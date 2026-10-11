@@ -1,0 +1,384 @@
+.graph-editor {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  /* Double-clicking the canvas would otherwise select nearby toolbar text. */
+  user-select: none;
+}
+
+.graph-editor input {
+  user-select: text;
+}
+
+/*
+ * React Flow's edge colours are too faint (#b1b1b7 on white is 2.1:1; #3e3e3e on #141414 is barely
+ * visible), and its dark selected colour (#727272) would be dimmer than ours. Arrowheads follow
+ * --xy-edge-stroke. A selected edge takes the accent, like a selected node.
+ */
+.graph-editor .react-flow {
+  --graph-accent: #2563eb;
+  --xy-edge-stroke: #8a8a8a;
+  --xy-edge-stroke-selected: var(--graph-accent);
+}
+
+.graph-editor .react-flow.dark {
+  --graph-accent: #60a5fa;
+}
+
+/* An empty canvas is not a link. */
+.graph-editor .react-flow__pane.selection {
+  cursor: default;
+}
+
+/* An item is a card that looks like React Flow's default node. Keep in sync with ITEM_SIZE. */
+.react-flow__node-item {
+  width: 150px;
+  font-size: 12px;
+}
+
+.graph-card {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 34px;
+  border: var(--xy-node-border-default);
+  border-radius: 4px;
+  background: var(--xy-node-background-color-default);
+  color: var(--xy-node-color-default);
+}
+
+.react-flow__node-frame {
+  border: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  font-size: 12px;
+}
+
+.react-flow__node-item.selected > .graph-card,
+.react-flow__node-item.parent.selected::before,
+.react-flow__node-frame.selected {
+  box-shadow: 0 0 0 2px var(--graph-accent);
+}
+
+/*
+ * React Flow removes the focus outline of every node and restores a ring only for its built-in
+ * types. Keyboard focus (Tab) gets a dashed outline, distinct from the solid selection ring.
+ */
+.graph-editor .react-flow__node-item.selectable:focus-visible,
+.graph-editor .react-flow__node-frame.selectable:focus-visible {
+  outline: 2px dashed var(--graph-accent);
+  outline-offset: 3px;
+}
+
+/*
+ * The dashed rectangle React Flow draws around a marquee selection lets the pointer through, like
+ * a container's body: double-clicks inside it reach the nodes (rename) and the canvas (add), and
+ * dragging a selected node still moves the whole selection.
+ */
+.graph-editor .react-flow__nodesselection-rect {
+  pointer-events: none;
+}
+
+/* Keep in sync with HEADER in graph.ts. */
+.graph-label {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+/* Editing a label in place: the same box, as a text field. */
+input.graph-label {
+  display: block;
+  margin: 0;
+  border: 0;
+  border-radius: inherit;
+  outline: 2px solid var(--graph-accent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+}
+
+/*
+ * Containers (frames, and items with children) only take the pointer on a frame's label bar, a
+ * parent node's card, the '+', and dots. Clicks, drags and double-clicks on the rest reach the
+ * canvas, so you can draw a selection box or add a node inside a group. React Flow sets
+ * pointer-events inline, hence !important.
+ */
+.react-flow__node-item.parent,
+.react-flow__node-frame {
+  pointer-events: none !important;
+}
+
+/*
+ * A parent node: a box around its children, with the item's card centred on the box's top border
+ * (the border is inset by half the card's height). graph.ts keeps the children below the card.
+ */
+.react-flow__node-item.parent::before {
+  position: absolute;
+  inset: 17px 0 0;
+  border: var(--xy-node-border-default);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--xy-node-background-color-default) 25%, transparent);
+  content: '';
+}
+
+.react-flow__node-item.parent > .graph-card {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 150px;
+  height: 34px;
+  transform: translateX(-50%);
+  font-weight: 600;
+  pointer-events: all;
+  cursor: grab;
+}
+
+.react-flow__node-item.parent > .graph-card > .graph-label,
+.graph-frame-title > .graph-label {
+  height: 32px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-frame-title {
+  pointer-events: all;
+  cursor: grab;
+}
+
+.graph-frame-title > .graph-label {
+  text-align: left;
+}
+
+.graph-frame-title > div.graph-label {
+  opacity: 0.75;
+}
+
+/* A frame's '+': on the middle of its top border, shown while the frame is hovered or selected. */
+.graph-add-parent {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: var(--xy-node-border-default);
+  border-radius: 50%;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.1s;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.graph-add-parent::before {
+  content: '+';
+}
+
+.graph-add-parent.shown,
+.graph-add-parent:focus-visible {
+  opacity: 1;
+}
+
+.graph-add-parent:hover {
+  border-color: var(--graph-accent);
+  color: var(--graph-accent);
+}
+
+/* The actions shown next to a hovered or selected node, group, edge or selection. */
+.graph-actions {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 6px;
+  background: Canvas;
+  color: CanvasText;
+  font-size: 12px;
+}
+
+.graph-actions button {
+  padding: 2px 8px;
+  font: inherit;
+}
+
+.graph-panel {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 6px;
+  background: Canvas;
+  color: CanvasText;
+  font-size: 0.8rem;
+}
+
+.graph-hint {
+  opacity: 0.75;
+}
+
+/* Keeps React Flow's z-indices to itself, so a node panel covers everything on the canvas. */
+.graph-editor .react-flow {
+  isolation: isolate;
+}
+
+/* How many items are queued on a node: drawn from data-count, so it is not part of the label. */
+.graph-queue-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--graph-accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.graph-queue-count::after {
+  content: attr(data-count);
+}
+
+/* A node opened in a panel, over a dimmed and blurred canvas (NodeDetail.tsx). */
+.graph-detail-backdrop {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: color-mix(in srgb, CanvasText 15%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.graph-detail {
+  position: absolute;
+  inset: 7% 8%;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 20px;
+  background: Canvas;
+  box-shadow: 0 24px 64px color-mix(in srgb, black 25%, transparent);
+  color: CanvasText;
+  /* NodeDetail animates it from and to the node's card. */
+  transform-origin: 0 0;
+}
+
+.graph-detail:focus {
+  outline: none;
+}
+
+.graph-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px 28px;
+  font-size: 14px;
+}
+
+.graph-detail-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.graph-detail-header input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.graph-detail-header input:hover,
+.graph-detail-header input:focus {
+  border-color: color-mix(in srgb, CanvasText 25%, transparent);
+}
+
+.graph-detail h2 {
+  margin: 8px 0 0;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  text-transform: uppercase;
+}
+
+.graph-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.5em;
+}
+
+.graph-queue li {
+  padding: 2px 0;
+}
+
+.graph-queue-empty {
+  margin: 0;
+  opacity: 0.6;
+}
+
+.graph-queue-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.graph-queue-add button {
+  padding: 4px 10px;
+  font: inherit;
+}
+
+.graph-detail-close,
+.graph-queue-remove {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.graph-detail-close {
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+}
+
+.graph-queue-remove {
+  width: 20px;
+  height: 20px;
+  margin-left: 10px;
+  font-size: 13px;
+  vertical-align: middle;
+}
+
+.graph-detail-close::before,
+.graph-queue-remove::before {
+  content: '×';
+}

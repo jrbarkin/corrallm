@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it is scaffolding only: one IPC channel (`app:ping`), and node-pty installed but used only by the packaged-build self-test.
+corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has one IPC channel (`app:ping`), an in-memory node-graph editor in the renderer (`src/renderer/graph/`), and node-pty installed but used only by the packaged-build self-test.
 
 ## Commands
 
@@ -21,6 +21,12 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` (note `pnpm dev` overwrites it). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). It loads node-pty, spawns a shell that exits, and exits 0 on success. CI runs this on all three OSes.
 
+## Testing
+
+- Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
+- The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).
+- Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
+
 ## Layout
 
 ```
@@ -28,9 +34,13 @@ src/main/       Main process (Node). index.ts is the entry; security.ts, app-pro
                 url-policy.ts hold the security baseline; ipc.ts registers IPC handlers.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
+src/renderer/graph/  Graph editor on React Flow (@xyflow/react): pure graph operations in
+                     graph.ts, the canvas in GraphEditor.tsx, a node's panel and queue in
+                     NodeDetail.tsx and queue.ts.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.
-e2e/            Playwright Electron tests (*.e2e.ts) and their global setup.
+e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Launch the app with
+                launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in.
 build/          Packaging resources (macOS entitlements, patched rpm spec template).
 ```
 

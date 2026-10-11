@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { GraphEditor } from './graph/GraphEditor';
+
 type PingState =
   { status: 'pending' } | { status: 'ok'; version: string } | { status: 'error'; message: string };
 
@@ -27,13 +29,16 @@ export function App() {
   }, []);
 
   return (
-    <main>
-      <h1>corrallm</h1>
-      <p data-testid="ping-result" data-status={ping.status}>
-        {ping.status === 'pending' && 'Pinging main process…'}
-        {ping.status === 'ok' && ping.version}
-        {ping.status === 'error' && `Ping failed: ${ping.message}`}
-      </p>
+    <main className="app">
+      <header className="app-header">
+        <h1>corrallm</h1>
+        <p data-testid="ping-result" data-status={ping.status}>
+          {ping.status === 'pending' && 'Pinging main process…'}
+          {ping.status === 'ok' && ping.version}
+          {ping.status === 'error' && `Ping failed: ${ping.message}`}
+        </p>
+      </header>
+      <GraphEditor />
     </main>
   );
 }

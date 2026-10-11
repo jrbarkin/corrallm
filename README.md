@@ -90,16 +90,16 @@ To try the production build, run `pnpm package` and open the app in `out/` (for 
 
 ## Common scripts
 
-| Script           | What it does                                               |
-| ---------------- | ---------------------------------------------------------- |
-| `pnpm dev`       | Run the app in development mode                            |
-| `pnpm typecheck` | Type-check all TypeScript projects                         |
-| `pnpm lint`      | ESLint (type-aware rules)                                  |
-| `pnpm format`    | Format all files with Prettier                             |
-| `pnpm test`      | Unit tests (Vitest) for main, preload and renderer         |
-| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright smoke test |
-| `pnpm package`   | Package the app for the current OS into `out/`             |
-| `pnpm make`      | Build installers for the current OS into `out/make/`       |
+| Script           | What it does                                          |
+| ---------------- | ----------------------------------------------------- |
+| `pnpm dev`       | Run the app in development mode                       |
+| `pnpm typecheck` | Type-check all TypeScript projects                    |
+| `pnpm lint`      | ESLint (type-aware rules)                             |
+| `pnpm format`    | Format all files with Prettier                        |
+| `pnpm test`      | Unit tests (Vitest) for main, preload and renderer    |
+| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests |
+| `pnpm package`   | Package the app for the current OS into `out/`        |
+| `pnpm make`      | Build installers for the current OS into `out/make/`  |
 
 ## Debugging
 
