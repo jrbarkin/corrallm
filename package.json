@@ -37,6 +37,7 @@
     "node-pty": "1.2.0-beta.14"
   },
   "devDependencies": {
+    "@dagrejs/dagre": "^3.1.1",
     "@electron-forge/cli": "^8.0.1",
     "@electron-forge/maker-deb": "^8.0.1",
     "@electron-forge/maker-dmg": "^8.0.1",

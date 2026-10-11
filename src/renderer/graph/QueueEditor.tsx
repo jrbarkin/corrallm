@@ -1,0 +1,551 @@
+import { useState } from 'react';
+import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
+
+import { SearchPicker } from '../search/SearchPicker';
+import type { AgentAction, AgentType } from './agents';
+import type { GraphNode } from './graph';
+import { CONDITIONS, isIf, isMessage } from './queue';
+import type { Condition, QueueIf, QueueItem, QueueMessage, QueueStep } from './queue';
+import { SortableList } from './SortableList';
+import type { HandleProps } from './SortableList';
+
+const EMPTY: readonly QueueItem[] = [];
+
+/** A queue item, before it has an id. */
+export type QueueEntry = Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'>;
+
+/** An agent a step can act on, or a condition check; `id` undefined is the queue's own agent. */
+interface Target {
+  id: string | undefined;
+  name: string;
+}
+
+const nameOf = (node: GraphNode | undefined) =>
+  node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
+
+/**
+ * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
+ * another is picked), messages (text passed to the agent), and if-thens (steps and messages that
+ * run only when a condition holds). The ⊕ adds any of them; everything is picked by typing to
+ * search. Rows are reordered by dragging their handle, or with the arrow keys on it.
+ */
+export function QueueEditor({
+  node,
+  nodes,
+  agent,
+  actions,
+  onAdd,
+  onRemove,
+  onMove,
+  onRetarget,
+  onEditMessage,
+  onCondition,
+}: {
+  node: GraphNode;
+  /** Every node of the graph: the agents steps can act on, and their names. */
+  nodes: readonly GraphNode[];
+  agent: AgentType;
+  /** What the agent can do. */
+  actions: readonly AgentAction[];
+  /** `into`: the id of the if-then to add a step or message to. */
+  onAdd: (entry: QueueEntry, into?: string) => void;
+  onRemove: (itemId: string) => void;
+  onMove: (itemId: string, index: number) => void;
+  onRetarget: (itemId: string, target: string | undefined) => void;
+  onEditMessage: (itemId: string, message: string) => void;
+  onCondition: (ifId: string, condition: Condition) => void;
+}) {
+  const queue = node.data.queue ?? EMPTY;
+  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const name = (id: string | undefined) =>
+    id === undefined ? 'this agent' : nameOf(nodes.find((n) => n.id === id));
+  const ifText = (condition: Condition) =>
+    condition.kind === 'nodeDone'
+      ? `${name(condition.node)} has finished`
+      : condition.kind === 'outputContains'
+        ? `the output contains "${condition.text}"`
+        : condition.kind === 'freeText'
+          ? condition.text
+          : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
+  const describe = (item: QueueItem) =>
+    isIf(item) ? `If ${ifText(item.if)}` : isMessage(item) ? 'Message' : item.action;
+  const context: Context = {
+    agent,
+    actions,
+    others,
+    name,
+    ifText,
+    describe,
+    onRemove,
+    onRetarget,
+    onEditMessage,
+  };
+  const row = (item: QueueStep | QueueMessage, handle: HandleProps) =>
+    isMessage(item) ? (
+      <MessageRow item={item} handle={handle} context={context} />
+    ) : (
+      <StepRow item={item} handle={handle} context={context} />
+    );
+
+  return (
+    <>
+      {queue.length > 0 && (
+        <SortableList
+          items={queue}
+          className="graph-queue"
+          onMove={onMove}
+          renderItem={(item, handle) =>
+            isIf(item) ? (
+              <IfRow
+                item={item}
+                handle={handle}
+                context={context}
+                row={row}
+                onMove={onMove}
+                onAdd={(entry) => {
+                  onAdd(entry, item.id);
+                }}
+                onCondition={(condition) => {
+                  onCondition(item.id, condition);
+                }}
+              />
+            ) : (
+              row(item, handle)
+            )
+          }
+        />
+      )}
+      <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
+    </>
+  );
+}
+
+interface Context {
+  agent: AgentType;
+  actions: readonly AgentAction[];
+  others: readonly GraphNode[];
+  name: (id: string | undefined) => string;
+  ifText: (condition: Condition) => string;
+  describe: (item: QueueItem) => string;
+  onRemove: (itemId: string) => void;
+  onRetarget: (itemId: string, target: string | undefined) => void;
+  onEditMessage: (itemId: string, message: string) => void;
+}
+
+/** Picks an agent by typing: "This agent" first, unless `withSelf` is false. */
+function TargetPicker({
+  context,
+  label = 'On which agent?',
+  withSelf = true,
+  onPick,
+  onCancel,
+}: {
+  context: Context;
+  label?: string;
+  withSelf?: boolean;
+  onPick: (target: Target) => void;
+  onCancel: () => void;
+}) {
+  const targets: Target[] = [
+    ...(withSelf ? [{ id: undefined, name: 'This agent' }] : []),
+    ...context.others.map((n) => ({ id: n.id, name: nameOf(n) })),
+  ];
+  return (
+    <SearchPicker
+      label={label}
+      placeholder="Search agents…"
+      options={targets}
+      optionLabel={(target) => target.name}
+      optionKey={(target) => target.id ?? '(this agent)'}
+      onPick={onPick}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/** A dropdown with a text box: Enter submits (in a multi-line one, Shift+Enter is a new line). */
+function TextPrompt({
+  label,
+  multiline = false,
+  onSubmit,
+  onCancel,
+}: {
+  label: string;
+  multiline?: boolean;
+  onSubmit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState('');
+  const props = {
+    'aria-label': label,
+    placeholder: label,
+    autoFocus: true,
+    value: text,
+    onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setText(event.target.value);
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (text.trim() !== '') onSubmit(text.trim());
+      } else if (event.key === 'Escape') {
+        event.stopPropagation();
+        onCancel();
+      }
+    },
+  };
+  return (
+    <div
+      className="search-picker"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) onCancel();
+      }}
+    >
+      {multiline ? <textarea rows={3} {...props} /> : <input {...props} />}
+    </div>
+  );
+}
+
+function Handle({
+  handle,
+  item,
+  context,
+}: {
+  handle: HandleProps;
+  item: QueueItem;
+  context: Context;
+}) {
+  return (
+    <button
+      type="button"
+      className="graph-queue-handle"
+      aria-label={`Move ${context.describe(item)}`}
+      title="Drag, or use the arrow keys, to reorder"
+      {...handle}
+    />
+  );
+}
+
+function RemoveButton({ item, context }: { item: QueueItem; context: Context }) {
+  return (
+    <button
+      type="button"
+      className="graph-queue-remove"
+      aria-label={`Remove ${context.describe(item)}`}
+      onClick={() => {
+        context.onRemove(item.id);
+      }}
+    />
+  );
+}
+
+/** A step: its handle, its action, the agent it acts on (a chip that changes it), and remove. */
+function StepRow({
+  item,
+  handle,
+  context,
+}: {
+  item: QueueStep;
+  handle: HandleProps;
+  context: Context;
+}) {
+  const [retargeting, setRetargeting] = useState(false);
+  const known = context.actions.some((a) => a.name === item.action);
+  return (
+    <div className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}>
+      <Handle handle={handle} item={item} context={context} />
+      <span
+        className="graph-queue-action"
+        {...(known ? {} : { title: `${context.agent} has no ${item.action}` })}
+      >
+        {item.action}
+      </span>{' '}
+      <button
+        type="button"
+        className="graph-queue-target"
+        aria-label={`Change the agent ${item.action} acts on`}
+        aria-expanded={retargeting}
+        onClick={() => {
+          setRetargeting(!retargeting);
+        }}
+      >
+        → {context.name(item.target)}
+      </button>
+      <RemoveButton item={item} context={context} />
+      {retargeting && (
+        <TargetPicker
+          context={context}
+          onPick={(target) => {
+            context.onRetarget(item.id, target.id);
+            setRetargeting(false);
+          }}
+          onCancel={() => {
+            setRetargeting(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A message for the agent: its text, edited in place. */
+function MessageRow({
+  item,
+  handle,
+  context,
+}: {
+  item: QueueMessage;
+  handle: HandleProps;
+  context: Context;
+}) {
+  return (
+    <div className="graph-queue-row graph-queue-message">
+      <Handle handle={handle} item={item} context={context} />
+      <span className="graph-queue-keyword">Message</span>
+      <textarea
+        aria-label="Message to the agent"
+        placeholder="Tell the agent what to do"
+        value={item.message}
+        onChange={(event) => {
+          context.onEditMessage(item.id, event.target.value);
+        }}
+      />
+      <RemoveButton item={item} context={context} />
+    </div>
+  );
+}
+
+/** An if-then: "If <condition> then" (the condition a chip that changes it), and its steps. */
+function IfRow({
+  item,
+  handle,
+  context,
+  row,
+  onMove,
+  onAdd,
+  onCondition,
+}: {
+  item: QueueIf;
+  handle: HandleProps;
+  context: Context;
+  row: (item: QueueStep | QueueMessage, handle: HandleProps) => ReactNode;
+  onMove: (itemId: string, index: number) => void;
+  onAdd: (entry: QueueEntry) => void;
+  onCondition: (condition: Condition) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const text = context.ifText(item.if);
+  return (
+    <div className="graph-queue-if">
+      <div className="graph-queue-row">
+        <Handle handle={handle} item={item} context={context} />
+        <span className="graph-queue-keyword">If</span>
+        <button
+          type="button"
+          className="graph-queue-target"
+          aria-label={`Change the condition: ${text}`}
+          aria-expanded={editing}
+          onClick={() => {
+            setEditing(!editing);
+          }}
+        >
+          {text}
+        </button>
+        <span className="graph-queue-keyword">then</span>
+        <RemoveButton item={item} context={context} />
+        {editing && (
+          <ConditionPicker
+            context={context}
+            current={item.if}
+            onPick={(condition) => {
+              onCondition(condition);
+              setEditing(false);
+            }}
+            onCancel={() => {
+              setEditing(false);
+            }}
+          />
+        )}
+      </div>
+      {item.then.length > 0 && (
+        <SortableList
+          items={item.then}
+          className="graph-queue graph-queue-then"
+          label={`Then: ${text}`}
+          onMove={onMove}
+          renderItem={row}
+        />
+      )}
+      <AddMenu label={`Add to If ${text}`} context={context} onAdd={onAdd} />
+    </div>
+  );
+}
+
+type Choice = { kind: 'if' } | { kind: 'message' } | { kind: 'action'; action: AgentAction };
+
+const CHOICE_TEXT = {
+  if: ['If… then', 'Run steps only when a condition holds'],
+  message: ['Message', 'Tell the agent something'],
+} as const;
+
+/**
+ * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`) "If… then"; then
+ * the agent the action acts on, the message's text, or the if-then's condition.
+ */
+function AddMenu({
+  label,
+  withIf = false,
+  context,
+  onAdd,
+}: {
+  label: string;
+  withIf?: boolean;
+  context: Context;
+  onAdd: (entry: QueueEntry) => void;
+}) {
+  const [step, setStep] = useState<'closed' | 'choose' | 'condition' | 'message' | AgentAction>(
+    'closed',
+  );
+  const close = () => {
+    setStep('closed');
+  };
+  const choices: Choice[] = [
+    ...(withIf ? [{ kind: 'if' as const }] : []),
+    { kind: 'message' },
+    ...context.actions.map((action) => ({ kind: 'action' as const, action })),
+  ];
+  return (
+    <div className="graph-queue-add">
+      <button
+        type="button"
+        className="graph-queue-plus"
+        aria-label={label}
+        title={label}
+        aria-expanded={step !== 'closed'}
+        onClick={() => {
+          setStep(step === 'closed' ? 'choose' : 'closed');
+        }}
+      />
+      {step === 'choose' && (
+        <SearchPicker
+          label={label}
+          options={choices}
+          optionLabel={(choice) =>
+            choice.kind === 'action' ? choice.action.name : CHOICE_TEXT[choice.kind][0]
+          }
+          optionDetail={(choice) =>
+            choice.kind === 'action' ? choice.action.description : CHOICE_TEXT[choice.kind][1]
+          }
+          optionKey={(choice) =>
+            choice.kind === 'action' ? choice.action.name : `(${choice.kind})`
+          }
+          onPick={(choice) => {
+            setStep(
+              choice.kind === 'if'
+                ? 'condition'
+                : choice.kind === 'message'
+                  ? 'message'
+                  : choice.action,
+            );
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'condition' && (
+        <ConditionPicker
+          context={context}
+          onPick={(condition) => {
+            onAdd({ if: condition, then: [] });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'message' && (
+        <TextPrompt
+          label="New message to the agent"
+          multiline
+          onSubmit={(message) => {
+            onAdd({ message });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {typeof step === 'object' && (
+        <TargetPicker
+          context={context}
+          onPick={(target) => {
+            onAdd({ action: step.name, ...(target.id === undefined ? {} : { target: target.id }) });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Picks a condition, then what it needs: an agent, or the text to look for. Or takes what was
+ * typed as the condition, in the user's own words; changing such a condition starts from them.
+ */
+function ConditionPicker({
+  context,
+  current,
+  onPick,
+  onCancel,
+}: {
+  context: Context;
+  current?: Condition;
+  onPick: (condition: Condition) => void;
+  onCancel: () => void;
+}) {
+  const [needs, setNeeds] = useState<'kind' | 'agent' | 'text'>('kind');
+  if (needs === 'agent') {
+    return (
+      <TargetPicker
+        context={context}
+        label="Which agent?"
+        withSelf={false}
+        onPick={(target) => {
+          if (target.id !== undefined) onPick({ kind: 'nodeDone', node: target.id });
+        }}
+        onCancel={onCancel}
+      />
+    );
+  }
+  if (needs === 'text') {
+    return (
+      <TextPrompt
+        label="Text to look for"
+        onSubmit={(text) => {
+          onPick({ kind: 'outputContains', text });
+        }}
+        onCancel={onCancel}
+      />
+    );
+  }
+  return (
+    <SearchPicker
+      label="If…"
+      placeholder="Pick a condition, or describe one…"
+      options={CONDITIONS}
+      optionLabel={(c) => c.label}
+      optionKey={(c) => c.kind}
+      {...(current?.kind === 'freeText' ? { initialQuery: current.text } : {})}
+      freeText={{
+        detail: 'In your own words, for the agent to judge',
+        onPick: (text) => {
+          onPick({ kind: 'freeText', text });
+        },
+      }}
+      onPick={(c) => {
+        if (c.kind === 'nodeDone') setNeeds('agent');
+        else if (c.kind === 'outputContains') setNeeds('text');
+        else onPick({ kind: c.kind });
+      }}
+      onCancel={onCancel}
+    />
+  );
+}

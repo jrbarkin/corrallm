@@ -34,9 +34,13 @@ src/main/       Main process (Node). index.ts is the entry; security.ts, app-pro
                 url-policy.ts hold the security baseline; ipc.ts registers IPC handlers.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
-src/renderer/graph/  Graph editor on React Flow (@xyflow/react): pure graph operations in
-                     graph.ts, the canvas in GraphEditor.tsx, a node's panel and queue in
-                     NodeDetail.tsx and queue.ts.
+src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
+                     groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
+                     GraphEditor.tsx (node views in nodes.tsx); an agent's panel in NodeDetail.tsx,
+                     with its queue (QueueEditor.tsx, queue.ts, SortableList.tsx) and questions
+                     (Questions.tsx); agent types and their actions (sourced catalogs) in agents.ts;
+                     automatic layout (dagre) in layout.ts.
+src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.
 e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Launch the app with

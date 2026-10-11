@@ -86,7 +86,7 @@ async function at(dx: number, dy: number): Promise<Point> {
   return { x: p.x + dx, y: p.y + dy };
 }
 
-async function addNodeAt(label: string, dx: number, dy: number) {
+async function addAgentAt(label: string, dx: number, dy: number) {
   const p = await at(dx, dy);
   await page.mouse.dblclick(p.x, p.y);
   await expect(node(label)).toBeVisible();
@@ -189,11 +189,11 @@ async function edgeEnd(edge: Locator, which: 'start' | 'end'): Promise<Point> {
   }, which);
 }
 
-/** Node 1 and Node 3 in frame Group 2, which sits in frame Group 1 next to Node 2. */
+/** Agent 1 and Agent 3 in frame Group 2, which sits in frame Group 1 next to Agent 2. */
 async function nestedFrames() {
-  const a = await addNodeAt('Node 1', 500, 280);
-  const b = await addNodeAt('Node 2', 750, 340);
-  const c = await addNodeAt('Node 3', 500, 400);
+  const a = await addAgentAt('Agent 1', 500, 280);
+  const b = await addAgentAt('Agent 2', 750, 340);
+  const c = await addAgentAt('Agent 3', 500, 400);
   await marquee(a, b, c);
   await page.keyboard.press('ControlOrMeta+g');
   const outer = node('Group 1');
@@ -215,18 +215,18 @@ test('creates, selects, renames and deletes nodes', async () => {
   // React Flow's stylesheet loaded under the production CSP (its own "styles loaded" check).
   expect(await pane().evaluate((el) => getComputedStyle(el).zIndex)).toBe('1');
 
-  await addNodeAt('Node 1', 300, 200);
-  await addNodeAt('Node 2', 600, 300);
+  await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 600, 300);
 
-  await node('Node 1').click();
-  await node('Node 2').click({ modifiers: ['Shift'] });
+  await node('Agent 1').click();
+  await node('Agent 2').click({ modifiers: ['Shift'] });
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
   const empty = await at(800, 500);
   await page.mouse.click(empty.x, empty.y);
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
 
   // F2 renames the selected node in place: type over the selected text, Enter.
-  await node('Node 1').click();
+  await node('Agent 1').click();
   await page.keyboard.press('F2');
   await expect(labelInput()).toBeFocused();
   await page.keyboard.type('Alpha');
@@ -238,24 +238,24 @@ test('creates, selects, renames and deletes nodes', async () => {
   await expect(node('Alpha')).toHaveCount(0);
 
   // Backspace while renaming edits the text only, and Escape restores the label.
-  await node('Node 2').click();
+  await node('Agent 2').click();
   await page.keyboard.press('F2');
   await page.keyboard.press('Backspace');
   await expect(labelInput()).toHaveValue('');
   await expect(nodes()).toHaveCount(1);
   await page.keyboard.press('Escape');
-  await expect(node('Node 2')).toBeVisible();
+  await expect(node('Agent 2')).toBeVisible();
 
   // Hovering a node shows its actions.
   await page.mouse.click(empty.x, empty.y);
-  await node('Node 2').hover();
-  await (await actionsFor(node('Node 2'))).getByRole('button', { name: 'Delete' }).click();
+  await node('Agent 2').hover();
+  await (await actionsFor(node('Agent 2'))).getByRole('button', { name: 'Delete' }).click();
   await expect(nodes()).toHaveCount(0);
 });
 
 test('connects nodes in both directions, and deletes edges', async () => {
-  const a = await addNodeAt('Node 1', 400, 150);
-  const b = await addNodeAt('Node 2', 400, 350);
+  const a = await addAgentAt('Agent 1', 400, 150);
+  const b = await addAgentAt('Agent 2', 400, 350);
   const [idA, idB] = await Promise.all([a.getAttribute('data-id'), b.getAttribute('data-id')]);
   const ab = page.getByTestId(`rf__edge-${String(idA)}->${String(idB)}`);
   const ba = page.getByTestId(`rf__edge-${String(idB)}->${String(idA)}`);
@@ -290,8 +290,8 @@ test('connects nodes in both directions, and deletes edges', async () => {
 });
 
 test('frames a marquee selection, works inside the frame, and ungroups', async () => {
-  const a = await addNodeAt('Node 1', 400, 200);
-  const b = await addNodeAt('Node 2', 650, 300);
+  const a = await addAgentAt('Agent 1', 400, 200);
+  const b = await addAgentAt('Agent 2', 650, 300);
 
   await marquee(a, b);
   await expect(a).toHaveClass(/selected/);
@@ -305,9 +305,13 @@ test('frames a marquee selection, works inside the frame, and ungroups', async (
   expectInside(await box(a), await box(frame));
   expectInside(await box(b), await box(frame));
 
-  // The frame's body lets clicks through to the canvas: this deselects everything.
+  // A click anywhere on the frame selects it, like a node; a click on the canvas deselects it.
   const f = await box(frame);
   await page.mouse.click(f.x + f.width / 2, f.y + f.height - 10);
+  await expect(frame).toHaveClass(/selected/);
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+  const outside = await at(900, 560);
+  await page.mouse.click(outside.x, outside.y);
   await expect(frame).not.toHaveClass(/selected/);
 
   // Dragging a child past the frame's edge grows the frame.
@@ -318,7 +322,7 @@ test('frames a marquee selection, works inside the frame, and ungroups', async (
 
   // Double-clicking the frame's body (here its top-left padding) adds a node inside it.
   await page.mouse.dblclick(grown.x + PADDING / 2, grown.y + HEADER + PADDING / 2);
-  const c = node('Node 3');
+  const c = node('Agent 3');
   await expect(c).toBeVisible();
   const withC = await box(frame);
   expectInside(await box(c), withC);
@@ -348,10 +352,44 @@ test('frames a marquee selection, works inside the frame, and ungroups', async (
   }
 });
 
+test('moves a group like one node: drag it anywhere, and what is inside comes along', async () => {
+  const a = await addAgentAt('Agent 1', 350, 200);
+  const b = await addAgentAt('Agent 2', 600, 320);
+  await marquee(a, b);
+  await page.keyboard.press('ControlOrMeta+g');
+  const frame = node('Group 1');
+  await expect(frame).toBeVisible();
+
+  /**
+   * Drags `group` by a point on its body (its bottom-right padding) and checks everything moved
+   * together.
+   */
+  const dragBody = async (group: Locator, inside: Locator[]) => {
+    const g = await box(group);
+    const before = await Promise.all(inside.map(box));
+    const grip = { x: g.x + g.width - PADDING / 2, y: g.y + g.height - PADDING / 2 };
+    await drag(grip, { x: grip.x + 120, y: grip.y + 80 });
+    const moved = await box(group);
+    expect(moved.x - g.x).toBeGreaterThan(100);
+    expect(moved.y - g.y).toBeGreaterThan(60);
+    for (const [i, n] of inside.entries()) {
+      const was = before[i];
+      if (was)
+        expectSamePlace(await box(n), { x: was.x + moved.x - g.x, y: was.y + moved.y - g.y });
+    }
+  };
+  await dragBody(frame, [a, b]);
+
+  // A group with a parent node moves the same way.
+  await titleBar('Group 1').hover();
+  await page.getByRole('button', { name: 'Add a parent agent' }).click();
+  await dragBody(node('Agent 3'), [a, b]);
+});
+
 test("gives a group a parent from the '+' on its top border, then connects and deletes it", async () => {
-  const a = await addNodeAt('Node 1', 450, 330);
-  const b = await addNodeAt('Node 2', 450, 460);
-  const c = await addNodeAt('Node 3', 900, 200);
+  const a = await addAgentAt('Agent 1', 450, 330);
+  const b = await addAgentAt('Agent 2', 450, 460);
+  const c = await addAgentAt('Agent 3', 900, 200);
 
   await marquee(a, b);
   await page.keyboard.press('ControlOrMeta+g');
@@ -361,7 +399,7 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   await page.mouse.click(empty.x, empty.y);
 
   // The '+' shows when the pointer is on the middle of the group's top border.
-  const plus = page.getByRole('button', { name: 'Add a parent node' });
+  const plus = page.getByRole('button', { name: 'Add a parent agent' });
   const opacity = () => plus.evaluate((el) => getComputedStyle(el).opacity);
   await expect.poll(opacity).toBe('0');
   const f = await box(frame);
@@ -373,10 +411,10 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   await plus.click();
 
   // The group's new parent node: its card where the '+' was, the group's nodes where they were.
-  const parent = node('Node 4');
+  const parent = node('Agent 4');
   await expect(parent).toHaveClass(/parent/);
   await expect(parent).toHaveClass(/selected/);
-  expectNear(await center(card('Node 4')), topMiddle, 1);
+  expectNear(await center(card('Agent 4')), topMiddle, 1);
   expectSamePlace(await box(a), boxA);
   expectInside(boxA, await box(parent));
 
@@ -385,12 +423,8 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   await page.keyboard.press('Enter');
   const team = node('Team');
 
-  // A selection box started on the parent's body selects only what it encloses.
-  const start = { x: boxA.x + boxA.width + PADDING / 2, y: boxA.y + boxA.height + PADDING / 2 };
-  expect(
-    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, start),
-  ).toMatch(/react-flow__pane/);
-  await drag(start, { x: boxA.x - 30, y: boxA.y - 30 });
+  // Inside a group, a click selects just that node.
+  await a.click();
   await expect(a).toHaveClass(/selected/);
   await expect(b).not.toHaveClass(/selected/);
   await expect(team).not.toHaveClass(/selected/);
@@ -432,8 +466,9 @@ test("gives a group a parent from the '+' on its top border, then connects and d
 });
 
 test('double-clicking a node opens it in a panel that grows out of it, to edit its queue', async () => {
-  const a = await addNodeAt('Node 1', 300, 200);
-  const from = await box(card('Node 1'));
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 800, 500);
+  const from = await box(card('Agent 1'));
   await a.dblclick();
 
   // Rewound to its first frame, the panel sits exactly on the node's card...
@@ -452,28 +487,117 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   expectSamePlace({ x: first.width, y: first.height }, { x: from.width, y: from.height });
 
   // ...and opens to most of the editor, centred.
-  const panel = page.getByRole('dialog', { name: 'Node 1' });
+  const panel = page.getByRole('dialog', { name: 'Agent 1' });
   const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(panel)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.8);
   expect(opened.height).toBeGreaterThan(editor.height * 0.8);
   expectNear(await center(panel), await center(page.locator('.graph-editor')), 1);
 
-  await panel.getByRole('button', { name: 'Add Placeholder A' }).click();
-  await panel.getByRole('button', { name: 'Add Placeholder C' }).click();
-  await expect(panel.getByRole('listitem')).toHaveText(['Placeholder A', 'Placeholder C']);
-  await panel.getByRole('button', { name: 'Remove Placeholder A' }).click();
-  await expect(panel.getByRole('listitem')).toHaveText(['Placeholder C']);
+  // A new agent's queue starts with a message, to tell it what to do. ⊕ adds one of the agent's
+  // actions and the agent it acts on, each picked by typing (or clicking). Agent 1 is a Claude
+  // agent, so these are Claude Code's tools.
+  const plus = panel.getByRole('button', { name: 'Add to queue' });
+  const handles = panel.getByRole('button', { name: /^Move / });
+  const order = () => handles.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+  await expect.poll(order).toEqual(['Move Message']);
+  await plus.click();
+  await panel.getByRole('option', { name: /^Read / }).click();
+  await page.keyboard.press('Enter'); // this agent
+  await plus.click();
+  await page.keyboard.type('run shell');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('2');
+  await page.keyboard.press('Enter');
+  await expect.poll(order).toEqual(['Move Message', 'Move Read', 'Move Bash']);
+  await expect(panel.getByRole('button', { name: 'Change the agent Bash acts on' })).toHaveText(
+    '→ Agent 2',
+  );
 
-  // Escape shrinks it back into the node, which shows how many items are queued.
+  // Dragging an item's handle reorders the queue.
+  const grip = await center(panel.getByRole('button', { name: 'Move Bash', exact: true }));
+  await drag(grip, { x: grip.x, y: (await box(handles.first())).y - 4 });
+  await expect.poll(order).toEqual(['Move Bash', 'Move Message', 'Move Read']);
+  await panel.getByRole('button', { name: 'Remove Read' }).click();
+  await expect.poll(order).toEqual(['Move Bash', 'Move Message']);
+
+  // Escape shrinks it back into the node, which shows how many items are queued (a message with
+  // nothing written in it does not count).
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
-  await expect(card('Node 1').locator('.graph-queue-count')).toHaveAttribute('data-count', '1');
+  await expect(card('Agent 1').locator('.graph-queue-count')).toHaveAttribute('data-count', '1');
 
   // The queue is kept; a click outside the panel closes it too.
   await a.dblclick();
-  await expect(panel.getByRole('listitem')).toHaveText(['Placeholder C']);
+  await expect(panel.getByRole('button', { name: 'Change the agent Bash acts on' })).toHaveText(
+    '→ Agent 2',
+  );
+
+  // A queued message shows all of its text, however many lines it wraps to.
+  const message = panel.getByRole('textbox', { name: 'Message to the agent' });
+  await message.fill(
+    'Keep the diff small, explain each change, and run the tests before handing it back.',
+  );
+  expect(await message.evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
+
+  // A new message is typed into a box that looks like the search field it replaces.
+  const look = (field: Locator) =>
+    field.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const { fontFamily, fontSize, borderTopColor, borderRadius } = style;
+      return { fontFamily, fontSize, borderTopColor, borderRadius, width: el.clientWidth };
+    });
+  await plus.click();
+  const search = await look(panel.getByRole('combobox', { name: 'Add to queue' }));
+  await page.keyboard.type('message');
+  await page.keyboard.press('Enter');
+  const prompt = panel.getByRole('textbox', { name: 'New message to the agent' });
+  expect(await look(prompt)).toEqual(search);
+  await page.keyboard.press('Escape');
+  await expect(prompt).toHaveCount(0);
+
   await page.mouse.click(editor.x + 10, editor.y + 10);
   await expect(panel).toHaveCount(0);
+});
+
+test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 650, 380);
+  const tagColor = (label: string) =>
+    card(label)
+      .locator('.graph-agent')
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const stripe = (label: string) =>
+    card(label).evaluate((el) => getComputedStyle(el).borderLeftColor);
+
+  // Every agent has a type, colour-coded on its card; its panel changes it.
+  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Claude');
+  const claude = await tagColor('Agent 1');
+  expect(await stripe('Agent 1')).toBe(claude);
+  await a.dblclick();
+  const panel = page.getByRole('dialog', { name: 'Agent 1' });
+  await panel.getByRole('button', { name: 'Agent: Claude' }).click();
+  // Its dropdown fits in the panel, which does not scroll to show it.
+  await expect(panel.getByRole('listbox', { name: 'Agent' })).toBeVisible();
+  expect(await panel.evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth])).toEqual([
+    0, 0,
+  ]);
+  await page.keyboard.type('codex');
+  await page.keyboard.press('Enter');
+  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Codex');
+  expect(await tagColor('Agent 1')).not.toBe(claude);
+  expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
+
+  // An agent asks a question (simulated until agents are connected): it glows, and a sidebar
+  // lists the question, labelled by agent, until it is answered there.
+  await panel.getByRole('button', { name: 'Simulate a question' }).click();
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(a).toHaveClass(/asking/);
+  const sidebar = page.getByRole('complementary', { name: 'Questions from agents' });
+  await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
+  await sidebar.getByRole('button', { name: 'Fix them first' }).click();
+  await expect(sidebar).toHaveCount(0);
+  await expect(a).not.toHaveClass(/asking/);
 });
 
 test('groups fit their contents as a nested node is dragged out of them and back', async () => {
@@ -523,6 +647,84 @@ test('groups fit their contents as a nested node is dragged out of them and back
   await others();
 });
 
+test('groups nest and take a parent node just like nodes do', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  const b = await addAgentAt('Agent 2', 300, 320);
+  await marquee(a, b);
+  await page.keyboard.press('ControlOrMeta+g');
+  const c = await addAgentAt('Agent 3', 700, 200);
+  const d = await addAgentAt('Agent 4', 700, 320);
+  await marquee(c, d);
+  await page.keyboard.press('ControlOrMeta+g');
+  const [first, second] = [node('Group 1'), node('Group 2')];
+  await expect(second).toBeVisible();
+
+  // Each group colours its nodes, in a colour of its own.
+  const border = (label: string) =>
+    card(label).evaluate((el) => getComputedStyle(el).borderTopColor);
+  expect(await border('Agent 1')).toBe(await border('Agent 2'));
+  expect(await border('Agent 3')).not.toBe(await border('Agent 1'));
+
+  // Two groups, grouped.
+  await marquee(first, second);
+  await page.keyboard.press('ControlOrMeta+g');
+  const outer = node('Group 3');
+  await expect(outer).toBeVisible();
+  expectInside(await box(first), await box(outer));
+  expectInside(await box(second), await box(outer));
+
+  // The group of groups takes a parent node, which connects like any node.
+  await outer.locator('.graph-frame-title').hover();
+  await outer.getByRole('button', { name: 'Add a parent agent' }).click();
+  const parent = node('Agent 5');
+  await expect(parent).toHaveClass(/parent/);
+  expectInside(await box(first), await box(parent));
+  expectInside(await box(second), await box(parent));
+  const e = await addAgentAt('Agent 6', 500, 620);
+  await connect(parent, e);
+  await expect(edges()).toHaveCount(1);
+});
+
+test('arranges the graph automatically while the toggle is on', async () => {
+  const a = await addAgentAt('Agent 1', 650, 450);
+  const b = await addAgentAt('Agent 2', 300, 150);
+  const c = await addAgentAt('Agent 3', 900, 200);
+  await connect(a, b);
+  await connect(a, c);
+  const toggle = page.getByRole('button', { name: 'Arrange automatically' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  // Top to bottom along the edges: Agent 1 above the two it points to, which share a row.
+  const [boxA, boxB, boxC] = await Promise.all([box(a), box(b), box(c)]);
+  expect(boxA.y + boxA.height).toBeLessThan(boxB.y);
+  expect(boxB.y).toBeCloseTo(boxC.y, 0);
+
+  // A new node joins the arrangement, clear of the others.
+  const d = await addAgentAt('Agent 4', 150, 560);
+  const boxes = await Promise.all([a, b, c, d].map(box));
+  for (const [i, one] of boxes.entries()) {
+    for (const other of boxes.slice(i + 1)) {
+      const overlap =
+        one.x < other.x + other.width &&
+        other.x < one.x + one.width &&
+        one.y < other.y + other.height &&
+        other.y < one.y + one.height;
+      expect(overlap).toBe(false);
+    }
+  }
+
+  // Nodes stay where the arrangement puts them; turning it off lets them be dragged again.
+  const held = await box(b);
+  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  expectSamePlace(await box(b), held);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  expect((await box(b)).x).toBeGreaterThan(held.x + 100);
+});
+
 test('left-drag selects; right-drag and Space-drag pan', async () => {
   const viewport = page.locator('.react-flow__viewport');
   const transform = () => viewport.evaluate((el) => getComputedStyle(el).transform);
@@ -542,13 +744,13 @@ test('left-drag selects; right-drag and Space-drag pan', async () => {
 });
 
 test('shows which node or frame has keyboard focus', async () => {
-  const a = await addNodeAt('Node 1', 400, 200);
-  const b = await addNodeAt('Node 2', 650, 300);
+  const a = await addAgentAt('Agent 1', 400, 200);
+  const b = await addAgentAt('Agent 2', 650, 300);
   await marquee(a, b);
   await page.keyboard.press('ControlOrMeta+g');
   await expect(node('Group 1')).toBeVisible();
 
-  // Click empty canvas, then Tab: the frame (first in the node layer), its '+', then Node 1.
+  // Click empty canvas, then Tab: the frame (first in the node layer), its '+', then Agent 1.
   const empty = await at(800, 500);
   await page.mouse.click(empty.x, empty.y);
   const focused = page.locator('.react-flow__node:focus-visible');
@@ -560,18 +762,18 @@ test('shows which node or frame has keyboard focus', async () => {
 
   // The '+' that gives the group a parent is reachable, and shows while focused.
   await page.keyboard.press('Tab');
-  const plus = page.getByRole('button', { name: 'Add a parent node' });
+  const plus = page.getByRole('button', { name: 'Add a parent agent' });
   await expect(plus).toBeFocused();
-  expect(await plus.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  await expect.poll(() => plus.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
 
   await page.keyboard.press('Tab');
-  await expect(focused).toHaveText('Node 1');
+  await expect(focused).toHaveText('Agent 1');
   expect(await outline()).toBe('dashed');
 });
 
 test('double-click works inside the rectangle a marquee leaves around the selection', async () => {
-  const a = await addNodeAt('Node 1', 400, 200);
-  const b = await addNodeAt('Node 2', 650, 350);
+  const a = await addAgentAt('Agent 1', 400, 200);
+  const b = await addAgentAt('Agent 2', 650, 350);
   const rect = page.locator('.react-flow__nodesselection-rect');
 
   // On a node: opens that node alone.
@@ -579,7 +781,7 @@ test('double-click works inside the rectangle a marquee leaves around the select
   await expect(rect).toHaveCount(1);
   const onA = await center(a);
   await page.mouse.dblclick(onA.x, onA.y);
-  await expect(page.getByRole('dialog', { name: 'Node 1' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Agent 1' })).toBeVisible();
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -591,5 +793,5 @@ test('double-click works inside the rectangle a marquee leaves around the select
   const between = { x: (boxA.x + boxA.width + boxB.x) / 2, y: (boxA.y + boxA.height + boxB.y) / 2 };
   expectInside({ ...between, width: 0, height: 0 }, await box(rect));
   await page.mouse.dblclick(between.x, between.y);
-  await expect(node('Node 3')).toBeVisible();
+  await expect(node('Agent 3')).toBeVisible();
 });

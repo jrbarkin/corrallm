@@ -30,8 +30,8 @@
   cursor: default;
 }
 
-/* An item is a card that looks like React Flow's default node. Keep in sync with ITEM_SIZE. */
-.react-flow__node-item {
+/* An item is a card that looks like React Flow's default node. Keep in sync with CARD_SIZE. */
+.react-flow__node-agent {
   width: 150px;
   font-size: 12px;
 }
@@ -53,8 +53,8 @@
   font-size: 12px;
 }
 
-.react-flow__node-item.selected > .graph-card,
-.react-flow__node-item.parent.selected::before,
+.react-flow__node-agent.selected > .graph-card,
+.react-flow__node-agent.parent.selected::before,
 .react-flow__node-frame.selected {
   box-shadow: 0 0 0 2px var(--graph-accent);
 }
@@ -63,7 +63,7 @@
  * React Flow removes the focus outline of every node and restores a ring only for its built-in
  * types. Keyboard focus (Tab) gets a dashed outline, distinct from the solid selection ring.
  */
-.graph-editor .react-flow__node-item.selectable:focus-visible,
+.graph-editor .react-flow__node-agent.selectable:focus-visible,
 .graph-editor .react-flow__node-frame.selectable:focus-visible {
   outline: 2px dashed var(--graph-accent);
   outline-offset: 3px;
@@ -101,22 +101,17 @@ input.graph-label {
   text-align: inherit;
 }
 
-/*
- * Containers (frames, and items with children) only take the pointer on a frame's label bar, a
- * parent node's card, the '+', and dots. Clicks, drags and double-clicks on the rest reach the
- * canvas, so you can draw a selection box or add a node inside a group. React Flow sets
- * pointer-events inline, hence !important.
- */
-.react-flow__node-item.parent,
+/* A group moves like one node: grab it anywhere. (Double-clicking its body adds a node into it.) */
+.react-flow__node-agent.parent,
 .react-flow__node-frame {
-  pointer-events: none !important;
+  cursor: grab;
 }
 
 /*
  * A parent node: a box around its children, with the item's card centred on the box's top border
  * (the border is inset by half the card's height). graph.ts keeps the children below the card.
  */
-.react-flow__node-item.parent::before {
+.react-flow__node-agent.parent::before {
   position: absolute;
   inset: 17px 0 0;
   border: var(--xy-node-border-default);
@@ -125,7 +120,7 @@ input.graph-label {
   content: '';
 }
 
-.react-flow__node-item.parent > .graph-card {
+.react-flow__node-agent.parent > .graph-card {
   position: absolute;
   top: 0;
   left: 50%;
@@ -137,7 +132,7 @@ input.graph-label {
   cursor: grab;
 }
 
-.react-flow__node-item.parent > .graph-card > .graph-label,
+.react-flow__node-agent.parent > .graph-card > .graph-label,
 .graph-frame-title > .graph-label {
   height: 32px;
   overflow: hidden;
@@ -158,7 +153,10 @@ input.graph-label {
   opacity: 0.75;
 }
 
-/* A frame's '+': on the middle of its top border, shown while the frame is hovered or selected. */
+/*
+ * A frame's '+': on the middle of its top border, shown while it or the label bar is hovered, or
+ * the frame is selected.
+ */
 .graph-add-parent {
   position: absolute;
   top: 0;
@@ -186,7 +184,9 @@ input.graph-label {
   content: '+';
 }
 
+/* :hover tracks what is really under the pointer (React's mouseleave can fire spuriously here). */
 .graph-add-parent.shown,
+.graph-add-parent:hover,
 .graph-add-parent:focus-visible {
   opacity: 1;
 }
@@ -297,7 +297,7 @@ input.graph-label {
   align-items: center;
 }
 
-.graph-detail-header input {
+.graph-detail-header > input {
   flex: 1;
   min-width: 0;
   padding: 4px 6px;
@@ -310,45 +310,177 @@ input.graph-label {
   font-weight: 600;
 }
 
-.graph-detail-header input:hover,
-.graph-detail-header input:focus {
+.graph-detail-header > input:hover,
+.graph-detail-header > input:focus {
   border-color: color-mix(in srgb, CanvasText 25%, transparent);
 }
 
-.graph-detail h2 {
-  margin: 8px 0 0;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  opacity: 0.6;
-  text-transform: uppercase;
-}
-
+/* The queue: a centred column of items, with the ⊕ below it (its dropdown floats under it). */
 .graph-queue {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding-left: 1.5em;
+  gap: 8px;
+  width: min(420px, 100%);
+  margin: 24px auto 0;
+  padding: 0;
+  list-style: none;
 }
 
-.graph-queue li {
-  padding: 2px 0;
+/* A queued item's row: its handle, what it does (and to which agent), and its remove button. */
+.graph-queue-row {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 10px;
+  background: Canvas;
 }
 
-.graph-queue-empty {
-  margin: 0;
-  opacity: 0.6;
+.graph-queue > li.dragging > .graph-queue-row,
+.graph-queue > li.dragging > .graph-queue-if {
+  z-index: 1;
+  box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
+}
+
+/* A step whose action the agent does not have (its type changed since it was queued). */
+.graph-queue-row.unavailable .graph-queue-action {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.graph-queue-keyword {
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.graph-queue-message textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  /* Grows with the text, wrapped lines included. */
+  field-sizing: content;
+  max-height: 12lh;
+  resize: none;
+}
+
+/* An if-then: its row, then its own steps, indented, with their own ⊕. */
+.graph-queue-if {
+  position: relative;
+  padding: 0 0 10px;
+  border: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 12px;
+}
+
+.graph-queue-if > .graph-queue-row {
+  border: 0;
+  background: transparent;
+}
+
+.graph-queue-then {
+  width: auto;
+  margin: 4px 10px 0 28px;
+}
+
+.graph-queue-if > .graph-queue-add {
+  margin-top: 10px;
+}
+
+.graph-queue-if > .graph-queue-add > .graph-queue-plus {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+}
+
+.graph-queue-handle {
+  width: 14px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  letter-spacing: -3px;
+  opacity: 0.45;
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-queue-handle::before {
+  content: '⋮⋮';
+}
+
+.graph-queue > li.dragging .graph-queue-handle {
+  cursor: grabbing;
+}
+
+.graph-queue-target {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-queue-target:hover,
+.graph-queue-target[aria-expanded='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.graph-queue-row .search-picker {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  left: 0;
 }
 
 .graph-queue-add {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: center;
+  margin-top: 24px;
 }
 
-.graph-queue-add button {
-  padding: 4px 10px;
-  font: inherit;
+.graph-queue-plus {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.graph-queue-plus::before {
+  content: '+';
+}
+
+.graph-queue-plus:hover,
+.graph-queue-plus[aria-expanded='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.graph-queue-add .search-picker {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .graph-detail-close,
@@ -373,7 +505,7 @@ input.graph-label {
 .graph-queue-remove {
   width: 20px;
   height: 20px;
-  margin-left: 10px;
+  margin-left: auto;
   font-size: 13px;
   vertical-align: middle;
 }
@@ -381,4 +513,318 @@ input.graph-label {
 .graph-detail-close::before,
 .graph-queue-remove::before {
   content: '×';
+}
+
+/*
+ * Group colours (graph.ts: GROUP_COLORS, groupColors). A group shows its colour on its border, and
+ * the nodes in it on their cards.
+ */
+.react-flow__node.group-color-0 {
+  --group-color: #3b82f6;
+}
+
+.react-flow__node.group-color-1 {
+  --group-color: #f97316;
+}
+
+.react-flow__node.group-color-2 {
+  --group-color: #22c55e;
+}
+
+.react-flow__node.group-color-3 {
+  --group-color: #a855f7;
+}
+
+.react-flow__node.group-color-4 {
+  --group-color: #ec4899;
+}
+
+.react-flow__node.group-color-5 {
+  --group-color: #14b8a6;
+}
+
+.react-flow__node.group-color-6 {
+  --group-color: #eab308;
+}
+
+.react-flow__node.group-color-7 {
+  --group-color: #ef4444;
+}
+
+.react-flow__node[class*='group-color-'] > .graph-card {
+  border-color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 14%, var(--xy-node-background-color-default));
+}
+
+.react-flow__node-frame[class*='group-color-'] {
+  border-color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 7%, transparent);
+}
+
+.react-flow__node-frame[class*='group-color-'] .graph-frame-title > div.graph-label {
+  color: var(--group-color);
+  opacity: 1;
+}
+
+.react-flow__node-agent.parent[class*='group-color-']::before {
+  border-color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 7%, transparent);
+}
+
+/* The arrange toggle (in the zoom controls), when on. */
+.graph-editor .react-flow__controls-button.graph-arrange[aria-pressed='true'] {
+  background: var(--graph-accent);
+  color: white;
+}
+
+/* Agent types (agents.ts), colour-coded: the tag on a node's card and the chip in its panel. */
+[data-agent='Claude'] {
+  --agent-color: #c15f3c;
+}
+
+[data-agent='Codex'] {
+  --agent-color: #0e8a6b;
+}
+
+[data-agent='Qwen'] {
+  --agent-color: #5b4fe0;
+}
+
+[data-agent='Gemini'] {
+  --agent-color: #1a73e8;
+}
+
+.graph-agent {
+  position: absolute;
+  top: -9px;
+  left: 8px;
+  box-sizing: border-box;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--agent-color);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  pointer-events: none;
+}
+
+.graph-agent::after {
+  content: attr(data-agent);
+}
+
+.graph-agent-chip {
+  position: relative;
+}
+
+.graph-agent-chip > button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--agent-color);
+  color: white;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.graph-agent-chip .search-picker {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 6px);
+  right: 0;
+}
+
+/*
+ * The agent's colour on its card (a stripe down the left, over any group colour) and across the
+ * top of its open panel.
+ */
+.react-flow__node.react-flow__node-agent > .graph-card[data-agent] {
+  border-left: 4px solid var(--agent-color);
+}
+
+.graph-detail[data-agent] {
+  border-top: 6px solid var(--agent-color);
+}
+
+/* An agent with a question for the user glows until it is answered. */
+.react-flow__node.asking > .graph-card {
+  animation: graph-asking 1.6s ease-in-out infinite;
+}
+
+@keyframes graph-asking {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px #f59e0b,
+      0 0 8px 2px color-mix(in srgb, #f59e0b 45%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 2px #f59e0b,
+      0 0 20px 8px color-mix(in srgb, #f59e0b 55%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node.asking > .graph-card {
+    box-shadow:
+      0 0 0 2px #f59e0b,
+      0 0 12px 4px color-mix(in srgb, #f59e0b 50%, transparent);
+    animation: none;
+  }
+}
+
+.graph-question-count {
+  position: absolute;
+  top: -8px;
+  right: 18px;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #f59e0b;
+  color: black;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.graph-question-count::after {
+  content: '?' attr(data-count);
+}
+
+/* The floating list of questions agents are waiting on. */
+.graph-questions {
+  box-sizing: border-box;
+  width: 300px;
+  max-height: calc(100vh - 160px);
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 12px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+  color: CanvasText;
+  font-size: 13px;
+}
+
+.graph-questions h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.graph-questions-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #f59e0b;
+  color: black;
+  text-align: center;
+}
+
+.graph-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.graph-question-agent {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--agent-color);
+  color: white;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.graph-question-text {
+  margin: 0;
+}
+
+.graph-question-options,
+.graph-question-reply {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-question-reply input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 6px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+}
+
+.graph-question-options button,
+.graph-question-reply button {
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-question-options button:hover,
+.graph-question-reply button:enabled:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.graph-question-reply button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.graph-question-answer {
+  margin: 0;
+  opacity: 0.65;
+}
+
+/* An agent's own questions, at the top of its panel, each in a callout. */
+.graph-detail-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, 100%);
+  margin: 12px auto 0;
+}
+
+.graph-detail-questions .graph-question {
+  padding: 10px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  background: color-mix(in srgb, #f59e0b 8%, Canvas);
+}
+
+.graph-simulate {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  opacity: 0.55;
+  cursor: pointer;
 }

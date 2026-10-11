@@ -12,8 +12,10 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { useGraphActions } from './actions';
+import { DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
 import { SHORTCUTS } from './keys';
+import { isBlank } from './queue';
 
 /**
  * An item: a card with a dot on top and one at the bottom. An edge runs from the dot a drag starts
@@ -21,15 +23,17 @@ import { SHORTCUTS } from './keys';
  * the item has children React Flow adds the `parent` class, and GraphEditor.css draws a box around
  * them with the card centred on its top border. Hovering the card shows its actions.
  */
-export function ItemNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
+export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const hover = useHover();
   const isParent = useStore((state) => state.parentLookup.has(id));
   const { remove, ungroup } = useGraphActions();
   return (
-    <div className="graph-card" {...hover.target}>
+    <div className="graph-card" data-agent={data.agent ?? DEFAULT_AGENT} {...hover.target}>
       <Handle type="source" id="top" position={Position.Top} />
       <Label id={id} label={data.label} />
-      <QueueCount count={data.queue?.length ?? 0} />
+      <AgentTag agent={data.agent ?? DEFAULT_AGENT} />
+      <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
+      <QuestionCount count={data.questions?.filter((q) => q.answer === undefined).length ?? 0} />
       <Handle type="source" id="bottom" position={Position.Bottom} />
       <NodeToolbar isVisible={hover.active} className="graph-actions" {...hover.target}>
         {isParent && (
@@ -44,7 +48,7 @@ export function ItemNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
         )}
         {!isParent && parentId !== undefined && (
           <ActionButton
-            title={`Move this node out of its group (${SHORTCUTS.ungroup})`}
+            title={`Move this agent out of its group (${SHORTCUTS.ungroup})`}
             onClick={() => {
               ungroup(id);
             }}
@@ -55,8 +59,8 @@ export function ItemNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
         <ActionButton
           title={
             isParent
-              ? "Delete this node (Delete). Its group's nodes are kept."
-              : 'Delete this node (Delete)'
+              ? "Delete this agent (Delete). Its group's nodes are kept."
+              : 'Delete this agent (Delete)'
           }
           onClick={() => {
             remove(id);
@@ -73,7 +77,7 @@ export function ItemNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
  * A frame: a label bar over a see-through body. No dots, so it cannot be connected. Hovering the
  * label bar shows its actions, and a '+' on the middle of its top border that gives it a parent node.
  */
-export function FrameNodeView({ id, data, selected }: NodeProps<GraphNode>) {
+export function GroupNodeView({ id, data, selected }: NodeProps<GraphNode>) {
   const hover = useHover();
   const { addParent, remove, ungroup } = useGraphActions();
   return (
@@ -84,8 +88,8 @@ export function FrameNodeView({ id, data, selected }: NodeProps<GraphNode>) {
       <button
         type="button"
         className={`graph-add-parent nodrag nopan${hover.active || selected ? ' shown' : ''}`}
-        aria-label="Add a parent node"
-        title="Add a parent node"
+        aria-label="Add a parent agent"
+        title="Add a parent agent"
         onClick={() => {
           addParent(id);
         }}
@@ -175,6 +179,23 @@ function LabelInput({ id, label }: { id: string; label: string }) {
         }
       }}
       onBlur={stopEditing}
+    />
+  );
+}
+
+/** The coding agent a node runs, colour-coded. Drawn by CSS, so it is not part of the label. */
+function AgentTag({ agent }: { agent: string }) {
+  return <span className="graph-agent" data-agent={agent} title={`Agent: ${agent}`} />;
+}
+
+/** How many questions the agent is waiting on the user for, drawn by CSS like the queue count. */
+function QuestionCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span
+      className="graph-question-count"
+      data-count={count}
+      title={`${String(count)} question${count === 1 ? '' : 's'} for you`}
     />
   );
 }

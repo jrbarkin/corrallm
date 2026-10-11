@@ -1,27 +1,52 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import { SearchPicker } from '../search/SearchPicker';
+import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
-import { QueueItemKind } from './queue';
+import type { Condition } from './queue';
+import { QuestionCard } from './Questions';
+import { QueueEditor } from './QueueEditor';
+import type { QueueEntry } from './QueueEditor';
 
 /**
  * A node opened up, the way an iOS folder opens: the panel grows out of the node's card to fill
  * most of the editor, over a blurred canvas, and shrinks back into it when closed (Escape, the
- * close button, or a click outside). It renames the node and edits its queue.
+ * close button, or a click outside). It renames the node, sets its agent, and edits its queue
+ * (QueueEditor.tsx).
  */
 export function NodeDetail({
   node,
+  nodes,
   origin,
   onRename,
+  onAgent,
+  onAnswer,
+  onSimulateQuestion,
   onAdd,
   onRemove,
+  onMove,
+  onRetarget,
+  onEditMessage,
+  onCondition,
   onClose,
 }: {
   node: GraphNode;
+  /** Every node of the graph: what queued items can act on. */
+  nodes: readonly GraphNode[];
   /** Where the node's card is on screen: the panel grows from it and shrinks back into it. */
   origin: () => DOMRect | undefined;
   onRename: (label: string) => void;
-  onAdd: (kind: QueueItemKind) => void;
+  onAgent: (agent: AgentType) => void;
+  onAnswer: (questionId: string, answer: string) => void;
+  /** A stand-in for an agent asking, until agents are connected. */
+  onSimulateQuestion: () => void;
+  /** `into`: the id of the if-then to add a step to. */
+  onAdd: (entry: QueueEntry, into?: string) => void;
   onRemove: (itemId: string) => void;
+  onMove: (itemId: string, index: number) => void;
+  onRetarget: (itemId: string, target: string | undefined) => void;
+  onEditMessage: (itemId: string, message: string) => void;
+  onCondition: (ifId: string, condition: Condition) => void;
   onClose: () => void;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
@@ -76,7 +101,7 @@ export function NodeDetail({
   }, [close]);
 
   const label = node.data.label;
-  const queue = node.data.queue ?? [];
+  const agent = node.data.agent ?? DEFAULT_AGENT;
   return (
     <div
       ref={backdrop}
@@ -88,9 +113,10 @@ export function NodeDetail({
       <div
         ref={panel}
         className="graph-detail"
+        data-agent={agent}
         role="dialog"
         aria-modal="true"
-        aria-label={label || 'Unnamed node'}
+        aria-label={label || 'Unnamed agent'}
         tabIndex={-1}
       >
         <div ref={content} className="graph-detail-content">
@@ -98,11 +124,12 @@ export function NodeDetail({
             <input
               aria-label="Name"
               value={label}
-              placeholder="Unnamed node"
+              placeholder="Unnamed agent"
               onChange={(event) => {
                 onRename(event.target.value);
               }}
             />
+            <AgentChip agent={agent} onChange={onAgent} />
             <button
               type="button"
               className="graph-detail-close"
@@ -110,42 +137,75 @@ export function NodeDetail({
               onClick={close}
             />
           </header>
-          <h2>Queue</h2>
-          {queue.length === 0 ? (
-            <p className="graph-queue-empty">Nothing queued yet.</p>
-          ) : (
-            <ol className="graph-queue">
-              {queue.map((item) => (
-                <li key={item.id}>
-                  {item.kind}
-                  <button
-                    type="button"
-                    className="graph-queue-remove"
-                    aria-label={`Remove ${item.kind}`}
-                    onClick={() => {
-                      onRemove(item.id);
-                    }}
-                  />
-                </li>
-              ))}
-            </ol>
-          )}
-          <div className="graph-queue-add" role="group" aria-label="Add to queue">
-            {Object.values(QueueItemKind).map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                aria-label={`Add ${kind}`}
-                onClick={() => {
-                  onAdd(kind);
+          <section className="graph-detail-questions" aria-label="Questions">
+            {(node.data.questions ?? []).map((question) => (
+              <QuestionCard
+                key={question.id}
+                question={question}
+                onAnswer={(answer) => {
+                  onAnswer(question.id, answer);
                 }}
-              >
-                + {kind}
-              </button>
+              />
             ))}
-          </div>
+            <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
+              Simulate a question
+            </button>
+          </section>
+          <QueueEditor
+            node={node}
+            nodes={nodes}
+            agent={agent}
+            actions={AGENT_ACTIONS[agent]}
+            onAdd={onAdd}
+            onRemove={onRemove}
+            onMove={onMove}
+            onRetarget={onRetarget}
+            onEditMessage={onEditMessage}
+            onCondition={onCondition}
+          />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The node's agent: a colour-coded chip that opens a dropdown of the agent types. */
+function AgentChip({
+  agent,
+  onChange,
+}: {
+  agent: AgentType;
+  onChange: (agent: AgentType) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="graph-agent-chip">
+      <button
+        type="button"
+        data-agent={agent}
+        aria-label={`Agent: ${agent}`}
+        aria-expanded={open}
+        onClick={() => {
+          setOpen(!open);
+        }}
+      >
+        {agent}
+      </button>
+      {open && (
+        <SearchPicker
+          label="Agent"
+          options={Object.values(AgentType)}
+          optionLabel={(type) => type}
+          optionKey={(type) => type}
+          onPick={(type) => {
+            onChange(type);
+            setOpen(false);
+          }}
+          onCancel={() => {
+            setOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,10 @@
 import { MarkerType } from '@xyflow/react';
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
-import type { QueueItem } from './queue';
+import { DEFAULT_AGENT } from './agents';
+import type { AgentType } from './agents';
+import { isIf, isMessage } from './queue';
+import type { Condition, QueueItem, QueueMessage, Question, QueueStep } from './queue';
 
 /**
  * `item`: a labelled node with a target handle (top) and a source handle (bottom). While it has
@@ -11,8 +14,21 @@ import type { QueueItem } from './queue';
  * A frame, or an item with children, is a container. Containers are always sized to fit their
  * children (see `autosize`).
  */
-export type NodeKind = 'item' | 'frame';
-export type GraphNode = Node<{ label: string; queue?: QueueItem[] }, NodeKind>;
+export type NodeKind = 'agent' | 'frame';
+/**
+ * `agent`: the coding agent an item runs (frames have none). `color`: a group's colour, an index
+ * into the GROUP_COLORS palette (GraphEditor.css).
+ */
+export type GraphNode = Node<
+  {
+    label: string;
+    agent?: AgentType;
+    queue?: QueueItem[];
+    questions?: Question[];
+    color?: number;
+  },
+  NodeKind
+>;
 export interface Graph {
   nodes: GraphNode[];
   edges: Edge[];
@@ -20,16 +36,18 @@ export interface Graph {
 
 export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
 /** An item's card: 150px wide, a 32px label inside a 1px border. Matches `.graph-card`. */
-export const ITEM_SIZE = { width: 150, height: 34 } as const;
+export const CARD_SIZE = { width: 150, height: 34 } as const;
 /** Height of a container's header zone (a frame's label bar). Matches `.graph-label` in GraphEditor.css. */
 export const HEADER = 32;
 /** Space between a container's edges (below its label bar or card) and its children. */
 export const PADDING = 20;
 /** A frame without children: room for one item. */
 export const EMPTY_FRAME = {
-  width: ITEM_SIZE.width + 2 * PADDING,
+  width: CARD_SIZE.width + 2 * PADDING,
   height: HEADER + 2 * PADDING,
 } as const;
+/** How many colours groups take turns with (`.group-color-0` … in GraphEditor.css). */
+export const GROUP_COLORS = 8;
 /** How far "Add node" moves a new node that would land on another node's top-left corner. */
 const NUDGE = 24;
 
@@ -43,7 +61,7 @@ export function edgeId(source: string, target: string): string {
 }
 
 /** `Node N` or `Group N`, one more than the largest N already used with that prefix. */
-export function nextLabel(nodes: readonly GraphNode[], prefix: 'Node' | 'Group'): string {
+export function nextLabel(nodes: readonly GraphNode[], prefix: 'Agent' | 'Group'): string {
   const pattern = new RegExp(`^${prefix} (\\d+)$`);
   let max = 0;
   for (const node of nodes) {
@@ -58,28 +76,28 @@ export function nextLabel(nodes: readonly GraphNode[], prefix: 'Node' | 'Group')
  * the point is inside a container, the item becomes a child of the innermost one, which grows to
  * fit it. A new item that would land exactly on another node is nudged down and right.
  */
-export function addNode(graph: Graph, id: string, center: XYPosition): Graph {
+export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
   const { nodes } = graph;
   const byId = indexById(nodes);
   let topLeft = {
-    x: Math.round(center.x - ITEM_SIZE.width / 2),
-    y: Math.round(center.y - ITEM_SIZE.height / 2),
+    x: Math.round(center.x - CARD_SIZE.width / 2),
+    y: Math.round(center.y - CARD_SIZE.height / 2),
   };
   const corners = nodes.map((n) => absolutePosition(n, byId));
   for (let i = 0; i < 50 && corners.some((c) => near(c, topLeft)); i++) {
     topLeft = { x: topLeft.x + NUDGE, y: topLeft.y + NUDGE };
   }
   const container = containerAt(nodes, {
-    x: topLeft.x + ITEM_SIZE.width / 2,
-    y: topLeft.y + ITEM_SIZE.height / 2,
+    x: topLeft.x + CARD_SIZE.width / 2,
+    y: topLeft.y + CARD_SIZE.height / 2,
   });
   const origin = container ? absolutePosition(container, byId) : { x: 0, y: 0 };
   const node = withParent(
     {
       id,
-      type: 'item',
+      type: 'agent',
       position: { x: topLeft.x - origin.x, y: topLeft.y - origin.y },
-      data: { label: nextLabel(nodes, 'Node') },
+      data: { label: nextLabel(nodes, 'Agent'), ...newAgent(id) },
       selected: true,
     },
     container?.id,
@@ -88,6 +106,14 @@ export function addNode(graph: Graph, id: string, center: XYPosition): Graph {
     nodes: autosize([...nodes.map((n) => select(n, false)), node]),
     edges: graph.edges.map((e) => select(e, false)),
   };
+}
+
+/**
+ * What a new agent (node `id`) starts with besides its label: the default agent, and a queue that
+ * starts with a message to write, telling the agent what to do.
+ */
+function newAgent(id: string): Pick<GraphNode['data'], 'agent' | 'queue'> {
+  return { agent: DEFAULT_AGENT, queue: [{ id: `${id}/message`, message: '' }] };
 }
 
 /** Sets a node's label. Any string is accepted, including an empty one. */
@@ -100,14 +126,149 @@ export function renameNode(graph: Graph, id: string, label: string): Graph {
   };
 }
 
-/** Appends an item to a node's queue. */
-export function addToQueue(graph: Graph, id: string, item: QueueItem): Graph {
-  return updateQueue(graph, id, (queue) => [...queue, item]);
+/** Sets the coding agent a node runs. Groups (frames) have none. */
+export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (node?.type !== 'agent' || node.data.agent === agent) return graph;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, agent } } : n)),
+  };
 }
 
-/** Removes one item from a node's queue. */
+/**
+ * Appends an item to a node's queue, or with `into` (an if-then's id) a step to that if-then's
+ * steps. If-thens do not nest.
+ */
+export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
+  return updateQueue(graph, id, (queue) => {
+    if (into === undefined) return [...queue, item];
+    if (isIf(item)) return queue;
+    return queue.map((q) => (q.id === into && isIf(q) ? { ...q, then: [...q.then, item] } : q));
+  });
+}
+
+/** Removes one item from a node's queue, or one step from an if-then in it. */
 export function removeFromQueue(graph: Graph, id: string, itemId: string): Graph {
-  return updateQueue(graph, id, (queue) => queue.filter((item) => item.id !== itemId));
+  return updateQueue(graph, id, (queue) =>
+    queue
+      .filter((q) => q.id !== itemId)
+      .map((q) =>
+        isIf(q) && q.then.some((step) => step.id === itemId)
+          ? { ...q, then: q.then.filter((step) => step.id !== itemId) }
+          : q,
+      ),
+  );
+}
+
+/** Moves an item to `index` in its list (the queue, or an if-then's steps), clamped to its ends. */
+export function moveInQueue(graph: Graph, id: string, itemId: string, index: number): Graph {
+  return updateQueue(graph, id, (queue) =>
+    queue.some((q) => q.id === itemId)
+      ? moveTo(queue, itemId, index)
+      : queue.map((q) => (isIf(q) ? withSteps(q, moveTo(q.then, itemId, index)) : q)),
+  );
+}
+
+/** Sets which node a step acts on; `undefined` makes it act on the node whose queue it is in. */
+export function retarget(
+  graph: Graph,
+  id: string,
+  itemId: string,
+  target: string | undefined,
+): Graph {
+  const aim = (step: QueueStep | QueueMessage): QueueStep | QueueMessage => {
+    if (step.id !== itemId || isMessage(step) || step.target === target) return step;
+    const next = { ...step };
+    if (target === undefined) delete next.target;
+    else next.target = target;
+    return next;
+  };
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(aim)) : aim(q))),
+  );
+}
+
+/** Changes the text of a message in the queue (or in an if-then in it). */
+export function editMessage(graph: Graph, id: string, itemId: string, message: string): Graph {
+  const edit = <T extends QueueItem>(q: T): T =>
+    q.id === itemId && isMessage(q) && q.message !== message ? { ...q, message } : q;
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(edit)) : edit(q))),
+  );
+}
+
+/** Adds a question an agent asks the user. */
+export function askUser(graph: Graph, id: string, question: Question): Graph {
+  return updateQuestions(graph, id, (questions) => [...questions, question]);
+}
+
+/** Records the user's answer to an agent's question. */
+export function answerQuestion(
+  graph: Graph,
+  id: string,
+  questionId: string,
+  answer: string,
+): Graph {
+  return updateQuestions(graph, id, (questions) =>
+    questions.map((q) => (q.id === questionId ? { ...q, answer } : q)),
+  );
+}
+
+/** The questions agents are waiting on, in graph order: each with the agent that asked it. */
+export function pendingQuestions(
+  nodes: readonly GraphNode[],
+): { agent: GraphNode; question: Question }[] {
+  return nodes.flatMap((agent) =>
+    (agent.data.questions ?? [])
+      .filter((question) => question.answer === undefined)
+      .map((question) => ({ agent, question })),
+  );
+}
+
+function updateQuestions(
+  graph: Graph,
+  id: string,
+  update: (questions: Question[]) => Question[],
+): Graph {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (!node) return graph;
+  const before = node.data.questions ?? [];
+  const questions = update(before);
+  if (questions.length === before.length && questions.every((q, i) => q === before[i]))
+    return graph;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, questions } } : n)),
+  };
+}
+
+/** Sets what an if-then checks. */
+export function setCondition(graph: Graph, id: string, ifId: string, condition: Condition): Graph {
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) => (q.id === ifId && isIf(q) ? { ...q, if: condition } : q)),
+  );
+}
+
+/** `list` with the item `itemId` moved to `index` (clamped); `list` itself if that changes nothing. */
+function moveTo<T extends { id: string }>(list: T[], itemId: string, index: number): T[] {
+  const item = list.find((q) => q.id === itemId);
+  if (!item) return list;
+  const rest = list.filter((q) => q !== item);
+  const at = Math.max(0, Math.min(index, rest.length));
+  return rest[at - 1] === list[at - 1] && list[at] === item
+    ? list
+    : [...rest.slice(0, at), item, ...rest.slice(at)];
+}
+
+/** An if-then with these steps: itself when they are the same steps. */
+function withSteps<T extends { then: (QueueStep | QueueMessage)[] }>(
+  q: T,
+  then: (QueueStep | QueueMessage)[],
+): T {
+  return then.length === q.then.length && then.every((step, i) => step === q.then[i])
+    ? q
+    : { ...q, then };
 }
 
 function updateQueue(graph: Graph, id: string, update: (queue: QueueItem[]) => QueueItem[]): Graph {
@@ -134,7 +295,7 @@ export function selectOnly(graph: Graph, id: string): Graph {
 /** Whether `source → target` may be added: both are items, distinct, and not already connected. */
 export function canConnect(graph: Graph, connection: { source: string; target: string }): boolean {
   const { source, target } = connection;
-  const isItem = (id: string) => graph.nodes.some((n) => n.id === id && n.type === 'item');
+  const isItem = (id: string) => graph.nodes.some((n) => n.id === id && n.type === 'agent');
   return (
     source !== target &&
     isItem(source) &&
@@ -176,7 +337,7 @@ export function deleteEdge(graph: Graph, id: string): Graph {
 }
 
 /**
- * Deletes the selected nodes and edges, and every edge attached to a deleted node. Children of a
+ * Deletes the selected agents and edges, and every edge attached to a deleted agent. Children of a
  * deleted container are kept: they move to the nearest surviving ancestor (or the top level)
  * without moving on screen. Containers then shrink to fit what is left.
  */
@@ -203,7 +364,7 @@ export function deleteSelection(graph: Graph): Graph {
 }
 
 /**
- * The nodes that grouping would move into a new container: the selected nodes that have no
+ * The nodes that grouping would move into a new container: the selected agents that have no
  * selected ancestor (descendants move with their ancestor). Empty when they do not all share the
  * same parent.
  */
@@ -229,7 +390,11 @@ export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph 
       id,
       type: kind,
       position,
-      data: { label: nextLabel(graph.nodes, kind === 'frame' ? 'Group' : 'Node') },
+      data: {
+        label: nextLabel(graph.nodes, kind === 'frame' ? 'Group' : 'Agent'),
+        color: nextGroupColor(graph.nodes),
+        ...(kind === 'agent' ? newAgent(id) : {}),
+      },
       selected: true,
     },
     parentId,
@@ -262,13 +427,52 @@ export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph 
 export function addParent(graph: Graph, id: string): Graph {
   const frame = graph.nodes.find((n) => n.id === id);
   if (frame?.type !== 'frame') return graph;
-  const label = nextLabel(graph.nodes, 'Node');
+  const label = nextLabel(graph.nodes, 'Agent');
   const nodes = graph.nodes.map((n) =>
     n === frame
-      ? { ...n, type: 'item' as const, data: { ...n.data, label }, selected: true }
+      ? {
+          ...n,
+          type: 'agent' as const,
+          data: { ...n.data, label, ...newAgent(n.id) },
+          selected: true,
+        }
       : select(n, false),
   );
   return { nodes: autosize(nodes), edges: graph.edges.map((e) => select(e, false)) };
+}
+
+/**
+ * The colour each node shows: a group its own, any other node that of the innermost group it is in.
+ * Nodes outside any group have none.
+ */
+export function groupColors(nodes: readonly GraphNode[]): Map<string, number> {
+  const byId = indexById(nodes);
+  const parentIds = new Set(nodes.map((n) => n.parentId));
+  const colors = new Map<string, number>();
+  for (const node of nodes) {
+    for (let n: GraphNode | undefined = node; n; n = parentOf(n, byId)) {
+      const isGroup = n.type === 'frame' || parentIds.has(n.id);
+      if (isGroup && n.data.color !== undefined) {
+        colors.set(node.id, n.data.color);
+        break;
+      }
+    }
+  }
+  return colors;
+}
+
+/** The colour for a new group: the one fewest groups have, the first of those on a tie. */
+function nextGroupColor(nodes: readonly GraphNode[]): number {
+  const parentIds = new Set(nodes.map((n) => n.parentId));
+  const uses = new Array<number>(GROUP_COLORS).fill(0);
+  for (const n of nodes) {
+    const isGroup = n.type === 'frame' || parentIds.has(n.id);
+    if (isGroup && n.data.color !== undefined) {
+      const i = n.data.color % GROUP_COLORS;
+      uses[i] = (uses[i] ?? 0) + 1;
+    }
+  }
+  return uses.indexOf(Math.min(...uses));
 }
 
 /** Whether `ungroupSelection` would change anything. */
@@ -426,8 +630,8 @@ export function autosize(nodes: GraphNode[]): GraphNode[] {
 /** Width and height as React Flow sees them: measured, else explicit, else an item's default. */
 export function size(node: GraphNode): Size {
   return {
-    width: node.measured?.width ?? node.width ?? ITEM_SIZE.width,
-    height: node.measured?.height ?? node.height ?? ITEM_SIZE.height,
+    width: node.measured?.width ?? node.width ?? CARD_SIZE.width,
+    height: node.measured?.height ?? node.height ?? CARD_SIZE.height,
   };
 }
 
@@ -436,8 +640,8 @@ export function size(node: GraphNode): Size {
  * (a frame's label bar), plus PADDING. A parent node's box starts half a card lower, because its
  * card straddles the box's top border; so a frame that gets a parent keeps its border in place.
  */
-function topInset(kind: NodeKind): number {
-  return (kind === 'frame' ? 0 : ITEM_SIZE.height / 2) + HEADER + PADDING;
+export function topInset(kind: NodeKind): number {
+  return (kind === 'frame' ? 0 : CARD_SIZE.height / 2) + HEADER + PADDING;
 }
 
 /** A node without children: frames shrink to EMPTY_FRAME, items lose their container size. */
@@ -447,7 +651,7 @@ function childless(node: GraphNode): GraphNode {
   // The card was centred on the box's top border; leave the plain node where the card was.
   const shrunk = {
     ...node,
-    position: { x: node.position.x + (node.width - ITEM_SIZE.width) / 2, y: node.position.y },
+    position: { x: node.position.x + (node.width - CARD_SIZE.width) / 2, y: node.position.y },
   };
   delete shrunk.width;
   delete shrunk.height;
