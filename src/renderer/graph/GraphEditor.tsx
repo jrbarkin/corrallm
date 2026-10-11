@@ -23,6 +23,7 @@ import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
 import {
+  absolutePosition,
   addAgent,
   addParent,
   addToQueue,
@@ -47,6 +48,7 @@ import {
   selectOnly,
   setAgent,
   setCondition,
+  setWaitFor,
   ungroupSelection,
 } from './graph';
 import type { Graph } from './graph';
@@ -260,6 +262,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setCondition: (owner, ifId, condition) => {
         setGraph((g) => setCondition(g, owner, ifId, condition));
       },
+      setWaitFor: (owner, waitId, agents) => {
+        setGraph((g) => setWaitFor(g, owner, waitId, agents));
+      },
     }),
     [setGraph],
   );
@@ -418,6 +423,12 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     const pair = (a: string, b: string) => JSON.stringify([a, b].sort());
     const work = workEdges(graph.nodes);
     const working = new Set(work.map(({ from, to }) => pair(from, to)));
+    const directed = new Set(work.map(({ from, to }) => JSON.stringify([from, to])));
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    const top = (id: string) => {
+      const node = byId.get(id);
+      return node ? absolutePosition(node, byId).y : 0;
+    };
     const links: Edge[] = graph.edges
       .filter((e) => !working.has(pair(e.source, e.target)))
       .map((e) => ({
@@ -425,20 +436,31 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         className: 'graph-link',
         ariaLabel: `${name(e.source)} and ${name(e.target)} can talk`,
       }));
-    const arrows: WorkFlowEdge[] = work.map(({ from, to, count, conditional }) => ({
-      id: `work:${from}->${to}`,
-      type: 'work',
-      source: from,
-      target: to,
-      sourceHandle: 'bottom',
-      targetHandle: 'top',
-      markerEnd: { type: MarkerType.ArrowClosed },
-      selectable: false,
-      deletable: false,
-      className: 'graph-work',
-      ariaLabel: `Work from ${name(from)} for ${name(to)}: ${String(count)} queued${conditional ? ', on a condition' : ''}`,
-      data: { count, conditional, fromName: name(from), toName: name(to) },
-    }));
+    const arrows: WorkFlowEdge[] = work.map(({ from, to, count, conditional }) => {
+      // Up to an agent above: out of the top dot and into the bottom one, so it does not loop.
+      const upwards = top(from) > top(to);
+      const both = directed.has(JSON.stringify([to, from]));
+      return {
+        id: `work:${from}->${to}`,
+        type: 'work',
+        source: from,
+        target: to,
+        sourceHandle: upwards ? 'top' : 'bottom',
+        targetHandle: upwards ? 'bottom' : 'top',
+        markerEnd: { type: MarkerType.ArrowClosed },
+        selectable: false,
+        deletable: false,
+        className: 'graph-work',
+        ariaLabel: `Work from ${name(from)} for ${name(to)}: ${String(count)} queued${conditional ? ', on a condition' : ''}`,
+        data: {
+          count,
+          conditional,
+          lane: both ? (from < to ? 1 : -1) : 0,
+          fromName: name(from),
+          toName: name(to),
+        },
+      };
+    });
     return [...links, ...arrows];
   }, [graph.nodes, graph.edges]);
 
@@ -684,6 +706,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             }}
             onCondition={(ifId, condition) => {
               edits.setCondition(openedNode.id, ifId, condition);
+            }}
+            onWaitFor={(waitId, agents) => {
+              edits.setWaitFor(openedNode.id, waitId, agents);
             }}
             onClose={closeOpened}
           />

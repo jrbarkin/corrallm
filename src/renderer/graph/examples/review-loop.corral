@@ -35,16 +35,13 @@
       "queue": [
         {
           "id": "ready",
-          "if": {
-            "kind": "nodeDone",
-            "node": "coder"
-          },
-          "then": [
-            {
-              "id": "review",
-              "action": "/review"
-            }
+          "waitFor": [
+            "coder"
           ]
+        },
+        {
+          "id": "review",
+          "action": "/review"
         },
         {
           "id": "changes",

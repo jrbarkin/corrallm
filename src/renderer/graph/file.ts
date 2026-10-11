@@ -3,7 +3,7 @@ import type { Edge } from '@xyflow/react';
 import { AgentType } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
-import type { Condition, QueueItem, QueueMessage, QueueStep } from './queue';
+import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait } from './queue';
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
@@ -198,6 +198,7 @@ function readNode(value: unknown, where: string): FileNode {
 
 function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
+  if ('waitFor' in item) return readWait(item, where);
   if ('if' in item) {
     return {
       id: name(item.id, `${where}.id`),
@@ -212,11 +213,18 @@ function readItem(value: unknown, where: string): QueueItem {
 function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const item = record(value, where);
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
+  if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
   const id = name(item.id, `${where}.id`);
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };
   if ('message' in item) return { id, message: text(item.message, `${where}.message`), ...aimed };
   return { id, action: name(item.action, `${where}.action`), ...aimed };
+}
+
+function readWait(item: Record<string, unknown>, where: string): QueueWait {
+  const waitFor = list(item.waitFor, `${where}.waitFor`, name);
+  if (waitFor.length === 0) throw new Error(`${where}.waitFor must name at least one agent`);
+  return { id: name(item.id, `${where}.id`), waitFor: [...new Set(waitFor)] };
 }
 
 function readCondition(value: unknown, where: string): Condition {
@@ -225,15 +233,11 @@ function readCondition(value: unknown, where: string): Condition {
     case 'succeeded':
     case 'failed':
       return { kind: condition.kind };
-    case 'nodeDone':
-      return { kind: 'nodeDone', node: name(condition.node, `${where}.node`) };
     case 'outputContains':
     case 'freeText':
       return { kind: condition.kind, text: text(condition.text, `${where}.text`) };
     default:
-      throw new Error(
-        `${where}.kind must be one of: succeeded, failed, nodeDone, outputContains, freeText`,
-      );
+      throw new Error(`${where}.kind must be one of: succeeded, failed, outputContains, freeText`);
   }
 }
 

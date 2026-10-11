@@ -47,3 +47,6 @@ Object.defineProperties(HTMLElement.prototype, {
     },
   },
 });
+
+// jsdom does not lay out, so it has nothing to scroll into view.
+Element.prototype.scrollIntoView = () => undefined;

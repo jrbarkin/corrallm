@@ -1,3 +1,4 @@
+import crossCheck from './examples/cross-check.corral?raw';
 import fanOut from './examples/fan-out.corral?raw';
 import releaseChecks from './examples/release-checks.corral?raw';
 import reviewLoop from './examples/review-loop.corral?raw';
@@ -11,6 +12,12 @@ export interface Example {
 }
 
 export const EXAMPLES: readonly Example[] = [
+  {
+    name: 'Independent cross-check',
+    description:
+      "A builder takes the task while a checker researches it on its own, then checks the builder's work.",
+    text: crossCheck,
+  },
   {
     name: 'Review loop',
     description:

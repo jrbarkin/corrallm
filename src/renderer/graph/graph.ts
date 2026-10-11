@@ -2,7 +2,7 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
-import { isIf, isMessage } from './queue';
+import { isIf, isMessage, isWait } from './queue';
 import type { Condition, QueueItem, QueueMessage, Question, QueueStep } from './queue';
 
 /**
@@ -136,13 +136,13 @@ export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
 }
 
 /**
- * Appends an item to a node's queue, or with `into` (an if-then's id) a step to that if-then's
- * steps. If-thens do not nest.
+ * Appends an item to a node's queue, or with `into` (an if-then's id) a step or message to that
+ * if-then's steps. If-thens do not nest, and hold no waits.
  */
 export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
   return updateQueue(graph, id, (queue) => {
     if (into === undefined) return [...queue, item];
-    if (isIf(item)) return queue;
+    if (isIf(item) || isWait(item)) return queue;
     return queue.map((q) => (q.id === into && isIf(q) ? { ...q, then: [...q.then, item] } : q));
   });
 }
@@ -187,7 +187,19 @@ export function retarget(
     return next;
   };
   return updateQueue(graph, id, (queue) =>
-    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(aim)) : aim(q))),
+    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(aim)) : isWait(q) ? q : aim(q))),
+  );
+}
+
+/** Sets the agents a wait waits for (ids). A wait waits for someone: an empty list is ignored. */
+export function setWaitFor(graph: Graph, id: string, waitId: string, agents: string[]): Graph {
+  if (agents.length === 0) return graph;
+  const same = (waitFor: string[]) =>
+    waitFor.length === agents.length && waitFor.every((agent, i) => agent === agents[i]);
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) =>
+      q.id === waitId && isWait(q) && !same(q.waitFor) ? { ...q, waitFor: agents } : q,
+    ),
   );
 }
 

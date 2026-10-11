@@ -1,18 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
-import { CONDITIONS, isIf, isMessage } from './queue';
-import type { Condition, QueueIf, QueueItem, QueueMessage, QueueStep } from './queue';
+import { CONDITIONS, isIf, isMessage, isWait } from './queue';
+import type { Condition, QueueIf, QueueItem, QueueMessage, QueueStep, QueueWait } from './queue';
 import { SortableList } from './SortableList';
 import type { HandleProps } from './SortableList';
 
 const EMPTY: readonly QueueItem[] = [];
 
 /** A queue item, before it has an id. */
-export type QueueEntry = Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'>;
+export type QueueEntry =
+  Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'> | Omit<QueueWait, 'id'>;
 
 /** An agent a step can act on, or a condition check; `id` undefined is the queue's own agent. */
 interface Target {
@@ -25,8 +26,8 @@ const nameOf = (node: GraphNode | undefined) =>
 
 /**
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
- * another is picked), messages (text passed to the agent), and if-thens (steps and messages that
- * run only when a condition holds). The ⊕ adds any of them; everything is picked by typing to
+ * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
+ * only when a condition holds), and waits (until other agents have finished). The ⊕ adds any of them; everything is picked by typing to
  * search. Rows are reordered by dragging their handle, or with the arrow keys on it. With `only`,
  * it shows part of the queue (WorkDetail.tsx), where reordering moves items among those shown.
  */
@@ -43,6 +44,7 @@ export function QueueEditor({
   onRetarget,
   onEditMessage,
   onCondition,
+  onWaitFor,
 }: {
   node: GraphNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
@@ -64,21 +66,26 @@ export function QueueEditor({
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
+  onWaitFor: (waitId: string, agents: string[]) => void;
 }) {
   const queue = node.data.queue ?? EMPTY;
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const name = (id: string | undefined) =>
     id === undefined ? 'this agent' : nameOf(nodes.find((n) => n.id === id));
   const ifText = (condition: Condition) =>
-    condition.kind === 'nodeDone'
-      ? `${name(condition.node)} has finished`
-      : condition.kind === 'outputContains'
-        ? `the output contains "${condition.text}"`
-        : condition.kind === 'freeText'
-          ? condition.text
-          : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
+    condition.kind === 'outputContains'
+      ? `the output contains "${condition.text}"`
+      : condition.kind === 'freeText'
+        ? condition.text
+        : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
   const describe = (item: QueueItem) =>
-    isIf(item) ? `If ${ifText(item.if)}` : isMessage(item) ? 'Message' : item.action;
+    isWait(item)
+      ? `Wait for ${andList(item.waitFor.map(name))}`
+      : isIf(item)
+        ? `If ${ifText(item.if)}`
+        : isMessage(item)
+          ? 'Message'
+          : item.action;
   const context: Context = {
     agent,
     actions,
@@ -89,6 +96,7 @@ export function QueueEditor({
     onRemove,
     onRetarget,
     onEditMessage,
+    onWaitFor,
   };
   const shown = only ? queue.filter(only) : queue;
   /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
@@ -111,7 +119,9 @@ export function QueueEditor({
           className="graph-queue"
           onMove={moveShown}
           renderItem={(item, handle) =>
-            isIf(item) ? (
+            isWait(item) ? (
+              <WaitRow item={item} handle={handle} context={context} />
+            ) : isIf(item) ? (
               <IfRow
                 item={item}
                 handle={handle}
@@ -156,25 +166,40 @@ interface Context {
   onRemove: (itemId: string) => void;
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
+  onWaitFor: (waitId: string, agents: string[]) => void;
 }
 
-/** Picks an agent by typing: "This agent" first, unless `withSelf` is false. */
+/** "a", "a and b", "a, b and c". */
+function andList(names: readonly string[]): string {
+  return names.length < 2
+    ? names.join('')
+    : `${names.slice(0, -1).join(', ')} and ${String(names.at(-1))}`;
+}
+
+/**
+ * Picks an agent by typing: "This agent" first, unless `withSelf` is false. Agents in `exclude`
+ * (ids) are not offered.
+ */
 function TargetPicker({
   context,
   label = 'On which agent?',
   withSelf = true,
+  exclude = [],
   onPick,
   onCancel,
 }: {
   context: Context;
   label?: string;
   withSelf?: boolean;
+  exclude?: readonly string[];
   onPick: (target: Target) => void;
   onCancel: () => void;
 }) {
   const targets: Target[] = [
     ...(withSelf ? [{ id: undefined, name: 'This agent' }] : []),
-    ...context.others.map((n) => ({ id: n.id, name: nameOf(n) })),
+    ...context.others
+      .filter((n) => !exclude.includes(n.id))
+      .map((n) => ({ id: n.id, name: nameOf(n) })),
   ];
   return (
     <SearchPicker
@@ -202,6 +227,10 @@ function TextPrompt({
   onCancel: () => void;
 }) {
   const [text, setText] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    root.current?.scrollIntoView({ block: 'nearest' });
+  }, []);
   const props = {
     'aria-label': label,
     placeholder: label,
@@ -222,6 +251,7 @@ function TextPrompt({
   };
   return (
     <div
+      ref={root}
       className="search-picker"
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) onCancel();
@@ -359,6 +389,76 @@ function MessageRow({
   );
 }
 
+/**
+ * A wait: the agents it waits for, each with a button that takes it off (but the last), and a
+ * button that adds another.
+ */
+function WaitRow({
+  item,
+  handle,
+  context,
+}: {
+  item: QueueWait;
+  handle: HandleProps;
+  context: Context;
+}) {
+  const [adding, setAdding] = useState(false);
+  const more = context.others.some((n) => !item.waitFor.includes(n.id));
+  return (
+    <div className="graph-queue-row graph-queue-wait">
+      <Handle handle={handle} item={item} context={context} />
+      <span className="graph-queue-keyword">Wait for</span>
+      {item.waitFor.map((agent) => (
+        <span key={agent} className="graph-queue-waited">
+          {context.name(agent)}
+          {item.waitFor.length > 1 && (
+            <button
+              type="button"
+              aria-label={`Stop waiting for ${context.name(agent)}`}
+              onClick={() => {
+                context.onWaitFor(
+                  item.id,
+                  item.waitFor.filter((a) => a !== agent),
+                );
+              }}
+            />
+          )}
+        </span>
+      ))}
+      {more && (
+        <button
+          type="button"
+          className="graph-queue-target"
+          aria-label="Wait for another agent"
+          title="Wait for another agent too"
+          aria-expanded={adding}
+          onClick={() => {
+            setAdding(!adding);
+          }}
+        >
+          +
+        </button>
+      )}
+      <RemoveButton item={item} context={context} />
+      {adding && (
+        <TargetPicker
+          context={context}
+          label="Wait for which agent?"
+          withSelf={false}
+          exclude={item.waitFor}
+          onPick={(target) => {
+            if (target.id !== undefined) context.onWaitFor(item.id, [...item.waitFor, target.id]);
+            setAdding(false);
+          }}
+          onCancel={() => {
+            setAdding(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /** An if-then: "If <condition> then" (the condition a chip that changes it), and its steps. */
 function IfRow({
   item,
@@ -399,7 +499,6 @@ function IfRow({
         <RemoveButton item={item} context={context} />
         {editing && (
           <ConditionPicker
-            context={context}
             current={item.if}
             onPick={(condition) => {
               onCondition(condition);
@@ -425,17 +524,19 @@ function IfRow({
   );
 }
 
-type Choice = { kind: 'if' } | { kind: 'message' } | { kind: 'action'; action: AgentAction };
+type Choice =
+  { kind: 'if' } | { kind: 'wait' } | { kind: 'message' } | { kind: 'action'; action: AgentAction };
 
 const CHOICE_TEXT = {
   if: ['If… then', 'Run steps only when a condition holds'],
-  message: ['Message', 'Tell the agent something'],
+  wait: ['Wait for…', 'Go on only once other agents have finished'],
+  message: ['Message', 'Tell an agent something'],
 } as const;
 
 /**
- * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`) "If… then"; then
- * the agent the action acts on (unless `target` fixes it), the message's text, or the if-then's
- * condition.
+ * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`, for the queue
+ * itself) "If… then" and "Wait for…"; then the agent the action acts on (unless `target` fixes it),
+ * the message's text, the if-then's condition, or the agent to wait for.
  */
 function AddMenu({
   label,
@@ -451,14 +552,14 @@ function AddMenu({
   context: Context;
   onAdd: (entry: QueueEntry) => void;
 }) {
-  const [step, setStep] = useState<'closed' | 'choose' | 'condition' | 'message' | AgentAction>(
-    'closed',
-  );
+  const [step, setStep] = useState<
+    'closed' | 'choose' | 'condition' | 'wait' | 'message' | AgentAction
+  >('closed');
   const close = () => {
     setStep('closed');
   };
   const choices: Choice[] = [
-    ...(withIf ? [{ kind: 'if' as const }] : []),
+    ...(withIf ? [{ kind: 'if' as const }, { kind: 'wait' as const }] : []),
     { kind: 'message' },
     ...context.actions.map((action) => ({ kind: 'action' as const, action })),
   ];
@@ -496,9 +597,9 @@ function AddMenu({
             setStep(
               choice.kind === 'if'
                 ? 'condition'
-                : choice.kind === 'message'
-                  ? 'message'
-                  : choice.action,
+                : choice.kind === 'action'
+                  ? choice.action
+                  : choice.kind,
             );
           }}
           onCancel={close}
@@ -506,9 +607,20 @@ function AddMenu({
       )}
       {step === 'condition' && (
         <ConditionPicker
-          context={context}
           onPick={(condition) => {
             onAdd({ if: condition, then: [] });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'wait' && (
+        <TargetPicker
+          context={context}
+          label="Wait for which agent?"
+          withSelf={false}
+          onPick={(agent) => {
+            if (agent.id !== undefined) onAdd({ waitFor: [agent.id] });
             close();
           }}
           onCancel={close}
@@ -540,34 +652,19 @@ function AddMenu({
 }
 
 /**
- * Picks a condition, then what it needs: an agent, or the text to look for. Or takes what was
- * typed as the condition, in the user's own words; changing such a condition starts from them.
+ * Picks a condition, then the text to look for if it needs one. Or takes what was typed as the
+ * condition, in the user's own words; changing such a condition starts from them.
  */
 function ConditionPicker({
-  context,
   current,
   onPick,
   onCancel,
 }: {
-  context: Context;
   current?: Condition;
   onPick: (condition: Condition) => void;
   onCancel: () => void;
 }) {
-  const [needs, setNeeds] = useState<'kind' | 'agent' | 'text'>('kind');
-  if (needs === 'agent') {
-    return (
-      <TargetPicker
-        context={context}
-        label="Which agent?"
-        withSelf={false}
-        onPick={(target) => {
-          if (target.id !== undefined) onPick({ kind: 'nodeDone', node: target.id });
-        }}
-        onCancel={onCancel}
-      />
-    );
-  }
+  const [needs, setNeeds] = useState<'kind' | 'text'>('kind');
   if (needs === 'text') {
     return (
       <TextPrompt
@@ -594,8 +691,7 @@ function ConditionPicker({
         },
       }}
       onPick={(c) => {
-        if (c.kind === 'nodeDone') setNeeds('agent');
-        else if (c.kind === 'outputContains') setNeeds('text');
+        if (c.kind === 'outputContains') setNeeds('text');
         else onPick({ kind: c.kind });
       }}
       onCancel={onCancel}

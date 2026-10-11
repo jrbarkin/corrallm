@@ -6,6 +6,7 @@ import type { Graph, GraphNode } from './graph';
 import type { QueueItem } from './queue';
 
 const queue: QueueItem[] = [
+  { id: 'w', waitFor: ['b'] },
   { id: 'm', message: 'Fix the flaky test', target: 'b' },
   {
     id: 'i',
@@ -163,6 +164,19 @@ describe('fromFile', () => {
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'i', if: { kind: 'maybe' }, then: [] }] }),
       /nodes\[1\]\.queue\[0\]\.if/,
+    ],
+    [
+      'a wait inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'w', waitFor: ['b'] }] }],
+        }),
+      /nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a wait/,
+    ],
+    [
+      'a wait for nobody',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: [] }] }),
+      /nodes\[1\]\.queue\[0\]\.waitFor must name at least one agent/,
     ],
     [
       'a link to a missing agent',

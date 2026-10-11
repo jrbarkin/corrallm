@@ -43,6 +43,7 @@ export function SearchPicker<T>({
   const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   const listId = useId();
   const typedId = useId();
   const fuzzy = freeText === undefined;
@@ -73,10 +74,13 @@ export function SearchPicker<T>({
   useEffect(() => {
     field.current?.focus();
     field.current?.select();
+    // Opened at the end of a long list, it may start out of sight in whatever scrolls it.
+    root.current?.scrollIntoView({ block: 'nearest' });
   }, []);
 
   return (
     <div
+      ref={root}
       className="search-picker"
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) onCancel();

@@ -467,20 +467,33 @@ describe('GraphEditor', () => {
     expect(count().textContent).toBe('2');
   });
 
-  it('draws a wait for another agent as an arrow from it, opening to the waiting queue', () => {
-    const queue = [{ id: 'w', if: { kind: 'nodeDone' as const, node: 'a' }, then: [] }];
-    const { container } = setup({
-      nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100, { data: { label: 'b', queue } })],
+  it('queues a wait for other agents, drawn as an arrow from each, opening to the waiting queue', () => {
+    const { container, node } = setup({
+      nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100), agentNode('c', 200, 0)],
       edges: [],
     });
-    expect(
-      container.querySelector('[data-testid="rf__edge-work:a->b"]')?.getAttribute('aria-label'),
-    ).toBe('Work from a for b: 1 queued');
+    const edge = (id: string) => container.querySelector(`[data-testid="rf__edge-${id}"]`);
+    fireEvent.doubleClick(node('b'));
+    const panel = within(screen.getByRole('dialog', { name: 'b' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'a' }));
+    // Another agent joins the wait: the queue goes on once both have finished.
+    fireEvent.click(panel.getByRole('button', { name: 'Wait for another agent' }));
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual(['c']);
+    fireEvent.click(panel.getByRole('option', { name: 'c' }));
+    expect(panel.getByRole('button', { name: 'Move Wait for a and c' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(edge('work:a->b')?.getAttribute('aria-label')).toBe('Work from a for b: 1 queued');
+    expect(edge('work:c->b')).not.toBeNull();
+
+    // The arrow opens the queue that waits, where an agent can come off the wait.
     fireEvent.click(button('Open the work from a for b'));
-    const panel = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
-    const waiting = within(panel.getByRole('region', { name: "In b's queue" }));
-    expect(waiting.getByRole('button', { name: 'Move If a has finished' })).toBeTruthy();
-    expect(panel.getByRole('region', { name: "In a's queue" })).toBeTruthy();
+    const work = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
+    const waiting = within(work.getByRole('region', { name: "In b's queue" }));
+    fireEvent.click(waiting.getByRole('button', { name: 'Stop waiting for a' }));
+    expect(edge('work:a->b')).toBeNull();
+    expect(edge('work:c->b')).not.toBeNull();
   });
 
   it('deletes a selected link from its button', () => {

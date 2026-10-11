@@ -15,11 +15,12 @@ export interface QueueEdits {
   retarget: (owner: string, itemId: string, target: string | undefined) => void;
   editMessage: (owner: string, itemId: string, message: string) => void;
   setCondition: (owner: string, ifId: string, condition: Condition) => void;
+  setWaitFor: (owner: string, waitId: string, agents: string[]) => void;
 }
 
 /**
- * The work from one agent for another (an edge from `from` to `to`, see work.ts): the steps
- * `from`'s queue aims at `to`, where ⊕ queues more, and the if-thens in `to`'s queue that wait for
+ * The work from one agent for another (an edge from `from` to `to`, see work.ts): the steps and
+ * messages `from`'s queue aims at `to`, where ⊕ queues more, and the waits in `to`'s queue for
  * `from`. It is a view onto those queues, so what it changes, it changes there. Escape, the close
  * button or a click outside closes it.
  */
@@ -85,6 +86,9 @@ export function WorkDetail({
           }}
           onCondition={(ifId, condition) => {
             edits.setCondition(owner.id, ifId, condition);
+          }}
+          onWaitFor={(waitId, agents) => {
+            edits.setWaitFor(owner.id, waitId, agents);
           }}
         />
       </section>

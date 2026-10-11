@@ -25,7 +25,6 @@ export interface QueueMessage {
 export type Condition =
   | { kind: 'succeeded' }
   | { kind: 'failed' }
-  | { kind: 'nodeDone'; node: string }
   | { kind: 'outputContains'; text: string }
   | { kind: 'freeText'; text: string };
 
@@ -36,10 +35,24 @@ export interface QueueIf {
   then: (QueueStep | QueueMessage)[];
 }
 
-export type QueueItem = QueueStep | QueueMessage | QueueIf;
+/**
+ * A wait: the queue stops here until every agent in `waitFor` (ids) has finished its own queue.
+ * Naming several makes a join: the queue goes on once the last of them is done. Waits sit in the
+ * queue itself, not in an if-then.
+ */
+export interface QueueWait {
+  id: string;
+  waitFor: string[];
+}
+
+export type QueueItem = QueueStep | QueueMessage | QueueIf | QueueWait;
 
 export function isIf(item: QueueItem): item is QueueIf {
   return 'if' in item;
+}
+
+export function isWait(item: QueueItem): item is QueueWait {
+  return 'waitFor' in item;
 }
 
 export function isMessage(item: QueueItem): item is QueueMessage {
@@ -63,6 +76,5 @@ export interface Question {
 export const CONDITIONS = [
   { kind: 'succeeded', label: 'the previous step succeeded' },
   { kind: 'failed', label: 'the previous step failed' },
-  { kind: 'nodeDone', label: 'an agent has finished' },
   { kind: 'outputContains', label: 'the output contains…' },
 ] as const satisfies readonly { kind: Condition['kind']; label: string }[];

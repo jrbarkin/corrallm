@@ -502,8 +502,10 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   await page.keyboard.type('read');
   await page.keyboard.press('Enter');
   await page.keyboard.press('Escape');
+  // Agent 3 is above the group: the work goes up, out of the parent's top dot.
   const work = page.getByTestId(`rf__edge-work:${String(idTeam)}->${String(idC)}`);
-  expectNear(await edgeEnd(work, 'start'), await center(dot(team, 'bottom')));
+  expectNear(await edgeEnd(work, 'start'), await center(dot(team, 'top')));
+  expectNear(await edgeEnd(work, 'end'), await center(dot(c, 'bottom')));
   await expect(edges()).toHaveCount(1);
 
   // Deleting the parent, from its actions, keeps what was inside it in place and removes its edges.
@@ -741,7 +743,13 @@ test('groups nest and take a parent node just like nodes do', async () => {
 
 test('opens each example from the gallery, drawing its agents and the work between them', async () => {
   await page.getByRole('button', { name: 'Start from an example…' }).click();
-  for (const name of ['Review loop', 'Team lead', 'Fan-out research', 'Release checks']) {
+  for (const name of [
+    'Independent cross-check',
+    'Review loop',
+    'Team lead',
+    'Fan-out research',
+    'Release checks',
+  ]) {
     const gallery = page.getByRole('dialog', { name: 'Examples' });
     if ((await gallery.count()) === 0)
       await page.getByRole('button', { name: 'Examples…' }).click();
@@ -755,6 +763,48 @@ test('opens each example from the gallery, drawing its agents and the work betwe
     for (const n of await nodes().all())
       expect((await box(n)).y, name).toBeGreaterThan(bar.y + bar.height);
   }
+});
+
+test('keeps work both ways readable, gives messages room, and shows the menus of long queues', async () => {
+  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('button', { name: /^Independent cross-check/ })
+    .click();
+
+  // Work both ways between two agents: each arrow's count stays clear of the other's, and of the
+  // agents' cards.
+  const there = await box(
+    page.getByRole('button', { name: 'Open the work from Builder for Checker' }),
+  );
+  const back = await box(
+    page.getByRole('button', { name: 'Open the work from Checker for Builder' }),
+  );
+  const cards = await Promise.all([box(card('Builder')), box(card('Checker'))]);
+  const overlap = (a: Box, b: Box) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  expect(overlap(there, back)).toBe(false);
+  for (const count of [there, back]) {
+    for (const one of cards) expect(overlap(count, one)).toBe(false);
+  }
+
+  await node('Checker').dblclick();
+  const panel = page.getByRole('dialog', { name: 'Checker' });
+  await expect.poll(() => panel.evaluate((el) => el.getAnimations().length)).toBe(0);
+
+  // A message's text gets the width of its row.
+  const widths = await panel
+    .getByRole('textbox', { name: 'Message to the agent' })
+    .first()
+    .evaluate((el) => ({
+      text: el.getBoundingClientRect().width,
+      row: el.closest('.graph-queue-row')?.getBoundingClientRect().width ?? 0,
+    }));
+  expect(widths.text).toBeGreaterThan(widths.row * 0.8);
+
+  // The ⊕ under a long queue brings its menu into view.
+  await panel.getByRole('button', { name: 'Add to queue' }).click();
+  expectInside(await box(panel.getByRole('listbox', { name: 'Add to queue' })), await box(panel));
 });
 
 test('arranges the graph automatically while the toggle is on', async () => {

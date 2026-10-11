@@ -12,6 +12,7 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { useGraphActions } from './actions';
+import { pointOnBezier } from './curve';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
 import { SHORTCUTS } from './keys';
@@ -140,9 +141,22 @@ export function LinkView({ id, interactionWidth, ...geometry }: EdgeProps) {
   );
 }
 
+/** How far apart (px) two arrows between the same agents run, each this far from the middle. */
+const LANE_GAP = 6;
+
 /** Work queued from one agent for another (work.ts), as React Flow draws it. */
 export type WorkFlowEdge = Edge<
-  { count: number; conditional: boolean; fromName: string; toName: string },
+  {
+    count: number;
+    conditional: boolean;
+    /**
+     * When work flows the other way too, which side of the line between the two this arrow runs
+     * on (1 or -1), so that the two run side by side; otherwise 0.
+     */
+    lane: -1 | 0 | 1;
+    fromName: string;
+    toName: string;
+  },
   'work'
 >;
 
@@ -160,7 +174,11 @@ export function WorkEdgeView({
   ...geometry
 }: EdgeProps<WorkFlowEdge>) {
   const { openWork } = useGraphActions();
-  const [path, labelX, labelY] = getBezierPath(geometry);
+  // Two arrows between the same agents run side by side, each count nearer its arrow's sender.
+  const lane = (data?.lane ?? 0) * LANE_GAP;
+  const ends = { ...geometry, sourceX: geometry.sourceX + lane, targetX: geometry.targetX + lane };
+  const [path, labelX, labelY] = getBezierPath(ends);
+  const at = lane === 0 ? { x: labelX, y: labelY } : pointOnBezier(ends, 0.35);
   const count = data?.count ?? 0;
   const conditional = data?.conditional ?? false;
   return (
@@ -170,7 +188,7 @@ export function WorkEdgeView({
         {...(markerEnd ? { markerEnd } : {})}
         {...(interactionWidth ? { interactionWidth } : {})}
       />
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible>
+      <EdgeToolbar edgeId={id} x={at.x} y={at.y} isVisible>
         <button
           type="button"
           className={conditional ? 'graph-work-count conditional' : 'graph-work-count'}

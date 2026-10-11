@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
-import { isIf } from './queue';
+import { isIf, isWait } from './queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
@@ -18,8 +18,11 @@ describe.each(EXAMPLES)('the $name example', (example) => {
     for (const agent of agents.values()) {
       const actions = AGENT_ACTIONS[agent.data.agent ?? DEFAULT_AGENT].map((a) => a.name);
       for (const item of agent.data.queue ?? []) {
+        if (isWait(item)) {
+          for (const id of item.waitFor) expect(agents.has(id)).toBe(true);
+          continue;
+        }
         const steps = isIf(item) ? item.then : [item];
-        if (isIf(item) && item.if.kind === 'nodeDone') expect(agents.has(item.if.node)).toBe(true);
         for (const step of steps) {
           if (step.target !== undefined) expect(agents.has(step.target)).toBe(true);
           if ('action' in step) expect(actions).toContain(step.action);

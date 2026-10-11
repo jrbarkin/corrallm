@@ -1,11 +1,11 @@
 import type { GraphNode } from './graph';
-import { isIf } from './queue';
+import { isIf, isWait } from './queue';
 import type { QueueItem } from './queue';
 
 /**
  * Work between two agents, as their queues make it: an edge from `from` to `to`, drawn (with an
  * arrowhead) whenever `from`'s queue aims a step or a message at `to`, or `to`'s queue waits for
- * `from`.
+ * `from` to finish.
  */
 export interface WorkEdge {
   from: string;
@@ -18,14 +18,12 @@ export interface WorkEdge {
 
 /**
  * Whether `item`, in the queue of agent `owner`, is part of the work from `from` to `to`: in `from`'s
- * queue, a step or message aimed at `to` (or an if-then holding one); in `to`'s queue, an if-then
- * that waits for `from` to finish.
+ * queue, a step or message aimed at `to` (or an if-then holding one); in `to`'s queue, a wait for
+ * `from`.
  */
 export function isWorkBetween(item: QueueItem, owner: string, from: string, to: string): boolean {
-  if (isIf(item)) {
-    const waits = owner === to && item.if.kind === 'nodeDone' && item.if.node === from;
-    return waits || item.then.some((step) => isWorkBetween(step, owner, from, to));
-  }
+  if (isWait(item)) return owner === to && item.waitFor.includes(from);
+  if (isIf(item)) return item.then.some((step) => isWorkBetween(step, owner, from, to));
   return owner === from && item.target === to;
 }
 
@@ -51,8 +49,9 @@ export function workEdges(nodes: readonly GraphNode[]): WorkEdge[] {
   for (const node of nodes) {
     // A wait is not conditional work: it is when the agent waiting goes on.
     const visit = (item: QueueItem, inIf: boolean) => {
-      if (isIf(item)) {
-        if (item.if.kind === 'nodeDone') add(item.if.node, node.id, false);
+      if (isWait(item)) {
+        for (const agent of item.waitFor) add(agent, node.id, false);
+      } else if (isIf(item)) {
         for (const step of item.then) visit(step, true);
       } else if (item.target !== undefined) {
         add(node.id, item.target, inIf);

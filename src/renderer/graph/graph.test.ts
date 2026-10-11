@@ -34,6 +34,7 @@ import {
   selectOnly,
   setAgent,
   setCondition,
+  setWaitFor,
   size,
   ungroupSelection,
 } from './graph';
@@ -287,6 +288,23 @@ describe('queues', () => {
     expect(queueOf(retarget(sent, 'a', 'm1', undefined)).at(-1)).toEqual(note);
   });
 
+  it('holds waits for other agents, whose agents can be changed', () => {
+    const wait = { id: 'w1', waitFor: ['b'] };
+    const waiting = addToQueue(queued, 'a', wait);
+    expect(queueOf(waiting).at(-1)).toEqual(wait);
+    expect(queueOf(setWaitFor(waiting, 'a', 'w1', ['b', 'c'])).at(-1)).toEqual({
+      id: 'w1',
+      waitFor: ['b', 'c'],
+    });
+    // A wait waits for someone, and only waits are changed.
+    expect(setWaitFor(waiting, 'a', 'w1', [])).toBe(waiting);
+    expect(setWaitFor(waiting, 'a', 'w1', ['b'])).toBe(waiting);
+    expect(setWaitFor(waiting, 'a', 'q1', ['b'])).toBe(waiting);
+    // Waits are left alone by what changes steps and messages.
+    expect(retarget(waiting, 'a', 'w1', 'c')).toBe(waiting);
+    expect(editMessage(waiting, 'a', 'w1', 'x')).toBe(waiting);
+  });
+
   describe('if-then', () => {
     const block = { id: 'if1', if: { kind: 'failed' as const }, then: [] };
     const withIf = addToQueue(queued, 'a', block);
@@ -297,10 +315,11 @@ describe('queues', () => {
       return found && 'then' in found ? found.then.map((q) => q.id) : undefined;
     };
 
-    it('adds steps inside an if-then, not to the queue', () => {
+    it('adds steps inside an if-then, not to the queue; never a wait', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'w', waitFor: ['b'] }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {
@@ -318,9 +337,9 @@ describe('queues', () => {
     });
 
     it('changes its condition', () => {
-      const done = setCondition(filled, 'a', 'if1', { kind: 'nodeDone', node: 'b' });
+      const done = setCondition(filled, 'a', 'if1', { kind: 'outputContains', text: 'PASS' });
       expect(queueOf(done).find((q) => q.id === 'if1')).toMatchObject({
-        if: { kind: 'nodeDone', node: 'b' },
+        if: { kind: 'outputContains', text: 'PASS' },
       });
       expect(setCondition(filled, 'a', 'q1', { kind: 'failed' })).toBe(filled);
     });

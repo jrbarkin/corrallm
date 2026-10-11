@@ -1,0 +1,67 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "builder",
+      "kind": "agent",
+      "label": "Builder",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "task",
+          "message": "Add rate limiting to the public API, with tests."
+        }
+      ]
+    },
+    {
+      "id": "checker",
+      "kind": "agent",
+      "label": "Checker",
+      "position": {
+        "x": 360,
+        "y": 160
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "brief",
+          "message": "Work out on your own how the public API should be rate-limited. Don't look at Builder's changes."
+        },
+        {
+          "id": "research",
+          "action": "Workflow"
+        },
+        {
+          "id": "done",
+          "waitFor": [
+            "builder"
+          ]
+        },
+        {
+          "id": "check",
+          "message": "Cross-check Builder's changes against what your research found. List every place they disagree, and why."
+        },
+        {
+          "id": "disagree",
+          "if": {
+            "kind": "freeText",
+            "text": "you found a disagreement"
+          },
+          "then": [
+            {
+              "id": "report",
+              "message": "Address the points in Checker's cross-check.",
+              "target": "builder"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": []
+}

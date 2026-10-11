@@ -28,6 +28,7 @@ export function NodeDetail({
   onRetarget,
   onEditMessage,
   onCondition,
+  onWaitFor,
   onClose,
 }: {
   node: GraphNode;
@@ -47,6 +48,7 @@ export function NodeDetail({
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
+  onWaitFor: (waitId: string, agents: string[]) => void;
   onClose: () => void;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
@@ -162,6 +164,7 @@ export function NodeDetail({
             onRetarget={onRetarget}
             onEditMessage={onEditMessage}
             onCondition={onCondition}
+            onWaitFor={onWaitFor}
           />
         </div>
       </div>

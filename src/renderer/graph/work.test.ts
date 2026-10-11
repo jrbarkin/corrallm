@@ -46,12 +46,13 @@ describe('workEdges', () => {
 
   it('runs an edge to an agent from each agent it waits for, beside the work it gives them', () => {
     const b = agent('b', [
-      { id: 'w', if: { kind: 'nodeDone', node: 'a' }, then: [] },
+      { id: 'w', waitFor: ['a', 'c'] },
       { id: 's', action: 'Read', target: 'a' },
     ]);
     const a = agent('a', [{ id: 't', action: 'Write', target: 'b' }]);
-    expect(workEdges([a, b])).toEqual([
+    expect(workEdges([a, b, agent('c')])).toEqual([
       { from: 'a', to: 'b', count: 2, conditional: false },
+      { from: 'c', to: 'b', count: 1, conditional: false },
       { from: 'b', to: 'a', count: 1, conditional: false },
     ]);
   });
@@ -61,7 +62,7 @@ describe('isWorkBetween', () => {
   it("tells which of an agent's items make an edge: work it gives, or a wait for another", () => {
     const step: QueueItem = { id: 's', action: 'Read', target: 'b' };
     const holding: QueueItem = { id: 'i', if: { kind: 'failed' }, then: [step] };
-    const waiting: QueueItem = { id: 'w', if: { kind: 'nodeDone', node: 'b' }, then: [] };
+    const waiting: QueueItem = { id: 'w', waitFor: ['b'] };
     const message: QueueItem = { id: 'm', message: 'Hello' };
     const sent: QueueItem = { id: 'n', message: 'Over to you', target: 'b' };
     const between = (item: QueueItem, from: string, to: string) =>
