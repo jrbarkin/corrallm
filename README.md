@@ -15,7 +15,7 @@ Cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron 
 ### 1. Clone
 
 ```sh
-git clone <repo-url> corrallm
+git clone https://github.com/jrbarkin/corrallm.git
 cd corrallm
 ```
 
@@ -112,6 +112,10 @@ Signing and notarization are turned on only when the matching environment variab
 ## Contributing
 
 See [`CLAUDE.md`](CLAUDE.md) for the project layout, security rules and how to add an IPC channel.
+
+## License
+
+[Apache License 2.0](LICENSE).
 
 ## Troubleshooting
 
