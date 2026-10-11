@@ -1,9 +1,9 @@
-<%#
+<% /*
   Vendored from electron-installer-redhat 4.0.0 (resources/spec.ejs), used by @electron-forge/maker-rpm.
   Only change: %install copies from %{_topdir}/BUILD/usr instead of the relative usr/, which breaks on
   rpmbuild >= 4.20 (Fedora 41+, Ubuntu 26.04) because %install no longer runs inside BUILD/.
   Upstream: electron-userland/electron-installer-redhat#343. Delete this file once a fixed release ships.
-%>%define _binary_payload w<%= compressionLevel %>.xzdio
+*/ %>%define _binary_payload w<%= compressionLevel %>.xzdio
 
 %if "%{_host_cpu}" != "%{_target_cpu}"
 %global __strip /bin/true
