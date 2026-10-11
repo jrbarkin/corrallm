@@ -1,16 +1,22 @@
 import { Graph as Layered, layout } from '@dagrejs/dagre';
 import type { EdgeLabel, GraphLabel, NodeLabel } from '@dagrejs/dagre';
-import type { Edge } from '@xyflow/react';
-
 import { autosize, PADDING, size, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
+import { workEdges } from './work';
+
+/** What the layout follows: an edge, or the work one agent's queue gives another. */
+interface Flow {
+  source: string;
+  target: string;
+}
 
 /** Space between neighbouring nodes in a row, and between rows. */
 const NODE_GAP = 40;
 const RANK_GAP = 60;
 
 /**
- * Lays the graph out top to bottom along its edges (dagre's layered layout): each group's nodes
+ * Lays the graph out top to bottom along its edges and the work its queues give (dagre's layered
+ * layout, see work.ts): each group's nodes
  * inside it, innermost groups first, then every group among its siblings. An edge into or out of a
  * group counts, at each level, as an edge of whatever there holds its end. The graph stays where it
  * was, and an arranged graph is returned as it is.
@@ -19,16 +25,20 @@ export function arrange(graph: Graph): Graph {
   const parentIds = new Set(graph.nodes.flatMap((n) => n.parentId ?? []));
   // Children come after their parents, so going backwards reaches inner groups first.
   const groups = graph.nodes.filter((n) => parentIds.has(n.id)).reverse();
+  const flows: Flow[] = [
+    ...graph.edges,
+    ...workEdges(graph.nodes).map(({ from, to }) => ({ source: from, target: to })),
+  ];
   let nodes = graph.nodes;
-  for (const group of groups) nodes = autosize(placeChildren(nodes, graph.edges, group));
-  nodes = placeChildren(nodes, graph.edges, undefined);
+  for (const group of groups) nodes = autosize(placeChildren(nodes, flows, group));
+  nodes = placeChildren(nodes, flows, undefined);
   return nodes.every((n, i) => n === graph.nodes[i]) ? graph : { ...graph, nodes };
 }
 
 /** Lays out the nodes directly inside `group` (or at the top level). */
 function placeChildren(
   nodes: GraphNode[],
-  edges: readonly Edge[],
+  flows: readonly Flow[],
   group: GraphNode | undefined,
 ): GraphNode[] {
   const children = nodes.filter((n) => n.parentId === group?.id);
@@ -47,9 +57,9 @@ function placeChildren(
   layered.setGraph({ rankdir: 'TB', nodesep: NODE_GAP, ranksep: RANK_GAP });
   layered.setDefaultEdgeLabel(() => ({}));
   for (const child of children) layered.setNode(child.id, { ...size(child) });
-  for (const edge of edges) {
-    const from = holder(edge.source);
-    const to = holder(edge.target);
+  for (const flow of flows) {
+    const from = holder(flow.source);
+    const to = holder(flow.target);
     if (from !== undefined && to !== undefined && from !== to) layered.setEdge(from, to);
   }
   layout(layered);

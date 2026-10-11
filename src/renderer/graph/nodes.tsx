@@ -7,7 +7,7 @@ import {
   Position,
   useStore,
 } from '@xyflow/react';
-import type { EdgeProps, NodeProps } from '@xyflow/react';
+import type { Edge, EdgeProps, NodeProps } from '@xyflow/react';
 import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -118,9 +118,44 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GraphNode>) {
 }
 
 /** An edge with an arrowhead at its target. When it is selected, a button on it deletes it. */
-export function EdgeView({ id, markerEnd, interactionWidth, ...geometry }: EdgeProps) {
+/** A link between two agents that can talk to each other: a line, and while selected, its delete button. */
+export function LinkView({ id, interactionWidth, ...geometry }: EdgeProps) {
   const { removeEdge } = useGraphActions();
   const [path, labelX, labelY] = getBezierPath(geometry);
+  return (
+    <>
+      <BaseEdge path={path} {...(interactionWidth ? { interactionWidth } : {})} />
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} className="graph-actions">
+        <ActionButton
+          title="Delete this link (Delete)"
+          aria-label="Delete link"
+          onClick={() => {
+            removeEdge(id);
+          }}
+        >
+          ×
+        </ActionButton>
+      </EdgeToolbar>
+    </>
+  );
+}
+
+/** Work queued from one agent for another (work.ts), as React Flow draws it. */
+export type WorkFlowEdge = Edge<{ count: number; fromName: string; toName: string }, 'work'>;
+
+/** Work from one agent for another: an arrow, and a button with how many items, which opens them. */
+export function WorkEdgeView({
+  id,
+  source,
+  target,
+  data,
+  markerEnd,
+  interactionWidth,
+  ...geometry
+}: EdgeProps<WorkFlowEdge>) {
+  const { openWork } = useGraphActions();
+  const [path, labelX, labelY] = getBezierPath(geometry);
+  const count = data?.count ?? 0;
   return (
     <>
       <BaseEdge
@@ -128,16 +163,18 @@ export function EdgeView({ id, markerEnd, interactionWidth, ...geometry }: EdgeP
         {...(markerEnd ? { markerEnd } : {})}
         {...(interactionWidth ? { interactionWidth } : {})}
       />
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} className="graph-actions">
-        <ActionButton
-          title="Delete this edge (Delete)"
-          aria-label="Delete edge"
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible>
+        <button
+          type="button"
+          className="graph-work-count"
+          aria-label={`Open the work from ${data?.fromName ?? ''} for ${data?.toName ?? ''}`}
+          title={`${String(count)} queued. Click to open.`}
           onClick={() => {
-            removeEdge(id);
+            openWork(source, target);
           }}
         >
-          ×
-        </ActionButton>
+          {count}
+        </button>
       </EdgeToolbar>
     </>
   );

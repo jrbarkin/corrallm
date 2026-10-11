@@ -12,6 +12,8 @@ export interface GraphActions {
   ungroup: (id: string) => void;
   addParent: (id: string) => void;
   removeEdge: (id: string) => void;
+  /** Opens the work queued from one agent for another (WorkDetail.tsx). */
+  openWork: (from: string, to: string) => void;
 }
 
 export const GraphActionsContext = createContext<GraphActions | null>(null);

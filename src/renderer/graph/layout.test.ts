@@ -95,6 +95,20 @@ describe('arrange', () => {
     expectApart(F, z);
   });
 
+  it('follows the work queues give other agents, as it follows edges', () => {
+    const a = agentNode('a', 0, 300);
+    const g = arrange({
+      nodes: [
+        { ...a, data: { label: 'a', queue: [{ id: 's', action: 'Read', target: 'b' }] } },
+        agentNode('b', 0, 0),
+      ],
+      edges: [],
+    });
+    const [boxA, boxB] = ['a', 'b'].map((id) => boxOf(g, id));
+    if (!boxA || !boxB) throw new Error('missing');
+    expect(boxA.y + boxA.height).toBeLessThan(boxB.y);
+  });
+
   it('keeps the graph where it was, and leaves an arranged graph alone', () => {
     const before: Graph = {
       nodes: [agentNode('a', 200, 150), agentNode('b', 600, 900)],

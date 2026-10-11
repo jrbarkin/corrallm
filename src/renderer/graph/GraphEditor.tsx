@@ -5,6 +5,7 @@ import {
   ConnectionMode,
   ControlButton,
   Controls,
+  MarkerType,
   NodeToolbar,
   Panel,
   ReactFlow,
@@ -12,7 +13,7 @@ import {
   useReactFlow,
   useStoreApi,
 } from '@xyflow/react';
-import type { EdgeTypes, NodeTypes } from '@xyflow/react';
+import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
@@ -25,6 +26,7 @@ import {
   addParent,
   addToQueue,
   answerQuestion,
+  areLinked,
   askUser,
   autosize,
   canConnect,
@@ -50,14 +52,20 @@ import type { Graph } from './graph';
 import { keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
 import type { KeyAction } from './keys';
+import { ConnectMenu } from './ConnectMenu';
+import type { MenuPlace } from './ConnectMenu';
 import { NodeDetail } from './NodeDetail';
-import { EdgeView, GroupNodeView, AgentNodeView } from './nodes';
+import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
+import type { WorkFlowEdge } from './nodes';
 import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
+import { workEdges } from './work';
+import { WorkDetail } from './WorkDetail';
+import type { QueueEdits } from './WorkDetail';
 import './GraphEditor.css';
 
 const nodeTypes = { agent: AgentNodeView, frame: GroupNodeView } satisfies NodeTypes;
-const edgeTypes = { default: EdgeView } satisfies EdgeTypes;
+const edgeTypes = { default: LinkView, work: WorkEdgeView } satisfies EdgeTypes;
 /** Middle and right mouse buttons pan; the left button draws the selection box. */
 const PAN_BUTTONS = [1, 2];
 const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
@@ -107,13 +115,19 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
   const [editing, setEditing] = useState<string>();
   /** The node opened in a panel by a double-click, if any. */
   const [opened, setOpened] = useState<string>();
+  /** The work between two agents opened in a panel, if any. */
+  const [work, setWork] = useState<{ from: string; to: string }>();
+  /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
+  const [drawn, setDrawn] = useState<Connection & { at?: MenuPlace }>();
   const store = useStoreApi();
   const { screenToFlowPosition } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
+  /** Whether a panel or menu is open, which has the keyboard (Escape closes it). */
+  const modal = opened !== undefined || work !== undefined || drawn !== undefined;
   // The keyboard handler reads these without re-subscribing on every change.
-  const latest = useRef({ graph, opened, arranging });
+  const latest = useRef({ graph, modal, arranging });
   useEffect(() => {
-    latest.current = { graph, opened, arranging };
+    latest.current = { graph, modal, arranging };
   });
   /** Every change to the graph goes through here, so it stays arranged while arranging is on. */
   const setGraph = useCallback((op: (graph: Graph) => Graph) => {
@@ -171,14 +185,47 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
       removeEdge: (id) => {
         setGraph((g) => deleteEdge(g, id));
       },
+      openWork: (from, to) => {
+        setWork({ from, to });
+      },
     }),
     [apply, editing, setGraph],
   );
 
+  const edits = useMemo<QueueEdits>(
+    () => ({
+      add: (owner, entry, into) => {
+        const item = { ...entry, id: crypto.randomUUID() };
+        setGraph((g) => addToQueue(g, owner, item, into));
+      },
+      remove: (owner, itemId) => {
+        setGraph((g) => removeFromQueue(g, owner, itemId));
+      },
+      move: (owner, itemId, index) => {
+        setGraph((g) => moveInQueue(g, owner, itemId, index));
+      },
+      retarget: (owner, itemId, target) => {
+        setGraph((g) => retarget(g, owner, itemId, target));
+      },
+      editMessage: (owner, itemId, message) => {
+        setGraph((g) => editMessage(g, owner, itemId, message));
+      },
+      setCondition: (owner, ifId, condition) => {
+        setGraph((g) => setCondition(g, owner, ifId, condition));
+      },
+    }),
+    [setGraph],
+  );
+  const closeWork = useCallback(() => {
+    setWork(undefined);
+  }, []);
+  const cancelDrawn = useCallback(() => {
+    setDrawn(undefined);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // An open node panel has the keyboard (Escape closes it).
-      if (latest.current.opened !== undefined) return;
+      if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
       event.preventDefault();
@@ -228,17 +275,42 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
   }, [graph.nodes]);
   const pending = pendingQuestions(graph.nodes);
 
-  // React Flow names an edge after its node ids (random UUIDs); use the labels for screen readers.
+  // The links between agents that can talk (graph.edges, dashed), except where one hands the other
+  // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
+  // names an edge after its node ids (random UUIDs); screen readers hear the agents' labels.
   const edges = useMemo(() => {
-    const labels = new Map(graph.nodes.map((n) => [n.id, n.data.label || 'unnamed agent']));
+    const labels = new Map(graph.nodes.map((n) => [n.id, n.data.label || 'Unnamed agent']));
     const name = (id: string) => labels.get(id) ?? 'unknown node';
-    return graph.edges.map((e) => ({
-      ...e,
-      ariaLabel: `Edge from ${name(e.source)} to ${name(e.target)}`,
+    const pair = (a: string, b: string) => JSON.stringify([a, b].sort());
+    const work = workEdges(graph.nodes);
+    const working = new Set(work.map(({ from, to }) => pair(from, to)));
+    const links: Edge[] = graph.edges
+      .filter((e) => !working.has(pair(e.source, e.target)))
+      .map((e) => ({
+        ...e,
+        className: 'graph-link',
+        ariaLabel: `${name(e.source)} and ${name(e.target)} can talk`,
+      }));
+    const arrows: WorkFlowEdge[] = work.map(({ from, to, count }) => ({
+      id: `work:${from}->${to}`,
+      type: 'work',
+      source: from,
+      target: to,
+      sourceHandle: 'bottom',
+      targetHandle: 'top',
+      markerEnd: { type: MarkerType.ArrowClosed },
+      selectable: false,
+      deletable: false,
+      className: 'graph-work',
+      ariaLabel: `Work from ${name(from)} for ${name(to)}: ${String(count)} queued`,
+      data: { count, fromName: name(from), toName: name(to) },
     }));
+    return [...links, ...arrows];
   }, [graph.nodes, graph.edges]);
 
   const selectedIds = graph.nodes.filter((n) => n.selected).map((n) => n.id);
+  const nameOf = (id: string) =>
+    (graph.nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
   const openedNode = graph.nodes.find((n) => n.id === opened);
   const canGroup = groupMembers(graph.nodes).length > 0;
 
@@ -258,8 +330,30 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
           onEdgesChange={(changes) => {
             setGraph((g) => ({ ...g, edges: applyEdgeChanges(changes, g.edges) }));
           }}
+          // A drawn edge asks what it makes (ConnectMenu), where the drag ended.
           onConnect={(connection) => {
-            setGraph((g) => connect(g, connection));
+            setDrawn(connection);
+          }}
+          onConnectEnd={(event) => {
+            const point = 'changedTouches' in event ? event.changedTouches[0] : event;
+            const editor = wrapper.current?.getBoundingClientRect();
+            if (!point || !editor) return;
+            // Above a top dot and below a bottom one, clear of the card it ends on.
+            const x = Math.min(Math.max(point.clientX - editor.left, 150), editor.width - 150);
+            const y = point.clientY - editor.top;
+            setDrawn(
+              (d) =>
+                d && {
+                  ...d,
+                  at:
+                    d.targetHandle === 'bottom'
+                      ? { x, y: Math.min(y, editor.height - 150), above: false }
+                      : { x, y: Math.max(y, 150), above: true },
+                },
+            );
+          }}
+          onEdgeDoubleClick={(_event, edge) => {
+            if (edge.type === 'work') setWork({ from: edge.source, to: edge.target });
           }}
           isValidConnection={(connection) => canConnect(graph, connection)}
           connectionMode={ConnectionMode.Loose}
@@ -366,8 +460,8 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
             </Panel>
           )}
           <Panel position="bottom-center" className="graph-panel graph-hint">
-            Double-click the canvas to add an agent, or an agent to open it · Drag between dots to
-            connect · Drag on empty space to select · Hover for actions · F2 to rename
+            Double-click the canvas to add an agent, or an agent to open it · Drag between agents'
+            dots to let them talk or queue work · Drag on empty space to select · F2 to rename
           </Panel>
         </ReactFlow>
         {openedNode && (
@@ -393,25 +487,52 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
               setGraph((g) => askUser(g, openedNode.id, question));
             }}
             onAdd={(entry, into) => {
-              const item = { ...entry, id: crypto.randomUUID() };
-              setGraph((g) => addToQueue(g, openedNode.id, item, into));
+              edits.add(openedNode.id, entry, into);
             }}
             onRemove={(itemId) => {
-              setGraph((g) => removeFromQueue(g, openedNode.id, itemId));
+              edits.remove(openedNode.id, itemId);
             }}
             onMove={(itemId, index) => {
-              setGraph((g) => moveInQueue(g, openedNode.id, itemId, index));
+              edits.move(openedNode.id, itemId, index);
             }}
             onRetarget={(itemId, target) => {
-              setGraph((g) => retarget(g, openedNode.id, itemId, target));
+              edits.retarget(openedNode.id, itemId, target);
             }}
             onEditMessage={(itemId, message) => {
-              setGraph((g) => editMessage(g, openedNode.id, itemId, message));
+              edits.editMessage(openedNode.id, itemId, message);
             }}
             onCondition={(ifId, condition) => {
-              setGraph((g) => setCondition(g, openedNode.id, ifId, condition));
+              edits.setCondition(openedNode.id, ifId, condition);
             }}
             onClose={closeOpened}
+          />
+        )}
+        {work && (
+          <WorkDetail
+            key={`${work.from}->${work.to}`}
+            from={work.from}
+            to={work.to}
+            nodes={graph.nodes}
+            edits={edits}
+            onClose={closeWork}
+          />
+        )}
+        {drawn && (
+          <ConnectMenu
+            fromName={nameOf(drawn.source)}
+            toName={nameOf(drawn.target)}
+            linked={areLinked(graph, drawn.source, drawn.target)}
+            at={drawn.at}
+            onTalk={() => {
+              setGraph((g) => connect(g, drawn));
+              setDrawn(undefined);
+            }}
+            onWork={() => {
+              setGraph((g) => connect(g, drawn));
+              setDrawn(undefined);
+              setWork({ from: drawn.source, to: drawn.target });
+            }}
+            onCancel={cancelDrawn}
           />
         )}
       </div>

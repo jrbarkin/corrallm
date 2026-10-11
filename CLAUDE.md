@@ -39,7 +39,10 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      GraphEditor.tsx (node views in nodes.tsx); an agent's panel in NodeDetail.tsx,
                      with its queue (QueueEditor.tsx, queue.ts, SortableList.tsx) and questions
                      (Questions.tsx); agent types and their actions (sourced catalogs) in agents.ts;
-                     automatic layout (dagre) in layout.ts.
+                     automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
+                     talk); arrows for the work one agent's queue gives another are derived from
+                     the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
+                     (ConnectMenu.tsx).
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.

@@ -1,4 +1,3 @@
-import { MarkerType } from '@xyflow/react';
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
@@ -292,21 +291,28 @@ export function selectOnly(graph: Graph, id: string): Graph {
   return unchanged ? graph : { nodes, edges };
 }
 
-/** Whether `source → target` may be added: both are items, distinct, and not already connected. */
+/**
+ * Whether an edge may be drawn from `source` to `target`: both are agents, and distinct. Drawing one
+ * between agents already linked is allowed (it can queue work instead, see work.ts).
+ */
 export function canConnect(graph: Graph, connection: { source: string; target: string }): boolean {
   const { source, target } = connection;
-  const isItem = (id: string) => graph.nodes.some((n) => n.id === id && n.type === 'agent');
-  return (
-    source !== target &&
-    isItem(source) &&
-    isItem(target) &&
-    !graph.edges.some((e) => e.source === source && e.target === target)
+  const isAgent = (id: string) => graph.nodes.some((n) => n.id === id && n.type === 'agent');
+  return source !== target && isAgent(source) && isAgent(target);
+}
+
+/** Whether agents `a` and `b` are linked (can talk to each other), whichever way it was drawn. */
+export function areLinked(graph: Graph, a: string, b: string): boolean {
+  return graph.edges.some(
+    (e) => (e.source === a && e.target === b) || (e.source === b && e.target === a),
   );
 }
 
 /**
- * Adds a directed edge with an arrowhead at the target, between the dots it was drawn between (so
- * b -> a drawn back along a -> b's dots retraces it). Invalid connections are ignored.
+ * Links two agents so they can talk to each other: an edge with no direction (and no arrowhead),
+ * between the dots it was drawn between. The graph's stored edges are these links; the work queues
+ * give other agents is drawn from the queues (work.ts). Invalid connections, and agents already
+ * linked either way round, are ignored.
  */
 export function connect(
   graph: Graph,
@@ -317,14 +323,9 @@ export function connect(
     targetHandle?: string | null;
   },
 ): Graph {
-  if (!canConnect(graph, connection)) return graph;
   const { source, target, sourceHandle, targetHandle } = connection;
-  const edge: Edge = {
-    id: edgeId(source, target),
-    source,
-    target,
-    markerEnd: { type: MarkerType.ArrowClosed },
-  };
+  if (!canConnect(graph, connection) || areLinked(graph, source, target)) return graph;
+  const edge: Edge = { id: edgeId(source, target), source, target };
   if (sourceHandle) edge.sourceHandle = sourceHandle;
   if (targetHandle) edge.targetHandle = targetHandle;
   return { ...graph, edges: [...graph.edges, edge] };

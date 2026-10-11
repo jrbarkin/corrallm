@@ -1,4 +1,3 @@
-import { MarkerType } from '@xyflow/react';
 import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
@@ -8,6 +7,7 @@ import {
   addParent,
   addToQueue,
   answerQuestion,
+  areLinked,
   askUser,
   autosize,
   canConnect,
@@ -390,49 +390,42 @@ describe('connect', () => {
     inside('F', agentNode('c', 20, 52)),
   ]);
 
-  it('adds a directed edge with an arrowhead at the target', () => {
-    expect(connect(g, { source: 'a', target: 'b' }).edges).toEqual([
-      { id: 'a->b', source: 'a', target: 'b', markerEnd: { type: MarkerType.ArrowClosed } },
-    ]);
-  });
-
-  it('rejects self-loops, duplicates, frames and unknown nodes', () => {
-    const ab = connect(g, { source: 'a', target: 'b' });
-    for (const [source, target] of [
-      ['a', 'a'],
-      ['a', 'b'],
-      ['a', 'F'],
-      ['F', 'a'],
-      ['a', 'missing'],
-    ] as const) {
-      expect(canConnect(ab, { source, target }), `${source}->${target}`).toBe(false);
-      expect(connect(ab, { source, target })).toBe(ab);
-    }
-  });
-
-  it('allows the reverse direction and edges into a container', () => {
-    const ab = connect(g, { source: 'a', target: 'b' });
-    expect(connect(ab, { source: 'b', target: 'a' }).edges).toHaveLength(2);
-    expect(canConnect(ab, { source: 'a', target: 'c' })).toBe(true);
-  });
-
-  it('keeps the dots an edge was drawn between, so b -> a can run back along a -> b', () => {
+  it('links two agents so they can talk: no arrowhead, between the dots it was drawn between', () => {
     const ab = connect(g, {
       source: 'a',
       target: 'b',
       sourceHandle: 'bottom',
       targetHandle: 'top',
     });
-    const ba = connect(ab, {
-      source: 'b',
-      target: 'a',
-      sourceHandle: 'top',
-      targetHandle: 'bottom',
-    });
-    expect(ba.edges).toEqual([
-      expect.objectContaining({ id: 'a->b', sourceHandle: 'bottom', targetHandle: 'top' }),
-      expect.objectContaining({ id: 'b->a', sourceHandle: 'top', targetHandle: 'bottom' }),
+    expect(ab.edges).toEqual([
+      { id: 'a->b', source: 'a', target: 'b', sourceHandle: 'bottom', targetHandle: 'top' },
     ]);
+    expect([areLinked(ab, 'a', 'b'), areLinked(ab, 'b', 'a'), areLinked(g, 'a', 'b')]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it('links two agents once, either way round', () => {
+    const ab = connect(g, { source: 'a', target: 'b' });
+    expect(connect(ab, { source: 'a', target: 'b' })).toBe(ab);
+    expect(connect(ab, { source: 'b', target: 'a' })).toBe(ab);
+    // Drawing between linked agents is still allowed: it can queue work instead.
+    expect(canConnect(ab, { source: 'b', target: 'a' })).toBe(true);
+  });
+
+  it('rejects self-loops, frames and unknown nodes, but not containers', () => {
+    for (const [source, target] of [
+      ['a', 'a'],
+      ['a', 'F'],
+      ['F', 'a'],
+      ['a', 'missing'],
+    ] as const) {
+      expect(canConnect(g, { source, target }), `${source}->${target}`).toBe(false);
+      expect(connect(g, { source, target })).toBe(g);
+    }
+    expect(canConnect(g, { source: 'a', target: 'c' })).toBe(true);
   });
 });
 

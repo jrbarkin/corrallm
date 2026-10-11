@@ -103,9 +103,18 @@ async function drag(from: Point, to: Point, button: 'left' | 'right' = 'left') {
 type Dot = 'top' | 'bottom';
 const dot = (n: Locator, which: Dot) => n.locator(`.react-flow__handle[data-handleid="${which}"]`);
 
-/** Drags from one node's dot to another's: an edge from the first node to the second. */
-async function connect(source: Locator, target: Locator, from: Dot = 'bottom', to: Dot = 'top') {
+/** Drags from one node's dot to another's, which asks what the edge makes (a link or work). */
+async function draw(source: Locator, target: Locator, from: Dot = 'bottom', to: Dot = 'top') {
   await drag(await center(dot(source, from)), await center(dot(target, to)));
+}
+
+/** Draws an edge from one node's dot to another's, and makes it a link: the two can talk. */
+async function connect(source: Locator, target: Locator, from: Dot = 'bottom', to: Dot = 'top') {
+  await draw(source, target, from, to);
+  await page
+    .getByRole('dialog', { name: /^Connect / })
+    .getByRole('button', { name: /^Let them talk/ })
+    .click();
 }
 
 /** Drags a selection box 30px around the given nodes, starting on empty space. */
@@ -253,35 +262,75 @@ test('creates, selects, renames and deletes nodes', async () => {
   await expect(nodes()).toHaveCount(0);
 });
 
-test('connects nodes in both directions, and deletes edges', async () => {
+test('a drawn edge lets two agents talk, or queues work, which their queues then draw', async () => {
   const a = await addAgentAt('Agent 1', 400, 150);
   const b = await addAgentAt('Agent 2', 400, 350);
   const [idA, idB] = await Promise.all([a.getAttribute('data-id'), b.getAttribute('data-id')]);
-  const ab = page.getByTestId(`rf__edge-${String(idA)}->${String(idB)}`);
-  const ba = page.getByTestId(`rf__edge-${String(idB)}->${String(idA)}`);
+  const link = page.getByTestId(`rf__edge-${String(idA)}->${String(idB)}`);
+  const work = page.getByTestId(`rf__edge-work:${String(idB)}->${String(idA)}`);
+  const arrowhead = (edge: Locator) =>
+    edge.locator('path.react-flow__edge-path').getAttribute('marker-end');
 
-  await connect(a, b);
-  await expect(ab).toHaveCount(1);
-  await expect(ab.locator('path.react-flow__edge-path')).toHaveAttribute('marker-end', /url\(/);
+  // Drawing from a to b asks what the edge makes, just above where the drag ended (clear of b's
+  // card). A link lets them talk: dashed, with no arrowhead.
+  await draw(a, b);
+  const menu = page.getByRole('dialog', { name: 'Connect Agent 1 to Agent 2' });
+  const placed = await box(menu);
+  expectNear(
+    { x: placed.x + placed.width / 2, y: placed.y + placed.height },
+    await center(dot(b, 'top')),
+    16,
+  );
+  await menu.getByRole('button', { name: /^Let them talk/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(link).toHaveCount(1);
+  expect(await arrowhead(link)).toBeNull();
+  expect(
+    await link
+      .locator('path.react-flow__edge-path')
+      .evaluate((el) => getComputedStyle(el).strokeDasharray),
+  ).not.toBe('none');
 
-  // An edge runs from where the drag starts to where it ends: dragging back from b's top dot to
-  // a's bottom dot adds b -> a along the same line, so the pair shows an arrowhead at each end.
-  await connect(b, a, 'top', 'bottom');
-  await expect(ba).toHaveCount(1);
-  expectNear(await edgeEnd(ba, 'start'), await edgeEnd(ab, 'end'));
-  expectNear(await edgeEnd(ba, 'end'), await edgeEnd(ab, 'start'));
+  // Drawing back from b to a: they can talk already, so it queues work for a, from b's queue.
+  await draw(b, a, 'top', 'bottom');
+  const back = page.getByRole('dialog', { name: 'Connect Agent 2 to Agent 1' });
+  await expect(back.getByRole('button', { name: /^Let them talk/ })).toBeDisabled();
+  await back.getByRole('button', { name: /^Queue work for Agent 1/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Work from Agent 2 for Agent 1' });
+  await panel.getByRole('button', { name: 'Queue work for Agent 1' }).click();
+  await page.keyboard.type('read');
+  await page.keyboard.press('Enter');
+  await expect(panel.getByRole('button', { name: 'Change the agent Read acts on' })).toHaveText(
+    '→ Agent 1',
+  );
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
 
-  await connect(a, a); // self-loop: rejected
-  await connect(a, b); // duplicate: rejected
-  await expect(edges()).toHaveCount(2);
+  // The work is an arrow from b to a, with how much is queued, in place of the link it implies.
+  expect(await arrowhead(work)).toMatch(/url\(/);
+  await expect(link).toHaveCount(0);
+  const count = page.getByRole('button', { name: 'Open the work from Agent 2 for Agent 1' });
+  await expect(count).toHaveText('1');
 
-  // A selected edge shows a button that deletes it; Backspace works too.
+  // Removing the work, from the panel its count opens, brings the link back.
+  await count.click();
+  await panel.getByRole('button', { name: 'Remove Read' }).click();
+  await page.keyboard.press('Escape');
+  await expect(work).toHaveCount(0);
+  await expect(link).toHaveCount(1);
+
+  // A self-loop asks nothing.
+  await draw(a, a);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  // A selected link shows a button that deletes it; Backspace works too.
   const selected = page.locator('.react-flow__edge.selected');
-  const mid = await edgeMidpoint(ab);
+  const mid = await edgeMidpoint(link);
   await page.mouse.click(mid.x, mid.y);
   await expect(selected).toHaveCount(1);
-  await page.getByRole('button', { name: 'Delete edge' }).click();
-  await expect(edges()).toHaveCount(1);
+  await page.getByRole('button', { name: 'Delete link' }).click();
+  await expect(edges()).toHaveCount(0);
+  await connect(a, b);
   await page.mouse.click(mid.x, mid.y);
   await expect(selected).toHaveCount(1);
   await page.keyboard.press('Backspace');
@@ -439,18 +488,23 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   const teamCard = await box(card('Team'));
   expect((await box(inner)).y).toBeGreaterThanOrEqual(teamCard.y + teamCard.height);
 
-  // The parent node connects to nodes outside its group, both ways.
+  // The parent node links to nodes outside its group, and gives them work, from its own dots.
   await connect(c, team);
-  await connect(team, c);
-  await expect(edges()).toHaveCount(2);
   const [idC, idTeam] = await Promise.all([
     c.getAttribute('data-id'),
     team.getAttribute('data-id'),
   ]);
-  const into = page.getByTestId(`rf__edge-${String(idC)}->${String(idTeam)}`);
-  const outOf = page.getByTestId(`rf__edge-${String(idTeam)}->${String(idC)}`);
-  expectNear(await edgeEnd(into, 'end'), await center(dot(team, 'top')));
-  expectNear(await edgeEnd(outOf, 'start'), await center(dot(team, 'bottom')));
+  const link = page.getByTestId(`rf__edge-${String(idC)}->${String(idTeam)}`);
+  expectNear(await edgeEnd(link, 'end'), await center(dot(team, 'top')));
+  await draw(team, c);
+  await page.getByRole('button', { name: /^Queue work for Agent 3/ }).click();
+  await page.getByRole('button', { name: 'Queue work for Agent 3' }).click();
+  await page.keyboard.type('read');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+  const work = page.getByTestId(`rf__edge-work:${String(idTeam)}->${String(idC)}`);
+  expectNear(await edgeEnd(work, 'start'), await center(dot(team, 'bottom')));
+  await expect(edges()).toHaveCount(1);
 
   // Deleting the parent, from its actions, keeps what was inside it in place and removes its edges.
   const kept = await Promise.all([a, b, inner].map(box));

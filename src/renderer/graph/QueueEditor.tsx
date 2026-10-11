@@ -27,13 +27,16 @@ const nameOf = (node: GraphNode | undefined) =>
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
  * another is picked), messages (text passed to the agent), and if-thens (steps and messages that
  * run only when a condition holds). The ⊕ adds any of them; everything is picked by typing to
- * search. Rows are reordered by dragging their handle, or with the arrow keys on it.
+ * search. Rows are reordered by dragging their handle, or with the arrow keys on it. With `only`,
+ * it shows part of the queue (WorkDetail.tsx), where reordering moves items among those shown.
  */
 export function QueueEditor({
   node,
   nodes,
   agent,
   actions,
+  only,
+  add = 'anything',
   onAdd,
   onRemove,
   onMove,
@@ -47,6 +50,13 @@ export function QueueEditor({
   agent: AgentType;
   /** What the agent can do. */
   actions: readonly AgentAction[];
+  /** Shows only the items for which this holds (an if-then whole, with all of its steps). */
+  only?: (item: QueueItem) => boolean;
+  /**
+   * What ⊕ adds: anything (the default), nothing (no ⊕), or (`workFor`, an agent's id) one of the
+   * agent's actions, aimed at that agent.
+   */
+  add?: 'anything' | 'nothing' | { workFor: string };
   /** `into`: the id of the if-then to add a step or message to. */
   onAdd: (entry: QueueEntry, into?: string) => void;
   onRemove: (itemId: string) => void;
@@ -80,6 +90,12 @@ export function QueueEditor({
     onRetarget,
     onEditMessage,
   };
+  const shown = only ? queue.filter(only) : queue;
+  /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
+  const moveShown = (itemId: string, index: number) => {
+    const at = shown[Math.min(Math.max(index, 0), shown.length - 1)];
+    if (at) onMove(itemId, queue.indexOf(at));
+  };
   const row = (item: QueueStep | QueueMessage, handle: HandleProps) =>
     isMessage(item) ? (
       <MessageRow item={item} handle={handle} context={context} />
@@ -89,11 +105,11 @@ export function QueueEditor({
 
   return (
     <>
-      {queue.length > 0 && (
+      {shown.length > 0 && (
         <SortableList
-          items={queue}
+          items={shown}
           className="graph-queue"
-          onMove={onMove}
+          onMove={moveShown}
           renderItem={(item, handle) =>
             isIf(item) ? (
               <IfRow
@@ -115,7 +131,18 @@ export function QueueEditor({
           }
         />
       )}
-      <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
+      {add === 'anything' && (
+        <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
+      )}
+      {typeof add === 'object' && (
+        <AddMenu
+          label={`Queue work for ${name(add.workFor)}`}
+          withMessage={false}
+          target={add.workFor}
+          context={context}
+          onAdd={onAdd}
+        />
+      )}
     </>
   );
 }
@@ -389,17 +416,23 @@ const CHOICE_TEXT = {
 } as const;
 
 /**
- * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`) "If… then"; then
- * the agent the action acts on, the message's text, or the if-then's condition.
+ * The ⊕ and its dropdowns: one of the agent's actions, a message (unless `withMessage` is false),
+ * or (`withIf`) "If… then"; then the agent the action acts on (unless `target` fixes it), the
+ * message's text, or the if-then's condition.
  */
 function AddMenu({
   label,
   withIf = false,
+  withMessage = true,
+  target,
   context,
   onAdd,
 }: {
   label: string;
   withIf?: boolean;
+  withMessage?: boolean;
+  /** The agent every action added acts on. */
+  target?: string;
   context: Context;
   onAdd: (entry: QueueEntry) => void;
 }) {
@@ -411,7 +444,7 @@ function AddMenu({
   };
   const choices: Choice[] = [
     ...(withIf ? [{ kind: 'if' as const }] : []),
-    { kind: 'message' },
+    ...(withMessage ? [{ kind: 'message' as const }] : []),
     ...context.actions.map((action) => ({ kind: 'action' as const, action })),
   ];
   return (
@@ -440,6 +473,11 @@ function AddMenu({
             choice.kind === 'action' ? choice.action.name : `(${choice.kind})`
           }
           onPick={(choice) => {
+            if (choice.kind === 'action' && target !== undefined) {
+              onAdd({ action: choice.action.name, target });
+              close();
+              return;
+            }
             setStep(
               choice.kind === 'if'
                 ? 'condition'

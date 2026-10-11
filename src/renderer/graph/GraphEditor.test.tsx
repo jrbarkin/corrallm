@@ -396,12 +396,64 @@ describe('GraphEditor', () => {
     expect(node('a').classList.contains('draggable')).toBe(true);
   });
 
-  it('deletes a selected edge from its button', () => {
+  it('draws the work a queue gives another agent as an arrow, which opens the work between them', () => {
+    const queue = [
+      { id: 'm', message: 'Fix the tests' },
+      { id: 's', action: 'Read', target: 'b' },
+    ];
+    const { container } = setup({
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('b', 0, 100)],
+      edges: [{ id: 'a->b', source: 'a', target: 'b' }],
+    });
+    const edge = (id: string) => container.querySelector(`[data-testid="rf__edge-${id}"]`);
+    // Work implies the agents can talk: it takes the place of their link.
+    expect(edge('work:a->b')?.getAttribute('aria-label')).toBe('Work from a for b: 1 queued');
+    expect(edge('a->b')).toBeNull();
+
+    fireEvent.click(button('Open the work from a for b'));
+    const panel = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
+    const order = () => panel.queryAllByRole('button', { name: /^Move / }).map((b) => b.ariaLabel);
+    // Only a's items for b, not its message; ⊕ queues one of a's actions, aimed at b.
+    expect(order()).toEqual(['Move Read']);
+    fireEvent.click(panel.getByRole('button', { name: 'Queue work for b' }));
+    fireEvent.click(panel.getByRole('option', { name: /^Bash / }));
+    expect(order()).toEqual(['Move Read', 'Move Bash']);
+    expect(panel.getByRole('button', { name: 'Change the agent Bash acts on' }).textContent).toBe(
+      '→ b',
+    );
+    expect(button('Open the work from a for b').textContent).toBe('2');
+
+    // Without work, the link shows again.
+    fireEvent.click(panel.getByRole('button', { name: 'Remove Read' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Remove Bash' }));
+    expect(edge('work:a->b')).toBeNull();
+    expect(edge('a->b')?.getAttribute('aria-label')).toBe('a and b can talk');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('draws a wait for another agent as an arrow from it, opening to the waiting queue', () => {
+    const queue = [{ id: 'w', if: { kind: 'nodeDone' as const, node: 'a' }, then: [] }];
+    const { container } = setup({
+      nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100, { data: { label: 'b', queue } })],
+      edges: [],
+    });
+    expect(
+      container.querySelector('[data-testid="rf__edge-work:a->b"]')?.getAttribute('aria-label'),
+    ).toBe('Work from a for b: 1 queued');
+    fireEvent.click(button('Open the work from a for b'));
+    const panel = within(screen.getByRole('dialog', { name: 'Work from a for b' }));
+    const waiting = within(panel.getByRole('region', { name: "In b's queue" }));
+    expect(waiting.getByRole('button', { name: 'Move If a has finished' })).toBeTruthy();
+    expect(panel.getByRole('region', { name: "In a's queue" })).toBeTruthy();
+  });
+
+  it('deletes a selected link from its button', () => {
     const { container } = setup({
       nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100)],
       edges: [{ id: 'a->b', source: 'a', target: 'b', selected: true }],
     });
-    fireEvent.click(button('Delete edge'));
+    fireEvent.click(button('Delete link'));
     expect(container.querySelector('[data-testid="rf__edge-a->b"]')).toBeNull();
   });
 
@@ -444,7 +496,7 @@ describe('GraphEditor', () => {
     expect(width('H')).toBe(width('G') + 2 * PADDING);
   });
 
-  it('names edges by the labels of their nodes, and follows renames', () => {
+  it('names links by the labels of their agents, and follows renames', () => {
     const { container, node } = setup({
       nodes: [
         agentNode('a', 0, 0, { data: { label: 'Alpha' } }),
@@ -453,11 +505,11 @@ describe('GraphEditor', () => {
       edges: [{ id: 'a->b', source: 'a', target: 'b' }],
     });
     const edge = () => container.querySelector('[data-testid="rf__edge-a->b"]');
-    expect(edge()?.getAttribute('aria-label')).toBe('Edge from Alpha to Beta');
+    expect(edge()?.getAttribute('aria-label')).toBe('Alpha and Beta can talk');
     // Renamed in the panel a double-click opens.
     fireEvent.doubleClick(node('a'));
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Gamma' } });
     expect(screen.getByRole('dialog', { name: 'Gamma' })).toBeTruthy();
-    expect(edge()?.getAttribute('aria-label')).toBe('Edge from Gamma to Beta');
+    expect(edge()?.getAttribute('aria-label')).toBe('Gamma and Beta can talk');
   });
 });
