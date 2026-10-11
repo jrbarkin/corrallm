@@ -45,6 +45,12 @@ function main(): void {
     return;
   }
 
+  // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden. Never in packaged
+  // builds.
+  const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';
+  // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
+  if (hidden && process.platform === 'darwin') app.setActivationPolicy('accessory');
+
   // TODO(auto-update): call updateElectronApp() (update-electron-app) here when app.isPackaged.
   // Works with the Squirrel.Windows and macOS ZIP makers; needs published releases and a
   // Developer ID-signed macOS build. Linux deb/rpm updates come from the package manager.
@@ -58,7 +64,7 @@ function main(): void {
   app.enableSandbox();
   installNavigationGuards(trustedOrigin);
 
-  const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged });
+  const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged, hidden });
 
   void app
     .whenReady()

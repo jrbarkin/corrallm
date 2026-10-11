@@ -25,6 +25,13 @@ test('launches, renders the window and round-trips app:ping', async () => {
     }));
     expect(leaked).toEqual({ require: false, process: false });
 
+    // The window under test stays hidden: it never pops up on screen or meets the real mouse.
+    expect(
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().map((window) => window.isVisible()),
+      ),
+    ).toEqual([false]);
+
     // A throwaway profile: state the real app saved (such as a page zoom) must not leak in.
     const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'));
     expect(userData.startsWith(realpathSync(tmpdir()))).toBe(true);
