@@ -77,6 +77,17 @@ pnpm exec install-electron
 pnpm dev          # start the app with Vite hot reload
 ```
 
+What happens when you save a file while `pnpm dev` is running:
+
+| You change…                                             | Result                                                                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `src/renderer/**` (UI, CSS)                             | Updates in place, component state kept                                                            |
+| `src/preload/**`                                        | Rebuilt; the window reloads                                                                       |
+| `src/main/**` (or `src/shared` code main uses)          | Rebuilt, but the app keeps running the old code: press `r` in the Forge terminal UI to restart it |
+| `forge.config.mts`, `vite.*.config.mts`, `package.json` | Stop with Ctrl+C and run `pnpm dev` again                                                         |
+
+To try the production build, run `pnpm package` and open the app in `out/` (for example `open out/corrallm-darwin-arm64/corrallm.app`).
+
 ## Common scripts
 
 | Script           | What it does                                               |
