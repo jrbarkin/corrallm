@@ -42,8 +42,31 @@ export function getVersionString(): string {
   return `${app.getName()} ${app.getVersion()} (Electron ${electron}, Chromium ${chrome}, Node ${node})`;
 }
 
+/**
+ * One entry per channel in the contract. The mapped type makes a missing channel a compile
+ * error, and ties each channel's parser and handler to its contract types.
+ */
+type HandlerTable = {
+  [C in IpcChannel]: { parseArgs: ArgsParser<C>; handler: IpcHandler<C> };
+};
+
+const handlers: HandlerTable = {
+  'app:ping': { parseArgs: noArgs, handler: getVersionString },
+};
+
+// Generic so each channel's parser and handler types stay linked while iterating the table.
+function register<C extends IpcChannel>(
+  handle: ReturnType<typeof createIpcHandle>,
+  channel: C,
+  { parseArgs, handler }: HandlerTable[C],
+): void {
+  handle(channel, parseArgs, handler);
+}
+
 /** Registers every channel in the IPC contract. Call once, after the app is ready. */
 export function registerIpcHandlers(trustedOrigin: string): void {
   const handle = createIpcHandle(trustedOrigin);
-  handle('app:ping', noArgs, getVersionString);
+  for (const channel of Object.keys(handlers) as IpcChannel[]) {
+    register(handle, channel, handlers[channel]);
+  }
 }

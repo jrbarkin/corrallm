@@ -20,22 +20,26 @@ export function originKey(raw: string): string | null {
   }
 }
 
-/** True only for plain https URLs (no credentials, default port) on an allowlisted host. */
-export function isAllowedExternalUrl(
+/**
+ * Returns the normalized URL to open externally, or null unless it is a plain https URL (no
+ * credentials, default port) on an allowlisted host. Always open the returned value, never the
+ * raw input: OS URL handlers may parse oddities such as backslashes differently.
+ */
+export function allowedExternalUrl(
   raw: string,
   allowlist: ReadonlySet<string> = EXTERNAL_URL_ALLOWLIST,
-): boolean {
+): string | null {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    return false;
+    return null;
   }
-  return (
+  const allowed =
     url.protocol === 'https:' &&
     url.username === '' &&
     url.password === '' &&
     url.port === '' &&
-    allowlist.has(url.hostname)
-  );
+    allowlist.has(url.hostname);
+  return allowed ? url.href : null;
 }

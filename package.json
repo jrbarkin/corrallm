@@ -21,7 +21,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "electron-forge package && playwright test",
+    "test:e2e": "playwright test",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "prepare": "husky"

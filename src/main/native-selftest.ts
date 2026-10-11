@@ -8,6 +8,15 @@ import { app } from 'electron';
  * Triggered by CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md.
  */
 export async function runNativeSelfTest(): Promise<void> {
+  // Log and exit instead of Electron's default handler, which shows a modal error dialog that
+  // nobody dismisses on a CI runner.
+  const fail = (kind: string) => (error: unknown) => {
+    console.error(`[native-selftest] ${kind}:`, error);
+    app.exit(4);
+  };
+  process.on('uncaughtException', fail('uncaught exception'));
+  process.on('unhandledRejection', fail('unhandled rejection'));
+
   const timeout = setTimeout(() => {
     console.error('[native-selftest] timed out waiting for the pty to exit');
     app.exit(3);

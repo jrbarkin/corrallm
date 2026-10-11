@@ -27,7 +27,7 @@ export const DEV_CSP = [
   "default-src 'none'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data:",
   "font-src 'self' data:",
   "connect-src 'self' ws://localhost:*",
   "base-uri 'none'",

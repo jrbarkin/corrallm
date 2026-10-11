@@ -1,6 +1,6 @@
 import { app, shell, type Session, type WebFrameMain } from 'electron';
 
-import { isAllowedExternalUrl, originKey } from './url-policy';
+import { allowedExternalUrl, originKey } from './url-policy';
 
 /** Permissions the renderer may be granted. Empty: everything is denied. Extend deliberately. */
 const ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set<string>();
@@ -30,13 +30,15 @@ export function hardenSession(session: Session, trustedOrigin: string): void {
   session.setDevicePermissionHandler(() => false);
 }
 
-function openExternalIfAllowed(url: string): void {
-  if (isAllowedExternalUrl(url)) void shell.openExternal(url);
+function openExternalIfAllowed(raw: string): void {
+  const url = allowedExternalUrl(raw);
+  if (url !== null) void shell.openExternal(url);
 }
 
 /**
  * Applies to every WebContents the app ever creates. Call before creating any window.
- * - Navigation away from the app's origin is blocked (allowlisted links open in the browser).
+ * - Navigation and redirects away from the app's origin are blocked (allowlisted links open in
+ *   the browser).
  * - New windows are never created by the renderer (allowlisted links open in the browser).
  * - <webview> attachment is refused.
  */
@@ -50,6 +52,10 @@ export function installNavigationGuards(trustedOrigin: string): void {
     contents.on('will-frame-navigate', (event) => {
       if (event.isMainFrame || originKey(event.url) === trustedOrigin) return;
       event.preventDefault();
+    });
+    // Server-side redirects; never opened externally since the user didn't choose the target.
+    contents.on('will-redirect', (event) => {
+      if (originKey(event.url) !== trustedOrigin) event.preventDefault();
     });
     contents.setWindowOpenHandler(({ url }) => {
       openExternalIfAllowed(url);

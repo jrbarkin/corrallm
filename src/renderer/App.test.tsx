@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
 
-function stubApi(api: AppApi) {
+function stubApi(api: Partial<AppApi>) {
   Object.defineProperty(window, 'api', { value: api, configurable: true });
 }
 

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerDMG } from '@electron-forge/maker-dmg';
-import { MakerRpm } from '@electron-forge/maker-rpm';
+import { MakerRpm, type MakerRpmConfigOptions } from '@electron-forge/maker-rpm';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
@@ -27,6 +27,22 @@ const execFileAsync = promisify(execFile);
 const envFile = path.join(projectDir, '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
+const SIGNING_ENV = [
+  'APPLE_SIGNING_IDENTITY',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER',
+  'APPLE_ID',
+  'APPLE_APP_SPECIFIC_PASSWORD',
+  'APPLE_TEAM_ID',
+  'WINDOWS_CERTIFICATE_FILE',
+  'WINDOWS_CERTIFICATE_PASSWORD',
+] as const;
+
+// CORRALLM_UNSIGNED=1 skips signing and notarization even when credentials are set (used by the
+// e2e build, which only needs the Vite output).
+const unsigned = process.env.CORRALLM_UNSIGNED === '1';
+
 const {
   APPLE_SIGNING_IDENTITY,
   APPLE_API_KEY,
@@ -41,21 +57,22 @@ const {
 
 // Omit osxSign entirely (never `{}`) when unsigned: FusesPlugin treats any object as "signing
 // configured" and skips its arm64 ad-hoc re-sign.
-const osxSign: ForgePackagerOptions['osxSign'] | undefined = APPLE_SIGNING_IDENTITY
-  ? {
-      identity: APPLE_SIGNING_IDENTITY,
-      // @electron/packager defaults to warning and shipping unsigned on failure.
-      continueOnError: false,
-      optionsForFile: (filePath: string) =>
-        // Keep @electron/osx-sign's default entitlements for Electron's helper apps.
-        /\((GPU|Renderer|Plugin)\)\.app/.test(filePath)
-          ? {}
-          : {
-              entitlements: path.join(projectDir, 'build/entitlements.mac.plist'),
-              hardenedRuntime: true,
-            },
-    }
-  : undefined;
+const osxSign: ForgePackagerOptions['osxSign'] | undefined =
+  !unsigned && APPLE_SIGNING_IDENTITY
+    ? {
+        identity: APPLE_SIGNING_IDENTITY,
+        // @electron/packager defaults to warning and shipping unsigned on failure.
+        continueOnError: false,
+        optionsForFile: (filePath: string) =>
+          // Keep @electron/osx-sign's default entitlements for Electron's helper apps.
+          /\((GPU|Renderer|Plugin)\)\.app/.test(filePath)
+            ? {}
+            : {
+                entitlements: path.join(projectDir, 'build/entitlements.mac.plist'),
+                hardenedRuntime: true,
+              },
+      }
+    : undefined;
 
 const osxNotarize: ForgePackagerOptions['osxNotarize'] | undefined = !osxSign
   ? undefined
@@ -72,7 +89,7 @@ const osxNotarize: ForgePackagerOptions['osxNotarize'] | undefined = !osxSign
 // With `windowsSign: true`, @electron/windows-sign reads WINDOWS_CERTIFICATE_FILE and
 // WINDOWS_CERTIFICATE_PASSWORD itself. Squirrel signs its installer with its own options.
 const windowsCertificate =
-  WINDOWS_CERTIFICATE_FILE && WINDOWS_CERTIFICATE_PASSWORD
+  !unsigned && WINDOWS_CERTIFICATE_FILE && WINDOWS_CERTIFICATE_PASSWORD
     ? {
         certificateFile: WINDOWS_CERTIFICATE_FILE,
         certificatePassword: WINDOWS_CERTIFICATE_PASSWORD,
@@ -146,6 +163,13 @@ async function copyNativeModule(
   }
 }
 
+// electron-installer-redhat 4.0.0's default spec fails on rpmbuild >= 4.20; build/rpm.spec.ejs
+// carries the fix. Forge's option type omits specTemplate, which the installer still honors.
+const rpmOptions: MakerRpmConfigOptions & { specTemplate: string } = {
+  categories: ['Development'],
+  specTemplate: path.join(projectDir, 'build/rpm.spec.ejs'),
+};
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: {
@@ -164,6 +188,12 @@ const config: ForgeConfig = {
     ignoreModules: ['node-pty', 'better-sqlite3'],
   },
   hooks: {
+    preStart: () => {
+      // `electron-forge start` passes its environment to the app and everything it spawns:
+      // keep signing credentials (possibly loaded from .env) out of it.
+      for (const name of SIGNING_ENV) Reflect.deleteProperty(process.env, name);
+      return Promise.resolve();
+    },
     packageAfterCopy: async (_config, buildPath, _electronVersion, platform, arch) => {
       for (const [name, module] of Object.entries(NATIVE_MODULES)) {
         await copyNativeModule(name, module, buildPath, platform, arch);
@@ -195,7 +225,7 @@ const config: ForgeConfig = {
     new MakerZIP({}, ['darwin']),
     new MakerSquirrel({ ...windowsCertificate }),
     new MakerDeb({ options: { categories: ['Development'] } }),
-    new MakerRpm({}),
+    new MakerRpm({ options: rpmOptions }),
   ],
   plugins: [
     new VitePlugin({

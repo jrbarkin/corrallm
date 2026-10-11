@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-24.04 is pinned: newer images ship rpmbuild >= 4.20, which breaks the rpm maker.
+        # ubuntu-24.04 rather than ubuntu-latest, so runner image upgrades happen deliberately.
         os: [macos-latest, windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -62,14 +62,14 @@ jobs:
       - run: pnpm run test
       - run: pnpm run package
 
-      # Proves node-pty loads and spawns inside the packaged, fused main process on every OS.
+      # Checks the packaged, fused app on every OS: node-pty loads and spawns in the main process,
+      # and launch switches that could hijack the app are refused.
       - name: Allow Chromium sandbox (Linux)
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Native module self-test (packaged app)
+      - name: Packaged app checks
+        timeout-minutes: 5
         shell: bash
-        env:
-          CORRALLM_NATIVE_SELFTEST: '1'
         run: |
           set -euo pipefail
           arch=$(node -p process.arch)
@@ -78,12 +78,19 @@ jobs:
               app="out/corrallm-darwin-$arch/corrallm.app"
               codesign --verify --deep --strict "$app"
               test -x "$app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-$arch/spawn-helper"
-              "$app/Contents/MacOS/corrallm"
+              run() { "$app/Contents/MacOS/corrallm" "$@"; }
               ;;
-            Windows)
-              "out/corrallm-win32-$arch/corrallm.exe"
-              ;;
-            Linux)
-              xvfb-run --auto-servernum "out/corrallm-linux-$arch/corrallm"
-              ;;
+            Windows) run() { "out/corrallm-win32-$arch/corrallm.exe" "$@"; } ;;
+            Linux) run() { xvfb-run --auto-servernum "out/corrallm-linux-$arch/corrallm" "$@"; } ;;
           esac
+
+          CORRALLM_NATIVE_SELFTEST=1 run
+
+          for switch in --remote-debugging-port=0 --gpu-launcher=refused --renderer-cmd-prefix=refused; do
+            code=0
+            CORRALLM_NATIVE_SELFTEST=1 run "$switch" || code=$?
+            if [ "$code" -ne 1 ]; then
+              echo "::error::packaged app accepted $switch (exit $code, expected 1)"
+              exit 1
+            fi
+          done

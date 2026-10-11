@@ -1,3 +1,5 @@
+import { builtinModules } from 'node:module';
+
 import js from '@eslint/js';
 import eslintConfigPrettier from 'eslint-config-prettier/flat';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -5,6 +7,10 @@ import { reactRefresh } from 'eslint-plugin-react-refresh';
 import { defineConfig, globalIgnores } from 'eslint/config';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+
+const NODE_BUILTINS = builtinModules.flatMap((name) =>
+  name.startsWith('node:') ? [name] : [name, `node:${name}`],
+);
 
 export default defineConfig(
   globalIgnores(['.vite/', 'out/', 'coverage/', 'playwright-report/', 'test-results/']),
@@ -43,6 +49,52 @@ export default defineConfig(
       '@typescript-eslint/no-misused-promises': [
         'error',
         { checksVoidReturn: { attributes: false } },
+      ],
+    },
+  },
+  // Process boundaries (see CLAUDE.md). Core no-restricted-imports also catches `import type`.
+  {
+    name: 'app/boundaries-web',
+    files: ['src/renderer/**/*.{ts,tsx}', 'src/shared/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: NODE_BUILTINS,
+          patterns: [
+            {
+              group: ['electron', 'electron/*'],
+              message:
+                'Renderer and shared code must not import Electron. Go through window.api and src/shared/ipc.ts.',
+            },
+            {
+              group: ['**/main/**', '**/preload/**'],
+              message: 'Renderer and shared code must not import main or preload code.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    name: 'app/boundaries-preload',
+    files: ['src/preload/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: NODE_BUILTINS.map((name) => ({
+            name,
+            message: 'The preload is sandboxed: it may import only electron and src/shared.',
+          })),
+          patterns: [
+            {
+              group: ['**/main/**', '**/renderer/**'],
+              message: 'The preload must not import main or renderer code.',
+            },
+          ],
+        },
       ],
     },
   },

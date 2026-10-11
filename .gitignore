@@ -11,10 +11,15 @@ coverage/
 playwright-report/
 test-results/
 
-# Environment (signing credentials etc.)
+# Environment and signing material (keep certificates and keys outside the repo)
 .env
 .env.*
 !.env.example
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
 
 # Logs
 *.log

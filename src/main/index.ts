@@ -16,6 +16,18 @@ import { createMainWindow } from './window';
 const devServerUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL;
 const rendererHost = MAIN_WINDOW_VITE_NAME.toLowerCase();
 
+// Chromium switches no fuse covers: they expose the DevTools protocol or make the app launch an
+// arbitrary executable as its own child process. Packaged builds refuse to start with them.
+// (Linux's --zygote-cmd-prefix acts before any JS runs and cannot be blocked here.)
+const FORBIDDEN_SWITCHES = [
+  'remote-debugging-port',
+  'remote-debugging-pipe',
+  'renderer-cmd-prefix',
+  'gpu-launcher',
+  'utility-cmd-prefix',
+  'browser-subprocess-path',
+] as const;
+
 function main(): void {
   // Squirrel.Windows launches the app with --squirrel-* flags on install/update/uninstall.
   if (squirrelStartup) {
@@ -23,12 +35,7 @@ function main(): void {
     return;
   }
 
-  // No fuse covers Chromium's remote-debugging switches, so refuse them in packaged builds.
-  if (
-    app.isPackaged &&
-    (app.commandLine.hasSwitch('remote-debugging-port') ||
-      app.commandLine.hasSwitch('remote-debugging-pipe'))
-  ) {
+  if (app.isPackaged && FORBIDDEN_SWITCHES.some((name) => app.commandLine.hasSwitch(name))) {
     app.exit(1);
     return;
   }
@@ -37,6 +44,10 @@ function main(): void {
     void app.whenReady().then(runNativeSelfTest);
     return;
   }
+
+  // TODO(auto-update): call updateElectronApp() (update-electron-app) here when app.isPackaged.
+  // Works with the Squirrel.Windows and macOS ZIP makers; needs published releases and a
+  // Developer ID-signed macOS build. Linux deb/rpm updates come from the package manager.
 
   const trustedOrigin =
     devServerUrl === undefined ? `${APP_SCHEME}://${rendererHost}` : originKey(devServerUrl);
