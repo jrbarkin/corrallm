@@ -1,0 +1,126 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "lead",
+      "kind": "agent",
+      "label": "Lead",
+      "position": {
+        "x": 210,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "q1",
+          "message": "How do other coding agents sandbox the shell commands they run?",
+          "target": "r1"
+        },
+        {
+          "id": "q2",
+          "message": "Which of those sandboxes work on Windows?",
+          "target": "r2"
+        },
+        {
+          "id": "q3",
+          "message": "What do people complain about in each of them?",
+          "target": "r3"
+        }
+      ]
+    },
+    {
+      "id": "research",
+      "kind": "group",
+      "label": "Research",
+      "position": {
+        "x": 0,
+        "y": 120
+      },
+      "color": 3
+    },
+    {
+      "id": "r1",
+      "kind": "agent",
+      "label": "Researcher 1",
+      "position": {
+        "x": 20,
+        "y": 52
+      },
+      "parent": "research",
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "search",
+          "action": "WebSearch"
+        },
+        {
+          "id": "report",
+          "message": "Here is what I found, in NOTES-1.md.",
+          "target": "writer"
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "kind": "agent",
+      "label": "Researcher 2",
+      "position": {
+        "x": 210,
+        "y": 52
+      },
+      "parent": "research",
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "search",
+          "action": "web_search"
+        },
+        {
+          "id": "report",
+          "message": "Here is what I found, in NOTES-2.md.",
+          "target": "writer"
+        }
+      ]
+    },
+    {
+      "id": "r3",
+      "kind": "agent",
+      "label": "Researcher 3",
+      "position": {
+        "x": 400,
+        "y": 52
+      },
+      "parent": "research",
+      "agent": "Gemini",
+      "queue": [
+        {
+          "id": "search",
+          "action": "google_web_search"
+        },
+        {
+          "id": "report",
+          "message": "Here is what I found, in NOTES-3.md.",
+          "target": "writer"
+        }
+      ]
+    },
+    {
+      "id": "writer",
+      "kind": "agent",
+      "label": "Writer",
+      "position": {
+        "x": 210,
+        "y": 320
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "write",
+          "message": "Once all three have reported, combine their notes into REPORT.md."
+        }
+      ]
+    }
+  ],
+  "links": []
+}

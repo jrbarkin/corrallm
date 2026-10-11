@@ -1,25 +1,27 @@
 import type { GraphNode } from './graph';
-import { isIf, isMessage } from './queue';
+import { isIf } from './queue';
 import type { QueueItem } from './queue';
 
 /**
  * Work between two agents, as their queues make it: an edge from `from` to `to`, drawn (with an
- * arrowhead) whenever `from`'s queue aims a step at `to`, or `to`'s queue waits for `from`.
+ * arrowhead) whenever `from`'s queue aims a step or a message at `to`, or `to`'s queue waits for
+ * `from`.
  */
 export interface WorkEdge {
   from: string;
   to: string;
   /** How many queued items make the edge. */
   count: number;
+  /** Whether all of it is in if-thens, so it happens only if their conditions hold. */
+  conditional: boolean;
 }
 
 /**
  * Whether `item`, in the queue of agent `owner`, is part of the work from `from` to `to`: in `from`'s
- * queue, a step aimed at `to` (or an if-then holding one); in `to`'s queue, an if-then that waits
- * for `from` to finish.
+ * queue, a step or message aimed at `to` (or an if-then holding one); in `to`'s queue, an if-then
+ * that waits for `from` to finish.
  */
 export function isWorkBetween(item: QueueItem, owner: string, from: string, to: string): boolean {
-  if (isMessage(item)) return false;
   if (isIf(item)) {
     const waits = owner === to && item.if.kind === 'nodeDone' && item.if.node === from;
     return waits || item.then.some((step) => isWorkBetween(step, owner, from, to));
@@ -35,24 +37,28 @@ export function isWorkBetween(item: QueueItem, owner: string, from: string, to: 
 export function workEdges(nodes: readonly GraphNode[]): WorkEdge[] {
   const agents = new Set(nodes.filter((n) => n.type === 'agent').map((n) => n.id));
   const edges = new Map<string, WorkEdge>();
-  const add = (from: string, to: string) => {
+  const add = (from: string, to: string, conditional: boolean) => {
     if (from === to || !agents.has(from) || !agents.has(to)) return;
     const key = JSON.stringify([from, to]);
     const edge = edges.get(key);
-    if (edge) edge.count += 1;
-    else edges.set(key, { from, to, count: 1 });
+    if (edge) {
+      edge.count += 1;
+      edge.conditional &&= conditional;
+    } else {
+      edges.set(key, { from, to, count: 1, conditional });
+    }
   };
   for (const node of nodes) {
-    const visit = (item: QueueItem) => {
-      if (isMessage(item)) return;
+    // A wait is not conditional work: it is when the agent waiting goes on.
+    const visit = (item: QueueItem, inIf: boolean) => {
       if (isIf(item)) {
-        if (item.if.kind === 'nodeDone') add(item.if.node, node.id);
-        item.then.forEach(visit);
+        if (item.if.kind === 'nodeDone') add(item.if.node, node.id, false);
+        for (const step of item.then) visit(step, true);
       } else if (item.target !== undefined) {
-        add(node.id, item.target);
+        add(node.id, item.target, inIf);
       }
     };
-    node.data.queue?.forEach(visit);
+    for (const item of node.data.queue ?? []) visit(item, false);
   }
   return [...edges.values()];
 }

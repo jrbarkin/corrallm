@@ -739,6 +739,24 @@ test('groups nest and take a parent node just like nodes do', async () => {
   await expect(edges()).toHaveCount(1);
 });
 
+test('opens each example from the gallery, drawing its agents and the work between them', async () => {
+  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  for (const name of ['Review loop', 'Team lead', 'Fan-out research', 'Release checks']) {
+    const gallery = page.getByRole('dialog', { name: 'Examples' });
+    if ((await gallery.count()) === 0)
+      await page.getByRole('button', { name: 'Examples…' }).click();
+    await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+    await expect(gallery).toHaveCount(0);
+    await expect(nodes().nth(1), name).toBeVisible();
+    // Attached rather than visible: a straight vertical edge has no width.
+    await expect(page.locator('[data-testid^="rf__edge-work:"]').first(), name).toBeAttached();
+    // Fitted into view, clear of the file bar.
+    const bar = await box(page.getByRole('toolbar', { name: 'Canvas file' }));
+    for (const n of await nodes().all())
+      expect((await box(n)).y, name).toBeGreaterThan(bar.y + bar.height);
+  }
+});
+
 test('arranges the graph automatically while the toggle is on', async () => {
   const a = await addAgentAt('Agent 1', 650, 450);
   const b = await addAgentAt('Agent 2', 300, 150);

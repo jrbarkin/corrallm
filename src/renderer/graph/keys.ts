@@ -1,7 +1,23 @@
 /** How the shortcuts read on this platform, for tooltips. */
 export const SHORTCUTS = navigator.userAgent.includes('Mac')
-  ? { group: '⌘G', groupUnderParent: '⌥⌘G', ungroup: '⇧⌘G' }
-  : { group: 'Ctrl+G', groupUnderParent: 'Ctrl+Alt+G', ungroup: 'Ctrl+Shift+G' };
+  ? {
+      group: '⌘G',
+      groupUnderParent: '⌥⌘G',
+      ungroup: '⇧⌘G',
+      new: '⌘N',
+      open: '⌘O',
+      save: '⌘S',
+      saveAs: '⇧⌘S',
+    }
+  : {
+      group: 'Ctrl+G',
+      groupUnderParent: 'Ctrl+Alt+G',
+      ungroup: 'Ctrl+Shift+G',
+      new: 'Ctrl+N',
+      open: 'Ctrl+O',
+      save: 'Ctrl+S',
+      saveAs: 'Ctrl+Shift+S',
+    };
 
 /** Editor commands that have a keyboard shortcut. */
 export type KeyAction = 'delete' | 'group' | 'groupUnderParent' | 'ungroup' | 'rename';
@@ -31,6 +47,26 @@ export function keyAction(event: KeyboardEvent): KeyAction | null {
     return event.altKey ? 'groupUnderParent' : 'group';
   }
   return null;
+}
+
+/** Canvas file commands that have a keyboard shortcut. */
+export type FileAction = 'new' | 'open' | 'save' | 'saveAs';
+
+/**
+ * Maps a document keydown to a canvas file command, or null: ⌘N / Ctrl+N a new canvas, ⌘O / Ctrl+O
+ * open, ⌘S / Ctrl+S save, ⇧⌘S / Ctrl+Shift+S save as. They work while typing in a field too.
+ * Letters are matched as `keyAction` matches G.
+ */
+export function fileAction(event: KeyboardEvent): FileAction | null {
+  if (event.isComposing || event.repeat || event.altKey || !(event.metaKey || event.ctrlKey)) {
+    return null;
+  }
+  const letter = /^[a-z]$/i.test(event.key)
+    ? event.key.toLowerCase()
+    : event.code.replace(/^Key/, '').toLowerCase();
+  if (letter === 's') return event.shiftKey ? 'saveAs' : 'save';
+  if (event.shiftKey) return null;
+  return letter === 'n' ? 'new' : letter === 'o' ? 'open' : null;
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {

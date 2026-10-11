@@ -169,7 +169,10 @@ export function moveInQueue(graph: Graph, id: string, itemId: string, index: num
   );
 }
 
-/** Sets which node a step acts on; `undefined` makes it act on the node whose queue it is in. */
+/**
+ * Sets which node a step acts on, or a message goes to; `undefined` makes it the node whose queue it
+ * is in.
+ */
 export function retarget(
   graph: Graph,
   id: string,
@@ -177,7 +180,7 @@ export function retarget(
   target: string | undefined,
 ): Graph {
   const aim = (step: QueueStep | QueueMessage): QueueStep | QueueMessage => {
-    if (step.id !== itemId || isMessage(step) || step.target === target) return step;
+    if (step.id !== itemId || step.target === target) return step;
     const next = { ...step };
     if (target === undefined) delete next.target;
     else next.target = target;

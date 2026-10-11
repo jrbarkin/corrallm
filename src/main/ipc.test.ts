@@ -10,6 +10,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle },
 }));
 
+import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { registerIpcHandlers } from './ipc';
 
 const TRUSTED_ORIGIN = 'app://main_window';
@@ -18,12 +19,14 @@ function frame(origin: string, overrides: Record<string, unknown> = {}) {
   return { origin, detached: false, parent: null, ...overrides };
 }
 
-function pingListener() {
+function listenerFor(name: string) {
   registerIpcHandlers(TRUSTED_ORIGIN);
-  const call = handle.mock.calls.find(([channel]) => channel === 'app:ping');
-  if (call === undefined) throw new Error('app:ping was not registered');
+  const call = handle.mock.calls.find(([channel]) => channel === name);
+  if (call === undefined) throw new Error(`${name} was not registered`);
   return call[1];
 }
+
+const pingListener = () => listenerFor('app:ping');
 
 describe('app:ping handler', () => {
   beforeEach(() => {
@@ -51,5 +54,22 @@ describe('app:ping handler', () => {
     expect(() => listener({ senderFrame: frame(TRUSTED_ORIGIN) }, 'extra')).toThrow(
       /Expected no arguments/,
     );
+  });
+});
+
+describe('canvas:save handler', () => {
+  beforeEach(() => {
+    handle.mockReset();
+  });
+
+  it.each([
+    ['no arguments', [], /Expected the canvas text/],
+    ['text that is not a string', [42, false], /Expected the canvas text/],
+    ['a choice that is not a boolean', ['{}', 'yes'], /Expected the canvas text/],
+    ['an extra argument', ['{}', false, 'more'], /Expected the canvas text/],
+    ['a canvas too large to save', ['x'.repeat(MAX_CANVAS_BYTES + 1), false], /too large/],
+  ])('rejects %s', (_label, args, message) => {
+    const listener = listenerFor('canvas:save');
+    expect(() => listener({ senderFrame: frame(TRUSTED_ORIGIN) }, ...args)).toThrow(message);
   });
 });

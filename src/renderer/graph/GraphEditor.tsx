@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
+import type { CanvasFile } from '../../shared/ipc';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -49,7 +50,12 @@ import {
   ungroupSelection,
 } from './graph';
 import type { Graph } from './graph';
-import { keyAction, SHORTCUTS } from './keys';
+import { ExampleGallery } from './ExampleGallery';
+import { EXAMPLES } from './examples';
+import type { Example } from './examples';
+import { FileBar } from './FileBar';
+import { fromFile, toFile } from './file';
+import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
 import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
@@ -100,16 +106,52 @@ function operation(command: Command): (graph: Graph) => Graph {
   }
 }
 
-export function GraphEditor({ initialGraph = EMPTY_GRAPH }: { initialGraph?: Graph }) {
+/** Where canvases are saved and opened from (window.api in the app; see src/main/canvas.ts). */
+export interface CanvasFiles {
+  /** Asks for a file to open: resolves with it, or null if cancelled. */
+  open: () => Promise<CanvasFile | null>;
+  /** Saves a canvas's text (to a file picked anew, if `choose`): resolves with its name, or null. */
+  save: (text: string, choose: boolean) => Promise<string | null>;
+  /** Forgets the canvas's file: the next save asks where. */
+  forget: () => Promise<null>;
+}
+
+/** The editor, with (given `files`) a bar to open and save canvases as `.corral` files. */
+export function GraphEditor({
+  initialGraph = EMPTY_GRAPH,
+  files,
+}: {
+  initialGraph?: Graph;
+  files?: CanvasFiles;
+}) {
   return (
     <ReactFlowProvider>
-      <Editor initialGraph={initialGraph} />
+      <Editor initialGraph={initialGraph} files={files} />
     </ReactFlowProvider>
   );
 }
 
-function Editor({ initialGraph }: { initialGraph: Graph }) {
+/** Why opening or saving failed, without what IPC adds to a rejection from main. */
+function reason(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  return message.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
+}
+
+function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFiles | undefined }) {
   const [graph, setRawGraph] = useState(initialGraph);
+  /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
+  const [saved, setSaved] = useState(() => ({
+    name: undefined as string | undefined,
+    text: toFile(initialGraph),
+  }));
+  const text = useMemo(() => toFile(graph), [graph]);
+  const edited = text !== saved.text;
+  /** What would discard unsaved changes, while the user is asked first. */
+  const [discarding, setDiscarding] = useState<{ run: () => void }>();
+  /** Why the last open or save failed. */
+  const [problem, setProblem] = useState<string>();
+  /** Whether the examples gallery is open. */
+  const [gallery, setGallery] = useState(false);
   /** Whether the graph is laid out automatically (and nodes cannot be dragged). */
   const [arranging, setArranging] = useState(false);
   const [editing, setEditing] = useState<string>();
@@ -120,14 +162,19 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
   /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
   const [drawn, setDrawn] = useState<Connection & { at?: MenuPlace }>();
   const store = useStoreApi();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
-  /** Whether a panel or menu is open, which has the keyboard (Escape closes it). */
-  const modal = opened !== undefined || work !== undefined || drawn !== undefined;
-  // The keyboard handler reads these without re-subscribing on every change.
-  const latest = useRef({ graph, modal, arranging });
+  /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
+  const modal =
+    opened !== undefined ||
+    work !== undefined ||
+    drawn !== undefined ||
+    discarding !== undefined ||
+    gallery;
+  // The keyboard handler and file commands read these without re-subscribing on every change.
+  const latest = useRef({ graph, modal, arranging, text, edited });
   useEffect(() => {
-    latest.current = { graph, modal, arranging };
+    latest.current = { graph, modal, arranging, text, edited };
   });
   /** Every change to the graph goes through here, so it stays arranged while arranging is on. */
   const setGraph = useCallback((op: (graph: Graph) => Graph) => {
@@ -219,12 +266,99 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
   const closeWork = useCallback(() => {
     setWork(undefined);
   }, []);
+  const closeGallery = useCallback(() => {
+    setGallery(false);
+  }, []);
+
+  /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
+  const [loads, setLoads] = useState(0);
+  useEffect(() => {
+    // React Flow holds the new nodes by now (its effects run first); it fits once they are measured.
+    if (loads > 0) void fitView({ padding: 0.2, maxZoom: 1 });
+  }, [loads, fitView]);
+
+  /** Replaces the canvas with one from a file (`name`), or a new one, and fits the view to it. */
+  const load = useCallback((next: Graph, name: string | undefined) => {
+    setLoads((n) => n + 1);
+    setRawGraph(next);
+    setSaved({ name, text: toFile(next) });
+    setArranging(false);
+    setEditing(undefined);
+    setOpened(undefined);
+    setWork(undefined);
+    setDrawn(undefined);
+    setProblem(undefined);
+  }, []);
+  /**
+   * The file commands. New and Open replace the canvas, so while it has unsaved changes (`edited`)
+   * they ask first; Save writes `text`, the canvas's file text.
+   */
+  const commands = useMemo(() => {
+    if (!files) return undefined;
+    /** Runs `run` now, or once the user agrees to discard unsaved changes. */
+    const unless = (edited: boolean, run: () => void) => {
+      if (edited) setDiscarding({ run });
+      else run();
+    };
+    const failed = (doing: string) => (error: unknown) => {
+      setProblem(`Could not ${doing}: ${reason(error)}`);
+    };
+    return {
+      new: (edited: boolean) => {
+        unless(edited, () => {
+          load(EMPTY_GRAPH, undefined);
+          files.forget().catch(failed('start a new canvas'));
+        });
+      },
+      open: (edited: boolean) => {
+        unless(edited, () => {
+          files.open().then((file) => {
+            if (!file) return;
+            try {
+              load(fromFile(file.text), file.name);
+            } catch (error) {
+              setProblem(`Could not open ${file.name}: ${reason(error)}`);
+              // Main took it as the canvas's file: never save this canvas over it.
+              files.forget().catch(failed('open the canvas'));
+            }
+          }, failed('open the canvas'));
+        });
+      },
+      /** Opens an example as a new canvas, saved nowhere yet. */
+      example: (example: Example, edited: boolean) => {
+        unless(edited, () => {
+          load(fromFile(example.text), undefined);
+          files.forget().catch(failed('open the example'));
+        });
+      },
+      save: (text: string, choose: boolean) => {
+        files.save(text, choose).then((name) => {
+          if (name !== null) setSaved({ name, text });
+        }, failed('save the canvas'));
+      },
+    };
+  }, [files, load]);
+  useEffect(() => {
+    if (files)
+      document.title = `${saved.name ?? 'Untitled'}${edited ? ' (edited)' : ''} — corrallm`;
+  }, [files, saved.name, edited]);
   const cancelDrawn = useCallback(() => {
     setDrawn(undefined);
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const file = commands ? fileAction(event) : null;
+      if (commands && file) {
+        event.preventDefault();
+        if (file === 'save' || file === 'saveAs') {
+          commands.save(latest.current.text, file === 'saveAs');
+        } else if (!latest.current.modal) {
+          if (file === 'new') commands.new(latest.current.edited);
+          else commands.open(latest.current.edited);
+        }
+        return;
+      }
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
@@ -240,7 +374,7 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [apply]);
+  }, [apply, commands]);
 
   /** Adds a node where the pointer is: into the innermost group there, if any. */
   const addAtPointer = (event: ReactMouseEvent) => {
@@ -291,7 +425,7 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
         className: 'graph-link',
         ariaLabel: `${name(e.source)} and ${name(e.target)} can talk`,
       }));
-    const arrows: WorkFlowEdge[] = work.map(({ from, to, count }) => ({
+    const arrows: WorkFlowEdge[] = work.map(({ from, to, count, conditional }) => ({
       id: `work:${from}->${to}`,
       type: 'work',
       source: from,
@@ -302,8 +436,8 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
       selectable: false,
       deletable: false,
       className: 'graph-work',
-      ariaLabel: `Work from ${name(from)} for ${name(to)}: ${String(count)} queued`,
-      data: { count, fromName: name(from), toName: name(to) },
+      ariaLabel: `Work from ${name(from)} for ${name(to)}: ${String(count)} queued${conditional ? ', on a condition' : ''}`,
+      data: { count, conditional, fromName: name(from), toName: name(to) },
     }));
     return [...links, ...arrows];
   }, [graph.nodes, graph.edges]);
@@ -459,6 +593,53 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
               />
             </Panel>
           )}
+          {commands && (
+            <Panel position="top-left">
+              <FileBar
+                name={saved.name}
+                edited={edited}
+                problem={problem}
+                discarding={discarding !== undefined}
+                onNew={() => {
+                  commands.new(edited);
+                }}
+                onOpen={() => {
+                  commands.open(edited);
+                }}
+                onSave={() => {
+                  commands.save(text, false);
+                }}
+                onSaveAs={() => {
+                  commands.save(text, true);
+                }}
+                onExamples={() => {
+                  setGallery(true);
+                }}
+                onDiscard={() => {
+                  discarding?.run();
+                  setDiscarding(undefined);
+                }}
+                onKeep={() => {
+                  setDiscarding(undefined);
+                }}
+                onDismiss={() => {
+                  setProblem(undefined);
+                }}
+              />
+            </Panel>
+          )}
+          {commands && graph.nodes.length === 0 && (
+            <Panel position="top-center" className="graph-panel graph-start">
+              <button
+                type="button"
+                onClick={() => {
+                  setGallery(true);
+                }}
+              >
+                Start from an example…
+              </button>
+            </Panel>
+          )}
           <Panel position="bottom-center" className="graph-panel graph-hint">
             Double-click the canvas to add an agent, or an agent to open it · Drag between agents'
             dots to let them talk or queue work · Drag on empty space to select · F2 to rename
@@ -515,6 +696,16 @@ function Editor({ initialGraph }: { initialGraph: Graph }) {
             nodes={graph.nodes}
             edits={edits}
             onClose={closeWork}
+          />
+        )}
+        {gallery && (
+          <ExampleGallery
+            examples={EXAMPLES}
+            onPick={(example) => {
+              setGallery(false);
+              commands?.example(example, edited);
+            }}
+            onClose={closeGallery}
           />
         )}
         {drawn && (

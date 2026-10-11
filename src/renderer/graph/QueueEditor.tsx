@@ -137,7 +137,6 @@ export function QueueEditor({
       {typeof add === 'object' && (
         <AddMenu
           label={`Queue work for ${name(add.workFor)}`}
-          withMessage={false}
           target={add.workFor}
           context={context}
           onAdd={onAdd}
@@ -266,6 +265,46 @@ function RemoveButton({ item, context }: { item: QueueItem; context: Context }) 
   );
 }
 
+/** The agent a step acts on, or a message goes to: a chip that changes it. */
+function TargetChip({
+  item,
+  label,
+  context,
+}: {
+  item: QueueStep | QueueMessage;
+  label: string;
+  context: Context;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="graph-queue-target"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => {
+          setOpen(!open);
+        }}
+      >
+        → {context.name(item.target)}
+      </button>
+      {open && (
+        <TargetPicker
+          context={context}
+          onPick={(target) => {
+            context.onRetarget(item.id, target.id);
+            setOpen(false);
+          }}
+          onCancel={() => {
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 /** A step: its handle, its action, the agent it acts on (a chip that changes it), and remove. */
 function StepRow({
   item,
@@ -276,7 +315,6 @@ function StepRow({
   handle: HandleProps;
   context: Context;
 }) {
-  const [retargeting, setRetargeting] = useState(false);
   const known = context.actions.some((a) => a.name === item.action);
   return (
     <div className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}>
@@ -287,35 +325,13 @@ function StepRow({
       >
         {item.action}
       </span>{' '}
-      <button
-        type="button"
-        className="graph-queue-target"
-        aria-label={`Change the agent ${item.action} acts on`}
-        aria-expanded={retargeting}
-        onClick={() => {
-          setRetargeting(!retargeting);
-        }}
-      >
-        → {context.name(item.target)}
-      </button>
+      <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
       <RemoveButton item={item} context={context} />
-      {retargeting && (
-        <TargetPicker
-          context={context}
-          onPick={(target) => {
-            context.onRetarget(item.id, target.id);
-            setRetargeting(false);
-          }}
-          onCancel={() => {
-            setRetargeting(false);
-          }}
-        />
-      )}
     </div>
   );
 }
 
-/** A message for the agent: its text, edited in place. */
+/** A message: the agent it goes to (a chip that changes it), and its text, edited in place. */
 function MessageRow({
   item,
   handle,
@@ -329,6 +345,7 @@ function MessageRow({
     <div className="graph-queue-row graph-queue-message">
       <Handle handle={handle} item={item} context={context} />
       <span className="graph-queue-keyword">Message</span>
+      <TargetChip item={item} label="Change the agent the message goes to" context={context} />
       <textarea
         aria-label="Message to the agent"
         placeholder="Tell the agent what to do"
@@ -416,22 +433,20 @@ const CHOICE_TEXT = {
 } as const;
 
 /**
- * The ⊕ and its dropdowns: one of the agent's actions, a message (unless `withMessage` is false),
- * or (`withIf`) "If… then"; then the agent the action acts on (unless `target` fixes it), the
- * message's text, or the if-then's condition.
+ * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`) "If… then"; then
+ * the agent the action acts on (unless `target` fixes it), the message's text, or the if-then's
+ * condition.
  */
 function AddMenu({
   label,
   withIf = false,
-  withMessage = true,
   target,
   context,
   onAdd,
 }: {
   label: string;
   withIf?: boolean;
-  withMessage?: boolean;
-  /** The agent every action added acts on. */
+  /** The agent every action and message added is aimed at; by default, the queue's own. */
   target?: string;
   context: Context;
   onAdd: (entry: QueueEntry) => void;
@@ -444,7 +459,7 @@ function AddMenu({
   };
   const choices: Choice[] = [
     ...(withIf ? [{ kind: 'if' as const }] : []),
-    ...(withMessage ? [{ kind: 'message' as const }] : []),
+    { kind: 'message' },
     ...context.actions.map((action) => ({ kind: 'action' as const, action })),
   ];
   return (
@@ -504,7 +519,7 @@ function AddMenu({
           label="New message to the agent"
           multiline
           onSubmit={(message) => {
-            onAdd({ message });
+            onAdd({ message, ...(target === undefined ? {} : { target }) });
             close();
           }}
           onCancel={close}

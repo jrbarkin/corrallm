@@ -1,0 +1,67 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "coder",
+      "kind": "agent",
+      "label": "Coder",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "brief",
+          "message": "Implement the feature described in ISSUE.md, with tests."
+        },
+        {
+          "id": "handoff",
+          "message": "Review my change: look for bugs and missing tests.",
+          "target": "reviewer"
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "kind": "agent",
+      "label": "Reviewer",
+      "position": {
+        "x": 360,
+        "y": 160
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "ready",
+          "if": {
+            "kind": "nodeDone",
+            "node": "coder"
+          },
+          "then": [
+            {
+              "id": "review",
+              "action": "/review"
+            }
+          ]
+        },
+        {
+          "id": "changes",
+          "if": {
+            "kind": "freeText",
+            "text": "the review asks for changes"
+          },
+          "then": [
+            {
+              "id": "back",
+              "message": "Fix what the review found, then hand the change back.",
+              "target": "coder"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": []
+}

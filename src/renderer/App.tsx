@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 
 import { GraphEditor } from './graph/GraphEditor';
+import type { CanvasFiles } from './graph/GraphEditor';
+
+/** Canvases are opened and saved by the main process (src/main/canvas.ts). */
+const files: CanvasFiles = {
+  open: () => window.api.openCanvas(),
+  save: (text, choose) => window.api.saveCanvas(text, choose),
+  forget: () => window.api.forgetCanvas(),
+};
 
 type PingState =
   { status: 'pending' } | { status: 'ok'; version: string } | { status: 'error'; message: string };
@@ -38,7 +46,7 @@ export function App() {
           {ping.status === 'error' && `Ping failed: ${ping.message}`}
         </p>
       </header>
-      <GraphEditor />
+      <GraphEditor files={files} />
     </main>
   );
 }

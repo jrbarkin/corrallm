@@ -1,7 +1,10 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
+import type { CanvasFile } from '../../shared/ipc';
+import { fromFile, toFile } from './file';
 import { GraphEditor } from './GraphEditor';
+import type { CanvasFiles } from './GraphEditor';
 import { PADDING } from './graph';
 import type { Graph, GraphNode } from './graph';
 
@@ -28,9 +31,9 @@ const frame: GraphNode = {
   measured: { width: 400, height: 300 },
 };
 
-function setup(initialGraph?: Graph) {
+function setup(initialGraph?: Graph, files?: CanvasFiles) {
   const { container } = render(
-    initialGraph ? <GraphEditor initialGraph={initialGraph} /> : <GraphEditor />,
+    <GraphEditor {...(initialGraph ? { initialGraph } : {})} {...(files ? { files } : {})} />,
   );
   const nodes = (selector = '.react-flow__node') => [
     ...container.querySelectorAll<HTMLElement>(selector),
@@ -432,6 +435,38 @@ describe('GraphEditor', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('sends a message to another agent, which draws an arrow, marked "if" on a condition', () => {
+    const queue = [
+      { id: 'i', if: { kind: 'failed' as const }, then: [{ id: 'm', message: 'Take over' }] },
+    ];
+    const { container, node } = setup({
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('lead', 0, 100)],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const chip = panel.getByRole('button', { name: 'Change the agent the message goes to' });
+    expect(chip.textContent).toBe('→ this agent');
+    fireEvent.click(chip);
+    fireEvent.click(panel.getByRole('option', { name: 'lead' }));
+    expect(chip.textContent).toBe('→ lead');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    const edge = container.querySelector('[data-testid="rf__edge-work:a->lead"]');
+    expect(edge?.getAttribute('aria-label')).toBe('Work from a for lead: 1 queued, on a condition');
+    const count = () => button('Open the work from a for lead');
+    expect(count().textContent).toBe('if 1');
+
+    // The work panel's ⊕ sends messages too: no longer all on a condition.
+    fireEvent.click(count());
+    const work = within(screen.getByRole('dialog', { name: 'Work from a for lead' }));
+    fireEvent.click(work.getByRole('button', { name: 'Queue work for lead' }));
+    fireEvent.click(work.getByRole('option', { name: /^Message/ }));
+    const text = work.getByRole('textbox', { name: 'New message to the agent' });
+    fireEvent.change(text, { target: { value: 'Start now' } });
+    fireEvent.keyDown(text, { key: 'Enter' });
+    expect(count().textContent).toBe('2');
+  });
+
   it('draws a wait for another agent as an arrow from it, opening to the waiting queue', () => {
     const queue = [{ id: 'w', if: { kind: 'nodeDone' as const, node: 'a' }, then: [] }];
     const { container } = setup({
@@ -511,5 +546,95 @@ describe('GraphEditor', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Gamma' } });
     expect(screen.getByRole('dialog', { name: 'Gamma' })).toBeTruthy();
     expect(edge()?.getAttribute('aria-label')).toBe('Gamma and Beta can talk');
+  });
+
+  describe('canvas files', () => {
+    /** Stands in for window.api: opens `opened`, saves as team.corral. */
+    const fakeFiles = (opened: CanvasFile | null = null) => ({
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(opened),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(null),
+    });
+    const coder: Graph = {
+      nodes: [agentNode('x', 0, 0, { data: { label: 'Coder' } })],
+      edges: [],
+    };
+
+    it('saves the canvas, and titles the window with its file and whether it is edited', async () => {
+      const files = fakeFiles();
+      const { pane } = setup(undefined, files);
+      expect(document.title).toBe('Untitled — corrallm');
+      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      expect(document.title).toBe('Untitled (edited) — corrallm');
+
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(document.title).toBe('team.corral — corrallm');
+      });
+      const [text, choose] = files.save.mock.calls[0] ?? [];
+      expect(choose).toBe(false);
+      expect(fromFile(text ?? '').nodes.map((n) => n.data.label)).toEqual(['Agent 1']);
+
+      // Ctrl/⌘ Shift S saves as, Ctrl/⌘ S saves.
+      fireEvent.keyDown(document.body, { key: 's', ctrlKey: true, shiftKey: true });
+      expect(files.save).toHaveBeenLastCalledWith(expect.any(String), true);
+      fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+      expect(files.save).toHaveBeenLastCalledWith(expect.any(String), false);
+    });
+
+    it('opens a canvas file and starts new ones, asking before unsaved changes are lost', async () => {
+      const files = fakeFiles({ name: 'review.corral', text: toFile(coder) });
+      const { pane, nodes } = setup(undefined, files);
+      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+
+      fireEvent.click(button('Open…'));
+      const ask = screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' });
+      fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }));
+      expect(files.open).not.toHaveBeenCalled();
+      expect(nodes().map((n) => n.textContent)).toEqual(['Agent 1']);
+
+      fireEvent.click(button('Open…'));
+      fireEvent.click(button('Discard'));
+      await waitFor(() => {
+        expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
+      });
+      expect(document.title).toBe('review.corral — corrallm');
+
+      // Nothing to lose: New asks nothing.
+      fireEvent.click(button('New'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(nodes()).toEqual([]);
+      expect(files.forget).toHaveBeenCalled();
+      expect(document.title).toBe('Untitled — corrallm');
+    });
+
+    it('opens an example as a new canvas, from an empty canvas or the file bar', () => {
+      const files = fakeFiles();
+      const { nodes } = setup(undefined, files);
+      fireEvent.click(button('Start from an example…'));
+      const gallery = within(screen.getByRole('dialog', { name: 'Examples' }));
+      fireEvent.click(gallery.getByRole('button', { name: /^Team lead/ }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(nodes().map((n) => n.textContent)).toContain('Lead');
+      expect(files.forget).toHaveBeenCalled();
+      expect(document.title).toBe('Untitled — corrallm');
+      // Not empty now: the file bar still has them.
+      expect(screen.queryByRole('button', { name: 'Start from an example…' })).toBeNull();
+      fireEvent.click(button('Examples…'));
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('says why a file cannot be opened, and keeps the canvas', async () => {
+      const files = fakeFiles({ name: 'notes.corral', text: 'Remember the milk' });
+      const { nodes } = setup(coder, files);
+      fireEvent.click(button('Open…'));
+      expect((await screen.findByRole('alert')).textContent).toMatch(
+        /^Could not open notes\.corral: This is not a corrallm canvas/,
+      );
+      expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
+      // Main took the file as the canvas's; it must not be saved over.
+      expect(files.forget).toHaveBeenCalled();
+    });
   });
 });

@@ -23,5 +23,13 @@ describe('preload', () => {
     invoke.mockResolvedValue('corrallm 0.1.0');
     await expect((api as AppApi).ping()).resolves.toBe('corrallm 0.1.0');
     expect(invoke).toHaveBeenCalledWith('app:ping');
+
+    // The canvas file functions invoke their channels with their arguments.
+    await (api as AppApi).openCanvas();
+    expect(invoke).toHaveBeenLastCalledWith('canvas:open');
+    await (api as AppApi).saveCanvas('{}', true);
+    expect(invoke).toHaveBeenLastCalledWith('canvas:save', '{}', true);
+    await (api as AppApi).forgetCanvas();
+    expect(invoke).toHaveBeenLastCalledWith('canvas:forget');
   });
 });

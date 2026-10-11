@@ -273,7 +273,7 @@ describe('queues', () => {
     expect(retarget(queued, 'a', 'q2', 'b')).toBe(queued);
   });
 
-  it('holds messages to the agent, which can be edited, and are not retargeted', () => {
+  it('holds messages for the agent, which can be edited, or sent to another agent', () => {
     const note = { id: 'm1', message: 'Use the staging database' };
     const withNote = addToQueue(queued, 'a', note);
     expect(queueOf(withNote).at(-1)).toEqual(note);
@@ -282,7 +282,9 @@ describe('queues', () => {
       message: 'Use prod',
     });
     expect(editMessage(withNote, 'a', 'q1', 'x')).toBe(withNote);
-    expect(retarget(withNote, 'a', 'm1', 'b')).toBe(withNote);
+    const sent = retarget(withNote, 'a', 'm1', 'b');
+    expect(queueOf(sent).at(-1)).toEqual({ ...note, target: 'b' });
+    expect(queueOf(retarget(sent, 'a', 'm1', undefined)).at(-1)).toEqual(note);
   });
 
   describe('if-then', () => {

@@ -8,10 +8,14 @@ export interface QueueStep {
   target?: string;
 }
 
-/** A message for the agent: text the user passes it as part of the queue. */
+/**
+ * A message: text the user passes an agent as part of the queue. It goes to the queue's own agent,
+ * or (`target`, an id) to another one, such as the head of a group.
+ */
 export interface QueueMessage {
   id: string;
   message: string;
+  target?: string;
 }
 
 /**

@@ -141,9 +141,15 @@ export function LinkView({ id, interactionWidth, ...geometry }: EdgeProps) {
 }
 
 /** Work queued from one agent for another (work.ts), as React Flow draws it. */
-export type WorkFlowEdge = Edge<{ count: number; fromName: string; toName: string }, 'work'>;
+export type WorkFlowEdge = Edge<
+  { count: number; conditional: boolean; fromName: string; toName: string },
+  'work'
+>;
 
-/** Work from one agent for another: an arrow, and a button with how many items, which opens them. */
+/**
+ * Work from one agent for another: an arrow, and a button with how many items (marked "if" when all
+ * of them wait on a condition), which opens them.
+ */
 export function WorkEdgeView({
   id,
   source,
@@ -156,6 +162,7 @@ export function WorkEdgeView({
   const { openWork } = useGraphActions();
   const [path, labelX, labelY] = getBezierPath(geometry);
   const count = data?.count ?? 0;
+  const conditional = data?.conditional ?? false;
   return (
     <>
       <BaseEdge
@@ -166,13 +173,15 @@ export function WorkEdgeView({
       <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible>
         <button
           type="button"
-          className="graph-work-count"
+          className={conditional ? 'graph-work-count conditional' : 'graph-work-count'}
           aria-label={`Open the work from ${data?.fromName ?? ''} for ${data?.toName ?? ''}`}
-          title={`${String(count)} queued. Click to open.`}
+          title={`${String(count)} queued${conditional ? ', on a condition' : ''}. Click to open.`}
           onClick={() => {
             openWork(source, target);
           }}
         >
+          {conditional && <span className="graph-work-if">if</span>}
+          {conditional && ' '}
           {count}
         </button>
       </EdgeToolbar>

@@ -32,6 +32,8 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 ```
 src/main/       Main process (Node). index.ts is the entry; security.ts, app-protocol.ts, csp.ts,
                 url-policy.ts hold the security baseline; ipc.ts registers IPC handlers.
+                canvas.ts opens and saves canvas files for the canvas:* channels: it remembers
+                each renderer's file, so the renderer never passes a path.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
@@ -42,7 +44,10 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
                      the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
-                     (ConnectMenu.tsx).
+                     (ConnectMenu.tsx). Canvases save as .corral files (versioned JSON; format and
+                     validation in file.ts, open/save bar in FileBar.tsx). examples/ holds .corral
+                     examples, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
+                     each one valid and written exactly as toFile writes it.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.

@@ -12,7 +12,28 @@
 export interface IpcContract {
   /** Round-trip check. Resolves with a human-readable version string. */
   'app:ping': { args: []; result: string };
+  /** Asks for a canvas file to open (the Open dialog). Resolves with it, or null if cancelled. */
+  'canvas:open': { args: []; result: CanvasFile | null };
+  /**
+   * Saves a canvas (its file's text) to the file it was opened from or last saved to, or, when it
+   * has none or `choose` is true, to one picked in the Save dialog. Resolves with the file's name,
+   * or null if cancelled.
+   */
+  'canvas:save': { args: [text: string, choose: boolean]; result: string | null };
+  /** Forgets the canvas's file, for a new canvas: its next save asks where. Resolves with null. */
+  'canvas:forget': { args: []; result: null };
 }
+
+/** A canvas file: its name (without folders) and its text (src/renderer/graph/file.ts). */
+export interface CanvasFile {
+  name: string;
+  text: string;
+}
+
+/** The extension of canvas files. */
+export const CANVAS_EXTENSION = 'corral';
+/** The largest canvas file read or written, in bytes. */
+export const MAX_CANVAS_BYTES = 10 * 1024 * 1024;
 
 export type IpcChannel = keyof IpcContract;
 export type IpcArgs<C extends IpcChannel> = IpcContract[C]['args'];
@@ -21,11 +42,17 @@ export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 /** The API the preload script exposes to the renderer as `window.api`. */
 export interface AppApi {
   ping(): Promise<IpcResult<'app:ping'>>;
+  openCanvas(): Promise<IpcResult<'canvas:open'>>;
+  saveCanvas(...args: IpcArgs<'canvas:save'>): Promise<IpcResult<'canvas:save'>>;
+  forgetCanvas(): Promise<IpcResult<'canvas:forget'>>;
 }
 
 /** Which channel each `AppApi` method invokes. */
 export const API_CHANNELS = {
   ping: 'app:ping',
+  openCanvas: 'canvas:open',
+  saveCanvas: 'canvas:save',
+  forgetCanvas: 'canvas:forget',
 } as const satisfies Record<keyof AppApi, IpcChannel>;
 
 type AssertNever<T extends never> = T;

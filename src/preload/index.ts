@@ -16,6 +16,9 @@ function invoke<C extends IpcChannel>(channel: C, ...args: IpcArgs<C>): Promise<
 
 const api: AppApi = {
   ping: () => invoke(API_CHANNELS.ping),
+  openCanvas: () => invoke(API_CHANNELS.openCanvas),
+  saveCanvas: (text, choose) => invoke(API_CHANNELS.saveCanvas, text, choose),
+  forgetCanvas: () => invoke(API_CHANNELS.forgetCanvas),
 };
 
 contextBridge.exposeInMainWorld('api', api);

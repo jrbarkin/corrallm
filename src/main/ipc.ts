@@ -1,11 +1,19 @@
 import { app, ipcMain } from 'electron';
+import type { WebContents } from 'electron';
 
+import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcResult } from '../shared/ipc';
+import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
 import { isTrustedSender } from './security';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends IpcChannel> = (args: unknown[]) => IpcArgs<C>;
+/** Who sent a message: the renderer's web contents (whose window a dialog belongs to). */
+export interface IpcCaller {
+  contents: WebContents;
+}
 export type IpcHandler<C extends IpcChannel> = (
+  caller: IpcCaller,
   ...args: IpcArgs<C>
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
@@ -26,7 +34,7 @@ export function createIpcHandle(trustedOrigin: string) {
       if (!isTrustedSender(event.senderFrame, trustedOrigin)) {
         throw new Error(`Rejected ${channel}: untrusted sender`);
       }
-      return handler(...parseArgs(rawArgs));
+      return handler({ contents: event.sender }, ...parseArgs(rawArgs));
     });
   };
 }
@@ -50,8 +58,32 @@ type HandlerTable = {
   [C in IpcChannel]: { parseArgs: ArgsParser<C>; handler: IpcHandler<C> };
 };
 
+/** `ArgsParser` for canvas:save: the canvas's text (within the size limit), and `choose`. */
+export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
+  const [text, choose] = args;
+  if (args.length !== 2 || typeof text !== 'string' || typeof choose !== 'boolean') {
+    throw new TypeError('Expected the canvas text and whether to choose a file');
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_CANVAS_BYTES) {
+    throw new RangeError('The canvas is too large to save');
+  }
+  return [text, choose];
+}
+
 const handlers: HandlerTable = {
   'app:ping': { parseArgs: noArgs, handler: getVersionString },
+  'canvas:open': { parseArgs: noArgs, handler: ({ contents }) => openCanvas(contents) },
+  'canvas:save': {
+    parseArgs: parseSaveArgs,
+    handler: ({ contents }, text, choose) => saveCanvas(contents, text, choose),
+  },
+  'canvas:forget': {
+    parseArgs: noArgs,
+    handler: ({ contents }) => {
+      forgetCanvas(contents);
+      return null;
+    },
+  },
 };
 
 // Generic so each channel's parser and handler types stay linked while iterating the table.
