@@ -1,0 +1,13 @@
+{
+  // Build/test tooling: Forge, Vite, Vitest, ESLint and Playwright configs plus the e2e suite.
+  // DOM lib is needed because Playwright's types and page.evaluate() callbacks reference DOM globals.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tooling.tsbuildinfo",
+    "lib": ["ES2025", "DOM"],
+    "types": ["node"],
+    // Config files are loaded by Node/Vite directly, which need explicit .ts extensions.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.config.ts", "*.config.mts", "e2e/**/*", "src/renderer/global.d.ts"]
+}

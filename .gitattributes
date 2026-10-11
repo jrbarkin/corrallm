@@ -1,0 +1,6 @@
+# LF everywhere (Windows CI checkouts would otherwise get CRLF and fail `prettier --check`).
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary

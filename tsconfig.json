@@ -1,0 +1,9 @@
+{
+  // Solution-style root: type-check everything with `tsc -b` (plain `tsc --noEmit` here checks nothing).
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.web.json" },
+    { "path": "./tsconfig.tooling.json" }
+  ]
+}

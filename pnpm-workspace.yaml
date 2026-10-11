@@ -1,0 +1,14 @@
+# pnpm >= 11 reads only auth/registry settings from .npmrc. Every other setting lives here.
+
+# Electron Forge requires a flat (npm-style) node_modules layout.
+nodeLinker: hoisted
+
+# Fail install when the running Node doesn't satisfy package.json "engines".
+engineStrict: true
+
+# Dependency lifecycle scripts are blocked unless listed here (strictDepBuilds is on by default).
+allowBuilds:
+  electron-winstaller: true # maker-squirrel: install script selects the 7z binary
+  fs-xattr: true # maker-dmg -> appdmg native add-on (macOS only)
+  macos-alias: true # maker-dmg -> ds-store native add-on (macOS only)
+  node-pty: false # ships Node-API prebuilds for every platform; its install script isn't needed
