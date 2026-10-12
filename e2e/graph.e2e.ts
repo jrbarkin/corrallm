@@ -669,6 +669,26 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect(transcript.getByText('Add rate limiting', { exact: true })).toBeVisible();
 });
 
+test("keeps an if-then's steps inside it, in the agent view's narrow queue", async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await a.dblclick();
+  const side = page
+    .getByRole('dialog', { name: 'Agent 1' })
+    .getByRole('complementary', { name: 'Questions and queue' });
+  await side.getByRole('button', { name: 'Add to queue' }).click();
+  await page.keyboard.type('if');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // the previous step succeeded
+  await side.getByRole('button', { name: 'Add to If the previous step succeeded' }).click();
+  await page.keyboard.type('message');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('research');
+  await page.keyboard.press('Enter');
+  const step = side.locator('.graph-queue-then .graph-queue-row');
+  await expect(step).toBeVisible();
+  expectInside(await box(step), await box(side.locator('.graph-queue-if')));
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);
