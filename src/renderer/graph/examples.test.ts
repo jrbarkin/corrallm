@@ -19,7 +19,11 @@ describe.each(EXAMPLES)('the $name example', (example) => {
       const actions = AGENT_ACTIONS[agent.data.agent ?? DEFAULT_AGENT].map((a) => a.name);
       for (const item of agent.data.queue ?? []) {
         if (isWait(item)) {
-          for (const id of item.waitFor) expect(agents.has(id)).toBe(true);
+          for (const { agent: waited, item: step } of item.waitFor) {
+            const queue = agents.get(waited)?.data.queue ?? [];
+            expect(agents.has(waited)).toBe(true);
+            if (step !== undefined) expect(queue.map((q) => q.id)).toContain(step);
+          }
           continue;
         }
         const steps = isIf(item) ? item.then : [item];

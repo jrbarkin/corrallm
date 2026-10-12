@@ -6,7 +6,7 @@ import type { Graph, GraphNode } from './graph';
 import type { QueueItem } from './queue';
 
 const queue: QueueItem[] = [
-  { id: 'w', waitFor: ['b'] },
+  { id: 'w', waitFor: [{ agent: 'b' }, { agent: 'b', item: 'x' }] },
   { id: 'm', message: 'Fix the flaky test', target: 'b' },
   {
     id: 'i',
@@ -117,6 +117,14 @@ describe('fromFile', () => {
     expect(toFile(loaded)).toBe(toFile(graph));
   });
 
+  it('reads a wait for an agent written as just its id', () => {
+    const file = structuredClone(saved);
+    Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
+    expect(fromFile(JSON.stringify(file)).nodes[1]?.data.queue).toEqual([
+      { id: 'w', waitFor: [{ agent: 'b' }] },
+    ]);
+  });
+
   it('puts parents before their children, whatever order the file lists them in', () => {
     const [group, ...rest] = saved.nodes;
     const loaded = fromFile(JSON.stringify({ ...saved, nodes: [...rest, group] }));
@@ -169,7 +177,9 @@ describe('fromFile', () => {
       'a wait inside an if-then',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, {
-          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'w', waitFor: ['b'] }] }],
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'w', waitFor: [{ agent: 'b' }] }] },
+          ],
         }),
       /nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a wait/,
     ],
@@ -177,6 +187,11 @@ describe('fromFile', () => {
       'a wait for nobody',
       (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: [] }] }),
       /nodes\[1\]\.queue\[0\]\.waitFor must name at least one agent/,
+    ],
+    [
+      'a wait for a step without its agent',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: [{ item: 's' }] }] }),
+      /nodes\[1\]\.queue\[0\]\.waitFor\[0\]\.agent must be non-empty text/,
     ],
     [
       'a link to a missing agent',

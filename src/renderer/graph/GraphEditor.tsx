@@ -267,8 +267,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setCondition: (owner, ifId, condition) => {
         setGraph((g) => setCondition(g, owner, ifId, condition));
       },
-      setWaitFor: (owner, waitId, agents) => {
-        setGraph((g) => setWaitFor(g, owner, waitId, agents));
+      setWaitFor: (owner, waitId, targets) => {
+        setGraph((g) => setWaitFor(g, owner, waitId, targets));
       },
     }),
     [setGraph],
@@ -716,8 +716,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             onCondition={(ifId, condition) => {
               edits.setCondition(openedNode.id, ifId, condition);
             }}
-            onWaitFor={(waitId, agents) => {
-              edits.setWaitFor(openedNode.id, waitId, agents);
+            onWaitFor={(waitId, targets) => {
+              edits.setWaitFor(openedNode.id, waitId, targets);
             }}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{

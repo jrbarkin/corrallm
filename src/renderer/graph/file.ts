@@ -3,7 +3,8 @@ import type { Edge } from '@xyflow/react';
 import { AgentType } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
-import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait } from './queue';
+import { sameTarget } from './queue';
+import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait, WaitTarget } from './queue';
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
@@ -15,8 +16,9 @@ import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait } from '.
  *                 "parent"?, "agent"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
- * A node's position is relative to its parent's, as React Flow keeps it. A link's dots are the
- * ones it was drawn between ("top" or "bottom").
+ * A node's position is relative to its parent's, as React Flow keeps it. Queue items are as
+ * queue.ts has them; a wait's targets are { "agent", "item"? }. A link's dots are the ones it was
+ * drawn between ("top" or "bottom").
  */
 const FORMAT = 'corrallm';
 const VERSION = 1;
@@ -222,9 +224,20 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
 }
 
 function readWait(item: Record<string, unknown>, where: string): QueueWait {
-  const waitFor = list(item.waitFor, `${where}.waitFor`, name);
+  const waitFor = list(item.waitFor, `${where}.waitFor`, readTarget);
   if (waitFor.length === 0) throw new Error(`${where}.waitFor must name at least one agent`);
-  return { id: name(item.id, `${where}.id`), waitFor: [...new Set(waitFor)] };
+  return {
+    id: name(item.id, `${where}.id`),
+    waitFor: waitFor.filter((target, i) => waitFor.findIndex((t) => sameTarget(t, target)) === i),
+  };
+}
+
+/** `{ "agent", "item"? }`, or (as older files have it) just an agent's id. */
+function readTarget(value: unknown, where: string): WaitTarget {
+  if (typeof value === 'string') return { agent: name(value, where) };
+  const target = record(value, where);
+  const item = optional(target.item, `${where}.item`, name);
+  return { agent: name(target.agent, `${where}.agent`), ...(item === undefined ? {} : { item }) };
 }
 
 function readCondition(value: unknown, where: string): Condition {

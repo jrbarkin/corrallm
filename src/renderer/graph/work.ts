@@ -22,7 +22,7 @@ export interface WorkEdge {
  * `from`.
  */
 export function isWorkBetween(item: QueueItem, owner: string, from: string, to: string): boolean {
-  if (isWait(item)) return owner === to && item.waitFor.includes(from);
+  if (isWait(item)) return owner === to && item.waitFor.some((target) => target.agent === from);
   if (isIf(item)) return item.then.some((step) => isWorkBetween(step, owner, from, to));
   return owner === from && item.target === to;
 }
@@ -50,7 +50,10 @@ export function workEdges(nodes: readonly GraphNode[]): WorkEdge[] {
     // A wait is not conditional work: it is when the agent waiting goes on.
     const visit = (item: QueueItem, inIf: boolean) => {
       if (isWait(item)) {
-        for (const agent of item.waitFor) add(agent, node.id, false);
+        // Once per agent, whether the wait is for all of its work or for some of its steps.
+        for (const agent of new Set(item.waitFor.map((target) => target.agent))) {
+          add(agent, node.id, false);
+        }
       } else if (isIf(item)) {
         for (const step of item.then) visit(step, true);
       } else if (item.target !== undefined) {

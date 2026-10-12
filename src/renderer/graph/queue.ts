@@ -36,13 +36,26 @@ export interface QueueIf {
 }
 
 /**
- * A wait: the queue stops here until every agent in `waitFor` (ids) has finished its own queue.
- * Naming several makes a join: the queue goes on once the last of them is done. Waits sit in the
- * queue itself, not in an if-then.
+ * What a wait waits for: an agent (`agent`, an id) to finish its whole queue, or, with `item` (the
+ * id of an item in that agent's queue), to have done that item.
+ */
+export interface WaitTarget {
+  agent: string;
+  item?: string;
+}
+
+export function sameTarget(a: WaitTarget, b: WaitTarget): boolean {
+  return a.agent === b.agent && a.item === b.item;
+}
+
+/**
+ * A wait: the queue stops here until everything in `waitFor` is done (see WaitTarget). Naming
+ * several makes a join: the queue goes on once the last of them is. Waits sit in the queue itself,
+ * not in an if-then.
  */
 export interface QueueWait {
   id: string;
-  waitFor: string[];
+  waitFor: WaitTarget[];
 }
 
 export type QueueItem = QueueStep | QueueMessage | QueueIf | QueueWait;

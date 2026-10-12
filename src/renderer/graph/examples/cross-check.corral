@@ -39,7 +39,9 @@
         {
           "id": "done",
           "waitFor": [
-            "builder"
+            {
+              "agent": "builder"
+            }
           ]
         },
         {

@@ -2,8 +2,8 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
-import { isIf, isMessage, isWait } from './queue';
-import type { Condition, QueueItem, QueueMessage, Question, QueueStep } from './queue';
+import { isIf, isMessage, isWait, sameTarget } from './queue';
+import type { Condition, QueueItem, QueueMessage, Question, QueueStep, WaitTarget } from './queue';
 
 /**
  * `item`: a labelled node with a target handle (top) and a source handle (bottom). While it has
@@ -191,14 +191,18 @@ export function retarget(
   );
 }
 
-/** Sets the agents a wait waits for (ids). A wait waits for someone: an empty list is ignored. */
-export function setWaitFor(graph: Graph, id: string, waitId: string, agents: string[]): Graph {
-  if (agents.length === 0) return graph;
-  const same = (waitFor: string[]) =>
-    waitFor.length === agents.length && waitFor.every((agent, i) => agent === agents[i]);
+/** Sets what a wait waits for (see WaitTarget). A wait waits for something: an empty list is ignored. */
+export function setWaitFor(graph: Graph, id: string, waitId: string, targets: WaitTarget[]): Graph {
+  if (targets.length === 0) return graph;
+  const same = (waitFor: WaitTarget[]) =>
+    waitFor.length === targets.length &&
+    waitFor.every((target, i) => {
+      const other = targets[i];
+      return other !== undefined && sameTarget(target, other);
+    });
   return updateQueue(graph, id, (queue) =>
     queue.map((q) =>
-      q.id === waitId && isWait(q) && !same(q.waitFor) ? { ...q, waitFor: agents } : q,
+      q.id === waitId && isWait(q) && !same(q.waitFor) ? { ...q, waitFor: targets } : q,
     ),
   );
 }

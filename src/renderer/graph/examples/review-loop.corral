@@ -36,7 +36,9 @@
         {
           "id": "ready",
           "waitFor": [
-            "coder"
+            {
+              "agent": "coder"
+            }
           ]
         },
         {

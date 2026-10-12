@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
-import type { Condition } from './queue';
+import type { Condition, WaitTarget } from './queue';
 import { QueueEditor } from './QueueEditor';
 import type { QueueEntry } from './QueueEditor';
 import { isWorkBetween } from './work';
@@ -15,7 +15,7 @@ export interface QueueEdits {
   retarget: (owner: string, itemId: string, target: string | undefined) => void;
   editMessage: (owner: string, itemId: string, message: string) => void;
   setCondition: (owner: string, ifId: string, condition: Condition) => void;
-  setWaitFor: (owner: string, waitId: string, agents: string[]) => void;
+  setWaitFor: (owner: string, waitId: string, targets: WaitTarget[]) => void;
 }
 
 /**
@@ -87,8 +87,8 @@ export function WorkDetail({
           onCondition={(ifId, condition) => {
             edits.setCondition(owner.id, ifId, condition);
           }}
-          onWaitFor={(waitId, agents) => {
-            edits.setWaitFor(owner.id, waitId, agents);
+          onWaitFor={(waitId, targets) => {
+            edits.setWaitFor(owner.id, waitId, targets);
           }}
         />
       </section>

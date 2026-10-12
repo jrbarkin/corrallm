@@ -46,7 +46,7 @@ describe('workEdges', () => {
 
   it('runs an edge to an agent from each agent it waits for, beside the work it gives them', () => {
     const b = agent('b', [
-      { id: 'w', waitFor: ['a', 'c'] },
+      { id: 'w', waitFor: [{ agent: 'a' }, { agent: 'c', item: 'x' }] },
       { id: 's', action: 'Read', target: 'a' },
     ]);
     const a = agent('a', [{ id: 't', action: 'Write', target: 'b' }]);
@@ -62,7 +62,7 @@ describe('isWorkBetween', () => {
   it("tells which of an agent's items make an edge: work it gives, or a wait for another", () => {
     const step: QueueItem = { id: 's', action: 'Read', target: 'b' };
     const holding: QueueItem = { id: 'i', if: { kind: 'failed' }, then: [step] };
-    const waiting: QueueItem = { id: 'w', waitFor: ['b'] };
+    const waiting: QueueItem = { id: 'w', waitFor: [{ agent: 'b', item: 's' }] };
     const message: QueueItem = { id: 'm', message: 'Hello' };
     const sent: QueueItem = { id: 'n', message: 'Over to you', target: 'b' };
     const between = (item: QueueItem, from: string, to: string) =>

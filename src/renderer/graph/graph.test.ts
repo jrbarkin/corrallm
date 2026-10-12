@@ -288,18 +288,21 @@ describe('queues', () => {
     expect(queueOf(retarget(sent, 'a', 'm1', undefined)).at(-1)).toEqual(note);
   });
 
-  it('holds waits for other agents, whose agents can be changed', () => {
-    const wait = { id: 'w1', waitFor: ['b'] };
+  it('holds waits for other agents or their steps, which can be changed', () => {
+    const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
     const waiting = addToQueue(queued, 'a', wait);
     expect(queueOf(waiting).at(-1)).toEqual(wait);
-    expect(queueOf(setWaitFor(waiting, 'a', 'w1', ['b', 'c'])).at(-1)).toEqual({
+    const both = [{ agent: 'b' }, { agent: 'c', item: 's1' }];
+    expect(queueOf(setWaitFor(waiting, 'a', 'w1', both)).at(-1)).toEqual({
       id: 'w1',
-      waitFor: ['b', 'c'],
+      waitFor: both,
     });
-    // A wait waits for someone, and only waits are changed.
+    // A wait waits for something, and only waits are changed.
     expect(setWaitFor(waiting, 'a', 'w1', [])).toBe(waiting);
-    expect(setWaitFor(waiting, 'a', 'w1', ['b'])).toBe(waiting);
-    expect(setWaitFor(waiting, 'a', 'q1', ['b'])).toBe(waiting);
+    expect(setWaitFor(waiting, 'a', 'w1', [{ agent: 'b' }])).toBe(waiting);
+    expect(setWaitFor(waiting, 'a', 'q1', [{ agent: 'b' }])).toBe(waiting);
+    // A step of b is not b.
+    expect(setWaitFor(waiting, 'a', 'w1', [{ agent: 'b', item: 's1' }])).not.toBe(waiting);
     // Waits are left alone by what changes steps and messages.
     expect(retarget(waiting, 'a', 'w1', 'c')).toBe(waiting);
     expect(editMessage(waiting, 'a', 'w1', 'x')).toBe(waiting);
@@ -319,7 +322,7 @@ describe('queues', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
-      expect(addToQueue(withIf, 'a', { id: 'w', waitFor: ['b'] }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'w', waitFor: [{ agent: 'b' }] }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {

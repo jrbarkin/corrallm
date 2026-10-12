@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
-import type { Condition } from '../graph/queue';
+import type { Condition, WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { QueueEntry } from '../graph/QueueEditor';
@@ -61,7 +61,7 @@ export function AgentView({
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
-  onWaitFor: (waitId: string, agents: string[]) => void;
+  onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   session: Session;
   controls: SessionControls;
   onClose: () => void;
