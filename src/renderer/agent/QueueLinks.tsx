@@ -4,9 +4,11 @@ import type { RefObject } from 'react';
 import type { LinkEnd, QueueLink } from './links';
 
 /**
- * Lines between two queues side by side (links.ts): each from what a wait waits for to the wait,
- * across the gap between the columns (`[data-column="own"]` on the left, `"peer"` on the right),
- * drawn over `container`. They follow the rows as the columns scroll or change.
+ * Lines between queues shown side by side (links.ts), drawn over `container`: each from one
+ * column (an element with `data-column`, its box a `data-lane` element's if there is one) to
+ * another, between the edges of the rows that face each other (`data-item`, or `data-end` for the
+ * end of a queue), or to the other column's edge, level. They follow the rows as the columns
+ * scroll or change.
  */
 export function QueueLinks({
   container,
@@ -16,7 +18,7 @@ export function QueueLinks({
   links: readonly QueueLink[];
 }) {
   const arrow = useId();
-  const [paths, setPaths] = useState<readonly { key: string; d: string }[]>([]);
+  const [paths, setPaths] = useState<readonly { key: string; kind: string; d: string }[]>([]);
 
   // Measured after every render (rows move as queues change), and on scrolling and resizing; only
   // a change of path re-renders.
@@ -25,28 +27,44 @@ export function QueueLinks({
     if (!root) return;
     const measure = () => {
       const base = root.getBoundingClientRect();
-      /** Where a link meets an end: the row's edge facing the other column, kept in its column. */
-      const point = (end: LinkEnd) => {
-        const column = root.querySelector(`[data-column="${end.column}"]`);
-        const row =
-          end.item === null
-            ? column?.querySelector('[data-end]')
-            : [...(column?.querySelectorAll<HTMLElement>('[data-item]') ?? [])].find(
-                (element) => element.dataset.item === end.item,
-              );
-        if (!column || !row) return undefined;
+      const all = (selector: string) => [...root.querySelectorAll<HTMLElement>(selector)];
+      const columnOf = (element: Element) => element.closest<HTMLElement>('[data-column]');
+      const columnBox = (column: string) =>
+        (
+          all('[data-lane]').find((e) => e.dataset.lane === column) ??
+          all('[data-column]').find((e) => e.dataset.column === column)
+        )?.getBoundingClientRect();
+      const rowOf = (end: LinkEnd) =>
+        all(end.item === null ? '[data-end]' : '[data-item]').find(
+          (e) =>
+            columnOf(e)?.dataset.column === end.column &&
+            (end.item === null || e.dataset.item === end.item),
+        );
+      /** Where a line meets `end`, on its `side` (facing the other column), `level` for an edge. */
+      const at = (end: LinkEnd, side: 'left' | 'right', level: number | undefined) => {
+        if (end.item === undefined) {
+          const box = columnBox(end.column);
+          if (!box || level === undefined) return undefined;
+          return { x: box[side] - base.left, y: level };
+        }
+        const row = rowOf(end);
+        if (!row) return undefined;
         const box = row.getBoundingClientRect();
-        const bounds = column.getBoundingClientRect();
+        const bounds = columnOf(row)?.getBoundingClientRect() ?? box;
         const y = Math.min(Math.max(box.top + box.height / 2, bounds.top), bounds.bottom);
-        return { x: (end.column === 'own' ? box.right : box.left) - base.left, y: y - base.top };
+        return { x: box[side] - base.left, y: y - base.top };
       };
       const next = links.flatMap((link) => {
-        const from = point(link.from);
-        const to = point(link.to);
+        const fromBox = columnBox(link.from.column);
+        const toBox = columnBox(link.to.column);
+        if (!fromBox || !toBox) return [];
+        const rightwards = fromBox.left < toBox.left;
+        const from = at(link.from, rightwards ? 'right' : 'left', undefined);
+        const to = from && at(link.to, rightwards ? 'left' : 'right', from.y);
         if (!from || !to) return [];
         const bend = (to.x - from.x) / 2;
         const d = `M ${String(from.x)} ${String(from.y)} C ${String(from.x + bend)} ${String(from.y)} ${String(to.x - bend)} ${String(to.y)} ${String(to.x)} ${String(to.y)}`;
-        return [{ key: link.key, d }];
+        return [{ key: link.key, kind: link.kind ?? 'wait', d }];
       });
       setPaths((now) => (JSON.stringify(now) === JSON.stringify(next) ? now : next));
     };
@@ -81,7 +99,13 @@ export function QueueLinks({
         </marker>
       </defs>
       {paths.map((path) => (
-        <path key={path.key} data-link={path.key} d={path.d} markerEnd={`url(#${arrow})`} />
+        <path
+          key={path.key}
+          data-link={path.key}
+          data-kind={path.kind}
+          d={path.d}
+          markerEnd={`url(#${arrow})`}
+        />
       ))}
     </svg>
   );

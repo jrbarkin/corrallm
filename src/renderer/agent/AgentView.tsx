@@ -48,6 +48,7 @@ export function AgentView({
   onEditMessage,
   onCondition,
   onWaitFor,
+  onShowQueues,
   session,
   controls,
   onClose,
@@ -70,6 +71,8 @@ export function AgentView({
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  /** Shows every agent's queue, side by side (QueuesView.tsx). */
+  onShowQueues: () => void;
   session: Session;
   controls: SessionControls;
   onClose: () => void;
@@ -215,6 +218,14 @@ export function AgentView({
                 <span className="agent-removed">−{changed.removed}</span>
               </span>
             )}
+            <button
+              type="button"
+              className="agent-queues"
+              title="Every agent's queue, side by side"
+              onClick={onShowQueues}
+            >
+              All queues
+            </button>
             <AgentChip agent={agent} onChange={onAgent} />
           </header>
           <div ref={body} className="agent-body">

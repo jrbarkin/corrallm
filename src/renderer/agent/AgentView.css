@@ -77,6 +77,22 @@
   border-color: color-mix(in srgb, CanvasText 25%, transparent);
 }
 
+.agent-queues {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-queues:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
 .agent-diff {
   font-family: ui-monospace, monospace;
   font-size: 12px;

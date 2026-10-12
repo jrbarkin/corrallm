@@ -740,6 +740,37 @@ test('links a wait to the step it waits for, across two queues side by side', as
   expectNear(end, { x: wait.x + wait.width, y: wait.y + wait.height / 2 }, 3);
 });
 
+test('shows every queue side by side, a wait below what it waits for and linked to it', async () => {
+  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('button', { name: /^Independent cross-check/ })
+    .click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+
+  // The Checker waits for all of the Builder's work: below the end of the Builder's lane.
+  const end = await box(view.locator('[data-end]').first());
+  const wait = await box(view.getByRole('group', { name: 'Checker: Wait for Builder' }));
+  expect(wait.y).toBeGreaterThan(end.y + end.height);
+
+  // A line from that end to the wait; and a dashed one for the work the Checker hands back.
+  const line = view.locator('path[data-kind="wait"]');
+  await expect(line).toHaveCount(1);
+  await expect(view.locator('path[data-kind="handoff"]')).toHaveCount(1);
+  const [from, to] = await line.evaluate((path: SVGPathElement) =>
+    [0, path.getTotalLength()].map((length) => {
+      const matrix = path.getScreenCTM();
+      if (!matrix) throw new Error('the line is not rendered');
+      const point = path.getPointAtLength(length).matrixTransform(matrix);
+      return { x: point.x, y: point.y };
+    }),
+  );
+  if (!from || !to) throw new Error('no line');
+  expectNear(from, { x: end.x + end.width, y: end.y + end.height / 2 }, 3);
+  expectNear(to, { x: wait.x, y: wait.y + wait.height / 2 }, 3);
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

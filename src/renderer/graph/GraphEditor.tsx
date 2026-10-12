@@ -22,6 +22,7 @@ import type { CanvasFile } from '../../shared/ipc';
 import { AgentView } from '../agent/AgentView';
 import { NEW_SESSION } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
+import { QueuesView } from '../queues/QueuesView';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -159,6 +160,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const [problem, setProblem] = useState<string>();
   /** Whether the examples gallery is open. */
   const [gallery, setGallery] = useState(false);
+  /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
+  const [queues, setQueues] = useState<{ from?: string }>();
   /** Whether the graph is laid out automatically (and nodes cannot be dragged). */
   const [arranging, setArranging] = useState(false);
   const [editing, setEditing] = useState<string>();
@@ -177,7 +180,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     work !== undefined ||
     drawn !== undefined ||
     discarding !== undefined ||
-    gallery;
+    gallery ||
+    queues !== undefined;
   // The keyboard handler and file commands read these without re-subscribing on every change.
   const latest = useRef({ graph, modal, arranging, text, edited });
   useEffect(() => {
@@ -278,6 +282,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   }, []);
   const closeGallery = useCallback(() => {
     setGallery(false);
+  }, []);
+  const closeQueues = useCallback(() => {
+    setQueues(undefined);
   }, []);
 
   /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
@@ -575,6 +582,17 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
                 <path d="M6 1h4v3H6zM1 11h4v3H1zM11 11h4v3h-4zM7.5 4h1v2.5h5V11h-1V7.5h-9V11h-1V6.5h5z" />
               </svg>
             </ControlButton>
+            <ControlButton
+              aria-label="Show all queues"
+              title="All queues: every agent's, side by side"
+              onClick={() => {
+                setQueues({});
+              }}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M1 2h4v12H1zM6 2h4v8H6zM11 2h4v10h-4z" />
+              </svg>
+            </ControlButton>
           </Controls>
           <NodeToolbar
             nodeId={selectedIds}
@@ -719,6 +737,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             onWaitFor={(waitId, targets) => {
               edits.setWaitFor(openedNode.id, waitId, targets);
             }}
+            onShowQueues={() => {
+              setQueues({ from: openedNode.id });
+            }}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
               send: (text) => {
@@ -751,6 +772,20 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             nodes={graph.nodes}
             edits={edits}
             onClose={closeWork}
+          />
+        )}
+        {queues && (
+          <QueuesView
+            nodes={graph.nodes}
+            sessions={sessions}
+            {...(queues.from === undefined ? {} : { focus: queues.from })}
+            backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
+            onOpenAgent={(id) => {
+              setQueues(undefined);
+              apply((g) => selectOnly(g, id));
+              setOpened(id);
+            }}
+            onClose={closeQueues}
           />
         )}
         {gallery && (
