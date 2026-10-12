@@ -9,6 +9,7 @@ import type { QueueEntry } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
 import type { ComposerControls } from './Composer';
+import { threadTitle } from './session';
 import type { Answer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -124,6 +125,8 @@ export function AgentView({
   const label = node.data.label;
   const name = label || 'Unnamed agent';
   const agent = node.data.agent ?? DEFAULT_AGENT;
+  /** The chat's first message, which names it in the queue. */
+  const firstMessage = session.entries.find((entry) => entry.kind === 'user');
   /** The lines its edits added and removed, this session. */
   const changed = session.entries.reduce(
     (sum, entry) =>
@@ -199,6 +202,7 @@ export function AgentView({
                     node={node}
                     nodes={nodes}
                     actions={AGENT_ACTIONS[agent]}
+                    label="Queue something"
                     onAdd={onAdd}
                   />
                 }
@@ -220,13 +224,21 @@ export function AgentView({
                 </button>
               </section>
               <h2 className="agent-side-title">Queue</h2>
-              {(node.data.queue ?? []).length === 0 && (
-                <p className="agent-side-empty">
-                  Nothing queued. Add to it with ⊕ above the message box.
-                </p>
+              {firstMessage && (
+                <div
+                  className="graph-queue-row agent-thread"
+                  role="group"
+                  aria-label={`Current chat: ${threadTitle(firstMessage.text)}`}
+                  data-status={session.status}
+                >
+                  <span className="agent-thread-status" aria-hidden="true" />
+                  <span className="graph-queue-keyword">Chat</span>
+                  <span className="agent-thread-title" title={firstMessage.text}>
+                    {threadTitle(firstMessage.text)}
+                  </span>
+                </div>
               )}
               <QueueEditor
-                add="nothing"
                 node={node}
                 nodes={nodes}
                 agent={agent}

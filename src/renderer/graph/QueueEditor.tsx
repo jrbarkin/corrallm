@@ -181,22 +181,25 @@ function andList(names: readonly string[]): string {
 }
 
 /**
- * The ⊕ that adds to an agent's queue (`node`'s), on its own: AgentView puts it right above the
- * message box, with the queue beside. Its menus open upwards.
+ * A ⊕ that adds to an agent's queue (`node`'s), apart from the queue: AgentView puts one right
+ * above the message box, as well as the queue's own beside. Its menus open upwards.
  */
 export function QueueAddMenu({
   node,
   nodes,
   actions,
+  label = 'Add to queue',
   onAdd,
 }: {
   node: GraphNode;
   nodes: readonly GraphNode[];
   actions: readonly AgentAction[];
+  /** Its name, telling it from the queue's own ⊕. */
+  label?: string;
   onAdd: (entry: QueueEntry) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
-  return <AddMenu label="Add to queue" withIf up context={{ actions, others }} onAdd={onAdd} />;
+  return <AddMenu label={label} withIf up context={{ actions, others }} onAdd={onAdd} />;
 }
 
 /**

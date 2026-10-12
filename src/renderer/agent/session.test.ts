@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { NEW_SESSION, reduce } from './session';
+import { NEW_SESSION, reduce, threadTitle } from './session';
 import type { Entry, Session } from './session';
 
 const tool = (id: string, status: 'running' | 'done' = 'running'): Entry => ({
@@ -9,6 +9,16 @@ const tool = (id: string, status: 'running' | 'done' = 'running'): Entry => ({
   tool: 'Bash',
   summary: 'npm test',
   status,
+});
+
+describe('threadTitle', () => {
+  it('names a chat by the start of its first message, cut at a word', () => {
+    expect(threadTitle('Fix the flaky test')).toBe('Fix the flaky test');
+    expect(threadTitle('Fix\n\n  the   flaky test')).toBe('Fix the flaky test');
+    expect(threadTitle('Add rate limiting to the public API and document every endpoint')).toBe(
+      'Add rate limiting to the public API…',
+    );
+  });
 });
 
 describe('reduce', () => {

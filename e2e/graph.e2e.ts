@@ -648,9 +648,9 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect(transcript.getByText('Then update the docs', { exact: true })).toBeVisible();
   await expect(view.getByText('+4', { exact: true }).first()).toBeVisible();
 
-  // The queue's ⊕ sits right above the message box.
+  // A ⊕ that adds to the queue sits right above the message box.
   const [plus, input] = await Promise.all([
-    box(view.getByRole('button', { name: 'Add to queue' })),
+    box(view.getByRole('button', { name: 'Queue something' })),
     box(view.locator('.agent-input')),
   ]);
   expect(plus.y + plus.height).toBeLessThanOrEqual(input.y);

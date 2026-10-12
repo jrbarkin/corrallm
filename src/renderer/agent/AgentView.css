@@ -604,8 +604,36 @@
   transform: none;
 }
 
-.agent-side-empty {
-  margin: 12px 0 0;
-  font-size: 13px;
-  opacity: 0.6;
+/* The chat itself, as the queue's current item. */
+.agent-thread {
+  margin-top: 12px;
+  border-color: color-mix(in srgb, var(--agent-color, CanvasText) 45%, transparent);
+  background: color-mix(in srgb, var(--agent-color, CanvasText) 6%, Canvas);
+}
+
+.agent-thread-status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, CanvasText 35%, transparent);
+}
+
+.agent-thread:not([data-status='idle']) .agent-thread-status {
+  background: var(--agent-color, CanvasText);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+
+.agent-thread-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thread .agent-thread-status {
+    animation: none;
+  }
 }

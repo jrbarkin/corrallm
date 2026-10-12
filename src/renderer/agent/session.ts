@@ -71,6 +71,18 @@ export interface Session {
   model: string | null;
 }
 
+/**
+ * What a chat is called: the start of its first message, on one line, cut at a word and ended
+ * with "…" when longer than `max` characters.
+ */
+export function threadTitle(text: string, max = 36): string {
+  const line = text.trim().replace(/\s+/g, ' ');
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 export const NEW_SESSION: Session = {
   entries: [],
   status: 'idle',

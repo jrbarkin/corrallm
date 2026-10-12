@@ -77,15 +77,31 @@ describe('the agent view', () => {
     expect(transcript.getAllByText(/^Worked for \d+s$/)).toHaveLength(2);
   });
 
-  it('adds to the queue from a ⊕ right above the message box', () => {
+  it('adds to the queue from its sidebar, or from right above the message box', () => {
     const { view } = open();
     const session = within(view.getByRole('region', { name: 'Session' }));
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
-    expect(side.queryByRole('button', { name: 'Add to queue' })).toBeNull();
-    fireEvent.click(session.getByRole('button', { name: 'Add to queue' }));
+    expect(side.getByRole('button', { name: 'Add to queue' })).toBeTruthy();
+    fireEvent.click(session.getByRole('button', { name: 'Queue something' }));
     fireEvent.click(session.getByRole('option', { name: /^Read / }));
     fireEvent.keyDown(session.getByRole('combobox'), { key: 'Enter' }); // this agent
     expect(side.getByRole('button', { name: 'Move Read' })).toBeTruthy();
+  });
+
+  it('shows the chat as the current item of the queue, named by its first message', () => {
+    const { view, send } = open();
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
+    send('Add rate limiting to the public API and document every endpoint');
+    const chat = side.getByRole('group', { name: /^Current chat/ });
+    expect(chat.getAttribute('aria-label')).toBe(
+      'Current chat: Add rate limiting to the public API…',
+    );
+    expect(chat.dataset.status).toBe('working');
+    send('And a changelog');
+    expect(side.getByRole('group', { name: /^Current chat/ }).getAttribute('aria-label')).toBe(
+      'Current chat: Add rate limiting to the public API…',
+    );
   });
 
   it('closes an open menu on Escape, not the view', () => {
