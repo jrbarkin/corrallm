@@ -77,6 +77,17 @@ describe('the agent view', () => {
     expect(transcript.getAllByText(/^Worked for \d+s$/)).toHaveLength(2);
   });
 
+  it('adds to the queue from a ⊕ right above the message box', () => {
+    const { view } = open();
+    const session = within(view.getByRole('region', { name: 'Session' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    expect(side.queryByRole('button', { name: 'Add to queue' })).toBeNull();
+    fireEvent.click(session.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(session.getByRole('option', { name: /^Read / }));
+    fireEvent.keyDown(session.getByRole('combobox'), { key: 'Enter' }); // this agent
+    expect(side.getByRole('button', { name: 'Move Read' })).toBeTruthy();
+  });
+
   it('closes an open menu on Escape, not the view', () => {
     const { view } = open();
     const mode = view.getByRole('button', { name: /^Mode: / });

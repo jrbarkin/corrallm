@@ -584,3 +584,28 @@
   background: currentColor;
   content: '';
 }
+
+/* The queue's ⊕, right above the message box; its menus open upwards. */
+.agent-composer .graph-queue-add {
+  justify-content: flex-start;
+  margin: 0 0 6px;
+}
+
+.agent-composer .graph-queue-plus {
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+}
+
+.agent-composer .graph-queue-add.up .search-picker {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  transform: none;
+}
+
+.agent-side-empty {
+  margin: 12px 0 0;
+  font-size: 13px;
+  opacity: 0.6;
+}

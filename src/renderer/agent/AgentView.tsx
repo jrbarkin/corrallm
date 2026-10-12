@@ -4,7 +4,7 @@ import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import type { Condition } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
-import { QueueEditor } from '../graph/QueueEditor';
+import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { QueueEntry } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
@@ -194,6 +194,14 @@ export function AgentView({
                 session={session}
                 controls={controls}
                 field={composer}
+                above={
+                  <QueueAddMenu
+                    node={node}
+                    nodes={nodes}
+                    actions={AGENT_ACTIONS[agent]}
+                    onAdd={onAdd}
+                  />
+                }
               />
             </section>
             <aside className="agent-side" aria-label="Questions and queue">
@@ -212,7 +220,13 @@ export function AgentView({
                 </button>
               </section>
               <h2 className="agent-side-title">Queue</h2>
+              {(node.data.queue ?? []).length === 0 && (
+                <p className="agent-side-empty">
+                  Nothing queued. Add to it with ⊕ above the message box.
+                </p>
+              )}
               <QueueEditor
+                add="nothing"
                 node={node}
                 nodes={nodes}
                 agent={agent}

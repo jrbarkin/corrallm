@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 
 import { AgentType } from '../graph/agents';
 import { MODES } from './session';
@@ -34,6 +34,7 @@ export function Composer({
   session,
   controls,
   field,
+  above,
 }: {
   agentName: string;
   agent: AgentType;
@@ -41,6 +42,8 @@ export function Composer({
   controls: ComposerControls;
   /** Its text box, which the view focuses again after the user answers a prompt. */
   field: RefObject<HTMLTextAreaElement | null>;
+  /** What sits right above the text box (the queue's ⊕). */
+  above?: ReactNode;
 }) {
   const [draft, setDraft] = useState('');
   const working = session.status !== 'idle';
@@ -77,6 +80,7 @@ export function Composer({
           ))}
         </ul>
       )}
+      {above}
       <div className="agent-input">
         <textarea
           ref={field}

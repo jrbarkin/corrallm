@@ -156,10 +156,14 @@ export function QueueEditor({
   );
 }
 
-interface Context {
-  agent: AgentType;
+/** What the ⊕ and its menus need: the agent's actions, and the other agents. */
+interface AddContext {
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
+}
+
+interface Context extends AddContext {
+  agent: AgentType;
   name: (id: string | undefined) => string;
   ifText: (condition: Condition) => string;
   describe: (item: QueueItem) => string;
@@ -177,6 +181,25 @@ function andList(names: readonly string[]): string {
 }
 
 /**
+ * The ⊕ that adds to an agent's queue (`node`'s), on its own: AgentView puts it right above the
+ * message box, with the queue beside. Its menus open upwards.
+ */
+export function QueueAddMenu({
+  node,
+  nodes,
+  actions,
+  onAdd,
+}: {
+  node: GraphNode;
+  nodes: readonly GraphNode[];
+  actions: readonly AgentAction[];
+  onAdd: (entry: QueueEntry) => void;
+}) {
+  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  return <AddMenu label="Add to queue" withIf up context={{ actions, others }} onAdd={onAdd} />;
+}
+
+/**
  * Picks an agent by typing: "This agent" first, unless `withSelf` is false. Agents in `exclude`
  * (ids) are not offered.
  */
@@ -188,7 +211,7 @@ function TargetPicker({
   onPick,
   onCancel,
 }: {
-  context: Context;
+  context: AddContext;
   label?: string;
   withSelf?: boolean;
   exclude?: readonly string[];
@@ -541,15 +564,18 @@ const CHOICE_TEXT = {
 function AddMenu({
   label,
   withIf = false,
+  up = false,
   target,
   context,
   onAdd,
 }: {
   label: string;
   withIf?: boolean;
+  /** Whether its menus open above it, for a ⊕ at the bottom of the view. */
+  up?: boolean;
   /** The agent every action and message added is aimed at; by default, the queue's own. */
   target?: string;
-  context: Context;
+  context: AddContext;
   onAdd: (entry: QueueEntry) => void;
 }) {
   const [step, setStep] = useState<
@@ -564,7 +590,7 @@ function AddMenu({
     ...context.actions.map((action) => ({ kind: 'action' as const, action })),
   ];
   return (
-    <div className="graph-queue-add">
+    <div className={up ? 'graph-queue-add up' : 'graph-queue-add'}>
       <button
         type="button"
         className="graph-queue-plus"

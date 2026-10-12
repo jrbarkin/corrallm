@@ -648,6 +648,16 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect(transcript.getByText('Then update the docs', { exact: true })).toBeVisible();
   await expect(view.getByText('+4', { exact: true }).first()).toBeVisible();
 
+  // The queue's ⊕ sits right above the message box.
+  const [plus, input] = await Promise.all([
+    box(view.getByRole('button', { name: 'Add to queue' })),
+    box(view.locator('.agent-input')),
+  ]);
+  expect(plus.y + plus.height).toBeLessThanOrEqual(input.y);
+  expect(input.y - (plus.y + plus.height)).toBeLessThan(24);
+  expect(plus.x).toBeGreaterThanOrEqual(input.x);
+  expect(plus.x + plus.width).toBeLessThanOrEqual(input.x + input.width);
+
   // A tool call's line opens its diff.
   await transcript.getByRole('button', { name: /^Edit src\/index\.ts/ }).click();
   await expect(transcript.getByText(/retries: options\.retries \?\? 3/)).toBeVisible();
