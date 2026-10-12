@@ -1,9 +1,4 @@
-import { isIf } from '../graph/queue';
-import { linesOf } from './lanes';
 import type { Lanes, LinkEnd } from './lanes';
-
-/** How tall a line of a lane is, in pixels (QueuesView.css draws lines this tall). */
-export const LINE = 24;
 
 /** A stretch of the rows, in pixels down from the top of the first. */
 export interface Span {
@@ -11,17 +6,10 @@ export interface Span {
   bottom: number;
 }
 
-/** Where each row starts, then where the last ends. */
-export function rowTops(heights: readonly number[]): number[] {
-  const tops = [0];
-  for (const lines of heights) tops.push((tops.at(-1) ?? 0) + lines * LINE);
-  return tops;
-}
-
 /**
- * A link between two lanes (by index), as a diff viewer joins the lines that differ: from the
- * lines of one (what a wait waits for, or a step handed on) to the lines of the other (the wait),
- * or to a point (where a step handed on reaches the other agent).
+ * A link between two lanes (by index), as a diff viewer joins the blocks that differ: from a task
+ * in one (what a wait waits for, or a step handed on) to a task in the other (the wait), or to a
+ * point (where a step handed on reaches the other agent).
  */
 export interface Ribbon {
   key: string;
@@ -32,25 +20,12 @@ export interface Ribbon {
   to: { lane: number; span: Span };
 }
 
-export function ribbonsOf({ lanes, heights, links, isStuck }: Lanes): Ribbon[] {
-  const tops = rowTops(heights);
+/** The ribbons of the links between lanes, between the spans their ends take (`spanOf`). */
+export function ribbonsOf(
+  { lanes, links, isStuck }: Lanes,
+  spanOf: (end: LinkEnd) => Span | undefined,
+): Ribbon[] {
   const index = new Map(lanes.map((lane, i) => [lane.agent.id, i]));
-  const spanOf = (end: LinkEnd): Span | undefined => {
-    const lane = lanes[index.get(end.lane) ?? -1];
-    if (!lane) return undefined;
-    const lines = (row: number, first: number, count: number) => {
-      const top = (tops[row] ?? 0) + first * LINE;
-      return { top, bottom: top + count * LINE };
-    };
-    if (end.item === null) return lines(lane.end, 0, 1);
-    for (const { item, row } of lane.cells) {
-      if (item.id === end.item) return lines(row, 0, linesOf(item));
-      const step = isIf(item) ? item.then.findIndex((s) => s.id === end.item) : -1;
-      if (step >= 0) return lines(row, 1 + step, 1);
-    }
-    return undefined;
-  };
-
   return links.flatMap((link): Ribbon[] => {
     const from = index.get(link.from.lane);
     const to = index.get(link.kind === 'wait' ? link.to.lane : link.to);

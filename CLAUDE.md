@@ -53,10 +53,11 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      reducer, player.ts plays a turn's steps in time, script.ts writes the turn, and
                      sessions.ts keeps every agent's session (useSyncExternalStore) so turns play on
                      while the canvas is shown.
-src/renderer/queues/ Every agent's queue side by side (QueuesView.tsx), read like a diff viewer, from
-                     the canvas or an agent: lanes.ts aligns rows so a wait sits below what it waits
-                     for, links waits and work handed over, and finds waits stuck in a loop;
-                     ribbons.ts shapes the ribbons that join linked lines across the gaps.
+src/renderer/queues/ Every agent's queue side by side, task by task, laid out like a diff viewer
+                     (QueuesView.tsx), from the canvas or an agent: lanes.ts aligns rows so a wait
+                     sits below what it waits for, links waits and work handed over, and finds waits
+                     stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that
+                     join linked tasks (from where the view measures them).
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.

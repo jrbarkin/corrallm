@@ -82,23 +82,6 @@ describe('lanesOf', () => {
     ]);
   });
 
-  it('makes each row as many lines tall as its tallest item, an if-then a line per step', () => {
-    const a = agent('a', [
-      { id: 'read', action: 'Read' },
-      {
-        id: 'if',
-        if: { kind: 'failed' },
-        then: [
-          { id: 'fix', action: 'Edit' },
-          { id: 'test', action: 'Bash' },
-        ],
-      },
-    ]);
-    const b = agent('b', [{ id: 'empty', if: { kind: 'succeeded' }, then: [] }]);
-    // Rows 0 and 1 hold the items, row 2 the end of a's lane (b's ends in row 1).
-    expect(lanesOf([a, b]).heights).toEqual([1, 3, 1]);
-  });
-
   it('marks waits that wait on each other as stuck, and still lays them out', () => {
     const a = agent('a', [{ id: 'w', waitFor: [{ agent: 'b', item: 'w' }] }]);
     const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'w' }] }]);

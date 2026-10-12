@@ -754,20 +754,16 @@ test('shows every queue side by side, a wait below what it waits for and linked 
   const wait = await box(view.getByRole('group', { name: 'Checker: Wait for Builder' }));
   expect(wait.y).toBeGreaterThanOrEqual(end.y + end.height - 1);
 
-  // A ribbon joins the two across the gap between the lanes, as a diff viewer joins changed
-  // lines; another is for the work the Checker hands back.
+  // A ribbon joins the two across the gap between the lanes, from the side of one to the side
+  // of the other, as a diff viewer joins blocks; another is for the work the Checker hands back.
   const ribbon = await box(view.locator('g[data-kind="wait"] .queues-ribbon'));
   await expect(view.locator('g[data-kind="handoff"]')).toHaveCount(1);
-  const [builder, checker] = await Promise.all(
-    [0, 1].map((n) => box(view.locator('.queues-pane').nth(n))),
-  );
-  if (!builder || !checker) throw new Error('no panes');
-  expectNear({ x: ribbon.x, y: ribbon.y }, { x: builder.x + builder.width, y: end.y }, 1);
-  expectNear(
-    { x: ribbon.x + ribbon.width, y: ribbon.y + ribbon.height },
-    { x: checker.x, y: wait.y + wait.height },
-    1,
-  );
+  expect(Math.abs(ribbon.x - (end.x + end.width))).toBeLessThanOrEqual(1);
+  expect(Math.abs(ribbon.x + ribbon.width - wait.x)).toBeLessThanOrEqual(1);
+  expect(ribbon.y).toBeGreaterThanOrEqual(end.y);
+  expect(ribbon.y).toBeLessThan(end.y + end.height);
+  expect(ribbon.y + ribbon.height).toBeGreaterThan(wait.y);
+  expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(wait.y + wait.height);
 });
 
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {

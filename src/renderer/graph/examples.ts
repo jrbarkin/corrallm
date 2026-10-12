@@ -1,5 +1,6 @@
 import crossCheck from './examples/cross-check.corral?raw';
 import fanOut from './examples/fan-out.corral?raw';
+import featureCrew from './examples/feature-crew.corral?raw';
 import releaseChecks from './examples/release-checks.corral?raw';
 import reviewLoop from './examples/review-loop.corral?raw';
 import teamLead from './examples/team-lead.corral?raw';
@@ -12,6 +13,12 @@ export interface Example {
 }
 
 export const EXAMPLES: readonly Example[] = [
+  {
+    name: 'Feature crew',
+    description:
+      'Research feeds the build and its docs; review waits for the build, and the docs for the review.',
+    text: featureCrew,
+  },
   {
     name: 'Independent cross-check',
     description:

@@ -1,13 +1,11 @@
 /*
- * All queues, read like a diff viewer: lanes as panes of numbered lines, ribbons in the gaps
- * between them joining the lines that link them. Lines are 24px tall (LINE in ribbons.ts).
+ * All queues, task by task: each lane a pane of task cards (written as an agent's queue writes
+ * them), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
  */
 .queues-view {
   --queues-wait: #3b82f6;
   --queues-handoff: #22a35a;
   --queues-stuck: #e5484d;
-  --queues-gutter: 44px;
-  --queues-rule: color-mix(in srgb, CanvasText 14%, transparent);
 
   position: absolute;
   inset: 16px;
@@ -22,15 +20,15 @@
   font-size: 14px;
 }
 
-[data-mark='wait'] {
+.queues-view [data-mark='wait'] {
   --mark: var(--queues-wait);
 }
 
-[data-mark='handoff'] {
+.queues-view [data-mark='handoff'] {
   --mark: var(--queues-handoff);
 }
 
-[data-mark='stuck'] {
+.queues-view [data-mark='stuck'] {
   --mark: var(--queues-stuck);
 }
 
@@ -55,7 +53,7 @@
   margin-right: 6px;
   vertical-align: -1px;
   border: 1px solid var(--mark);
-  border-radius: 2px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--mark) 25%, transparent);
   content: '';
 }
@@ -65,8 +63,7 @@
   flex: 1;
   flex-direction: column;
   overflow: auto;
-  padding: 0 16px;
-  background: color-mix(in srgb, CanvasText 4%, Canvas);
+  padding: 0 28px 16px;
 }
 
 .queues-empty {
@@ -76,50 +73,55 @@
 .queues-grid {
   display: grid;
   flex: 1 0 auto;
+  row-gap: 10px;
 }
 
-/* A pane: its gutter of line numbers, then its lines. */
-.queues-pane {
-  border-inline: 1px solid var(--queues-rule);
-  background:
-    linear-gradient(var(--queues-rule), var(--queues-rule)) var(--queues-gutter) 0 / 1px 100%
-      no-repeat,
-    linear-gradient(
-        color-mix(in srgb, CanvasText 3%, Canvas),
-        color-mix(in srgb, CanvasText 3%, Canvas)
-      )
-      0 0 / var(--queues-gutter) 100% no-repeat,
-    Canvas;
+/* Layers, bottom up: lanes and where agents wait; ribbons; tasks; the heads, kept in view. */
+.queues-lane,
+.queues-idle {
+  position: relative;
+  z-index: 0;
 }
 
-.queues-pane[data-focus] {
-  outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 50%, transparent);
-  outline-offset: -1px;
+.queues-gap {
+  position: relative;
+  z-index: 1;
 }
 
-/* The heads stay in view: over a band as wide as every pane and gap. */
-.queues-heads,
+.queues-cell,
+.queues-task,
+.queues-if,
+.queues-end {
+  position: relative;
+  z-index: 2;
+}
+
 .queues-head {
   position: sticky;
+  z-index: 3;
   top: 0;
 }
 
-.queues-heads {
-  z-index: 2;
-  border-bottom: 1px solid var(--queues-rule);
-  background: color-mix(in srgb, CanvasText 4%, Canvas);
+/* A lane: a pane a little wider than its tasks, so ribbons leave from their sides. */
+.queues-lane {
+  margin: 0 -12px;
+  border-radius: 0 0 12px 12px;
+  background: color-mix(in srgb, CanvasText 3%, transparent);
+}
+
+.queues-lane[data-focus] {
+  outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
 }
 
 .queues-head {
-  z-index: 3;
   display: flex;
   gap: 8px;
   align-items: center;
-  min-width: 0;
-  padding: 8px 12px 6px;
-  border-inline: 1px solid var(--queues-rule);
-  border-bottom: 2px solid var(--agent-color, CanvasText);
+  margin: 0 -12px;
+  padding: 14px 14px 8px;
+  border-bottom: 3px solid var(--agent-color, CanvasText);
   background: Canvas;
+  box-shadow: 0 -16px 0 Canvas;
 }
 
 .queues-head button {
@@ -151,78 +153,126 @@
   background: var(--agent-color, CanvasText);
 }
 
-/* Lines: a number in the gutter, then what the item does, on one line. */
-.queues-item {
-  z-index: 1;
+/* Tasks, as an agent's queue shows them: cards, an if-then's dashed around its own. */
+.queues-cell,
+.queues-task,
+.queues-if,
+.queues-end {
   align-self: start;
   min-width: 0;
-  margin-inline: 1px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
 }
 
-.queues-item[data-waited-for] {
-  background: color-mix(in srgb, var(--queues-wait) 9%, transparent);
-}
-
-.queues-line {
-  display: flex;
-  height: 24px;
-  align-items: center;
-}
-
-.queues-line[data-mark] {
-  background: color-mix(in srgb, var(--mark) 16%, transparent);
-  box-shadow: inset 3px 0 var(--mark);
-}
-
-.queues-line[data-mark='stuck'] {
-  color: var(--queues-stuck);
-}
-
-.queues-number {
-  flex: none;
+.queues-task,
+.queues-if {
   box-sizing: border-box;
-  width: calc(var(--queues-gutter) - 1px);
-  padding-right: 10px;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.45;
-  text-align: right;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  font-size: 13px;
 }
 
-.queues-text {
-  flex: 1;
+.queues-task {
+  padding: 8px 10px;
+}
+
+.queues-if {
+  padding: 0 10px 10px 0;
+  border-style: dashed;
+  border-color: color-mix(in srgb, CanvasText 28%, transparent);
+}
+
+.queues-if > .queues-task-head {
+  padding: 8px 10px 2px;
+}
+
+.queues-task.nested {
+  margin: 6px 0 0 24px;
+}
+
+.queues-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
   min-width: 0;
+}
+
+.queues-keyword {
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.queues-chip {
   overflow: hidden;
-  padding: 0 12px;
+  max-width: 100%;
+  padding: 1px 9px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.queues-line[data-nested] .queues-text {
-  margin-left: 16px;
-  padding-left: 10px;
-  border-left: 1px solid var(--queues-rule);
+.queues-message {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  opacity: 0.85;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
-.queues-end .queues-text {
-  font-style: italic;
-  opacity: 0.45;
+/* Tasks a ribbon joins take its colour: a wait, work handed on, and what a wait waits for. */
+.queues-task[data-mark] {
+  border-color: color-mix(in srgb, var(--mark) 60%, transparent);
+  background: color-mix(in srgb, var(--mark) 8%, Canvas);
+}
+
+.queues-task[data-mark='wait'],
+.queues-task[data-mark='stuck'] {
+  border-style: dashed;
+}
+
+.queues-task[data-mark='stuck'] {
+  color: var(--queues-stuck);
+}
+
+.queues-task[data-waited-for]:not([data-mark]),
+.queues-if[data-waited-for] {
+  border-color: color-mix(in srgb, var(--queues-wait) 55%, transparent);
+  background: color-mix(in srgb, var(--queues-wait) 5%, Canvas);
+}
+
+.queues-end {
+  padding: 3px 2px 0;
+  border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
+  color: color-mix(in srgb, CanvasText 50%, transparent);
+  font-size: 11px;
+}
+
+.queues-end[data-waited-for] {
+  border-top: 2px solid var(--queues-wait);
+  color: var(--queues-wait);
 }
 
 /* Where an agent has nothing to do, waiting. */
 .queues-idle {
-  margin-left: var(--queues-gutter);
+  border-radius: 10px;
   background: repeating-linear-gradient(
     -45deg,
     transparent 0 6px,
-    color-mix(in srgb, CanvasText 8%, transparent) 6px 7px
+    color-mix(in srgb, CanvasText 7%, transparent) 6px 7px
   );
 }
 
 /* Ribbons: filled, with their top and bottom edges drawn. */
-.queues-ribbons {
-  align-self: start;
+.queues-gap svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: visible;
 }
 
@@ -240,16 +290,16 @@
   fill: var(--mark);
 }
 
-/* Pointing at a line or a ribbon shows its links over the rest. */
-.queues-grid[data-pointing] .queues-ribbons g:not([data-active]) {
+/* Pointing at a task or a ribbon shows its links over the rest. */
+.queues-grid[data-pointing] .queues-gap g:not([data-active]) {
   opacity: 0.15;
 }
 
-.queues-grid[data-pointing] .queues-ribbons g[data-active] .queues-ribbon {
-  fill: color-mix(in srgb, var(--mark) 32%, transparent);
+.queues-grid[data-pointing] .queues-gap g[data-active] .queues-ribbon {
+  fill: color-mix(in srgb, var(--mark) 34%, transparent);
 }
 
 .queues-grid[data-pointing] [data-at][data-active] {
-  outline: 1px solid color-mix(in srgb, CanvasText 45%, transparent);
-  outline-offset: -1px;
+  outline: 2px solid color-mix(in srgb, CanvasText 40%, transparent);
+  outline-offset: 1px;
 }

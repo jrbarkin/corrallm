@@ -1,0 +1,148 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "researcher",
+      "kind": "agent",
+      "label": "Researcher",
+      "position": {
+        "x": 0,
+        "y": 120
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "research",
+          "action": "/deep-research"
+        },
+        {
+          "id": "notes",
+          "message": "Write up what you found in NOTES.md: the limits to set, and how clients should be told they hit one."
+        }
+      ]
+    },
+    {
+      "id": "builder",
+      "kind": "agent",
+      "label": "Builder",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "scaffold",
+          "message": "Add a rate limiter to the public API, behind a feature flag, with tests."
+        },
+        {
+          "id": "read-notes",
+          "waitFor": [
+            {
+              "agent": "researcher",
+              "item": "notes"
+            }
+          ]
+        },
+        {
+          "id": "tune",
+          "message": "Tune the limiter to match NOTES.md."
+        },
+        {
+          "id": "tests",
+          "action": "exec_command"
+        },
+        {
+          "id": "failing",
+          "if": {
+            "kind": "failed"
+          },
+          "then": [
+            {
+              "id": "fix",
+              "message": "Fix the failing tests, then run them again."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "kind": "agent",
+      "label": "Reviewer",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "built",
+          "waitFor": [
+            {
+              "agent": "builder"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "action": "/code-review"
+        },
+        {
+          "id": "problems",
+          "if": {
+            "kind": "freeText",
+            "text": "the review found problems"
+          },
+          "then": [
+            {
+              "id": "send-back",
+              "message": "Fix what the review found.",
+              "target": "builder"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "docs",
+      "kind": "agent",
+      "label": "Docs",
+      "position": {
+        "x": 720,
+        "y": 240
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "read-notes",
+          "waitFor": [
+            {
+              "agent": "researcher",
+              "item": "notes"
+            }
+          ]
+        },
+        {
+          "id": "draft",
+          "message": "Draft the rate limits page of the API docs from NOTES.md."
+        },
+        {
+          "id": "reviewed",
+          "waitFor": [
+            {
+              "agent": "reviewer",
+              "item": "review"
+            }
+          ]
+        },
+        {
+          "id": "final",
+          "message": "Bring the rate limits page in line with the reviewed change."
+        }
+      ]
+    }
+  ],
+  "links": []
+}

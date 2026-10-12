@@ -28,8 +28,8 @@ export type Link =
 
 export interface Lanes {
   lanes: Lane[];
-  /** How many lines tall each row is (its tallest item's), the rows of the lanes' ends included. */
-  heights: number[];
+  /** How many rows the lanes take, their ends included. */
+  rows: number;
   /** The waits and work handed over between lanes. */
   links: Link[];
   /** Whether an item is in a loop of waits (waits waiting on each other): it would never run. */
@@ -129,28 +129,12 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     }
   }
 
-  const heights = Array.from(
-    { length: Math.max(0, ...lanes.map((lane) => lane.end + 1)) },
-    (_, row) =>
-      Math.max(
-        1,
-        ...lanes.flatMap((lane) =>
-          lane.cells.filter((cell) => cell.row === row).map((cell) => linesOf(cell.item)),
-        ),
-      ),
-  );
-
   return {
     lanes,
-    heights,
+    rows: Math.max(0, ...lanes.map((lane) => lane.end + 1)),
     links,
     isStuck: (agent, item) => stuck.has(key(agent, item)),
   };
-}
-
-/** How many lines an item takes in its lane: an if-then one for its condition and one per step. */
-export function linesOf(item: QueueItem): number {
-  return isIf(item) ? 1 + item.then.length : 1;
 }
 
 /** The nodes of a dependency graph that lie on a loop (Tarjan's strongly connected components). */
