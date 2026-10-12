@@ -1121,7 +1121,7 @@ input.graph-label {
   border-radius: 999px;
 }
 
-.graph-queue-waited button {
+.graph-queue-unwait {
   width: 16px;
   height: 16px;
   margin-right: -4px;
@@ -1135,11 +1135,11 @@ input.graph-label {
   cursor: pointer;
 }
 
-.graph-queue-waited button::before {
+.graph-queue-unwait::before {
   content: '×';
 }
 
-.graph-queue-waited button:hover {
+.graph-queue-unwait:hover {
   background: color-mix(in srgb, CanvasText 12%, transparent);
   opacity: 1;
 }

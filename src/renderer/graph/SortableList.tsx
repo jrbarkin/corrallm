@@ -60,7 +60,12 @@ export function SortableList<T extends { id: string }>({
   return (
     <ol ref={list} className={className} {...(label === undefined ? {} : { 'aria-label': label })}>
       {items.map((item, index) => (
-        <li key={item.id} className={item.id === dragging ? 'dragging' : undefined}>
+        <li
+          key={item.id}
+          className={item.id === dragging ? 'dragging' : undefined}
+          // Where an item is, for what points at it (the links between queues, QueueLinks.tsx).
+          data-item={item.id}
+        >
           {renderItem(item, {
             'data-handle': item.id,
             onPointerDown: (event) => {

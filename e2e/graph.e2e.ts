@@ -689,6 +689,57 @@ test("keeps an if-then's steps inside it, in the agent view's narrow queue", asy
   expectInside(await box(step), await box(side.locator('.graph-queue-if')));
 });
 
+test('links a wait to the step it waits for, across two queues side by side', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await addAgentAt('Agent 2', 700, 400);
+  // Agent 1 queues a workflow.
+  await a.dblclick();
+  let view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view
+    .getByRole('complementary', { name: 'Questions and queue' })
+    .getByRole('button', { name: 'Add to queue' })
+    .click();
+  await page.keyboard.type('workflow');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // this agent
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(view).toHaveCount(0);
+
+  // Agent 2 waits for it: picking Agent 1 opens its queue beside, where the step is picked.
+  await node('Agent 2').dblclick();
+  view = page.getByRole('dialog', { name: 'Agent 2' });
+  await expect.poll(() => view.evaluate((el) => el.getAnimations().length)).toBe(0);
+  const own = view.getByRole('complementary', { name: 'Questions and queue' });
+  await own.getByRole('button', { name: 'Add to queue' }).click();
+  await page.keyboard.type('wait');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Agent 1');
+  await page.keyboard.press('Enter');
+  const beside = view.getByRole('complementary', { name: "Agent 1's queue" });
+  await beside.getByRole('button', { name: 'Wait for Agent 1: Workflow' }).click();
+  // The wait's chip reads in full.
+  const chip = own.getByRole('button', { name: 'Change what it waits for: Agent 1: Workflow' });
+  await expect(chip).toHaveText('Agent 1: Workflow');
+  expect(await chip.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0);
+
+  // A line from the step to the wait, across the gap between the queues.
+  const line = view.locator('path[data-link]');
+  await expect(line).toHaveCount(1);
+  const [start, end] = await line.evaluate((path: SVGPathElement) =>
+    [0, path.getTotalLength()].map((length) => {
+      const matrix = path.getScreenCTM();
+      if (!matrix) throw new Error('the line is not rendered');
+      const point = path.getPointAtLength(length).matrixTransform(matrix);
+      return { x: point.x, y: point.y };
+    }),
+  );
+  const step = await box(beside.locator('[data-item]', { hasText: 'Workflow' }));
+  const wait = await box(own.locator('.graph-queue-wait'));
+  if (!start || !end) throw new Error('no line');
+  expectNear(start, { x: step.x, y: step.y + step.height / 2 }, 3);
+  expectNear(end, { x: wait.x + wait.width, y: wait.y + wait.height / 2 }, 3);
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

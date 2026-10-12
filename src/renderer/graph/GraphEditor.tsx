@@ -249,7 +249,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const edits = useMemo<QueueEdits>(
     () => ({
       add: (owner, entry, into) => {
-        const item = { ...entry, id: crypto.randomUUID() };
+        const item = { id: crypto.randomUUID(), ...entry };
         setGraph((g) => addToQueue(g, owner, item, into));
       },
       remove: (owner, itemId) => {

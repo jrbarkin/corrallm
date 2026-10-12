@@ -638,3 +638,108 @@
     animation: none;
   }
 }
+
+/* Another agent's queue beside this one, a gap between them for the lines that link them. */
+.agent-body {
+  position: relative;
+}
+
+.agent-peer {
+  margin-left: 56px;
+  border-right: 0;
+}
+
+.agent-peer-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-peer-header .agent-side-title {
+  margin: 0;
+}
+
+.agent-peer-hint {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.agent-peer-queue {
+  margin-top: 12px;
+}
+
+.agent-peer-all,
+button.agent-peer-item {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-peer-all {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border-style: dashed;
+}
+
+.agent-peer-all:hover,
+button.agent-peer-item:hover,
+.agent-peer-all[aria-pressed='true'],
+button.agent-peer-item[aria-pressed='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-queue-end {
+  margin: 12px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+/* A wait whose target is being picked, and that target. */
+.graph-queue-wait.choosing,
+.graph-queue-waited.choosing {
+  border-color: var(--graph-accent, #2563eb);
+}
+
+.graph-queue-waited-pick {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-queue-waited-pick:hover {
+  color: var(--graph-accent, #2563eb);
+}
+
+/* The lines between the two queues. */
+.agent-links {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.agent-links path[data-link] {
+  fill: none;
+  stroke: var(--graph-accent, #2563eb);
+  stroke-width: 1.5;
+}
+
+.agent-links marker path {
+  fill: var(--graph-accent, #2563eb);
+}

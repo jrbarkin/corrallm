@@ -477,13 +477,13 @@ describe('GraphEditor', () => {
     const panel = within(screen.getByRole('dialog', { name: 'b' }));
     fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
     fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
-    fireEvent.click(panel.getByRole('option', { name: /^a All of its work/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'a' }));
     // Another agent joins the wait: the queue goes on once both have finished.
     fireEvent.click(panel.getByRole('button', { name: 'Wait for something else' }));
-    expect(panel.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual(['c']);
-    fireEvent.click(panel.getByRole('option', { name: /^c All of its work/ }));
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual(['c']);
+    fireEvent.click(panel.getByRole('option', { name: 'c' }));
     expect(panel.getByRole('button', { name: 'Move Wait for a and c' })).toBeTruthy();
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
     expect(edge('work:a->b')?.getAttribute('aria-label')).toBe('Work from a for b: 1 queued');
     expect(edge('work:c->b')).not.toBeNull();
 
@@ -496,31 +496,44 @@ describe('GraphEditor', () => {
     expect(edge('work:c->b')).not.toBeNull();
   });
 
-  it('waits for a particular step of another agent, not only for all of its work', () => {
+  it("picks the step to wait for in the other agent's queue, shown beside, linked to the wait", () => {
     const queue = [
       { id: 'research', action: 'Workflow' },
       { id: 'm', message: 'Write up what you found' },
     ];
-    const { container, node } = setup({
+    const { node } = setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', queue } }), agentNode('b', 0, 100)],
       edges: [],
     });
     fireEvent.doubleClick(node('b'));
-    const panel = within(screen.getByRole('dialog', { name: 'b' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
-    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
-    // Each agent, then each item in its queue.
-    expect(panel.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
-      'a',
-      'a: Workflow',
-      'a: “Write up what you found”',
-    ]);
-    fireEvent.click(panel.getByRole('option', { name: /^a: Workflow/ }));
-    expect(panel.getByRole('button', { name: 'Move Wait for a: Workflow' })).toBeTruthy();
+    const view = within(screen.getByRole('dialog', { name: 'b' }));
+    const links = () => screen.getByRole('dialog', { name: 'b' }).querySelectorAll('[data-link]');
+    fireEvent.click(view.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(view.getByRole('option', { name: /^Wait for…/ }));
+    fireEvent.click(view.getByRole('option', { name: 'a' }));
+
+    // b waits for all of a's work until a step of a's, in its queue beside b's, is picked.
+    expect(view.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
+    const beside = within(view.getByRole('complementary', { name: "a's queue" }));
+    expect(beside.getAllByRole('button', { name: /^Wait for / }).map((b) => b.textContent)).toEqual(
+      ["All of a's work", 'Workflow', '“Write up what you found”'],
+    );
+    fireEvent.click(beside.getByRole('button', { name: 'Wait for a: Workflow' }));
+    expect(view.getByRole('button', { name: 'Move Wait for a: Workflow' })).toBeTruthy();
+    // The two queues stay side by side, the wait linked to the step it waits for.
+    expect(beside.queryByRole('button', { name: /^Wait for / })).toBeNull();
+    expect(links()).toHaveLength(1);
+
+    // Its chip picks again; Escape stops picking, then hides a's queue, then closes the view.
+    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: a: Workflow' }));
+    fireEvent.click(beside.getByRole('button', { name: "Wait for all of a's work" }));
+    expect(view.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: a' }));
     fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(
-      container.querySelector('[data-testid="rf__edge-work:a->b"]')?.getAttribute('aria-label'),
-    ).toBe('Work from a for b: 1 queued');
+    expect(beside.queryByRole('button', { name: /^Wait for / })).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(view.queryByRole('complementary', { name: "a's queue" })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'b' })).toBeTruthy();
   });
 
   it('deletes a selected link from its button', () => {

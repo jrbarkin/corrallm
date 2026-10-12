@@ -4,7 +4,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
-import { threadTitle } from '../agent/session';
+import { ifText, itemLabel } from './labels';
 import { CONDITIONS, isIf, isMessage, isWait, sameTarget } from './queue';
 import type {
   Condition,
@@ -20,9 +20,17 @@ import type { HandleProps } from './SortableList';
 
 const EMPTY: readonly QueueItem[] = [];
 
-/** A queue item, before it has an id. */
-export type QueueEntry =
-  Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'> | Omit<QueueWait, 'id'>;
+/** A queue item, before it is added: its id is made then, unless it brings one. */
+export type QueueEntry = (
+  Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'> | Omit<QueueWait, 'id'>
+) & { id?: string };
+
+/** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
+export interface StepChoice {
+  waitId: string;
+  index: number;
+  agent: string;
+}
 
 /** An agent a step can act on, or a condition check; `id` undefined is the queue's own agent. */
 interface Target {
@@ -32,25 +40,6 @@ interface Target {
 
 const nameOf = (node: GraphNode | undefined) =>
   node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
-
-const ifText = (condition: Condition) =>
-  condition.kind === 'outputContains'
-    ? `the output contains "${condition.text}"`
-    : condition.kind === 'freeText'
-      ? condition.text
-      : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
-
-/** How an item reads when another agent waits for it. */
-const itemLabel = (item: QueueItem): string =>
-  isWait(item)
-    ? 'its wait'
-    : isIf(item)
-      ? `If ${ifText(item.if)}`
-      : isMessage(item)
-        ? item.message.trim() === ''
-          ? 'an empty message'
-          : `“${threadTitle(item.message, 24)}”`
-        : item.action;
 
 /**
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
@@ -73,6 +62,8 @@ export function QueueEditor({
   onEditMessage,
   onCondition,
   onWaitFor,
+  onChooseStep,
+  choosing,
 }: {
   node: GraphNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
@@ -95,6 +86,13 @@ export function QueueEditor({
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  /**
+   * Once an agent is picked for a wait, lets the user pick one of its steps (AgentView shows its
+   * queue beside). Without it, the wait picker lists their steps too.
+   */
+  onChooseStep?: (choice: StepChoice) => void;
+  /** The wait target being picked, to show which. */
+  choosing?: Omit<StepChoice, 'agent'>;
 }) {
   const queue = node.data.queue ?? EMPTY;
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
@@ -126,6 +124,8 @@ export function QueueEditor({
     onRetarget,
     onEditMessage,
     onWaitFor,
+    ...(onChooseStep ? { onChooseStep } : {}),
+    ...(choosing ? { choosing } : {}),
   };
   const shown = only ? queue.filter(only) : queue;
   /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
@@ -190,6 +190,7 @@ interface AddContext {
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
   itemLabel: (item: QueueItem) => string;
+  onChooseStep?: (choice: StepChoice) => void;
 }
 
 interface Context extends AddContext {
@@ -202,6 +203,7 @@ interface Context extends AddContext {
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  choosing?: Omit<StepChoice, 'agent'>;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -221,6 +223,7 @@ export function QueueAddMenu({
   actions,
   label = 'Add to queue',
   onAdd,
+  onChooseStep,
 }: {
   node: GraphNode;
   nodes: readonly GraphNode[];
@@ -228,28 +231,37 @@ export function QueueAddMenu({
   /** Its name, telling it from the queue's own ⊕. */
   label?: string;
   onAdd: (entry: QueueEntry) => void;
+  onChooseStep?: (choice: StepChoice) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
-  return <AddMenu label={label} withIf up context={{ actions, others, itemLabel }} onAdd={onAdd} />;
+  const context = { actions, others, itemLabel, ...(onChooseStep ? { onChooseStep } : {}) };
+  return <AddMenu label={label} withIf up context={context} onAdd={onAdd} />;
 }
 
-/** Picks an agent by typing: "This agent" first, unless `withSelf` is false. */
+/**
+ * Picks an agent by typing: "This agent" first, unless `withSelf` is false. Agents in `exclude`
+ * (ids) are not offered.
+ */
 function TargetPicker({
   context,
   label = 'On which agent?',
   withSelf = true,
+  exclude = [],
   onPick,
   onCancel,
 }: {
   context: AddContext;
   label?: string;
   withSelf?: boolean;
+  exclude?: readonly string[];
   onPick: (target: Target) => void;
   onCancel: () => void;
 }) {
   const targets: Target[] = [
     ...(withSelf ? [{ id: undefined, name: 'This agent' }] : []),
-    ...context.others.map((n) => ({ id: n.id, name: nameOf(n) })),
+    ...context.others
+      .filter((n) => !exclude.includes(n.id))
+      .map((n) => ({ id: n.id, name: nameOf(n) })),
   ];
   return (
     <SearchPicker
@@ -484,7 +496,8 @@ function WaitPicker({
 
 /**
  * A wait: what it waits for (agents, or steps in their queues), each with a button that takes it
- * off (but the last), and a button that adds another.
+ * off (but the last), and a button that adds another. With `onChooseStep`, a target's chip picks
+ * its step again, and an added target's agent is picked first, then its step.
  */
 function WaitRow({
   item,
@@ -496,19 +509,49 @@ function WaitRow({
   context: Context;
 }) {
   const [adding, setAdding] = useState(false);
-  const more = waitOptions(context).some(
-    (option) => !item.waitFor.some((target) => sameTarget(target, option.target)),
-  );
+  const { onChooseStep } = context;
+  /** Agents it already waits for all the work of. */
+  const whole = item.waitFor.flatMap((target) => (target.item === undefined ? [target.agent] : []));
+  const more = onChooseStep
+    ? context.others.some((n) => !whole.includes(n.id))
+    : waitOptions(context).some(
+        (option) => !item.waitFor.some((target) => sameTarget(target, option.target)),
+      );
+  const picking = context.choosing?.waitId === item.id ? context.choosing.index : undefined;
   return (
-    <div className="graph-queue-row graph-queue-wait">
+    <div
+      className={
+        picking === undefined
+          ? 'graph-queue-row graph-queue-wait'
+          : 'graph-queue-row graph-queue-wait choosing'
+      }
+    >
       <Handle handle={handle} item={item} context={context} />
       <span className="graph-queue-keyword">Wait for</span>
-      {item.waitFor.map((target) => (
-        <span key={JSON.stringify(target)} className="graph-queue-waited">
-          {context.targetLabel(target)}
+      {item.waitFor.map((target, index) => (
+        <span
+          key={JSON.stringify(target)}
+          className={index === picking ? 'graph-queue-waited choosing' : 'graph-queue-waited'}
+        >
+          {onChooseStep ? (
+            <button
+              type="button"
+              className="graph-queue-waited-pick"
+              aria-label={`Change what it waits for: ${context.targetLabel(target)}`}
+              title="Pick another step to wait for"
+              onClick={() => {
+                onChooseStep({ waitId: item.id, index, agent: target.agent });
+              }}
+            >
+              {context.targetLabel(target)}
+            </button>
+          ) : (
+            context.targetLabel(target)
+          )}
           {item.waitFor.length > 1 && (
             <button
               type="button"
+              className="graph-queue-unwait"
               aria-label={`Stop waiting for ${context.targetLabel(target)}`}
               onClick={() => {
                 context.onWaitFor(
@@ -535,7 +578,24 @@ function WaitRow({
         </button>
       )}
       <RemoveButton item={item} context={context} />
-      {adding && (
+      {adding && onChooseStep && (
+        <TargetPicker
+          context={context}
+          label="Wait for which agent?"
+          withSelf={false}
+          exclude={whole}
+          onPick={(target) => {
+            setAdding(false);
+            if (target.id === undefined) return;
+            context.onWaitFor(item.id, [...item.waitFor, { agent: target.id }]);
+            onChooseStep({ waitId: item.id, index: item.waitFor.length, agent: target.id });
+          }}
+          onCancel={() => {
+            setAdding(false);
+          }}
+        />
+      )}
+      {adding && !onChooseStep && (
         <WaitPicker
           context={context}
           exclude={item.waitFor}
@@ -710,7 +770,23 @@ function AddMenu({
           onCancel={close}
         />
       )}
-      {step === 'wait' && (
+      {step === 'wait' && context.onChooseStep && (
+        <TargetPicker
+          context={context}
+          label="Wait for which agent?"
+          withSelf={false}
+          onPick={(target) => {
+            close();
+            if (target.id === undefined) return;
+            // All of its work, until one of its steps is picked (beside).
+            const id = crypto.randomUUID();
+            onAdd({ id, waitFor: [{ agent: target.id }] });
+            context.onChooseStep?.({ waitId: id, index: 0, agent: target.id });
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'wait' && !context.onChooseStep && (
         <WaitPicker
           context={context}
           onPick={(target) => {

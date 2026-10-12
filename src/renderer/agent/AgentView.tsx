@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
+import { isWait, sameTarget } from '../graph/queue';
 import type { Condition, WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
-import type { QueueEntry } from '../graph/QueueEditor';
+import type { QueueEntry, StepChoice } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
+import { queueLinks } from './links';
+import { PeerQueue } from './PeerQueue';
+import { QueueLinks } from './QueueLinks';
 import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
 import type { Answer, Session } from './session';
@@ -24,6 +28,10 @@ export interface SessionControls extends ComposerControls {
  * and a composer to write to the agent), beside its questions and queue (QueueEditor.tsx). It grows
  * out of the agent's card to fill the editor, over a blurred canvas, and shrinks back into it on
  * Back, Escape, or a click outside. Escape interrupts the agent first while it works.
+ *
+ * Picking another agent for a wait opens that agent's queue beside this one (PeerQueue.tsx), to
+ * pick which of its steps to wait for; while it is open, lines link the waits in either queue to
+ * what they wait for in the other (QueueLinks.tsx).
  */
 export function AgentView({
   node,
@@ -110,17 +118,46 @@ export function AgentView({
   const working = session.status !== 'idle';
   const { stop } = controls;
   const composer = useRef<HTMLTextAreaElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  /** The agent whose queue is shown beside this one. */
+  const [peer, setPeer] = useState<string>();
+  /** The wait target whose step is being picked in that queue. */
+  const [choosing, setChoosing] = useState<StepChoice>();
+  const chooseStep = useCallback((choice: StepChoice) => {
+    setPeer(choice.agent);
+    setChoosing(choice);
+  }, []);
+  // Escape steps back: from picking, from the queue beside, from the agent's work, then the view.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (working) stop();
+      if (choosing) setChoosing(undefined);
+      else if (peer !== undefined) setPeer(undefined);
+      else if (working) stop();
       else close();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [close, working, stop]);
+  }, [close, working, stop, choosing, peer]);
+
+  const peerNode = nodes.find((n) => n.id === peer && n.type === 'agent');
+  const links = useMemo(() => (peerNode ? queueLinks(node, peerNode) : []), [node, peerNode]);
+  const waiting = node.data.queue?.find((item) => item.id === choosing?.waitId);
+  const chosen =
+    waiting && isWait(waiting) && choosing ? waiting.waitFor[choosing.index] : undefined;
+  /** Sets the target being picked to one of the peer's steps, or (undefined) all of its work. */
+  const pick = (item: string | undefined) => {
+    if (!choosing || !waiting || !isWait(waiting)) return;
+    const target: WaitTarget =
+      item === undefined ? { agent: choosing.agent } : { agent: choosing.agent, item };
+    const targets = waiting.waitFor
+      .map((t, i) => (i === choosing.index ? target : t))
+      .filter((t, i, all) => all.findIndex((u) => sameTarget(u, t)) === i);
+    onWaitFor(waiting.id, targets);
+    setChoosing(undefined);
+  };
 
   const label = node.data.label;
   const name = label || 'Unnamed agent';
@@ -180,7 +217,7 @@ export function AgentView({
             )}
             <AgentChip agent={agent} onChange={onAgent} />
           </header>
-          <div className="agent-body">
+          <div ref={body} className="agent-body">
             <section className="agent-session" aria-label="Session">
               <Transcript
                 session={session}
@@ -204,11 +241,12 @@ export function AgentView({
                     actions={AGENT_ACTIONS[agent]}
                     label="Queue something"
                     onAdd={onAdd}
+                    onChooseStep={chooseStep}
                   />
                 }
               />
             </section>
-            <aside className="agent-side" aria-label="Questions and queue">
+            <aside className="agent-side" data-column="own" aria-label="Questions and queue">
               <section className="graph-detail-questions" aria-label="Questions">
                 {(node.data.questions ?? []).map((question) => (
                   <QuestionCard
@@ -250,8 +288,27 @@ export function AgentView({
                 onEditMessage={onEditMessage}
                 onCondition={onCondition}
                 onWaitFor={onWaitFor}
+                onChooseStep={chooseStep}
+                {...(choosing ? { choosing } : {})}
               />
+              {peerNode && (
+                <p className="agent-queue-end" data-end>
+                  End of {name}&apos;s queue
+                </p>
+              )}
             </aside>
+            {peerNode && (
+              <PeerQueue
+                node={peerNode}
+                picking={chosen ? { item: chosen.item } : undefined}
+                onPick={pick}
+                onClose={() => {
+                  setPeer(undefined);
+                  setChoosing(undefined);
+                }}
+              />
+            )}
+            {peerNode && <QueueLinks container={body} links={links} />}
           </div>
         </div>
       </div>
