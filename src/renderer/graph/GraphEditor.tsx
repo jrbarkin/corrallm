@@ -15,10 +15,13 @@ import {
 } from '@xyflow/react';
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { CanvasFile } from '../../shared/ipc';
+import { AgentView } from '../agent/AgentView';
+import { NEW_SESSION } from '../agent/session';
+import { SessionStore } from '../agent/sessions';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -62,7 +65,6 @@ import { arrange } from './layout';
 import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
 import type { MenuPlace } from './ConnectMenu';
-import { NodeDetail } from './NodeDetail';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import type { WorkFlowEdge } from './nodes';
 import type { Question } from './queue';
@@ -141,6 +143,9 @@ function reason(error: unknown): string {
 
 function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFiles | undefined }) {
   const [graph, setRawGraph] = useState(initialGraph);
+  /** Every agent's session, playing on while its view is closed. */
+  const [sessionStore] = useState(() => new SessionStore());
+  const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
   const [saved, setSaved] = useState(() => ({
     name: undefined as string | undefined,
@@ -399,10 +404,14 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     const colors = groupColors(graph.nodes);
     return graph.nodes.map((n) => {
       const color = colors.get(n.id);
-      const asking = n.data.questions?.some((q) => q.answer === undefined) ?? false;
+      const status = sessions[n.id]?.status ?? 'idle';
+      // Waiting on a permission answer is asking too.
+      const asking =
+        status === 'waiting' || (n.data.questions?.some((q) => q.answer === undefined) ?? false);
       const classes = [
         ...(color === undefined ? [] : [`group-color-${String(color)}`]),
         ...(asking ? ['asking'] : []),
+        ...(status === 'idle' ? [] : ['working']),
       ];
       const name = n.data.label || 'Unnamed agent';
       return {
@@ -411,7 +420,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         ...(n.type === 'agent' ? { ariaLabel: `${name}, ${n.data.agent ?? DEFAULT_AGENT}` } : {}),
       };
     });
-  }, [graph.nodes]);
+  }, [graph.nodes, sessions]);
   const pending = pendingQuestions(graph.nodes);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
@@ -668,7 +677,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
           </Panel>
         </ReactFlow>
         {openedNode && (
-          <NodeDetail
+          <AgentView
             key={openedNode.id}
             node={openedNode}
             nodes={graph.nodes}
@@ -709,6 +718,27 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             }}
             onWaitFor={(waitId, agents) => {
               edits.setWaitFor(openedNode.id, waitId, agents);
+            }}
+            session={sessions[openedNode.id] ?? NEW_SESSION}
+            controls={{
+              send: (text) => {
+                sessionStore.send(openedNode.id, openedNode.data.agent ?? DEFAULT_AGENT, text);
+              },
+              answer: (permissionId, answer) => {
+                sessionStore.answer(openedNode.id, permissionId, answer);
+              },
+              stop: () => {
+                sessionStore.stop(openedNode.id);
+              },
+              unqueue: (queuedId) => {
+                sessionStore.unqueue(openedNode.id, queuedId);
+              },
+              setMode: (mode) => {
+                sessionStore.setMode(openedNode.id, mode);
+              },
+              setModel: (model) => {
+                sessionStore.setModel(openedNode.id, model);
+              },
             }}
             onClose={closeOpened}
           />

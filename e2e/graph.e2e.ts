@@ -615,6 +615,50 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   await expect(panel).toHaveCount(0);
 });
 
+test('opens an agent as a full Claude Code-style session, and goes back to the canvas', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await a.dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await expect.poll(() => view.evaluate((el) => el.getAnimations().length)).toBe(0);
+  const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(view)]);
+  expect(opened.width).toBeGreaterThan(editor.width * 0.95);
+  expect(opened.height).toBeGreaterThan(editor.height * 0.9);
+
+  // The composer has the keyboard: type, Enter sends. Manual mode asks before the edit and the
+  // command; each is answered from its prompt.
+  await page.keyboard.type('Add rate limiting');
+  await page.keyboard.press('Enter');
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  await transcript
+    .getByRole('group', { name: 'Edit file: src/index.ts' })
+    .getByRole('button', { name: 'Yes', exact: true })
+    .click();
+  // Answering gives the keyboard back to the composer: what is typed now is queued.
+  await page.keyboard.type('Then update the docs');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('list', { name: 'Queued messages' })).toHaveText(
+    'Then update the docs',
+  );
+  await transcript
+    .getByRole('group', { name: 'Bash command: npm test' })
+    .getByRole('button', { name: 'Yes', exact: true })
+    .click();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
+  // The queued message goes next.
+  await expect(transcript.getByText('Then update the docs', { exact: true })).toBeVisible();
+  await expect(view.getByText('+4', { exact: true }).first()).toBeVisible();
+
+  // A tool call's line opens its diff.
+  await transcript.getByRole('button', { name: /^Edit src\/index\.ts/ }).click();
+  await expect(transcript.getByText(/retries: options\.retries \?\? 3/)).toBeVisible();
+
+  // Back to the canvas; the session is still there when the agent opens again.
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(view).toHaveCount(0);
+  await a.dblclick();
+  await expect(transcript.getByText('Add rate limiting', { exact: true })).toBeVisible();
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

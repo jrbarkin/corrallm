@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has one IPC channel (`app:ping`), an in-memory node-graph editor in the renderer (`src/renderer/graph/`), and node-pty installed but used only by the packaged-build self-test.
+corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session that is scripted until agents are connected (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels; and node-pty installed but used only by the packaged-build self-test.
 
 ## Commands
 
@@ -38,9 +38,8 @@ src/preload/    Preload script (sandboxed; may import only 'electron' and src/sh
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
                      groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
-                     GraphEditor.tsx (node views in nodes.tsx); an agent's panel in NodeDetail.tsx,
-                     with its queue (QueueEditor.tsx, queue.ts, SortableList.tsx) and questions
-                     (Questions.tsx); agent types and their actions (sourced catalogs) in agents.ts;
+                     GraphEditor.tsx (node views in nodes.tsx); an agent's queue (QueueEditor.tsx, queue.ts,
+                     SortableList.tsx) and questions (Questions.tsx), shown in its agent view; agent types and their actions (sourced catalogs) in agents.ts;
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
                      the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
@@ -48,6 +47,12 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      validation in file.ts, open/save bar in FileBar.tsx). examples/ holds .corral
                      examples, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
                      each one valid and written exactly as toFile writes it.
+src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
+                     a Claude Code-style session (Transcript.tsx, Composer.tsx) beside the agent's
+                     questions and queue. Sessions are scripted for now: session.ts is the model and
+                     reducer, player.ts plays a turn's steps in time, script.ts writes the turn, and
+                     sessions.ts keeps every agent's session (useSyncExternalStore) so turns play on
+                     while the canvas is shown.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.

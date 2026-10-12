@@ -1,20 +1,30 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
+import type { GraphNode } from '../graph/graph';
+import type { Condition } from '../graph/queue';
+import { QuestionCard } from '../graph/Questions';
+import { QueueEditor } from '../graph/QueueEditor';
+import type { QueueEntry } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
-import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from './agents';
-import type { GraphNode } from './graph';
-import type { Condition } from './queue';
-import { QuestionCard } from './Questions';
-import { QueueEditor } from './QueueEditor';
-import type { QueueEntry } from './QueueEditor';
+import { Composer } from './Composer';
+import type { ComposerControls } from './Composer';
+import type { Answer, Session } from './session';
+import { Transcript } from './Transcript';
+import './AgentView.css';
+
+/** What the view does to its agent's session (sessions.ts). */
+export interface SessionControls extends ComposerControls {
+  answer: (permissionId: string, answer: Answer) => void;
+}
 
 /**
- * A node opened up, the way an iOS folder opens: the panel grows out of the node's card to fill
- * most of the editor, over a blurred canvas, and shrinks back into it when closed (Escape, the
- * close button, or a click outside). It renames the node, sets its agent, and edits its queue
- * (QueueEditor.tsx).
+ * An agent opened up: its session, the way Claude Code's desktop app shows one (the transcript,
+ * and a composer to write to the agent), beside its questions and queue (QueueEditor.tsx). It grows
+ * out of the agent's card to fill the editor, over a blurred canvas, and shrinks back into it on
+ * Back, Escape, or a click outside. Escape interrupts the agent first while it works.
  */
-export function NodeDetail({
+export function AgentView({
   node,
   nodes,
   origin,
@@ -29,6 +39,8 @@ export function NodeDetail({
   onEditMessage,
   onCondition,
   onWaitFor,
+  session,
+  controls,
   onClose,
 }: {
   node: GraphNode;
@@ -49,6 +61,8 @@ export function NodeDetail({
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, agents: string[]) => void;
+  session: Session;
+  controls: SessionControls;
   onClose: () => void;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
@@ -57,7 +71,7 @@ export function NodeDetail({
   const closing = useRef(false);
 
   useLayoutEffect(() => {
-    panel.current?.focus();
+    // Not the panel: the composer has the keyboard (autoFocus).
     const from = origin();
     if (!from || !panel.current || !content.current || !backdrop.current) return;
     morph(panel.current, from, 'open');
@@ -92,18 +106,32 @@ export function NodeDetail({
     else void Promise.all(shrinking.map((animation) => animation.finished)).then(onClose, onClose);
   }, [origin, onClose]);
 
+  const working = session.status !== 'idle';
+  const { stop } = controls;
+  const composer = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
+      if (event.key !== 'Escape') return;
+      if (working) stop();
+      else close();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [close]);
+  }, [close, working, stop]);
 
   const label = node.data.label;
+  const name = label || 'Unnamed agent';
   const agent = node.data.agent ?? DEFAULT_AGENT;
+  /** The lines its edits added and removed, this session. */
+  const changed = session.entries.reduce(
+    (sum, entry) =>
+      entry.kind === 'tool' && entry.status === 'done' && entry.detail?.kind === 'diff'
+        ? { added: sum.added + entry.detail.added, removed: sum.removed + entry.detail.removed }
+        : sum,
+    { added: 0, removed: 0 },
+  );
   return (
     <div
       ref={backdrop}
@@ -114,16 +142,26 @@ export function NodeDetail({
     >
       <div
         ref={panel}
-        className="graph-detail"
+        className="agent-view"
         data-agent={agent}
         role="dialog"
         aria-modal="true"
-        aria-label={label || 'Unnamed agent'}
+        aria-label={name}
         tabIndex={-1}
       >
-        <div ref={content} className="graph-detail-content">
-          <header className="graph-detail-header">
+        <div ref={content} className="agent-content">
+          <header className="agent-header">
+            <button
+              type="button"
+              className="agent-back"
+              aria-label="Back to the canvas"
+              title="Back to the canvas (Esc)"
+              onClick={close}
+            >
+              Canvas
+            </button>
             <input
+              className="agent-title"
               aria-label="Name"
               value={label}
               placeholder="Unnamed agent"
@@ -131,48 +169,71 @@ export function NodeDetail({
                 onRename(event.target.value);
               }}
             />
+            {changed.added + changed.removed > 0 && (
+              <span className="agent-diff" title="Lines changed this session">
+                <span className="agent-added">+{changed.added}</span>{' '}
+                <span className="agent-removed">−{changed.removed}</span>
+              </span>
+            )}
             <AgentChip agent={agent} onChange={onAgent} />
-            <button
-              type="button"
-              className="graph-detail-close"
-              aria-label="Close"
-              onClick={close}
-            />
           </header>
-          <section className="graph-detail-questions" aria-label="Questions">
-            {(node.data.questions ?? []).map((question) => (
-              <QuestionCard
-                key={question.id}
-                question={question}
-                onAnswer={(answer) => {
-                  onAnswer(question.id, answer);
+          <div className="agent-body">
+            <section className="agent-session" aria-label="Session">
+              <Transcript
+                session={session}
+                agentName={name}
+                onAnswer={(permissionId, answer) => {
+                  controls.answer(permissionId, answer);
+                  // The prompt's buttons are gone: the keyboard goes back to the composer.
+                  composer.current?.focus();
                 }}
               />
-            ))}
-            <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
-              Simulate a question
-            </button>
-          </section>
-          <QueueEditor
-            node={node}
-            nodes={nodes}
-            agent={agent}
-            actions={AGENT_ACTIONS[agent]}
-            onAdd={onAdd}
-            onRemove={onRemove}
-            onMove={onMove}
-            onRetarget={onRetarget}
-            onEditMessage={onEditMessage}
-            onCondition={onCondition}
-            onWaitFor={onWaitFor}
-          />
+              <Composer
+                agentName={name}
+                agent={agent}
+                session={session}
+                controls={controls}
+                field={composer}
+              />
+            </section>
+            <aside className="agent-side" aria-label="Questions and queue">
+              <section className="graph-detail-questions" aria-label="Questions">
+                {(node.data.questions ?? []).map((question) => (
+                  <QuestionCard
+                    key={question.id}
+                    question={question}
+                    onAnswer={(answer) => {
+                      onAnswer(question.id, answer);
+                    }}
+                  />
+                ))}
+                <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
+                  Simulate a question
+                </button>
+              </section>
+              <h2 className="agent-side-title">Queue</h2>
+              <QueueEditor
+                node={node}
+                nodes={nodes}
+                agent={agent}
+                actions={AGENT_ACTIONS[agent]}
+                onAdd={onAdd}
+                onRemove={onRemove}
+                onMove={onMove}
+                onRetarget={onRetarget}
+                onEditMessage={onEditMessage}
+                onCondition={onCondition}
+                onWaitFor={onWaitFor}
+              />
+            </aside>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/** The node's agent: a colour-coded chip that opens a dropdown of the agent types. */
+/** The agent's type: a colour-coded chip that opens a dropdown of the agent types. */
 function AgentChip({
   agent,
   onChange,
