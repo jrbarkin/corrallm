@@ -752,23 +752,22 @@ test('shows every queue side by side, a wait below what it waits for and linked 
   // The Checker waits for all of the Builder's work: below the end of the Builder's lane.
   const end = await box(view.locator('[data-end]').first());
   const wait = await box(view.getByRole('group', { name: 'Checker: Wait for Builder' }));
-  expect(wait.y).toBeGreaterThan(end.y + end.height);
+  expect(wait.y).toBeGreaterThanOrEqual(end.y + end.height - 1);
 
-  // A line from that end to the wait; and a dashed one for the work the Checker hands back.
-  const line = view.locator('path[data-kind="wait"]');
-  await expect(line).toHaveCount(1);
-  await expect(view.locator('path[data-kind="handoff"]')).toHaveCount(1);
-  const [from, to] = await line.evaluate((path: SVGPathElement) =>
-    [0, path.getTotalLength()].map((length) => {
-      const matrix = path.getScreenCTM();
-      if (!matrix) throw new Error('the line is not rendered');
-      const point = path.getPointAtLength(length).matrixTransform(matrix);
-      return { x: point.x, y: point.y };
-    }),
+  // A ribbon joins the two across the gap between the lanes, as a diff viewer joins changed
+  // lines; another is for the work the Checker hands back.
+  const ribbon = await box(view.locator('g[data-kind="wait"] .queues-ribbon'));
+  await expect(view.locator('g[data-kind="handoff"]')).toHaveCount(1);
+  const [builder, checker] = await Promise.all(
+    [0, 1].map((n) => box(view.locator('.queues-pane').nth(n))),
   );
-  if (!from || !to) throw new Error('no line');
-  expectNear(from, { x: end.x + end.width, y: end.y + end.height / 2 }, 3);
-  expectNear(to, { x: wait.x, y: wait.y + wait.height / 2 }, 3);
+  if (!builder || !checker) throw new Error('no panes');
+  expectNear({ x: ribbon.x, y: ribbon.y }, { x: builder.x + builder.width, y: end.y }, 1);
+  expectNear(
+    { x: ribbon.x + ribbon.width, y: ribbon.y + ribbon.height },
+    { x: checker.x, y: wait.y + wait.height },
+    1,
+  );
 });
 
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {

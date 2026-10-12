@@ -1,5 +1,14 @@
-/* All queues: lanes side by side, filling the editor like the agent view. */
+/*
+ * All queues, read like a diff viewer: lanes as panes of numbered lines, ribbons in the gaps
+ * between them joining the lines that link them. Lines are 24px tall (LINE in ribbons.ts).
+ */
 .queues-view {
+  --queues-wait: #3b82f6;
+  --queues-handoff: #22a35a;
+  --queues-stuck: #e5484d;
+  --queues-gutter: 44px;
+  --queues-rule: color-mix(in srgb, CanvasText 14%, transparent);
+
   position: absolute;
   inset: 16px;
   display: flex;
@@ -13,6 +22,18 @@
   font-size: 14px;
 }
 
+[data-mark='wait'] {
+  --mark: var(--queues-wait);
+}
+
+[data-mark='handoff'] {
+  --mark: var(--queues-handoff);
+}
+
+[data-mark='stuck'] {
+  --mark: var(--queues-stuck);
+}
+
 .queues-title {
   margin: 0;
   font-size: 16px;
@@ -21,76 +42,96 @@
 
 .queues-legend {
   display: flex;
-  gap: 14px;
+  gap: 16px;
   margin: 0 0 0 auto;
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
 }
 
 .queues-key::before {
   display: inline-block;
-  width: 18px;
+  width: 10px;
+  height: 10px;
   margin-right: 6px;
-  vertical-align: middle;
-  border-top: 2px solid var(--graph-accent, #2563eb);
+  vertical-align: -1px;
+  border: 1px solid var(--mark);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--mark) 25%, transparent);
   content: '';
 }
 
-.queues-key.handoff::before {
-  border-top-style: dashed;
-}
-
-.queues-key.stuck::before {
-  border-top-color: #dc2626;
-}
-
 .queues-scroll {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   overflow: auto;
-  padding: 16px 24px 24px;
+  padding: 0 16px;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
 }
 
 .queues-empty {
   opacity: 0.6;
 }
 
-/* Lanes 240px wide, with room between them for the lines. */
 .queues-grid {
-  position: relative;
   display: grid;
-  gap: 8px 72px;
-  width: max-content;
+  flex: 1 0 auto;
 }
 
-.queues-lane {
-  margin: -8px -12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, CanvasText 3%, transparent);
+/* A pane: its gutter of line numbers, then its lines. */
+.queues-pane {
+  border-inline: 1px solid var(--queues-rule);
+  background:
+    linear-gradient(var(--queues-rule), var(--queues-rule)) var(--queues-gutter) 0 / 1px 100%
+      no-repeat,
+    linear-gradient(
+        color-mix(in srgb, CanvasText 3%, Canvas),
+        color-mix(in srgb, CanvasText 3%, Canvas)
+      )
+      0 0 / var(--queues-gutter) 100% no-repeat,
+    Canvas;
 }
 
-.queues-lane[data-focus] {
-  outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
+.queues-pane[data-focus] {
+  outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 50%, transparent);
+  outline-offset: -1px;
+}
+
+/* The heads stay in view: over a band as wide as every pane and gap. */
+.queues-heads,
+.queues-head {
+  position: sticky;
+  top: 0;
+}
+
+.queues-heads {
+  z-index: 2;
+  border-bottom: 1px solid var(--queues-rule);
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
 }
 
 .queues-head {
-  position: sticky;
-  z-index: 1;
-  top: 0;
+  z-index: 3;
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 6px 4px;
-  border-bottom: 3px solid var(--agent-color, CanvasText);
+  min-width: 0;
+  padding: 8px 12px 6px;
+  border-inline: 1px solid var(--queues-rule);
+  border-bottom: 2px solid var(--agent-color, CanvasText);
   background: Canvas;
 }
 
 .queues-head button {
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -99,6 +140,7 @@
 }
 
 .queues-status {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -109,55 +151,105 @@
   background: var(--agent-color, CanvasText);
 }
 
-.queues-cell {
-  align-self: center;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-  border-radius: 10px;
-  background: Canvas;
-  font-size: 13px;
-}
-
-.queues-cell[data-kind='wait'] {
-  border-style: dashed;
-}
-
-.queues-cell.stuck {
-  border-color: #dc2626;
-  color: #dc2626;
-}
-
-.queues-cell ul {
-  margin: 6px 0 0;
-  padding-left: 16px;
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-.queues-end {
-  align-self: start;
-  margin: 0;
-  padding-top: 4px;
-  border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
-  font-size: 11px;
-  opacity: 0.5;
-}
-
-.queues-grid .agent-links path[data-kind='handoff'] {
-  stroke-dasharray: 5 4;
-}
-
-/* Lines pass beneath the cards of lanes they cross, showing in the gaps between. */
-.queues-grid .agent-links {
-  z-index: 0;
-}
-
-.queues-cell,
-.queues-end {
-  position: relative;
+/* Lines: a number in the gutter, then what the item does, on one line. */
+.queues-item {
   z-index: 1;
+  align-self: start;
+  min-width: 0;
+  margin-inline: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
-.queues-head {
-  z-index: 2;
+.queues-item[data-waited-for] {
+  background: color-mix(in srgb, var(--queues-wait) 9%, transparent);
+}
+
+.queues-line {
+  display: flex;
+  height: 24px;
+  align-items: center;
+}
+
+.queues-line[data-mark] {
+  background: color-mix(in srgb, var(--mark) 16%, transparent);
+  box-shadow: inset 3px 0 var(--mark);
+}
+
+.queues-line[data-mark='stuck'] {
+  color: var(--queues-stuck);
+}
+
+.queues-number {
+  flex: none;
+  box-sizing: border-box;
+  width: calc(var(--queues-gutter) - 1px);
+  padding-right: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.45;
+  text-align: right;
+}
+
+.queues-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queues-line[data-nested] .queues-text {
+  margin-left: 16px;
+  padding-left: 10px;
+  border-left: 1px solid var(--queues-rule);
+}
+
+.queues-end .queues-text {
+  font-style: italic;
+  opacity: 0.45;
+}
+
+/* Where an agent has nothing to do, waiting. */
+.queues-idle {
+  margin-left: var(--queues-gutter);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    color-mix(in srgb, CanvasText 8%, transparent) 6px 7px
+  );
+}
+
+/* Ribbons: filled, with their top and bottom edges drawn. */
+.queues-ribbons {
+  align-self: start;
+  overflow: visible;
+}
+
+.queues-ribbon {
+  fill: color-mix(in srgb, var(--mark) 20%, transparent);
+}
+
+.queues-ribbon-edges {
+  fill: none;
+  stroke: color-mix(in srgb, var(--mark) 75%, transparent);
+  stroke-width: 1;
+}
+
+.queues-ribbon-arrow {
+  fill: var(--mark);
+}
+
+/* Pointing at a line or a ribbon shows its links over the rest. */
+.queues-grid[data-pointing] .queues-ribbons g:not([data-active]) {
+  opacity: 0.15;
+}
+
+.queues-grid[data-pointing] .queues-ribbons g[data-active] .queues-ribbon {
+  fill: color-mix(in srgb, var(--mark) 32%, transparent);
+}
+
+.queues-grid[data-pointing] [data-at][data-active] {
+  outline: 1px solid color-mix(in srgb, CanvasText 45%, transparent);
+  outline-offset: -1px;
 }

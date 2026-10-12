@@ -1,4 +1,3 @@
-import type { QueueLink } from '../agent/links';
 import type { GraphNode } from '../graph/graph';
 import { isIf, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
@@ -16,12 +15,23 @@ export interface Lane {
   end: number;
 }
 
+/** One end of a link: an item in an agent's lane (or a step of an if-then), or (null) its end. */
+export interface LinkEnd {
+  lane: string;
+  item: string | null;
+}
+
+/** A wait, from what it waits for; or a step one agent hands another, to that agent's lane. */
+export type Link =
+  | { key: string; kind: 'wait'; from: LinkEnd; to: { lane: string; item: string } }
+  | { key: string; kind: 'handoff'; from: LinkEnd; to: string };
+
 export interface Lanes {
   lanes: Lane[];
-  /** How many rows the items take (end markers may sit in the row after). */
-  rows: number;
-  /** The waits and work handed over between lanes (columns are agent ids). */
-  links: QueueLink[];
+  /** How many lines tall each row is (its tallest item's), the rows of the lanes' ends included. */
+  heights: number[];
+  /** The waits and work handed over between lanes. */
+  links: Link[];
   /** Whether an item is in a loop of waits (waits waiting on each other): it would never run. */
   isStuck: (agent: string, item: string) => boolean;
 }
@@ -86,9 +96,9 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     };
   });
 
-  const links: QueueLink[] = [];
+  const links: Link[] = [];
   const seen = new Set<string>();
-  const link = (next: QueueLink) => {
+  const link = (next: Link) => {
     if (seen.has(next.key)) return;
     seen.add(next.key);
     links.push(next);
@@ -100,31 +110,47 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
         if (step.target === undefined || step.target === agent.id || !ids.has(step.target))
           continue;
         link({
-          key: `${item.id}>${step.target}`,
+          key: `${agent.id}:${step.id}>${step.target}`,
           kind: 'handoff',
-          from: { column: agent.id, item: item.id },
-          to: { column: step.target, item: undefined },
+          from: { lane: agent.id, item: step.id },
+          to: step.target,
         });
       }
       if (!isWait(item)) continue;
       for (const target of item.waitFor) {
-        if (!ids.has(target.agent)) continue;
+        if (target.agent === agent.id || !ids.has(target.agent)) continue;
         link({
-          key: `${item.id}>${target.item ?? 'end'}`,
+          key: `${agent.id}:${item.id}>${target.agent}${target.item === undefined ? '' : `:${target.item}`}`,
           kind: 'wait',
-          from: { column: target.agent, item: target.item ?? null },
-          to: { column: agent.id, item: item.id },
+          from: { lane: target.agent, item: target.item ?? null },
+          to: { lane: agent.id, item: item.id },
         });
       }
     }
   }
 
+  const heights = Array.from(
+    { length: Math.max(0, ...lanes.map((lane) => lane.end + 1)) },
+    (_, row) =>
+      Math.max(
+        1,
+        ...lanes.flatMap((lane) =>
+          lane.cells.filter((cell) => cell.row === row).map((cell) => linesOf(cell.item)),
+        ),
+      ),
+  );
+
   return {
     lanes,
-    rows: Math.max(0, ...lanes.flatMap((lane) => lane.cells.map((cell) => cell.row + 1))),
+    heights,
     links,
     isStuck: (agent, item) => stuck.has(key(agent, item)),
   };
+}
+
+/** How many lines an item takes in its lane: an if-then one for its condition and one per step. */
+export function linesOf(item: QueueItem): number {
+  return isIf(item) ? 1 + item.then.length : 1;
 }
 
 /** The nodes of a dependency graph that lie on a loop (Tarjan's strongly connected components). */

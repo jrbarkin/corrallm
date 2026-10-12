@@ -40,7 +40,7 @@ function setup(initial: Graph = graph) {
 }
 
 describe('the queues view', () => {
-  it("shows every agent's queue in a lane, with lines for its waits and the work it hands on", () => {
+  it("shows every agent's queue in a lane, with ribbons for its waits and the work it hands on", () => {
     const { queues } = setup();
     fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
     const view = within(queues());
@@ -51,9 +51,19 @@ describe('the queues view', () => {
       'b: Wait for a: Workflow',
       'b: Message “Cross-check”',
     ]);
-    // A line for the wait, and a dashed one for the message a hands b.
-    const lines = [...queues().querySelectorAll<SVGPathElement>('path[data-link]')];
-    expect(lines.map((line) => line.dataset.kind).sort()).toEqual(['handoff', 'wait']);
+    // A ribbon for the wait, and one for the message a hands b.
+    const ribbons = [...queues().querySelectorAll('[data-link]')];
+    expect(ribbons.map((ribbon) => ribbon.getAttribute('data-kind')).sort()).toEqual([
+      'handoff',
+      'wait',
+    ]);
+    // Pointing at the wait shows its ribbon over the other.
+    fireEvent.pointerOver(view.getByRole('group', { name: 'b: Wait for a: Workflow' }));
+    expect(
+      ribbons
+        .filter((ribbon) => ribbon.hasAttribute('data-active'))
+        .map((r) => r.getAttribute('data-kind')),
+    ).toEqual(['wait']);
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'All queues' })).toBeNull();
   });

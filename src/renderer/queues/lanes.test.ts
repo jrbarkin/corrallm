@@ -13,7 +13,8 @@ const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
 
 /** Each lane's items, by row: `null` where a row is empty. */
 const rows = (nodes: GraphNode[]) => {
-  const { lanes, rows: count } = lanesOf(nodes);
+  const { lanes } = lanesOf(nodes);
+  const count = Math.max(0, ...lanes.flatMap((lane) => lane.cells.map((cell) => cell.row + 1)));
   return Object.fromEntries(
     lanes.map((lane) => [
       lane.agent.id,
@@ -56,35 +57,46 @@ describe('lanesOf', () => {
   it('links waits to what they wait for, and work handed to another agent to its lane', () => {
     const a = agent('a', [
       { id: 'hand', message: 'Over to you', target: 'b' },
-      { id: 'if', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit', target: 'b' }] },
+      {
+        id: 'if',
+        if: { kind: 'failed' },
+        then: [
+          { id: 'fix', action: 'Edit', target: 'b' },
+          { id: 'mine', action: 'Read' },
+        ],
+      },
+      { id: 'self', waitFor: [{ agent: 'a', item: 'hand' }] },
     ]);
     const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'hand' }, { agent: 'a' }] }]);
+    // A step of an if-then is handed over on its own line; a wait in the same lane needs no link.
     expect(lanesOf([a, b]).links).toEqual([
+      { key: 'a:hand>b', kind: 'handoff', from: { lane: 'a', item: 'hand' }, to: 'b' },
+      { key: 'a:fix>b', kind: 'handoff', from: { lane: 'a', item: 'fix' }, to: 'b' },
       {
-        key: 'hand>b',
-        kind: 'handoff',
-        from: { column: 'a', item: 'hand' },
-        to: { column: 'b', item: undefined },
-      },
-      {
-        key: 'if>b',
-        kind: 'handoff',
-        from: { column: 'a', item: 'if' },
-        to: { column: 'b', item: undefined },
-      },
-      {
-        key: 'w>hand',
+        key: 'b:w>a:hand',
         kind: 'wait',
-        from: { column: 'a', item: 'hand' },
-        to: { column: 'b', item: 'w' },
+        from: { lane: 'a', item: 'hand' },
+        to: { lane: 'b', item: 'w' },
       },
+      { key: 'b:w>a', kind: 'wait', from: { lane: 'a', item: null }, to: { lane: 'b', item: 'w' } },
+    ]);
+  });
+
+  it('makes each row as many lines tall as its tallest item, an if-then a line per step', () => {
+    const a = agent('a', [
+      { id: 'read', action: 'Read' },
       {
-        key: 'w>end',
-        kind: 'wait',
-        from: { column: 'a', item: null },
-        to: { column: 'b', item: 'w' },
+        id: 'if',
+        if: { kind: 'failed' },
+        then: [
+          { id: 'fix', action: 'Edit' },
+          { id: 'test', action: 'Bash' },
+        ],
       },
     ]);
+    const b = agent('b', [{ id: 'empty', if: { kind: 'succeeded' }, then: [] }]);
+    // Rows 0 and 1 hold the items, row 2 the end of a's lane (b's ends in row 1).
+    expect(lanesOf([a, b]).heights).toEqual([1, 3, 1]);
   });
 
   it('marks waits that wait on each other as stuck, and still lays them out', () => {

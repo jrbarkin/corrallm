@@ -1,6 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 
-import { QueueLinks } from '../agent/QueueLinks';
 import { threadTitle } from '../agent/session';
 import type { Session } from '../agent/session';
 import { DEFAULT_AGENT } from '../graph/agents';
@@ -9,14 +8,21 @@ import { ifText, itemLabel } from '../graph/labels';
 import { isIf, isMessage, isWait } from '../graph/queue';
 import type { QueueItem, QueueMessage, QueueStep } from '../graph/queue';
 import { lanesOf } from './lanes';
+import type { Link } from './lanes';
+import { LINE, piecePaths, piecesIn, ribbonsOf, rowTops } from './ribbons';
 import './QueuesView.css';
 
+/** How wide the gap between two lanes is, where ribbons join their lines. */
+const GAP = 64;
+
 /**
- * Every agent's queue, side by side, as lanes (lanes.ts) whose rows read in order downwards: a
- * wait sits below what it waits for. Lines show where queues merge (a wait, from what it waits
- * for) and where they part (work one agent hands another, dashed); items in a loop of waits are
- * marked stuck. Opened from the canvas, or from an agent (`focus`, whose lane is brought into
- * view). Escape, Back or a click outside closes it; an agent's name opens that agent.
+ * Every agent's queue side by side, read like a diff viewer: each lane a pane of numbered lines (an
+ * item each, an if-then a line per step), its rows aligned with the other lanes' so order reads
+ * downwards (lanes.ts): a wait sits below what it waits for, with hatching where its agent waits.
+ * Ribbons in the gaps join the lines that link lanes (ribbons.ts): a wait to what it waits for, and
+ * a step handed to another agent, narrowing into that agent's lane; waits in a loop are stuck.
+ * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
+ * or a click outside closes it; an agent's name opens that agent.
  */
 export function QueuesView({
   nodes,
@@ -34,7 +40,9 @@ export function QueuesView({
   onOpenAgent: (agentId: string) => void;
   onClose: () => void;
 }) {
-  const { lanes, rows, links, isStuck } = useMemo(() => lanesOf(nodes), [nodes]);
+  const layout = useMemo(() => lanesOf(nodes), [nodes]);
+  const ribbons = useMemo(() => ribbonsOf(layout), [layout]);
+  const { lanes, heights, links, isStuck } = layout;
   const grid = useRef<HTMLDivElement>(null);
   const name = (id: string) =>
     (nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
@@ -58,10 +66,29 @@ export function QueuesView({
       ?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }, [focus]);
 
+  /** What links mark: the lines handed to another agent, and what waits wait for. */
+  const at = (lane: string, item: string | null) => JSON.stringify([lane, item]);
+  const handed = new Set(
+    links.flatMap((l) => (l.kind === 'handoff' ? [at(l.from.lane, l.from.item)] : [])),
+  );
+  const waitedFor = new Set(
+    links.flatMap((l) => (l.kind === 'wait' ? [at(l.from.lane, l.from.item)] : [])),
+  );
+
+  /** What the pointer is on, a ribbon (its key) or a line (`at`): its links show over the rest. */
+  const [pointed, setPointed] = useState<string | null>(null);
+  const ends = (l: Link) => [
+    at(l.from.lane, l.from.item),
+    ...(l.kind === 'wait' ? [at(l.to.lane, l.to.item)] : []),
+  ];
+  const shown = links.filter((l) => l.key === pointed || ends(l).includes(pointed ?? ''));
+  const active = new Set(shown.map((l) => l.key));
+  const activeEnds = new Set(shown.flatMap(ends));
+
   /** How a step or a message reads in a lane, with the agent it is aimed at if another. */
   const aimed = (step: QueueStep | QueueMessage) => {
     const what = isMessage(step)
-      ? `Message ${step.message.trim() === '' ? '(empty)' : `“${threadTitle(step.message, 32)}”`}`
+      ? `Message ${step.message.trim() === '' ? '(empty)' : `“${threadTitle(step.message, 48)}”`}`
       : step.action;
     return step.target === undefined ? what : `${what} → ${name(step.target)}`;
   };
@@ -78,6 +105,8 @@ export function QueuesView({
     return aimed(item);
   };
 
+  const tops = rowTops(heights);
+  const rows = heights.map((lines) => `${String(lines * LINE)}px`).join(' ');
   return (
     <div
       className="graph-detail-backdrop"
@@ -92,9 +121,15 @@ export function QueuesView({
           </button>
           <h2 className="queues-title">All queues</h2>
           <p className="queues-legend">
-            <span className="queues-key wait">waits for</span>
-            <span className="queues-key handoff">hands work to</span>
-            <span className="queues-key stuck">stuck</span>
+            <span className="queues-key" data-mark="wait">
+              waits for
+            </span>
+            <span className="queues-key" data-mark="handoff">
+              hands work to
+            </span>
+            <span className="queues-key" data-mark="stuck">
+              stuck
+            </span>
           </p>
         </header>
         <div className="queues-scroll">
@@ -102,26 +137,44 @@ export function QueuesView({
           <div
             ref={grid}
             className="queues-grid"
+            data-pointing={active.size > 0 ? '' : undefined}
+            onPointerOver={(event) => {
+              const on = event.target instanceof Element ? event.target : null;
+              setPointed(
+                on?.closest('[data-link]')?.getAttribute('data-link') ??
+                  on?.closest('[data-at]')?.getAttribute('data-at') ??
+                  null,
+              );
+            }}
+            onPointerLeave={() => {
+              setPointed(null);
+            }}
             style={{
-              gridTemplateColumns: `repeat(${String(lanes.length)}, 240px)`,
-              gridTemplateRows: `auto repeat(${String(rows + 1)}, minmax(44px, auto))`,
+              gridTemplateColumns: lanes.map(() => 'minmax(240px, 1fr)').join(` ${String(GAP)}px `),
+              gridTemplateRows: `auto ${rows} minmax(${String(LINE)}px, 1fr)`,
             }}
           >
+            <div className="queues-heads" style={{ gridColumn: '1 / -1', gridRow: 1 }} />
             {lanes.map((lane, i) => {
               const id = lane.agent.id;
-              const column = i + 1;
+              const column = 2 * i + 1;
               const status = sessions[id]?.status ?? 'idle';
+              /** Where the agent has nothing to do until what it waits for is done. */
+              const idle = lane.cells.flatMap(({ row }, n) => {
+                const after = n === 0 ? 0 : (lane.cells[n - 1]?.row ?? 0) + 1;
+                return row > after ? [{ from: after, to: row }] : [];
+              });
+              const pieces = i < lanes.length - 1 ? piecesIn(ribbons, i) : [];
               return (
                 <Fragment key={id}>
                   <div
-                    className="queues-lane"
-                    style={{ gridColumn: column, gridRow: `1 / ${String(rows + 3)}` }}
+                    className="queues-pane"
+                    style={{ gridColumn: column, gridRow: '1 / -1' }}
                     data-focus={id === focus ? '' : undefined}
                   />
                   <div
                     className="queues-head"
                     data-lane={id}
-                    data-column={id}
                     data-agent={lane.agent.data.agent ?? DEFAULT_AGENT}
                     data-status={status}
                     style={{ gridColumn: column, gridRow: 1 }}
@@ -137,46 +190,134 @@ export function QueuesView({
                       {name(id)}
                     </button>
                   </div>
-                  {lane.cells.map(({ item, row }) => {
+                  {idle.map(({ from, to }) => (
+                    <div
+                      key={`idle-${String(from)}`}
+                      className="queues-idle"
+                      title="Waiting"
+                      style={{
+                        gridColumn: column,
+                        gridRow: `${String(from + 2)} / ${String(to + 2)}`,
+                      }}
+                    />
+                  ))}
+                  {lane.cells.map(({ item, row }, n) => {
                     const stuck = isStuck(id, item.id);
                     const text = describe(item);
+                    const mark = isWait(item)
+                      ? stuck
+                        ? 'stuck'
+                        : 'wait'
+                      : handed.has(at(id, item.id))
+                        ? 'handoff'
+                        : undefined;
                     return (
                       <div
                         key={item.id}
-                        className={stuck ? 'queues-cell stuck' : 'queues-cell'}
+                        className="queues-item"
                         role="group"
                         aria-label={`${name(id)}: ${text}${stuck ? ' (stuck)' : ''}`}
-                        data-column={id}
-                        data-item={item.id}
-                        data-kind={isWait(item) ? 'wait' : isIf(item) ? 'if' : 'step'}
+                        data-waited-for={waitedFor.has(at(id, item.id)) ? '' : undefined}
+                        data-at={at(id, item.id)}
+                        data-active={activeEnds.has(at(id, item.id)) ? '' : undefined}
                         style={{ gridColumn: column, gridRow: row + 2 }}
                       >
-                        <span className="queues-cell-text">{text}</span>
-                        {isIf(item) && item.then.length > 0 && (
-                          <ul>
-                            {item.then.map((step) => (
-                              <li key={step.id}>{aimed(step)}</li>
-                            ))}
-                          </ul>
-                        )}
+                        <Line number={n + 1} text={text} mark={mark} />
+                        {isIf(item) &&
+                          item.then.map((step) => (
+                            <Line
+                              key={step.id}
+                              nested
+                              at={at(id, step.id)}
+                              active={activeEnds.has(at(id, step.id))}
+                              text={aimed(step)}
+                              mark={handed.has(at(id, step.id)) ? 'handoff' : undefined}
+                            />
+                          ))}
                       </div>
                     );
                   })}
-                  <p
-                    className="queues-end"
-                    data-column={id}
+                  <div
+                    className="queues-item queues-end"
                     data-end
+                    data-waited-for={waitedFor.has(at(id, null)) ? '' : undefined}
+                    data-at={at(id, null)}
+                    data-active={activeEnds.has(at(id, null)) ? '' : undefined}
                     style={{ gridColumn: column, gridRow: lane.end + 2 }}
                   >
-                    End
-                  </p>
+                    <Line text="End" />
+                  </div>
+                  {pieces.length > 0 && (
+                    <svg
+                      className="queues-ribbons"
+                      aria-hidden="true"
+                      width={GAP}
+                      height={tops.at(-1)}
+                      style={{
+                        gridColumn: column + 1,
+                        gridRow: `2 / span ${String(heights.length)}`,
+                      }}
+                    >
+                      {pieces.map((piece) => {
+                        const paths = piecePaths(piece, GAP);
+                        return (
+                          <g
+                            key={piece.key}
+                            data-link={piece.key}
+                            data-kind={piece.kind}
+                            data-mark={piece.stuck ? 'stuck' : piece.kind}
+                            data-active={active.has(piece.key) ? '' : undefined}
+                          >
+                            <path className="queues-ribbon" d={paths.fill} />
+                            <path className="queues-ribbon-edges" d={paths.edges} />
+                            {paths.arrow && (
+                              <path className="queues-ribbon-arrow" d={paths.arrow} />
+                            )}
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  )}
                 </Fragment>
               );
             })}
-            <QueueLinks container={grid} links={links} />
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A line of a lane: its number in the queue (if it has one), and what it does. */
+function Line({
+  number,
+  nested = false,
+  at,
+  active = false,
+  text,
+  mark,
+}: {
+  number?: number;
+  /** A step of an if-then, under its condition: then it has its own links (`at`). */
+  nested?: boolean;
+  at?: string;
+  /** Whether a link of what the pointer is on ends here. */
+  active?: boolean;
+  text: string;
+  mark?: string | undefined;
+}) {
+  return (
+    <div
+      className="queues-line"
+      data-mark={mark}
+      data-nested={nested ? '' : undefined}
+      data-at={at}
+      data-active={active ? '' : undefined}
+    >
+      <span className="queues-number">{number}</span>
+      <span className="queues-text" title={text}>
+        {text}
+      </span>
     </div>
   );
 }

@@ -1,22 +1,17 @@
 import type { GraphNode } from '../graph/graph';
 import { isWait } from '../graph/queue';
 
-/**
- * One end of a link: in a column (a queue, by the id its element has as `data-column`), an item
- * (`data-item`), or (null) the end of the queue (`data-end`), or (undefined) the column's edge,
- * level with the other end.
- */
+/** One end of a link: an item in a column's queue, or (null) the end of that queue. */
 export interface LinkEnd {
-  column: string;
-  item: string | null | undefined;
+  column: 'own' | 'peer';
+  item: string | null;
 }
 
-/** A line between queues: a wait, from what it waits for; or work one agent hands another. */
+/** A wait in one queue, linked from what it waits for in the other. */
 export interface QueueLink {
   key: string;
   from: LinkEnd;
   to: LinkEnd;
-  kind?: 'wait' | 'handoff';
 }
 
 /**
@@ -25,7 +20,7 @@ export interface QueueLink {
  * its queue for all of its work) to the wait.
  */
 export function queueLinks(own: GraphNode, peer: GraphNode): QueueLink[] {
-  const waits = (waiting: GraphNode, column: 'own' | 'peer', other: GraphNode) =>
+  const waits = (waiting: GraphNode, column: LinkEnd['column'], other: GraphNode) =>
     (waiting.data.queue ?? []).flatMap((item) =>
       isWait(item)
         ? item.waitFor
