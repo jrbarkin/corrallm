@@ -23,6 +23,7 @@ import { AgentView } from '../agent/AgentView';
 import { NEW_SESSION } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
 import { QueuesView } from '../queues/QueuesView';
+import { RunStore, taskState } from '../run/runner';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -147,6 +148,33 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   /** Every agent's session, playing on while its view is closed. */
   const [sessionStore] = useState(() => new SessionStore());
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
+  /** Every agent's queue, run (simulated for now): messages go to the agents' sessions. */
+  const [runStore] = useState(
+    () =>
+      new RunStore({
+        send: (agent, text, done) => {
+          sessionStore.send(agent.id, agent.data.agent ?? DEFAULT_AGENT, text, done);
+        },
+        later: (run, ms) => {
+          const timer = setTimeout(run, ms);
+          return () => {
+            clearTimeout(timer);
+          };
+        },
+        chance: Math.random,
+      }),
+  );
+  const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
+  // The run reads the queues as they are edited.
+  useEffect(() => {
+    runStore.update(graph.nodes);
+  }, [graph.nodes, runStore]);
+  useEffect(
+    () => () => {
+      runStore.reset();
+    },
+    [runStore],
+  );
   /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
   const [saved, setSaved] = useState(() => ({
     name: undefined as string | undefined,
@@ -295,17 +323,21 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   }, [loads, fitView]);
 
   /** Replaces the canvas with one from a file (`name`), or a new one, and fits the view to it. */
-  const load = useCallback((next: Graph, name: string | undefined) => {
-    setLoads((n) => n + 1);
-    setRawGraph(next);
-    setSaved({ name, text: toFile(next) });
-    setArranging(false);
-    setEditing(undefined);
-    setOpened(undefined);
-    setWork(undefined);
-    setDrawn(undefined);
-    setProblem(undefined);
-  }, []);
+  const load = useCallback(
+    (next: Graph, name: string | undefined) => {
+      setLoads((n) => n + 1);
+      setRawGraph(next);
+      runStore.reset();
+      setSaved({ name, text: toFile(next) });
+      setArranging(false);
+      setEditing(undefined);
+      setOpened(undefined);
+      setWork(undefined);
+      setDrawn(undefined);
+      setProblem(undefined);
+    },
+    [runStore],
+  );
   /**
    * The file commands. New and Open replace the canvas, so while it has unsaved changes (`edited`)
    * they ask first; Save writes `text`, the canvas's file text.
@@ -740,6 +772,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             onShowQueues={() => {
               setQueues({ from: openedNode.id });
             }}
+            runMarks={(itemId) => ({ 'data-run': taskState(run, openedNode.id, itemId) })}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
               send: (text) => {
@@ -778,6 +811,14 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
           <QueuesView
             nodes={graph.nodes}
             sessions={sessions}
+            run={run}
+            edits={edits}
+            onRun={() => {
+              runStore.start();
+            }}
+            onStop={() => {
+              runStore.stop();
+            }}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {

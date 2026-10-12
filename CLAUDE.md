@@ -39,7 +39,7 @@ src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
                      groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
                      GraphEditor.tsx (node views in nodes.tsx); an agent's queue (QueueEditor.tsx, queue.ts,
-                     SortableList.tsx) and questions (Questions.tsx), shown in its agent view; agent types and their actions (sourced catalogs) in agents.ts;
+                     SortableList.tsx and sortable.ts) and questions (Questions.tsx), shown in its agent view; agent types and their actions (sourced catalogs) in agents.ts;
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
                      the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
@@ -54,10 +54,15 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      sessions.ts keeps every agent's session (useSyncExternalStore) so turns play on
                      while the canvas is shown.
 src/renderer/queues/ Every agent's queue side by side, task by task, laid out like a diff viewer
-                     (QueuesView.tsx), from the canvas or an agent: lanes.ts aligns rows so a wait
-                     sits below what it waits for, links waits and work handed over, and finds waits
-                     stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that
-                     join linked tasks (from where the view measures them).
+                     (QueuesView.tsx), from the canvas or an agent: each lane is its queue, edited in
+                     place with the queue's own rows (QueueRow, QueueEditor.tsx). lanes.ts aligns rows
+                     so a wait sits below what it waits for, links waits and work handed over, and
+                     finds waits stuck in a loop; ribbons.ts shapes the ribbons in the gaps between
+                     lanes that join linked tasks (from where the view measures them).
+src/renderer/run/    Running the queues, simulated until agents are connected (runner.ts, a store like
+                     sessions.ts): each agent works through its queue, messages go to its session,
+                     waits hold until their target is done. run.css marks where the run is on a
+                     queue's rows, wherever they are shown.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.

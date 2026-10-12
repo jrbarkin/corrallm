@@ -2,11 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
-import { isWait, sameTarget } from '../graph/queue';
+import { chooseTarget, isWait } from '../graph/queue';
 import type { Condition, WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
-import type { QueueEntry, StepChoice } from '../graph/QueueEditor';
+import type { QueueEntry, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
 import { queueLinks } from './links';
@@ -16,6 +16,7 @@ import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
 import type { Answer, Session } from './session';
 import { Transcript } from './Transcript';
+import '../run/run.css';
 import './AgentView.css';
 
 /** What the view does to its agent's session (sessions.ts). */
@@ -49,6 +50,7 @@ export function AgentView({
   onCondition,
   onWaitFor,
   onShowQueues,
+  runMarks,
   session,
   controls,
   onClose,
@@ -73,6 +75,8 @@ export function AgentView({
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   /** Shows every agent's queue, side by side (QueuesView.tsx). */
   onShowQueues: () => void;
+  /** Where the queues' run is with each of its tasks (run/runner.ts), to mark them. */
+  runMarks?: (itemId: string) => RowMarks;
   session: Session;
   controls: SessionControls;
   onClose: () => void;
@@ -155,10 +159,7 @@ export function AgentView({
     if (!choosing || !waiting || !isWait(waiting)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choosing.agent } : { agent: choosing.agent, item };
-    const targets = waiting.waitFor
-      .map((t, i) => (i === choosing.index ? target : t))
-      .filter((t, i, all) => all.findIndex((u) => sameTarget(u, t)) === i);
-    onWaitFor(waiting.id, targets);
+    onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
     setChoosing(undefined);
   };
 
@@ -301,6 +302,7 @@ export function AgentView({
                 onWaitFor={onWaitFor}
                 onChooseStep={chooseStep}
                 {...(choosing ? { choosing } : {})}
+                {...(runMarks ? { marks: runMarks } : {})}
               />
               {peerNode && (
                 <p className="agent-queue-end" data-end>

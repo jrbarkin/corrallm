@@ -1,11 +1,13 @@
 /*
- * All queues, task by task: each lane a pane of task cards (written as an agent's queue writes
- * them), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
+ * All queues, task by task: each lane a pane of its agent's queue (the queue's own rows, edited in
+ * place), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
  */
 .queues-view {
   --queues-wait: #3b82f6;
   --queues-handoff: #22a35a;
   --queues-stuck: #e5484d;
+  --queues-held: color-mix(in srgb, CanvasText 45%, Canvas);
+  --queues-asking: #f59e0b;
 
   position: absolute;
   inset: 16px;
@@ -38,6 +40,47 @@
   font-weight: 600;
 }
 
+/* Run (a ▶) or Stop (a ■), and how the run is going. */
+.queues-run {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.queues-run::before {
+  width: 0;
+  height: 0;
+  border-block: 5px solid transparent;
+  border-left: 8px solid currentcolor;
+  content: '';
+}
+
+.queues-run[data-running]::before {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 1px;
+  background: currentcolor;
+}
+
+.queues-run:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.queues-run-status {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 .queues-legend {
   display: flex;
   gap: 16px;
@@ -56,6 +99,14 @@
   border-radius: 3px;
   background: color-mix(in srgb, var(--mark) 25%, transparent);
   content: '';
+}
+
+.queues-choosing {
+  margin: 0;
+  padding: 8px 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--queues-wait) 30%, transparent);
+  background: color-mix(in srgb, var(--queues-wait) 10%, Canvas);
+  font-size: 13px;
 }
 
 .queues-scroll {
@@ -89,16 +140,22 @@
 }
 
 .queues-cell,
-.queues-task,
-.queues-if,
-.queues-end {
+.queues-end-cell {
   position: relative;
   z-index: 2;
+  align-self: start;
+  min-width: 0;
+}
+
+/* A dropdown open in a task shows over the tasks below. */
+.queues-cell:focus-within,
+.queues-end-cell:focus-within {
+  z-index: 4;
 }
 
 .queues-head {
   position: sticky;
-  z-index: 3;
+  z-index: 5;
   top: 0;
 }
 
@@ -111,6 +168,10 @@
 
 .queues-lane[data-focus] {
   outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
+}
+
+.queues-lane[data-picking] {
+  outline: 2px solid color-mix(in srgb, var(--queues-wait) 55%, transparent);
 }
 
 .queues-head {
@@ -153,99 +214,110 @@
   background: var(--agent-color, CanvasText);
 }
 
-/* Tasks, as an agent's queue shows them: cards, an if-then's dashed around its own. */
-.queues-cell,
-.queues-task,
-.queues-if,
-.queues-end {
-  align-self: start;
-  min-width: 0;
+.queues-head[data-run='running'] .queues-status {
+  background: var(--graph-accent, #2563eb);
+  animation: queues-blink 1.2s ease-in-out infinite;
 }
 
-.queues-task,
-.queues-if {
-  box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-  border-radius: 10px;
-  background: Canvas;
-  font-size: 13px;
+.queues-head[data-run='waiting'] .queues-status {
+  background: var(--queues-held);
+  animation: queues-blink 2.4s ease-in-out infinite;
 }
 
-.queues-task {
-  padding: 8px 10px;
+.queues-head[data-run='done'] .queues-status {
+  background: var(--queues-handoff);
 }
 
-.queues-if {
-  padding: 0 10px 10px 0;
-  border-style: dashed;
-  border-color: color-mix(in srgb, CanvasText 28%, transparent);
+.queues-head[data-run='asking'] .queues-status {
+  background: var(--queues-asking);
+  animation: queues-blink 1.2s ease-in-out infinite;
 }
 
-.queues-if > .queues-task-head {
-  padding: 8px 10px 2px;
-}
-
-.queues-task.nested {
-  margin: 6px 0 0 24px;
-}
-
-.queues-task-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  min-width: 0;
-}
-
-.queues-keyword {
-  font-weight: 600;
-  opacity: 0.7;
-}
-
-.queues-chip {
-  overflow: hidden;
-  max-width: 100%;
+/* An agent the run needs: it asks permission. Opens the agent, to answer. */
+.queues-head .queues-needs {
+  flex: none;
+  margin-left: auto;
   padding: 1px 9px;
-  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border: 1px solid var(--queues-asking);
   border-radius: 999px;
+  background: color-mix(in srgb, var(--queues-asking) 14%, Canvas);
+  color: inherit;
+  font: inherit;
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 400;
+  cursor: pointer;
 }
 
-.queues-message {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  line-height: 1.4;
-  opacity: 0.85;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+.queues-head .queues-needs:hover {
+  background: color-mix(in srgb, var(--queues-asking) 28%, Canvas);
+}
+
+/*
+ * At rest, a lane's tasks read as cards: what edits a task (its handle, remove, the agent it is
+ * aimed at when that is its own) shows on the task pointed at, or with the keyboard in it.
+ */
+.queues-cell
+  .graph-queue-row:not(:hover, :focus-within)
+  > :is(
+    .graph-queue-handle,
+    .graph-queue-remove,
+    .graph-queue-target[data-own],
+    .graph-queue-target[aria-label='Wait for something else']
+  ),
+.queues-cell .graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
+  opacity: 0;
+}
+
+.queues-cell .graph-queue-message:not(:hover, :focus-within) textarea {
+  border-color: transparent;
+}
+
+.queues-cell .graph-queue-if > .graph-queue-add {
+  margin-top: 4px;
+}
+
+.queues-cell .graph-queue-plus,
+.queues-end-cell .graph-queue-plus {
+  width: 24px;
+  height: 24px;
+  font-size: 15px;
+}
+
+.queues-end-cell .graph-queue-plus:not(:hover, :focus-visible, [aria-expanded='true']) {
+  opacity: 0.5;
+}
+
+/* Tasks: the queue's own rows; an if-then on the lane's colour like the rest. */
+.queues-cell .graph-queue-if {
+  background: Canvas;
+}
+
+.queues-cell.dragging :is(.graph-queue-row, .graph-queue-if) {
+  box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
 
 /* Tasks a ribbon joins take its colour: a wait, work handed on, and what a wait waits for. */
-.queues-task[data-mark] {
+.queues-grid :is(.graph-queue-row, .graph-queue-if)[data-mark] {
   border-color: color-mix(in srgb, var(--mark) 60%, transparent);
-  background: color-mix(in srgb, var(--mark) 8%, Canvas);
+  background-color: color-mix(in srgb, var(--mark) 8%, Canvas);
 }
 
-.queues-task[data-mark='wait'],
-.queues-task[data-mark='stuck'] {
+.queues-grid .graph-queue-row:is([data-mark='wait'], [data-mark='stuck']) {
   border-style: dashed;
 }
 
-.queues-task[data-mark='stuck'] {
+.queues-grid .graph-queue-row[data-mark='stuck'] {
   color: var(--queues-stuck);
 }
 
-.queues-task[data-waited-for]:not([data-mark]),
-.queues-if[data-waited-for] {
+.queues-grid :is(.graph-queue-row, .graph-queue-if)[data-waited-for]:not([data-mark]) {
   border-color: color-mix(in srgb, var(--queues-wait) 55%, transparent);
-  background: color-mix(in srgb, var(--queues-wait) 5%, Canvas);
+  background-color: color-mix(in srgb, var(--queues-wait) 5%, Canvas);
 }
 
+/* A lane's end (what a wait for all of its agent's work waits for), and its ⊕. */
 .queues-end {
+  position: relative;
   padding: 3px 2px 0;
   border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
   color: color-mix(in srgb, CanvasText 50%, transparent);
@@ -257,17 +329,64 @@
   color: var(--queues-wait);
 }
 
-/* Where an agent has nothing to do, waiting. */
-.queues-idle {
-  border-radius: 10px;
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 6px,
-    color-mix(in srgb, CanvasText 7%, transparent) 6px 7px
-  );
+.queues-end[data-run='reached'] {
+  border-top-color: var(--queues-handoff);
+  color: var(--queues-handoff);
 }
 
-/* Ribbons: filled, with their top and bottom edges drawn. */
+.queues-end[data-run='reached']::after {
+  content: ' ✓';
+}
+
+.queues-end-cell .graph-queue-add {
+  margin-top: 8px;
+}
+
+/* While a wait's step is picked: every task of the lane it is picked in, and its end, picks. */
+.queues-pick {
+  position: absolute;
+  z-index: 3;
+  inset: -3px;
+  border: 2px dashed var(--queues-wait);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--queues-wait) 6%, transparent);
+  cursor: pointer;
+}
+
+.queues-end .queues-pick {
+  inset: -6px -3px -3px;
+  border-radius: 6px;
+}
+
+.queues-pick:hover,
+.queues-pick:focus-visible {
+  border-style: solid;
+  background: color-mix(in srgb, var(--queues-wait) 16%, transparent);
+}
+
+/* Where an agent has nothing to do, waiting: its stripes run while the run holds it there. */
+.queues-idle {
+  border-radius: 10px;
+  background: linear-gradient(
+      -45deg,
+      transparent 0 46%,
+      color-mix(in srgb, CanvasText 9%, transparent) 46% 54%,
+      transparent 54%
+    )
+    0 0 / 10px 10px;
+}
+
+.queues-idle[data-held] {
+  background-image: linear-gradient(
+    -45deg,
+    transparent 0 42%,
+    color-mix(in srgb, var(--queues-held) 40%, transparent) 42% 58%,
+    transparent 58%
+  );
+  animation: queues-stripes 0.8s linear infinite;
+}
+
+/* Ribbons: filled, with their top and bottom edges drawn; flowing while their wait is held. */
 .queues-gap svg {
   position: absolute;
   inset: 0;
@@ -290,6 +409,15 @@
   fill: var(--mark);
 }
 
+.queues-gap g[data-flow] .queues-ribbon {
+  animation: queues-breathe 1.8s ease-in-out infinite;
+}
+
+.queues-gap g[data-flow] .queues-ribbon-edges {
+  stroke-dasharray: 5 4;
+  animation: queues-flow 0.9s linear infinite;
+}
+
 /* Pointing at a task or a ribbon shows its links over the rest. */
 .queues-grid[data-pointing] .queues-gap g:not([data-active]) {
   opacity: 0.15;
@@ -302,4 +430,36 @@
 .queues-grid[data-pointing] [data-at][data-active] {
   outline: 2px solid color-mix(in srgb, CanvasText 40%, transparent);
   outline-offset: 1px;
+}
+
+@keyframes queues-blink {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+
+@keyframes queues-stripes {
+  to {
+    background-position: 10px 0;
+  }
+}
+
+@keyframes queues-breathe {
+  50% {
+    fill: color-mix(in srgb, var(--mark) 38%, transparent);
+  }
+}
+
+@keyframes queues-flow {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queues-view *,
+  .queues-view *::after {
+    animation: none !important;
+  }
 }

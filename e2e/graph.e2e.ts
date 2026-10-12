@@ -766,6 +766,50 @@ test('shows every queue side by side, a wait below what it waits for and linked 
   expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(wait.y + wait.height);
 });
 
+test('edits a queue in its lane by dragging, and animates the task each queue is on', async () => {
+  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('button', { name: /^Feature crew/ })
+    .click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+  const builder = () =>
+    view
+      .getByRole('group', { name: /^Builder: / })
+      .evaluateAll((groups) => groups.map((g) => g.getAttribute('aria-label') ?? ''));
+  const before = await builder();
+  const tests = before.indexOf('Builder: exec_command');
+  const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
+  expect(tests).toBeGreaterThan(wait);
+
+  // The test run, dragged by its handle above the wait in its lane.
+  const from = await center(view.getByRole('button', { name: 'Move exec_command', exact: true }));
+  const to = await box(view.getByRole('group', { name: /^Builder: Wait for/ }));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x, to.y + 4, { steps: 12 });
+  await page.mouse.up();
+  const after = await builder();
+  expect(after.indexOf('Builder: exec_command')).toBeLessThan(
+    after.findIndex((label) => label.startsWith('Builder: Wait for')),
+  );
+
+  // Run: the task each agent is on pulses; the Reviewer is held at its wait.
+  await view.getByRole('button', { name: 'Run', exact: true }).click();
+  const research = view
+    .getByRole('group', { name: 'Researcher: /deep-research' })
+    .locator('[data-run]');
+  await expect(research).toHaveAttribute('data-run', 'running');
+  expect(await research.evaluate((row) => getComputedStyle(row).animationName)).toContain(
+    'run-pulse',
+  );
+  await expect(
+    view.getByRole('group', { name: 'Reviewer: Wait for Builder' }).locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'waiting');
+  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

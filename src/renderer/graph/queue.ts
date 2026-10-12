@@ -48,6 +48,17 @@ export function sameTarget(a: WaitTarget, b: WaitTarget): boolean {
   return a.agent === b.agent && a.item === b.item;
 }
 
+/** A wait's targets with the one at `index` now `target` (and no target twice). */
+export function chooseTarget(
+  waitFor: readonly WaitTarget[],
+  index: number,
+  target: WaitTarget,
+): WaitTarget[] {
+  return waitFor
+    .map((t, i) => (i === index ? target : t))
+    .filter((t, i, all) => all.findIndex((u) => sameTarget(u, t)) === i);
+}
+
 /**
  * A wait: the queue stops here until everything in `waitFor` is done (see WaitTarget). Naming
  * several makes a join: the queue goes on once the last of them is. Waits sit in the queue itself,

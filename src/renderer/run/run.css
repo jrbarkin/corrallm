@@ -1,0 +1,113 @@
+/*
+ * Where the queues' run is (run/runner.ts), on a queue's rows (QueueEditor.tsx) wherever they are
+ * shown: the task an agent is on pulses, with a sheen passing over it; a wait it is held at
+ * breathes, grey; a task that needs the user (its agent asks permission) pulses amber, as an agent
+ * with a question does on the canvas; a task done is ticked, one that failed crossed, one skipped
+ * faded.
+ */
+:is(.graph-queue-row, .graph-queue-if)[data-run] {
+  --run: var(--graph-accent, #2563eb);
+}
+
+.graph-queue-row[data-run='running'] {
+  background-image: linear-gradient(
+    105deg,
+    transparent 35%,
+    color-mix(in srgb, var(--run) 18%, transparent) 50%,
+    transparent 65%
+  );
+  background-size: 300% 100%;
+  animation:
+    run-pulse 1.6s ease-in-out infinite,
+    run-sheen 1.6s linear infinite;
+}
+
+.graph-queue-row[data-run='waiting'] {
+  --run: color-mix(in srgb, CanvasText 40%, Canvas);
+
+  animation: run-pulse 2.4s ease-in-out infinite;
+}
+
+.graph-queue-row[data-run='asking'] {
+  --run: #f59e0b;
+
+  animation: run-pulse 1.2s ease-in-out infinite;
+}
+
+.graph-queue-row[data-run='stopped'] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
+}
+
+:is(.graph-queue-row, .graph-queue-if):is([data-run='succeeded'], [data-run='failed']) {
+  opacity: 0.6;
+}
+
+:is(.graph-queue-row, .graph-queue-if)[data-run='skipped'] {
+  opacity: 0.4;
+}
+
+:is(.graph-queue-row, .graph-queue-if):is(
+    [data-run='succeeded'],
+    [data-run='failed'],
+    [data-run='skipped']
+  )::after {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #22a35a;
+  color: white;
+  content: '✓';
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+:is(.graph-queue-row, .graph-queue-if)[data-run='failed']::after {
+  background: #e5484d;
+  content: '✕';
+}
+
+:is(.graph-queue-row, .graph-queue-if)[data-run='skipped']::after {
+  background: color-mix(in srgb, CanvasText 45%, Canvas);
+  content: '–';
+}
+
+@keyframes run-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px var(--run),
+      0 0 0 0 color-mix(in srgb, var(--run) 45%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 2px var(--run),
+      0 0 0 8px color-mix(in srgb, var(--run) 0%, transparent);
+  }
+}
+
+@keyframes run-sheen {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.graph-queue-row, .graph-queue-if)[data-run] {
+    animation: none;
+  }
+
+  .graph-queue-row:is([data-run='running'], [data-run='waiting'], [data-run='asking']) {
+    box-shadow: 0 0 0 2px var(--run);
+  }
+}

@@ -26,8 +26,8 @@ export interface PlayerIO {
   /** Whether the user always allows `tool`, so it need not ask. */
   allowed: (tool: string) => boolean;
   newId: () => string;
-  /** Called once the turn has ended, interrupted or not. */
-  done: () => void;
+  /** Called once the turn has ended: `interrupted` if it was stopped. */
+  done: (interrupted: boolean) => void;
 }
 
 export interface Playback {
@@ -54,7 +54,7 @@ export function play(steps: readonly Step[], io: PlayerIO): Playback {
     cancel?.();
     const seconds = Math.max(1, Math.round((io.now() - started) / 1000));
     io.dispatch({ type: 'end', id: io.newId(), seconds, interrupted });
-    io.done();
+    io.done(interrupted);
   };
 
   const next = (): void => {

@@ -41,43 +41,17 @@ interface Target {
 const nameOf = (node: GraphNode | undefined) =>
   node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
 
-/**
- * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
- * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
- * only when a condition holds), and waits (until other agents have finished). The ⊕ adds any of them; everything is picked by typing to
- * search. Rows are reordered by dragging their handle, or with the arrow keys on it. With `only`,
- * it shows part of the queue (WorkDetail.tsx), where reordering moves items among those shown.
- */
-export function QueueEditor({
-  node,
-  nodes,
-  agent,
-  actions,
-  only,
-  add = 'anything',
-  onAdd,
-  onRemove,
-  onMove,
-  onRetarget,
-  onEditMessage,
-  onCondition,
-  onWaitFor,
-  onChooseStep,
-  choosing,
-}: {
+/** Data attributes a row carries: what QueuesView marks its tasks with (links, the run). */
+export type RowMarks = Readonly<Record<`data-${string}`, string | undefined>>;
+
+/** What QueueEditor and QueueRow edit, and with what. */
+interface QueueProps {
   node: GraphNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
   nodes: readonly GraphNode[];
   agent: AgentType;
   /** What the agent can do. */
   actions: readonly AgentAction[];
-  /** Shows only the items for which this holds (an if-then whole, with all of its steps). */
-  only?: (item: QueueItem) => boolean;
-  /**
-   * What ⊕ adds: anything (the default), nothing (no ⊕), or (`workFor`, an agent's id) one of the
-   * agent's actions, aimed at that agent.
-   */
-  add?: 'anything' | 'nothing' | { workFor: string };
   /** `into`: the id of the if-then to add a step or message to. */
   onAdd: (entry: QueueEntry, into?: string) => void;
   onRemove: (itemId: string) => void;
@@ -93,8 +67,130 @@ export function QueueEditor({
   onChooseStep?: (choice: StepChoice) => void;
   /** The wait target being picked, to show which. */
   choosing?: Omit<StepChoice, 'agent'>;
+  /** Marks for the row of each item and if-then step, by id. */
+  marks?: (itemId: string) => RowMarks;
+}
+
+/**
+ * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
+ * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
+ * only when a condition holds), and waits (until other agents have finished). The ⊕ adds any of them; everything is picked by typing to
+ * search. Rows are reordered by dragging their handle, or with the arrow keys on it. With `only`,
+ * it shows part of the queue (WorkDetail.tsx), where reordering moves items among those shown.
+ */
+export function QueueEditor({
+  only,
+  add = 'anything',
+  ...props
+}: QueueProps & {
+  /** Shows only the items for which this holds (an if-then whole, with all of its steps). */
+  only?: (item: QueueItem) => boolean;
+  /**
+   * What ⊕ adds: anything (the default), nothing (no ⊕), or (`workFor`, an agent's id) one of the
+   * agent's actions, aimed at that agent.
+   */
+  add?: 'anything' | 'nothing' | { workFor: string };
 }) {
+  const { node, onAdd, onMove } = props;
   const queue = node.data.queue ?? EMPTY;
+  const context = contextOf(props);
+  const shown = only ? queue.filter(only) : queue;
+  /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
+  const moveShown = (itemId: string, index: number) => {
+    const at = shown[Math.min(Math.max(index, 0), shown.length - 1)];
+    if (at) onMove(itemId, queue.indexOf(at));
+  };
+
+  return (
+    <>
+      {shown.length > 0 && (
+        <SortableList
+          items={shown}
+          className="graph-queue"
+          onMove={moveShown}
+          renderItem={(item, handle) => (
+            <ItemRow item={item} handle={handle} context={context} props={props} />
+          )}
+        />
+      )}
+      {add === 'anything' && (
+        <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
+      )}
+      {typeof add === 'object' && (
+        <AddMenu
+          label={`Queue work for ${context.name(add.workFor)}`}
+          target={add.workFor}
+          context={context}
+          onAdd={onAdd}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * One item of an agent's queue, as QueueEditor shows it, on its own: QueuesView puts each in its
+ * row of the lanes. `handle` reorders it (useSortable, sortable.ts).
+ */
+export function QueueRow({
+  item,
+  handle,
+  ...props
+}: QueueProps & { item: QueueItem; handle: HandleProps }) {
+  return <ItemRow item={item} handle={handle} context={contextOf(props)} props={props} />;
+}
+
+/** An item's row: a step, a message, a wait, or an if-then with its own steps. */
+function ItemRow({
+  item,
+  handle,
+  context,
+  props,
+}: {
+  item: QueueItem;
+  handle: HandleProps;
+  context: Context;
+  props: QueueProps;
+}) {
+  const row = (step: QueueStep | QueueMessage, stepHandle: HandleProps) =>
+    isMessage(step) ? (
+      <MessageRow item={step} handle={stepHandle} context={context} />
+    ) : (
+      <StepRow item={step} handle={stepHandle} context={context} />
+    );
+  if (isWait(item)) return <WaitRow item={item} handle={handle} context={context} />;
+  if (!isIf(item)) return row(item, handle);
+  return (
+    <IfRow
+      item={item}
+      handle={handle}
+      context={context}
+      row={row}
+      onMove={props.onMove}
+      onAdd={(entry) => {
+        props.onAdd(entry, item.id);
+      }}
+      onCondition={(condition) => {
+        props.onCondition(item.id, condition);
+      }}
+    />
+  );
+}
+
+/** What every row needs to show and change its item. */
+function contextOf({
+  node,
+  nodes,
+  agent,
+  actions,
+  onRemove,
+  onRetarget,
+  onEditMessage,
+  onWaitFor,
+  onChooseStep,
+  choosing,
+  marks,
+}: QueueProps): Context {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const name = (id: string | undefined) =>
     id === undefined ? 'this agent' : nameOf(nodes.find((n) => n.id === id));
@@ -111,7 +207,7 @@ export function QueueEditor({
         : isMessage(item)
           ? 'Message'
           : item.action;
-  const context: Context = {
+  return {
     agent,
     actions,
     others,
@@ -124,65 +220,10 @@ export function QueueEditor({
     onRetarget,
     onEditMessage,
     onWaitFor,
+    marks: marks ?? (() => ({})),
     ...(onChooseStep ? { onChooseStep } : {}),
     ...(choosing ? { choosing } : {}),
   };
-  const shown = only ? queue.filter(only) : queue;
-  /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
-  const moveShown = (itemId: string, index: number) => {
-    const at = shown[Math.min(Math.max(index, 0), shown.length - 1)];
-    if (at) onMove(itemId, queue.indexOf(at));
-  };
-  const row = (item: QueueStep | QueueMessage, handle: HandleProps) =>
-    isMessage(item) ? (
-      <MessageRow item={item} handle={handle} context={context} />
-    ) : (
-      <StepRow item={item} handle={handle} context={context} />
-    );
-
-  return (
-    <>
-      {shown.length > 0 && (
-        <SortableList
-          items={shown}
-          className="graph-queue"
-          onMove={moveShown}
-          renderItem={(item, handle) =>
-            isWait(item) ? (
-              <WaitRow item={item} handle={handle} context={context} />
-            ) : isIf(item) ? (
-              <IfRow
-                item={item}
-                handle={handle}
-                context={context}
-                row={row}
-                onMove={onMove}
-                onAdd={(entry) => {
-                  onAdd(entry, item.id);
-                }}
-                onCondition={(condition) => {
-                  onCondition(item.id, condition);
-                }}
-              />
-            ) : (
-              row(item, handle)
-            )
-          }
-        />
-      )}
-      {add === 'anything' && (
-        <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
-      )}
-      {typeof add === 'object' && (
-        <AddMenu
-          label={`Queue work for ${name(add.workFor)}`}
-          target={add.workFor}
-          context={context}
-          onAdd={onAdd}
-        />
-      )}
-    </>
-  );
 }
 
 /** What the ⊕ and its menus need: the agent's actions, the other agents, and how items read. */
@@ -204,6 +245,7 @@ interface Context extends AddContext {
   onEditMessage: (itemId: string, message: string) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   choosing?: Omit<StepChoice, 'agent'>;
+  marks: (itemId: string) => RowMarks;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -215,13 +257,15 @@ function andList(names: readonly string[]): string {
 
 /**
  * A ⊕ that adds to an agent's queue (`node`'s), apart from the queue: AgentView puts one right
- * above the message box, as well as the queue's own beside. Its menus open upwards.
+ * above the message box, as well as the queue's own beside, its menus opening upwards (`up`);
+ * QueuesView puts one at the end of each lane.
  */
 export function QueueAddMenu({
   node,
   nodes,
   actions,
   label = 'Add to queue',
+  up = true,
   onAdd,
   onChooseStep,
 }: {
@@ -230,12 +274,13 @@ export function QueueAddMenu({
   actions: readonly AgentAction[];
   /** Its name, telling it from the queue's own ⊕. */
   label?: string;
+  up?: boolean;
   onAdd: (entry: QueueEntry) => void;
   onChooseStep?: (choice: StepChoice) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const context = { actions, others, itemLabel, ...(onChooseStep ? { onChooseStep } : {}) };
-  return <AddMenu label={label} withIf up context={context} onAdd={onAdd} />;
+  return <AddMenu label={label} withIf up={up} context={context} onAdd={onAdd} />;
 }
 
 /**
@@ -373,6 +418,7 @@ function TargetChip({
       <button
         type="button"
         className="graph-queue-target"
+        data-own={item.target === undefined ? '' : undefined}
         aria-label={label}
         aria-expanded={open}
         onClick={() => {
@@ -409,7 +455,10 @@ function StepRow({
 }) {
   const known = context.actions.some((a) => a.name === item.action);
   return (
-    <div className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}>
+    <div
+      className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}
+      {...context.marks(item.id)}
+    >
       <Handle handle={handle} item={item} context={context} />
       <span
         className="graph-queue-action"
@@ -434,7 +483,7 @@ function MessageRow({
   context: Context;
 }) {
   return (
-    <div className="graph-queue-row graph-queue-message">
+    <div className="graph-queue-row graph-queue-message" {...context.marks(item.id)}>
       <Handle handle={handle} item={item} context={context} />
       <span className="graph-queue-keyword">Message</span>
       <TargetChip item={item} label="Change the agent the message goes to" context={context} />
@@ -525,6 +574,7 @@ function WaitRow({
           ? 'graph-queue-row graph-queue-wait'
           : 'graph-queue-row graph-queue-wait choosing'
       }
+      {...context.marks(item.id)}
     >
       <Handle handle={handle} item={item} context={context} />
       <span className="graph-queue-keyword">Wait for</span>
@@ -633,7 +683,7 @@ function IfRow({
   const [editing, setEditing] = useState(false);
   const text = context.ifText(item.if);
   return (
-    <div className="graph-queue-if">
+    <div className="graph-queue-if" {...context.marks(item.id)}>
       <div className="graph-queue-row">
         <Handle handle={handle} item={item} context={context} />
         <span className="graph-queue-keyword">If</span>
