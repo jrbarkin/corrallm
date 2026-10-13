@@ -20,7 +20,7 @@ import {
   MAX_IMAGES,
   MAX_MESSAGE_LENGTH,
 } from '../shared/session';
-import { MAX_TERMINAL_INPUT } from '../shared/terminal';
+import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../shared/terminal';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
 
@@ -66,6 +66,9 @@ function fakeServices() {
       inputTerminal: vi.fn<IpcServices['sessions']['inputTerminal']>().mockResolvedValue(undefined),
       resizeTerminal: vi
         .fn<IpcServices['sessions']['resizeTerminal']>()
+        .mockResolvedValue(undefined),
+      dropOnTerminal: vi
+        .fn<IpcServices['sessions']['dropOnTerminal']>()
         .mockResolvedValue(undefined),
     },
   };
@@ -389,6 +392,11 @@ describe('terminal:* handlers', () => {
     expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(sender, 'a', 120, 40);
     await invoke('terminal:detach', ['a'], sender);
     expect(services.sessions.detachTerminal).toHaveBeenCalledWith(sender, 'a');
+    // The paths of files dropped (as the preload read them), checked: main sees if they are there.
+    await invoke('terminal:drop', ['a', ['/Users/me/Screen Shot.png']], sender);
+    expect(services.sessions.dropOnTerminal).toHaveBeenCalledWith(sender, 'a', [
+      '/Users/me/Screen Shot.png',
+    ]);
   });
 
   it.each([
@@ -408,6 +416,23 @@ describe('terminal:* handlers', () => {
     ['terminal:resize', 'a size too large', ['a', 100_000, 24], /terminal size/],
     ['terminal:resize', 'a size that is not a number', ['a', '80', 24], /terminal size/],
     ['terminal:detach', 'an extra argument', ['a', 'b'], /an agent/],
+    ['terminal:drop', 'no files', ['a', []], /files dropped/],
+    ['terminal:drop', 'a path that is not a list', ['a', '/Users/me/a.png'], /files dropped/],
+    [
+      'terminal:drop',
+      'too many files',
+      ['a', Array.from({ length: MAX_DROPPED_FILES + 1 }, (_, i) => `/f${String(i)}`)],
+      /files dropped/,
+    ],
+    ['terminal:drop', 'a relative path', ['a', ['shot.png']], /path of a file/],
+    ['terminal:drop', 'a path with a line break', ['a', ['/a\n/b.png']], /path of a file/],
+    ['terminal:drop', 'a path that is not text', ['a', [42]], /path of a file/],
+    [
+      'terminal:drop',
+      'a path too long',
+      ['a', [`/${'x'.repeat(MAX_DROPPED_PATH)}`]],
+      /path of a file/,
+    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

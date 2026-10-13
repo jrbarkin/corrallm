@@ -127,6 +127,18 @@ export interface AskedQuestion {
   multiple: boolean;
 }
 
+/**
+ * What a session's CLI asks the user in its own terminal (a Terminal session's Claude Code), as
+ * corrallm lists it outside the terminal: a permission (the tool, and what it acts on), its
+ * questions, a plan to approve, or anything else it waits on, in its own words. corrallm never
+ * answers it: the user does, in the terminal.
+ */
+export type TerminalAsk =
+  | { kind: 'permission'; id: string; tool: string; summary: string }
+  | { kind: 'question'; id: string; questions: AskedQuestion[] }
+  | { kind: 'plan'; id: string; plan: string }
+  | { kind: 'other'; id: string; text: string };
+
 /** The modes a plan can be carried out in once approved, as Claude Code offers them. */
 export const PLAN_MODES = ['auto', 'acceptEdits', 'manual'] as const;
 export type PlanMode = (typeof PLAN_MODES)[number];
@@ -198,6 +210,12 @@ export type SessionEvent =
   | { type: 'tasks'; tasks: BackgroundTask[] }
   /** What the user might send next, as the CLI predicts it after a turn: the composer offers it. */
   | { type: 'suggestion'; text: string }
+  /**
+   * What the CLI asks the user in its own terminal now (a Terminal session's), every ask (it
+   * replaces the last list; none once it goes on). Shown outside the terminal, never answered
+   * there: the user answers in the terminal. A session that starts asks nothing yet.
+   */
+  | { type: 'asking'; asks: TerminalAsk[] }
   /**
    * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
    * or null where it offers no "always". `title`: what it asks, as the CLI words it ("Claude wants

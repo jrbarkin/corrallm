@@ -606,6 +606,12 @@ function Editor({
       };
     });
   }, [graph.nodes, sessions, run]);
+  /** What Terminal agents' Claude Code asks in their terminals: listed, answered there. */
+  const inTerminal = graph.nodes.flatMap((agent) =>
+    agent.type === 'agent' && connectionOf(agent.data) === 'terminal'
+      ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
+      : [],
+  );
   /** The questions agents wait on: asked on the canvas, and asked in their sessions. */
   const pending: { agent: GraphNode; question: CardQuestion; asked?: AskedInSession }[] = [
     ...pendingQuestions(graph.nodes),
@@ -825,7 +831,7 @@ function Editor({
               Delete
             </button>
           </NodeToolbar>
-          {(pending.length > 0 || asks.length > 0) && (
+          {(pending.length > 0 || asks.length > 0 || inTerminal.length > 0) && (
             <Panel position="top-right">
               <QuestionsSidebar
                 asks={asks}
@@ -835,6 +841,12 @@ function Editor({
                   agentName: agent.data.label || 'Unnamed agent',
                   agentType: agent.data.agent ?? DEFAULT_AGENT,
                   question,
+                }))}
+                inTerminal={inTerminal.map(({ agent, ask }) => ({
+                  agentId: agent.id,
+                  agentName: agent.data.label || 'Unnamed agent',
+                  agentType: agent.data.agent ?? DEFAULT_AGENT,
+                  ask,
                 }))}
                 onAnswer={(agentId, questionId, answer) => {
                   const asked = pending.find(

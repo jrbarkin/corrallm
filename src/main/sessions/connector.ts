@@ -91,6 +91,11 @@ export interface TerminalScreen {
   input(data: string): void;
   /** The view's size changed: the terminal takes it. */
   resize(cols: number, rows: number): void;
+  /**
+   * Text pasted into the view (the paths of files dropped on it): typed in as a terminal pastes,
+   * bracketed when the CLI asked for that (as Claude Code does, to tell a paste from typing).
+   */
+  paste(text: string): void;
 }
 
 /** Starts sessions of one kind of connection. */

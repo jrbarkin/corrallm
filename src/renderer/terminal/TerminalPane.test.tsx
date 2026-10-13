@@ -1,12 +1,12 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { fakeBackend } from '../test-backend';
-import { fakeScreens, fakeTerminals } from './test-screen';
+import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in (test-screen.ts).
 vi.mock('./screen', async () => {
@@ -132,6 +132,64 @@ describe('a Terminal agent', () => {
     expect(sessions.backend.send).not.toHaveBeenCalled();
   });
 
+  it('lists what Claude Code asks in its terminal in the Needs you sidebar, to answer there', async () => {
+    const { view, session } = await open();
+    session(
+      { type: 'status', status: 'working' },
+      { type: 'user', id: 'typed', text: 'Set up the repo' },
+      {
+        type: 'asking',
+        asks: [
+          { kind: 'permission', id: 'p', tool: 'Bash', summary: 'git init' },
+          {
+            kind: 'question',
+            id: 'q',
+            questions: [
+              {
+                header: 'Color',
+                text: 'Pick a color',
+                options: [
+                  { label: 'Red', description: 'Warm' },
+                  { label: 'Blue', description: 'Cool' },
+                ],
+                multiple: false,
+              },
+            ],
+          },
+          { kind: 'plan', id: 'plan', plan: '## Set up\nRun `git init`.' },
+          { kind: 'other', id: 'o', text: 'answer: Which region?' },
+        ],
+      },
+      { type: 'status', status: 'waiting' },
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await settle();
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
+    const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
+    expect(cards.map((card) => card.textContent)).toEqual([
+      'aBashgit initDo you want to proceed?Answer it in the terminal.Open terminal',
+      'aColorPick a colorRedWarmBlueCoolAnswer it in the terminal.Open terminal',
+      'aPlanReady to code? Here is the plan:Set upRun git init.Answer it in the terminal.Open terminal',
+      'aanswer: Which region?Answer it in the terminal.Open terminal',
+    ]);
+    // Never answered here: nothing to type in, no answers to pick.
+    expect(sidebar.queryByRole('textbox')).toBeNull();
+    expect(new Set(sidebar.getAllByRole('button').map((button) => button.textContent))).toEqual(
+      new Set(['a', 'Open terminal']),
+    );
+
+    // Open terminal: the agent's view, where the user answers it.
+    fireEvent.click(
+      within(cards[0] ?? document.body).getByRole('button', { name: 'Open terminal' }),
+    );
+    await settle();
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+    // Answered there: nothing is listed any more.
+    session({ type: 'asking', asks: [] }, { type: 'status', status: 'working' });
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+  });
+
   it('says why Claude Code cannot run, and tries again', async () => {
     let fail = true;
     const { sessions, view } = await open({
@@ -167,6 +225,54 @@ describe('a Terminal agent', () => {
     });
     expect(fakeScreens.latest().shown).toBe('Resumed');
     expect(view.queryByText('Claude Code exited.')).toBeNull();
+  });
+
+  it('pastes files dropped on its terminal: main reads their paths', async () => {
+    const { terminals, view, show } = await open();
+    const terminal = view.getByRole('region', { name: 'Session' }).querySelector('.agent-terminal');
+    if (!terminal) throw new Error('no terminal');
+    const shot = new File(['png'], 'Screen Shot.png', { type: 'image/png' });
+    const dragged = { dataTransfer: { types: ['Files'], files: [shot], dropEffect: 'none' } };
+    // Not before Claude Code runs in it.
+    fireEvent.drop(terminal, dragged);
+    expect(terminals.backend.drop).not.toHaveBeenCalled();
+
+    show(SCREEN);
+    act(() => {
+      fakeScreens.latest().finish();
+    });
+    fireEvent.dragOver(terminal, dragged);
+    expect(terminal.hasAttribute('data-dragging')).toBe(true);
+    fireEvent.drop(terminal, dragged);
+    expect(terminal.hasAttribute('data-dragging')).toBe(false);
+    expect(terminals.backend.drop).toHaveBeenCalledWith('a', [shot]);
+  });
+
+  it('fits a new screen to the view and draws it afresh when Claude Code starts again', async () => {
+    const { terminals, view, session, show } = await open();
+    const terminal = fakeScreens.latest();
+    terminal.fits = { cols: 140, rows: 40 };
+    show(SCREEN);
+    act(() => {
+      terminal.finish();
+    });
+    expect(terminal.size).toEqual({ cols: 140, rows: 40 });
+    expect(terminal.redraws).toBe(1);
+    show({ type: 'exit', code: 0 });
+    session({ type: 'closed' });
+    fireEvent.click(view.getByRole('button', { name: 'Start it again' }));
+    await settle();
+    terminals.backend.resize.mockClear();
+    // The new CLI's screen comes at main's size: the view takes it, then its own again.
+    show({ ...SCREEN, data: 'Started again' });
+    expect(terminal.size).toEqual({ cols: 100, rows: 30 });
+    act(() => {
+      terminal.finish();
+    });
+    expect(terminal.size).toEqual({ cols: 140, rows: 40 });
+    expect(terminals.backend.resize).toHaveBeenLastCalledWith('a', 140, 40);
+    // Drawn afresh at that size, not as the renderer last drew it.
+    expect(terminal.redraws).toBe(2);
   });
 
   it('types the queue’s messages in once Claude Code is done; queued ones wait in its bar', async () => {
@@ -344,5 +450,47 @@ describe('a Terminal agent', () => {
     await settle();
     expect(terminals.backend.attach).toHaveBeenCalledTimes(2);
     expect(fakeScreens.latest()).not.toBe(first);
+  });
+});
+
+describe('the Option key in a Terminal agent’s terminal', () => {
+  let undo: (() => void) | undefined;
+  afterEach(() => {
+    undo?.();
+    undo = undefined;
+    localStorage.clear();
+  });
+
+  it('types characters on a German Mac, until the user makes it Meta: from then on', async () => {
+    undo = macKeyboard(keyboardLayout({ KeyY: 'z', KeyZ: 'y', Minus: 'ß', Semicolon: 'ö' }));
+    const { view, card } = await open();
+    const option = view.getByRole('button', { name: 'Option as Meta' });
+    expect(option.getAttribute('aria-pressed')).toBe('false');
+    expect(fakeScreens.latest().optionIsMeta).toBe(false);
+
+    fireEvent.click(option);
+    expect(option.getAttribute('aria-pressed')).toBe('true');
+    expect(fakeScreens.latest().optionIsMeta).toBe(true);
+    // Kept for the user: the next terminal shown starts with it.
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await settle();
+    fireEvent.doubleClick(card());
+    await settle();
+    expect(fakeScreens.made).toHaveLength(2);
+    expect(fakeScreens.latest().optionIsMeta).toBe(true);
+  });
+
+  it('works as Meta on a US Mac, for Claude Code’s Option shortcuts', async () => {
+    undo = macKeyboard(keyboardLayout());
+    const { view } = await open();
+    expect(view.getByRole('button', { name: 'Option as Meta' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(fakeScreens.latest().optionIsMeta).toBe(true);
+  });
+
+  it('is no choice off a Mac, where Alt is Meta anyway', async () => {
+    const { view } = await open();
+    expect(view.queryByRole('button', { name: 'Option as Meta' })).toBeNull();
   });
 });

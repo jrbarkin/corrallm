@@ -29,6 +29,17 @@ export interface Screen {
   write(data: string): void;
   /** Fits the terminal to its element; `onResize` hears if that changed its size. */
   fit(): void;
+  /**
+   * Draws the whole screen afresh, fitted again once the view has laid it out: after a reset, the
+   * renderer may still draw at the size and place it had before (a new CLI's screen came at
+   * main's size, then the view's).
+   */
+  redraw(): void;
+  /**
+   * Whether Option works as Meta (macOS): for Claude Code's Option shortcuts, or not, to type the
+   * characters it types on the user's layout (keyboard.ts).
+   */
+  setOptionIsMeta(on: boolean): void;
   focus(): void;
   /** What the user types (and what the terminal answers the CLI's queries with). */
   onInput(listener: (data: string) => void): void;
@@ -65,8 +76,8 @@ export const createScreen: ScreenFactory = (element) => {
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
     fontSize: 13,
     scrollback: 5000,
-    // Claude Code's Option shortcuts (as Option+P, its model picker) need Option as Meta.
-    macOptionIsMeta: true,
+    // Option types characters until the view says otherwise (setOptionIsMeta).
+    macOptionIsMeta: false,
     theme: THEME,
     // Links (OSC 8) open as the app's other links do: allowed ones in the browser.
     linkHandler: {
@@ -109,6 +120,7 @@ export const createScreen: ScreenFactory = (element) => {
   });
   terminal.onData(type);
   terminal.open(element);
+  let disposed = false;
 
   return {
     reset: ({ data, cols, rows }, done) => {
@@ -122,6 +134,17 @@ export const createScreen: ScreenFactory = (element) => {
     fit: () => {
       fit.fit();
     },
+    redraw: () => {
+      requestAnimationFrame(() => {
+        if (disposed) return;
+        fit.fit();
+        terminal.clearTextureAtlas();
+        terminal.refresh(0, terminal.rows - 1);
+      });
+    },
+    setOptionIsMeta: (on) => {
+      terminal.options.macOptionIsMeta = on;
+    },
     focus: () => {
       terminal.focus();
     },
@@ -134,6 +157,7 @@ export const createScreen: ScreenFactory = (element) => {
       });
     },
     dispose: () => {
+      disposed = true;
       inputs.clear();
       terminal.dispose();
     },

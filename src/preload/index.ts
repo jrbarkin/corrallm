@@ -1,7 +1,7 @@
 // Runs sandboxed: only 'electron' may be imported, and Vite bundles this into one CJS file.
 // Never expose ipcRenderer itself; expose one typed function per contract channel, and one per
 // event that listens for it (never passing Electron's event object on).
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 
 import {
@@ -54,6 +54,16 @@ const api: AppApi = {
   detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
   resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
+  // The paths of the files dropped, as the files say (a file the page made has none): the page
+  // never names a path, and main checks these again.
+  dropOnTerminal: (agentId, files) => {
+    const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter(
+      (file) => file !== '',
+    );
+    return paths.length === 0
+      ? Promise.resolve(null)
+      : invoke(API_CHANNELS.dropOnTerminal, agentId, paths);
+  },
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
   onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
 };

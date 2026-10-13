@@ -37,6 +37,7 @@ const terminalBackend: TerminalBackend = {
   detach: (agentId) => window.api.detachTerminal(agentId),
   write: (agentId, data) => window.api.writeTerminal(agentId, data),
   resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
+  drop: (agentId, files) => window.api.dropOnTerminal(agentId, files),
   onEvent: (listener) => window.api.onTerminalEvent(listener),
 };
 

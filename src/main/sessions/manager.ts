@@ -12,6 +12,7 @@ import type {
 import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
+import { droppedPaste } from './terminal/drop';
 
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
@@ -167,6 +168,21 @@ export class SessionManager {
   /** Keystrokes typed in an agent's terminal view, for its session's terminal, if it runs. */
   async inputTerminal(contents: WebContents, agentId: string, data: string): Promise<void> {
     (await this.#running(contents, agentId))?.terminal?.input(data);
+  }
+
+  /**
+   * Files dropped on an agent's terminal view (checked paths): those that are there are pasted
+   * into its session's terminal, if it runs, quoted (drop.ts).
+   */
+  async dropOnTerminal(
+    contents: WebContents,
+    agentId: string,
+    paths: readonly string[],
+  ): Promise<void> {
+    const terminal = (await this.#running(contents, agentId))?.terminal;
+    if (!terminal) return;
+    const text = await droppedPaste(paths);
+    if (text !== '') terminal.paste(text);
   }
 
   /** An agent's terminal view was resized: so is its session's terminal, if it runs. */

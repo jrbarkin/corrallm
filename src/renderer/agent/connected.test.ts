@@ -331,6 +331,35 @@ describe('a connected session', () => {
     expect(store.of('b').entries).toEqual([]);
   });
 
+  it('keeps what a Terminal session asks in its terminal, until it goes on or its CLI is gone', async () => {
+    const fake = fakeBackend();
+    const store = new SessionStore(fake.backend);
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.open('a');
+    await settle();
+    const permission = {
+      kind: 'permission',
+      id: 'p',
+      tool: 'Bash',
+      summary: 'npm test',
+    } as const;
+    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
+    expect(store.of('a').asking).toEqual([permission]);
+    // Answered in the terminal.
+    fake.emit('a', 'terminal', { type: 'asking', asks: [] });
+    expect(store.of('a').asking).toBeUndefined();
+
+    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
+    fake.emit('a', 'terminal', { type: 'closed', error: 'Claude Code exited with code 1.' });
+    expect(store.of('a').asking).toBeUndefined();
+    store.open('a');
+    await settle();
+    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
+    // The agent runs another way: its terminal is gone, and what it asked.
+    store.sync([{ id: 'a', connection: 'sdk' }]);
+    expect(store.of('a').asking).toBeUndefined();
+  });
+
   it('closes when its agent runs another way, or is gone', async () => {
     const { store, backend, listening } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();

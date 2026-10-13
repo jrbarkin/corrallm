@@ -95,6 +95,12 @@ export interface IpcContract {
   'terminal:input': { args: [agentId: string, data: string]; result: null };
   /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
   'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
+  /**
+   * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
+   * dropped files: window.api takes the files, never paths): main pastes those that exist into its
+   * terminal, quoted, as a terminal does.
+   */
+  'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
@@ -130,7 +136,10 @@ export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 export type IpcEvent = keyof IpcEvents;
 export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
 
-/** A method per contract channel: what `window.api` invokes. */
+/**
+ * A method per contract channel: what `window.api` invokes, with the channel's arguments (but
+ * dropOnTerminal, which takes the dropped files).
+ */
 export interface InvokeApi {
   ping(): Promise<IpcResult<'app:ping'>>;
   openCanvas(): Promise<IpcResult<'canvas:open'>>;
@@ -151,6 +160,8 @@ export interface InvokeApi {
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
   resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
+  /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
+  dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
@@ -183,6 +194,7 @@ export const API_CHANNELS = {
   detachTerminal: 'terminal:detach',
   writeTerminal: 'terminal:input',
   resizeTerminal: 'terminal:resize',
+  dropOnTerminal: 'terminal:drop',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */

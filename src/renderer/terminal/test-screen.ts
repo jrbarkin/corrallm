@@ -7,6 +7,7 @@ import type { Screen, Snapshot } from './screen';
 /*
  * For tests: a terminal (screen.ts) without xterm.js, which jsdom cannot draw, and main's
  * terminals faked (backend.ts). Mock the screen module with `createScreen: fakeScreens.create`.
+ * And keyboard layouts, as the Keyboard API gives them (keyboard.ts).
  */
 
 /** A terminal that records what it shows. */
@@ -19,6 +20,10 @@ export class FakeScreen implements Screen {
   fits = { cols: 80, rows: 24 };
   focused = false;
   disposed = false;
+  /** How often it was drawn afresh (see Screen.redraw). */
+  redraws = 0;
+  /** Whether Option works as Meta in it (see Screen.setOptionIsMeta). */
+  optionIsMeta = false;
   /** Snapshots written and not yet done (see `finish`). */
   readonly #pending: (() => void)[] = [];
   readonly #inputs: ((data: string) => void)[] = [];
@@ -45,6 +50,14 @@ export class FakeScreen implements Screen {
 
   fit(): void {
     this.#resize(this.fits.cols, this.fits.rows);
+  }
+
+  redraw(): void {
+    this.redraws += 1;
+  }
+
+  setOptionIsMeta(on: boolean): void {
+    this.optionIsMeta = on;
   }
 
   focus(): void {
@@ -98,6 +111,7 @@ export function fakeTerminals() {
     detach: vi.fn<TerminalBackend['detach']>().mockResolvedValue(null),
     write: vi.fn<TerminalBackend['write']>().mockResolvedValue(null),
     resize: vi.fn<TerminalBackend['resize']>().mockResolvedValue(null),
+    drop: vi.fn<TerminalBackend['drop']>().mockResolvedValue(null),
     onEvent: vi.fn<TerminalBackend['onEvent']>((given) => {
       listener = given;
       return () => {
@@ -111,5 +125,43 @@ export function fakeTerminals() {
       for (const event of events) listener?.(agentId, event);
     },
     listening: () => listener !== undefined,
+  };
+}
+
+/** A keyboard layout map: the US one, with `changes` (key code → what that key types instead). */
+export function keyboardLayout(changes: Record<string, string> = {}): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const letter of 'abcdefghijklmnopqrstuvwxyz') keys.set(`Key${letter.toUpperCase()}`, letter);
+  for (const digit of '0123456789') keys.set(`Digit${digit}`, digit);
+  for (const [code, key] of Object.entries({
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Backquote: '`',
+    IntlBackslash: '§',
+  })) {
+    keys.set(code, key);
+  }
+  for (const [code, key] of Object.entries(changes)) keys.set(code, key);
+  return keys;
+}
+
+/** Gives the page a Mac's keyboard with `layout` (the Keyboard API); returns a function that undoes it. */
+export function macKeyboard(layout: Map<string, string>): () => void {
+  const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+  Object.defineProperty(navigator, 'keyboard', {
+    configurable: true,
+    value: { getLayoutMap: () => Promise.resolve(layout) },
+  });
+  return () => {
+    platform.mockRestore();
+    Reflect.deleteProperty(navigator, 'keyboard');
   };
 }

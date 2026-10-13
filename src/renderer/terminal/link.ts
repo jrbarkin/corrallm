@@ -67,8 +67,9 @@ export class TerminalLink {
           if (shown !== this.#shown) return;
           this.#live = true;
           this.#onState({ kind: 'live' });
-          // The CLI takes the view's size.
+          // The CLI takes the view's size, and the screen is drawn afresh at it.
           this.#screen.fit();
+          this.#screen.redraw();
         });
         return;
       }
@@ -80,6 +81,13 @@ export class TerminalLink {
         this.#onState({ kind: 'exited', code: event.code });
         return;
     }
+  }
+
+  /** Files dropped on the view: their paths go to the CLI, pasted (while it runs). */
+  drop(files: readonly File[]): void {
+    if (!this.#live || files.length === 0) return;
+    this.#backend.drop(this.#agentId, files).catch(ignore);
+    this.#screen.focus();
   }
 
   #input(data: string): void {

@@ -1,4 +1,4 @@
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
@@ -46,6 +46,8 @@ export interface TerminalConnectorOptions {
   /** Where sessions' settings files go. */
   tmp?: string;
   timing?: Partial<TerminalTiming>;
+  /** The user's home folder. */
+  home?: string;
 }
 
 export class TerminalConnector implements Connector {
@@ -53,6 +55,7 @@ export class TerminalConnector implements Connector {
   readonly #findClaude: (env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
+  readonly #home: string;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
 
@@ -61,11 +64,13 @@ export class TerminalConnector implements Connector {
     findClaude = (env) => requireClaude(env),
     tmp = tmpdir(),
     timing = {},
+    home = homedir(),
   }: TerminalConnectorOptions = {}) {
     this.#spawn = spawn;
     this.#findClaude = findClaude;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...timing };
+    this.#home = home;
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
@@ -77,6 +82,7 @@ export class TerminalConnector implements Connector {
       tmp: this.#tmp,
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
+      home: this.#home,
     });
     await session.launch();
     return session;

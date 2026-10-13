@@ -3,10 +3,11 @@ import type { ReactNode } from 'react';
 
 import type { Session } from '../agent/session';
 import type { TerminalBackend } from './backend';
+import { isMac, useOptionIsMeta } from './keyboard';
 import { TerminalLink } from './link';
 import type { LinkState } from './link';
 import { createScreen } from './screen';
-import type { ScreenFactory } from './screen';
+import type { Screen, ScreenFactory } from './screen';
 import './TerminalPane.css';
 
 /** What the bar under the terminal says the session is doing. */
@@ -24,8 +25,9 @@ const STATUS: Record<Session['status'], string> = {
  * dismissed (corrallm took an answer to its question as no, or Claude Code did not take a message
  * typed in: what the transcript would show), what the session is doing (as corrallm follows it),
  * the messages queued for it (corrallm types each into the terminal once Claude Code is ready),
- * and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again (resuming its
- * session).
+ * and the queue's ⊕; on a Mac, whether Option works as Meta in it (keyboard.ts). Over it, while no
+ * CLI runs: why, and a button to start it again (resuming its session). Files dropped on it are
+ * pasted into it as their paths, quoted, as a terminal does (main reads the paths: link.ts).
  */
 export function TerminalPane({
   agentId,
@@ -56,17 +58,32 @@ export function TerminalPane({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<LinkState>({ kind: 'waiting' });
+  const linked = useRef<TerminalLink>(undefined);
+  /** Whether files are dragged over the terminal (to drop: their paths are pasted). */
+  const [dragging, setDragging] = useState(false);
+  const [optionIsMeta, setOptionIsMeta] = useOptionIsMeta();
+  /** The terminal shown, and the Option key's setting as it last was (for a new terminal). */
+  const shown = useRef<Screen>(undefined);
+  const meta = useRef(optionIsMeta);
+
+  useEffect(() => {
+    meta.current = optionIsMeta;
+    shown.current?.setOptionIsMeta(optionIsMeta);
+  }, [optionIsMeta]);
 
   useEffect(() => {
     const element = host.current;
     if (!element) return;
     setState({ kind: 'waiting' });
     const screen = screens(element);
+    screen.setOptionIsMeta(meta.current);
+    shown.current = screen;
     const link = new TerminalLink(agentId, backend, screen, (next) => {
       setState(next);
       if (next.kind === 'live') screen.focus();
     });
     link.start();
+    linked.current = link;
     const observer = new ResizeObserver(() => {
       screen.fit();
     });
@@ -74,6 +91,8 @@ export function TerminalPane({
     return () => {
       observer.disconnect();
       link.stop();
+      linked.current = undefined;
+      shown.current = undefined;
       screen.dispose();
     };
   }, [agentId, backend, screens]);
@@ -89,7 +108,25 @@ export function TerminalPane({
   const [dismissed, setDismissed] = useState<string>();
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
-      <div className="agent-terminal" data-state={state.kind}>
+      <div
+        className="agent-terminal"
+        data-state={state.kind}
+        data-dragging={dragging ? '' : undefined}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes('Files') || state.kind !== 'live') return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          setDragging(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          linked.current?.drop([...event.dataTransfer.files]);
+        }}
+      >
         <div ref={host} className="agent-terminal-screen" aria-label="Claude Code’s terminal" />
         {state.kind !== 'live' && (
           <div className="agent-terminal-overlay" role="status">
@@ -155,6 +192,23 @@ export function TerminalPane({
             {STATUS[session.status]}
           </span>
           <span className="agent-terminal-note">{note}</span>
+          {isMac() && (
+            <button
+              type="button"
+              className="agent-terminal-option"
+              aria-pressed={optionIsMeta}
+              title={
+                optionIsMeta
+                  ? 'Option works as Meta, for Claude Code’s shortcuts (as Option+P). Turn it off to type the characters Option types (as @ on a German or French keyboard).'
+                  : 'Option types characters (as @ on a German or French keyboard). Turn this on for Claude Code’s Option shortcuts (as Option+P).'
+              }
+              onClick={() => {
+                setOptionIsMeta(!optionIsMeta);
+              }}
+            >
+              Option as Meta
+            </button>
+          )}
         </div>
       </div>
     </section>

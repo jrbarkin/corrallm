@@ -13,6 +13,8 @@ As models change, the workflows that work best change with them. corrallm is whe
 
 > **Status:** early. A Claude agent can run Claude Code itself, with your own `claude`, its login and settings, in the canvas's project folder, connected one of two ways: in a terminal in its agent view (all of Claude Code, while corrallm types the queue's messages in and follows each turn), or through the Agent SDK (a real Claude Code session shown in corrallm's own transcript and composer). Other agents' sessions, and agents left Simulated, are scripted. The queues' Run drives a connected agent for real: its steps and messages are turns of its session, an If reads what it replied (or asks it, yes or no, about a condition in your own words), and Stop interrupts what the run started.
 >
+> In a terminal, what Claude Code asks you (a permission, its questions, a plan to approve) is also listed in the canvas's Needs you list, to answer in its terminal; files dropped on the terminal are pasted as their paths, as a terminal pastes them; and on a Mac, Option works as Meta (for Claude Code's Option shortcuts) on a US-like keyboard layout, and types its characters on others, as the switch under the terminal says.
+>
 > Through the Agent SDK, the session keeps close to Claude Code's own: questions with their headers, meanings and several answers, permissions answered with 1, 2 or 3 or with what to do instead, live progress on tool calls and subagents, work in the background that you can stop, hooks that fail or block, the effort beside the model, predictions of your next message, earlier messages with Up and Down, and history that fits the transcript (a /clear marked in it).
 
 ## Development

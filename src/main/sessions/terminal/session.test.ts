@@ -95,6 +95,8 @@ const seen = (skip = 0) =>
         return `mode:${event.mode}`;
       case 'closed':
         return `closed${event.error === undefined ? '' : `:${event.error}`}`;
+      case 'asking':
+        return `asking:${event.asks.map((ask) => ask.kind).join(',')}`;
       default:
         return event.type;
     }
@@ -228,11 +230,148 @@ describe('a Terminal session', () => {
     expect(seen(1)).toEqual([
       'user:ask to run the tests',
       'status:working',
+      'asking:permission',
       'status:waiting',
+      'asking:',
       'status:working',
       'text:Done: ask to run the tests',
       'end:done',
     ]);
+  });
+
+  it('lists what Claude Code asks in its terminal while it waits there, and never answers it', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(last('asking')?.asks).toHaveLength(1);
+    });
+    expect(last('asking')?.asks).toEqual([
+      {
+        kind: 'permission',
+        id: expect.any(String) as unknown,
+        tool: 'Bash',
+        summary: 'echo hello',
+      },
+    ]);
+    // Every hook is answered with no decision: the user answers in the terminal.
+    expect(claude().answers.length).toBeGreaterThan(0);
+    expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
+    // Answered there: it goes on, and asks nothing.
+    session.terminal?.input('1');
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(last('asking')?.asks).toEqual([]);
+
+    // Its question, as both hooks tell it (once), and its plan.
+    await session.send({ id: 'm2', text: 'question first' });
+    await until(() => {
+      expect(last('asking')?.asks).toHaveLength(1);
+    });
+    expect(last('asking')?.asks).toEqual([
+      {
+        kind: 'question',
+        id: 'toolu_question',
+        questions: [
+          {
+            header: 'Color',
+            text: 'Pick a color',
+            options: [
+              { label: 'Red', description: 'Warm' },
+              { label: 'Blue', description: 'Cool' },
+            ],
+            multiple: false,
+          },
+        ],
+      },
+    ]);
+    session.terminal?.input('1');
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([]);
+    });
+    await until(() => {
+      expect(seen().filter((one) => one.startsWith('end'))).toHaveLength(2);
+    });
+    await session.send({ id: 'm3', text: 'plan it' });
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([
+        { kind: 'plan', id: 'toolu_plan', plan: '## Plan\nRun `git init`.\n' },
+      ]);
+    });
+    session.terminal?.input('\x1b');
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([]);
+    });
+  });
+
+  it('says what Claude Code waits for when its hooks tell nothing: its status’s words, or its notification’s', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'slow work' });
+    await until(() => {
+      expect(claude().prompts).toEqual(['slow work']);
+    });
+    claude().report(`state=blocked:kind=question:msg=${btoa('answer: Which region?')}`);
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([
+        { kind: 'other', id: expect.any(String) as unknown, text: 'answer: Which region?' },
+      ]);
+    });
+    claude().report('state=working');
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([]);
+    });
+    // A permission it was about to ask long ago (another hook answered it) is not listed.
+    await claude().hook('PermissionRequest', {
+      tool_name: 'Write',
+      tool_input: { file_path: '/work/app/a.txt' },
+    });
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 6000);
+    claude().report('state=blocked:kind=permission');
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([
+        {
+          kind: 'other',
+          id: expect.any(String) as unknown,
+          text: 'Claude Code asks for your permission.',
+        },
+      ]);
+    });
+    vi.restoreAllMocks();
+    claude().report('state=working');
+    await session.interrupt();
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+
+    // An MCP server's question: only its notification says what.
+    await session.send({ id: 'm2', text: 'elicit a region' });
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([
+        { kind: 'other', id: expect.any(String) as unknown, text: 'shop-db needs your input' },
+      ]);
+    });
+    // Claude Code exits: nothing is asked any more.
+    claude().exit(1);
+    await until(() => {
+      expect(last('closed')).toBeDefined();
+    });
+    expect(seen().slice(-2)).toEqual(['asking:', 'closed:Claude Code exited with code 1.']);
+  });
+
+  it('lists what its hooks tell until the turn ends, without status reports', async () => {
+    fake.reports = false;
+    const session = await start();
+    await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(last('asking')?.asks).toHaveLength(1);
+    });
+    expect(last('asking')?.asks[0]).toMatchObject({ kind: 'permission', summary: 'echo hello' });
+    session.terminal?.input('1');
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(last('asking')?.asks).toEqual([]);
   });
 
   it('is interrupted with Escape: the turn ends, interrupted', async () => {
@@ -248,6 +387,18 @@ describe('a Terminal session', () => {
     });
     expect(claude().written.at(-1)).toBe('\x1b');
     expect(last('end')).toMatchObject({ messages: ['m1'], interrupted: true, failed: false });
+  });
+
+  it('interrupts what Claude Code just said it started, though its screen copy has yet to read it', async () => {
+    const session = await start();
+    await until(() => {
+      expect(claude().written).toContain('\x1b]7501;?\x1b\\');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // It starts on its own (a background task reported back); corrallm interrupts at once.
+    claude().report('state=working');
+    await session.interrupt();
+    expect(claude().written.at(-1)).toBe('\x1b');
   });
 
   it('drops a message not typed yet when interrupted', async () => {
@@ -387,6 +538,20 @@ describe('a Terminal session', () => {
     });
     expect(last('closed')).toEqual({ type: 'closed' });
     stop?.();
+  });
+
+  it('pastes what a view pastes (dropped files’ paths), bracketed as Claude Code asked', async () => {
+    const session = await start();
+    // It asks for bracketed pastes as it starts.
+    await until(() => {
+      expect(claude().written).toContain('\x1b]7501;?\x1b\\');
+    });
+    session.terminal?.paste("'/tmp/Screen Shot.png' ");
+    expect(claude().written.at(-1)).toBe("\x1b[200~'/tmp/Screen Shot.png' \x1b[201~");
+    claude().print('\x1b[?2004l');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.terminal?.paste('/tmp/notes.txt ');
+    expect(claude().written.at(-1)).toBe('/tmp/notes.txt ');
   });
 
   it('says when Claude Code exits with an error', async () => {

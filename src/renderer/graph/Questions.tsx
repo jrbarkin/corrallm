@@ -1,5 +1,7 @@
 import { useId, useState } from 'react';
 
+import type { TerminalAsk } from '../../shared/session';
+import { Markdown } from '../agent/Markdown';
 import type { AskChoice, HeldAsk } from '../run/asks';
 import type { Answer } from '../run/runner';
 import { DEFAULT_AGENT } from './agents';
@@ -217,23 +219,109 @@ export function QuestionCard({
 }
 
 /**
+ * What a Terminal agent's Claude Code asks the user in its terminal, shown (never answered) here,
+ * as Claude Code shows it: a permission (the tool, what it acts on), its questions (each with its
+ * header, and its answers with what they mean), a plan to approve, or what it waits for, in its
+ * own words. The user answers in the terminal: Open terminal opens the agent's view.
+ */
+export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker }) {
+  const body = () => {
+    switch (ask.kind) {
+      case 'permission':
+        return (
+          <>
+            <span className="graph-question-header">{ask.tool}</span>
+            {ask.summary !== '' && <code className="graph-question-code">{ask.summary}</code>}
+            <p className="graph-question-text">Do you want to proceed?</p>
+          </>
+        );
+      case 'question':
+        return ask.questions.map((question, i) => (
+          <div key={i} className="graph-question-asked">
+            {question.header !== '' && (
+              <span className="graph-question-header">{question.header}</span>
+            )}
+            <p className="graph-question-text">{question.text}</p>
+            {question.options.length > 0 && (
+              <ul className="graph-question-choices" aria-label="Its answers">
+                {question.options.map((option) => (
+                  <li key={option.label}>
+                    <span className="graph-question-option-label">{option.label}</span>
+                    {option.description !== '' && option.description !== option.label && (
+                      <span className="graph-question-option-detail">{option.description}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ));
+      case 'plan':
+        return (
+          <>
+            <span className="graph-question-header">Plan</span>
+            <p className="graph-question-text">Ready to code? Here is the plan:</p>
+            {ask.plan.trim() !== '' && (
+              <div className="graph-question-plan agent-text">
+                <Markdown text={ask.plan} />
+              </div>
+            )}
+          </>
+        );
+      case 'other':
+        return <p className="graph-question-text">{ask.text}</p>;
+    }
+  };
+  return (
+    <div
+      className="graph-question"
+      data-in-terminal=""
+      role="group"
+      aria-label={`${agent.name} asks, in its terminal`}
+    >
+      <button
+        type="button"
+        className="graph-question-agent"
+        data-agent={agent.type}
+        aria-label={`Open ${agent.name}`}
+        onClick={agent.onOpen}
+      >
+        {agent.name}
+      </button>
+      {body()}
+      <div className="graph-question-terminal">
+        <span>Answer it in the terminal.</span>
+        <button type="button" onClick={agent.onOpen}>
+          Open terminal
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Who is asking, by agent: its id, name and type. */
+interface Asking {
+  agentId: string;
+  agentName: string;
+  agentType: AgentType;
+}
+
+/**
  * A floating list of what needs the user, labelled by agent: first what the queues' run holds for
- * them (`asks`, such as an OK), then the questions agents are waiting on.
+ * them (`asks`, such as an OK), then the questions agents are waiting on, then what Terminal
+ * agents' Claude Code asks in their terminals (`inTerminal`: shown, answered there).
  */
 export function QuestionsSidebar({
   asks,
   pending,
+  inTerminal = [],
   onDecide,
   onAnswer,
   onOpen,
 }: {
   asks: readonly HeldAsk[];
-  pending: readonly {
-    agentId: string;
-    agentName: string;
-    agentType: AgentType;
-    question: CardQuestion;
-  }[];
+  pending: readonly (Asking & { question: CardQuestion })[];
+  inTerminal?: readonly (Asking & { ask: TerminalAsk })[];
   onDecide: (agentId: string, itemId: string, answer: Answer) => void;
   onAnswer: (agentId: string, questionId: string, answer: string) => void;
   onOpen: (agentId: string) => void;
@@ -241,7 +329,10 @@ export function QuestionsSidebar({
   return (
     <aside className="graph-questions" aria-label="Needs you">
       <h2>
-        Needs you <span className="graph-questions-count">{asks.length + pending.length}</span>
+        Needs you{' '}
+        <span className="graph-questions-count">
+          {asks.length + pending.length + inTerminal.length}
+        </span>
       </h2>
       {asks.map(({ agent, item, text, detail, choices, reply }) => (
         <AskCard
@@ -278,6 +369,19 @@ export function QuestionsSidebar({
           }}
           onAnswer={(answer) => {
             onAnswer(agentId, question.id, answer);
+          }}
+        />
+      ))}
+      {inTerminal.map(({ agentId, agentName, agentType, ask }) => (
+        <TerminalAskCard
+          key={`${agentId}/${ask.id}`}
+          ask={ask}
+          agent={{
+            name: agentName,
+            type: agentType,
+            onOpen: () => {
+              onOpen(agentId);
+            },
           }}
         />
       ))}

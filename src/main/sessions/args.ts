@@ -1,5 +1,13 @@
+import path from 'node:path';
+
 import type { IpcArgs } from '../../shared/ipc';
-import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
+import {
+  MAX_DROPPED_FILES,
+  MAX_DROPPED_PATH,
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_INPUT,
+  MAX_TERMINAL_ROWS,
+} from '../../shared/terminal';
 import {
   CONNECTIONS,
   EFFORT_LEVELS,
@@ -114,6 +122,30 @@ export function parseTerminalInputArgs(args: unknown[]): IpcArgs<'terminal:input
     throw new TypeError('Expected what was typed');
   }
   return [parseId(agentId, 'agent'), data];
+}
+
+/**
+ * terminal:drop: an agent, and the paths of the files dropped on its terminal (read from the files
+ * by the preload): a few, each absolute, not too long, with no control characters.
+ */
+export function parseTerminalDropArgs(args: unknown[]): IpcArgs<'terminal:drop'> {
+  const [agentId, paths] = expect(args, 2, 'an agent and the files dropped');
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_DROPPED_FILES) {
+    throw new TypeError(`Expected 1 to ${String(MAX_DROPPED_FILES)} files dropped`);
+  }
+  const files = paths.map((file: unknown) => {
+    if (
+      typeof file !== 'string' ||
+      file.length > MAX_DROPPED_PATH ||
+      !path.isAbsolute(file) ||
+      // eslint-disable-next-line no-control-regex
+      /[\u0000-\u001f\u007f]/.test(file)
+    ) {
+      throw new TypeError('Expected the path of a file dropped');
+    }
+    return file;
+  });
+  return [parseId(agentId, 'agent'), files];
 }
 
 /** terminal:resize: an agent, and its terminal's columns and rows. */

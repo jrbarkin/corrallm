@@ -18,6 +18,7 @@ import {
   parseSendArgs,
   parseStartArgs,
   parseStopTaskArgs,
+  parseTerminalDropArgs,
   parseTerminalInputArgs,
   parseTerminalResizeArgs,
 } from './sessions/args';
@@ -57,6 +58,7 @@ export interface IpcServices {
     | 'detachTerminal'
     | 'inputTerminal'
     | 'resizeTerminal'
+    | 'dropOnTerminal'
   >;
 }
 
@@ -260,6 +262,13 @@ function createHandlers({ projects, files, sessions }: IpcServices): HandlerTabl
       parseArgs: parseTerminalResizeArgs,
       handler: async ({ contents }, agentId, cols, rows) => {
         await sessions.resizeTerminal(contents, agentId, cols, rows);
+        return null;
+      },
+    },
+    'terminal:drop': {
+      parseArgs: parseTerminalDropArgs,
+      handler: async ({ contents }, agentId, paths) => {
+        await sessions.dropOnTerminal(contents, agentId, paths);
         return null;
       },
     },

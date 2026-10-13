@@ -9,6 +9,7 @@ import type {
   PlanAnswer,
   SessionUsage,
   SlashCommand,
+  TerminalAsk,
   Todo,
   ToolDetail,
   ToolProgress,
@@ -26,6 +27,7 @@ export type {
   PlanAnswer,
   SessionUsage,
   SlashCommand,
+  TerminalAsk,
   Todo,
   ToolDetail,
   ToolProgress,
@@ -137,6 +139,8 @@ export interface Session {
   suggestion?: string;
   /** The effort picked for a connected session (null: its model's default), once picked. */
   effort?: EffortLevel | null;
+  /** What a Terminal session's Claude Code asks the user in its terminal now (answered there). */
+  asking?: readonly TerminalAsk[];
 }
 
 /**
@@ -191,6 +195,7 @@ export type SessionAction =
   | { type: 'tasks'; tasks: readonly BackgroundTask[] }
   | { type: 'suggestion'; text: string }
   | { type: 'effort'; effort: EffortLevel | null }
+  | { type: 'asking'; asks: readonly TerminalAsk[] }
   /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] };
 
@@ -316,15 +321,18 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, mode: action.mode };
     case 'model':
       return { ...session, model: action.model };
-    case 'connected':
-      // A session that starts runs nothing in the background yet.
-      return {
+    case 'connected': {
+      // A session that starts runs nothing in the background yet, and asks nothing.
+      const connected: Session = {
         ...session,
         models: action.models,
         model: action.model,
         mode: action.mode,
         tasks: [],
       };
+      delete connected.asking;
+      return connected;
+    }
     case 'usage':
       return { ...session, usage: action.usage };
     case 'commands':
@@ -335,6 +343,12 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, suggestion: action.text };
     case 'effort':
       return { ...session, effort: action.effort };
+    case 'asking': {
+      if (action.asks.length > 0) return { ...session, asking: action.asks };
+      const asked: Session = { ...session };
+      delete asked.asking;
+      return asked;
+    }
     case 'restore':
       return { ...session, entries: mergeHistory(session.entries, action.entries) };
   }

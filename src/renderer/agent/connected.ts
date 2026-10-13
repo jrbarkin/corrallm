@@ -157,6 +157,7 @@ export class ConnectedDriver implements SessionDriver {
 
   close(): void {
     this.#closed = true;
+    this.#stopAsking();
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
       this.#end([...this.#turns.keys()], { interrupted: true, failed: false });
     }
@@ -260,6 +261,9 @@ export class ConnectedDriver implements SessionDriver {
       case 'suggestion':
         io.dispatch({ type: 'suggestion', text: event.text });
         return;
+      case 'asking':
+        io.dispatch({ type: 'asking', asks: event.asks });
+        return;
       case 'todos':
         this.#put({ id: event.id, kind: 'todos', items: event.items });
         return;
@@ -318,8 +322,9 @@ export class ConnectedDriver implements SessionDriver {
         return;
       case 'closed':
         this.#running = undefined;
-        // Its CLI is gone, and what it ran in the background with it.
+        // Its CLI is gone, and what it ran in the background or asked with it.
         if ((io.session().tasks?.length ?? 0) > 0) io.dispatch({ type: 'tasks', tasks: [] });
+        this.#stopAsking();
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
           this.#end([...this.#turns.keys()], {
@@ -360,6 +365,11 @@ export class ConnectedDriver implements SessionDriver {
       .catch((error: unknown) => {
         this.#notice('error', ipcErrorMessage(error));
       });
+  }
+
+  /** Its CLI asks nothing in its terminal any more (it is gone). */
+  #stopAsking(): void {
+    if (this.#io.session().asking !== undefined) this.#io.dispatch({ type: 'asking', asks: [] });
   }
 
   /** Adds an entry, or replaces the one with its id. */

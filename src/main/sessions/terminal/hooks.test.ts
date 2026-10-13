@@ -52,6 +52,13 @@ describe('hookSettings', () => {
       'StopFailure',
       'SessionEnd',
       'PostModelSwitch',
+      'PermissionRequest',
+      'Notification',
+      'PreToolUse',
+    ]);
+    // Before a tool runs, only the two that ask the user: its questions, and a plan to approve.
+    expect(settings.hooks.PreToolUse).toEqual([
+      { matcher: 'AskUserQuestion|ExitPlanMode', hooks: settings.hooks.Stop?.[0]?.hooks },
     ]);
     expect(settings.hooks.Stop).toEqual([
       {

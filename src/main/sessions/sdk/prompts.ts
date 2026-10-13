@@ -193,7 +193,7 @@ function withdrawn(): PermissionResult {
 }
 
 /** AskUserQuestion's questions, as corrallm asks them; undefined if they are not what it expects. */
-function askedQuestions(value: unknown): AskedQuestion[] | undefined {
+export function askedQuestions(value: unknown): AskedQuestion[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
   const questions = value.map((item): AskedQuestion | undefined => {
     const asked = text(property(item, 'question'));
