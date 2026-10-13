@@ -11,7 +11,14 @@ vi.mock('electron', () => ({
 }));
 
 import { API_CHANNELS, MAX_CANVAS_BYTES } from '../shared/ipc';
-import { MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../shared/session';
+import {
+  MAX_FILE_MATCHES,
+  MAX_FILE_QUERY_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES,
+  MAX_MESSAGE_LENGTH,
+} from '../shared/session';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
 
@@ -30,6 +37,9 @@ function fakeServices() {
       remember: vi.fn<IpcServices['projects']['remember']>().mockResolvedValue(undefined),
       forget: vi.fn<IpcServices['projects']['forget']>(),
       of: vi.fn<IpcServices['projects']['of']>().mockReturnValue(undefined),
+    },
+    files: {
+      find: vi.fn<IpcServices['files']['find']>().mockResolvedValue([]),
     },
     sessions: {
       start: vi.fn<IpcServices['sessions']['start']>().mockResolvedValue(undefined),
@@ -141,6 +151,30 @@ describe('project:choose handler', () => {
   });
 });
 
+describe('project:files handler', () => {
+  it('searches the files of the sender’s project folder, and of none without one', async () => {
+    const sender = {};
+    await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual([]);
+    expect(services.files.find).not.toHaveBeenCalled();
+
+    services.projects.of.mockReturnValue('/work/app');
+    services.files.find.mockResolvedValueOnce(['src/main/ipc.ts']);
+    await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual(['src/main/ipc.ts']);
+    expect(services.projects.of).toHaveBeenCalledWith(sender);
+    expect(services.files.find).toHaveBeenCalledWith('/work/app', 'ipc', MAX_FILE_MATCHES);
+  });
+
+  it.each([
+    ['nothing to search for', []],
+    ['a query that is not text', [42]],
+    ['a query too long', ['x'.repeat(MAX_FILE_QUERY_LENGTH + 1)]],
+    ['a folder as well', ['ipc', '/etc']],
+  ])('rejects %s', (_label, args) => {
+    expect(() => invoke('project:files', args)).toThrow(/what to search for/);
+    expect(services.files.find).not.toHaveBeenCalled();
+  });
+});
+
 describe('session:* handlers', () => {
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = {};
@@ -153,6 +187,14 @@ describe('session:* handlers', () => {
 
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
     expect(services.sessions.send).toHaveBeenCalledWith(sender, 'a', { id: 'm1', text: 'Hi' });
+    // A pasted image may be all a message is.
+    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
+    await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
+    expect(services.sessions.send).toHaveBeenLastCalledWith(sender, 'a', {
+      id: 'm2',
+      text: '',
+      images: [image],
+    });
     await invoke('session:answer', ['a', 'p1', { kind: 'question', answers: ['Yes'] }], sender);
     expect(services.sessions.answer).toHaveBeenCalledWith(sender, 'a', 'p1', {
       kind: 'question',
@@ -200,6 +242,58 @@ describe('session:* handlers', () => {
       'a message with more in it',
       ['a', { id: 'm', text: 'Hi', cwd: '/' }],
       /message/,
+    ],
+    [
+      'session:send',
+      'an image of a kind Claude does not read',
+      ['a', { id: 'm', text: 'Hi', images: [{ mediaType: 'image/svg+xml', data: 'PHN2Zz4=' }] }],
+      /kind of image/,
+    ],
+    [
+      'session:send',
+      'an image that is not base64',
+      ['a', { id: 'm', text: 'Hi', images: [{ mediaType: 'image/png', data: 'not base64!' }] }],
+      /base64/,
+    ],
+    [
+      'session:send',
+      'an image too large',
+      [
+        'a',
+        {
+          id: 'm',
+          text: 'Hi',
+          images: [
+            { mediaType: 'image/png', data: 'A'.repeat(Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4) },
+          ],
+        },
+      ],
+      /too large/,
+    ],
+    [
+      'session:send',
+      'too many images',
+      [
+        'a',
+        {
+          id: 'm',
+          text: 'Hi',
+          images: Array.from({ length: MAX_IMAGES + 1 }, () => ({
+            mediaType: 'image/png',
+            data: 'AAAA',
+          })),
+        },
+      ],
+      /at most/,
+    ],
+    [
+      'session:send',
+      'an image with a path',
+      [
+        'a',
+        { id: 'm', text: 'Hi', images: [{ mediaType: 'image/png', data: 'AAAA', path: '/x' }] },
+      ],
+      /an image/,
     ],
     ['session:answer', 'no answer', ['a', 'p'], /an agent, a prompt and an answer/],
     ['session:answer', 'an unknown kind', ['a', 'p', { kind: 'shell' }], /permission, question/],

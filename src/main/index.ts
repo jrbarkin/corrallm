@@ -6,6 +6,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
 import { canvasFile } from './canvas';
 import { PROD_CSP } from './csp';
+import { ProjectFiles } from './files';
 import { registerIpcHandlers, sendEvent } from './ipc';
 import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
@@ -88,13 +89,17 @@ function main(): void {
       const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
       const projects = new ProjectFolders(memory, canvasFile);
       let environment: Promise<Record<string, string>> | undefined;
+      // Resolved once, when the first session starts.
+      const agentsEnvironment = () =>
+        (environment ??= fakeSessions
+          ? Promise.resolve(agentEnvironment(process.env))
+          : loginShellEnvironment().then(agentEnvironment));
       const sessions = new SessionManager({
-        connectors: createConnectors({ fake: fakeSessions }),
-        // Resolved once, when the first session starts.
-        environment: () =>
-          (environment ??= fakeSessions
-            ? Promise.resolve(agentEnvironment(process.env))
-            : loginShellEnvironment().then(agentEnvironment)),
+        connectors: createConnectors({
+          fake: fakeSessions,
+          clientApp: `${app.getName()}/${app.getVersion()}`,
+        }),
+        environment: agentsEnvironment,
         projectOf: (contents) => projects.of(contents),
         canvasOf: canvasFile,
         memory,
@@ -102,7 +107,8 @@ function main(): void {
           sendEvent(contents, 'session:event', agentId, connection, event);
         },
       });
-      registerIpcHandlers(trustedOrigin, { projects, sessions });
+      const files = new ProjectFiles({ environment: agentsEnvironment });
+      registerIpcHandlers(trustedOrigin, { projects, files, sessions });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;

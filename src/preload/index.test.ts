@@ -46,6 +46,8 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('canvas:forget');
     await api.chooseProject();
     expect(invoke).toHaveBeenLastCalledWith('project:choose');
+    await api.findProjectFiles('src/ma');
+    expect(invoke).toHaveBeenLastCalledWith('project:files', 'src/ma');
   });
 
   it('invokes the session channels with their arguments', async () => {
@@ -56,6 +58,13 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:start', 'a', options);
     await api.sendToSession('a', { id: 'm', text: 'Hi' });
     expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
+    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
+    await api.sendToSession('a', { id: 'm2', text: '', images: [image] });
+    expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', {
+      id: 'm2',
+      text: '',
+      images: [image],
+    });
     await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
     expect(invoke).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
       kind: 'permission',

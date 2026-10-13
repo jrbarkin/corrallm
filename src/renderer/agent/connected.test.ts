@@ -321,3 +321,92 @@ describe('a connected session without the app', () => {
     });
   });
 });
+
+describe('a connected session, resumed or completed', () => {
+  const past: SessionEvent[] = [
+    { type: 'user', id: 'u1', text: 'Fix the bug' },
+    { type: 'text', id: 'm1:0', text: 'Fixed.' },
+    { type: 'tool', id: 'toolu_1', tool: 'Edit', summary: 'a.ts', status: 'done' },
+    { type: 'end', messages: ['u1'], seconds: 4, interrupted: false, failed: false },
+  ];
+
+  it('shows what a resumed session did before, ahead of what it does now', async () => {
+    const { store, emit, backend } = connected();
+    const done = vi.fn<(interrupted: boolean) => void>();
+    // A message sent from the queues' run before the view opened: the session resumes for it.
+    store.send('a', 'Claude', 'Go on', done);
+    await settle();
+    emit('a', 'sdk', { type: 'history', events: past });
+    expect(store.of('a').entries.map((e) => e.kind)).toEqual([
+      'user',
+      'text',
+      'tool',
+      'end',
+      'user',
+    ]);
+    expect(store.of('a').entries[3]).toMatchObject({ kind: 'end', seconds: 4 });
+    // Still working on the message just sent; history ended nobody's turn.
+    expect(store.of('a').status).toBe('working');
+    expect(done).not.toHaveBeenCalled();
+    expect(backend.send).toHaveBeenCalledOnce();
+  });
+
+  it('does not show history again that the transcript already shows', () => {
+    const { store, emit } = connected();
+    store.open('a');
+    emit('a', 'sdk', { type: 'history', events: past });
+    emit('a', 'sdk', { type: 'closed' }, { type: 'history', events: past });
+    expect(store.of('a').entries.filter((e) => e.kind === 'user')).toHaveLength(1);
+  });
+
+  it('takes the slash commands the session offers, as they change', () => {
+    const { store, emit } = connected();
+    store.open('a');
+    const compact = { name: 'compact', description: 'Summarize', argumentHint: '<instructions>' };
+    emit('a', 'sdk', { type: 'commands', commands: [compact] });
+    expect(store.of('a').commands).toEqual([compact]);
+    emit('a', 'sdk', { type: 'commands', commands: [] });
+    expect(store.of('a').commands).toEqual([]);
+  });
+
+  it('sends pasted images with the message, queued or not', async () => {
+    const { store, backend, sent } = connected();
+    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
+    store.send('a', 'Claude', 'What is this?', undefined, [image]);
+    await settle();
+    expect(backend.send).toHaveBeenCalledWith('a', {
+      id: sent(),
+      text: 'What is this?',
+      images: [image],
+    });
+    expect(store.of('a').entries[0]).toMatchObject({ kind: 'user', images: [image] });
+    store.send('a', 'Claude', '', undefined, [image]);
+    expect(store.of('a').queued).toEqual([
+      { id: expect.any(String) as unknown, text: '', images: [image] },
+    ]);
+  });
+
+  it('shows a permission prompt as the CLI words it', () => {
+    const { store, emit } = connected();
+    store.open('a');
+    emit('a', 'sdk', {
+      type: 'permission',
+      id: 'p',
+      tool: 'WebFetch',
+      summary: 'https://example.com',
+      always: null,
+      title: 'Claude wants to fetch example.com',
+    });
+    expect(store.of('a').entries[0]).toMatchObject({
+      kind: 'permission',
+      title: 'Claude wants to fetch example.com',
+    });
+  });
+
+  it('searches the project folder’s files for @-mentions', async () => {
+    const { store, backend } = connected();
+    backend.files.mockResolvedValueOnce(['src/main/ipc.ts']);
+    await expect(store.findFiles('ipc')).resolves.toEqual(['src/main/ipc.ts']);
+    expect(backend.files).toHaveBeenCalledWith('ipc');
+  });
+});

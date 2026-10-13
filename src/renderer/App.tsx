@@ -24,6 +24,7 @@ const sessionBackend: SessionBackend = {
   setMode: (agentId, mode) => window.api.setSessionMode(agentId, mode),
   setModel: (agentId, model) => window.api.setSessionModel(agentId, model),
   close: (agentId) => window.api.closeSession(agentId),
+  files: (query) => window.api.findProjectFiles(query),
   onEvent: (listener) => window.api.onSessionEvent(listener),
 };
 

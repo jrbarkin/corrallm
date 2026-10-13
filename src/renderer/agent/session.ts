@@ -1,17 +1,29 @@
 import type {
   AskedQuestion,
   DiffLine,
+  MessageImage,
   ModelChoice,
   PermissionMode,
   PlanAnswer,
   SessionUsage,
+  SlashCommand,
   Todo,
   ToolDetail,
   ToolStatus,
 } from '../../shared/session';
 import type { Question } from '../graph/queue';
 
-export type { DiffLine, ModelChoice, PlanAnswer, SessionUsage, Todo, ToolDetail, ToolStatus };
+export type {
+  DiffLine,
+  MessageImage,
+  ModelChoice,
+  PlanAnswer,
+  SessionUsage,
+  SlashCommand,
+  Todo,
+  ToolDetail,
+  ToolStatus,
+};
 
 /*
  * An agent's session, as its view shows it: a transcript of turns (the user's message, then what
@@ -50,7 +62,8 @@ export interface SessionQuestion extends AskedQuestion {
  * Prompts (permission, question, plan) are `withdrawn` when the session stops waiting for them.
  */
 export type Entry =
-  | { id: string; kind: 'user'; text: string }
+  /** The user's message, with the images pasted into it. */
+  | { id: string; kind: 'user'; text: string; images?: MessageImage[] }
   | { id: string; kind: 'text'; text: string; parent?: string }
   | { id: string; kind: 'thinking'; text: string; seconds: number; parent?: string }
   | {
@@ -71,6 +84,8 @@ export type Entry =
       detail?: ToolDetail;
       /** What "always" allows, as the CLI words it; null where it offers none. */
       always?: string | null;
+      /** What it asks, as the CLI words it, when it says. */
+      title?: string;
       answer?: Answer;
       withdrawn?: boolean;
     }
@@ -91,7 +106,7 @@ export interface Session {
   /** Working on a turn; waiting (mid-turn) for the user to answer a prompt; or idle. */
   status: 'idle' | 'working' | 'waiting';
   /** Messages sent while it works, sent in order once it is idle. */
-  queued: { id: string; text: string }[];
+  queued: { id: string; text: string; images?: MessageImage[] }[];
   /** Tools the user said to always allow: it no longer asks about them. */
   allowed: string[];
   mode: Mode;
@@ -101,6 +116,8 @@ export interface Session {
   models?: readonly ModelChoice[];
   /** What a connected session has used, as it last said. */
   usage?: SessionUsage;
+  /** The slash commands a connected session offers, as the composer completes them. */
+  commands?: readonly SlashCommand[];
 }
 
 /**
@@ -143,13 +160,16 @@ export type SessionAction =
   /** Mid-turn: working, or waiting on the user (as a connected session says). */
   | { type: 'status'; status: 'working' | 'waiting' }
   | { type: 'end'; id: string; seconds: number; interrupted: boolean; failed?: boolean }
-  | { type: 'queue'; id: string; text: string }
+  | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
   | { type: 'mode'; mode: Mode }
   | { type: 'model'; model: string }
   /** A connected session started: the models it offers, and its model and mode. */
   | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
-  | { type: 'usage'; usage: SessionUsage };
+  | { type: 'usage'; usage: SessionUsage }
+  | { type: 'commands'; commands: readonly SlashCommand[] }
+  /** What a resumed session did before: entries put ahead of the transcript's. */
+  | { type: 'restore'; entries: Entry[] };
 
 /** Whether a prompt still waits for the user. */
 export function isOpen(entry: Entry): entry is Prompt {
@@ -246,8 +266,13 @@ export function reduce(session: Session, action: SessionAction): Session {
         ],
       };
     }
-    case 'queue':
-      return { ...session, queued: [...session.queued, { id: action.id, text: action.text }] };
+    case 'queue': {
+      const { id, text, images } = action;
+      return {
+        ...session,
+        queued: [...session.queued, { id, text, ...(images === undefined ? {} : { images }) }],
+      };
+    }
     case 'unqueue':
       return { ...session, queued: session.queued.filter((q) => q.id !== action.id) };
     case 'mode':
@@ -258,6 +283,10 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, models: action.models, model: action.model, mode: action.mode };
     case 'usage':
       return { ...session, usage: action.usage };
+    case 'commands':
+      return { ...session, commands: action.commands };
+    case 'restore':
+      return { ...session, entries: [...action.entries, ...session.entries] };
   }
 }
 

@@ -39,6 +39,7 @@ const api: AppApi = {
   saveCanvas: (text, choose) => invoke(API_CHANNELS.saveCanvas, text, choose),
   forgetCanvas: () => invoke(API_CHANNELS.forgetCanvas),
   chooseProject: () => invoke(API_CHANNELS.chooseProject),
+  findProjectFiles: (query) => invoke(API_CHANNELS.findProjectFiles, query),
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>

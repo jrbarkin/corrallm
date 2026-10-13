@@ -5,7 +5,7 @@ import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
 import { answersOf, NEW_SESSION, reduce } from './session';
-import type { Answer, Mode, PlanAnswer, Session, SessionAction } from './session';
+import type { Answer, MessageImage, Mode, PlanAnswer, Session, SessionAction } from './session';
 
 /** An agent's driver, how it runs, and whether it is being let go. */
 interface Driving {
@@ -79,24 +79,35 @@ export class SessionStore {
   }
 
   /**
-   * Sends the user's message: a new turn, or queued while one is going on. `onDone` hears when that
-   * turn ends (`interrupted` too if the message is taken off the queue before it is sent, or the
-   * turn failed).
+   * Sends the user's message (with the images pasted into it): a new turn, or queued while one is
+   * going on. `onDone` hears when that turn ends (`interrupted` too if the message is taken off the
+   * queue before it is sent, or the turn failed).
    */
   send(
     agentId: string,
     agent: AgentType,
     text: string,
     onDone?: (interrupted: boolean) => void,
+    images?: MessageImage[],
   ): void {
     this.#types.set(agentId, agent);
     if (this.of(agentId).status === 'idle') {
-      this.#start(agentId, agent, text, onDone);
+      this.#start(agentId, agent, { text, images }, onDone);
       return;
     }
     const id = crypto.randomUUID();
     if (onDone) this.#onDone.set(id, onDone);
-    this.#dispatch(agentId, { type: 'queue', id, text });
+    this.#dispatch(agentId, {
+      type: 'queue',
+      id,
+      text,
+      ...(images === undefined || images.length === 0 ? {} : { images }),
+    });
+  }
+
+  /** The files and folders of the canvas's project folder that match `query`, for an @-mention. */
+  findFiles(query: string): Promise<string[]> {
+    return this.#backend.files(query);
   }
 
   /** Answers a permission prompt. */
@@ -154,12 +165,15 @@ export class SessionStore {
   #start(
     agentId: string,
     agent: AgentType,
-    text: string,
+    { text, images }: { text: string; images: MessageImage[] | undefined },
     onDone?: (interrupted: boolean) => void,
   ): void {
     const id = crypto.randomUUID();
-    this.#dispatch(agentId, { type: 'start', entry: { id, kind: 'user', text } });
-    this.#driver(agentId).start({ id, text, agent }, (interrupted) => onDone?.(interrupted));
+    const pasted = images === undefined || images.length === 0 ? {} : { images };
+    this.#dispatch(agentId, { type: 'start', entry: { id, kind: 'user', text, ...pasted } });
+    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) =>
+      onDone?.(interrupted),
+    );
   }
 
   /** The session is idle: its next queued message, if any, starts. */
@@ -170,7 +184,12 @@ export class SessionStore {
     const onDone = this.#onDone.get(next.id);
     this.#onDone.delete(next.id);
     this.#dispatch(agentId, { type: 'unqueue', id: next.id });
-    this.#start(agentId, this.#types.get(agentId) ?? DEFAULT_AGENT, next.text, onDone);
+    this.#start(
+      agentId,
+      this.#types.get(agentId) ?? DEFAULT_AGENT,
+      { text: next.text, images: next.images },
+      onDone,
+    );
   }
 
   /** The agent's driver, made as the agent runs if it has none. */

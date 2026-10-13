@@ -8,7 +8,8 @@ import type {
 } from '../../shared/session';
 import { ipcErrorMessage } from '../ipc-error';
 import type { DriverIO, SessionDriver, Turn } from './driver';
-import type { Entry } from './session';
+import { NEW_SESSION, reduce } from './session';
+import type { Entry, Session } from './session';
 
 /** What a connected session asks of the main process: window.api's session functions. */
 export interface SessionBackend {
@@ -19,6 +20,8 @@ export interface SessionBackend {
   setMode(agentId: string, mode: PermissionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
   close(agentId: string): Promise<null>;
+  /** The project folder's files and folders that match `query`, for an @-mention. */
+  files(query: string): Promise<string[]>;
   /** Listens for what sessions do; returns a function that stops listening. */
   onEvent(
     listener: (agentId: string, connection: Connection, event: SessionEvent) => void,
@@ -37,6 +40,7 @@ export const NO_BACKEND: SessionBackend = (() => {
     setMode: refuse,
     setModel: refuse,
     close: refuse,
+    files: () => Promise.resolve([]),
     onEvent: () => () => undefined,
   };
 })();
@@ -88,7 +92,12 @@ export class ConnectedDriver implements SessionDriver {
         // Stopped before it went: it never does.
         if (!this.#turns.has(turn.id)) return null;
         sent.sent = true;
-        return this.#backend.send(this.#agentId, { id: turn.id, text: turn.text });
+        const { id, text, images } = turn;
+        return this.#backend.send(this.#agentId, {
+          id,
+          text,
+          ...(images === undefined || images.length === 0 ? {} : { images }),
+        });
       })
       .catch((error: unknown) => {
         if (!this.#turns.has(turn.id)) return;
@@ -152,6 +161,17 @@ export class ConnectedDriver implements SessionDriver {
           mode: event.mode,
         });
         return;
+      case 'commands':
+        io.dispatch({ type: 'commands', commands: event.commands });
+        return;
+      case 'history': {
+        // Shown already (the session was resumed after it closed): not again.
+        const shown = new Set(io.session().entries.map((entry) => entry.id));
+        const entries = replay(event.events, this.#agentId, this.connection);
+        if (entries.length === 0 || entries.some((entry) => shown.has(entry.id))) return;
+        io.dispatch({ type: 'restore', entries });
+        return;
+      }
       case 'user':
         if (!find(event.id)) {
           io.dispatch({ type: 'start', entry: { id: event.id, kind: 'user', text: event.text } });
@@ -211,7 +231,7 @@ export class ConnectedDriver implements SessionDriver {
         this.#put({ id: event.id, kind: 'todos', items: event.items });
         return;
       case 'permission': {
-        const { id, tool, summary, always, detail } = event;
+        const { id, tool, summary, always, detail, title } = event;
         io.dispatch({
           type: 'ask',
           entry: {
@@ -221,6 +241,7 @@ export class ConnectedDriver implements SessionDriver {
             summary,
             always,
             ...(detail === undefined ? {} : { detail }),
+            ...(title === undefined ? {} : { title }),
           },
         });
         return;
@@ -346,4 +367,21 @@ export class ConnectedDriver implements SessionDriver {
     io.idle();
     for (const turn of turns) turn.done(interrupted || failed);
   }
+}
+
+/** The entries a resumed session's past events make, played onto a session of their own. */
+function replay(events: readonly SessionEvent[], agentId: string, connection: Connection): Entry[] {
+  let session: Session = NEW_SESSION;
+  const driver = new ConnectedDriver(agentId, connection, NO_BACKEND, {
+    dispatch: (action) => {
+      session = reduce(session, action);
+    },
+    session: () => session,
+    idle: () => undefined,
+    newId: () => crypto.randomUUID(),
+    now: () => 0,
+    later: () => () => undefined,
+  });
+  for (const event of events) if (event.type !== 'history') driver.receive(event);
+  return session.entries;
 }

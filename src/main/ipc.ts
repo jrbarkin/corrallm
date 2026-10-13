@@ -3,12 +3,15 @@ import type { WebContents } from 'electron';
 
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
+import { MAX_FILE_MATCHES } from '../shared/session';
 import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
+import type { ProjectFiles } from './files';
 import type { ProjectFolders } from './project';
 import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
   parseAnswerArgs,
+  parseFilesArgs,
   parseModeArgs,
   parseModelArgs,
   parseSendArgs,
@@ -27,9 +30,10 @@ export type IpcHandler<C extends IpcChannel> = (
   ...args: IpcArgs<C>
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
-/** What the handlers act on besides canvas files: project folders and agents' sessions. */
+/** What the handlers act on besides canvas files: project folders, their files, and sessions. */
 export interface IpcServices {
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
+  files: Pick<ProjectFiles, 'find'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -108,7 +112,7 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
   return [text, choose];
 }
 
-function createHandlers({ projects, sessions }: IpcServices): HandlerTable {
+function createHandlers({ projects, files, sessions }: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'canvas:open': {
@@ -149,6 +153,13 @@ function createHandlers({ projects, sessions }: IpcServices): HandlerTable {
         const chosen = await projects.choose(contents);
         if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
         return chosen;
+      },
+    },
+    'project:files': {
+      parseArgs: parseFilesArgs,
+      handler: async ({ contents }, query) => {
+        const folder = projects.of(contents);
+        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
       },
     },
     'session:start': {

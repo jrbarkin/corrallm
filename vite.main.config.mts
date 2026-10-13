@@ -4,6 +4,11 @@ import { defineConfig } from 'vite';
 // external). Native modules must stay external: they load .node binaries relative to their
 // own files, so they ship in node_modules instead (see NATIVE_MODULES in forge.config.mts).
 export default defineConfig(({ command }) => ({
+  // The bundle is CommonJS, where import.meta is not: modules that find their own file through
+  // it (the Agent SDK does) get the bundle's file instead.
+  define: {
+    'import.meta.url': 'require("node:url").pathToFileURL(__filename).href',
+  },
   build: {
     rollupOptions: {
       external: ['node-pty'],

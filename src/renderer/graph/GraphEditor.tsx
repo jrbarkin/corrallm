@@ -906,9 +906,16 @@ function Editor({
             }}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
-              send: (text) => {
-                sessionStore.send(openedNode.id, openedNode.data.agent ?? DEFAULT_AGENT, text);
+              send: (text, images) => {
+                sessionStore.send(
+                  openedNode.id,
+                  openedNode.data.agent ?? DEFAULT_AGENT,
+                  text,
+                  undefined,
+                  images,
+                );
               },
+              findFiles: (query) => sessionStore.findFiles(query),
               answer: (permissionId, answer) => {
                 sessionStore.answer(openedNode.id, permissionId, answer);
               },

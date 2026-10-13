@@ -1,4 +1,4 @@
-import type { SessionAnswer } from '../../shared/session';
+import type { MessageImage, SessionAnswer } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Session, SessionAction } from './session';
 
@@ -10,10 +10,14 @@ import type { Mode, Session, SessionAction } from './session';
  * action, then `idle()`, then the turn's `done`.
  */
 
-/** A turn the store starts: the user's message (its entry's id), to an agent of type `agent`. */
+/**
+ * A turn the store starts: the user's message (its entry's id) and the images pasted into it, to
+ * an agent of type `agent`.
+ */
 export interface Turn {
   id: string;
   text: string;
+  images?: MessageImage[];
   agent: AgentType;
 }
 

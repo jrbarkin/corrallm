@@ -212,4 +212,114 @@ describe('a connected agent', () => {
     const grep = transcript.getByRole('button', { name: 'Grep TODO' });
     expect(grep.closest('.agent-subagent')?.getAttribute('data-parent')).toBe('agent-1');
   });
+
+  it('completes slash commands as they are typed, and runs one picked with Enter', async () => {
+    const { backend, composer, view, emit, sent } = await open({ connection: 'sdk' });
+    emit({
+      type: 'commands',
+      commands: [
+        { name: 'clear', description: 'Start afresh', argumentHint: '' },
+        {
+          name: 'compact',
+          description: 'Summarize the conversation',
+          argumentHint: '<instructions>',
+        },
+        { name: 'context', description: 'Show context use', argumentHint: '' },
+      ],
+    });
+    fireEvent.change(composer, { target: { value: '/co', selectionStart: 3 } });
+    const menu = within(view.getByRole('listbox', { name: 'Commands' }));
+    expect(menu.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '/compact<instructions> · Summarize the conversation',
+      '/context' + 'Show context use',
+    ]);
+    // Tab puts the one picked in, ready for what it takes.
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    fireEvent.keyDown(composer, { key: 'Tab' });
+    expect(composer.value).toBe('/context ');
+
+    // Enter runs the one picked.
+    fireEvent.change(composer, { target: { value: '/comp', selectionStart: 5 } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await settle();
+    expect(backend.send).toHaveBeenCalledWith('a', { id: sent(), text: '/compact' });
+    expect(view.queryByRole('listbox')).toBeNull();
+  });
+
+  it('completes @-mentions with the project folder’s files', async () => {
+    const { backend, composer, view } = await open({ connection: 'sdk' });
+    backend.files.mockResolvedValue(['src/main/', 'src/main/ipc.ts']);
+    fireEvent.change(composer, { target: { value: 'look at @ma', selectionStart: 11 } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    });
+    expect(backend.files).toHaveBeenLastCalledWith('ma');
+    const menu = within(view.getByRole('listbox', { name: 'Files' }));
+    fireEvent.click(menu.getByRole('option', { name: 'src/main/ipc.ts' }));
+    expect(composer.value).toBe('look at @src/main/ipc.ts ');
+    // Esc closes the menu, not the view.
+    fireEvent.change(composer, { target: { value: 'and @ma', selectionStart: 7 } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    });
+    fireEvent.keyDown(composer, { key: 'Escape' });
+    expect(view.queryByRole('listbox')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+  });
+
+  it('sends images pasted into the message, and shows them with it', async () => {
+    const { backend, composer, view, transcript, sent } = await open({ connection: 'sdk' });
+    const png = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(composer, {
+      clipboardData: { files: [png], getData: () => '' },
+    });
+    const pasted = await view.findByRole('img', { name: 'Image 1' });
+    expect(pasted.closest('ul')?.getAttribute('aria-label')).toBe('Images');
+    expect(pasted.getAttribute('src')).toBe('data:image/png;base64,iVBORw==');
+    fireEvent.change(composer, { target: { value: 'What is this?' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await settle();
+    expect(backend.send).toHaveBeenCalledWith('a', {
+      id: sent(),
+      text: 'What is this?',
+      images: [{ mediaType: 'image/png', data: 'iVBORw==' }],
+    });
+    expect(transcript.getByRole('img', { name: 'Image 1' })).toBeTruthy();
+    expect(view.queryByRole('list', { name: 'Images' })).toBeNull();
+  });
+
+  it('shows what a resumed session did before', async () => {
+    const { emit, transcript } = await open({ connection: 'sdk' });
+    emit({
+      type: 'history',
+      events: [
+        { type: 'user', id: 'u1', text: 'Earlier question' },
+        { type: 'text', id: 'm1:0', text: 'Earlier answer' },
+        { type: 'end', messages: ['u1'], seconds: 3, interrupted: false, failed: false },
+      ],
+    });
+    expect(transcript.getByText('Earlier question')).toBeTruthy();
+    expect(transcript.getByText('Earlier answer')).toBeTruthy();
+    expect(transcript.getByText('Worked for 3s')).toBeTruthy();
+  });
+
+  it('words a permission prompt as the CLI does', async () => {
+    const { send, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Fetch it');
+    emit({
+      type: 'permission',
+      id: 'p',
+      tool: 'WebFetch',
+      summary: 'https://example.com',
+      always: null,
+      title: 'Claude wants to fetch example.com',
+    });
+    const prompt = within(
+      transcript.getByRole('group', {
+        name: 'Claude wants to fetch example.com: https://example.com',
+      }),
+    );
+    expect(prompt.getByText('Do you want to proceed?')).toBeTruthy();
+    expect(prompt.getAllByRole('button').map((b) => b.textContent)).toEqual(['Yes', 'No']);
+  });
 });

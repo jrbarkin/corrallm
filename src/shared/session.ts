@@ -57,10 +57,36 @@ export interface SessionOptions {
   mode: PermissionMode;
 }
 
-/** A message the user sends: its id (the turn it starts ends naming it) and its text. */
+/** The kinds of image the user can paste into a message (those Claude reads). */
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+
+/** An image the user pasted into a message: its kind, and its bytes, base64-encoded. */
+export interface MessageImage {
+  mediaType: ImageType;
+  data: string;
+}
+
+/**
+ * A message the user sends: its id (the turn it starts ends naming it), its text, and the images
+ * pasted into it, if any (only connected sessions see them).
+ */
 export interface UserMessage {
   id: string;
   text: string;
+  images?: MessageImage[];
+}
+
+/**
+ * A slash command a session offers (Claude Code's own, the user's and the project's commands and
+ * skills, MCP prompts), as the composer completes it: typed as `/name`, then what it takes.
+ */
+export interface SlashCommand {
+  /** Its name, without the slash. */
+  name: string;
+  description: string;
+  /** What it takes after its name ("<file>"), or '' for nothing. */
+  argumentHint: string;
 }
 
 /** A question the agent asks the user (Claude Code's AskUserQuestion), with answers to pick from. */
@@ -109,6 +135,13 @@ export interface SessionUsage {
 export type SessionEvent =
   /** The session runs (started, or resumed): its model and mode, and the models it offers. */
   | { type: 'started'; model: string | null; mode: PermissionMode; models: ModelChoice[] }
+  /** The slash commands it offers now (sent once it runs, and again whenever they change). */
+  | { type: 'commands'; commands: SlashCommand[] }
+  /**
+   * What a resumed session did before (its turns, as the events they were): shown unless the
+   * transcript already shows them. Sent once it runs, outside any turn.
+   */
+  | { type: 'history'; events: SessionEvent[] }
   | { type: 'user'; id: string; text: string }
   | { type: 'status'; status: 'working' | 'waiting' }
   | { type: 'text'; id: string; text: string; parent?: string }
@@ -126,7 +159,8 @@ export type SessionEvent =
   | { type: 'todos'; id: string; items: Todo[] }
   /**
    * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
-   * or null where it offers no "always".
+   * or null where it offers no "always". `title`: what it asks, as the CLI words it ("Claude wants
+   * to fetch example.com"), when it says.
    */
   | {
       type: 'permission';
@@ -135,6 +169,7 @@ export type SessionEvent =
       summary: string;
       detail?: ToolDetail;
       always: string | null;
+      title?: string;
     }
   | { type: 'question'; id: string; questions: AskedQuestion[] }
   /** Plan mode's plan (Markdown), for the user to approve. */
@@ -160,6 +195,14 @@ export const MAX_ID_LENGTH = 200;
 export const MAX_MESSAGE_LENGTH = 200_000;
 /** The longest answer to a question or a plan. */
 export const MAX_ANSWER_LENGTH = 20_000;
+/** At most this many images in one message. */
+export const MAX_IMAGES = 20;
+/** The largest image the user may paste, in bytes (the Claude API's limit). */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** The longest text searched for when completing a file mention. */
+export const MAX_FILE_QUERY_LENGTH = 500;
+/** At most this many files are offered for a file mention. */
+export const MAX_FILE_MATCHES = 50;
 /** At most this many questions in one prompt (Claude Code asks 1 to 4). */
 export const MAX_QUESTIONS = 4;
 /** What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN. */

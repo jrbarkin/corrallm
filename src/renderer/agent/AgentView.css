@@ -608,7 +608,10 @@
   display: flex;
   flex-direction: column;
   min-width: 260px;
+  /* A connected session can offer many models. */
+  max-height: min(60vh, 480px);
   padding: 4px;
+  overflow-y: auto;
   border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
   border-radius: 10px;
   background: Canvas;
@@ -956,4 +959,189 @@
   .agent-stack-status {
     animation: none;
   }
+}
+
+/* What the composer completes: slash commands, and files to mention, above the box. */
+.agent-input {
+  position: relative;
+}
+
+.agent-completions {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+}
+
+.agent-completions [role='option'] {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-completions [role='option'][aria-selected='true'],
+.agent-completions [role='option']:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.agent-completion-label {
+  flex: none;
+  font-family: ui-monospace, monospace;
+}
+
+.agent-completion-detail {
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+/* Images pasted into a message: in the box before it goes, then in the transcript. */
+.agent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-attachments li {
+  position: relative;
+}
+
+.agent-attachments img,
+.agent-user-images img {
+  display: block;
+  max-width: 160px;
+  max-height: 120px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.agent-attachments button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: CanvasText;
+  color: Canvas;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.agent-attachments button::before {
+  content: '×';
+}
+
+.agent-attachment-problem {
+  margin: 0 0 6px;
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.agent-user-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.agent-queued-images {
+  opacity: 0.7;
+}
+
+/* Markdown in replies: headings, code blocks, quotes, tables, rules. */
+.agent-text .agent-md-heading {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.agent-text h3.agent-md-heading {
+  font-size: 17px;
+}
+
+.agent-text .agent-md-code {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, CanvasText 6%, transparent);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-text .agent-md-code code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.agent-text blockquote {
+  margin: 0 0 8px;
+  padding: 0 0 0 12px;
+  border-left: 3px solid color-mix(in srgb, CanvasText 20%, transparent);
+  opacity: 0.85;
+}
+
+.agent-text hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+}
+
+.agent-text li > ul,
+.agent-text li > ol {
+  margin: 2px 0;
+}
+
+.agent-text a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, CanvasText 40%, transparent);
+}
+
+.agent-md-table {
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.agent-md-table table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agent-md-table th,
+.agent-md-table td {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+}
+
+.agent-md-table th {
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+  font-weight: 600;
 }

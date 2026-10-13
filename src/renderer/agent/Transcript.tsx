@@ -8,6 +8,16 @@ import type { Answer, Entry, PlanAnswer, Session } from './session';
 
 /** The tools that run commands, and those that edit files, across the agents (agents.ts). */
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'exec_command', 'run_shell_command']);
+const EDIT_TOOLS = new Set([
+  'Edit',
+  'Write',
+  'MultiEdit',
+  'NotebookEdit',
+  'apply_patch',
+  'edit',
+  'replace',
+  'write_file',
+]);
 
 /** What the transcript does with the user's answers to prompts. */
 export interface TranscriptAnswers {
@@ -94,7 +104,18 @@ function EntryView({
     case 'user':
       return (
         <div className="agent-user">
-          <p>{entry.text}</p>
+          {entry.images !== undefined && entry.images.length > 0 && (
+            <div className="agent-user-images">
+              {entry.images.map((image, i) => (
+                <img
+                  key={i}
+                  src={`data:${image.mediaType};base64,${image.data}`}
+                  alt={`Image ${String(i + 1)}`}
+                />
+              ))}
+            </div>
+          )}
+          {entry.text !== '' && <p>{entry.text}</p>}
         </div>
       );
     case 'text':
@@ -232,7 +253,14 @@ function Permission({
   onAnswer: (permissionId: string, answer: Answer) => void;
 }) {
   const shell = SHELL_TOOLS.has(entry.tool);
-  const title = shell ? `${entry.tool === 'Bash' ? 'Bash' : 'Shell'} command` : 'Edit file';
+  const edit = EDIT_TOOLS.has(entry.tool);
+  const title =
+    entry.title ??
+    (shell
+      ? `${entry.tool === 'Bash' ? 'Bash' : 'Shell'} command`
+      : edit
+        ? 'Edit file'
+        : `Use ${entry.tool}`);
   const always =
     entry.always === undefined
       ? shell
@@ -271,7 +299,7 @@ function Permission({
       <code className="agent-permission-summary">{entry.summary}</code>
       {entry.detail && <Detail detail={entry.detail} />}
       <p>
-        {shell ? 'Do you want to proceed?' : `Do you want to make this edit to ${entry.summary}?`}
+        {edit ? `Do you want to make this edit to ${entry.summary}?` : 'Do you want to proceed?'}
       </p>
       <div className="agent-permission-choices">
         {choices.map(([answer, text]) => (

@@ -1,8 +1,12 @@
 import type { IpcArgs } from '../../shared/ipc';
 import {
   CONNECTIONS,
+  IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
+  MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES,
   MAX_MESSAGE_LENGTH,
   MAX_QUESTIONS,
   MODEL_PATTERN,
@@ -10,6 +14,7 @@ import {
   PLAN_MODES,
 } from '../../shared/session';
 import type {
+  MessageImage,
   PermissionMode,
   PlanAnswer,
   SessionAnswer,
@@ -40,13 +45,52 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
 
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
-  const { id, text } = record(message, 'the message', ['id', 'text']);
-  if (typeof text !== 'string' || text.trim() === '') {
+  const { id, text, images } = record(message, 'the message', ['id', 'text', 'images']);
+  const pasted = images === undefined ? [] : parseImages(images);
+  // A message may be only an image.
+  if (typeof text !== 'string' || (text.trim() === '' && pasted.length === 0)) {
     throw new TypeError('Expected the message to have text');
   }
   if (text.length > MAX_MESSAGE_LENGTH) throw new RangeError('The message is too long');
-  const parsed: UserMessage = { id: parseId(id, 'message'), text };
+  const parsed: UserMessage = {
+    id: parseId(id, 'message'),
+    text,
+    ...(pasted.length === 0 ? {} : { images: pasted }),
+  };
   return [parseId(agentId, 'agent'), parsed];
+}
+
+/** project:files: what to search the project folder's files for. */
+export function parseFilesArgs(args: unknown[]): IpcArgs<'project:files'> {
+  const [query] = expect(args, 1, 'what to search for');
+  if (typeof query !== 'string' || query.length > MAX_FILE_QUERY_LENGTH) {
+    throw new TypeError('Expected what to search for');
+  }
+  return [query];
+}
+
+/** The longest base64 an image of the largest size takes. */
+const MAX_IMAGE_BASE64 = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Images pasted into a message: a few, of the kinds Claude reads, base64-encoded, not too large. */
+function parseImages(value: unknown): MessageImage[] {
+  if (!Array.isArray(value) || value.length > MAX_IMAGES) {
+    throw new TypeError(`Expected at most ${String(MAX_IMAGES)} images`);
+  }
+  return value.map((image): MessageImage => {
+    const { mediaType, data } = record(image, 'an image', ['mediaType', 'data']);
+    if (
+      typeof data !== 'string' ||
+      data.length === 0 ||
+      data.length % 4 !== 0 ||
+      !BASE64.test(data)
+    ) {
+      throw new TypeError('Expected an image, base64-encoded');
+    }
+    if (data.length > MAX_IMAGE_BASE64) throw new RangeError('The image is too large');
+    return { mediaType: oneOf(mediaType, IMAGE_TYPES, 'kind of image'), data };
+  });
 }
 
 export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {

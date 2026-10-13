@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels, with a project folder their agents work in; and node-pty installed but used only by the packaged-build self-test. A Claude agent runs Simulated (a scripted session) or connected to the real `claude` CLI, in a Terminal or through the Agent SDK: the connection layer is built (see Connected sessions), but its two connectors are placeholders until their builds land.
+corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels, with a project folder their agents work in; and node-pty installed but used only by the packaged-build self-test. A Claude agent runs Simulated (a scripted session) or connected to the real `claude` CLI, in a Terminal or through the Agent SDK (see Connected sessions): the Agent SDK connector is built (`src/main/sessions/sdk/`); the Terminal one is a placeholder until its build lands.
 
 ## Commands
 
@@ -26,6 +26,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 - The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).
 - Tests never run the real Claude. Main's session tests use the fake connector (`src/main/sessions/fake.ts`), renderer tests a fake backend (`src/renderer/test-backend.ts`), and e2e runs the app with `CORRALLM_FAKE_SESSIONS=1` (`launchApp({ env })`; honoured only by unpackaged builds), which gives every connection the fake connector. A connector's own tests drive a fake `claude` that prints the CLI's real formats.
+- The Agent SDK connector's tests replay what the real CLI did (`src/main/sessions/sdk/fixtures/`, recorded with Haiku in a scratch folder, its paths and the user's own skills and servers taken out) and drive the real SDK against `fake-claude.mjs`; e2e (`e2e/sdk.e2e.ts`) points the built app at it with `CORRALLM_CLAUDE_PATH`. To record new fixtures, run a few tiny prompts through the SDK in a throwaway folder, never a real repository, and keep the same sanitizing.
 - Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
 
 ## Layout
@@ -42,6 +43,14 @@ src/main/sessions/  Connected sessions (see Connected sessions): connector.ts is
                 connectors.ts picks each connection's connector, fake.ts is the fake for tests,
                 args.ts validates the channels' arguments, environment.ts and claude.ts resolve
                 the agents' environment (the login shell's) and the `claude` executable.
+src/main/sessions/sdk/  The Agent SDK connection (see Agent SDK below): connector.ts starts a session
+                (query() with Claude Code's options), session.ts runs it (turns, interrupts, mode,
+                model), translate.ts turns SDK messages into session events (tools.ts words tool
+                calls: summaries, diffs, output), prompts.ts answers canUseTool (permissions,
+                AskUserQuestion, plans), history.ts replays a resumed session's transcript, inbox.ts
+                feeds the streaming query. fixtures/ holds what the real CLI did (recorded.ts reads
+                it); fake-claude.mjs is a fake `claude` that speaks the SDK's protocol.
+src/main/files.ts   The project folder's files for @-mentions (project:files): git's list, or a walk.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
@@ -134,6 +143,18 @@ A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `termi
 - Main (`sessions/manager.ts`) starts the session with the connection's `Connector` in the canvas's project folder (it refuses without one), with the agents' environment (the user's login shell's, cleaned of what corrallm was started from: `environment.ts`), resuming the agent's last session id (remembered per canvas file in `memory.ts`, so sessions survive a restart; the same id is resumed whichever connection the agent switches to). Opening or forgetting a canvas, choosing another project folder (which forgets the ids), a renderer that goes or reloads, and quitting (`before-quit` in index.ts) close sessions.
 - A connector emits `SessionEvent`s through its `SessionHost`: `started` (model, mode, the models it offers, which the composer's model picker lists), then per turn: `user` (with the renderer's message id, or a new one for a message typed in a terminal), `status` (working, or waiting on the user) and entries by id (`text`/`thinking` stream in, `tool`/`todos` replace; `parent` nests a subagent's entries), prompts (`permission` with what "always" allows, `question` for AskUserQuestion, `plan` for ExitPlanMode; `withdrawn` when no longer asked), `notice` (compaction, retries, usage limits with their reset time, login problems), `usage`, `mode`, `model`, and exactly one `end` naming the messages it answered (interrupted, or failed). `status` is never sent outside a turn: only `end` makes a session idle. `closed` if the session stops by itself; it calls `remember(sessionId)` whenever its CLI's session id is known or changes (as after /clear).
 - To build a connection: write its `Connector` in its own folder (`src/main/sessions/sdk/`, `src/main/sessions/terminal/`), find the CLI with `requireClaude(spec.env)`, and register it in `connectors.ts`. Its tests drive a fake `claude`; the manager, IPC, renderer and UI need no change unless the protocol grows (then extend `session.ts`'s types, `connected.ts`'s `receive`, and their tests). The Terminal connection also adds its terminal channels and view (the agent view shows the CLI's own terminal in place of the transcript and composer).
+- Beyond turns, a session can send `commands` (the slash commands the composer completes; again when they change) and `history` (a resumed session's past turns, as events: the renderer puts them ahead of its transcript unless it shows them already, matching entries by id). A message may carry pasted `images` (validated in args.ts: kinds Claude reads, base64, at most 5 MB each). The composer's @-mentions search the project folder over `project:files` (`src/main/files.ts`); the renderer sends only what was typed.
+
+### Agent SDK
+
+`src/main/sessions/sdk/` runs a Claude agent through `@anthropic-ai/claude-agent-sdk` (bundled into main: devDependency, root entry only; its per-platform CLI copies are skipped in `pnpm-workspace.yaml`, `ignoredOptionalDependencies`). Rules it keeps:
+
+- One streaming `query()` per session, fed by an `Inbox`, so the CLI runs between turns (interrupts, mode and model changes need it). It runs the user's own `claude` (`pathToClaudeCodeExecutable`), never a JS CLI, with Claude Code's own system prompt (`systemPrompt: { type: 'preset', preset: 'claude_code' }`; without it the agent is bare), the user, project and local settings, the mode always given (Manual is the SDK's `default`), `allowDangerouslySkipPermissions` (so the composer can switch to bypass), partial messages (streaming), summarized thinking (`--thinking-display`), and `perTaskStopAffordance` (interrupting stops the turn, not background work).
+- Each message is sent with the renderer's id as its uuid and `origin: { kind: 'human' }`; a turn ends on the `result` whose `user_message_uuids` name it. A result naming none of the messages waiting (a background task's follow-up) ends none of them. Interrupt asks the CLI to cancel what it queued too, and ends what it cancelled.
+- Its session id is remembered once a turn has run (the CLI writes the transcript from the first message), and again after /clear. A session that cannot be resumed starts afresh, with a warning. A resumed session's history comes from `getSessionMessages` (history.ts).
+- Entry ids are stable between live and history: text and thinking are `<API message id>:<block index>`, tool calls their `tool_use` id, user messages their uuid.
+- Prompts are canUseTool calls: permissions offer "always" only where the CLI suggests a rule to keep (its suggestions, worded as Claude Code words them); No denies and stops the turn, as the CLI's No does. An approved plan is carried out in the mode chosen once the CLI has left plan mode (it reports the mode it goes back to).
+- Policy: Anthropic's docs ask third-party products not to use a claude.ai subscription login through the Agent SDK without approval; corrallm passes no credentials and uses whatever login `claude` has. The Terminal connection runs the CLI itself and is unaffected.
 
 ## Native modules
 
@@ -153,4 +174,5 @@ A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `termi
 - Unsigned macOS builds are re-signed ad hoc in the `postPackage` hook so the bundle signature verifies. Signing and notarization turn on from env vars (`.env.example`); `CORRALLM_UNSIGNED=1` forces an unsigned build.
 - `build/rpm.spec.ejs` is a patched copy of electron-installer-redhat's template (rpmbuild >= 4.20 fix); delete it once upstream ships the fix.
 - Forge 8's terminal UI hides plain logs; set `CI=1` for linear output.
+- The main bundle is CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` would catch it.
 - Auto-update is a TODO in `src/main/index.ts` (Squirrel + ZIP makers are compatible with `update-electron-app`).
