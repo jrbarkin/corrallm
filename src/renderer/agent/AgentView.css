@@ -738,6 +738,59 @@
   background: color-mix(in srgb, #dc2626 80%, black);
 }
 
+/*
+ * A panel above the message box, in the accent colour: Terminal offered for a command only its
+ * terminal runs; the MCP servers (/mcp); a rewind to confirm.
+ */
+.agent-offer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 7%, Canvas);
+  font-size: 13px;
+}
+
+.agent-offer p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.agent-offer button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-offer button:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-offer button[data-primary] {
+  border-color: var(--graph-accent, #2563eb);
+  background: var(--graph-accent, #2563eb);
+  color: white;
+}
+
+.agent-offer button[data-primary]:hover {
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 82%, black);
+  color: white;
+}
+
+.agent-offer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .agent-ok {
   display: flex;
   flex-wrap: wrap;

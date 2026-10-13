@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../shared/session';
-import type { ImageType } from '../../shared/session';
+import type { ImageType, SlashCommand } from '../../shared/session';
 import { AgentType } from '../graph/agents';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
@@ -66,6 +66,7 @@ export function Composer({
   field,
   placeholder,
   above,
+  commands = session.commands,
 }: {
   agentName: string;
   agent: AgentType;
@@ -79,6 +80,8 @@ export function Composer({
   placeholder?: string;
   /** What sits right above the text box (the queue's ⊕, and what the run asks of the user). */
   above?: ReactNode;
+  /** The slash commands it completes: the session's, unless the view knows more. */
+  commands?: readonly SlashCommand[] | undefined;
 }) {
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
@@ -123,7 +126,7 @@ export function Composer({
   const mention = at?.kind === 'file' ? at.query : undefined;
   const choices: Choice[] =
     at?.kind === 'command'
-      ? matchCommands(session.commands ?? [], at.query).map((command) => ({
+      ? matchCommands(commands ?? [], at.query).map((command) => ({
           value: command.name,
           label: `/${command.name}`,
           detail: [command.argumentHint, command.description].filter(Boolean).join(' · '),

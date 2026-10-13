@@ -24,6 +24,7 @@ import type { HeldAsk } from '../run/asks';
 import { SearchPicker } from '../search/SearchPicker';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
+import { completedCommands, terminalCommand } from './commands';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
@@ -34,7 +35,7 @@ import { Rail } from './Rail';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
-import type { Answer, PlanAnswer, Session } from './session';
+import type { Answer, MessageImage, PlanAnswer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
 
@@ -73,6 +74,11 @@ export interface SessionControls extends ComposerControls {
  * a command, as the bar says. A Terminal agent has no composer: the bar, under its terminal, has
  * a box of its own for the answer. Either way, that answer goes to the agent's session as a
  * message (RunStore.decide).
+ *
+ * An Agent SDK agent can continue its conversation in Terminal, where Claude Code itself runs (the
+ * connections share its session): from its agent chip, or where a command only Claude Code's
+ * terminal runs is typed (/permissions, /login…: commands.ts), which is offered there instead of
+ * being sent, and runs there once the agent has switched.
  */
 export function AgentView({
   node,
@@ -87,6 +93,7 @@ export function AgentView({
   project,
   terminal,
   onAgent,
+  onContinueInTerminal,
   onAnswer,
   onSimulateQuestion,
   edits,
@@ -122,6 +129,8 @@ export function AgentView({
   terminal: TerminalBackend;
   /** Sets its type and how it runs. */
   onAgent: (agent: AgentType, connection: AgentConnection) => void;
+  /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
+  onContinueInTerminal: (command?: string) => void;
   onAnswer: (questionId: string, answer: string) => void;
   /** A stand-in for an agent asking, until agents are connected. */
   onSimulateQuestion: () => void;
@@ -241,6 +250,8 @@ export function AgentView({
   const [peer, setPeer] = useState<string>();
   /** The wait target whose step is being picked in that queue. */
   const [choosing, setChoosing] = useState<StepChoice>();
+  /** A command typed that only Claude Code's terminal runs, while Terminal is offered for it. */
+  const [offer, setOffer] = useState<string>();
   const chooseStep = useCallback((choice: StepChoice) => {
     setPeer(choice.agent);
     setChoosing(choice);
@@ -290,6 +301,26 @@ export function AgentView({
   );
   /** Its card, on top of the stack while it minimizes into the rail. */
   const itself: StackedAgent = { id: node.id, name, agent, status: session.status };
+  /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
+  const commands = connection === 'sdk' ? completedCommands(session.commands) : session.commands;
+  /**
+   * What the composer sends: a command only Claude Code's terminal runs is offered there instead;
+   * while the run asks (`ask.reply`), the answer, unless it is a command the session runs.
+   */
+  const send = (text: string, images?: MessageImage[]) => {
+    if (connection === 'sdk' && terminalCommand(text, session.commands)) {
+      setOffer(text.trim());
+      return;
+    }
+    if (ask?.reply && !(connection !== 'simulated' && isCommand(text, session.commands))) {
+      own.onDecide(ask.item.id, {
+        reply: text,
+        ...(images === undefined || images.length === 0 ? {} : { images }),
+      });
+      return;
+    }
+    controls.send(text, images);
+  };
   return (
     <div
       ref={backdrop}
@@ -341,7 +372,14 @@ export function AgentView({
               >
                 All queues
               </button>
-              <AgentChip agent={agent} connection={connection} onChange={onAgent} />
+              <AgentChip
+                agent={agent}
+                connection={connection}
+                onChange={onAgent}
+                onContinueInTerminal={() => {
+                  onContinueInTerminal();
+                }}
+              />
             </header>
             <div ref={body} className="agent-body">
               <aside className="agent-side" data-column="own" aria-label="Questions and queue">
@@ -462,27 +500,25 @@ export function AgentView({
                     agent={agent}
                     connected={connection !== 'simulated'}
                     session={session}
-                    controls={
-                      ask?.reply
-                        ? {
-                            ...controls,
-                            send: (text, images) => {
-                              if (connection !== 'simulated' && isCommand(text, session.commands)) {
-                                controls.send(text, images);
-                                return;
-                              }
-                              own.onDecide(ask.item.id, {
-                                reply: text,
-                                ...(images === undefined || images.length === 0 ? {} : { images }),
-                              });
-                            },
-                          }
-                        : controls
-                    }
+                    commands={commands}
+                    controls={{ ...controls, send }}
                     field={composer}
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={
                       <>
+                        {offer !== undefined && (
+                          <TerminalOffer
+                            command={offer}
+                            onContinue={() => {
+                              setOffer(undefined);
+                              onContinueInTerminal(offer);
+                            }}
+                            onCancel={() => {
+                              setOffer(undefined);
+                              composer.current?.focus();
+                            }}
+                          />
+                        )}
                         {ask && (
                           <AskBar
                             ask={ask}
@@ -612,6 +648,51 @@ function AskBar({
   );
 }
 
+/**
+ * Offers Terminal for a command only Claude Code's terminal runs, above the composer: "/permissions
+ * opens a screen of Claude Code's own…: [Continue in Terminal] [Cancel]". Esc cancels, leaving the
+ * view open.
+ */
+function TerminalOffer({
+  command,
+  onContinue,
+  onCancel,
+}: {
+  command: string;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="agent-offer"
+      role="group"
+      aria-label="Continue in Terminal?"
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      <p>
+        {command} opens a screen of Claude Code’s own, which only its terminal shows: continue this
+        conversation in Terminal to run it there.
+      </p>
+      <button
+        type="button"
+        data-primary=""
+        // It asks for the user's attention: the keyboard comes here.
+        autoFocus
+        onClick={onContinue}
+      >
+        Continue in Terminal
+      </button>
+      <button type="button" onClick={onCancel}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 /** What the empty transcript says about how the session runs, and what it needs. */
 function sessionNote(
   agent: AgentType,
@@ -630,26 +711,40 @@ function sessionNote(
     : `${cli} works in ${project.name}, ${how}.`;
 }
 
+/** A choice in the agent chip: a type and how it runs, or continuing the conversation in Terminal. */
+interface Choice {
+  agent: AgentType;
+  connection: AgentConnection;
+  continues?: true;
+}
+
 /** Every agent type with each way it runs, as the agent chip offers them. */
-const CHOICES = Object.values(AgentType).flatMap((agent) =>
+const CHOICES: readonly Choice[] = Object.values(AgentType).flatMap((agent) =>
   AGENT_CONNECTIONS[agent].map((connection) => ({ agent, connection })),
 );
 
 /**
  * The agent's type and how it runs: a colour-coded chip ("Claude · Terminal") that opens a dropdown
- * of the agent types, each with the ways it can run.
+ * of the agent types, each with the ways it can run; for an Agent SDK agent, first, continuing its
+ * conversation in Terminal.
  */
 function AgentChip({
   agent,
   connection,
   onChange,
+  onContinueInTerminal,
 }: {
   agent: AgentType;
   connection: AgentConnection;
   onChange: (agent: AgentType, connection: AgentConnection) => void;
+  onContinueInTerminal: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const label = agentLabel(agent, connection);
+  const choices: readonly Choice[] =
+    connection === 'sdk'
+      ? [{ agent, connection: 'terminal', continues: true }, ...CHOICES]
+      : CHOICES;
   return (
     <div className="graph-agent-chip">
       <button
@@ -670,16 +765,23 @@ function AgentChip({
       {open && (
         <SearchPicker
           label="Agent"
-          options={CHOICES}
-          optionLabel={(choice) => agentLabel(choice.agent, choice.connection)}
-          optionDetail={(choice) =>
-            AGENT_CONNECTIONS[choice.agent].length > 1
-              ? CONNECTION_INFO[choice.connection].description
-              : undefined
+          options={choices}
+          optionLabel={(choice) =>
+            choice.continues ? 'Continue in Terminal' : agentLabel(choice.agent, choice.connection)
           }
-          optionKey={(choice) => `${choice.agent}/${choice.connection}`}
+          optionDetail={(choice) =>
+            choice.continues
+              ? 'This conversation, in Claude Code’s own terminal'
+              : AGENT_CONNECTIONS[choice.agent].length > 1
+                ? CONNECTION_INFO[choice.connection].description
+                : undefined
+          }
+          optionKey={(choice) =>
+            choice.continues ? 'continue' : `${choice.agent}/${choice.connection}`
+          }
           onPick={(choice) => {
-            onChange(choice.agent, choice.connection);
+            if (choice.continues) onContinueInTerminal();
+            else onChange(choice.agent, choice.connection);
             setOpen(false);
           }}
           onCancel={() => {

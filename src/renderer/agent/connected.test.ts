@@ -492,3 +492,31 @@ describe('a connected session, resumed or completed', () => {
     expect(backend.files).toHaveBeenCalledWith('ipc');
   });
 });
+
+describe('a connected session continued in Terminal', () => {
+  it('sends a command typed for Terminal once the agent runs there, never to its SDK session', async () => {
+    const { store, backend, emit } = connected();
+    store.open('a');
+    emit('a', 'sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    store.sendOnceIn('a', 'terminal', 'Claude', '/permissions');
+    await settle();
+    expect(backend.send).not.toHaveBeenCalled();
+
+    // The canvas switches it: its Agent SDK session closes, and its terminal gets the command.
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    await settle();
+    expect(backend.close).toHaveBeenCalledWith('a');
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: '/permissions',
+    });
+    // Once.
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    await settle();
+    expect(backend.send).toHaveBeenCalledOnce();
+  });
+});

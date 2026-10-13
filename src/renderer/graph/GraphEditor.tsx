@@ -943,6 +943,19 @@ function Editor({
                 setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
               );
             }}
+            onContinueInTerminal={(command) => {
+              // Its terminal resumes the conversation (the connections share it), and runs the
+              // command typed for it once the agent runs there.
+              if (command !== undefined) {
+                sessionStore.sendOnceIn(
+                  openedNode.id,
+                  'terminal',
+                  openedNode.data.agent ?? DEFAULT_AGENT,
+                  command,
+                );
+              }
+              setGraph((g) => setConnection(g, openedNode.id, 'terminal'));
+            }}
             onAnswer={(questionId, answer) => {
               setGraph((g) => answerQuestion(g, openedNode.id, questionId, answer));
             }}

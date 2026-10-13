@@ -71,11 +71,13 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   const transcript = view.getByRole('log', { name: 'Transcript' });
 
-  // Slash commands and the project's files complete as they are typed.
+  // Slash commands and the project's files complete as they are typed: the session's, then
+  // Claude Code's own screens, which run in Terminal.
   await composer.fill('/co');
   await expect(view.getByRole('listbox', { name: 'Commands' }).getByRole('option')).toHaveText([
     /^\/compact/,
     /^\/context/,
+    /^\/configIn Terminal/,
   ]);
   await composer.fill('see @READ');
   await expect(

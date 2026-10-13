@@ -527,9 +527,11 @@ describe('a connected agent', () => {
     });
     fireEvent.change(composer, { target: { value: '/co', selectionStart: 3 } });
     const menu = within(view.getByRole('listbox', { name: 'Commands' }));
+    // Then Claude Code's own screens, which run in Terminal.
     expect(menu.getAllByRole('option').map((o) => o.textContent)).toEqual([
       '/compact<instructions> · Summarize the conversation',
       '/context' + 'Show context use',
+      '/config' + 'In Terminal · Open settings',
     ]);
     // Tab puts the one picked in, ready for what it takes.
     fireEvent.keyDown(composer, { key: 'ArrowDown' });
@@ -619,5 +621,70 @@ describe('a connected agent', () => {
     );
     expect(prompt.getByText('Do you want to proceed?')).toBeTruthy();
     expect(prompt.getAllByRole('button').map((b) => b.textContent)).toEqual(['Yes', 'No']);
+  });
+});
+
+describe('an Agent SDK agent continued in Terminal', () => {
+  it('offers Terminal for a command only Claude Code’s terminal runs, and runs it there', async () => {
+    const { backend, composer, view, emit, card } = await open({ connection: 'sdk' });
+    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    fireEvent.change(composer, { target: { value: '/perm', selectionStart: 5 } });
+    const menu = within(view.getByRole('listbox', { name: 'Commands' }));
+    expect(menu.getByRole('option').textContent).toBe(
+      '/permissions' + 'In Terminal · Manage allow and deny tool permission rules',
+    );
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await settle();
+    // Not sent to the Agent SDK session: Terminal is offered instead.
+    expect(backend.send).not.toHaveBeenCalled();
+    const offer = within(view.getByRole('group', { name: 'Continue in Terminal?' }));
+    expect(offer.getByText(/^\/permissions opens a screen of Claude Code’s own/)).toBeTruthy();
+
+    fireEvent.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
+    await settle();
+    expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
+      'Agent: Claude · Terminal',
+    );
+    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: '/permissions',
+    });
+  });
+
+  it('takes the offer back on Cancel, and keeps the view open on Escape', async () => {
+    const { backend, send, view } = await open({ connection: 'sdk' });
+    await send('/login');
+    fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+    expect(view.queryByRole('group', { name: 'Continue in Terminal?' })).toBeNull();
+    await send('/hooks');
+    fireEvent.keyDown(view.getByRole('button', { name: 'Continue in Terminal' }), {
+      key: 'Escape',
+    });
+    expect(view.queryByRole('group', { name: 'Continue in Terminal?' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+    expect(backend.send).not.toHaveBeenCalled();
+  });
+
+  it('continues the conversation in Terminal from its agent chip', async () => {
+    const { backend, view } = await open({ connection: 'sdk' });
+    fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
+    const first = view.getAllByRole('option')[0];
+    expect(first?.textContent).toMatch(/^Continue in Terminal.*Claude Code’s own terminal/);
+    if (!first) throw new Error('no options');
+    fireEvent.click(first);
+    await settle();
+    expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
+      'Agent: Claude · Terminal',
+    );
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    expect(backend.send).not.toHaveBeenCalled();
   });
 });

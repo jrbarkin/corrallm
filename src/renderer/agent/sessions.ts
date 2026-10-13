@@ -36,6 +36,11 @@ export class SessionStore {
   readonly #onDone = new Map<string, (interrupted: boolean, reply: string) => void>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
+  /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
+  readonly #onceIn = new Map<
+    string,
+    { connection: AgentConnection; agent: AgentType; text: string }
+  >();
   #unsubscribe: (() => void) | undefined;
 
   constructor(backend: SessionBackend = NO_BACKEND) {
@@ -71,6 +76,11 @@ export class SessionStore {
       if (driving && driving.connection !== connection) {
         this.#letGo(id);
         this.#idle(id);
+      }
+      const once = this.#onceIn.get(id);
+      if (once?.connection === connection) {
+        this.#onceIn.delete(id);
+        this.send(id, once.agent, once.text);
       }
     }
   }
@@ -112,6 +122,18 @@ export class SessionStore {
       if (this.of(agentId).queued.some((queued) => queued.id === id)) this.unqueue(agentId, id);
       else if (this.#turns.get(agentId) === id) this.stop(agentId);
     };
+  }
+
+  /**
+   * Sends a message once the agent runs with `connection`, as the canvas switches it (`sync`): a
+   * command typed for Claude Code's terminal, sent there once the agent continues in Terminal.
+   */
+  sendOnceIn(agentId: string, connection: AgentConnection, agent: AgentType, text: string): void {
+    if (this.#connections.get(agentId) === connection) {
+      this.send(agentId, agent, text);
+      return;
+    }
+    this.#onceIn.set(agentId, { connection, agent, text });
   }
 
   /** Tells the user something in the agent's session (a notice in its transcript). */
@@ -176,6 +198,7 @@ export class SessionStore {
     for (const onDone of this.#onDone.values()) onDone(true, '');
     this.#onDone.clear();
     this.#turns.clear();
+    this.#onceIn.clear();
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#sessions = {};
@@ -283,6 +306,7 @@ export class SessionStore {
   /** The agent is gone: its session ends, and whoever waits on its queued messages hears. */
   #forget(agentId: string): void {
     this.#letGo(agentId);
+    this.#onceIn.delete(agentId);
     for (const { id } of this.of(agentId).queued) {
       const onDone = this.#onDone.get(id);
       this.#onDone.delete(id);

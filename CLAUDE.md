@@ -102,7 +102,12 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      GraphEditor keeps the stack (the agent shown first) and clears it when the view
                      closes. motion.ts animates the panel: out of its canvas card and back, minimized
                      into the rail, grown out of the ⊕ or a stacked card. Its agent chip sets the
-                     agent's type and connection (agents.ts: AGENT_CONNECTIONS, Terminal first). session.ts is the
+                     agent's type and connection (agents.ts: AGENT_CONNECTIONS, Terminal first);
+                     an Agent SDK agent's chip also offers Continue in Terminal, and so does its
+                     composer for a command only Claude Code's terminal runs (commands.ts:
+                     /permissions, /login, a bare /config…, completed "In Terminal" and never sent
+                     to the SDK session): the agent switches to Terminal, which resumes the same
+                     session, and SessionStore.sendOnceIn runs the command there. session.ts is the
                      model and reducer; sessions.ts keeps every agent's session
                      (useSyncExternalStore) so turns play on while the canvas is shown, and gives
                      each one a driver (driver.ts): scripted.ts plays scripted turns (script.ts
