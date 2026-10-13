@@ -20,6 +20,8 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
+  /* xterm.js stacks its layers up to z-index 11: kept inside, under the view's menus. */
+  isolation: isolate;
 }
 
 .agent-terminal-screen .xterm {

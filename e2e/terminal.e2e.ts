@@ -242,6 +242,11 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   await claudeReady();
   // Claude Code ran only in the terminal: the Agent SDK never started it.
   expect(await starts()).toHaveLength(1);
+
+  // Its chip's menu opens over the terminal, and takes the pointer there.
+  await view.getByRole('button', { name: 'Agent: Claude · Terminal' }).click();
+  await view.getByRole('option', { name: /^Claude · Agent SDK/ }).click({ timeout: 5000 });
+  await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
 });
 
 test('opens a link Cmd-clicked in the terminal in the browser, once main has asked', async () => {
