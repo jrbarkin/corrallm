@@ -2,6 +2,8 @@ import { useId, useState } from 'react';
 
 import type { TerminalAsk } from '../../shared/session';
 import { Markdown } from '../agent/Markdown';
+import { ToolDetailView } from '../agent/ToolDetail';
+import { permissionQuestion } from '../agent/tools';
 import type { AskChoice, HeldAsk } from '../run/asks';
 import type { Answer } from '../run/runner';
 import { AGENT_CLI, DEFAULT_AGENT } from './agents';
@@ -220,7 +222,8 @@ export function QuestionCard({
 
 /**
  * What a Terminal agent's Claude Code asks the user in its terminal, shown (never answered) here,
- * as Claude Code shows it: a permission (the tool, what it acts on), its questions (each with its
+ * as Claude Code shows it: a permission (the tool, what it acts on, and the start of what its
+ * prompt shows: a command in full, an edit's diff, a new file), its questions (each with its
  * header, and its answers with what they mean), a plan to approve, whether to trust the folder
  * (as it first runs there), or what it waits for, in its own words. The user answers in the
  * terminal: Open terminal opens the agent's view.
@@ -233,7 +236,8 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
           <>
             <span className="graph-question-header">{ask.tool}</span>
             {ask.summary !== '' && <code className="graph-question-code">{ask.summary}</code>}
-            <p className="graph-question-text">Do you want to proceed?</p>
+            {ask.detail && <ToolDetailView detail={ask.detail} />}
+            <p className="graph-question-text">{permissionQuestion(ask.tool, ask.summary)}</p>
           </>
         );
       case 'question':

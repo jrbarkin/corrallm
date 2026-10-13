@@ -282,6 +282,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       // The terminal is its own model picker.
       models: [],
     });
+    const unheard = this.#cli.unheard?.();
+    if (unheard !== undefined) this.#host.emit({ type: 'unheard', text: unheard });
     this.#readUsage();
   }
 

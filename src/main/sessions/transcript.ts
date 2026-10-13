@@ -72,6 +72,27 @@ export function diff(lines: DiffLine[]): ToolDetail {
   };
 }
 
+/**
+ * The start of a detail, as a short preview shows it: its first `lines` lines, then how many more
+ * there are (a diff keeps its counts).
+ */
+export function preview(detail: ToolDetail, lines: number): ToolDetail {
+  const more = (count: number) => `… (${String(count)} more line${count === 1 ? '' : 's'})`;
+  if (detail.kind === 'diff') {
+    if (detail.lines.length <= lines) return detail;
+    return {
+      ...detail,
+      lines: [
+        ...detail.lines.slice(0, lines),
+        { kind: 'same', text: more(detail.lines.length - lines) },
+      ],
+    };
+  }
+  const all = detail.text.split('\n');
+  if (all.length <= lines) return detail;
+  return { kind: 'output', text: [...all.slice(0, lines), more(all.length - lines)].join('\n') };
+}
+
 /** The diff of replacing `before` with `after`: every line of one removed, of the other added. */
 export function replacement(before: string, after: string): ToolDetail {
   const split = (value: string) => (value === '' ? [] : value.replace(/\n$/, '').split('\n'));

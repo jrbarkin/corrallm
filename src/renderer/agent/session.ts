@@ -1,8 +1,9 @@
-import { DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
+import { CONNECTION_CLI, DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
 import type {
   AgentSettings,
   AskedQuestion,
   BackgroundTask,
+  Cli,
   CodexMode,
   Connection,
   DiffLine,
@@ -23,6 +24,7 @@ import type {
   ToolStatus,
 } from '../../shared/session';
 import { AgentType } from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import type { CardQuestion } from '../graph/Questions';
 import { mergeHistory } from './history';
 
@@ -136,6 +138,18 @@ export function modeOf(agent: AgentType, mode: Mode): ModeInfo {
   return shown;
 }
 
+/**
+ * Which conversation the transcript's messages are of: an agent's CLI's (main resumes one per CLI,
+ * whichever of its connections runs it), or its simulated session's. An agent that runs another
+ * way keeps its transcript, so it may hold several.
+ */
+export type Conversation = Cli | 'simulated';
+
+/** The conversation an agent that runs as `connection` is on. */
+export function conversationOf(connection: AgentConnection): Conversation {
+  return connection === 'simulated' ? 'simulated' : CONNECTION_CLI[connection];
+}
+
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';
 
@@ -152,9 +166,16 @@ export type Entry =
   /**
    * The user's message, with the images pasted into it. `reached`: a connected session's CLI has
    * it (main said so, by its id, or it is from the session's history): what a rewind can go back
-   * to.
+   * to. `conversation`: the one it was sent in.
    */
-  | { id: string; kind: 'user'; text: string; images?: MessageImage[]; reached?: true }
+  | {
+      id: string;
+      kind: 'user';
+      text: string;
+      images?: MessageImage[];
+      reached?: true;
+      conversation?: Conversation;
+    }
   | { id: string; kind: 'text'; text: string; parent?: string }
   | { id: string; kind: 'thinking'; text: string; seconds: number; parent?: string }
   | {
@@ -213,8 +234,8 @@ export type Entry =
       text: string;
       switchTo?: Connection;
     }
-  /** Where the conversation was cleared (/clear): Claude starts afresh after it. */
-  | { id: string; kind: 'cleared' }
+  /** Where the conversation was cleared (/clear): it starts afresh after it. */
+  | { id: string; kind: 'cleared'; conversation?: Conversation }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 
@@ -265,20 +286,51 @@ export interface Session {
   suggestion?: string;
   /** What a Terminal session's Claude Code asks the user in its terminal now (answered there). */
   asking?: readonly TerminalAsk[];
+  /**
+   * Why corrallm can't hear a connected session's replies, as it said when it started (its CLI's
+   * settings turn off the hooks it listens to): the queues' Run can't read them.
+   */
+  unheard?: string;
 }
 
 /**
- * The user's messages a rewind can go back to, oldest first: those the CLI has (`reached`), of the
- * conversation now, since the last /clear (what came before it is another conversation, as in
- * Claude Code).
+ * The user's messages of `conversation` since its last /clear (what came before it is another
+ * conversation, as in Claude Code), oldest first. A message not marked with its conversation is
+ * taken to be of any.
+ */
+function messagesOf(
+  entries: readonly Entry[],
+  conversation: Conversation,
+): Extract<Entry, { kind: 'user' }>[] {
+  const ours = entries.filter(
+    (entry): entry is Extract<Entry, { kind: 'user' | 'cleared' }> =>
+      (entry.kind === 'user' || entry.kind === 'cleared') &&
+      (entry.conversation === undefined || entry.conversation === conversation),
+  );
+  const cleared = ours.findLastIndex((entry) => entry.kind === 'cleared');
+  return ours.slice(cleared + 1).filter((entry) => entry.kind === 'user');
+}
+
+/**
+ * The message a chat is named by: the first of the conversation the agent is on now
+ * (`conversation`), since its last /clear.
+ */
+export function chatStart(
+  entries: readonly Entry[],
+  conversation: Conversation,
+): Extract<Entry, { kind: 'user' }> | undefined {
+  return messagesOf(entries, conversation)[0];
+}
+
+/**
+ * The user's messages a rewind can go back to, oldest first: those Claude Code has (`reached`), of
+ * its conversation now, since the last /clear (what came before it is another conversation, as in
+ * Claude Code). Only an Agent SDK agent rewinds.
  */
 export function rewindPoints(entries: readonly Entry[]): { id: string; text: string }[] {
-  const cleared = entries.findLastIndex((entry) => entry.kind === 'cleared');
-  return entries
-    .slice(cleared + 1)
-    .flatMap((entry) =>
-      entry.kind === 'user' && entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
-    );
+  return messagesOf(entries, 'claude').flatMap((entry) =>
+    entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
+  );
 }
 
 /**
@@ -353,6 +405,8 @@ export type SessionAction =
   | { type: 'tasks'; tasks: readonly BackgroundTask[] }
   | { type: 'suggestion'; text: string }
   | { type: 'asking'; asks: readonly TerminalAsk[] }
+  /** corrallm can't hear the session's replies, and why. */
+  | { type: 'unheard'; text: string }
   /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] }
   /**
@@ -523,6 +577,8 @@ export function reduce(session: Session, action: SessionAction): Session {
       else next.modes = modes;
       if (effort !== undefined) next.effort = effort;
       delete next.asking;
+      // One that can't hear its CLI says so after it starts.
+      delete next.unheard;
       return next;
     }
     case 'usage':
@@ -539,6 +595,8 @@ export function reduce(session: Session, action: SessionAction): Session {
       delete asked.asking;
       return asked;
     }
+    case 'unheard':
+      return { ...session, unheard: action.text };
     case 'restore':
       return { ...session, entries: mergeHistory(session.entries, action.entries) };
     case 'clear': {

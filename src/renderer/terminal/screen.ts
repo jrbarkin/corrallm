@@ -5,6 +5,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 
+import { linkAction } from '../open-link';
+
 /*
  * The terminal an agent's view shows (xterm.js), behind a small interface so that the view's logic
  * (link.ts) can be tested without one.
@@ -43,7 +45,10 @@ export interface Screen {
   focus(): void;
   /** What the user types (and what the terminal answers the CLI's queries with). */
   onInput(listener: (data: string) => void): void;
-  /** Links the user opens: an http(s) link (OSC 8, or a URL in the text) Cmd-clicked. */
+  /**
+   * Links the user opens: an http(s) link (OSC 8, or a URL in the text) or a file:// link (OSC 8)
+   * Cmd-clicked.
+   */
   onLink(listener: (url: string) => void): void;
   onResize(listener: (cols: number, rows: number) => void): void;
   dispose(): void;
@@ -77,7 +82,8 @@ const opensLink = (event: MouseEvent) =>
 export const createScreen: ScreenFactory = (element) => {
   const links = new Set<(url: string) => void>();
   const open = (event: MouseEvent, url: string) => {
-    if (!opensLink(event)) return;
+    // Only links that go anywhere: http(s), and file:// (shown in the file manager).
+    if (!opensLink(event) || linkAction(url) === undefined) return;
     for (const listener of links) listener(url);
   };
   const terminal = new Terminal({
@@ -90,8 +96,9 @@ export const createScreen: ScreenFactory = (element) => {
     // Option types characters until the view says otherwise (setOptionIsMeta).
     macOptionIsMeta: false,
     theme: THEME,
-    // Links (OSC 8, http and https only) open as the app's other links do: main asks first.
-    linkHandler: { activate: open },
+    // Links (OSC 8) open as the app's other links do (main asks first); a file:// link (as Claude
+    // Code prints the files it names) shows its file in the file manager, if in the project folder.
+    linkHandler: { activate: open, allowNonHttpProtocols: true },
   });
   const inputs = new Set<(data: string) => void>();
   const type = (data: string) => {

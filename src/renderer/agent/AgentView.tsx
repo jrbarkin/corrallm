@@ -54,7 +54,7 @@ import { Rewind } from './Rewind';
 import { SettingsMenu } from './Settings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
-import { rewindPoints, threadTitle } from './session';
+import { chatStart, conversationOf, rewindPoints, threadTitle } from './session';
 import type { Answer, MessageImage, PlanAnswer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -382,8 +382,8 @@ export function AgentView({
   const label = node.data.label;
   const name = label || 'Unnamed agent';
   const agent = node.data.agent ?? DEFAULT_AGENT;
-  /** The chat's first message, which names it in the queue. */
-  const firstMessage = session.entries.find((entry) => entry.kind === 'user');
+  /** The chat's first message, which names it in the queue: of the conversation it is on now. */
+  const firstMessage = chatStart(session.entries, conversationOf(connection));
   /** The lines its edits added and removed, this session. */
   const changed = session.entries.reduce(
     (sum, entry) =>
@@ -511,9 +511,12 @@ export function AgentView({
                       }}
                     />
                   ))}
-                  <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
-                    Simulate a question
-                  </button>
+                  {connection === 'simulated' && (
+                    // A connected agent's questions are its CLI's own.
+                    <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
+                      Simulate a question
+                    </button>
+                  )}
                 </section>
                 <h2 className="agent-side-title">Queue</h2>
                 {firstMessage && (

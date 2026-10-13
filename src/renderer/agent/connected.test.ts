@@ -106,6 +106,22 @@ describe('a connected session', () => {
     expect(store.of('a').running).toBeUndefined();
   });
 
+  it('warns when it can’t hear the session’s replies, until a session that can starts', async () => {
+    const { store, emit } = connected();
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.open('a');
+    const text =
+      'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json).';
+    emit('a', 'terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'terminal', { type: 'unheard', text });
+    expect(store.of('a').unheard).toBe(text);
+    expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'notice', level: 'warning', text });
+    // Started again, with the hooks back on: nothing more to say.
+    emit('a', 'terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    expect(store.of('a').unheard).toBeUndefined();
+    await settle();
+  });
+
   it('sends a message, streams the reply into the transcript, and hears when the turn ends', async () => {
     const { store, backend, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
@@ -235,6 +251,8 @@ describe('a connected session', () => {
       kind: 'user',
       text: 'Hello from the terminal',
       reached: true,
+      // Of Claude Code's conversation, whichever of its connections the agent runs.
+      conversation: 'claude',
     });
     emit('a', 'sdk', end(['typed']));
     emit('a', 'sdk', { type: 'status', status: 'working' });

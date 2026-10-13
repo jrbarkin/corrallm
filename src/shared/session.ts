@@ -336,13 +336,14 @@ export interface AskedQuestion {
 
 /**
  * What a session's CLI asks the user in its own terminal (a Terminal session's), as corrallm lists
- * it outside the terminal: a permission (the tool, and what it acts on), its questions, a plan to
- * approve, whether to trust the project folder (asked in or out of a turn, as the CLI starts), or
- * anything else it waits on, in its own words. corrallm never answers it: the user does, in the
- * terminal.
+ * it outside the terminal: a permission (the tool, what it acts on and, where its prompt shows
+ * more, a short `detail`: a command in full, an edit's diff, the start of a new file), its
+ * questions, a plan to approve, whether to trust the project folder (asked in or out of a turn, as
+ * the CLI starts), or anything else it waits on, in its own words. corrallm never answers it: the
+ * user does, in the terminal.
  */
 export type TerminalAsk =
-  | { kind: 'permission'; id: string; tool: string; summary: string }
+  | { kind: 'permission'; id: string; tool: string; summary: string; detail?: ToolDetail }
   | { kind: 'question'; id: string; questions: AskedQuestion[] }
   | { kind: 'plan'; id: string; plan: string }
   /** Whether to trust the project folder: its CLI's dialog the first time it runs there. */
@@ -458,6 +459,12 @@ export type SessionEvent =
    * there: the user answers in the terminal. A session that starts asks nothing yet.
    */
   | { type: 'asking'; asks: TerminalAsk[] }
+  /**
+   * That corrallm can't hear the session's replies, and why, in the CLI's words (a Terminal
+   * session's: the user's or their organization's settings turn off the hooks it listens to). Sent
+   * once, as it starts: the queues' Run can't read what it replies.
+   */
+  | { type: 'unheard'; text: string }
   /**
    * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
    * or null where it offers no "always". `title`: what it asks, as the CLI words it ("Claude wants

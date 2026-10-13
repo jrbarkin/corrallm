@@ -5,21 +5,10 @@ import { AgentType, CONNECTION_INFO } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
+import { ToolDetailView } from './ToolDetail';
+import { EDIT_TOOLS, permissionQuestion, SHELL_TOOLS } from './tools';
 import { isOpen, modeOf, rewindPoints, sessionQuestions } from './session';
 import type { Answer, BackgroundTask, Entry, PlanAnswer, Session, ToolProgress } from './session';
-
-/** The tools that run commands, and those that edit files, across the agents (agents.ts). */
-const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'exec_command', 'run_shell_command']);
-const EDIT_TOOLS = new Set([
-  'Edit',
-  'Write',
-  'MultiEdit',
-  'NotebookEdit',
-  'apply_patch',
-  'edit',
-  'replace',
-  'write_file',
-]);
 
 /** What the transcript does with the user's answers to prompts (and its Stops). */
 export interface TranscriptAnswers {
@@ -353,7 +342,7 @@ function ToolCall({
           </button>
         </span>
       )}
-      {open && detail && <Detail detail={detail} />}
+      {open && detail && <ToolDetailView detail={detail} />}
     </div>
   );
 }
@@ -390,22 +379,6 @@ function duration(seconds: number): string {
   if (seconds < 60) return `${String(seconds)}s`;
   const rest = seconds % 60;
   return `${String(Math.floor(seconds / 60))}m${rest === 0 ? '' : ` ${String(rest)}s`}`;
-}
-
-/** A tool call's detail: an edit's diff, or a command's output. */
-function Detail({ detail }: { detail: NonNullable<Extract<Entry, { kind: 'tool' }>['detail']> }) {
-  if (detail.kind === 'output') return <pre className="agent-tool-detail">{detail.text}</pre>;
-  return (
-    <pre className="agent-tool-detail agent-diff-lines">
-      {detail.lines.map((line, i) => (
-        <span key={i} data-line={line.kind}>
-          {line.kind === 'add' ? '+ ' : line.kind === 'remove' ? '- ' : '  '}
-          {line.text}
-          {'\n'}
-        </span>
-      ))}
-    </pre>
-  );
 }
 
 /**
@@ -492,10 +465,8 @@ function Permission({
     <div className="agent-permission" role="group" aria-label={label}>
       <p className="agent-permission-title">{title}</p>
       <code className="agent-permission-summary">{entry.summary}</code>
-      {entry.detail && <Detail detail={entry.detail} />}
-      <p>
-        {edit ? `Do you want to make this edit to ${entry.summary}?` : 'Do you want to proceed?'}
-      </p>
+      {entry.detail && <ToolDetailView detail={entry.detail} />}
+      <p>{permissionQuestion(entry.tool, entry.summary)}</p>
       <div className="agent-permission-choices">
         {choices.map(([answer, text], i) => (
           <button

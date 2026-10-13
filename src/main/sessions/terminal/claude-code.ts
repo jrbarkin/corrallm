@@ -12,11 +12,13 @@ import { CLAUDE_EFFORTS } from '../sdk/session';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import { askedQuestions } from '../sdk/prompts';
-import { property, text as textOf, toolSummary } from '../sdk/tools';
+import { proposedDetail, property, text as textOf, toolSummary } from '../sdk/tools';
 import type { Places } from '../sdk/tools';
+import { preview } from '../transcript';
 import type { Launch, TerminalCli, TerminalSignal } from './cli';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from './hooks';
+import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
 import type { Screen } from './screen';
 import { statusLineSettings, statusLineUsage } from './statusline';
 import { keystrokes, typeable } from './typing';
@@ -46,6 +48,8 @@ const NEEDS_YOU = new Set([
 ]);
 /** At most this much of a notification is listed. */
 const MAX_ASK_TEXT = 2000;
+/** At most this many lines of what a permission is for (a diff, a file, a command) are listed. */
+const PREVIEW_LINES = 12;
 const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
 /** Its folder trust dialog's choice to go on. */
 const TRUST_DIALOG = 'Yes, I trust this folder';
@@ -55,10 +59,12 @@ export interface ClaudeCodeOptions {
   cwd: string;
   /** The user's home folder: where the files it asks about are shown from (as ~), outside it. */
   home: string;
-  /** Its environment (the agents'), which finds the user's own status line. */
+  /** Its environment (the agents'), which finds the user's own status line and settings. */
   env: Readonly<Record<string, string>>;
   /** The effort to start at (one of Claude Code's levels), or null for the user's own. */
   effort?: string | null;
+  /** Where its managed settings are (the organization's): the OS's folder for them by default. */
+  managed?: string;
 }
 
 export class ClaudeCode implements TerminalCli<PermissionMode> {
@@ -88,11 +94,21 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly #env: Readonly<Record<string, string>>;
   /** Its effort, if it was given one of Claude Code's levels. */
   readonly #effort: string | undefined;
+  readonly #managed: string;
+  /** Why corrallm can't hear it, once its settings were read (they turn its hooks off). */
+  #unheard: string | undefined;
 
-  constructor({ cwd, home, env, effort = null }: ClaudeCodeOptions) {
+  constructor({
+    cwd,
+    home,
+    env,
+    effort = null,
+    managed = managedSettingsFolder(),
+  }: ClaudeCodeOptions) {
     this.#places = { cwd, home };
     this.#env = env;
     this.#effort = effort !== null && Object.hasOwn(CLAUDE_EFFORTS, effort) ? effort : undefined;
+    this.#managed = managed;
   }
 
   newId(): string {
@@ -117,6 +133,13 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       JSON.stringify({ ...hookSettings(hooks.url), ...statusLine }),
       { mode: 0o600 },
     );
+    // Its settings may turn corrallm's hooks off: read (never changed), to say what won't work.
+    const off = await hooksOff({ cwd, env: this.#env, managed: this.#managed, url: hooks.url });
+    this.#unheard = off && hooksOffWarning(off);
+  }
+
+  unheard(): string | undefined {
+    return this.#unheard;
   }
 
   args({ dir, id, resume, model, mode }: Launch<PermissionMode>): string[] {
@@ -214,7 +237,15 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       const plan = (textOf(property(input, 'plan')) ?? '').slice(0, MAX_ANSWER_LENGTH);
       return { kind: 'plan', id, plan };
     }
-    return { kind: 'permission', id, tool, summary: toolSummary(tool, input, this.#places) };
+    // What it is for, as its prompt shows it: a command in full, an edit's diff, a new file.
+    const detail = proposedDetail(tool, input);
+    return {
+      kind: 'permission',
+      id,
+      tool,
+      summary: toolSummary(tool, input, this.#places),
+      ...(detail === undefined ? {} : { detail: preview(detail, PREVIEW_LINES) }),
+    };
   }
 
   draft(screen: Screen): string | undefined {

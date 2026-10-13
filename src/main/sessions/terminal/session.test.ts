@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -191,6 +191,29 @@ describe('a Terminal session', () => {
       });
     },
   );
+
+  it('says once, as it starts, that it can’t hear Claude Code where its settings turn hooks off', async () => {
+    await start();
+    expect(seen()).not.toContain('unheard');
+    // The user's settings, read as they are (never changed).
+    const home = path.join(dir, 'home');
+    await mkdir(path.join(home, '.claude'), { recursive: true });
+    await writeFile(path.join(home, '.claude', 'settings.json'), '{ "disableAllHooks": true }');
+    events = [];
+    const session = await start({ env: { ...SPEC.env, HOME: home } });
+    expect(seen().slice(0, 2)).toEqual(['started', 'unheard']);
+    expect(last('unheard')?.text).toMatch(
+      /^Claude Code’s settings turn off its hooks \(disableAllHooks in ~.\.claude.settings\.json\), so corrallm can’t hear this agent’s replies/,
+    );
+    await session.send({ id: 'm1', text: 'hello there' });
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(seen().filter((one) => one === 'unheard')).toHaveLength(1);
+    expect(readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toBe(
+      '{ "disableAllHooks": true }',
+    );
+  });
 
   it('starts in a mode or model chosen in corrallm', async () => {
     await start({ mode: 'plan', model: 'haiku' });

@@ -1120,9 +1120,9 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   expect(await panel.evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth])).toEqual([
     0, 0,
   ]);
-  // (Simulated: a connected one would start its CLI.)
-  await page.keyboard.type('codex simulated');
-  await page.keyboard.press('Enter');
+  // Simulated: a connected agent's questions are its CLI's own (and it would start its CLI).
+  await page.keyboard.type('codex');
+  await panel.getByRole('option', { name: /^Codex · Simulated/ }).click();
   await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Codex');
   expect(await tagColor('Agent 1')).not.toBe(claude);
   expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));

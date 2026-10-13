@@ -84,6 +84,11 @@ export interface TerminalCli<M extends SessionMode> {
   newId(): string | null;
   /** Readies what its process needs before it first starts (a settings file in `dir`, its hooks). */
   prepare(dir: string, hooks: HookRegistration): Promise<void>;
+  /**
+   * Why corrallm can't hear it, once `prepare` has run (its settings turn off the hooks it posts
+   * to corrallm), in a sentence that says what won't work; undefined when it can.
+   */
+  unheard?(): string | undefined;
   /** Its command line. */
   args(launch: Launch<M>): string[];
   /**

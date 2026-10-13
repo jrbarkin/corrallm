@@ -258,6 +258,55 @@ describe('a Terminal agent', () => {
     expect(card().classList.contains('asking')).toBe(false);
   });
 
+  it('lists a permission with what it is for, as Claude Code’s prompt shows it', async () => {
+    const { view, session } = await open();
+    session(
+      { type: 'status', status: 'working' },
+      { type: 'user', id: 'typed', text: 'Greet the world' },
+      {
+        type: 'asking',
+        asks: [
+          {
+            kind: 'permission',
+            id: 'edit',
+            tool: 'Edit',
+            summary: 'notes.txt',
+            detail: {
+              kind: 'diff',
+              added: 1,
+              removed: 1,
+              lines: [
+                { kind: 'remove', text: 'hello' },
+                { kind: 'add', text: 'hello world' },
+              ],
+            },
+          },
+          {
+            kind: 'permission',
+            id: 'bash',
+            tool: 'Bash',
+            summary: 'git add -A …',
+            detail: { kind: 'output', text: 'git add -A\ngit commit -m "Greet"' },
+          },
+        ],
+      },
+      { type: 'status', status: 'waiting' },
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await settle();
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
+    expect(cards.map((card) => card.textContent)).toEqual([
+      'aEditnotes.txt- hello\n+ hello world\nDo you want to make this edit to notes.txt?' +
+        'Answer it in the terminal.Open terminal',
+      'aBashgit add -A …git add -A\ngit commit -m "Greet"Do you want to proceed?' +
+        'Answer it in the terminal.Open terminal',
+    ]);
+    const [edit] = cards;
+    const removed = edit?.querySelector('[data-line="remove"]');
+    expect(removed?.textContent).toBe('- hello\n');
+  });
+
   it('shows Codex’s own terminal for a Codex agent, and follows its turns there and on the canvas', async () => {
     const { sessions, terminals, card, view, session } = await open({
       data: { agent: 'Codex', connection: 'codex-terminal' },
@@ -454,6 +503,46 @@ describe('a Terminal agent', () => {
     );
     fireEvent.click(within(warning).getByRole('button', { name: 'Dismiss' }));
     expect(terminalSession.queryByRole('note')).toBeNull();
+  });
+
+  it('warns in its bar when its settings keep corrallm from hearing Claude Code, as the run does', async () => {
+    const { view, session, sessions } = await open({
+      queue: [
+        { id: 'tests', action: 'Bash' },
+        {
+          id: 'green',
+          if: { kind: 'outputContains', text: '0 failed' },
+          then: [{ id: 'tag', message: 'Tag it' }],
+        },
+      ],
+    });
+    const unheard =
+      'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json), so ' +
+      'corrallm can’t hear this agent’s replies.';
+    session(
+      { type: 'started', model: null, mode: 'manual', models: [] },
+      { type: 'unheard', text: unheard },
+    );
+    const terminalSession = within(view.getByRole('region', { name: 'Session' }));
+    expect(terminalSession.getByRole('note').textContent).toBe(unheard);
+
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await settle();
+    // Its turn ends (Claude Code's screen says so), with no reply heard.
+    const sent = sessions.sent();
+    session(
+      { type: 'user', id: sent, text: 'Use the Bash tool for this step (run shell commands).' },
+      { type: 'status', status: 'working' },
+      { type: 'end', messages: [sent], seconds: 4, interrupted: false, failed: false },
+    );
+    await settle();
+    expect(terminalSession.getByRole('note').textContent).toMatch(
+      /^corrallm can’t read this agent’s replies \(its hooks are off\)/,
+    );
+    expect(sessions.backend.send).toHaveBeenCalledTimes(1);
   });
 
   it('asks for your OK in the bar under its terminal: Approve, Stop here, or changes typed in', async () => {

@@ -13,6 +13,7 @@ import { LinkOpener } from './links';
 import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
+import { FileRevealer } from './reveal';
 import { hardenSession, installNavigationGuards } from './security';
 import { planConsent, Settings } from './settings';
 import { createConnectors, createOptions } from './sessions/connectors';
@@ -158,7 +159,22 @@ function main(): void {
       });
       // Which CLIs the user has, for the templates' agents.
       const clis = { installed: async () => installedClis(await agentsEnvironment()) };
-      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions, clis, usage });
+      // file:// links in a terminal: shown in the file manager, if in the project folder.
+      const reveal = new FileRevealer({
+        folderOf: (contents) => projects.of(contents),
+        show: (file) => {
+          shell.showItemInFolder(file);
+        },
+      });
+      registerIpcHandlers(trustedOrigin, {
+        projects,
+        files,
+        links,
+        reveal,
+        sessions,
+        clis,
+        usage,
+      });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;
