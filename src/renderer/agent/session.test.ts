@@ -204,7 +204,7 @@ describe('reduce, for connected sessions', () => {
   });
 
   it('empties for another conversation, with what the last one ran and predicted; choices stay', () => {
-    let s = reduce(started, { type: 'mode', mode: 'plan', chosen: true });
+    let s = reduce(started, { type: 'mode', mode: 'plan' });
     s = reduce(s, { type: 'effort', effort: 'high' });
     s = reduce(s, {
       type: 'tasks',
@@ -217,7 +217,6 @@ describe('reduce, for connected sessions', () => {
     });
     const cleared = reduce(s, { type: 'clear' });
     expect(cleared).toMatchObject({ entries: [], status: 'idle', mode: 'plan', effort: 'high' });
-    expect(cleared.chosen).toEqual({ mode: 'plan' });
     expect(cleared.tasks ?? []).toEqual([]);
     expect(cleared.suggestion).toBeUndefined();
     expect(cleared.usage).toBeUndefined();

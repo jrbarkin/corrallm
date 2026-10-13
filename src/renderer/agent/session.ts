@@ -1,5 +1,6 @@
 import { DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
 import type {
+  AgentSettings,
   AskedQuestion,
   BackgroundTask,
   CodexMode,
@@ -106,6 +107,20 @@ export const CODEX_MODES: readonly (ModeInfo & { mode: CodexMode })[] = [
 export function modesOf(agent: AgentType): readonly ModeInfo[] {
   return agent === AgentType.Codex ? CODEX_MODES : MODES;
 }
+
+/** The connections whose CLI starts with what its command line says: a Terminal agent's. */
+export type TerminalConnection = 'terminal' | 'codex-terminal';
+
+/**
+ * The modes each Terminal agent's CLI can be started in from its command line, besides the user's
+ * own default, as its settings offer them (Settings.tsx): Claude Code's `--permission-mode`s, and
+ * Codex's Read only (`-s`/`-a`; its Default is the user's own config, and its Plan is Shift+Tab in
+ * its terminal). Never one that never asks: that is chosen in its terminal, each time.
+ */
+export const STARTING_MODES: Readonly<Record<TerminalConnection, readonly Mode[]>> = {
+  terminal: ['manual', 'acceptEdits', 'plan', 'auto'],
+  'codex-terminal': ['read-only'],
+};
 
 /** The modes Shift+Tab cycles an agent through, in order: never one that never asks. */
 export function cycledModes(agent: AgentType): readonly Mode[] {
@@ -227,11 +242,10 @@ export interface Session {
   /** The model picked for it; null for its agent's default. */
   model: string | null;
   /**
-   * The mode, model and effort the user chose for it here (in its composer), as opposed to what its
-   * session said: what a connected session is started with. Anything not chosen is main's to fill
-   * in (what the agent was given before, else the user's own default).
+   * What a connected session that runs was started with (the agent's settings then), absent while
+   * none runs: its settings may have changed since, which a restart applies.
    */
-  chosen?: { mode?: Mode; model?: string; effort?: string | null };
+  running?: AgentSettings;
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
   /** The modes a connected session can switch to, when not all (bypassing turned off). */
@@ -316,12 +330,12 @@ export type SessionAction =
    * the message leaves the transcript for the head of the queue, unsent, and the session is idle.
    */
   | { type: 'refuse'; id: string }
-  /**
-   * The mode, model or effort: `chosen` when the user chose it, rather than the session saying so.
-   */
-  | { type: 'mode'; mode: Mode; chosen?: boolean }
-  | { type: 'model'; model: string; chosen?: boolean }
-  | { type: 'effort'; effort: string | null; chosen?: boolean }
+  /** The mode, model or effort: chosen by the user, or as the session says. */
+  | { type: 'mode'; mode: Mode }
+  | { type: 'model'; model: string }
+  | { type: 'effort'; effort: string | null }
+  /** A connected session runs, started with the agent's settings `settings`; or none (undefined). */
+  | { type: 'running'; settings: AgentSettings | undefined }
   /**
    * A connected session started: the models (and modes, if not all) it offers, its model and mode,
    * and its effort (where its model offers a choice).
@@ -491,23 +505,16 @@ export function reduce(session: Session, action: SessionAction): Session {
       };
     }
     case 'mode':
-      return {
-        ...session,
-        mode: action.mode,
-        ...(action.chosen === true ? { chosen: { ...session.chosen, mode: action.mode } } : {}),
-      };
+      return { ...session, mode: action.mode };
     case 'model':
-      return {
-        ...session,
-        model: action.model,
-        ...(action.chosen === true ? { chosen: { ...session.chosen, model: action.model } } : {}),
-      };
+      return { ...session, model: action.model };
     case 'effort':
-      return {
-        ...session,
-        effort: action.effort,
-        ...(action.chosen === true ? { chosen: { ...session.chosen, effort: action.effort } } : {}),
-      };
+      return { ...session, effort: action.effort };
+    case 'running': {
+      const next = { ...session };
+      delete next.running;
+      return action.settings === undefined ? next : { ...next, running: action.settings };
+    }
     case 'connected': {
       const { models, model, mode, modes, effort } = action;
       // A session that starts runs nothing in the background yet, and asks nothing.

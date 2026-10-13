@@ -32,42 +32,6 @@ describe('CanvasMemory', () => {
     expect(await readdir(dir)).toEqual(['canvases.json']);
   });
 
-  it('remembers the model, mode and effort each agent was given, in each CLI', async () => {
-    const memory = new CanvasMemory(file);
-    await memory.update('/work/team.corral', (m) => ({
-      ...m,
-      sessions: { a: 'id-a' },
-      chosen: { a: { model: 'haiku', mode: 'plan', effort: 'high' }, b: { mode: 'acceptEdits' } },
-      codexChosen: { a: { model: 'gpt-6-luna', mode: 'read-only', effort: 'low' } },
-    }));
-    expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
-      sessions: { a: 'id-a' },
-      chosen: { a: { model: 'haiku', mode: 'plan', effort: 'high' }, b: { mode: 'acceptEdits' } },
-      codexChosen: { a: { model: 'gpt-6-luna', mode: 'read-only', effort: 'low' } },
-    });
-  });
-
-  it('leaves out what was given that is not one of its CLI’s', async () => {
-    await writeFile(
-      file,
-      JSON.stringify({
-        version: 1,
-        canvases: {
-          '/c.corral': {
-            sessions: {},
-            chosen: { a: { mode: 'read-only' }, b: { mode: 'plan', effort: 'very hard' } },
-            codexChosen: { a: { mode: 'acceptEdits', model: 'gpt-6-luna' } },
-          },
-        },
-      }),
-    );
-    expect(await new CanvasMemory(file).get('/c.corral')).toEqual({
-      sessions: {},
-      chosen: { b: { mode: 'plan' } },
-      codexChosen: { a: { model: 'gpt-6-luna' } },
-    });
-  });
-
   it('remembers agents’ Codex threads apart from their Claude Code sessions', async () => {
     const memory = new CanvasMemory(file);
     await memory.update('/work/team.corral', (m) => ({
@@ -111,6 +75,7 @@ describe('CanvasMemory', () => {
   });
 
   it('starts afresh from a file it cannot read, and ignores entries that are not right', async () => {
+    // (What agents were given, which main once kept here, is in the canvas's file now: left out.)
     await writeFile(file, 'not json');
     expect(await new CanvasMemory(file).get('/x.corral')).toEqual({ sessions: {} });
 
@@ -134,22 +99,14 @@ describe('CanvasMemory', () => {
       }),
     );
     const memory = new CanvasMemory(file);
-    expect(await memory.get('/good.corral')).toEqual({
-      project: '/p',
-      sessions: { a: 'id' },
-      chosen: { a: { model: 'haiku' }, b: { mode: 'plan' } },
-    });
+    expect(await memory.get('/good.corral')).toEqual({ project: '/p', sessions: { a: 'id' } });
     expect(await memory.get('/bad.corral')).toEqual({ sessions: {} });
     expect(await memory.get('/worse.corral')).toEqual({ sessions: {} });
     await memory.update('/good.corral', (m) => m);
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
       version: 1,
       canvases: {
-        '/good.corral': {
-          project: '/p',
-          sessions: { a: 'id' },
-          chosen: { a: { model: 'haiku' }, b: { mode: 'plan' } },
-        },
+        '/good.corral': { project: '/p', sessions: { a: 'id' } },
       },
     });
   });

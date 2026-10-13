@@ -10,6 +10,7 @@ import {
 } from '../../shared/terminal';
 import {
   CLI_MODES,
+  CLIS,
   CODEX_MODES,
   CONNECTION_CLI,
   CONNECTIONS,
@@ -63,7 +64,7 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const parsed: SessionOptions = {
     connection: connected,
     model: model === null ? null : parseModel(model),
-    // One of its CLI's modes, or null for the one it was given before, else the user's own.
+    // One of its CLI's modes, or null for the user's own.
     mode:
       mode === null
         ? null
@@ -136,6 +137,12 @@ export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
 }
 
 /** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
+/** session:options: one of the CLIs corrallm runs. */
+export function parseOptionsArgs(args: unknown[]): IpcArgs<'session:options'> {
+  const [cli] = expect(args, 1, 'a CLI');
+  return [oneOf(cli, CLIS, 'CLI')];
+}
+
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];

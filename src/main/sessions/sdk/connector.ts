@@ -6,7 +6,7 @@ import {
   getSessionMessages as readHistory,
   query as startQuery,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 import { PERMISSION_MODES } from '../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../shared/session';
@@ -50,6 +50,30 @@ export interface SdkConnectorDeps {
   /** How that `claude` is logged in (`claude auth status`; a fake in tests). */
   authStatus?: typeof askAuthStatus;
   home?: string;
+}
+
+/**
+ * The model a session starts with when none was chosen, by the value the picker knows it by: the
+ * one the user's settings set (by its alias, else its id), else the one the CLI says it applies
+ * (as ANTHROPIC_MODEL sets it) unless that is just the account's default; else the account's
+ * default ('default', where the CLI offers it).
+ */
+function startingModel(
+  models: readonly ModelInfo[],
+  { model, appliedModel }: { model?: string; appliedModel?: string },
+): string | null {
+  const fallback = models.find((m) => m.value === 'default');
+  const named = (wanted: string | undefined) =>
+    wanted === undefined
+      ? undefined
+      : (models.find((m) => m.value === wanted) ??
+        models.find((m) => m !== fallback && m.resolvedModel === wanted) ??
+        models.find((m) => m.resolvedModel === wanted));
+  const applied =
+    appliedModel === undefined || appliedModel === (fallback?.resolvedModel ?? fallback?.value)
+      ? undefined
+      : named(appliedModel);
+  return (named(model) ?? applied ?? fallback)?.value ?? null;
 }
 
 /** What the CLI says when the session it is to resume has no conversation (no transcript). */
@@ -190,22 +214,26 @@ export class SdkConnector implements Connector {
       throw new Error(stopped(error, stderr), { cause: error });
     }
 
-    const models = init.models.map((m): ModelChoice => ({
-      value: m.value,
-      label: m.displayName,
-      description: m.description,
-      ...(m.supportsEffort === true && m.supportedEffortLevels !== undefined
-        ? {
-            efforts: m.supportedEffortLevels.map((level) =>
-              effortChoice(level, CLAUDE_EFFORTS[level]),
-            ),
-          }
-        : {}),
-    }));
-    const current = model ?? (models.some((m) => m.value === 'default') ? 'default' : null);
+    // The model and effort it starts with: those chosen, or the user's own (their settings').
+    const settings = await modeSettings(query);
+    const models = init.models.map((m): ModelChoice => {
+      const levels = m.supportsEffort === true ? (m.supportedEffortLevels ?? []) : [];
+      return {
+        value: m.value,
+        label: m.displayName,
+        description: m.description,
+        ...(levels.length === 0
+          ? {}
+          : { efforts: levels.map((level) => effortChoice(level, CLAUDE_EFFORTS[level])) }),
+        // What it reasons at unless one is chosen: the user's own effort, where it takes it.
+        ...(settings.effort !== undefined && levels.some((level) => level === settings.effort)
+          ? { defaultEffort: settings.effort }
+          : {}),
+      };
+    });
+    const current = model ?? startingModel(init.models, settings);
     translator.setModels(init.models, current);
     // The mode chosen, or the user's own default (the CLI says so again at its first turn).
-    const settings = await modeSettings(query);
     const mode = spec.mode ?? settings.defaultMode ?? 'manual';
     translator.setMode(mode);
     const session = new SdkSession({

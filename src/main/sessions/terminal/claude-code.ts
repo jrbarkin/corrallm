@@ -8,6 +8,7 @@ import {
   MODEL_PATTERN,
   PERMISSION_MODES,
 } from '../../../shared/session';
+import { CLAUDE_EFFORTS } from '../sdk/session';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import { askedQuestions } from '../sdk/prompts';
@@ -24,8 +25,9 @@ import { keystrokes, typeable } from './typing';
  * Claude Code, as a Terminal session runs it (cli.ts). It starts with --settings (a file in the
  * session's folder: corrallm's HTTP hooks, merged with the user's, and corrallm's status line,
  * which reads its usage limits and runs the user's own: statusline.ts), --session-id (new) or --resume
- * (one with no transcript starts afresh under the same id), and --model/--permission-mode only
- * when corrallm was given them (otherwise the user's own default model and mode apply). Its screen
+ * (one with no transcript starts afresh under the same id), and --model, --effort (one of its
+ * levels, where its claude takes the flag: connector.ts) and --permission-mode only when the agent
+ * was set to them (otherwise the user's own default model, effort and mode apply). Its screen
  * reports its state (Program Status, OSC 7501: read by the session's screen) and shows its prompt
  * box (whose draft screen.ts reads); its hooks tell its session id, the prompts it took, its last
  * reply, why a turn failed, its mode and its model, and what it is about to ask the user in its
@@ -53,6 +55,8 @@ export interface ClaudeCodeOptions {
   home: string;
   /** Its environment (the agents'), which finds the user's own status line. */
   env: Readonly<Record<string, string>>;
+  /** The effort to start at (one of Claude Code's levels), or null for the user's own. */
+  effort?: string | null;
 }
 
 export class ClaudeCode implements TerminalCli<PermissionMode> {
@@ -80,10 +84,13 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   /** Where it works, for the files its asks are about. */
   #places: Places;
   readonly #env: Readonly<Record<string, string>>;
+  /** Its effort, if it was given one of Claude Code's levels. */
+  readonly #effort: string | undefined;
 
-  constructor({ cwd, home, env }: ClaudeCodeOptions) {
+  constructor({ cwd, home, env, effort = null }: ClaudeCodeOptions) {
     this.#places = { cwd, home };
     this.#env = env;
+    this.#effort = effort !== null && Object.hasOwn(CLAUDE_EFFORTS, effort) ? effort : undefined;
   }
 
   newId(): string {
@@ -115,8 +122,9 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       '--settings',
       path.join(dir, SETTINGS),
       ...(id === null ? [] : resume ? ['--resume', id] : ['--session-id', id]),
-      // Only what corrallm was given: otherwise the user's own default model and mode apply.
+      // Only what corrallm was given: otherwise the user's own default model, effort and mode apply.
       ...(model === null || model === 'default' ? [] : ['--model', model]),
+      ...(this.#effort === undefined ? [] : ['--effort', this.#effort]),
       // (Its flag takes corrallm's names: 'manual' among them, as of 2.1.296.)
       ...(mode === null ? [] : ['--permission-mode', mode]),
     ];

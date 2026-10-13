@@ -78,6 +78,13 @@ export function sessionHooks(
 /** A TOML basic string: JSON's escapes are TOML's, for the text corrallm writes. */
 export const toml = (text: string): string => JSON.stringify(text);
 
+/**
+ * The override that trusts the project folder for one run of Codex (a `-c` value): the user chose
+ * it in corrallm's folder dialog, the trust gate; their config.toml is never written.
+ */
+export const folderTrust = (cwd: string): string =>
+  `projects={${toml(cwd)}={trust_level="trusted"}}`;
+
 /** The overrides that add a session's hooks (`-c` values). */
 export function hookOverrides(hooks: readonly SessionHook[]): string[] {
   return hooks.map(

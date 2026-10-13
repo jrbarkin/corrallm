@@ -2,8 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 
 import type { ProjectFolder } from '../../shared/ipc';
-import { TERMINAL_CONNECTIONS } from '../../shared/session';
+import { CONNECTION_CLI, TERMINAL_CONNECTIONS } from '../../shared/session';
 import type {
+  AgentSettings,
+  Cli,
   ElicitationAction,
   FormValue,
   McpChange,
@@ -12,6 +14,7 @@ import type {
   FilesRewind,
   RewindRestore,
   RewindResult,
+  SettingsOptions,
 } from '../../shared/session';
 import {
   AGENT_ACTIONS,
@@ -48,6 +51,7 @@ import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
+import { SettingsMenu } from './Settings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { rewindPoints, threadTitle } from './session';
@@ -70,6 +74,10 @@ export interface SessionControls extends ComposerControls {
   /** What restoring its files to before a message would change, and rewinding there. */
   previewRewind: (messageId: string) => Promise<FilesRewind>;
   rewind: (messageId: string, restore: RewindRestore) => Promise<RewindResult>;
+  /** What an agent of a CLI can be set to run with, and the user's own defaults. */
+  settingsOptions: (cli: Cli) => Promise<SettingsOptions>;
+  /** Starts its connected session again with what it is set to now, resuming its conversation. */
+  restart: () => void;
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
   mcpServers: () => Promise<McpServer[]>;
   changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
@@ -95,7 +103,9 @@ export interface SessionControls extends ComposerControls {
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
  * The agent chip sets its type and how it runs (`connection`): simulated, or connected to the real
- * CLI. A session connected through a structured interface (Claude's Agent SDK, Codex's app server)
+ * CLI. Beside it, a Terminal agent's settings (Settings.tsx): the model, effort and mode its CLI
+ * starts with (a structured session's composer sets them). A session connected through a
+ * structured interface (Claude's Agent SDK, Codex's app server)
  * shows in the same transcript and composer, fed by the main process (connected.ts); one in a
  * Terminal shows the CLI's own terminal instead (TerminalPane.tsx), where the user works with
  * Claude Code or Codex as in any terminal.
@@ -132,6 +142,7 @@ export function AgentView({
   project,
   terminal,
   onAgent,
+  onSettings,
   onContinueInTerminal,
   onAnswer,
   onSimulateQuestion,
@@ -168,6 +179,8 @@ export function AgentView({
   terminal: TerminalBackend;
   /** Sets its type and how it runs. */
   onAgent: (agent: AgentType, connection: AgentConnection) => void;
+  /** Sets what it runs with in a CLI (its settings, saved with it). */
+  onSettings: (cli: Cli, settings: AgentSettings) => void;
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
   onContinueInTerminal: (command?: string) => void;
   onAnswer: (questionId: string, answer: string) => void;
@@ -462,6 +475,21 @@ export function AgentView({
               >
                 All queues
               </button>
+              {connection === 'terminal' || connection === 'codex-terminal' ? (
+                <SettingsMenu
+                  cli={CONNECTION_CLI[connection]}
+                  connection={connection}
+                  agent={agent}
+                  settings={node.data.settings?.[CONNECTION_CLI[connection]] ?? {}}
+                  options={controls.settingsOptions}
+                  running={session.running}
+                  working={working}
+                  onChange={(settings) => {
+                    onSettings(CONNECTION_CLI[connection], settings);
+                  }}
+                  onRestart={controls.restart}
+                />
+              ) : null}
               <AgentChip
                 agent={agent}
                 connection={connection}

@@ -20,17 +20,13 @@ const end = (messages: string[], extra: Partial<Extract<SessionEvent, { type: 'e
   ({ type: 'end', messages, seconds: 3, interrupted: false, failed: false, ...extra }) as const;
 
 describe('a connected session', () => {
-  it('starts when its view opens, with its mode, and takes the models it offers', async () => {
+  it('starts when its view opens, and takes the models it offers', async () => {
     const { store, backend, emit } = connected();
-    store.setMode('a', 'acceptEdits');
     store.open('a');
     store.open('a');
     expect(backend.start).toHaveBeenCalledOnce();
-    expect(backend.start).toHaveBeenCalledWith('a', {
-      connection: 'sdk',
-      model: null,
-      mode: 'acceptEdits',
-    });
+    // Nothing set: the user's own defaults.
+    expect(backend.start).toHaveBeenCalledWith('a', { connection: 'sdk', model: null, mode: null });
     const models = [
       { value: 'opus', label: 'Opus' },
       { value: 'haiku', label: 'Haiku' },
@@ -40,35 +36,74 @@ describe('a connected session', () => {
     await settle();
   });
 
-  it('starts with only what the user chose here: main fills in what the agent was given before', async () => {
-    const { store, backend, emit } = connected();
-    // A model picked while it was simulated is not one the CLI offers: not passed on.
+  it('starts with what the agent is set to in its CLI, as the canvas says, and says so', async () => {
+    const { store, backend } = connected();
+    store.sync([
+      {
+        id: 'a',
+        connection: 'sdk',
+        settings: {
+          claude: { model: 'haiku', effort: 'low', mode: 'plan' },
+          codex: { model: 'gpt-6-luna', mode: 'read-only' },
+        },
+      },
+    ]);
+    // A model the user picked while it was simulated is not what it is set to: not passed on.
     store.setModel('a', 'Opus 5.5');
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
       connection: 'sdk',
-      model: null,
-      mode: null,
+      model: 'haiku',
+      mode: 'plan',
+      effort: 'low',
     });
-    const models = [
-      { value: 'default', label: 'Default' },
-      { value: 'haiku', label: 'Haiku' },
-    ];
-    // Main started it in the mode it was given last time, which the session shows.
-    emit('a', 'sdk', { type: 'started', model: 'default', mode: 'plan', models });
-    expect(store.of('a')).toMatchObject({ mode: 'plan', model: 'default' });
     await settle();
+    // What its running session started with, for its settings to tell apart from what they are.
+    expect(store.of('a').running).toEqual({ model: 'haiku', effort: 'low', mode: 'plan' });
 
-    // Once it stops, it starts again with what the user has chosen since.
-    store.setModel('a', 'haiku');
-    emit('a', 'sdk', { type: 'closed' }, { type: 'mode', mode: 'acceptEdits' });
+    // Its Codex settings, once it runs Codex.
+    store.sync([
+      {
+        id: 'a',
+        connection: 'app-server',
+        settings: { codex: { model: 'gpt-6-luna', mode: 'read-only' } },
+      },
+    ]);
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
-      model: 'haiku',
-      mode: null,
+      connection: 'app-server',
+      model: 'gpt-6-luna',
+      mode: 'read-only',
     });
     await settle();
+  });
+
+  it('restarts its session with what it is set to now, resuming its conversation', async () => {
+    const { store, backend, emit } = connected();
+    store.sync([{ id: 'a', connection: 'terminal', settings: { claude: { model: 'haiku' } } }]);
+    store.open('a');
+    await settle();
+    emit('a', 'terminal', { type: 'started', model: 'haiku', mode: 'manual', models: [] });
+    store.sync([{ id: 'a', connection: 'terminal', settings: { claude: { model: 'sonnet' } } }]);
+    // Settings changed: the session runs on as it started, until restarted.
+    expect(backend.start).toHaveBeenCalledOnce();
+    expect(store.of('a').running).toEqual({ model: 'haiku' });
+    await store.restart('a');
+    await settle();
+    // Main ends it before it starts again (main resumes the conversation it remembers).
+    expect(backend.close).toHaveBeenCalledWith('a');
+    expect(backend.close.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      backend.start.mock.invocationCallOrder[1] ?? 0,
+    );
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'terminal',
+      model: 'sonnet',
+      mode: null,
+    });
+    expect(store.of('a').running).toEqual({ model: 'sonnet' });
+    // A session that stopped by itself runs with nothing.
+    emit('a', 'terminal', { type: 'closed' });
+    expect(store.of('a').running).toBeUndefined();
   });
 
   it('sends a message, streams the reply into the transcript, and hears when the turn ends', async () => {

@@ -109,6 +109,98 @@
   white-space: nowrap;
 }
 
+/*
+ * A Terminal agent's settings (Settings.tsx): what its CLI starts with, beside its chip, and the
+ * panel that chooses them.
+ */
+.agent-settings {
+  position: relative;
+  min-width: 0;
+}
+
+.agent-settings-button {
+  max-width: 300px;
+  padding: 4px 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-settings-button:hover,
+.agent-settings-button[aria-expanded='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-settings-panel {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+  font-size: 13px;
+}
+
+.agent-settings-title {
+  margin: 0 0 2px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.agent-settings-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-settings-problem {
+  margin: 0;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.agent-settings-restart {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 2px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  font-size: 12px;
+}
+
+.agent-settings-restart button {
+  padding: 2px 10px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: var(--graph-accent, #2563eb);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-settings-restart button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .agent-added {
   color: #16a34a;
 }
@@ -752,6 +844,14 @@
   border-radius: 10px;
   background: Canvas;
   box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+}
+
+/* A menu that opens down (in a panel), from its button's right edge. */
+.agent-choice-menu[data-below] {
+  top: calc(100% + 6px);
+  right: 0;
+  bottom: auto;
+  left: auto;
 }
 
 .agent-choice-menu button {

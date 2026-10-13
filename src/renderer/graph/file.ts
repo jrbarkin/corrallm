@@ -1,7 +1,14 @@
 import type { Edge } from '@xyflow/react';
 
-import { CONNECTIONS } from '../../shared/session';
-import type { Connection } from '../../shared/session';
+import {
+  CLI_MODES,
+  CLIS,
+  CONNECTIONS,
+  EFFORT_PATTERN,
+  MODEL_PATTERN,
+  UNASKING_MODES,
+} from '../../shared/session';
+import type { AgentSettings, Cli, Connection } from '../../shared/session';
 import { USAGE_BACKENDS, USAGE_WINDOWS } from '../../shared/usage';
 import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
@@ -29,13 +36,17 @@ import type {
  *
  *   { "format": "corrallm", "version": 1,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
- *                 "parent"?, "agent"?, "connection"?, "color"?, "queue"? }],
+ *                 "parent"?, "agent"?, "connection"?, "settings"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
  * how it runs, if not simulated (a Claude agent's "terminal" or "sdk", a Codex agent's
  * "codex-terminal" or "app-server": agents.ts); where it runs (the project
- * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
+ * folder) is not in the file, which main remembers per file instead. An agent's settings are what
+ * it is set to run with in each CLI it has run, { "claude"?: { "model"?, "effort"?, "mode"? },
+ * "codex"?: { … } }, each only if set (else the user's own default applies): a model's name, a
+ * reasoning effort, and the mode its sessions start in, one of that CLI's that asks first (never
+ * bypassing permissions or Codex's Full access, which are chosen in a session, each time). Queue items are as queue.ts
  * has them; a step may say what it is to do ("instruction", text: none when empty), and that it is
  * expected to fail ("expect": "fails"); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
  * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
@@ -66,6 +77,7 @@ interface FileNode {
   parent?: string;
   agent?: AgentType;
   connection?: Connection;
+  settings?: Partial<Record<Cli, AgentSettings>>;
   color?: number;
   queue?: QueueItem[];
 }
@@ -78,7 +90,7 @@ interface FileLink {
 /** The canvas as the text of a `.corral` file. */
 export function toFile(graph: Graph): string {
   const nodes = graph.nodes.map((n): FileNode => {
-    const { label, agent, connection, color, queue } = n.data;
+    const { label, agent, connection, settings, color, queue } = n.data;
     return {
       id: n.id,
       kind: n.type === 'frame' ? 'group' : 'agent',
@@ -87,6 +99,7 @@ export function toFile(graph: Graph): string {
       ...(n.parentId === undefined ? {} : { parent: n.parentId }),
       ...(agent === undefined ? {} : { agent }),
       ...(connection === undefined ? {} : { connection }),
+      ...(settings === undefined ? {} : { settings }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     };
@@ -177,6 +190,7 @@ function toGraphNode({
   parent,
   agent,
   connection,
+  settings,
   color,
   queue,
 }: FileNode): GraphNode {
@@ -189,6 +203,7 @@ function toGraphNode({
       label,
       ...(agent === undefined ? {} : { agent }),
       ...(connection === undefined ? {} : { connection }),
+      ...(settings === undefined ? {} : { settings }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     },
@@ -224,6 +239,10 @@ function readNode(value: unknown, where: string): FileNode {
     // Simulated is the default, kept as no connection at all.
     return found === 'simulated' ? undefined : found;
   });
+  const settings = optional(node.settings, `${where}.settings`, (v, at) => {
+    if (kind === 'group') throw new Error(`${at}: a group has no settings`);
+    return readSettings(v, at);
+  });
   const color = optional(node.color, `${where}.color`, (v, at) => {
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= GROUP_COLORS) {
       throw new Error(`${at} must be a whole number from 0 to ${String(GROUP_COLORS - 1)}`);
@@ -245,9 +264,45 @@ function readNode(value: unknown, where: string): FileNode {
     ...(node.parent === undefined ? {} : { parent: name(node.parent, `${where}.parent`) }),
     ...(agent === undefined ? {} : { agent }),
     ...(connection === undefined ? {} : { connection }),
+    ...(settings === undefined ? {} : { settings }),
     ...(color === undefined ? {} : { color }),
     ...(queue === undefined ? {} : { queue }),
   };
+}
+
+/** An agent's settings, by CLI: undefined if nothing is set. */
+function readSettings(value: unknown, where: string): FileNode['settings'] {
+  const all: Partial<Record<Cli, AgentSettings>> = {};
+  for (const [cli, given] of Object.entries(record(value, where))) {
+    const at = `${where}.${cli}`;
+    const known = CLIS.find((one) => one === cli);
+    if (known === undefined) throw new Error(`${at}: settings are for ${CLIS.join(' or ')}`);
+    const settings = record(given, at);
+    if (Object.keys(settings).some((key) => !['model', 'effort', 'mode'].includes(key))) {
+      throw new Error(`${at}: only model, effort and mode can be set`);
+    }
+    const model = optional(settings.model, `${at}.model`, (v, there) => {
+      if (typeof v !== 'string' || !MODEL_PATTERN.test(v)) {
+        throw new Error(`${there} must be a model's name, as its CLI takes it`);
+      }
+      return v;
+    });
+    const effort = optional(settings.effort, `${at}.effort`, (v, there) => {
+      if (typeof v !== 'string' || !EFFORT_PATTERN.test(v)) {
+        throw new Error(`${there} must be a reasoning effort, as its CLI names it`);
+      }
+      return v;
+    });
+    const asking = CLI_MODES[known].filter((mode) => !UNASKING_MODES.includes(mode));
+    const mode = optional(settings.mode, `${at}.mode`, (v, there) => oneOf(v, there, asking));
+    const set: AgentSettings = {
+      ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(mode === undefined ? {} : { mode }),
+    };
+    if (Object.keys(set).length > 0) all[known] = set;
+  }
+  return Object.keys(all).length === 0 ? undefined : all;
 }
 
 /**

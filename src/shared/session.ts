@@ -152,29 +152,50 @@ export interface EffortChoice {
 }
 
 /**
- * How a session is started. Main picks the folder (the canvas's project) and what it resumes, and
- * remembers the model, mode and effort each agent was given, so that it starts with them again.
+ * How a session is started: with the agent's settings for its connection's CLI (`AgentSettings`,
+ * saved with the agent in its canvas's file). Main picks the folder (the canvas's project) and what
+ * it resumes.
  */
 export interface SessionOptions {
   connection: Connection;
-  /**
-   * The model the user chose (a value its models gave), or null: the one the agent was last given,
-   * else the CLI's default.
-   */
+  /** The model the agent is set to run, or null: the user's own default (their CLI's settings). */
   model: string | null;
   /**
-   * The mode the user chose (one of its connection's CLI's), or null: the one the agent was last
-   * given, else the user's own default (their Claude Code settings; Codex's Default).
+   * The mode it starts in (one of its connection's CLI's), or null: the user's own default (their
+   * Claude Code settings; Codex's Default, which leaves their own sandbox settings).
    */
   mode: SessionMode | null;
-  /**
-   * The reasoning effort the user chose (one its model offered; null: the model's default), or
-   * absent: the one the agent was last given, else the model's default.
-   */
+  /** The reasoning effort it is set to; null or absent: the user's own default, else the model's. */
   effort?: string | null;
 }
 
-/** The modes that never ask before acting: chosen only once confirmed, and never remembered. */
+/**
+ * What an agent is set to run with in a CLI, each only if chosen: its model, its reasoning effort
+ * and the mode its sessions start in (never one that never asks: UNASKING_MODES). Saved with the
+ * agent in its canvas's file, one for each CLI it has run (so switching between Claude and Codex
+ * loses neither), and shared by that CLI's connections: a Terminal agent's are passed on its CLI's
+ * command line as it starts, a structured session's are its composer's choices.
+ */
+export interface AgentSettings {
+  model?: string;
+  effort?: string;
+  mode?: SessionMode;
+}
+
+/**
+ * What an agent's settings can be in a CLI, as told without starting a session (or a prompt): the
+ * models it takes (with their efforts), and the user's own defaults, which apply where nothing is
+ * chosen (null where the CLI's settings say none).
+ */
+export interface SettingsOptions {
+  models: ModelChoice[];
+  defaults: { model: string | null; effort: string | null; mode: SessionMode | null };
+}
+
+/**
+ * The modes that never ask before acting: chosen only once confirmed, for a session, and never
+ * what an agent is set to start in (AgentSettings).
+ */
 export const UNASKING_MODES: readonly SessionMode[] = ['bypassPermissions', 'full-access'];
 
 /** The kinds of image the user can paste into a message (those Claude reads). */
@@ -512,7 +533,10 @@ export const MAX_QUESTIONS = 4;
 export const MAX_FORM_FIELDS = 50;
 /** The longest name of an MCP server the renderer may give. */
 export const MAX_MCP_NAME_LENGTH = 200;
-/** What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN. */
-export const MODEL_PATTERN = /^[\w.:/@[\]-]{1,200}$/;
+/**
+ * What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN; never
+ * with a dash first, which a command line would take for a flag.
+ */
+export const MODEL_PATTERN = /^(?!-)[\w.:/@[\]-]{1,200}$/;
 /** What a reasoning effort's value may look like ('low', 'xhigh'). */
 export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;

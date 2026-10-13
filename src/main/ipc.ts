@@ -18,6 +18,7 @@ import {
   parseMcpChangeArgs,
   parseModeArgs,
   parseModelArgs,
+  parseOptionsArgs,
   parseResumeArgs,
   parseRewindArgs,
   parseRewindPreviewArgs,
@@ -65,6 +66,7 @@ export interface IpcServices {
     | 'resumeSession'
     | 'mcpServers'
     | 'changeMcpServer'
+    | 'settingsOptions'
     | 'previewRewind'
     | 'rewind'
     | 'canvasOpened'
@@ -300,6 +302,10 @@ function createHandlers({ projects, files, links, sessions, usage }: IpcServices
       parseArgs: parseRewindArgs,
       handler: ({ contents }, agentId, messageId, restore) =>
         sessions.rewind(contents, agentId, messageId, restore),
+    },
+    'session:options': {
+      parseArgs: parseOptionsArgs,
+      handler: ({ contents }, cli) => sessions.settingsOptions(contents, cli),
     },
     'session:mcp': {
       parseArgs: parseAgentArgs,

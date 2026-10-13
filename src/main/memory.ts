@@ -1,21 +1,9 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 
-import { CLI_MODES, EFFORT_PATTERN, MODEL_PATTERN } from '../shared/session';
-import type { Cli, SessionMode } from '../shared/session';
-
 /**
- * The model, mode and reasoning effort an agent was given in a CLI (each only if it was): it starts
- * with them again.
- */
-export interface Chosen {
-  model?: string;
-  mode?: SessionMode;
-  effort?: string;
-}
-
-/**
- * What main remembers of a canvas file: its project folder, its agents' sessions' ids (Claude
- * Code's sessions, Codex's threads), and the model, mode and effort each agent was given in each.
+ * What main remembers of a canvas file: its project folder, and its agents' sessions' ids (Claude
+ * Code's sessions, Codex's threads). What its agents are set to run with (their models, efforts and
+ * modes) is in the canvas's file itself.
  */
 export interface Remembered {
   project?: string;
@@ -23,10 +11,6 @@ export interface Remembered {
   sessions: Readonly<Record<string, string>>;
   /** The id of each agent's Codex thread (Codex's sessions), by agent id, likewise. */
   threads?: Readonly<Record<string, string>>;
-  /** What each agent was given in Claude Code, by agent id: what its session starts with. */
-  chosen?: Readonly<Record<string, Chosen>>;
-  /** What each agent was given in Codex, likewise. */
-  codexChosen?: Readonly<Record<string, Chosen>>;
 }
 
 const NOTHING: Remembered = { sessions: {} };
@@ -40,8 +24,7 @@ const VERSION = 1;
  * file.ts), so it can be shared: where it runs on this machine is kept here.
  *
  *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id },
- *       "threads"?: { "<agent>": id },
- *       "chosen"?: { "<agent>": { "model"?, "mode"?, "effort"? } }, "codexChosen"?: { … } } } }
+ *       "threads"?: { "<agent>": id } } } }
  *
  * Updates are applied one at a time, in order, and written whole (beside it, then moved over it).
  */
@@ -122,16 +105,12 @@ function parse(text: string): Map<string, Remembered> {
   if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     if (!isRecord(value)) continue;
-    const { project, sessions, threads, chosen, codexChosen } = value;
+    const { project, sessions, threads } = value;
     if (project !== undefined && typeof project !== 'string') continue;
-    const given = parseChoices(chosen, 'claude');
-    const codexGiven = parseChoices(codexChosen, 'codex');
     canvases.set(canvas, {
       ...(project === undefined ? {} : { project }),
       sessions: ids(sessions),
       ...(isRecord(threads) ? { threads: ids(threads) } : {}),
-      ...(given === undefined ? {} : { chosen: given }),
-      ...(codexGiven === undefined ? {} : { codexChosen: codexGiven }),
     });
   }
   return canvases;
@@ -144,30 +123,6 @@ function ids(value: unknown): Record<string, string> {
       (entry): entry is [string, string] => typeof entry[1] === 'string',
     ),
   );
-}
-
-/** What each agent was given in `cli`, those entries that are right; undefined if none is. */
-function parseChoices(value: unknown, cli: Cli): Record<string, Chosen> | undefined {
-  const choices = Object.entries(isRecord(value) ? value : {}).flatMap(
-    ([agent, given]): [string, Chosen][] => {
-      const parsed = parseChosen(given, cli);
-      return parsed === undefined ? [] : [[agent, parsed]];
-    },
-  );
-  return choices.length === 0 ? undefined : Object.fromEntries(choices);
-}
-
-/** The model, mode and effort an entry gives, those that are right; undefined if none is. */
-function parseChosen(value: unknown, cli: Cli): Chosen | undefined {
-  if (!isRecord(value)) return undefined;
-  const { model, mode, effort } = value;
-  const known = (CLI_MODES[cli] as readonly SessionMode[]).find((m) => m === mode);
-  const chosen: Chosen = {
-    ...(typeof model === 'string' && MODEL_PATTERN.test(model) ? { model } : {}),
-    ...(known === undefined ? {} : { mode: known }),
-    ...(typeof effort === 'string' && EFFORT_PATTERN.test(effort) ? { effort } : {}),
-  };
-  return Object.keys(chosen).length === 0 ? undefined : chosen;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,7 +1,7 @@
 import { homedir, tmpdir } from 'node:os';
 
 import type { UsageBackend, UsageWindows } from '../../../shared/usage';
-import { requireClaude } from '../claude';
+import { claudeFlags, requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
 import { HOOK_TOKEN, HookServer } from './hooks';
@@ -46,6 +46,8 @@ export interface TerminalConnectorOptions {
   spawn?: SpawnPty;
   /** Finds the `claude` to run, in the agents' environment. */
   findClaude?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  /** The flags that `claude` takes (its --help's: claude.ts). */
+  flags?: (claude: string, env: Readonly<Record<string, string>>) => Promise<ReadonlySet<string>>;
   /** Where sessions' settings files go. */
   tmp?: string;
   timing?: Partial<TerminalTiming>;
@@ -58,6 +60,10 @@ export interface TerminalConnectorOptions {
 export class TerminalConnector implements Connector {
   readonly #spawn: SpawnPty;
   readonly #findClaude: (env: Readonly<Record<string, string>>) => Promise<string>;
+  readonly #flags: (
+    claude: string,
+    env: Readonly<Record<string, string>>,
+  ) => Promise<ReadonlySet<string>>;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #home: string;
@@ -68,6 +74,7 @@ export class TerminalConnector implements Connector {
   constructor({
     spawn = spawnPty,
     findClaude = (env) => requireClaude(env),
+    flags = claudeFlags(),
     tmp = tmpdir(),
     timing = {},
     home = homedir(),
@@ -75,6 +82,7 @@ export class TerminalConnector implements Connector {
   }: TerminalConnectorOptions = {}) {
     this.#spawn = spawn;
     this.#findClaude = findClaude;
+    this.#flags = flags;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...timing };
     this.#home = home;
@@ -83,9 +91,14 @@ export class TerminalConnector implements Connector {
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#findClaude(spec.env);
+    // An effort it was given, if its claude takes --effort (an older one would not start with it).
+    const effort =
+      spec.effort != null && (await this.#flags(claude, spec.env)).has('--effort')
+        ? spec.effort
+        : null;
     const session = new TerminalSession(spec, host, {
       executable: claude,
-      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home, env: spec.env }),
+      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home, env: spec.env, effort }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,

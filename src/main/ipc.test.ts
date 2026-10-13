@@ -64,6 +64,10 @@ function fakeServices() {
         .mockResolvedValue({ possible: true, files: [], added: 0, removed: 0 }),
       rewind: vi.fn<IpcServices['sessions']['rewind']>().mockResolvedValue({ conversation: false }),
       changeMcpServer: vi.fn<IpcServices['sessions']['changeMcpServer']>().mockResolvedValue([]),
+      settingsOptions: vi.fn<IpcServices['sessions']['settingsOptions']>().mockResolvedValue({
+        models: [],
+        defaults: { model: null, effort: null, mode: null },
+      }),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
         .fn<IpcServices['sessions']['canvasForgotten']>()
@@ -296,6 +300,9 @@ describe('session:* handlers', () => {
     );
     await invoke('session:list', ['a'], sender);
     expect(services.sessions.listSessions).toHaveBeenCalledWith(sender, 'a');
+    // What a CLI's agents can be set to: read for the canvas the renderer shows.
+    await invoke('session:options', ['codex'], sender);
+    expect(services.sessions.settingsOptions).toHaveBeenCalledWith(sender, 'codex');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
     await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
     expect(services.sessions.resumeSession).toHaveBeenCalledWith(
@@ -352,6 +359,13 @@ describe('session:* handlers', () => {
     ],
     ['session:start', 'a Codex mode for Claude', ['a', { ...start, mode: 'read-only' }], /mode/],
     ['session:start', 'a model with spaces', ['a', { ...start, model: 'rm -rf /' }], /model/],
+    // A command line would take it for a flag.
+    [
+      'session:start',
+      'a model that reads as a flag',
+      ['a', { ...start, model: '--dangerously-skip-permissions' }],
+      /model/,
+    ],
     ['session:start', 'a path to resume', ['a', { ...start, resume: '/etc/passwd' }], /options/],
     ['session:send', 'a message without text', ['a', { id: 'm' }], /text/],
     ['session:send', 'a blank message', ['a', { id: 'm', text: '  ' }], /text/],
@@ -517,6 +531,9 @@ describe('session:* handlers', () => {
       ],
       /what to do instead/,
     ],
+    ['session:options', 'no CLI', [], /a CLI/],
+    ['session:options', 'a CLI corrallm does not run', ['gemini'], /CLI/],
+    ['session:options', 'a folder as well', ['claude', '/etc'], /a CLI/],
     ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
     ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
     ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],

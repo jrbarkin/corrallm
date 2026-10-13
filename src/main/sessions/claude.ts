@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -42,4 +43,44 @@ export async function requireClaude(
     );
   }
   return found;
+}
+
+/** How long `claude --help` may take. */
+const HELP_MS = 10_000;
+
+/** The flags a `claude --help` lists ("--effort", "-r", "--resume"…). */
+export function helpFlags(help: string): Set<string> {
+  const flags = new Set<string>();
+  for (const line of help.split('\n')) {
+    // An option's line starts with its flags, comma-separated, before its value and description.
+    const names = /^\s+(-[\w-]+(?:,\s*-[\w-]+)*)/.exec(line)?.[1];
+    for (const name of names?.split(/,\s*/) ?? []) flags.add(name);
+  }
+  return flags;
+}
+
+/**
+ * What finds the flags a `claude` takes (as its --help lists them), so that a session is started
+ * only with flags its CLI knows (an older one exits on an unknown option). Each executable is
+ * asked once; one that cannot say (it fails, or is too slow) takes none, and is asked again next
+ * time.
+ */
+export function claudeFlags(): (
+  claude: string,
+  env: Readonly<Record<string, string>>,
+) => Promise<ReadonlySet<string>> {
+  const asked = new Map<string, Promise<ReadonlySet<string>>>();
+  return (claude, env) => {
+    let flags = asked.get(claude);
+    if (!flags) {
+      flags = new Promise((resolve) => {
+        execFile(claude, ['--help'], { env, timeout: HELP_MS }, (error, stdout) => {
+          if (error) asked.delete(claude);
+          resolve(error ? new Set() : helpFlags(stdout));
+        });
+      });
+      asked.set(claude, flags);
+    }
+    return flags;
+  };
 }

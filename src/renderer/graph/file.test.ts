@@ -318,6 +318,39 @@ describe('fromFile', () => {
     expect(fromFile(JSON.stringify(simulated)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
   });
 
+  it('saves what an agent is set to run with in each CLI, and reads it back', () => {
+    const set: Graph = {
+      nodes: [
+        {
+          id: 't',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: {
+            label: 'T',
+            connection: 'terminal',
+            settings: {
+              claude: { model: 'haiku', effort: 'low', mode: 'plan' },
+              // What it was set to when it ran Codex is kept too.
+              codex: { model: 'gpt-6-luna' },
+            },
+          },
+        },
+      ],
+      edges: [],
+    };
+    const text = toFile(set);
+    expect((JSON.parse(text) as { nodes: { settings?: unknown }[] }).nodes[0]?.settings).toEqual({
+      claude: { model: 'haiku', effort: 'low', mode: 'plan' },
+      codex: { model: 'gpt-6-luna' },
+    });
+    expect(fromFile(text).nodes[0]?.data.settings).toEqual(set.nodes[0]?.data.settings);
+    expect(toFile(fromFile(text))).toBe(text);
+    // Nothing set: written as nothing, for a CLI or at all.
+    const file = structuredClone(saved);
+    Object.assign(file.nodes[2] ?? {}, { settings: { claude: {}, codex: {} } });
+    expect(fromFile(JSON.stringify(file)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
+  });
+
   it('reads a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
@@ -367,6 +400,46 @@ describe('fromFile', () => {
       'a group with a connection',
       (f) => Object.assign(f.nodes[0] ?? {}, { connection: 'sdk' }),
       /^nodes\[0\]\.connection: a group has no connection$/,
+    ],
+    [
+      'a group with settings',
+      (f) => Object.assign(f.nodes[0] ?? {}, { settings: { claude: { model: 'opus' } } }),
+      /^nodes\[0\]\.settings: a group has no settings$/,
+    ],
+    [
+      'settings for a CLI corrallm does not run',
+      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { gemini: { model: 'pro' } } }),
+      /^nodes\[2\]\.settings\.gemini: settings are for claude or codex$/,
+    ],
+    [
+      'a model that reads as a flag',
+      (f) =>
+        Object.assign(f.nodes[2] ?? {}, {
+          settings: { claude: { model: '--dangerously-skip-permissions' } },
+        }),
+      /^nodes\[2\]\.settings\.claude\.model must be a model's name/,
+    ],
+    [
+      'an effort that is not a word',
+      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { claude: { effort: 'max; rm' } } }),
+      /^nodes\[2\]\.settings\.claude\.effort must be a reasoning effort/,
+    ],
+    [
+      'a mode of the other CLI',
+      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { codex: { mode: 'plan-ish' } } }),
+      /^nodes\[2\]\.settings\.codex\.mode must be one of: read-only, auto, plan$/,
+    ],
+    [
+      // A file never starts an agent without its asking: that is chosen in its session, each time.
+      'a mode that never asks',
+      (f) =>
+        Object.assign(f.nodes[2] ?? {}, { settings: { claude: { mode: 'bypassPermissions' } } }),
+      /^nodes\[2\]\.settings\.claude\.mode must be one of: manual, acceptEdits, plan, auto$/,
+    ],
+    [
+      'something else set',
+      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { claude: { command: 'rm -rf /' } } }),
+      /^nodes\[2\]\.settings\.claude: only model, effort and mode can be set$/,
     ],
     [
       'a repeated id',
