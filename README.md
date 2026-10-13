@@ -107,6 +107,8 @@ What happens when you save a file while `pnpm dev` is running:
 
 To try the production build, run `pnpm package` and open the app in `out/` (for example `open out/corrallm-darwin-arm64/corrallm.app`).
 
+To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFTEST=1` (for example `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`): it checks that node-pty, the terminal's screen copy and the Agent SDK work in it (the SDK against a fake `claude` of its own, run with the `node` on your PATH; no login needed), and exits with 0.
+
 ## Common scripts
 
 | Script           | What it does                                          |

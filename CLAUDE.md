@@ -20,7 +20,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - Run one Vitest project with `pnpm exec vitest run --project main`.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` (note `pnpm dev` overwrites it). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - `CORRALLM_CLAUDE_PATH=/path/to/claude` makes connected agents run that `claude` instead of the user's own (the e2e tests point it at a fake: `e2e/fake-claude.mjs` for Terminal agents, `src/main/sessions/sdk/fake-claude.mjs` for the Agent SDK).
-- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). It loads node-pty, spawns a shell that exits, and exits 0 on success. CI runs this on all three OSes.
+- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). `runNativeSelfTest` (`src/main/native-selftest.ts`) runs a shell that exits in a node-pty pseudo-terminal (through `spawnPty`, as Terminal agents run), then `src/main/selftest.ts`'s checks: main's terminal screen copy (@xterm/headless and its addons) reads a status report and snapshots, and the bundled Agent SDK (its `import.meta.url` define, its spawning) runs a query against `src/main/selftest-claude.mjs`, a tiny fake `claude` bundled as text (`?raw`, typed in `src/main/raw.d.ts`) only for this, written to a temporary folder and run with the `node` on the PATH (no login). It exits 0 on success, 2 if a check fails (saying which), 3 on a timeout. CI runs this on all three OSes; `src/main/selftest.test.ts` runs the same checks in the unit tests.
 
 ## Testing
 
@@ -62,6 +62,7 @@ src/main/sessions/terminal/  The Terminal connection (see Terminal below): conne
                 quotes the paths of files dropped on its view. fake-claude.ts fakes the CLI for its
                 tests.
 src/main/files.ts   The project folder's files for @-mentions (project:files): git's list, or a walk.
+src/main/native-selftest.ts, selftest.ts, selftest-claude.mjs  The packaged app's self-test (see Commands).
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
@@ -251,5 +252,5 @@ A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `termi
 - Unsigned macOS builds are re-signed ad hoc in the `postPackage` hook so the bundle signature verifies. Signing and notarization turn on from env vars (`.env.example`); `CORRALLM_UNSIGNED=1` forces an unsigned build.
 - `build/rpm.spec.ejs` is a patched copy of electron-installer-redhat's template (rpmbuild >= 4.20 fix); delete it once upstream ships the fix.
 - Forge 8's terminal UI hides plain logs; set `CI=1` for linear output.
-- The main bundle is CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` would catch it.
+- The main bundle is CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` and the packaged self-test would catch it.
 - Auto-update is a TODO in `src/main/index.ts` (Squirrel + ZIP makers are compatible with `update-electron-app`).
