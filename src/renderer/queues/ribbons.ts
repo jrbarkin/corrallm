@@ -16,6 +16,8 @@ export interface Ribbon {
   kind: 'wait' | 'handoff';
   /** A wait in a loop of waits, which would never run. */
   stuck: boolean;
+  /** A wait with a time limit: it may go on without what it waits for. */
+  timed: boolean;
   from: { lane: number; span: Span };
   to: { lane: number; span: Span };
 }
@@ -38,6 +40,7 @@ export function ribbonsOf(
           key: link.key,
           kind: 'handoff',
           stuck: false,
+          timed: false,
           from: { lane: from, span },
           to: { lane: to, span: { top: middle, bottom: middle } },
         },
@@ -50,6 +53,7 @@ export function ribbonsOf(
         key: link.key,
         kind: 'wait',
         stuck: isStuck(link.to.lane, link.to.item),
+        timed: link.timed,
         from: { lane: from, span },
         to: { lane: to, span: wait },
       },
@@ -62,6 +66,7 @@ export interface Piece {
   key: string;
   kind: Ribbon['kind'];
   stuck: boolean;
+  timed: boolean;
   left: Span;
   right: Span;
   /** Work handed on points into the lane it reaches, on this side of the gap. */
@@ -75,7 +80,7 @@ export interface Piece {
  * the lane it reaches.
  */
 export function piecesIn(ribbons: readonly Ribbon[], gap: number): Piece[] {
-  return ribbons.flatMap(({ key, kind, stuck, from, to }): Piece[] => {
+  return ribbons.flatMap(({ key, kind, stuck, timed, from, to }): Piece[] => {
     const rightwards = from.lane < to.lane;
     if (gap < Math.min(from.lane, to.lane) || gap >= Math.max(from.lane, to.lane)) return [];
     const middle = (from.span.top + from.span.bottom) / 2;
@@ -84,8 +89,8 @@ export function piecesIn(ribbons: readonly Ribbon[], gap: number): Piece[] {
     const reaches = gap === (rightwards ? to.lane - 1 : to.lane);
     const reaching = reaches ? to.span : line;
     const piece: Piece = rightwards
-      ? { key, kind, stuck, left: leaving, right: reaching }
-      : { key, kind, stuck, left: reaching, right: leaving };
+      ? { key, kind, stuck, timed, left: leaving, right: reaching }
+      : { key, kind, stuck, timed, left: reaching, right: leaving };
     if (reaches && kind === 'handoff') piece.arrow = rightwards ? 'right' : 'left';
     return [piece];
   });

@@ -77,9 +77,38 @@ describe('lanesOf', () => {
         kind: 'wait',
         from: { lane: 'a', item: 'hand' },
         to: { lane: 'b', item: 'w' },
+        timed: false,
       },
-      { key: 'b:w>a', kind: 'wait', from: { lane: 'a', item: null }, to: { lane: 'b', item: 'w' } },
+      {
+        key: 'b:w>a',
+        kind: 'wait',
+        from: { lane: 'a', item: null },
+        to: { lane: 'b', item: 'w' },
+        timed: false,
+      },
     ]);
+  });
+
+  it('says which waits have a time limit, and puts a delay after the item before it, unlinked', () => {
+    const a = agent('a', [
+      { id: 'build', action: 'Edit' },
+      { id: 'pause', delay: { seconds: 600 } },
+      { id: 'ship', action: 'Bash' },
+    ]);
+    const b = agent('b', [
+      { id: 'w', waitFor: [{ agent: 'a', item: 'pause' }], timeout: { seconds: 60 } },
+    ]);
+    const { links } = lanesOf([a, b]);
+    expect(links).toEqual([
+      {
+        key: 'b:w>a:pause',
+        kind: 'wait',
+        from: { lane: 'a', item: 'pause' },
+        to: { lane: 'b', item: 'w' },
+        timed: true,
+      },
+    ]);
+    expect(rows([a, b])).toEqual({ a: ['build', 'pause', 'ship'], b: [null, null, 'w'] });
   });
 
   it('marks waits that wait on each other as stuck, and still lays them out', () => {
@@ -94,5 +123,21 @@ describe('lanesOf', () => {
       false,
     ]);
     expect(rows([a, b, c]).c?.[0]).toBe('w');
+  });
+
+  it('does not mark a loop of waits stuck when a time limit in it breaks it, but lays it out', () => {
+    const a = agent('a', [
+      { id: 'w', waitFor: [{ agent: 'b', item: 'w' }], timeout: { seconds: 60 } },
+      { id: 'next', action: 'Read' },
+    ]);
+    const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'w' }] }]);
+    const c = agent('c', [{ id: 'x', waitFor: [{ agent: 'c', item: 'x' }] }]);
+    const lanes = lanesOf([a, b, c]);
+    expect([lanes.isStuck('a', 'w'), lanes.isStuck('b', 'w'), lanes.isStuck('c', 'x')]).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(rows([a, b, c])).toEqual({ a: ['w', 'next'], b: ['w', null], c: ['x', null] });
   });
 });

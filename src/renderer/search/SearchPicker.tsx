@@ -10,7 +10,8 @@ type Entry<T> = { option: T } | { typed: string };
  * Type to search, then pick: a text field over the options that match it (see `search`). Arrow
  * keys move through the matches, Enter or a click picks one, Escape or leaving the field cancels.
  * With `freeText`, what was typed is offered too, after the matches (which then leave out letters
- * merely in order, so that a sentence is not taken for an option). Follows the ARIA combobox
+ * merely in order, so that a sentence is not taken for an option). With `typed`, options read from
+ * what was typed (such as a time, "1h30") are listed first, as they are. Follows the ARIA combobox
  * pattern.
  */
 export function SearchPicker<T>({
@@ -22,6 +23,7 @@ export function SearchPicker<T>({
   placeholder = 'Search…',
   initialQuery = '',
   freeText,
+  typed: readTyped,
   onPick,
   onCancel,
 }: {
@@ -37,6 +39,11 @@ export function SearchPicker<T>({
   initialQuery?: string;
   /** Offers what was typed as an entry of its own, explained by `detail`, picked by `onPick`. */
   freeText?: { detail: string; onPick: (text: string) => void };
+  /**
+   * Options read from what was typed, listed first whether or not they match it; an option among
+   * the matches with the same key is not listed again.
+   */
+  typed?: (query: string) => readonly T[];
   onPick: (option: T) => void;
   onCancel: () => void;
 }) {
@@ -48,12 +55,17 @@ export function SearchPicker<T>({
   const typedId = useId();
   const fuzzy = freeText === undefined;
   const byLabel = search(options, query, optionLabel, { fuzzy });
-  const found = optionDetail
-    ? [
-        ...byLabel,
-        ...search(options, query, optionDetail, { fuzzy }).filter((o) => !byLabel.includes(o)),
-      ]
-    : byLabel;
+  const read = readTyped?.(query) ?? [];
+  const readKeys = new Set(read.map(optionKey));
+  const found = [
+    ...read,
+    ...[
+      ...byLabel,
+      ...(optionDetail
+        ? search(options, query, optionDetail, { fuzzy }).filter((o) => !byLabel.includes(o))
+        : []),
+    ].filter((o) => !readKeys.has(optionKey(o))),
+  ];
   const typed = query.trim();
   const offerTyped =
     freeText !== undefined &&

@@ -221,6 +221,120 @@ describe('GraphEditor', () => {
     expect(panel.getByRole('button', { name: 'Move If a test is flaky' })).toBeTruthy();
   });
 
+  it('queues a delay, picked by typing how long, and changes it from its chip', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    // Typing "wait" finds both ways to wait.
+    fireEvent.change(field(), { target: { value: 'wait' } });
+    expect(options().slice(0, 2)).toEqual(['Wait for…', 'Wait a while…']);
+    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    expect(field().getAttribute('aria-label')).toBe('Wait how long?');
+    expect(field().placeholder).toBe('10 minutes, 1 hour, until 9:00…');
+    expect(options()).toEqual([
+      '5 minutes',
+      '10 minutes',
+      '30 minutes',
+      '1 hour',
+      '4 hours',
+      'Until 9:00 AM',
+    ]);
+    // What is typed is read as the times it can mean, listed first.
+    fireEvent.change(field(), { target: { value: '15' } });
+    expect(options()).toEqual(['15 minutes', '15 hours', '15 seconds', 'Until 3:00 PM']);
+    fireEvent.click(panel.getByRole('option', { name: '15 minutes' }));
+    expect(panel.getByRole('button', { name: 'Move Wait 15 minutes' })).toBeTruthy();
+
+    // Its chip reopens the picker with its time typed in, to change it.
+    const chip = () => panel.getByRole('button', { name: /^Change how long it waits: / });
+    expect(chip().textContent).toBe('15 minutes');
+    fireEvent.click(chip());
+    expect(field().value).toBe('15 minutes');
+    fireEvent.change(field(), { target: { value: '1h30' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(chip().getAttribute('aria-label')).toBe('Change how long it waits: 1 hour 30 minutes');
+    expect(panel.getByRole('button', { name: 'Move Wait 1 hour 30 minutes' })).toBeTruthy();
+  });
+
+  it("gives a wait a time limit from its 'at most…' chip, and takes it off again", () => {
+    const queue = [{ id: 'w', waitFor: [{ agent: 'a' }] }];
+    const { node } = setup({
+      nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100, { data: { label: 'b', queue } })],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('b'));
+    const panel = within(screen.getByRole('dialog', { name: 'b' }));
+    const add = panel.getByRole('button', { name: 'Add a time limit' });
+    expect([add.textContent, add.title, add.hasAttribute('data-more')]).toEqual([
+      'at most…',
+      'Go on anyway if it is not done in time',
+      true,
+    ]);
+    fireEvent.click(add);
+    expect(panel.getByRole('combobox').getAttribute('aria-label')).toBe('Go on anyway after…');
+    fireEvent.click(panel.getByRole('option', { name: '30 minutes' }));
+    const limit = panel.getByRole('button', { name: 'Change the time limit: at most 30 minutes' });
+    expect(limit.textContent).toBe('at most 30 minutes');
+    expect(panel.getByRole('button', { name: 'Move Wait for a, at most 30 minutes' })).toBeTruthy();
+    expect(panel.queryByRole('button', { name: 'Add a time limit' })).toBeNull();
+
+    // Its chip offers to take it off first.
+    fireEvent.click(limit);
+    expect(panel.getAllByRole('option')[0]?.textContent).toBe('No time limit');
+    fireEvent.click(panel.getByRole('option', { name: 'No time limit' }));
+    expect(panel.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Add a time limit' })).toBeTruthy();
+  });
+
+  it('checks whether a wait ran out of time, striking the condition out where no wait is before it', () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, { data: { label: 'a', queue: [{ id: 'm', message: 'Build it' }] } }),
+        agentNode('b', 0, 100, {
+          data: {
+            label: 'b',
+            queue: [
+              { id: 'w', waitFor: [{ agent: 'a' }], timeout: { seconds: 60 } },
+              { id: 'd', delay: { seconds: 60 } },
+              { id: 'late', if: { kind: 'timedOut' }, then: [] },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'the previous step succeeded',
+      'the previous step failed',
+      'the output contains…',
+      'the wait ran out of time',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'the wait ran out of time' }));
+    // After a message, there is no wait to run out of time.
+    const chip = panel.getByRole('button', {
+      name: 'Change the condition: the wait ran out of time',
+    });
+    expect(chip.hasAttribute('data-unavailable')).toBe(true);
+    expect(chip.title).toBe('No wait right before this If');
+
+    // After a wait, it can hold: a delay between the two is passed over.
+    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+    fireEvent.doubleClick(node('b'));
+    const other = within(screen.getByRole('dialog', { name: 'b' }));
+    const fits = other.getByRole('button', {
+      name: 'Change the condition: the wait ran out of time',
+    });
+    expect(fits.hasAttribute('data-unavailable')).toBe(false);
+    expect(fits.title).toBe('');
+  });
+
   it("offers a Claude agent Claude Code's own tools, Workflow included", () => {
     const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
     fireEvent.doubleClick(node('a'));

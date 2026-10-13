@@ -4,17 +4,20 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
-import { agentName, andList, ifText, itemLabel, waitTargetLabel } from './labels';
-import { CONDITIONS, isIf, isMessage, isWait, sameTarget } from './queue';
+import { agentName, delayText, ifText, itemLabel, waitTargetLabel, waitText } from './labels';
+import { CONDITIONS, isDelay, isIf, isMessage, isWait, sameTarget, unfit } from './queue';
 import type {
   Condition,
+  QueueDelay,
   QueueIf,
   QueueItem,
   QueueMessage,
   QueueStep,
   QueueWait,
+  Time,
   WaitTarget,
 } from './queue';
+import { leftText, limitText, parseTime, TIME_PRESETS, timeText } from './time';
 import { SortableList } from './SortableList';
 import type { HandleProps } from './SortableList';
 import '../run/run.css';
@@ -23,7 +26,11 @@ const EMPTY: readonly QueueItem[] = [];
 
 /** A queue item, before it is added: its id is made then, unless it brings one. */
 export type QueueEntry = (
-  Omit<QueueStep, 'id'> | Omit<QueueMessage, 'id'> | Omit<QueueIf, 'id'> | Omit<QueueWait, 'id'>
+  | Omit<QueueStep, 'id'>
+  | Omit<QueueMessage, 'id'>
+  | Omit<QueueIf, 'id'>
+  | Omit<QueueWait, 'id'>
+  | Omit<QueueDelay, 'id'>
 ) & { id?: string };
 
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
@@ -77,6 +84,10 @@ interface QueueProps {
   onEditMessage: (itemId: string, message: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  /** Sets a delay's time, or a wait's time limit (`undefined` takes it off). */
+  onTime: (itemId: string, time: Time | undefined) => void;
+  /** Ends now the hold the run has this agent at (Go on now), shown on a row marked waiting. */
+  onGoOn: (itemId: string) => void;
   /**
    * Once an agent is picked for a wait, lets the user pick one of its steps (AgentView shows its
    * queue beside). Without it, the wait picker lists their steps too.
@@ -84,16 +95,21 @@ interface QueueProps {
   onChooseStep?: (choice: StepChoice) => void;
   /** The wait target being picked, to show which. */
   choosing?: Omit<StepChoice, 'agent'>;
-  /** Marks for the row of each item and if-then step, by id, and (null) the queue's end. */
+  /**
+   * Marks for the row of each item and if-then step, by id, and (null) the queue's end. Where the
+   * run is with a row (`data-run`, `data-until`) gives it its run controls: Go on now, a countdown.
+   */
   marks?: (itemId: string | null) => RowMarks;
 }
 
 /**
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
  * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
- * only when a condition holds), and waits (until other agents have finished). The ⊕ adds any of them; everything is picked by typing to
- * search. Rows are reordered by dragging their handle, or with the arrow keys on it. With `only`,
- * it shows part of the queue (WorkDetail.tsx), where reordering moves items among those shown.
+ * only when a condition holds), waits (until other agents have finished, or at most a time), and
+ * delays (a set time, or until a time of day). The ⊕ adds any of them; everything is picked by
+ * typing to search. Rows are reordered by dragging their handle, or with the arrow keys on it.
+ * With `only`, it shows part of the queue (WorkDetail.tsx), where reordering moves items among
+ * those shown.
  */
 export function QueueEditor({
   only,
@@ -161,12 +177,13 @@ export function QueueEditor({
               }
             }
           />
-          <AddMenu label={addLabel} withIf context={context} onAdd={onAdd} />
+          <AddMenu label={addLabel} place="queue" context={context} onAdd={onAdd} />
         </>
       )}
       {typeof add === 'object' && (
         <AddMenu
           label={`Queue work for ${context.name(add.workFor)}`}
+          place="if"
           target={add.workFor}
           context={context}
           onAdd={onAdd}
@@ -220,7 +237,7 @@ export function QueueRow({
   return <ItemRow item={item} handle={handle} context={contextOf(props)} props={props} />;
 }
 
-/** An item's row: a step, a message, a wait, or an if-then with its own steps. */
+/** An item's row: a step, a message, a wait, a delay, or an if-then with its own steps. */
 function ItemRow({
   item,
   handle,
@@ -239,6 +256,7 @@ function ItemRow({
       <StepRow item={step} handle={stepHandle} context={context} />
     );
   if (isWait(item)) return <WaitRow item={item} handle={handle} context={context} />;
+  if (isDelay(item)) return <DelayRow item={item} handle={handle} context={context} />;
   if (!isIf(item)) return row(item, handle);
   return (
     <IfRow
@@ -267,6 +285,8 @@ function contextOf({
   onRetarget,
   onEditMessage,
   onWaitFor,
+  onTime,
+  onGoOn,
   onChooseStep,
   choosing,
   marks,
@@ -276,12 +296,15 @@ function contextOf({
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
   const describe = (item: QueueItem) =>
     isWait(item)
-      ? `Wait for ${andList(item.waitFor.map(targetLabel))}`
-      : isIf(item)
-        ? `If ${ifText(item.if)}`
-        : isMessage(item)
-          ? 'Message'
-          : item.action;
+      ? waitText(item, targetLabel)
+      : isDelay(item)
+        ? delayText(item)
+        : isIf(item)
+          ? `If ${ifText(item.if)}`
+          : isMessage(item)
+            ? 'Message'
+            : item.action;
+  const queue = node.data.queue ?? EMPTY;
   return {
     agent,
     actions,
@@ -295,6 +318,13 @@ function contextOf({
     onRetarget,
     onEditMessage,
     onWaitFor,
+    onTime,
+    onGoOn,
+    unfit: (item) =>
+      unfit(
+        queue,
+        queue.findIndex((q) => q.id === item.id),
+      ),
     marks: marks ?? (() => ({})),
     ...(onChooseStep ? { onChooseStep } : {}),
     ...(choosing ? { choosing } : {}),
@@ -319,6 +349,10 @@ interface Context extends AddContext {
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  onTime: (itemId: string, time: Time | undefined) => void;
+  onGoOn: (itemId: string) => void;
+  /** Why an if-then's condition cannot hold where it sits, or undefined if it can. */
+  unfit: (item: QueueIf) => string | undefined;
   choosing?: Omit<StepChoice, 'agent'>;
   marks: (itemId: string) => RowMarks;
 }
@@ -348,7 +382,7 @@ export function QueueAddMenu({
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const context = { actions, others, itemLabel, ...(onChooseStep ? { onChooseStep } : {}) };
-  return <AddMenu label={label} withIf up={up} context={context} onAdd={onAdd} />;
+  return <AddMenu label={label} place="queue" up={up} context={context} onAdd={onAdd} />;
 }
 
 /**
@@ -434,6 +468,89 @@ function TextPrompt({
     >
       {multiline ? <textarea rows={3} {...props} /> : <input {...props} />}
     </div>
+  );
+}
+
+const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Picks a time by typing: a length, or a time of day (time.ts reads what is typed, and lists what
+ * it can mean first), or one of the presets. With `current`, its words are typed in to start
+ * from. With `allowNone`, "No time limit" comes first, which picks undefined.
+ */
+function TimePicker({
+  label,
+  current,
+  allowNone = false,
+  onPick,
+  onCancel,
+}: {
+  label: string;
+  current?: Time;
+  allowNone?: boolean;
+  onPick: (time: Time | undefined) => void;
+  onCancel: () => void;
+}) {
+  const options: (Time | null)[] = [...(allowNone ? [null] : []), ...TIME_PRESETS];
+  return (
+    <SearchPicker
+      label={label}
+      placeholder="10 minutes, 1 hour, until 9:00…"
+      options={options}
+      optionLabel={(time) => (time === null ? 'No time limit' : upper(timeText(time)))}
+      optionKey={(time) => (time === null ? '(none)' : JSON.stringify(time))}
+      typed={parseTime}
+      {...(current ? { initialQuery: timeText(current) } : {})}
+      onPick={(time) => {
+        onPick(time ?? undefined);
+      }}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/**
+ * How long is left until a time (`until`, epoch ms) that holds a row in the run, counting down
+ * each second. Keyed by `until`, so a changed time starts afresh.
+ */
+function Countdown({ until }: { until: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  return (
+    <span className="graph-queue-left" role="timer">
+      {leftText(until - now)}
+    </span>
+  );
+}
+
+/** A row's countdown, while the run holds the agent at it until a time (its `data-until`). */
+function RowCountdown({ id, context }: { id: string; context: Context }) {
+  const until = context.marks(id)['data-until'];
+  return until === undefined ? null : <Countdown key={until} until={Number(until)} />;
+}
+
+/** Go on now: ends the hold the run has the agent at, on a row the run holds it at (waiting). */
+function GoOn({ item, context }: { item: QueueItem; context: Context }) {
+  if (context.marks(item.id)['data-run'] !== 'waiting') return null;
+  return (
+    <button
+      type="button"
+      className="graph-queue-goon"
+      aria-label={`Go on now: ${context.describe(item)}`}
+      title="Stop waiting, and go on with the queue"
+      onClick={() => {
+        context.onGoOn(item.id);
+      }}
+    >
+      Go on now
+    </button>
   );
 }
 
@@ -613,8 +730,10 @@ function WaitPicker({
 
 /**
  * A wait: what it waits for (agents, or steps in their queues), each with a button that takes it
- * off (but the last), and a button that adds another. With `onChooseStep`, a target's chip picks
- * its step again, and an added target's agent is picked first, then its step.
+ * off (but the last), a button that adds another, and its time limit (a chip that changes it, or
+ * one that adds one). With `onChooseStep`, a target's chip picks its step again, and an added
+ * target's agent is picked first, then its step. While the run holds the agent at it: Go on now,
+ * and with a limit, how long is left.
  */
 function WaitRow({
   item,
@@ -626,6 +745,7 @@ function WaitRow({
   context: Context;
 }) {
   const [adding, setAdding] = useState(false);
+  const [timing, setTiming] = useState(false);
   const { onChooseStep } = context;
   /** Agents it already waits for all the work of. */
   const whole = item.waitFor.flatMap((target) => (target.item === undefined ? [target.agent] : []));
@@ -696,7 +816,49 @@ function WaitRow({
           +
         </button>
       )}
+      {item.timeout === undefined ? (
+        <button
+          type="button"
+          className="graph-queue-target graph-queue-limit"
+          aria-label="Add a time limit"
+          data-more
+          title="Go on anyway if it is not done in time"
+          aria-expanded={timing}
+          onClick={() => {
+            setTiming(!timing);
+          }}
+        >
+          at most…
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="graph-queue-target"
+          aria-label={`Change the time limit: ${limitText(item.timeout)}`}
+          aria-expanded={timing}
+          onClick={() => {
+            setTiming(!timing);
+          }}
+        >
+          {limitText(item.timeout)}
+        </button>
+      )}
+      <RowCountdown id={item.id} context={context} />
+      <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
+      {timing && (
+        <TimePicker
+          label="Go on anyway after…"
+          allowNone={item.timeout !== undefined}
+          onPick={(time) => {
+            context.onTime(item.id, time);
+            setTiming(false);
+          }}
+          onCancel={() => {
+            setTiming(false);
+          }}
+        />
+      )}
       {adding && onChooseStep && (
         <TargetPicker
           context={context}
@@ -731,7 +893,60 @@ function WaitRow({
   );
 }
 
-/** An if-then: "If <condition> then" (the condition a chip that changes it), and its steps. */
+/**
+ * A delay: "Wait" and how long, or until when (a chip that changes it). While the run holds the
+ * agent at it: how long is left, and Go on now.
+ */
+function DelayRow({
+  item,
+  handle,
+  context,
+}: {
+  item: QueueDelay;
+  handle: HandleProps;
+  context: Context;
+}) {
+  const [editing, setEditing] = useState(false);
+  const text = timeText(item.delay);
+  return (
+    <div className="graph-queue-row graph-queue-delay" {...context.marks(item.id)}>
+      <Handle handle={handle} item={item} context={context} />
+      <span className="graph-queue-keyword">Wait</span>
+      <button
+        type="button"
+        className="graph-queue-target"
+        aria-label={`Change how long it waits: ${text}`}
+        aria-expanded={editing}
+        onClick={() => {
+          setEditing(!editing);
+        }}
+      >
+        {text}
+      </button>
+      <RowCountdown id={item.id} context={context} />
+      <GoOn item={item} context={context} />
+      <RemoveButton item={item} context={context} />
+      {editing && (
+        <TimePicker
+          label="Wait how long?"
+          current={item.delay}
+          onPick={(time) => {
+            if (time) context.onTime(item.id, time);
+            setEditing(false);
+          }}
+          onCancel={() => {
+            setEditing(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * An if-then: "If <condition> then" (the condition a chip that changes it, struck through with
+ * the reason as its title when it cannot hold where it sits), and its steps.
+ */
 function IfRow({
   item,
   handle,
@@ -751,6 +966,7 @@ function IfRow({
 }) {
   const [editing, setEditing] = useState(false);
   const text = context.ifText(item.if);
+  const reason = context.unfit(item);
   return (
     <div className="graph-queue-if" {...context.marks(item.id)}>
       <div className="graph-queue-row">
@@ -760,6 +976,8 @@ function IfRow({
           type="button"
           className="graph-queue-target"
           aria-label={`Change the condition: ${text}`}
+          data-unavailable={reason === undefined ? undefined : ''}
+          {...(reason === undefined ? {} : { title: reason })}
           aria-expanded={editing}
           onClick={() => {
             setEditing(!editing);
@@ -791,35 +1009,52 @@ function IfRow({
           renderItem={row}
         />
       )}
-      <AddMenu label={`Add to If ${text}`} context={context} onAdd={onAdd} />
+      <AddMenu label={`Add to If ${text}`} place="if" context={context} onAdd={onAdd} />
     </div>
   );
 }
 
 type Choice =
-  { kind: 'if' } | { kind: 'wait' } | { kind: 'message' } | { kind: 'action'; action: AgentAction };
+  | { kind: 'if' }
+  | { kind: 'wait' }
+  | { kind: 'delay' }
+  | { kind: 'message' }
+  | { kind: 'action'; action: AgentAction };
 
 const CHOICE_TEXT = {
   if: ['If… then', 'Run steps only when a condition holds'],
   wait: ['Wait for…', 'Go on only once other agents have finished'],
+  delay: ['Wait a while…', 'Go on after a set time, or at a time of day'],
   message: ['Message', 'Tell an agent something'],
 } as const;
 
+/** Where a ⊕ adds: to the queue itself, or to an if-then's steps. */
+type Place = 'queue' | 'if';
+
 /**
- * The ⊕ and its dropdowns: one of the agent's actions, a message, or (`withIf`, for the queue
- * itself) "If… then" and "Wait for…"; then the agent the action acts on (unless `target` fixes it),
- * the message's text, the if-then's condition, or the agent to wait for.
+ * What may sit where, in the order the ⊕ offers it, before the agent's actions (which go
+ * anywhere). file.ts rejects the rest ("an if-then cannot hold …").
+ */
+const PLACES: Readonly<Record<Place, readonly (keyof typeof CHOICE_TEXT)[]>> = {
+  queue: ['if', 'wait', 'delay', 'message'],
+  if: ['message'],
+};
+
+/**
+ * The ⊕ and its dropdowns: what may be added in its `place` (PLACES), then the agent an action
+ * acts on (unless `target` fixes it), the message's text, the if-then's condition, the agent to
+ * wait for, or how long to wait.
  */
 function AddMenu({
   label,
-  withIf = false,
+  place,
   up = false,
   target,
   context,
   onAdd,
 }: {
   label: string;
-  withIf?: boolean;
+  place: Place;
   /** Whether its menus open above it, for a ⊕ at the bottom of the view. */
   up?: boolean;
   /** The agent every action and message added is aimed at; by default, the queue's own. */
@@ -828,14 +1063,13 @@ function AddMenu({
   onAdd: (entry: QueueEntry) => void;
 }) {
   const [step, setStep] = useState<
-    'closed' | 'choose' | 'condition' | 'wait' | 'message' | AgentAction
+    'closed' | 'choose' | 'condition' | 'wait' | 'delay' | 'message' | AgentAction
   >('closed');
   const close = () => {
     setStep('closed');
   };
   const choices: Choice[] = [
-    ...(withIf ? [{ kind: 'if' as const }, { kind: 'wait' as const }] : []),
-    { kind: 'message' },
+    ...PLACES[place].map((kind) => ({ kind })),
     ...context.actions.map((action) => ({ kind: 'action' as const, action })),
   ];
   return (
@@ -910,6 +1144,16 @@ function AddMenu({
           context={context}
           onPick={(target) => {
             onAdd({ waitFor: [target] });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'delay' && (
+        <TimePicker
+          label="Wait how long?"
+          onPick={(time) => {
+            if (time) onAdd({ delay: time });
             close();
           }}
           onCancel={close}

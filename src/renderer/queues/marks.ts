@@ -12,8 +12,9 @@ export function taskKey(lane: string, item: string | null): string {
 /**
  * Every task's marks, by lane and id (null: the lane's end): `data-at` (where it is measured),
  * `data-mark` (a wait, stuck, or work handed on), `data-waited-for`, `data-active` (a link of what
- * the pointer is on ends there), and `data-run` (the run is on it, held at it, waits on the user
- * for it as its agent (in `asking`) asks permission, or how it went).
+ * the pointer is on ends there), `data-run` (the run is on it, held at it, waits on the user for
+ * it as its agent (in `asking`) asks permission, or how it went), and `data-until` (while the run
+ * holds the agent at it, a delay or a wait with a time limit: when its time comes, in epoch ms).
  */
 export function queueMarks(
   { lanes, links, isStuck }: Lanes,
@@ -43,12 +44,15 @@ export function queueMarks(
         : handed.has(key)
           ? 'handoff'
           : undefined;
+    const at = run.agents[lane];
+    const until = run.running && at?.current === item ? at.until : undefined;
     return {
       'data-at': key,
       'data-mark': mark,
       'data-waited-for': waitedFor.has(key) ? '' : undefined,
       'data-active': activeEnds.has(key) ? '' : undefined,
       'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
+      'data-until': until === undefined ? undefined : String(until),
     };
   };
 }

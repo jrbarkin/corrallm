@@ -1,7 +1,7 @@
 import { AGENT_ACTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
 import type { AgentType } from './agents';
 import type { Graph } from './graph';
-import { isIf, isMessage, isWait } from './queue';
+import { isDelay, isIf, isMessage, isWait } from './queue';
 import type { Condition, QueueItem, QueueMessage, QueueStep } from './queue';
 
 /**
@@ -20,7 +20,7 @@ const PLACEHOLDER = /\{\{(\w+)\}\}/g;
 function textsOf(graph: Graph): string[] {
   const ofCondition = (condition: Condition) => ('text' in condition ? [condition.text] : []);
   const ofItem = (item: QueueItem): string[] =>
-    isWait(item)
+    isWait(item) || isDelay(item)
       ? []
       : isIf(item)
         ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
@@ -45,7 +45,7 @@ export function fillTemplate(graph: Graph, values: Readonly<Record<string, strin
   const fillStep = <T extends QueueStep | QueueMessage>(step: T): T =>
     isMessage(step) ? { ...step, message: fill(step.message) } : step;
   const fillItem = (item: QueueItem): QueueItem =>
-    isWait(item)
+    isWait(item) || isDelay(item)
       ? item
       : isIf(item)
         ? { ...item, if: fillCondition(item.if), then: item.then.map(fillStep) }
@@ -86,7 +86,7 @@ export function withAgents(
           ? step
           : { ...step, action: equivalentAction(step.action, was, now) ?? step.action };
       const queue = node.data.queue?.map((item): QueueItem =>
-        isWait(item)
+        isWait(item) || isDelay(item)
           ? item
           : isIf(item)
             ? { ...item, then: item.then.map(translate) }

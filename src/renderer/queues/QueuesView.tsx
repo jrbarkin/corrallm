@@ -39,8 +39,10 @@ interface Choosing {
  *
  * Each lane is its agent's queue, the same queue as everywhere (QueueEditor.tsx's rows, edited
  * in place): a wait's step is picked by clicking it in its agent's lane. Run plays every queue
- * (run/runner.ts): the task each agent is on pulses, a wait it is held at breathes, and what it
- * has done is ticked.
+ * (run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
+ * (counting down to its time, with Go on now on hover), and what it has done is ticked. A wait
+ * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
+ * that holds one is not stuck.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
  * or a click outside closes it; an agent's name opens that agent.
@@ -297,6 +299,7 @@ export function QueuesView({
                             data-link={piece.key}
                             data-kind={piece.kind}
                             data-mark={piece.stuck ? 'stuck' : piece.kind}
+                            data-timed={piece.timed ? '' : undefined}
                             data-active={active.has(piece.key) ? '' : undefined}
                             data-flow={flowing.has(piece.key) ? '' : undefined}
                           >

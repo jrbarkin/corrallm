@@ -344,8 +344,12 @@ input.graph-label {
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
 
-/* A step whose action the agent does not have (its type changed since it was queued). */
-.graph-queue-row.unavailable .graph-queue-action {
+/*
+ * A step whose action the agent does not have (its type changed since it was queued), or an
+ * if-then's condition that cannot hold where it sits (its title says why).
+ */
+.graph-queue-row.unavailable .graph-queue-action,
+.graph-queue-target[data-unavailable] {
   opacity: 0.55;
   text-decoration: line-through;
 }
@@ -1197,9 +1201,49 @@ input.graph-label {
   background: transparent;
 }
 
-/* A wait: a chip for each agent it waits for, with a button that takes it off. */
-.graph-queue-wait {
+/*
+ * A wait: a chip for each agent it waits for, with a button that takes it off, and its time limit.
+ * A delay: how long it waits, in a chip.
+ */
+.graph-queue-wait,
+.graph-queue-delay {
   flex-wrap: wrap;
+}
+
+/* Times read as one: "9:00 AM", "at most 30 minutes". */
+:is(.graph-queue-wait, .graph-queue-delay) > .graph-queue-target {
+  white-space: nowrap;
+}
+
+/* A wait without a time limit offers one, faintly, beside its +. */
+.graph-queue-limit {
+  border-style: dashed;
+  color: color-mix(in srgb, CanvasText 60%, transparent);
+}
+
+/* While the run holds the agent at a delay or a time limit: how long is left. */
+.graph-queue-left {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* Go on now: ends the hold the run has the agent at (a delay, a wait). */
+.graph-queue-goon {
+  padding: 1px 8px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 10%, Canvas);
+  color: var(--graph-accent, #2563eb);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.graph-queue-goon:hover {
+  background: var(--graph-accent, #2563eb);
+  color: white;
 }
 
 .graph-queue-waited {
@@ -1237,8 +1281,9 @@ input.graph-label {
 /*
  * Every queue looks the same wherever it shows (an agent's own, the one beside it, the work
  * between two agents, All queues): cards at rest, each with its handle to drag it by; what else
- * edits a task (remove, the agent it is aimed at when that is its own, a wait's +, an if-then's
- * ⊕) shows on the task pointed at, or with the keyboard in it.
+ * edits a task (remove, the agent it is aimed at when that is its own, a wait's + and its
+ * "at most…", an if-then's ⊕) or acts on the run (Go on now) shows on the task pointed at, or
+ * with the keyboard in it.
  */
 :root {
   --queue-wait: #3b82f6;
@@ -1259,7 +1304,12 @@ input.graph-label {
 }
 
 .graph-queue-row:not(:hover, :focus-within)
-  > :is(.graph-queue-remove, .graph-queue-target[data-own], .graph-queue-target[data-more]),
+  > :is(
+    .graph-queue-remove,
+    .graph-queue-target[data-own],
+    .graph-queue-target[data-more],
+    .graph-queue-goon
+  ),
 .graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
   opacity: 0;
 }

@@ -1,6 +1,6 @@
 import { autosize, bounds, edgeId, nextGroupColor, PADDING, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { isIf, isWait } from './queue';
+import { isDelay, isIf, isWait } from './queue';
 import type { QueueItem } from './queue';
 
 /** Space between what is on the canvas and a group inserted beside it. */
@@ -22,16 +22,18 @@ export function insertGraph(
   const retarget = (item: QueueItem): QueueItem =>
     isWait(item)
       ? { ...item, waitFor: item.waitFor.map((t) => ({ ...t, agent: rename(t.agent) })) }
-      : isIf(item)
-        ? {
-            ...item,
-            then: item.then.map((s) =>
-              s.target === undefined ? s : { ...s, target: rename(s.target) },
-            ),
-          }
-        : item.target === undefined
-          ? item
-          : { ...item, target: rename(item.target) };
+      : isDelay(item)
+        ? item
+        : isIf(item)
+          ? {
+              ...item,
+              then: item.then.map((s) =>
+                s.target === undefined ? s : { ...s, target: rename(s.target) },
+              ),
+            }
+          : item.target === undefined
+            ? item
+            : { ...item, target: rename(item.target) };
 
   const onCanvas = graph.nodes.filter((n) => n.parentId === undefined);
   const at = onCanvas.length === 0 ? { x: 0, y: 0 } : place(bounds(onCanvas));

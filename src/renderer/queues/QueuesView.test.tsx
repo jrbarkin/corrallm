@@ -196,4 +196,72 @@ describe('the queues view', () => {
     fireEvent.click(view.getByRole('button', { name: 'Answer a' }));
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
+
+  it('counts down a delay the run holds a lane at, and goes on from it when told', () => {
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [
+          { id: 'pause', delay: { seconds: 60 } },
+          { id: 'next', action: 'Read' },
+        ]),
+      ],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    const pause = view.getByRole('group', { name: 'a: Wait 1 minute' });
+    const run = (name: string) =>
+      view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(run('a: Wait 1 minute')).toBe('waiting');
+    const timer = within(pause).getByRole('timer');
+    expect(timer.textContent).toBe('1:00 left');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(timer.textContent).toBe('0:59 left');
+    expect(view.getByRole('status').textContent).toBe('0 working · 1 waiting');
+
+    fireEvent.click(within(pause).getByRole('button', { name: 'Go on now: Wait 1 minute' }));
+    expect(run('a: Wait 1 minute')).toBe('succeeded');
+    expect(run('a: Read')).toBe('running');
+    expect(within(pause).queryByRole('timer')).toBeNull();
+    expect(within(pause).queryByRole('button', { name: /^Go on now/ })).toBeNull();
+  });
+
+  it('goes on without what a wait waits for once its time limit passes, its ribbon dashed', () => {
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [{ id: 'slow', message: 'Take your time' }]),
+        agent('b', 100, [
+          { id: 'w', waitFor: [{ agent: 'a' }], timeout: { seconds: 2 } },
+          { id: 'next', action: 'Read' },
+        ]),
+      ],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    const name = 'b: Wait for a, at most 2 seconds';
+    const run = (task: string) =>
+      view.getByRole('group', { name: task }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(queues().querySelector('g[data-kind="wait"]')?.hasAttribute('data-timed')).toBe(true);
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    expect(run(name)).toBe('waiting');
+    expect(within(view.getByRole('group', { name })).getByRole('timer').textContent).toBe(
+      '0:02 left',
+    );
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(run(name)).toBe('timedOut');
+    expect(run('a: Message “Take your time”')).toBe('running');
+    expect(run('b: Read')).toBe('running');
+  });
 });

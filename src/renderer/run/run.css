@@ -1,9 +1,9 @@
 /*
  * Where the queues' run is (run/runner.ts), on a queue's rows (QueueEditor.tsx) wherever they are
- * shown: the task an agent is on pulses, with a sheen passing over it; a wait it is held at
- * breathes, grey; a task that needs the user (its agent asks permission) pulses amber, as an agent
- * with a question does on the canvas; a task done is ticked, one that failed crossed, one skipped
- * faded.
+ * shown: the task an agent is on pulses, with a sheen passing over it; a wait or a delay it is held
+ * at breathes, grey; a task that needs the user (its agent asks permission) pulses amber, as an
+ * agent with a question does on the canvas; a task done is ticked, one that failed crossed, one
+ * skipped faded, and a wait that ran out of time marked with an amber "!".
  */
 :is(.graph-queue-row, .graph-queue-if)[data-run] {
   --run: var(--graph-accent, #2563eb);
@@ -38,7 +38,11 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
 }
 
-:is(.graph-queue-row, .graph-queue-if):is([data-run='succeeded'], [data-run='failed']) {
+:is(.graph-queue-row, .graph-queue-if):is(
+  [data-run='succeeded'],
+  [data-run='failed'],
+  [data-run='timedOut']
+) {
   opacity: 0.6;
 }
 
@@ -49,7 +53,8 @@
 :is(.graph-queue-row, .graph-queue-if):is(
     [data-run='succeeded'],
     [data-run='failed'],
-    [data-run='skipped']
+    [data-run='skipped'],
+    [data-run='timedOut']
   )::after {
   position: absolute;
   top: -7px;
@@ -75,6 +80,11 @@
 :is(.graph-queue-row, .graph-queue-if)[data-run='skipped']::after {
   background: color-mix(in srgb, CanvasText 45%, Canvas);
   content: '–';
+}
+
+:is(.graph-queue-row, .graph-queue-if)[data-run='timedOut']::after {
+  background: #f59e0b;
+  content: '!';
 }
 
 @keyframes run-pulse {

@@ -298,6 +298,11 @@
   fill: var(--mark);
 }
 
+/* A wait with a time limit may go on without what it waits for: its ribbon's edges are dashed. */
+.queues-gap g[data-timed] .queues-ribbon-edges {
+  stroke-dasharray: 6 4;
+}
+
 .queues-gap g[data-flow] .queues-ribbon {
   animation: queues-breathe 1.8s ease-in-out infinite;
 }

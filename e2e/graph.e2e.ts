@@ -910,6 +910,68 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   await view.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
+test('limits a wait, counts it down while it holds, and goes on from it now', async () => {
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Templates' })
+    .getByRole('button', { name: /^Feature crew/ })
+    .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+
+  // A time limit is offered on the wait pointed at, beside its +.
+  const wait = view.getByRole('group', { name: 'Reviewer: Wait for Builder' });
+  const limit = wait.getByRole('button', { name: 'Add a time limit' });
+  await expect(limit).toHaveCSS('opacity', '0');
+  await wait.hover();
+  await expect(limit).toHaveCSS('opacity', '1');
+  await limit.click();
+  const field = view.getByRole('combobox', { name: 'Go on anyway after…' });
+  await field.fill('1 minute');
+  await field.press('Enter');
+  const limited = view.getByRole('group', {
+    name: 'Reviewer: Wait for Builder, at most 1 minute',
+  });
+  await expect(
+    limited.getByRole('button', { name: 'Change the time limit: at most 1 minute' }),
+  ).toBeVisible();
+  // Its ribbon's edges are dashed: it may go on without what it waits for.
+  const edges = view.locator('g[data-kind="wait"][data-timed] .queues-ribbon-edges');
+  await expect(edges).toHaveCount(1);
+  expect(await edges.evaluate((path) => getComputedStyle(path).strokeDasharray)).not.toBe('none');
+
+  // Run: the Builder is busy, so the Reviewer is held, counting down.
+  await view.getByRole('button', { name: 'Run', exact: true }).click();
+  const row = limited.locator('[data-run]');
+  await expect(row).toHaveAttribute('data-run', 'waiting');
+  const timer = limited.getByRole('timer');
+  await expect(timer).toHaveText(/^0:\d\d left$/);
+  const first = (await timer.textContent()) ?? '';
+  await expect(timer).not.toHaveText(first);
+
+  // Go on now, shown on the held wait pointed at, ends it as if its time had run out.
+  const goOn = limited.getByRole('button', {
+    name: 'Go on now: Wait for Builder, at most 1 minute',
+  });
+  await page.mouse.move(0, 0);
+  await expect(goOn).toHaveCSS('opacity', '0');
+  await limited.hover();
+  await expect(goOn).toHaveCSS('opacity', '1');
+  await goOn.click();
+  await expect(row).toHaveAttribute('data-run', 'timedOut');
+  const badge = await row.evaluate((element) => {
+    const after = getComputedStyle(element, '::after');
+    return { content: after.content, background: after.backgroundColor };
+  });
+  expect(badge).toEqual({ content: '"!"', background: 'rgb(245, 158, 11)' });
+  await expect(timer).toHaveCount(0);
+  await expect(
+    view.getByRole('group', { name: 'Reviewer: /code-review' }).locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'running');
+  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

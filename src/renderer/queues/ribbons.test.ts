@@ -122,4 +122,30 @@ describe('ribbonsOf', () => {
       ['b:later>a', false],
     ]);
   });
+
+  it('marks the ribbon of a wait with a time limit, in every gap it crosses', () => {
+    const a = agent('a', [{ id: 'build', action: 'Edit' }]);
+    const b = agent('b', [{ id: 'other', action: 'Read' }]);
+    const c = agent('c', [
+      { id: 'w', waitFor: [{ agent: 'a', item: 'build' }], timeout: { seconds: 1800 } },
+      { id: 'all', waitFor: [{ agent: 'a' }] },
+    ]);
+    const ribbons = ribbonsOf(
+      lanesOf([a, b, c]),
+      at({
+        'a/build': span(0, 20),
+        'a/end': span(30, 40),
+        'c/w': span(50, 70),
+        'c/all': span(80, 90),
+      }),
+    );
+    expect(ribbons.map(({ key, timed }) => [key, timed])).toEqual([
+      ['c:w>a:build', true],
+      ['c:all>a', false],
+    ]);
+    expect(piecesIn(ribbons, 1).map(({ key, timed }) => [key, timed])).toEqual([
+      ['c:w>a:build', true],
+      ['c:all>a', false],
+    ]);
+  });
 });

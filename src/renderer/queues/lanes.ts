@@ -1,5 +1,5 @@
 import type { GraphNode } from '../graph/graph';
-import { isIf, isWait } from '../graph/queue';
+import { isDelay, isIf, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
 
 /** An item of a lane, in its row. */
@@ -21,9 +21,18 @@ export interface LinkEnd {
   item: string | null;
 }
 
-/** A wait, from what it waits for; or a step one agent hands another, to that agent's lane. */
+/**
+ * A wait, from what it waits for (`timed`: the wait has a time limit, so it may go on without it);
+ * or a step one agent hands another, to that agent's lane.
+ */
 export type Link =
-  | { key: string; kind: 'wait'; from: LinkEnd; to: { lane: string; item: string } }
+  | {
+      key: string;
+      kind: 'wait';
+      from: LinkEnd;
+      to: { lane: string; item: string };
+      timed: boolean;
+    }
   | { key: string; kind: 'handoff'; from: LinkEnd; to: string };
 
 export interface Lanes {
@@ -32,15 +41,18 @@ export interface Lanes {
   rows: number;
   /** The waits and work handed over between lanes. */
   links: Link[];
-  /** Whether an item is in a loop of waits (waits waiting on each other): it would never run. */
+  /**
+   * Whether an item is in a loop of waits (waits waiting on each other) with no way out: it would
+   * never run. A loop that holds a wait with a time limit is not stuck: the limit breaks it.
+   */
   isStuck: (agent: string, item: string) => boolean;
 }
 
 /**
  * Every agent's queue as a lane, side by side, in rows aligned so that order reads downwards: an
  * item comes after the one before it in its lane, and a wait after what it waits for (a step, or
- * the end of an agent's lane for all of its work). Items in a loop of waits are stuck, the waits
- * laid out as if they did not wait.
+ * the end of an agent's lane for all of its work). Waits in a loop of waits are laid out as if
+ * they did not wait; the loop is stuck unless a time limit breaks it.
  */
 export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   const agents = nodes.filter((n) => n.type === 'agent');
@@ -71,7 +83,16 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     after.set(key(agent.id, null), previous === undefined ? [] : [{ key: previous, wait: false }]);
   }
 
-  const stuck = inLoops(after);
+  const loops = inLoops(after);
+  const looped = new Set(loops.flat());
+  const timed = new Set(
+    agents.flatMap((agent) =>
+      (agent.data.queue ?? []).flatMap((item) =>
+        isWait(item) && item.timeout !== undefined ? [key(agent.id, item.id)] : [],
+      ),
+    ),
+  );
+  const stuck = new Set(loops.filter((loop) => !loop.some((at) => timed.has(at))).flat());
   const rows = new Map<string, number>();
   const rowOf = (at: string): number => {
     const known = rows.get(at);
@@ -80,7 +101,7 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     const row = Math.max(
       0,
       ...(after.get(at) ?? [])
-        .filter((dep) => !(dep.wait && stuck.has(at)))
+        .filter((dep) => !(dep.wait && looped.has(at)))
         .map((dep) => rowOf(dep.key) + 1),
     );
     rows.set(at, row);
@@ -105,7 +126,7 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   };
   for (const agent of agents) {
     for (const item of agent.data.queue ?? []) {
-      const handed = isWait(item) ? [] : isIf(item) ? item.then : [item];
+      const handed = isWait(item) || isDelay(item) ? [] : isIf(item) ? item.then : [item];
       for (const step of handed) {
         if (step.target === undefined || step.target === agent.id || !ids.has(step.target))
           continue;
@@ -124,6 +145,7 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
           kind: 'wait',
           from: { lane: target.agent, item: target.item ?? null },
           to: { lane: agent.id, item: item.id },
+          timed: item.timeout !== undefined,
         });
       }
     }
@@ -137,13 +159,13 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   };
 }
 
-/** The nodes of a dependency graph that lie on a loop (Tarjan's strongly connected components). */
-function inLoops(after: ReadonlyMap<string, readonly { key: string }[]>): Set<string> {
+/** The loops of a dependency graph, each the nodes on it (Tarjan's strongly connected components). */
+function inLoops(after: ReadonlyMap<string, readonly { key: string }[]>): string[][] {
   const index = new Map<string, number>();
   const low = new Map<string, number>();
   const stack: string[] = [];
   const onStack = new Set<string>();
-  const looped = new Set<string>();
+  const loops: string[][] = [];
   let next = 0;
   const visit = (at: string) => {
     index.set(at, next);
@@ -167,8 +189,8 @@ function inLoops(after: ReadonlyMap<string, readonly { key: string }[]>): Set<st
       if (top === at) break;
     }
     const selfLoop = (after.get(at) ?? []).some((dep) => dep.key === at);
-    if (component.length > 1 || selfLoop) for (const member of component) looped.add(member);
+    if (component.length > 1 || selfLoop) loops.push(component);
   };
   for (const at of after.keys()) if (!index.has(at)) visit(at);
-  return looped;
+  return loops;
 }

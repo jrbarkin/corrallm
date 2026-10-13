@@ -1,7 +1,8 @@
 import { threadTitle } from '../agent/session';
 import type { GraphNode } from './graph';
-import { CONDITIONS, isIf, isMessage, isWait } from './queue';
-import type { Condition, QueueItem, WaitTarget } from './queue';
+import { CONDITIONS, isDelay, isIf, isMessage, isWait } from './queue';
+import type { Condition, QueueDelay, QueueItem, QueueWait, WaitTarget } from './queue';
+import { limitText, timeText } from './time';
 
 /** How a condition reads after "If". */
 export const ifText = (condition: Condition): string =>
@@ -11,17 +12,28 @@ export const ifText = (condition: Condition): string =>
       ? condition.text
       : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
 
+/** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
+export const delayText = (item: QueueDelay): string => `Wait ${timeText(item.delay)}`;
+
+/** How a wait reads, given how each of its targets reads: "Wait for Builder, at most 30 minutes". */
+export const waitText = (item: QueueWait, targetLabel: (target: WaitTarget) => string): string =>
+  `Wait for ${andList(item.waitFor.map(targetLabel))}${
+    item.timeout === undefined ? '' : `, ${limitText(item.timeout)}`
+  }`;
+
 /** How a queue item reads when another agent waits for it. */
 export const itemLabel = (item: QueueItem): string =>
   isWait(item)
     ? 'its wait'
-    : isIf(item)
-      ? `If ${ifText(item.if)}`
-      : isMessage(item)
-        ? item.message.trim() === ''
-          ? 'an empty message'
-          : `“${threadTitle(item.message, 24)}”`
-        : item.action;
+    : isDelay(item)
+      ? delayText(item)
+      : isIf(item)
+        ? `If ${ifText(item.if)}`
+        : isMessage(item)
+          ? item.message.trim() === ''
+            ? 'an empty message'
+            : `“${threadTitle(item.message, 24)}”`
+          : item.action;
 
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
 export function agentName(nodes: readonly GraphNode[], id: string): string {
@@ -45,8 +57,8 @@ export function andList(names: readonly string[]): string {
 
 /** How an item reads in full, as All queues names it: what it does, and to which agent. */
 export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string {
-  if (isWait(item))
-    return `Wait for ${andList(item.waitFor.map((target) => waitTargetLabel(nodes, target)))}`;
+  if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
+  if (isDelay(item)) return delayText(item);
   if (isIf(item)) return `If ${ifText(item.if)}`;
   const what = isMessage(item)
     ? `Message ${item.message.trim() === '' ? '(empty)' : `“${threadTitle(item.message, 32)}”`}`

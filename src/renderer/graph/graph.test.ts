@@ -34,6 +34,7 @@ import {
   selectOnly,
   setAgent,
   setCondition,
+  setTime,
   setWaitFor,
   size,
   spawnAgent,
@@ -375,6 +376,29 @@ describe('queues', () => {
     expect(editMessage(waiting, 'a', 'w1', 'x')).toBe(waiting);
   });
 
+  it("sets a delay's time, and sets and clears a wait's time limit", () => {
+    const delay = { id: 'd1', delay: { seconds: 600 } };
+    const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
+    const timed = addToQueue(addToQueue(queued, 'a', delay), 'a', wait);
+    const item = (graph: Graph, id: string) => queueOf(graph).find((q) => q.id === id);
+
+    const longer = setTime(timed, 'a', 'd1', { at: '09:00' });
+    expect(item(longer, 'd1')).toEqual({ id: 'd1', delay: { at: '09:00' } });
+    // A delay always has a time.
+    expect(setTime(timed, 'a', 'd1', undefined)).toBe(timed);
+    expect(setTime(timed, 'a', 'd1', { seconds: 600 })).toBe(timed);
+
+    const limited = setTime(timed, 'a', 'w1', { seconds: 1800 });
+    expect(item(limited, 'w1')).toEqual({ ...wait, timeout: { seconds: 1800 } });
+    expect(setTime(limited, 'a', 'w1', { seconds: 1800 })).toBe(limited);
+    expect(item(setTime(limited, 'a', 'w1', undefined), 'w1')).toEqual(wait);
+    expect(setTime(timed, 'a', 'w1', undefined)).toBe(timed);
+    // Only delays and waits have times; delays are left alone by what changes steps.
+    expect(setTime(timed, 'a', 'q1', { seconds: 60 })).toBe(timed);
+    expect(retarget(timed, 'a', 'd1', 'b')).toBe(timed);
+    expect(editMessage(timed, 'a', 'd1', 'x')).toBe(timed);
+  });
+
   describe('if-then', () => {
     const block = { id: 'if1', if: { kind: 'failed' as const }, then: [] };
     const withIf = addToQueue(queued, 'a', block);
@@ -385,11 +409,12 @@ describe('queues', () => {
       return found && 'then' in found ? found.then.map((q) => q.id) : undefined;
     };
 
-    it('adds steps inside an if-then, not to the queue; never a wait', () => {
+    it('adds steps inside an if-then, not to the queue; never a wait or a delay', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
       expect(addToQueue(withIf, 'a', { id: 'w', waitFor: [{ agent: 'b' }] }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'd', delay: { seconds: 60 } }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {

@@ -4,7 +4,7 @@ import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
-import { isIf, isWait } from './queue';
+import { isDelay, isIf, isWait } from './queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
@@ -27,6 +27,7 @@ describe.each(EXAMPLES)('the $name example', (example) => {
           }
           continue;
         }
+        if (isDelay(item)) continue;
         const steps = isIf(item) ? item.then : [item];
         for (const step of steps) {
           if (step.target !== undefined) expect(agents.has(step.target)).toBe(true);

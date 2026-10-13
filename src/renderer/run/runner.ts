@@ -1,16 +1,23 @@
 import type { GraphNode } from '../graph/graph';
-import { isIf, isMessage, isWait } from '../graph/queue';
-import type { Condition, QueueMessage, QueueStep, WaitTarget } from '../graph/queue';
+import { isDelay, isIf, isMessage, isWait, unfit } from '../graph/queue';
+import type { Condition, QueueItem, QueueMessage, QueueStep, WaitTarget } from '../graph/queue';
+import { deadline } from '../graph/time';
 
-/** How a task went; skipped: an if-then whose condition did not hold, or an empty message. */
-export type Outcome = 'succeeded' | 'failed' | 'skipped';
+/**
+ * How a task went. skipped: an if-then whose condition did not hold (or cannot, where it sits), or
+ * an empty message. timedOut: a wait that went on without what it waited for, its time limit past
+ * (or the user said to go on).
+ */
+export type Outcome = 'succeeded' | 'failed' | 'skipped' | 'timedOut';
 
 /** Where an agent's queue is, in a run. */
 export interface AgentRun {
   /** The task it is on: an item of its queue, or a step of an if-then (by id). */
   current?: string;
-  /** Doing its task; held at a wait; or past the end of its queue. */
+  /** Doing its task; held at a wait or a delay; or past the end of its queue. */
   status: 'running' | 'waiting' | 'done';
+  /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
+  until?: number;
   /** How each task it has finished went, by id. */
   outcomes: Readonly<Record<string, Outcome>>;
 }
@@ -27,6 +34,8 @@ export interface RunIO {
   send: (agent: GraphNode, text: string, done?: (failed: boolean) => void) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
+  /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
+  now: () => number;
   /** A random number from 0 up to 1: whether a step fails, or an agent judges a condition holds. */
   chance: () => number;
 }
@@ -34,6 +43,11 @@ export interface RunIO {
 /** How long a step takes, at least and at most; and handing a message to another agent. */
 const STEP_MS = [1500, 3500] as const;
 const HANDOFF_MS = 700;
+/**
+ * The longest the run sleeps before it looks at the clock again while a delay or a time limit
+ * holds an agent: a timer can fire late (a sleeping laptop) and the clock can be changed.
+ */
+const ALARM_MS = 60_000;
 /** How likely a step is to fail, and an agent to judge a condition in its own words to hold. */
 const FAILS = 0.25;
 const HOLDS = 0.5;
@@ -45,9 +59,10 @@ const IDLE: Run = { running: false, agents: {} };
  * agent works through its queue in order. A step takes a few seconds and may fail; a message to
  * the agent goes to its session (sessions.ts) and is done when the turn it starts ends; a message
  * to another agent is handed to that agent's session. A wait holds until what it waits for is
- * done (a step, or all of an agent's work); an if-then runs its steps only if its condition holds
- * of the task before it. Queues are read as they run (`update` gives it the graph as it changes),
- * so edits take effect at once.
+ * done (a step, or all of an agent's work), or its time limit passes; a delay holds until its time
+ * has come; an if-then runs its steps only if its condition holds of the task before it. Delays
+ * and time limits are the run's own, on the real clock (`now`): no agent is asked to wait. Queues
+ * are read as they run (`update` gives it the graph as it changes), so edits take effect at once.
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -60,6 +75,12 @@ export class RunStore {
   readonly #busy = new Map<string, object>();
   /** Whether each if-then's condition held, once decided (by agent and if-then). */
   readonly #held = new Map<string, boolean>();
+  /** When each agent reached the delay or wait it is (or was) held at (by agent and item). */
+  readonly #arrived = new Map<string, number>();
+  /** The holds the user said to go on from (Go on now), by agent and item. */
+  readonly #ended = new Set<string>();
+  /** The one timer that wakes the run when the next delay or time limit comes. */
+  #alarm: { at: number; cancel: () => void } | undefined;
 
   constructor(io: RunIO) {
     this.#io = io;
@@ -78,7 +99,7 @@ export class RunStore {
   /** Runs every queue from the top. */
   start(): void {
     this.#cancel();
-    this.#held.clear();
+    this.#forget();
     this.#run = { running: true, agents: {} };
     this.#settle(true);
   }
@@ -92,8 +113,20 @@ export class RunStore {
   /** Forgets the run, as for another canvas. */
   reset(): void {
     this.#cancel();
-    this.#held.clear();
+    this.#forget();
     this.#set(IDLE);
+  }
+
+  /**
+   * Ends now the hold an agent is at (Go on now): a delay, as if its time had come; a wait, as if
+   * its time limit had passed. Only while the run holds that agent at that item (`item`), so a
+   * click meant for one hold never ends the next.
+   */
+  goOn(agent: string, item: string): void {
+    const at = this.#run.agents[agent];
+    if (!this.#run.running || at?.status !== 'waiting' || at.current !== item) return;
+    this.#ended.add(JSON.stringify([agent, item]));
+    this.#settle(false);
   }
 
   /** The graph as it is now: a run goes on with new work, and past waits for what is gone. */
@@ -116,12 +149,13 @@ export class RunStore {
       }),
     );
     let moved = changed || Object.keys(agents).length !== Object.keys(this.#run.agents).length;
+    const now = this.#io.now();
     for (let again = true; again;) {
       again = false;
       for (const node of nodes) {
         if (this.#busy.has(node.id)) continue;
         const before = agents[node.id];
-        const after = this.#advance(node, before ?? { status: 'done', outcomes: {} }, agents);
+        const after = this.#advance(node, before ?? { status: 'done', outcomes: {} }, agents, now);
         if (JSON.stringify(before) === JSON.stringify(after)) continue;
         agents = { ...agents, [node.id]: after };
         again = true;
@@ -131,36 +165,65 @@ export class RunStore {
     const running =
       this.#busy.size > 0 || Object.values(agents).some((run) => run.status === 'waiting');
     if (moved || running !== this.#run.running) this.#set({ running, agents });
+    this.#arm(now);
   }
 
-  /** Where an agent not busy with a task goes next: its next task, a wait that holds, or done. */
-  #advance(node: GraphNode, run: AgentRun, agents: Readonly<Record<string, AgentRun>>): AgentRun {
+  /**
+   * Where an agent not busy with a task goes next: its next task, a wait or a delay that holds, or
+   * done.
+   */
+  #advance(
+    node: GraphNode,
+    run: AgentRun,
+    agents: Readonly<Record<string, AgentRun>>,
+    now: number,
+  ): AgentRun {
     const outcomes: Record<string, Outcome> = { ...run.outcomes };
-    let previous: Outcome | undefined;
-    for (const item of node.data.queue ?? []) {
-      const known = outcomes[item.id];
-      if (known !== undefined) {
-        previous = known;
+    const queue = node.data.queue ?? [];
+    for (const [index, item] of queue.entries()) {
+      if (outcomes[item.id] !== undefined) continue;
+      const key = JSON.stringify([node.id, item.id]);
+      if (isDelay(item)) {
+        const until = deadline(item.delay, this.#arrive(key, now));
+        if (!this.#ended.has(key) && now < until)
+          return { current: item.id, status: 'waiting', until, outcomes };
+        outcomes[item.id] = 'succeeded';
         continue;
       }
       if (isWait(item)) {
-        if (!item.waitFor.every((target) => this.#doneWith(target, agents)))
-          return { current: item.id, status: 'waiting', outcomes };
-        previous = outcomes[item.id] = 'succeeded';
-        continue;
+        const results = item.waitFor.map((target) => this.#resultOf(target, agents));
+        if (results.every((result) => result !== undefined)) {
+          outcomes[item.id] = results.includes('failed') ? 'failed' : 'succeeded';
+          continue;
+        }
+        // Arrival counts for a limit added while it waits, too.
+        const arrived = this.#arrive(key, now);
+        const until = item.timeout && deadline(item.timeout, arrived);
+        if (this.#ended.has(key) || (until !== undefined && now >= until)) {
+          outcomes[item.id] = 'timedOut';
+          continue;
+        }
+        return {
+          current: item.id,
+          status: 'waiting',
+          ...(until === undefined ? {} : { until }),
+          outcomes,
+        };
       }
       if (isIf(item)) {
-        const key = JSON.stringify([node.id, item.id]);
-        const held = this.#held.get(key) ?? this.#holds(item.if, previous);
+        const held =
+          this.#held.get(key) ??
+          (unfit(queue, index) === undefined &&
+            this.#holds(item.if, lastRan(queue.slice(0, index), outcomes)));
         this.#held.set(key, held);
         if (!held) {
-          previous = outcomes[item.id] = 'skipped';
+          outcomes[item.id] = 'skipped';
           continue;
         }
         const step = item.then.find((s) => outcomes[s.id] === undefined);
         if (step) return this.#begin(node.id, step, outcomes);
         const last = item.then.at(-1);
-        previous = outcomes[item.id] = (last && outcomes[last.id]) ?? 'succeeded';
+        outcomes[item.id] = (last && outcomes[last.id]) ?? 'succeeded';
         continue;
       }
       return this.#begin(node.id, item, outcomes);
@@ -168,14 +231,27 @@ export class RunStore {
     return { status: 'done', outcomes };
   }
 
-  /** Whether a wait's target is done: a step done (or gone), or an agent done with all its work. */
-  #doneWith(target: WaitTarget, agents: Readonly<Record<string, AgentRun>>): boolean {
+  /** When an agent reached a hold (by agent and item): now, the first time it is asked. */
+  #arrive(key: string, now: number): number {
+    const arrived = this.#arrived.get(key) ?? now;
+    this.#arrived.set(key, arrived);
+    return arrived;
+  }
+
+  /**
+   * How what a wait waits for went, once it is done; undefined until then. A step: its outcome. An
+   * agent's work: the outcome of its last task that ran. What is gone counts as done, and well.
+   */
+  #resultOf(target: WaitTarget, agents: Readonly<Record<string, AgentRun>>): Outcome | undefined {
     const node = this.#agents().find((n) => n.id === target.agent);
-    if (!node) return true;
+    if (!node) return 'succeeded';
     const run = agents[target.agent];
-    if (target.item === undefined) return run?.status === 'done';
-    if (!node.data.queue?.some((item) => item.id === target.item)) return true;
-    return run?.outcomes[target.item] !== undefined;
+    if (target.item === undefined) {
+      if (run?.status !== 'done') return undefined;
+      return lastRan(node.data.queue ?? [], run.outcomes) ?? 'succeeded';
+    }
+    if (!node.data.queue?.some((item) => item.id === target.item)) return 'succeeded';
+    return run?.outcomes[target.item];
   }
 
   #holds(condition: Condition, previous: Outcome | undefined): boolean {
@@ -184,10 +260,39 @@ export class RunStore {
         return previous === 'succeeded';
       case 'failed':
         return previous === 'failed';
+      case 'timedOut':
+        return previous === 'timedOut';
       case 'outputContains':
       case 'freeText':
         return this.#io.chance() < HOLDS;
     }
+  }
+
+  /**
+   * Sets the run's one alarm for the next delay or time limit to come, if it is not set for it
+   * already: no later than a minute away, so the clock is looked at again at least that often.
+   * When it goes off, the run settles: what is due moves on, and the alarm is set for what is next.
+   */
+  #arm(now: number): void {
+    const next = this.#run.running
+      ? Math.min(
+          ...Object.values(this.#run.agents).flatMap((run) =>
+            run.status === 'waiting' && run.until !== undefined ? [run.until] : [],
+          ),
+        )
+      : Infinity;
+    if (this.#alarm?.at === next) return;
+    this.#alarm?.cancel();
+    this.#alarm = undefined;
+    if (next === Infinity) return;
+    const cancel = this.#io.later(
+      () => {
+        this.#alarm = undefined;
+        this.#settle(false);
+      },
+      Math.min(Math.max(next - now, 0), ALARM_MS),
+    );
+    this.#alarm = { at: next, cancel };
   }
 
   /** Starts a task: the agent is busy with it until it finishes. */
@@ -251,6 +356,15 @@ export class RunStore {
     for (const cancel of this.#timers) cancel();
     this.#timers.clear();
     this.#busy.clear();
+    this.#alarm?.cancel();
+    this.#alarm = undefined;
+  }
+
+  /** Forgets what the last run decided and when it reached its holds, to run from the top. */
+  #forget(): void {
+    this.#held.clear();
+    this.#arrived.clear();
+    this.#ended.clear();
   }
 
   #set(run: Run): void {
@@ -269,6 +383,22 @@ export function taskState(run: Run, agent: string, item: string | null): string 
   if (item === null) return at.status === 'done' ? 'reached' : undefined;
   if (at.current === item && at.status !== 'done') return run.running ? at.status : 'stopped';
   return at.outcomes[item];
+}
+
+/**
+ * The outcome of the last of `items` that ran: what an if-then checks, and how a wait for all of an
+ * agent's work went. Items not done yet, skipped ones and delays (which only pause) are passed
+ * over.
+ */
+function lastRan(
+  items: readonly QueueItem[],
+  outcomes: Readonly<Record<string, Outcome>>,
+): Outcome | undefined {
+  for (const item of items.toReversed()) {
+    const outcome = outcomes[item.id];
+    if (outcome !== undefined && outcome !== 'skipped' && !isDelay(item)) return outcome;
+  }
+  return undefined;
 }
 
 /** A number from a string, the same each time: steps take their own, steady time. */

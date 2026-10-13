@@ -55,6 +55,7 @@ import {
   selectOnly,
   setAgent,
   setCondition,
+  setTime,
   setWaitFor,
   spawnAgent,
   ungroupSelection,
@@ -172,6 +173,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             clearTimeout(timer);
           };
         },
+        // The real clock, read when asked: delays and time limits are real, even simulated.
+        now: () => Date.now(),
         chance: Math.random,
       }),
   );
@@ -338,8 +341,14 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setWaitFor: (owner, waitId, targets) => {
         setGraph((g) => setWaitFor(g, owner, waitId, targets));
       },
+      setTime: (owner, itemId, time) => {
+        setGraph((g) => setTime(g, owner, itemId, time));
+      },
+      goOn: (owner, itemId) => {
+        runStore.goOn(owner, itemId);
+      },
     }),
-    [setGraph],
+    [setGraph, runStore],
   );
   const closeWork = useCallback(() => {
     setWork(undefined);

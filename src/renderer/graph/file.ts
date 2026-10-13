@@ -3,8 +3,17 @@ import type { Edge } from '@xyflow/react';
 import { AgentType } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { sameTarget } from './queue';
-import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait, WaitTarget } from './queue';
+import { MAX_SECONDS, sameTarget } from './queue';
+import type {
+  Condition,
+  QueueDelay,
+  QueueItem,
+  QueueMessage,
+  QueueStep,
+  QueueWait,
+  Time,
+  WaitTarget,
+} from './queue';
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
@@ -17,13 +26,16 @@ import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait, WaitTarg
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. Queue items are as
- * queue.ts has them; a wait's targets are { "agent", "item"? }. A link's dots are the ones it was
- * drawn between ("top" or "bottom").
+ * queue.ts has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one,
+ * is "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" },
+ * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. A
+ * link's dots are the ones it was drawn between ("top" or "bottom").
  */
 const FORMAT = 'corrallm';
 const VERSION = 1;
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
 const DOTS = ['top', 'bottom'];
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 interface FileNode {
   id: string;
@@ -201,6 +213,7 @@ function readNode(value: unknown, where: string): FileNode {
 function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
   if ('waitFor' in item) return readWait(item, where);
+  if ('delay' in item) return readDelay(item, where);
   if ('if' in item) {
     return {
       id: name(item.id, `${where}.id`),
@@ -216,6 +229,7 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const item = record(value, where);
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
   if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
+  if ('delay' in item) throw new Error(`${where}: an if-then cannot hold a delay`);
   const id = name(item.id, `${where}.id`);
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };
@@ -226,10 +240,37 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
 function readWait(item: Record<string, unknown>, where: string): QueueWait {
   const waitFor = list(item.waitFor, `${where}.waitFor`, readTarget);
   if (waitFor.length === 0) throw new Error(`${where}.waitFor must name at least one agent`);
+  const timeout = optional(item.timeout, `${where}.timeout`, readTime);
   return {
     id: name(item.id, `${where}.id`),
     waitFor: waitFor.filter((target, i) => waitFor.findIndex((t) => sameTarget(t, target)) === i),
+    ...(timeout === undefined ? {} : { timeout }),
   };
+}
+
+function readDelay(item: Record<string, unknown>, where: string): QueueDelay {
+  return { id: name(item.id, `${where}.id`), delay: readTime(item.delay, `${where}.delay`) };
+}
+
+/** `{ "seconds" }` (a whole number from 1 to MAX_SECONDS), or `{ "at": "HH:MM" }`. */
+function readTime(value: unknown, where: string): Time {
+  const time = record(value, where);
+  if ('seconds' in time === 'at' in time) throw new Error(`${where} must have seconds or at`);
+  if ('at' in time) {
+    if (typeof time.at !== 'string' || !CLOCK.test(time.at))
+      throw new Error(`${where}.at must be a time like "09:00"`);
+    return { at: time.at };
+  }
+  const { seconds } = time;
+  if (
+    typeof seconds !== 'number' ||
+    !Number.isInteger(seconds) ||
+    seconds < 1 ||
+    seconds > MAX_SECONDS
+  ) {
+    throw new Error(`${where}.seconds must be a whole number from 1 to ${String(MAX_SECONDS)}`);
+  }
+  return { seconds };
 }
 
 /** `{ "agent", "item"? }`, or (as older files have it) just an agent's id. */
@@ -245,12 +286,15 @@ function readCondition(value: unknown, where: string): Condition {
   switch (condition.kind) {
     case 'succeeded':
     case 'failed':
+    case 'timedOut':
       return { kind: condition.kind };
     case 'outputContains':
     case 'freeText':
       return { kind: condition.kind, text: text(condition.text, `${where}.text`) };
     default:
-      throw new Error(`${where}.kind must be one of: succeeded, failed, outputContains, freeText`);
+      throw new Error(
+        `${where}.kind must be one of: succeeded, failed, outputContains, timedOut, freeText`,
+      );
   }
 }
 

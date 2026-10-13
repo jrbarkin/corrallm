@@ -117,6 +117,30 @@ describe('fromFile', () => {
     expect(toFile(loaded)).toBe(toFile(graph));
   });
 
+  it('reads back delays, time limits on waits, and the condition that a wait ran out of time', () => {
+    const timed: QueueItem[] = [
+      { id: 'cool-off', delay: { seconds: 600 } },
+      { id: 'morning', delay: { at: '09:00' } },
+      { id: 'built', waitFor: [{ agent: 'b' }], timeout: { seconds: 1800 } },
+      { id: 'by-six', waitFor: [{ agent: 'b', item: 'x' }], timeout: { at: '18:00' } },
+      {
+        id: 'late',
+        if: { kind: 'timedOut' },
+        then: [{ id: 'nudge', message: 'Wrap up and commit what you have.', target: 'b' }],
+      },
+    ];
+    const withTimes: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: timed } } : n,
+      ),
+    };
+    const text = toFile(withTimes);
+    expect(text).toContain('"delay": {\n');
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(timed);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
   it('reads a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
@@ -171,7 +195,7 @@ describe('fromFile', () => {
       'a broken condition',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'i', if: { kind: 'maybe' }, then: [] }] }),
-      /nodes\[1\]\.queue\[0\]\.if/,
+      /^nodes\[1\]\.queue\[0\]\.if\.kind must be one of: succeeded, failed, outputContains, timedOut, freeText$/,
     ],
     [
       'a wait inside an if-then',
@@ -182,6 +206,55 @@ describe('fromFile', () => {
           ],
         }),
       /nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a wait/,
+    ],
+    [
+      'a delay of no time',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 0 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be a whole number from 1 to 604800$/,
+    ],
+    [
+      'a delay of part of a second',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 1.5 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be a whole number from 1 to 604800$/,
+    ],
+    [
+      'a delay longer than a week',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 604801 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be/,
+    ],
+    [
+      'a time of day without its leading zero',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { at: '9:00' } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.at must be a time like "09:00"$/,
+    ],
+    [
+      'a time of day past the end of the day',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { at: '24:00' } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.at must be a time like "09:00"$/,
+    ],
+    [
+      'a time that is both a length and a time of day',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'd', delay: { seconds: 60, at: '09:00' } }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.delay must have seconds or at$/,
+    ],
+    [
+      'a time limit that is neither',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'w', waitFor: [{ agent: 'b' }], timeout: {} }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.timeout must have seconds or at$/,
+    ],
+    [
+      'a delay inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'd', delay: { seconds: 60 } }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a delay$/,
     ],
     [
       'a wait for nobody',

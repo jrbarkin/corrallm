@@ -2,8 +2,17 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
-import { isIf, isMessage, isWait, sameTarget } from './queue';
-import type { Condition, QueueItem, QueueMessage, Question, QueueStep, WaitTarget } from './queue';
+import { isDelay, isIf, isMessage, isWait, sameTarget } from './queue';
+import type {
+  Condition,
+  QueueItem,
+  QueueMessage,
+  Question,
+  QueueStep,
+  Time,
+  WaitTarget,
+} from './queue';
+import { sameTime } from './time';
 
 /**
  * `item`: a labelled node with a target handle (top) and a source handle (bottom). While it has
@@ -212,12 +221,12 @@ export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
 
 /**
  * Appends an item to a node's queue, or with `into` (an if-then's id) a step or message to that
- * if-then's steps. If-thens do not nest, and hold no waits.
+ * if-then's steps. If-thens do not nest, and hold no waits or delays.
  */
 export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
   return updateQueue(graph, id, (queue) => {
     if (into === undefined) return [...queue, item];
-    if (isIf(item) || isWait(item)) return queue;
+    if (isIf(item) || isWait(item) || isDelay(item)) return queue;
     return queue.map((q) => (q.id === into && isIf(q) ? { ...q, then: [...q.then, item] } : q));
   });
 }
@@ -262,7 +271,9 @@ export function retarget(
     return next;
   };
   return updateQueue(graph, id, (queue) =>
-    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(aim)) : isWait(q) ? q : aim(q))),
+    queue.map((q) =>
+      isIf(q) ? withSteps(q, q.then.map(aim)) : isWait(q) || isDelay(q) ? q : aim(q),
+    ),
   );
 }
 
@@ -279,6 +290,27 @@ export function setWaitFor(graph: Graph, id: string, waitId: string, targets: Wa
     queue.map((q) =>
       q.id === waitId && isWait(q) && !same(q.waitFor) ? { ...q, waitFor: targets } : q,
     ),
+  );
+}
+
+/**
+ * Sets a delay's time, or a wait's time limit (`undefined` takes the limit off). A delay always has
+ * a time: `undefined` leaves it as it is.
+ */
+export function setTime(graph: Graph, id: string, itemId: string, time: Time | undefined): Graph {
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) => {
+      if (q.id !== itemId) return q;
+      if (isDelay(q))
+        return time === undefined || sameTime(q.delay, time) ? q : { ...q, delay: time };
+      if (!isWait(q)) return q;
+      if (time !== undefined)
+        return q.timeout && sameTime(q.timeout, time) ? q : { ...q, timeout: time };
+      if (q.timeout === undefined) return q;
+      const untimed = { ...q };
+      delete untimed.timeout;
+      return untimed;
+    }),
   );
 }
 
