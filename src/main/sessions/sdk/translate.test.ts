@@ -418,7 +418,7 @@ describe('Translator, on to-dos and background work', () => {
     ]);
   });
 
-  it('tells the user of retries, auto-denials and a cleared conversation', () => {
+  it('tells the user of retries and auto-denials', () => {
     const translate = translator();
     translate.translate(toolUse('toolu_x', 'Bash', { command: 'curl example.com' }));
     const said = [
@@ -439,15 +439,23 @@ describe('Translator, on to-dos and background work', () => {
         decision_reason: 'network access is not allowed',
         message: 'Denied',
       }),
-      sdk({ type: 'conversation_reset', new_conversation_id: 'n', trigger: 'clear' }),
     ].flatMap((message) => ofType(translate.translate(message), 'notice'));
     expect(said.map((n) => [n.level, n.text])).toEqual([
       ['warning', 'API error 529 (overloaded): retrying in 4s (attempt 2 of 10).'],
       ['warning', 'Not allowed: Bash curl example.com (network access is not allowed)'],
-      [
-        'info',
-        'The conversation was cleared: Claude starts afresh from here (the earlier session can still be resumed).',
-      ],
     ]);
+  });
+
+  it('marks where /clear cleared the conversation', () => {
+    expect(
+      translator().translate(
+        sdk({
+          type: 'conversation_reset',
+          new_conversation_id: 'n',
+          trigger: 'clear',
+          uuid: 'reset-1',
+        }),
+      ),
+    ).toEqual([{ type: 'cleared', id: 'reset-1' }]);
   });
 });

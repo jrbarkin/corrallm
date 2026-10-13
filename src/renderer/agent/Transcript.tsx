@@ -180,6 +180,12 @@ function EntryView({
           {entry.text}
         </p>
       );
+    case 'cleared':
+      return (
+        <div className="agent-cleared" role="separator" aria-label="Conversation cleared">
+          <span aria-hidden="true">Conversation cleared · Claude starts afresh from here</span>
+        </div>
+      );
     case 'end':
       return (
         <p className="agent-end" data-failed={entry.failed === true ? '' : undefined}>

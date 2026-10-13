@@ -87,6 +87,7 @@ import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import type { WorkFlowEdge } from './nodes';
 import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
+import type { CardQuestion } from './Questions';
 import { workEdges } from './work';
 import { WorkDetail } from './WorkDetail';
 import type { QueueEdits } from './edits';
@@ -606,7 +607,7 @@ function Editor({
     });
   }, [graph.nodes, sessions, run]);
   /** The questions agents wait on: asked on the canvas, and asked in their sessions. */
-  const pending: { agent: GraphNode; question: Question; asked?: AskedInSession }[] = [
+  const pending: { agent: GraphNode; question: CardQuestion; asked?: AskedInSession }[] = [
     ...pendingQuestions(graph.nodes),
     ...graph.nodes.flatMap((agent) =>
       pendingSessionQuestions(sessions[agent.id] ?? NEW_SESSION).map((asked) => ({

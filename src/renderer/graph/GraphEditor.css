@@ -879,6 +879,41 @@ input.graph-label {
   cursor: default;
 }
 
+/* A question's header, as Claude Code shows it: a chip above the question. */
+.graph-question-header {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Answers that say what they mean: a list, each meaning under its answer. */
+.graph-question-options[data-described] {
+  flex-direction: column;
+}
+
+.graph-question-options[data-described] button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.graph-question-option-detail {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+/* An answer picked, where several may be. */
+.graph-question-options button[aria-pressed='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 12%, Canvas);
+}
+
 .graph-question-answer {
   margin: 0;
   opacity: 0.65;

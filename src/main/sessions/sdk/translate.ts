@@ -196,12 +196,7 @@ export class Translator {
           ? []
           : [notice('error', `Claude Code could not log in: ${message.error}. ${LOGIN_HELP}`)];
       case 'conversation_reset':
-        return [
-          notice(
-            'info',
-            'The conversation was cleared: Claude starts afresh from here (the earlier session can still be resumed).',
-          ),
-        ];
+        return [{ type: 'cleared', id: message.uuid }];
       default:
         return [];
     }

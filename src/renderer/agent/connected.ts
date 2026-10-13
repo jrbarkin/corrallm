@@ -165,11 +165,10 @@ export class ConnectedDriver implements SessionDriver {
         io.dispatch({ type: 'commands', commands: event.commands });
         return;
       case 'history': {
-        // Shown already (the session was resumed after it closed): not again.
-        const shown = new Set(io.session().entries.map((entry) => entry.id));
+        // What the transcript shows already (the session was resumed after it closed, or the
+        // agent ran in a Terminal meanwhile) is not shown again; the rest goes where it happened.
         const entries = replay(event.events, this.#agentId, this.connection);
-        if (entries.length === 0 || entries.some((entry) => shown.has(entry.id))) return;
-        io.dispatch({ type: 'restore', entries });
+        if (entries.length > 0) io.dispatch({ type: 'restore', entries });
         return;
       }
       case 'user':
@@ -267,6 +266,9 @@ export class ConnectedDriver implements SessionDriver {
           type: 'add',
           entry: { id: event.id, kind: 'notice', level: event.level, text: event.text },
         });
+        return;
+      case 'cleared':
+        if (!find(event.id)) io.dispatch({ type: 'add', entry: { id: event.id, kind: 'cleared' } });
         return;
       case 'usage':
         io.dispatch({ type: 'usage', usage: event.usage });

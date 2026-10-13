@@ -187,6 +187,68 @@ describe('a connected agent', () => {
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
+  it('shows a question’s header and what each answer means, and takes several answers with Submit', async () => {
+    const { backend, view, send, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Go');
+    const question = (id: string) => ({
+      type: 'question' as const,
+      id,
+      questions: [
+        {
+          header: 'Checks',
+          text: 'Which checks should run?',
+          options: [
+            { label: 'Lint', description: 'ESLint, zero warnings' },
+            { label: 'Tests', description: 'Vitest, every project' },
+            { label: 'E2E', description: 'Playwright, on the built app' },
+          ],
+          multiple: true,
+        },
+      ],
+    });
+    emit(question('q1'));
+    const card = within(transcript.getByRole('group', { name: 'Questions for you' }));
+    expect(card.getByText('Checks').className).toBe('graph-question-header');
+    // Each answer says what it means; picking one does not answer yet.
+    const lint = card.getByRole('button', { name: 'Lint' });
+    expect(lint.getAttribute('aria-pressed')).toBe('false');
+    expect(lint.getAttribute('aria-describedby')).toBeTruthy();
+    expect(document.getElementById(lint.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'ESLint, zero warnings',
+    );
+    const submit = card.getByRole('button', { name: 'Submit' });
+    expect(submit).toHaveProperty('disabled', true);
+    fireEvent.click(lint);
+    fireEvent.click(card.getByRole('button', { name: 'E2E' }));
+    expect(lint.getAttribute('aria-pressed')).toBe('true');
+    expect(backend.answer).not.toHaveBeenCalled();
+    // What is typed in the box goes with the answers picked.
+    fireEvent.change(card.getByRole('textbox', { name: 'Your answer' }), {
+      target: { value: 'and the packaged self-test' },
+    });
+    fireEvent.click(submit);
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'q1', {
+      kind: 'question',
+      answers: ['Lint, E2E, and the packaged self-test'],
+    });
+    expect(card.getByText('You answered: Lint, E2E, and the packaged self-test')).toBeTruthy();
+
+    // The Needs you sidebar asks the same way.
+    emit(question('q2'));
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(sidebar.getByText('Checks')).toBeTruthy();
+    expect(sidebar.getByText('Vitest, every project')).toBeTruthy();
+    fireEvent.click(sidebar.getByRole('button', { name: 'Tests' }));
+    fireEvent.click(sidebar.getByRole('button', { name: 'Submit' }));
+    await settle();
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'q2', {
+      kind: 'question',
+      answers: ['Tests'],
+    });
+  });
+
   it('asks for your OK above its composer, where what is sent goes to Claude Code as the changes', async () => {
     const { backend, view, composer, send, emit, sent } = await open({
       connection: 'sdk',
@@ -488,6 +550,52 @@ describe('a connected agent', () => {
     expect(transcript.getByText('Earlier question')).toBeTruthy();
     expect(transcript.getByText('Earlier answer')).toBeTruthy();
     expect(transcript.getByText('Worked for 3s')).toBeTruthy();
+  });
+
+  it('fills in what a resumed session did that its transcript does not show', async () => {
+    const { send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    await send('One');
+    const one = sent();
+    emit(
+      { type: 'user', id: one, text: 'One' },
+      { type: 'text', id: 'm1:0', text: 'First answer' },
+      { type: 'end', messages: [one], seconds: 2, interrupted: false, failed: false },
+    );
+    // Resumed after the agent ran elsewhere (a Terminal): a turn it did there is not shown yet.
+    emit({
+      type: 'history',
+      events: [
+        { type: 'user', id: one, text: 'One' },
+        { type: 'text', id: 'm1:0', text: 'First answer' },
+        { type: 'end', messages: [one], seconds: 2, interrupted: false, failed: false },
+        { type: 'user', id: 'u2', text: 'Two' },
+        { type: 'tool', id: 't2', tool: 'Read', summary: 'README.md', status: 'done' },
+        { type: 'text', id: 'm2:0', text: 'Second answer' },
+        { type: 'end', messages: ['u2'], seconds: 5, interrupted: false, failed: false },
+      ],
+    });
+    expect(transcript.getAllByText('First answer')).toHaveLength(1);
+    expect(transcript.getByRole('button', { name: 'Read README.md' })).toBeTruthy();
+    expect(transcript.getByText('Second answer')).toBeTruthy();
+    expect(transcript.getByText('Worked for 5s')).toBeTruthy();
+  });
+
+  it('marks where /clear cleared the conversation, keeping what came before', async () => {
+    const { send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Hello');
+    emit(
+      { type: 'user', id: sent(), text: 'Hello' },
+      { type: 'text', id: 'm1:0', text: 'Hi there' },
+      { type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false },
+    );
+    await send('/clear');
+    emit(
+      { type: 'user', id: sent(), text: '/clear' },
+      { type: 'cleared', id: 'reset-1' },
+      { type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false },
+    );
+    expect(transcript.getByRole('separator', { name: 'Conversation cleared' })).toBeTruthy();
+    expect(transcript.getByText('Hi there')).toBeTruthy();
   });
 
   it('words a permission prompt as the CLI does', async () => {

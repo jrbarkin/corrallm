@@ -180,6 +180,11 @@ export type SessionEvent =
   | { type: 'withdrawn'; id: string }
   /** Something to tell the user: compaction, a retry, a usage limit and when it resets, a login problem. */
   | { type: 'notice'; id: string; level: 'info' | 'warning' | 'error'; text: string }
+  /**
+   * The conversation was cleared (/clear): Claude starts afresh, under a new session id. The
+   * transcript keeps what came before, marked off.
+   */
+  | { type: 'cleared'; id: string }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'mode'; mode: PermissionMode }
   | { type: 'model'; model: string }

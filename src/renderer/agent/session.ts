@@ -11,7 +11,8 @@ import type {
   ToolDetail,
   ToolStatus,
 } from '../../shared/session';
-import type { Question } from '../graph/queue';
+import type { CardQuestion } from '../graph/Questions';
+import { mergeHistory } from './history';
 
 export type {
   DiffLine,
@@ -95,6 +96,8 @@ export type Entry =
   | { id: string; kind: 'todos'; items: Todo[] }
   /** What the session tells the user: compaction, a usage limit, a login problem. */
   | { id: string; kind: 'notice'; level: 'info' | 'warning' | 'error'; text: string }
+  /** Where the conversation was cleared (/clear): Claude starts afresh after it. */
+  | { id: string; kind: 'cleared' }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 
@@ -168,7 +171,7 @@ export type SessionAction =
   | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
-  /** What a resumed session did before: entries put ahead of the transcript's. */
+  /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] };
 
 /** Whether a prompt still waits for the user. */
@@ -286,7 +289,7 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'commands':
       return { ...session, commands: action.commands };
     case 'restore':
-      return { ...session, entries: [...action.entries, ...session.entries] };
+      return { ...session, entries: mergeHistory(session.entries, action.entries) };
   }
 }
 
@@ -314,7 +317,8 @@ export interface AskedInSession {
   /** The question prompt it is in, and where in it. */
   prompt: string;
   index: number;
-  question: Question;
+  /** With Claude Code's header, what each answer means, and whether several may be given. */
+  question: CardQuestion;
 }
 
 /** The questions a session asked that still wait for an answer, oldest first. */
@@ -332,7 +336,9 @@ export function sessionQuestions(session: Session): AskedInSession[] {
           question: {
             id: `${entry.id}#${String(index)}`,
             text: q.text,
-            ...(q.options.length > 0 ? { options: q.options.map((o) => o.label) } : {}),
+            ...(q.header === '' ? {} : { header: q.header }),
+            ...(q.options.length > 0 ? { options: q.options } : {}),
+            ...(q.multiple ? { multiple: true } : {}),
             ...(q.answer === undefined ? {} : { answer: q.answer }),
           },
         }))
