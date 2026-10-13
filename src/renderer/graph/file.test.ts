@@ -117,6 +117,39 @@ describe('fromFile', () => {
     expect(toFile(loaded)).toBe(toFile(graph));
   });
 
+  it('saves how a Claude agent runs when it is connected, and reads it back', () => {
+    const connected: Graph = {
+      nodes: [
+        {
+          id: 't',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: { label: 'T', connection: 'terminal' },
+        },
+        {
+          id: 's',
+          type: 'agent',
+          position: { x: 200, y: 0 },
+          data: { label: 'S', agent: 'Claude', connection: 'sdk' },
+        },
+      ],
+      edges: [],
+    };
+    const file = JSON.parse(toFile(connected)) as typeof saved;
+    expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual([
+      'terminal',
+      'sdk',
+    ]);
+    expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual([
+      'terminal',
+      'sdk',
+    ]);
+    // Simulated is the default: written, it reads as no connection at all.
+    const simulated = structuredClone(saved);
+    Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
+    expect(fromFile(JSON.stringify(simulated)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
+  });
+
   it('reads a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
@@ -151,6 +184,21 @@ describe('fromFile', () => {
       'an unknown agent',
       (f) => Object.assign(f.nodes[1] ?? {}, { agent: 'Eliza' }),
       /nodes\[1\]\.agent/,
+    ],
+    [
+      'an unknown connection',
+      (f) => Object.assign(f.nodes[2] ?? {}, { connection: 'ssh' }),
+      /^nodes\[2\]\.connection must be one of: simulated, terminal, sdk$/,
+    ],
+    [
+      'a connection its agent type does not offer',
+      (f) => Object.assign(f.nodes[1] ?? {}, { connection: 'terminal' }),
+      /^nodes\[1\]\.connection: Codex agents can only be simulated$/,
+    ],
+    [
+      'a group with a connection',
+      (f) => Object.assign(f.nodes[0] ?? {}, { connection: 'sdk' }),
+      /^nodes\[0\]\.connection: a group has no connection$/,
     ],
     [
       'a repeated id',

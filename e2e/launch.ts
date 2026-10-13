@@ -13,9 +13,12 @@ import { agentElectronExecutable } from './agent-electron';
  * mouse; on macOS there is no Dock icon either, see agent-electron.ts) and a throwaway profile.
  * The real one (~/Library/Application Support/corrallm or its equivalent) is shared with the
  * packaged app and keeps state such as a page zoom set with ⌘+, which would shrink the canvas
- * under the coordinate-based tests. `close()` quits the app and deletes the profile.
+ * under the coordinate-based tests. `close()` quits the app and deletes the profile. `env` adds
+ * to the app's environment (CORRALLM_FAKE_SESSIONS=1: connected agents run a fake, not Claude).
  */
-export async function launchApp(): Promise<{
+export async function launchApp({
+  env: extra = {},
+}: { env?: Record<string, string> } = {}): Promise<{
   app: ElectronApplication;
   close: () => Promise<void>;
 }> {
@@ -34,7 +37,7 @@ export async function launchApp(): Promise<{
     app = await electron.launch({
       ...(executablePath ? { executablePath } : {}),
       args: ['.', `--user-data-dir=${profile}`],
-      env: { ...env, CORRALLM_HIDE_WINDOW: '1' },
+      env: { ...env, ...extra, CORRALLM_HIDE_WINDOW: '1' },
     });
   } catch (error) {
     remove();

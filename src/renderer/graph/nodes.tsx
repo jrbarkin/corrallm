@@ -13,7 +13,8 @@ import type { ReactNode } from 'react';
 
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
-import { DEFAULT_AGENT } from './agents';
+import { agentLabel, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from './agents';
+import type { AgentConnection, AgentType } from './agents';
 import type { GraphNode } from './graph';
 import { SHORTCUTS } from './keys';
 import { isBlank } from './queue';
@@ -32,7 +33,7 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
     <div className="graph-card" data-agent={data.agent ?? DEFAULT_AGENT} {...hover.target}>
       <Handle type="source" id="top" position={Position.Top} />
       <Label id={id} label={data.label} />
-      <AgentTag agent={data.agent ?? DEFAULT_AGENT} />
+      <AgentTag agent={data.agent ?? DEFAULT_AGENT} connection={connectionOf(data)} />
       <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
       <QuestionCount count={data.questions?.filter((q) => q.answer === undefined).length ?? 0} />
       <Handle type="source" id="bottom" position={Position.Bottom} />
@@ -247,9 +248,19 @@ function LabelInput({ id, label }: { id: string; label: string }) {
   );
 }
 
-/** The coding agent a node runs, colour-coded. Drawn by CSS, so it is not part of the label. */
-function AgentTag({ agent }: { agent: string }) {
-  return <span className="graph-agent" data-agent={agent} title={`Agent: ${agent}`} />;
+/**
+ * The coding agent a node runs, colour-coded, and how it runs when connected ("Claude · Terminal").
+ * Drawn by CSS, so it is not part of the label.
+ */
+function AgentTag({ agent, connection }: { agent: AgentType; connection: AgentConnection }) {
+  return (
+    <span
+      className="graph-agent"
+      data-agent={agent}
+      data-connection={connection === 'simulated' ? undefined : CONNECTION_INFO[connection].short}
+      title={`Agent: ${agentLabel(agent, connection)}`}
+    />
+  );
 }
 
 /** How many questions the agent is waiting on the user for, drawn by CSS like the queue count. */

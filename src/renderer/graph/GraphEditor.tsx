@@ -18,16 +18,19 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
-import type { CanvasFile } from '../../shared/ipc';
+import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { AgentView } from '../agent/AgentView';
-import { NEW_SESSION } from '../agent/session';
+import type { SessionBackend } from '../agent/connected';
+import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
+import type { AskedInSession } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
+import { ipcErrorMessage } from '../ipc-error';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import { RunStore } from '../run/runner';
 import { GraphActionsContext } from './actions';
-import { DEFAULT_AGENT } from './agents';
+import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
 import {
   absolutePosition,
@@ -55,11 +58,12 @@ import {
   selectOnly,
   setAgent,
   setCondition,
+  setConnection,
   setWaitFor,
   spawnAgent,
   ungroupSelection,
 } from './graph';
-import type { Graph } from './graph';
+import type { Graph, GraphNode } from './graph';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import { EXAMPLES } from './examples';
@@ -126,27 +130,28 @@ export interface CanvasFiles {
   save: (text: string, choose: boolean) => Promise<string | null>;
   /** Forgets the canvas's file: the next save asks where. */
   forget: () => Promise<null>;
+  /** Asks for the folder the canvas's agents work in: resolves with it, or null if cancelled. */
+  chooseProject?: () => Promise<ProjectFolder | null>;
 }
 
-/** The editor, with (given `files`) a bar to open and save canvases as `.corral` files. */
+/**
+ * The editor, with (given `files`) a bar to open and save canvases as `.corral` files, and (given
+ * `sessionBackend`) agents connected to the real CLI through the main process.
+ */
 export function GraphEditor({
   initialGraph = EMPTY_GRAPH,
   files,
+  sessionBackend,
 }: {
   initialGraph?: Graph;
   files?: CanvasFiles;
+  sessionBackend?: SessionBackend;
 }) {
   return (
     <ReactFlowProvider>
-      <Editor initialGraph={initialGraph} files={files} />
+      <Editor initialGraph={initialGraph} files={files} sessionBackend={sessionBackend} />
     </ReactFlowProvider>
   );
-}
-
-/** Why opening or saving failed, without what IPC adds to a rejection from main. */
-function reason(error: unknown): string {
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  return message.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
 }
 
 /** A template as a canvas: its blanks filled in, and its agents given their types. */
@@ -154,12 +159,20 @@ function fromTemplate(example: Example, { values, agents }: TemplateChoices): Gr
   return withAgents(fillTemplate(fromFile(example.text), values), agents);
 }
 
-function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFiles | undefined }) {
+function Editor({
+  initialGraph,
+  files,
+  sessionBackend,
+}: {
+  initialGraph: Graph;
+  files: CanvasFiles | undefined;
+  sessionBackend: SessionBackend | undefined;
+}) {
   const [graph, setRawGraph] = useState(initialGraph);
-  /** Every agent's session, playing on while its view is closed. */
-  const [sessionStore] = useState(() => new SessionStore());
+  /** Every agent's session, playing on while its view is closed: scripted, or connected. */
+  const [sessionStore] = useState(() => new SessionStore(sessionBackend));
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
-  /** Every agent's queue, run (simulated for now): messages go to the agents' sessions. */
+  /** Every agent's queue, run: messages go to the agents' sessions; other steps are simulated. */
   const [runStore] = useState(
     () =>
       new RunStore({
@@ -186,6 +199,21 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     );
     return queueMarks(layout, run, asking);
   }, [layout, run, sessions]);
+  // Sessions follow the agents on the canvas, and how each runs. Before the run reads the queues,
+  // which may send agents messages.
+  useEffect(() => {
+    sessionStore.sync(
+      graph.nodes.flatMap((n) =>
+        n.type === 'agent' ? [{ id: n.id, connection: connectionOf(n.data) }] : [],
+      ),
+    );
+  }, [graph.nodes, sessionStore]);
+  useEffect(
+    () => () => {
+      sessionStore.reset();
+    },
+    [sessionStore],
+  );
   // The run reads the queues as they are edited.
   useEffect(() => {
     runStore.update(graph.nodes);
@@ -207,6 +235,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const [discarding, setDiscarding] = useState<{ run: () => void }>();
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
+  /** The folder the canvas's agents work in (main keeps it; this is what the file bar shows). */
+  const [project, setProject] = useState<ProjectFolder | null>(null);
   /** Whether the templates gallery is open. */
   const [gallery, setGallery] = useState(false);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
@@ -230,6 +260,12 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   }, [opened.ids, graph.nodes]);
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
+  /** How it runs: its session starts when its view opens, and again when that changes. */
+  const frontNode = graph.nodes.find((n) => n.id === front);
+  const frontConnection = frontNode ? connectionOf(frontNode.data) : undefined;
+  useEffect(() => {
+    if (front !== undefined && frontConnection !== undefined) sessionStore.open(front);
+  }, [front, frontConnection, sessionStore]);
   /** The work between two agents opened in a panel, if any. */
   const [work, setWork] = useState<{ from: string; to: string }>();
   /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
@@ -370,6 +406,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setLoads((n) => n + 1);
       setRawGraph(next);
       runStore.reset();
+      // Another canvas: main has ended the old one's connected sessions.
+      sessionStore.reset();
       setSaved({ name, text: toFile(next) });
       setArranging(false);
       setEditing(undefined);
@@ -378,7 +416,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setDrawn(undefined);
       setProblem(undefined);
     },
-    [runStore],
+    [runStore, sessionStore],
   );
   /**
    * The file commands. New and Open replace the canvas, so while it has unsaved changes (`edited`)
@@ -392,12 +430,14 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       else run();
     };
     const failed = (doing: string) => (error: unknown) => {
-      setProblem(`Could not ${doing}: ${reason(error)}`);
+      setProblem(`Could not ${doing}: ${ipcErrorMessage(error)}`);
     };
+    const { chooseProject } = files;
     return {
       new: (edited: boolean) => {
         unless(edited, () => {
           load(EMPTY_GRAPH, undefined);
+          setProject(null);
           files.forget().catch(failed('start a new canvas'));
         });
       },
@@ -407,9 +447,11 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             if (!file) return;
             try {
               load(fromFile(file.text), file.name);
+              setProject(file.project ?? null);
             } catch (error) {
-              setProblem(`Could not open ${file.name}: ${reason(error)}`);
+              setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
               // Main took it as the canvas's file: never save this canvas over it.
+              setProject(null);
               files.forget().catch(failed('open the canvas'));
             }
           }, failed('open the canvas'));
@@ -419,9 +461,18 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       example: (example: Example, choices: TemplateChoices, edited: boolean) => {
         unless(edited, () => {
           load(fromTemplate(example, choices), undefined);
+          setProject(null);
           files.forget().catch(failed('open the template'));
         });
       },
+      /** Asks for the folder the canvas's agents work in. */
+      chooseProject:
+        chooseProject &&
+        (() => {
+          chooseProject().then((folder) => {
+            if (folder) setProject(folder);
+          }, failed('choose the project folder'));
+        }),
       save: (text: string, choose: boolean) => {
         files.save(text, choose).then((name) => {
           if (name !== null) setSaved({ name, text });
@@ -495,14 +546,25 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         ...(status === 'idle' ? [] : ['working']),
       ];
       const name = n.data.label || 'Unnamed agent';
+      const type = agentLabel(n.data.agent ?? DEFAULT_AGENT, connectionOf(n.data), { short: true });
       return {
         ...n,
         ...(classes.length === 0 ? {} : { className: classes.join(' ') }),
-        ...(n.type === 'agent' ? { ariaLabel: `${name}, ${n.data.agent ?? DEFAULT_AGENT}` } : {}),
+        ...(n.type === 'agent' ? { ariaLabel: `${name}, ${type}` } : {}),
       };
     });
   }, [graph.nodes, sessions]);
-  const pending = pendingQuestions(graph.nodes);
+  /** The questions agents wait on: asked on the canvas, and asked in their sessions. */
+  const pending: { agent: GraphNode; question: Question; asked?: AskedInSession }[] = [
+    ...pendingQuestions(graph.nodes),
+    ...graph.nodes.flatMap((agent) =>
+      pendingSessionQuestions(sessions[agent.id] ?? NEW_SESSION).map((asked) => ({
+        agent,
+        question: asked.question,
+        asked,
+      })),
+    ),
+  ];
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
@@ -721,7 +783,19 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
                   question,
                 }))}
                 onAnswer={(agentId, questionId, answer) => {
-                  setGraph((g) => answerQuestion(g, agentId, questionId, answer));
+                  const asked = pending.find(
+                    (p) => p.agent.id === agentId && p.question.id === questionId,
+                  );
+                  if (asked?.asked) {
+                    sessionStore.answerQuestion(
+                      agentId,
+                      asked.asked.prompt,
+                      asked.asked.index,
+                      answer,
+                    );
+                  } else {
+                    setGraph((g) => answerQuestion(g, agentId, questionId, answer));
+                  }
                 }}
                 onOpen={(agentId) => {
                   apply((g) => selectOnly(g, agentId));
@@ -735,6 +809,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
               <FileBar
                 name={saved.name}
                 edited={edited}
+                {...(commands.chooseProject
+                  ? { project: { folder: project, onChoose: commands.chooseProject } }
+                  : {})}
                 problem={problem}
                 discarding={discarding !== undefined}
                 onNew={() => {
@@ -805,8 +882,12 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             onRename={(label) => {
               setGraph((g) => renameNode(g, openedNode.id, label));
             }}
-            onAgent={(agent) => {
-              setGraph((g) => setAgent(g, openedNode.id, agent));
+            connection={connectionOf(openedNode.data)}
+            project={project}
+            onAgent={(agent, connection) => {
+              setGraph((g) =>
+                setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
+              );
             }}
             onAnswer={(questionId, answer) => {
               setGraph((g) => answerQuestion(g, openedNode.id, questionId, answer));
@@ -830,6 +911,12 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
               },
               answer: (permissionId, answer) => {
                 sessionStore.answer(openedNode.id, permissionId, answer);
+              },
+              answerQuestion: (promptId, index, answer) => {
+                sessionStore.answerQuestion(openedNode.id, promptId, index, answer);
+              },
+              answerPlan: (promptId, answer) => {
+                sessionStore.answerPlan(openedNode.id, promptId, answer);
               },
               stop: () => {
                 sessionStore.stop(openedNode.id);

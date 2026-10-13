@@ -691,6 +691,39 @@ describe('GraphEditor', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
+    it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
+      const files = {
+        ...fakeFiles({
+          name: 'shop.corral',
+          text: toFile(coder),
+          project: { name: 'shop', path: '/work/shop' },
+        }),
+        chooseProject: vi
+          .fn<NonNullable<CanvasFiles['chooseProject']>>()
+          .mockResolvedValueOnce({ name: 'app', path: '/work/app' })
+          .mockResolvedValueOnce(null),
+      };
+      setup(undefined, files);
+      fireEvent.click(button('Choose a project folder'));
+      await waitFor(() => {
+        expect(button('Project folder: app').title).toMatch(/^\/work\/app\n/);
+      });
+      // Cancelled: it keeps the folder it had.
+      fireEvent.click(button('Project folder: app'));
+      await waitFor(() => {
+        expect(files.chooseProject).toHaveBeenCalledTimes(2);
+      });
+      expect(button('Project folder: app')).toBeTruthy();
+
+      // A new canvas has none; an opened one has the folder main remembered with its file.
+      fireEvent.click(button('New'));
+      expect(button('Choose a project folder')).toBeTruthy();
+      fireEvent.click(button('Open…'));
+      await waitFor(() => {
+        expect(button('Project folder: shop')).toBeTruthy();
+      });
+    });
+
     it("fills in a template's blanks before it opens", () => {
       const { nodes, node } = setup(undefined, fakeFiles());
       fireEvent.click(button('Start from a template…'));

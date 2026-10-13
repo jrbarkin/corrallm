@@ -3,7 +3,7 @@ import type { ReactNode, RefObject } from 'react';
 
 import { AgentType } from '../graph/agents';
 import { MODES } from './session';
-import type { Mode, Session } from './session';
+import type { Mode, ModelChoice, Session, SessionUsage } from './session';
 
 /** What the composer does to its agent's session (sessions.ts). */
 export interface ComposerControls {
@@ -14,7 +14,7 @@ export interface ComposerControls {
   setModel: (model: string) => void;
 }
 
-/** The models each agent offers (the Claude 5 family for Claude; others are not listed yet). */
+/** The models each simulated agent offers (the Claude 5 family for Claude; others not listed). */
 const MODELS: Record<AgentType, readonly string[]> = {
   [AgentType.Claude]: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'],
   [AgentType.Codex]: ['Default model'],
@@ -22,15 +22,20 @@ const MODELS: Record<AgentType, readonly string[]> = {
   [AgentType.Gemini]: ['Default model'],
 };
 
+/** What a connected session offers before it has said: its CLI's default model. */
+const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Default model' }];
+
 /**
  * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
  * line, Shift+Tab switches mode. While the agent works, Enter queues the message (shown above, ✕
  * takes it back to edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the
- * permission mode, the model, and Send (or Stop).
+ * permission mode, the model (a connected session's own models, once it has started), what a
+ * connected session has used, and Send (or Stop).
  */
 export function Composer({
   agentName,
   agent,
+  connected,
   session,
   controls,
   field,
@@ -38,6 +43,8 @@ export function Composer({
 }: {
   agentName: string;
   agent: AgentType;
+  /** Whether it runs the real CLI (connected.ts) rather than a scripted session. */
+  connected: boolean;
   session: Session;
   controls: ComposerControls;
   /** Its text box, which the view focuses again after the user answers a prompt. */
@@ -47,9 +54,12 @@ export function Composer({
 }) {
   const [draft, setDraft] = useState('');
   const working = session.status !== 'idle';
-  const models = MODELS[agent];
-  const model =
-    session.model !== null && models.includes(session.model) ? session.model : models[0];
+  const models =
+    session.models ??
+    (connected
+      ? DEFAULT_MODEL
+      : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
+  const model = models.find((m) => m.value === session.model) ?? models[0];
   const mode = MODES.find((m) => m.mode === session.mode) ?? MODES[0];
 
   const submit = () => {
@@ -126,15 +136,20 @@ export function Composer({
           />
           <ChoiceMenu
             label="Model"
-            value={model ?? ''}
+            value={model?.label ?? ''}
             title="The model it runs"
-            choices={models.map((name) => ({ key: name, label: name }))}
-            chosen={model ?? ''}
-            onChoose={(name) => {
-              controls.setModel(name);
+            choices={models.map((m) => ({
+              key: m.value,
+              label: m.label,
+              ...(m.description === undefined ? {} : { detail: m.description }),
+            }))}
+            chosen={model?.value ?? ''}
+            onChoose={(value) => {
+              controls.setModel(value);
               field.current?.focus();
             }}
           />
+          {session.usage && <Usage usage={session.usage} />}
           {working ? (
             <button
               type="button"
@@ -156,6 +171,33 @@ export function Composer({
         </div>
       </div>
     </div>
+  );
+}
+
+/** What a connected session has used: its cost so far, and how full its context is. */
+function Usage({ usage }: { usage: SessionUsage }) {
+  const { costUsd, contextTokens, contextWindow } = usage;
+  const context =
+    contextTokens !== null && contextWindow !== null && contextWindow > 0
+      ? Math.round((contextTokens / contextWindow) * 100)
+      : null;
+  const parts = [
+    ...(costUsd === null ? [] : [`$${costUsd.toFixed(2)}`]),
+    ...(context === null ? [] : [`${String(context)}% context`]),
+  ];
+  if (parts.length === 0) return null;
+  return (
+    <span
+      className="agent-usage"
+      title={[
+        ...(costUsd === null ? [] : ['Its cost so far: an estimate on a subscription']),
+        ...(context === null
+          ? []
+          : [`${String(contextTokens)} of ${String(contextWindow)} tokens of context used`]),
+      ].join('. ')}
+    >
+      {parts.join(' · ')}
+    </span>
   );
 }
 

@@ -29,8 +29,11 @@ export function SearchPicker<T>({
   label: string;
   options: readonly T[];
   optionLabel: (option: T) => string;
-  /** A second line under the label; typing finds options by it too, after matches on labels. */
-  optionDetail?: (option: T) => string;
+  /**
+   * A second line under the label (none if undefined); typing finds options by it too, after
+   * matches on labels.
+   */
+  optionDetail?: (option: T) => string | undefined;
   optionKey: (option: T) => string;
   placeholder?: string;
   /** Text the field starts with (selected), such as what was typed last time. */
@@ -51,7 +54,9 @@ export function SearchPicker<T>({
   const found = optionDetail
     ? [
         ...byLabel,
-        ...search(options, query, optionDetail, { fuzzy }).filter((o) => !byLabel.includes(o)),
+        ...search(options, query, (o) => optionDetail(o) ?? '', { fuzzy }).filter(
+          (o) => !byLabel.includes(o),
+        ),
       ]
     : byLabel;
   const typed = query.trim();

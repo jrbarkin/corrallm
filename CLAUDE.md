@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session that is scripted until agents are connected (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels; and node-pty installed but used only by the packaged-build self-test.
+corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels, with a project folder their agents work in; and node-pty installed but used only by the packaged-build self-test. A Claude agent runs Simulated (a scripted session) or connected to the real `claude` CLI, in a Terminal or through the Agent SDK: the connection layer is built (see Connected sessions), but its two connectors are placeholders until their builds land.
 
 ## Commands
 
@@ -25,6 +25,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 - The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).
+- Tests never run the real Claude. Main's session tests use the fake connector (`src/main/sessions/fake.ts`), renderer tests a fake backend (`src/renderer/test-backend.ts`), and e2e runs the app with `CORRALLM_FAKE_SESSIONS=1` (`launchApp({ env })`; honoured only by unpackaged builds), which gives every connection the fake connector. A connector's own tests drive a fake `claude` that prints the CLI's real formats.
 - Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
 
 ## Layout
@@ -33,7 +34,14 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 src/main/       Main process (Node). index.ts is the entry; security.ts, app-protocol.ts, csp.ts,
                 url-policy.ts hold the security baseline; ipc.ts registers IPC handlers.
                 canvas.ts opens and saves canvas files for the canvas:* channels: it remembers
-                each renderer's file, so the renderer never passes a path.
+                each renderer's file, so the renderer never passes a path. project.ts keeps each
+                canvas's project folder (picked in a folder dialog); memory.ts remembers, per
+                canvas file, in the app's user data, its folder and its agents' session ids.
+src/main/sessions/  Connected sessions (see Connected sessions): connector.ts is the interface a
+                connection implements, manager.ts runs every session for the session:* channels,
+                connectors.ts picks each connection's connector, fake.ts is the fake for tests,
+                args.ts validates the channels' arguments, environment.ts and claude.ts resolve
+                the agents' environment (the login shell's) and the `claude` executable.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
@@ -58,23 +66,27 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      linked below it) and stacks the others opened that way, to switch between.
                      GraphEditor keeps the stack (the agent shown first) and clears it when the view
                      closes. motion.ts animates the panel: out of its canvas card and back, minimized
-                     into the rail, grown out of the ⊕ or a stacked card. Sessions are scripted for
-                     now: session.ts is the model and reducer, player.ts plays a turn's steps in
-                     time, script.ts writes the turn, and sessions.ts keeps every agent's session
-                     (useSyncExternalStore) so turns play on while the canvas is shown.
+                     into the rail, grown out of the ⊕ or a stacked card. Its agent chip sets the
+                     agent's type and connection (agents.ts: AGENT_CONNECTIONS). session.ts is the
+                     model and reducer; sessions.ts keeps every agent's session
+                     (useSyncExternalStore) so turns play on while the canvas is shown, and gives
+                     each one a driver (driver.ts): scripted.ts plays scripted turns (script.ts
+                     writes them, player.ts plays their steps in time), connected.ts plays a
+                     connected session's events from main.
 src/renderer/queues/ Every agent's queue side by side, task by task, laid out like a diff viewer
                      (QueuesView.tsx), from the canvas or an agent. lanes.ts aligns rows so a wait
                      sits below what it waits for, links waits and work handed over, and finds waits
                      stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that
                      join linked tasks (from where the view measures them); marks.ts marks tasks
                      (links, the run) wherever a queue is shown.
-src/renderer/run/    Running the queues, simulated until agents are connected (runner.ts, a store like
-                     sessions.ts): each agent works through its queue, messages go to its session,
-                     waits hold until their target is done. run.css marks where the run is on a
+src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): each agent works
+                     through its queue, messages go to its session (scripted or connected) and are
+                     done when the turn ends, other steps are simulated, waits hold until their
+                     target is done. run.css marks where the run is on a
                      queue's rows, wherever they are shown.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
-src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
-                Electron or DOM imports here.
+src/shared/     Types shared by all processes, including the IPC contract (ipc.ts) and the
+                connected-session protocol (session.ts). No Node, Electron or DOM imports here.
 e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Launch the app with
                 launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in.
 build/          Packaging resources (macOS entitlements, patched rpm spec template).
@@ -99,17 +111,29 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/p
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. CI asserts this.
 - Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork` or `spawn`), and Playwright cannot drive the packaged app.
-- Credentials only come from environment variables (see `.env.example`). Never commit `.env` or key files; `pnpm dev` strips the signing variables before launching the app.
+- Credentials only come from environment variables (see `.env.example`). Never commit `.env` or key files; `pnpm dev` strips the signing variables before launching the app. Agents use the `claude` CLI's own login; corrallm never reads, stores or passes credentials.
+- Agents run only in the project folder the user picked in main's folder dialog (`project.ts`): that choice is the trust gate (SDK sessions skip Claude Code's own trust dialog). The renderer never passes a path, a command line, an environment or a session id to resume: main resolves `claude` (`sessions/claude.ts`), the environment and the folder, and remembers session ids itself. Connectors use an agent's id only to route events, never in a path or a command line. Every session's process is closed before the app quits.
 
 ## Adding an IPC channel
 
-1. Declare it in `IpcContract` in `src/shared/ipc.ts`: `'domain:action': { args: [path: string]; result: Thing }`. Add the matching method to `AppApi` and its channel to `API_CHANNELS`.
-2. Add an entry to `handlers` in `src/main/ipc.ts`: `'domain:action': { parseArgs, handler }`. `parseArgs` receives `unknown[]` from an untrusted renderer and must validate every argument (type, length, allowed values) or throw. Use `noArgs` for channels without arguments.
+1. Declare it in `IpcContract` in `src/shared/ipc.ts`: `'domain:action': { args: [path: string]; result: Thing }`. Add the matching method to `InvokeApi` (part of `AppApi`) and its channel to `API_CHANNELS`.
+2. Add an entry to `createHandlers` in `src/main/ipc.ts`: `'domain:action': { parseArgs, handler }`. `parseArgs` receives `unknown[]` from an untrusted renderer and must validate every argument (type, length, allowed values) or throw. Use `noArgs` for channels without arguments.
 3. Expose it in `src/preload/index.ts`: `action: (path) => invoke(API_CHANNELS.action, path)`.
 4. Call it from the renderer as `window.api.action(...)`.
 5. Extend `src/main/ipc.test.ts` (sender rejection, argument validation) and `src/preload/index.test.ts`. If the UI uses it, stub it in `src/renderer/App.test.tsx` via `stubApi`.
 
-The compiler enforces that main, preload and renderer agree on argument and result types, and that no contract channel is missing a main handler or an `AppApi` method. For main-to-renderer events, add a separate typed event map to `src/shared/ipc.ts` and expose a `subscribe(callback) => unsubscribe` function from the preload; never pass the raw `IpcRendererEvent` to the renderer.
+The compiler enforces that main, preload and renderer agree on argument and result types, and that no contract channel is missing a main handler or an `AppApi` method.
+
+Main-to-renderer events: declare the event in `IpcEvents` in `src/shared/ipc.ts` (`'domain:event': [agentId: string, thing: Thing]`), add a function to `EventApi` and its event to `API_EVENTS` (the compiler checks none is missing), expose it in the preload with `listen` (`onThing: (listener) => listen(API_EVENTS.onThing, listener)`: it returns a function that stops listening, and never passes the `IpcRendererEvent` on), and send it from main with `sendEvent(contents, 'domain:event', ...)` (src/main/ipc.ts) to the renderer it concerns only.
+
+## Connected sessions
+
+A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `terminal`, `sdk`; saved in `.corral` files when not simulated) decides what drives its session. Simulated sessions are scripted in the renderer. Connected ones run in main, over the `session:*` channels and the `session:event` event, in the protocol of `src/shared/session.ts`:
+
+- The renderer (`connected.ts`) starts an agent's session when its view opens or a message is sent (`session:start`: connection, model, mode), sends one message at a time (it keeps its own editable queue; the runner hears each turn's end through `SessionStore.send`'s `onDone`), passes on answers to prompts, interrupts, mode and model changes, and closes the session when the agent goes or runs another way. Session events from main are routed to the agent's driver only if they come from its current connection.
+- Main (`sessions/manager.ts`) starts the session with the connection's `Connector` in the canvas's project folder (it refuses without one), with the agents' environment (the user's login shell's, cleaned of what corrallm was started from: `environment.ts`), resuming the agent's last session id (remembered per canvas file in `memory.ts`, so sessions survive a restart; the same id is resumed whichever connection the agent switches to). Opening or forgetting a canvas, choosing another project folder (which forgets the ids), a renderer that goes or reloads, and quitting (`before-quit` in index.ts) close sessions.
+- A connector emits `SessionEvent`s through its `SessionHost`: `started` (model, mode, the models it offers, which the composer's model picker lists), then per turn: `user` (with the renderer's message id, or a new one for a message typed in a terminal), `status` (working, or waiting on the user) and entries by id (`text`/`thinking` stream in, `tool`/`todos` replace; `parent` nests a subagent's entries), prompts (`permission` with what "always" allows, `question` for AskUserQuestion, `plan` for ExitPlanMode; `withdrawn` when no longer asked), `notice` (compaction, retries, usage limits with their reset time, login problems), `usage`, `mode`, `model`, and exactly one `end` naming the messages it answered (interrupted, or failed). `status` is never sent outside a turn: only `end` makes a session idle. `closed` if the session stops by itself; it calls `remember(sessionId)` whenever its CLI's session id is known or changes (as after /clear).
+- To build a connection: write its `Connector` in its own folder (`src/main/sessions/sdk/`, `src/main/sessions/terminal/`), find the CLI with `requireClaude(spec.env)`, and register it in `connectors.ts`. Its tests drive a fake `claude`; the manager, IPC, renderer and UI need no change unless the protocol grows (then extend `session.ts`'s types, `connected.ts`'s `receive`, and their tests). The Terminal connection also adds its terminal channels and view (the agent view shows the CLI's own terminal in place of the transcript and composer).
 
 ## Native modules
 
