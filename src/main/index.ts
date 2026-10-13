@@ -1,6 +1,7 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, dialog, session, shell } from 'electron';
+import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
@@ -8,6 +9,7 @@ import { canvasFile } from './canvas';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
 import { registerIpcHandlers, sendEvent } from './ipc';
+import { LinkOpener } from './links';
 import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
@@ -111,7 +113,28 @@ function main(): void {
         },
       });
       const files = new ProjectFiles({ environment: agentsEnvironment });
-      registerIpcHandlers(trustedOrigin, { projects, files, sessions });
+      const links = new LinkOpener({
+        file: path.join(app.getPath('userData'), 'links.json'),
+        ask: async (contents, host, url) => {
+          const options: MessageBoxOptions = {
+            type: 'question',
+            message: `Open ${host} in your browser?`,
+            detail: url.length > 300 ? `${url.slice(0, 300)}…` : url,
+            buttons: ['Open', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+            checkboxLabel: 'Always for this site',
+            noLink: true,
+          };
+          const window = BrowserWindow.fromWebContents(contents);
+          const { response, checkboxChecked } = await (window
+            ? dialog.showMessageBox(window, options)
+            : dialog.showMessageBox(options));
+          return { open: response === 0, always: response === 0 && checkboxChecked };
+        },
+        openExternal: (url) => shell.openExternal(url),
+      });
+      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;
@@ -119,9 +142,11 @@ function main(): void {
         if (quitting) return;
         quitting = true;
         event.preventDefault();
-        void Promise.all([sessions.closeEverything(), memory.flush()]).finally(() => {
-          app.quit();
-        });
+        void Promise.all([sessions.closeEverything(), memory.flush(), links.flush()]).finally(
+          () => {
+            app.quit();
+          },
+        );
       });
 
       await openMainWindow();

@@ -244,6 +244,72 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   expect(await starts()).toHaveLength(1);
 });
 
+test('opens a link Cmd-clicked in the terminal in the browser, once main has asked', async () => {
+  await app.evaluate(({ dialog, shell }) => {
+    const seen = globalThis as unknown as { asked: string[]; opened: string[] };
+    seen.asked = [];
+    seen.opened = [];
+    Object.assign(dialog, {
+      showMessageBox: (...args: unknown[]) => {
+        seen.asked.push((args.at(-1) as { message: string }).message);
+        return Promise.resolve({ response: 0, checkboxChecked: false });
+      },
+    });
+    Object.assign(shell, {
+      openExternal: (url: string) => {
+        seen.opened.push(url);
+        return Promise.resolve();
+      },
+    });
+  });
+  const seen = () =>
+    app
+      .evaluate(() => globalThis as unknown as { asked: string[]; opened: string[] })
+      .then(({ asked, opened }) => ({ asked, opened }));
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await typeIn(terminal, 'link please', 'Enter');
+  await expect
+    .poll(async () => (await logged()).some((entry) => entry.event === 'replied'))
+    .toBe(true);
+
+  // The reply's link is on the screen's fourth row (title, blank, prompt, reply), from column 6.
+  const sizes = (await logged()).filter((entry) => entry.event === 'size');
+  const { cols, rows } = sizes.at(-1) as unknown as { cols: number; rows: number };
+  const screen = await view.locator('.xterm-screen').boundingBox();
+  if (!screen) throw new Error('no terminal screen');
+  const cell = (col: number, row: number) => ({
+    x: screen.x + ((col + 0.5) * screen.width) / cols,
+    y: screen.y + ((row + 0.5) * screen.height) / rows,
+  });
+  const at = cell(20, 3);
+  // Cmd-clicked, it opens once main has asked. The terminal finds a link as the pointer comes
+  // onto its cell, so it comes from another each time, until the reply on screen has it.
+  await expect
+    .poll(async () => {
+      const away = cell(2, 3);
+      await page.mouse.move(away.x, away.y);
+      await page.mouse.move(at.x, at.y, { steps: 2 });
+      await page.keyboard.down('ControlOrMeta');
+      await page.mouse.click(at.x, at.y);
+      await page.keyboard.up('ControlOrMeta');
+      return (await seen()).opened.length;
+    })
+    .toBeGreaterThan(0);
+  // (Clicks still on their way to main land first.)
+  await page.waitForTimeout(300);
+  const opened = await seen();
+  expect(new Set(opened.asked)).toEqual(new Set(['Open docs.example.com in your browser?']));
+  expect(new Set(opened.opened)).toEqual(new Set(['https://docs.example.com/hooks']));
+
+  // A plain click does not open it, as in a terminal (it would be asked about at once).
+  await page.mouse.move(at.x + 4, at.y);
+  await page.mouse.click(at.x + 4, at.y);
+  await page.waitForTimeout(300);
+  expect(await seen()).toEqual(opened);
+});
+
 test('the queues’ Run types its message into the terminal, and hears its turn end', async () => {
   await canvasFile([{ id: 'docs', message: 'Write the docs\nand the changelog' }]);
   await chooseProject();

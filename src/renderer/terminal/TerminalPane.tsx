@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { Session } from '../agent/session';
+import { OpenLinkContext } from '../open-link';
 import type { TerminalBackend } from './backend';
 import { TerminalLink } from './link';
 import type { LinkState } from './link';
@@ -25,7 +26,7 @@ const STATUS: Record<Session['status'], string> = {
  * typed in: what the transcript would show), what the session is doing (as corrallm follows it),
  * the messages queued for it (corrallm types each into the terminal once Claude Code is ready),
  * and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again (resuming its
- * session).
+ * session). A link Cmd-clicked in the terminal goes to main, which asks before opening it.
  */
 export function TerminalPane({
   agentId,
@@ -56,12 +57,21 @@ export function TerminalPane({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<LinkState>({ kind: 'waiting' });
+  const openLink = useContext(OpenLinkContext);
+  /** Where its links go, as they are when one is opened. */
+  const links = useRef(openLink);
+  useEffect(() => {
+    links.current = openLink;
+  });
 
   useEffect(() => {
     const element = host.current;
     if (!element) return;
     setState({ kind: 'waiting' });
     const screen = screens(element);
+    screen.onLink((url) => {
+      links.current(url);
+    });
     const link = new TerminalLink(agentId, backend, screen, (next) => {
       setState(next);
       if (next.kind === 'live') screen.focus();

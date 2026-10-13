@@ -5,6 +5,7 @@ import type { SessionEvent } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
+import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../test-backend';
 import { fakeScreens, fakeTerminals } from './test-screen';
 
@@ -43,12 +44,15 @@ async function open({
     nodes: [agent('a', { connection: 'terminal', ...(queue ? { queue } : {}) })],
     edges: [],
   };
+  const openLink = vi.fn<(url: string) => void>();
   const { container } = render(
-    <GraphEditor
-      initialGraph={graph}
-      sessionBackend={sessions.backend}
-      terminalBackend={terminals.backend}
-    />,
+    <OpenLinkContext.Provider value={openLink}>
+      <GraphEditor
+        initialGraph={graph}
+        sessionBackend={sessions.backend}
+        terminalBackend={terminals.backend}
+      />
+    </OpenLinkContext.Provider>,
   );
   const card = () => {
     const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
@@ -61,6 +65,7 @@ async function open({
   return {
     sessions,
     terminals,
+    openLink,
     card,
     view,
     /** Main says `events` happened in a's session. */
@@ -108,6 +113,13 @@ describe('a Terminal agent', () => {
     expect(terminals.backend.write).toHaveBeenCalledWith('a', '/model\r');
     show({ type: 'output', data: 'Select model' });
     expect(terminal.shown).toContain('Select model');
+  });
+
+  it('opens a link Cmd-clicked in the terminal through main, which asks first', async () => {
+    const { openLink, show } = await open();
+    show(SCREEN);
+    fakeScreens.latest().openLink('https://docs.example.com/hooks');
+    expect(openLink).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/hooks');
   });
 
   it('shows what the session does, as corrallm follows it, there and on the canvas', async () => {

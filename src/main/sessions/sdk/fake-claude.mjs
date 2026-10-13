@@ -287,7 +287,8 @@ async function play(message) {
         'The **queue** runs in `runner.ts`:\n\n',
         '1. Each agent takes its next task\n2. Waits hold until their target is done\n\n',
         '```ts\nstore.send(agentId, agent, text, onDone);\n```\n\n',
-        '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |',
+        '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |\n\n',
+        'See [the queue docs](https://docs.example.com/queues).',
       ]
     : [`You said: ${text}`, images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : ''];
   const pieces = text.includes('slow')

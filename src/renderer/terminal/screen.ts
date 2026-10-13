@@ -32,6 +32,8 @@ export interface Screen {
   focus(): void;
   /** What the user types (and what the terminal answers the CLI's queries with). */
   onInput(listener: (data: string) => void): void;
+  /** Links the user opens: an http(s) link (OSC 8, or a URL in the text) Cmd-clicked. */
+  onLink(listener: (url: string) => void): void;
   onResize(listener: (cols: number, rows: number) => void): void;
   dispose(): void;
 }
@@ -57,7 +59,16 @@ export const THEME = {
 /** Shift+Enter: a new line in Claude Code's prompt, as its /terminal-setup binds it. */
 const NEW_LINE = '\x1b\r';
 
+/** Whether a click opens a link, as in a terminal: with Cmd (Ctrl on Windows and Linux). */
+const opensLink = (event: MouseEvent) =>
+  navigator.userAgent.includes('Mac') ? event.metaKey : event.ctrlKey;
+
 export const createScreen: ScreenFactory = (element) => {
+  const links = new Set<(url: string) => void>();
+  const open = (event: MouseEvent, url: string) => {
+    if (!opensLink(event)) return;
+    for (const listener of links) listener(url);
+  };
   const terminal = new Terminal({
     // Unicode 11 widths, as main's copy of the screen measures them.
     allowProposedApi: true,
@@ -68,12 +79,8 @@ export const createScreen: ScreenFactory = (element) => {
     // Claude Code's Option shortcuts (as Option+P, its model picker) need Option as Meta.
     macOptionIsMeta: true,
     theme: THEME,
-    // Links (OSC 8) open as the app's other links do: allowed ones in the browser.
-    linkHandler: {
-      activate: (_event, uri) => {
-        window.open(uri);
-      },
-    },
+    // Links (OSC 8, http and https only) open as the app's other links do: main asks first.
+    linkHandler: { activate: open },
   });
   const inputs = new Set<(data: string) => void>();
   const type = (data: string) => {
@@ -83,11 +90,7 @@ export const createScreen: ScreenFactory = (element) => {
   terminal.unicode.activeVersion = '11';
   const fit = new FitAddon();
   terminal.loadAddon(fit);
-  terminal.loadAddon(
-    new WebLinksAddon((_event, uri) => {
-      window.open(uri);
-    }),
-  );
+  terminal.loadAddon(new WebLinksAddon(open));
   const webgl = (): WebglAddon => {
     const addon = new WebglAddon();
     addon.onContextLoss(() => {
@@ -128,6 +131,9 @@ export const createScreen: ScreenFactory = (element) => {
     onInput: (listener) => {
       inputs.add(listener);
     },
+    onLink: (listener) => {
+      links.add(listener);
+    },
     onResize: (listener) => {
       terminal.onResize(({ cols, rows }) => {
         listener(cols, rows);
@@ -135,6 +141,7 @@ export const createScreen: ScreenFactory = (element) => {
     },
     dispose: () => {
       inputs.clear();
+      links.clear();
       terminal.dispose();
     },
   };

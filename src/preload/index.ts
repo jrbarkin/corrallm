@@ -52,6 +52,7 @@ const api: AppApi = {
   detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
   resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
+  openLink: (url) => invoke(API_CHANNELS.openLink, url),
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
   onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
 };

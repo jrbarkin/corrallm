@@ -10,7 +10,8 @@
 // ask whether to trust the folder first.
 //
 // Prompts: "ask …" asks for permission first (1 or Enter: yes), "slow …" works until Escape,
-// anything else is answered at once.
+// "link …" is answered with a link, anything else is answered at once. Its terminal's size is
+// logged as it changes, so a test can tell where a cell is drawn.
 //
 // `claude auth status --json` reports a Claude subscription login (claude.ai), unless the
 // environment has an API key, as the real one does; it logs nothing.
@@ -139,12 +140,16 @@ async function submit() {
 
 async function finish() {
   if (state !== 'working') return;
-  const reply = `You said: ${lines.at(-1)?.slice(2) ?? ''}`;
+  const said = lines.at(-1)?.slice(2) ?? '';
+  const reply = said.startsWith('link')
+    ? 'See https://docs.example.com/hooks for more'
+    : `You said: ${said}`;
   lines.push(`⏺ ${reply}`);
   await hook('Stop', { last_assistant_message: reply });
   if (state !== 'working') return;
   become('done');
   draw();
+  log({ event: 'replied', text: reply });
 }
 
 function key(data) {
@@ -207,6 +212,9 @@ if (resume !== undefined && !existsSync(path.join(home, resume))) {
   log({ event: 'exit', code: 1 });
   process.exit(1);
 }
+const size = () => log({ event: 'size', cols: process.stdout.columns, rows: process.stdout.rows });
+size();
+process.stdout.on('resize', size);
 process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', key);

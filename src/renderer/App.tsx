@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import type { SessionBackend } from './agent/connected';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
+import { OpenLinkContext } from './open-link';
+import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
 
 /**
@@ -36,6 +38,11 @@ const terminalBackend: TerminalBackend = {
   write: (agentId, data) => window.api.writeTerminal(agentId, data),
   resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
   onEvent: (listener) => window.api.onTerminalEvent(listener),
+};
+
+/** Links clicked in the app open in the browser if main says so (src/main/links.ts). */
+const openLink: OpenLink = (url) => {
+  window.api.openLink(url).catch(() => undefined);
 };
 
 type PingState =
@@ -74,11 +81,13 @@ export function App() {
           {ping.status === 'error' && `Ping failed: ${ping.message}`}
         </p>
       </header>
-      <GraphEditor
-        files={files}
-        sessionBackend={sessionBackend}
-        terminalBackend={terminalBackend}
-      />
+      <OpenLinkContext.Provider value={openLink}>
+        <GraphEditor
+          files={files}
+          sessionBackend={sessionBackend}
+          terminalBackend={terminalBackend}
+        />
+      </OpenLinkContext.Provider>
     </main>
   );
 }

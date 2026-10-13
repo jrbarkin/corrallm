@@ -84,6 +84,12 @@ export interface IpcContract {
   'terminal:input': { args: [agentId: string, data: string]; result: null };
   /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
   'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
+  /**
+   * Opens a link the user clicked (in a transcript, or in a terminal) in their browser: https, or
+   * http to this machine. Main asks first, in a dialog, unless the site is allowlisted or the user
+   * said to always open it. Resolves with whether it opened.
+   */
+  'link:open': { args: [url: string]; result: boolean };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
@@ -107,6 +113,9 @@ export interface ProjectFolder {
   name: string;
   path: string;
 }
+
+/** The longest link the renderer may ask to open, in characters. */
+export const MAX_LINK_LENGTH = 4096;
 
 /** The extension of canvas files. */
 export const CANVAS_EXTENSION = 'corral';
@@ -138,6 +147,7 @@ export interface InvokeApi {
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
   resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
+  openLink(...args: IpcArgs<'link:open'>): Promise<IpcResult<'link:open'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
@@ -168,6 +178,7 @@ export const API_CHANNELS = {
   detachTerminal: 'terminal:detach',
   writeTerminal: 'terminal:input',
   resizeTerminal: 'terminal:resize',
+  openLink: 'link:open',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */

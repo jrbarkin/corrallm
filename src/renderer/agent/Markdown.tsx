@@ -1,12 +1,14 @@
+import { useContext } from 'react';
 import type { ReactNode } from 'react';
 
+import { OpenLinkContext } from '../open-link';
 import { parseInline, parseMarkdown } from './blocks';
 import type { Block, Inline } from './blocks';
 
 /**
  * Markdown as agents write it in replies (read by blocks.ts): paragraphs, headings, code blocks, quotes,
- * lists, tables, rules; and inline code, bold, italic, struck-out text and links. Links open in
- * the browser only where the app allows it (security.ts).
+ * lists, tables, rules; and inline code, bold, italic, struck-out text and links. An http(s) link
+ * clicked goes to main (OpenLinkContext), which asks before opening it in the browser.
  */
 export function Markdown({ text }: { text: string }) {
   return <>{parseMarkdown(text).map((block, i) => renderBlock(block, i))}</>;
@@ -103,13 +105,35 @@ function inline(part: Inline, key: number): ReactNode {
       return <s key={key}>{part.children.map(inline)}</s>;
     case 'link':
       return /^https?:\/\//.test(part.href) ? (
-        <a key={key} href={part.href} title={part.href} target="_blank" rel="noreferrer">
+        <Link key={key} href={part.href}>
           {part.children.map(inline)}
-        </a>
+        </Link>
       ) : (
         <span key={key} title={part.href}>
           {part.children.map(inline)}
         </span>
       );
   }
+}
+
+/** A link: clicked (or middle-clicked), it goes to main, never opened here. */
+function Link({ href, children }: { href: string; children: ReactNode }) {
+  const openLink = useContext(OpenLinkContext);
+  return (
+    <a
+      href={href}
+      title={href}
+      onClick={(event) => {
+        event.preventDefault();
+        openLink(href);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        openLink(href);
+      }}
+    >
+      {children}
+    </a>
+  );
 }

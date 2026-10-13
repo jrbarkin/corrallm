@@ -38,7 +38,8 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 src/main/       Main process (Node). index.ts is the entry; security.ts, app-protocol.ts, csp.ts,
                 url-policy.ts hold the security baseline; ipc.ts registers IPC handlers.
                 canvas.ts opens and saves canvas files for the canvas:* channels: it remembers
-                each renderer's file, so the renderer never passes a path. project.ts keeps each
+                each renderer's file, so the renderer never passes a path. links.ts opens the
+                links users click (link:open), asking first (see Security rules). project.ts keeps each
                 canvas's project folder (picked in a folder dialog); memory.ts remembers, per
                 canvas file, in the app's user data, its folder and its agents' session ids.
 src/main/sessions/  Connected sessions (see Connected sessions): connector.ts is the interface a
@@ -63,7 +64,8 @@ src/main/sessions/terminal/  The Terminal connection (see Terminal below): conne
                 fake-claude.ts fakes the CLI for its tests.
 src/main/files.ts   The project folder's files for @-mentions (project:files): git's list, or a walk.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
-src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
+src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts
+                is where clicked links go (main's link:open, provided by App.tsx).
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
                      groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
                      GraphEditor.tsx (node views in nodes.tsx); an agent's queue (QueueEditor.tsx, queue.ts,
@@ -177,7 +179,7 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/p
 - All IPC goes through the contract in `src/shared/ipc.ts` and the `handle()` wrapper in `src/main/ipc.ts`, which validates the sender frame (top-level frame of our own origin) and parses arguments. Never call `ipcMain.handle`/`ipcMain.on` directly.
 - Production renderer is served from `app://main_window/` by `src/main/app-protocol.ts` (not `file://`, not `loadFile`). The CSP is a response header from `src/main/csp.ts`: never add `'unsafe-inline'` or `'unsafe-eval'` to `PROD_CSP`. Dev-only relaxations go in `DEV_CSP`. The only inline styles allowed are the two exact ones xterm.js writes for its scrollbar, by hash (`TERMINAL_STYLES`); xterm.js draws only with its WebGL renderer, loaded before the terminal opens (its DOM renderer's inline styles are blocked).
 - Dev vs production is decided by `MAIN_WINDOW_VITE_DEV_SERVER_URL` (defined only under `pnpm dev`), not `app.isPackaged`. e2e runs the production build unpackaged.
-- Navigation and redirects away from the app origin, and renderer-created windows, are blocked (`security.ts`). External links open in the default browser only if `allowedExternalUrl` accepts them (https + `EXTERNAL_URL_ALLOWLIST` in `url-policy.ts`); always open the normalized URL it returns.
+- Navigation and redirects away from the app origin, and renderer-created windows, are blocked (`security.ts`; one to an allowlisted site, `allowedExternalUrl`, opens in the browser instead). Links the user clicks (Markdown links in a transcript, links Cmd-clicked in a terminal, OSC 8 or found by xterm.js's web-links addon) go to main over `link:open` with only their URL (`OpenLinkContext` in the renderer), never through `window.open` or `target="_blank"`. Main decides, never on the renderer's say-so (`links.ts`): the URL is validated and length-capped (`MAX_LINK_LENGTH`) and normalized by `linkTarget` (`url-policy.ts`: https, or http to localhost or 127.0.0.1 only; no credentials); a site on `EXTERNAL_URL_ALLOWLIST` (https, default port) opens at once; any other asks in a native dialog ("Open docs.example.com in your browser?", with "Always for this site"), one question per window at a time, and a site allowed always is remembered by origin in user data (`links.json`). Always open the normalized URL, never the raw input.
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. CI asserts this.
 - Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork` or `spawn`), and Playwright cannot drive the packaged app.

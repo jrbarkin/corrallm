@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionEvent } from '../../shared/session';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
+import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../test-backend';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in, for an agent switched to Terminal.
@@ -36,7 +37,13 @@ async function open(
   const fake = fakeBackend();
   prepare?.(fake);
   const graph: Graph = { nodes: [agent('a', data)], edges: [] };
-  const { container } = render(<GraphEditor initialGraph={graph} sessionBackend={fake.backend} />);
+  /** Where clicked links go: to main, in the app. */
+  const openLink = vi.fn<(url: string) => void>();
+  const { container } = render(
+    <OpenLinkContext.Provider value={openLink}>
+      <GraphEditor initialGraph={graph} sessionBackend={fake.backend} />
+    </OpenLinkContext.Provider>,
+  );
   const card = () => {
     const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
     if (!element) throw new Error('no agent');
@@ -58,7 +65,7 @@ async function open(
       fake.emit('a', 'sdk', ...events);
     });
   };
-  return { ...fake, container, card, view, composer, send, transcript, emit };
+  return { ...fake, container, card, view, composer, send, transcript, emit, openLink };
 }
 
 const MODELS = [
@@ -147,6 +154,21 @@ describe('a connected agent', () => {
       expect.stringMatching(/^Claude · Agent SDK.*needs an API key or a cloud provider/),
       expect.stringMatching(/^Claude · Simulated/),
     ]);
+  });
+
+  it('opens a link in its reply through main, which asks first; never in the app', async () => {
+    const { send, transcript, emit, sent, openLink } = await open({ connection: 'sdk' });
+    await send('Where are the docs?');
+    emit(
+      { type: 'user', id: sent(), text: 'Where are the docs?' },
+      { type: 'text', id: 'x', text: 'See [the queue docs](https://docs.example.com/queues).' },
+    );
+    const link = transcript.getByRole('link', { name: 'the queue docs' });
+    expect(link.getAttribute('target')).toBeNull();
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(openLink).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/queues');
   });
 
   it('says what it needs to run: a project folder', async () => {

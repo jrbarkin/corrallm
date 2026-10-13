@@ -22,6 +22,7 @@ export class FakeScreen implements Screen {
   /** Snapshots written and not yet done (see `finish`). */
   readonly #pending: (() => void)[] = [];
   readonly #inputs: ((data: string) => void)[] = [];
+  readonly #links: ((url: string) => void)[] = [];
   readonly #resizes: ((cols: number, rows: number) => void)[] = [];
 
   constructor(element: HTMLElement) {
@@ -57,6 +58,15 @@ export class FakeScreen implements Screen {
 
   onResize(listener: (cols: number, rows: number) => void): void {
     this.#resizes.push(listener);
+  }
+
+  onLink(listener: (url: string) => void): void {
+    this.#links.push(listener);
+  }
+
+  /** The user opens a link shown in it (Cmd-clicks it). */
+  openLink(url: string): void {
+    for (const listener of this.#links) listener(url);
   }
 
   /** The user types `data` in it (or it answers a query). */

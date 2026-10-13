@@ -109,6 +109,13 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('terminal:detach', 'a');
   });
 
+  it('asks main to open a link, with only its URL', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(true);
+    await expect(api.openLink('https://docs.example.com/a')).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
+  });
+
   it('passes terminal events on without Electron’s event object, until told to stop', async () => {
     const api = await exposed();
     const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();

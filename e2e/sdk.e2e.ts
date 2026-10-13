@@ -101,3 +101,55 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   await composer.press('Escape');
   await expect(transcript.getByText(/^Interrupted · \d+s$/)).toBeVisible();
 });
+
+test('opens a link in a reply in the browser once main has asked, and not again for that site', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  // Main's dialogs and browser, for the user: the folder picked, links allowed always.
+  await app.evaluate(({ dialog, shell }, picked) => {
+    const seen = globalThis as unknown as { asked: string[]; opened: string[] };
+    seen.asked = [];
+    seen.opened = [];
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+      showMessageBox: (...args: unknown[]) => {
+        seen.asked.push((args.at(-1) as { message: string }).message);
+        return Promise.resolve({ response: 0, checkboxChecked: true });
+      },
+    });
+    Object.assign(shell, {
+      openExternal: (url: string) => {
+        seen.opened.push(url);
+        return Promise.resolve();
+      },
+    });
+  }, folder);
+  const seen = () =>
+    app
+      .evaluate(() => globalThis as unknown as { asked: string[]; opened: string[] })
+      .then(({ asked, opened }) => ({ asked, opened }));
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
+  await composer.fill('markdown, please');
+  await composer.press('Enter');
+
+  const link = view.getByRole('log', { name: 'Transcript' }).getByRole('link', {
+    name: 'the queue docs',
+  });
+  await link.click();
+  await expect.poll(seen).toEqual({
+    asked: ['Open docs.example.com in your browser?'],
+    opened: ['https://docs.example.com/queues'],
+  });
+  // "Always for this site": it opens without asking now. The app never navigated away.
+  await link.click();
+  await expect.poll(async () => (await seen()).opened).toHaveLength(2);
+  expect((await seen()).asked).toHaveLength(1);
+  await expect(view).toBeVisible();
+});

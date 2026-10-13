@@ -1,11 +1,12 @@
 import { app, ipcMain } from 'electron';
 import type { WebContents } from 'electron';
 
-import { MAX_CANVAS_BYTES } from '../shared/ipc';
+import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
 import { MAX_FILE_MATCHES } from '../shared/session';
 import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
 import type { ProjectFiles } from './files';
+import type { LinkOpener } from './links';
 import type { ProjectFolders } from './project';
 import { isTrustedSender } from './security';
 import {
@@ -32,10 +33,14 @@ export type IpcHandler<C extends IpcChannel> = (
   ...args: IpcArgs<C>
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
-/** What the handlers act on besides canvas files: project folders, their files, and sessions. */
+/**
+ * What the handlers act on besides canvas files: project folders, their files, links to open, and
+ * sessions.
+ */
 export interface IpcServices {
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
+  links: Pick<LinkOpener, 'open'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -118,7 +123,18 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
   return [text, choose];
 }
 
-function createHandlers({ projects, files, sessions }: IpcServices): HandlerTable {
+/**
+ * `ArgsParser` for link:open: the URL clicked, a string within MAX_LINK_LENGTH. Whether it may
+ * open, and how, is main's to decide (links.ts), never the renderer's.
+ */
+export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open'> {
+  const [url] = args;
+  if (args.length !== 1 || typeof url !== 'string') throw new TypeError('Expected a link');
+  if (url.length > MAX_LINK_LENGTH) throw new RangeError('The link is too long');
+  return [url];
+}
+
+function createHandlers({ projects, files, links, sessions }: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'canvas:open': {
@@ -237,6 +253,10 @@ function createHandlers({ projects, files, sessions }: IpcServices): HandlerTabl
         await sessions.inputTerminal(contents, agentId, data);
         return null;
       },
+    },
+    'link:open': {
+      parseArgs: parseLinkArgs,
+      handler: ({ contents }, url) => links.open(contents, url),
     },
     'terminal:resize': {
       parseArgs: parseTerminalResizeArgs,

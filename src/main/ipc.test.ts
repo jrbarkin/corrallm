@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle },
 }));
 
-import { API_CHANNELS, MAX_CANVAS_BYTES } from '../shared/ipc';
+import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import {
   MAX_FILE_MATCHES,
   MAX_FILE_QUERY_LENGTH,
@@ -41,6 +41,9 @@ function fakeServices() {
     },
     files: {
       find: vi.fn<IpcServices['files']['find']>().mockResolvedValue([]),
+    },
+    links: {
+      open: vi.fn<IpcServices['links']['open']>().mockResolvedValue(true),
     },
     sessions: {
       start: vi.fn<IpcServices['sessions']['start']>().mockResolvedValue(undefined),
@@ -121,6 +124,25 @@ describe('every channel', () => {
       /untrusted sender/,
     );
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+    expect(services.links.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('link:open handler', () => {
+  it('passes the URL on, for main to check and ask about, for the renderer that sent it', async () => {
+    const sender = {};
+    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
+    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
+  });
+
+  it.each([
+    ['no URL', [], /Expected a link/],
+    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
+    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
+    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
+  ])('rejects %s', (_label, args, message) => {
+    expect(() => invoke('link:open', args)).toThrow(message);
+    expect(services.links.open).not.toHaveBeenCalled();
   });
 });
 
@@ -341,6 +363,25 @@ describe('session:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+    expect(services.links.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('link:open handler', () => {
+  it('passes the URL on, for main to check and ask about, for the renderer that sent it', async () => {
+    const sender = {};
+    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
+    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
+  });
+
+  it.each([
+    ['no URL', [], /Expected a link/],
+    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
+    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
+    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
+  ])('rejects %s', (_label, args, message) => {
+    expect(() => invoke('link:open', args)).toThrow(message);
+    expect(services.links.open).not.toHaveBeenCalled();
   });
 });
 
@@ -378,5 +419,24 @@ describe('terminal:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+    expect(services.links.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('link:open handler', () => {
+  it('passes the URL on, for main to check and ask about, for the renderer that sent it', async () => {
+    const sender = {};
+    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
+    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
+  });
+
+  it.each([
+    ['no URL', [], /Expected a link/],
+    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
+    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
+    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
+  ])('rejects %s', (_label, args, message) => {
+    expect(() => invoke('link:open', args)).toThrow(message);
+    expect(services.links.open).not.toHaveBeenCalled();
   });
 });
