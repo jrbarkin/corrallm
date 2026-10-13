@@ -14,6 +14,10 @@ vi.mock('./screen', async () => {
   return { createScreen: screens.create };
 });
 
+/** What the run asks at the end of a tool's step: how it went (run/turns.ts). */
+const VERDICT =
+  ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
+
 const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id,
   type: 'agent',
@@ -226,7 +230,10 @@ describe('a Terminal agent', () => {
       );
       await settle();
     };
-    await answer('Use the Bash tool for this step (run shell commands).', 'Ran them: 0 failed.');
+    await answer(
+      'Use the Bash tool for this step (run shell commands).' + VERDICT,
+      'Ran them: 0 failed.\nSUCCEEDED',
+    );
     await answer('Tag it', 'Tagged v1.2.');
     await answer(
       'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.',

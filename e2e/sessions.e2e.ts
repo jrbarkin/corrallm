@@ -186,7 +186,9 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
   // so its message is sent; the second If's is not.
   const transcript = view.getByRole('log', { name: 'Transcript' });
   await expect(
-    transcript.getByText('Use the Bash tool for this step (run shell commands).', { exact: true }),
+    transcript.getByText(
+      /^Use the Bash tool for this step \(run shell commands\)\. End your reply/,
+    ),
   ).toBeVisible();
   await expect(transcript.getByText('You said: Wrap up the tests')).toBeVisible();
   const question = transcript.getByRole('group', { name: 'Questions for you' });

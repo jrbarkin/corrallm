@@ -1014,6 +1014,9 @@ describe('RunStore', () => {
 
   describe('connected agents', () => {
     const png: MessageImage = { mediaType: 'image/png', data: 'iVBORw==' };
+    /** What a tool's step asks for at its end: how it went (turns.ts). */
+    const VERDICT =
+      ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
 
     it('sends their steps to their sessions: a command as it is, a tool as an instruction', () => {
       const a = connected('a', [
@@ -1034,15 +1037,18 @@ describe('RunStore', () => {
       reply('a', true);
       expect(sent.map((s) => [s.agent, s.text])).toEqual([
         ['a', '/code-review'],
-        ['t', 'Use the EnterWorktree tool for this step (work in an isolated git worktree).'],
-        ['a', 'Use the Bash tool for this step (run shell commands).'],
+        [
+          't',
+          `Use the EnterWorktree tool for this step (work in an isolated git worktree).${VERDICT}`,
+        ],
+        ['a', `Use the Bash tool for this step (run shell commands).${VERDICT}`],
         [
           'a',
-          'Use the Read tool for this step (read files), on the work of Builder (another agent).',
+          `Use the Read tool for this step (read files), on the work of Builder (another agent).${VERDICT}`,
         ],
       ]);
-      // How each went is how its turn ended: a failed or interrupted turn failed the step.
-      reply('a');
+      // A failed or interrupted turn failed the step.
+      reply('a', false, 'Read it.\nSUCCEEDED');
       reply('t', true);
       expect(where()).toEqual({ a: 'done', b: 'done', t: 'done' });
       expect(store.snapshot().agents.a?.outcomes).toEqual({
@@ -1051,6 +1057,70 @@ describe('RunStore', () => {
         look: 'succeeded',
       });
       expect(store.snapshot().agents.t?.outcomes).toEqual({ tree: 'failed' });
+    });
+
+    it('takes how a step went from what its reply says last, not from its turn alone', () => {
+      // The TDD relay: tests written to fail, then run until they pass.
+      const a = connected('a', [
+        { id: 'red', action: 'Bash' },
+        {
+          id: 'red-check',
+          if: { kind: 'succeeded' },
+          then: [{ id: 'make-red', message: 'The new tests pass already: make them fail' }],
+        },
+        {
+          id: 'green-loop',
+          repeat: [
+            { id: 'implement', message: 'Make the tests pass' },
+            { id: 'green', action: 'Bash' },
+          ],
+          until: { kind: 'succeeded' },
+          rounds: 3,
+          otherwise: 'ask',
+        },
+      ]);
+      const { store, reply, where, sent, told } = setup([a], never);
+      store.start();
+      // The tests fail, as they should yet: the step failed, though its turn ended well.
+      reply('a', false, 'All 12 tests fail: wc.js is missing, as expected.\n\n**FAILED**');
+      expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+        red: 'failed',
+        'red-check': 'skipped',
+      });
+      expect(where()).toEqual({ a: 'running implement' });
+      // A round whose tests still fail goes round again; one whose tests pass ends the repeat.
+      reply('a');
+      reply('a', false, '3 of 12 still fail.\nFAILED');
+      expect(store.snapshot().agents.a?.rounds).toEqual({ 'green-loop': { round: 2 } });
+      reply('a');
+      reply('a', false, 'All 12 pass.\nSUCCEEDED');
+      expect(where()).toEqual({ a: 'done' });
+      expect(store.snapshot().agents.a?.outcomes['green-loop']).toBe('succeeded');
+      expect(sent.map((s) => s.text)).not.toContain('The new tests pass already: make them fail');
+      expect(told).toEqual([]);
+    });
+
+    it('takes a step whose reply says neither as its turn went, and says so in its session', () => {
+      const a = connected('a', [
+        { id: 'tests', action: 'Bash' },
+        { id: 'review', action: '/code-review' },
+      ]);
+      const { store, reply, told } = setup([a], never);
+      store.start();
+      reply('a', false, 'Ran them: 2 tests failed.');
+      expect(told).toEqual([
+        [
+          'a',
+          'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.',
+        ],
+      ]);
+      // A slash command is sent as it is, with nothing asked of it: its turn is how it went.
+      reply('a', false, 'No issues found.');
+      expect(store.snapshot().agents.a?.outcomes).toEqual({
+        tests: 'succeeded',
+        review: 'succeeded',
+      });
+      expect(told).toHaveLength(1);
     });
 
     it('judges “the output contains” by what the checked turn replied', () => {
@@ -1142,7 +1212,7 @@ describe('RunStore', () => {
       ]);
       const { store, reply, where, sent, told } = setup([a], never);
       store.start();
-      reply('a');
+      reply('a', false, 'Ran them.\nSUCCEEDED');
       // After the step it checks, a plain question, then its turn's answer decides.
       expect(where()).toEqual({ a: 'running flaky' });
       expect(sent.at(-1)?.text).toBe(
@@ -1214,9 +1284,9 @@ describe('RunStore', () => {
       expect(where()).toEqual({ a: 'running next', b: 'running hand' });
       store.stop();
       expect(sent.map((s) => [s.agent, s.text, s.withdrawn])).toEqual([
-        ['a', 'Use the Bash tool for this step (run shell commands).', false],
+        ['a', `Use the Bash tool for this step (run shell commands).${VERDICT}`, false],
         ['a', 'Review it', true],
-        ['a', 'Use the Read tool for this step (read files).', true],
+        ['a', `Use the Read tool for this step (read files).${VERDICT}`, true],
       ]);
       // The interrupted turns end later: nothing moves.
       reply('a', true);

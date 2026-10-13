@@ -118,8 +118,12 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      aimed at another agent, to that one's, and is done when that turn ends (failed
                      if it failed or was interrupted). A connected agent's steps go to its session
                      too (turns.ts words them: a slash command as it is, a tool as a short
-                     instruction to use it), done when their turn ends; a simulated agent's steps
-                     take a timer and may fail. A connected agent's conditions are real (never
+                     instruction to use it that asks for SUCCEEDED or FAILED on the reply's last
+                     line), done when their turn ends: a tool's step fails if its turn failed or
+                     the agent says FAILED (a turn that ends well may have run tests that fail;
+                     no verdict counts as succeeded, said in its session by RunIO.tell), a
+                     command's as its turn ended; a simulated agent's steps take a timer and may
+                     fail. A connected agent's conditions are real (never
                      chance): "the output contains" is matched, exactly, against what it replied in
                      the checked task's turn (RunIO.send's `done`: SessionStore's turnReply, its
                      top-level text; for a Terminal agent, the Stop hook's last reply), and one in
