@@ -1,5 +1,7 @@
 import type {
   Connection,
+  McpChange,
+  McpServer,
   PastSession,
   PermissionMode,
   SessionAnswer,
@@ -27,6 +29,10 @@ export interface SessionBackend {
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
   resume(agentId: string, sessionId: string): Promise<null>;
+  /** The MCP servers of the agent's running session (/mcp). */
+  mcp(agentId: string): Promise<McpServer[]>;
+  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
+  changeMcp(agentId: string, server: string, change: McpChange): Promise<McpServer[]>;
   /** Listens for what sessions do; returns a function that stops listening. */
   onEvent(
     listener: (agentId: string, connection: Connection, event: SessionEvent) => void,
@@ -48,6 +54,8 @@ export const NO_BACKEND: SessionBackend = (() => {
     files: () => Promise.resolve([]),
     sessions: refuse,
     resume: refuse,
+    mcp: refuse,
+    changeMcp: refuse,
     onEvent: () => () => undefined,
   };
 })();
@@ -119,6 +127,8 @@ export class ConnectedDriver implements SessionDriver {
       this.#io.dispatch({ type: 'answer', id, answer: answer.answer });
     } else if (answer.kind === 'plan') {
       this.#io.dispatch({ type: 'answerPlan', id, answer: answer.answer });
+    } else if (answer.kind === 'elicitation') {
+      this.#io.dispatch({ type: 'answerElicitation', id, action: answer.action });
     }
     this.#tell((agentId) => this.#backend.answer(agentId, id, answer));
   }
@@ -267,6 +277,21 @@ export class ConnectedDriver implements SessionDriver {
       case 'plan':
         io.dispatch({ type: 'ask', entry: { id: event.id, kind: 'plan', plan: event.plan } });
         return;
+      case 'elicitation': {
+        const { id, server, message, fields, url } = event;
+        io.dispatch({
+          type: 'ask',
+          entry: {
+            id,
+            kind: 'elicitation',
+            server,
+            message,
+            ...(fields === undefined ? {} : { fields }),
+            ...(url === undefined ? {} : { url }),
+          },
+        });
+        return;
+      }
       case 'withdrawn':
         io.dispatch({ type: 'withdraw', id: event.id });
         return;

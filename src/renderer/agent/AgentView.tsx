@@ -2,7 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 
 import type { ProjectFolder } from '../../shared/ipc';
-import type { PastSession } from '../../shared/session';
+import type {
+  ElicitationAction,
+  FormValue,
+  McpChange,
+  McpServer,
+  PastSession,
+} from '../../shared/session';
 import {
   AGENT_ACTIONS,
   AGENT_CLI,
@@ -30,6 +36,7 @@ import type { ViewCommand } from './commands';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
+import { McpPanel } from './McpPanel';
 import { animate, morph, settle, slide } from './motion';
 import { PeerQueue } from './PeerQueue';
 import { QueueLinks } from './QueueLinks';
@@ -53,6 +60,14 @@ export interface SessionControls extends ComposerControls {
   pastSessions: () => Promise<PastSession[]>;
   /** Opens one of them in the agent, in place of its own. */
   resume: (sessionId: string) => Promise<void>;
+  /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
+  mcpServers: () => Promise<McpServer[]>;
+  changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
+  answerElicitation: (
+    promptId: string,
+    action: ElicitationAction,
+    values?: Record<string, FormValue>,
+  ) => void;
 }
 
 /**
@@ -87,7 +102,9 @@ export interface SessionControls extends ComposerControls {
  * terminal runs is typed (/permissions, /login…: commands.ts), which is offered there instead of
  * being sent, and runs there once the agent has switched. The view answers some commands itself
  * for an Agent SDK agent (commands.ts' VIEW_COMMANDS), in a panel above the composer: /resume
- * picks another conversation of the project folder to open in its place (ResumePicker.tsx).
+ * picks another conversation of the project folder to open in its place (ResumePicker.tsx), /mcp
+ * shows its MCP servers to reconnect, disable or enable (McpPanel.tsx; signing in to one is
+ * Claude Code's /mcp in Terminal).
  */
 export function AgentView({
   node,
@@ -272,11 +289,16 @@ export function AgentView({
     setPeer(choice.agent);
     setChoosing(choice);
   }, []);
-  // Escape steps back: from picking, from the queue beside, from the agent's work, then the view.
+  // Escape steps back: from a panel above the composer (/mcp, /resume, Terminal offered), from
+  // picking, from the queue beside, from the agent's work, then the view.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (choosing) setChoosing(undefined);
+      if (opened !== undefined || offer !== undefined) {
+        setOpened(undefined);
+        setOffer(undefined);
+        composer.current?.focus();
+      } else if (choosing) setChoosing(undefined);
       else if (peer !== undefined) setPeer(undefined);
       else if (working) stop();
       else close();
@@ -285,7 +307,7 @@ export function AgentView({
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [close, working, stop, choosing, peer]);
+  }, [close, working, stop, choosing, peer, opened, offer]);
 
   /** Its own queue's edits. */
   const own = editsOf(edits, node.id);
@@ -514,6 +536,10 @@ export function AgentView({
                       onSwitch: (to) => {
                         onAgent(agent, to);
                       },
+                      onAnswerElicitation: (promptId, action, values) => {
+                        controls.answerElicitation(promptId, action, values);
+                        composer.current?.focus();
+                      },
                     }}
                   />
                   <Composer
@@ -527,6 +553,17 @@ export function AgentView({
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={
                       <>
+                        {opened === 'mcp' && (
+                          <McpPanel
+                            list={controls.mcpServers}
+                            change={controls.changeMcpServer}
+                            onSignIn={() => {
+                              setOpened(undefined);
+                              onContinueInTerminal('/mcp');
+                            }}
+                            onClose={closeOpened}
+                          />
+                        )}
                         {opened === 'resume' && (
                           <ResumePicker
                             list={controls.pastSessions}

@@ -30,6 +30,8 @@ const sessionBackend: SessionBackend = {
   files: (query) => window.api.findProjectFiles(query),
   sessions: (agentId) => window.api.listSessions(agentId),
   resume: (agentId, sessionId) => window.api.resumeSession(agentId, sessionId),
+  mcp: (agentId) => window.api.mcpServers(agentId),
+  changeMcp: (agentId, server, change) => window.api.changeMcpServer(agentId, server, change),
   onEvent: (listener) => window.api.onSessionEvent(listener),
 };
 

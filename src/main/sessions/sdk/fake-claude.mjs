@@ -3,7 +3,9 @@
 // CLI uses (see fixtures/), without a model. Each message gets a short reply, streamed after a
 // moment's thought ("markdown" in the message: a reply in Markdown). "run" in it also runs
 // `echo hello` with Bash, and "edit" edits notes.txt, each asking first in the default (Manual)
-// and plan modes; "slow" streams slowly enough to interrupt.
+// and plan modes; "slow" streams slowly enough to interrupt; "a form" has its MCP server github ask
+// for a form first (an elicitation), and replies with what it got. It has two MCP servers, github
+// (connected) and sentry (failed until reconnected), which /mcp's requests list and change.
 //
 // `claude auth status --json` says how it is logged in, as the real one would: with a cloud
 // provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
@@ -126,8 +128,20 @@ function keep(type, uuid, message) {
 }
 /** The turn going on, if any: whether it was interrupted. */
 let turn;
-/** Requests the fake made of the SDK (can_use_tool), waiting for its answer. */
+/** Requests the fake made of the SDK (can_use_tool, elicitation), waiting for its answer. */
 const asked = new Map();
+/** Its MCP servers, as the CLI reports them (mcp_status). */
+const GITHUB = {
+  name: 'github',
+  status: 'connected',
+  serverInfo: { name: 'github-mcp', version: '1.2.0' },
+  scope: 'user',
+  tools: [{ name: 'create_issue' }, { name: 'list_pull_requests' }],
+};
+const servers = new Map([
+  ['github', GITHUB],
+  ['sentry', { name: 'sentry', status: 'failed', error: 'Connection refused', scope: 'project' }],
+]);
 
 const MODELS = [
   {
@@ -168,24 +182,43 @@ function respond(requestId, response) {
   );
 }
 
-/** Asks the SDK whether a tool may run; resolves with its answer. */
-function canUseTool(name, input, toolUseId, suggestions) {
+/** Asks the SDK something (a control request); resolves with its answer. */
+function request(body) {
   const requestId = randomUUID();
   process.stdout.write(
-    `${JSON.stringify({
-      type: 'control_request',
-      request_id: requestId,
-      request: {
-        subtype: 'can_use_tool',
-        tool_name: name,
-        display_name: name,
-        input,
-        tool_use_id: toolUseId,
-        permission_suggestions: suggestions,
-      },
-    })}\n`,
+    `${JSON.stringify({ type: 'control_request', request_id: requestId, request: body })}\n`,
   );
   return new Promise((resolve) => asked.set(requestId, resolve));
+}
+
+/** Asks the SDK whether a tool may run; resolves with its answer. */
+function canUseTool(name, input, toolUseId, suggestions) {
+  return request({
+    subtype: 'can_use_tool',
+    tool_name: name,
+    display_name: name,
+    input,
+    tool_use_id: toolUseId,
+    permission_suggestions: suggestions,
+  });
+}
+
+/** Its github server asks the user for a form (an MCP elicitation); resolves with the answer. */
+function elicit() {
+  return request({
+    subtype: 'elicitation',
+    mcp_server_name: 'github',
+    message: 'Which repository should the issue go in?',
+    mode: 'form',
+    requested_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', title: 'Repository' },
+        draft: { type: 'boolean', title: 'Draft' },
+      },
+      required: ['repo'],
+    },
+  });
 }
 
 /**
@@ -330,16 +363,22 @@ async function play(message) {
     uuid: randomUUID(),
   });
 
-  const reply = text.includes('markdown')
-    ? [
-        '### What I found\n\n',
-        'The **queue** runs in `runner.ts`:\n\n',
-        '1. Each agent takes its next task\n2. Waits hold until their target is done\n\n',
-        '```ts\nstore.send(agentId, agent, text, onDone);\n```\n\n',
-        '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |\n\n',
-        'See [the queue docs](https://docs.example.com/queues).',
-      ]
-    : [`You said: ${text}`, images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : ''];
+  const got = text.includes('a form') ? await elicit() : undefined;
+  const reply = got
+    ? [`github got: ${got.action}`, got.content ? ` ${JSON.stringify(got.content)}` : '']
+    : text.includes('markdown')
+      ? [
+          '### What I found\n\n',
+          'The **queue** runs in `runner.ts`:\n\n',
+          '1. Each agent takes its next task\n2. Waits hold until their target is done\n\n',
+          '```ts\nstore.send(agentId, agent, text, onDone);\n```\n\n',
+          '| File | Lines |\n|---|--:|\n| runner.ts | 240 |\n| lanes.ts | 180 |\n\n',
+          'See [the queue docs](https://docs.example.com/queues).',
+        ]
+      : [
+          `You said: ${text}`,
+          images > 0 ? ` (with ${images} image${images === 1 ? '' : 's'})` : '',
+        ];
   const pieces = text.includes('slow')
     ? Array.from({ length: 40 }, (_, i) => `${i} `)
     : reply.filter(Boolean);
@@ -549,6 +588,31 @@ input.on('line', (line) => {
         sources: [],
         applied: { model, effort: null },
       });
+    } else if (subtype === 'mcp_status') {
+      respond(message.request_id, { mcpServers: [...servers.values()] });
+    } else if (subtype === 'mcp_reconnect' || subtype === 'mcp_toggle') {
+      const server = servers.get(message.request.serverName);
+      if (!server) {
+        process.stdout.write(
+          `${JSON.stringify({
+            type: 'control_response',
+            response: {
+              subtype: 'error',
+              request_id: message.request_id,
+              error: `Server not found: ${message.request.serverName}`,
+            },
+          })}\n`,
+        );
+        return;
+      }
+      const on = subtype === 'mcp_reconnect' || message.request.enabled;
+      servers.set(
+        server.name,
+        on
+          ? { ...GITHUB, name: server.name, scope: server.scope }
+          : { name: server.name, status: 'disabled', scope: server.scope },
+      );
+      respond(message.request_id, {});
     } else if (subtype === 'set_model') {
       model = message.request.model ?? 'claude-opus-5-5';
       respond(message.request_id, {});

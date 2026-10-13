@@ -50,6 +50,9 @@ const api: AppApi = {
   closeSession: (agentId) => invoke(API_CHANNELS.closeSession, agentId),
   listSessions: (agentId) => invoke(API_CHANNELS.listSessions, agentId),
   resumeSession: (agentId, sessionId) => invoke(API_CHANNELS.resumeSession, agentId, sessionId),
+  mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
+  changeMcpServer: (agentId, server, change) =>
+    invoke(API_CHANNELS.changeMcpServer, agentId, server, change),
   attachTerminal: (agentId) => invoke(API_CHANNELS.attachTerminal, agentId),
   detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),

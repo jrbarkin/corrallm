@@ -2,19 +2,24 @@ import type { IpcArgs } from '../../shared/ipc';
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
 import {
   CONNECTIONS,
+  ELICITATION_ACTIONS,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
   MAX_IMAGE_BYTES,
+  MAX_FORM_FIELDS,
   MAX_IMAGES,
+  MAX_MCP_NAME_LENGTH,
   MAX_MESSAGE_LENGTH,
   MAX_QUESTIONS,
+  MCP_CHANGES,
   MODEL_PATTERN,
   PERMISSION_MODES,
   PLAN_MODES,
 } from '../../shared/session';
 import type {
+  FormValue,
   MessageImage,
   PermissionMode,
   PlanAnswer,
@@ -144,6 +149,20 @@ export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
   return [parseId(agentId, 'agent'), sessionId];
 }
 
+/** session:mcp-change: an agent, one of its MCP servers by name, and what to do to it. */
+export function parseMcpChangeArgs(args: unknown[]): IpcArgs<'session:mcp-change'> {
+  const [agentId, server, change] = expect(args, 3, 'an agent, an MCP server and a change');
+  if (
+    typeof server !== 'string' ||
+    server === '' ||
+    server.length > MAX_MCP_NAME_LENGTH ||
+    /\p{Cc}/u.test(server)
+  ) {
+    throw new TypeError('Expected the MCP server’s name');
+  }
+  return [parseId(agentId, 'agent'), server, oneOf(change, MCP_CHANGES, 'change to an MCP server')];
+}
+
 export function parseModeArgs(args: unknown[]): IpcArgs<'session:mode'> {
   const [agentId, mode] = expect(args, 2, 'an agent and a mode');
   return [parseId(agentId, 'agent'), parseMode(mode)];
@@ -180,9 +199,40 @@ function parseAnswer(value: unknown): SessionAnswer {
       const { answer } = record(value, 'the answer', ['kind', 'answer']);
       return { kind, answer: parsePlanAnswer(answer) };
     }
+    case 'elicitation': {
+      const { action, values } = record(value, 'the answer', ['kind', 'action', 'values']);
+      const parsed = oneOf(action, ELICITATION_ACTIONS, 'answer to an MCP server');
+      return values === undefined
+        ? { kind, action: parsed }
+        : { kind, action: parsed, values: parseFormValues(values) };
+    }
     default:
-      throw new TypeError('Expected a permission, question or plan answer');
+      throw new TypeError('Expected a permission, question, plan or MCP server answer');
   }
+}
+
+/**
+ * A form's values, by field: text, numbers, yes or no, or choices, within the limits. Whether they
+ * are what the form asks is the session's to check (it has the form).
+ */
+function parseFormValues(value: unknown): Record<string, FormValue> {
+  const fail = () => new TypeError('Expected the form’s values');
+  if (!isRecord(value)) throw fail();
+  const entries = Object.entries(value);
+  if (entries.length > MAX_FORM_FIELDS) throw fail();
+  const text = (item: unknown): item is string =>
+    typeof item === 'string' && item.length <= MAX_ANSWER_LENGTH;
+  return Object.fromEntries(
+    entries.map(([name, given]): [string, FormValue] => {
+      if (name === '' || name.length > MAX_ID_LENGTH) throw fail();
+      if (text(given) || typeof given === 'boolean') return [name, given];
+      if (typeof given === 'number' && Number.isFinite(given)) return [name, given];
+      if (Array.isArray(given) && given.length <= MAX_FORM_FIELDS && given.every(text)) {
+        return [name, [...given]];
+      }
+      throw fail();
+    }),
+  );
 }
 
 function parsePlanAnswer(value: unknown): PlanAnswer {

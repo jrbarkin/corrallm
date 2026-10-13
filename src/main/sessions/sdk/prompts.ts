@@ -1,12 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type {
   CanUseTool,
+  ElicitationResult,
+  OnElicitation,
   PermissionResult,
   PermissionUpdate,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AskedQuestion, PlanMode, SessionAnswer, SessionEvent } from '../../../shared/session';
+import { formContent, formFields } from './mcp';
 import type { Places } from './tools';
 import { displayPath, property, proposedDetail, text, toolSummary } from './tools';
 
@@ -15,7 +19,9 @@ import { displayPath, property, proposedDetail, text, toolSummary } from './tool
  * (allow once, always, or deny, as the CLI offers them), the questions of AskUserQuestion, and
  * plan mode's plan to approve (ExitPlanMode). Each becomes a prompt event; the renderer's answer
  * (session:answer) becomes the CLI's permission result. A prompt the CLI stops waiting for (the
- * turn was interrupted) is withdrawn.
+ * turn was interrupted) is withdrawn. MCP servers' requests (elicitations, through onElicitation)
+ * are prompts too: a form to fill in (checked against the form before it goes back), or a link
+ * to open.
  */
 
 /** What the CLI is told when the user says no: what it says itself, stopping to wait for them. */
@@ -29,8 +35,14 @@ export interface PromptHost {
   planApproved(mode: PlanMode): void;
 }
 
-/** A prompt waiting for the user: how its answer reaches the CLI. */
-type Waiting = (answer: SessionAnswer | undefined) => void;
+/**
+ * A prompt waiting for the user: how its answer reaches the CLI, and what checks the answer first
+ * (throwing, it is refused and the prompt still waits).
+ */
+interface Waiting {
+  settle: (answer: SessionAnswer | undefined) => void;
+  check?: (answer: SessionAnswer) => void;
+}
 
 export class Prompts {
   readonly #host: PromptHost;
@@ -123,31 +135,87 @@ export class Prompts {
     }
   };
 
-  /** Passes on the user's answer to prompt `id`; rejects if it no longer waits for one. */
+  /**
+   * The SDK's onElicitation: an MCP server asks the user to fill in a form, or to open a link.
+   * A form corrallm can't show is declined, and the user told.
+   */
+  readonly onElicitation: OnElicitation = async (request, { signal }) => {
+    const id = `elicitation:${randomUUID()}`;
+    const { serverName: server, message } = request;
+    if (request.mode === 'url') {
+      if (request.url === undefined) return { action: 'decline' };
+      const answer = await this.#ask(id, signal, {
+        type: 'elicitation',
+        id,
+        server,
+        message,
+        url: request.url,
+      });
+      return answer?.kind === 'elicitation' ? { action: answer.action } : { action: 'cancel' };
+    }
+    const fields = formFields(request.requestedSchema);
+    if (fields === undefined) {
+      this.#host.emit({
+        type: 'notice',
+        id: randomUUID(),
+        level: 'warning',
+        text: `${server} asked for something corrallm can’t show, so it was declined: ${message}`,
+      });
+      return { action: 'decline' };
+    }
+    const answer = await this.#ask(
+      id,
+      signal,
+      { type: 'elicitation', id, server, message, fields },
+      (given) => {
+        if (given.kind === 'elicitation' && given.action === 'accept') {
+          formContent(fields, given.values ?? {});
+        }
+      },
+    );
+    if (answer?.kind !== 'elicitation') return { action: 'cancel' };
+    if (answer.action !== 'accept') return { action: answer.action };
+    const result: ElicitationResult = {
+      action: 'accept',
+      content: formContent(fields, answer.values ?? {}),
+    };
+    return result;
+  };
+
+  /**
+   * Passes on the user's answer to prompt `id`; rejects if it no longer waits for one, or if the
+   * answer is not what it asks (it still waits then).
+   */
   answer(id: string, answer: SessionAnswer): void {
     const waiting = this.#open.get(id);
     if (!waiting) throw new Error('That question is no longer asked.');
+    waiting.check?.(answer);
     this.#open.delete(id);
     this.#settle();
-    waiting(answer);
+    waiting.settle(answer);
   }
 
   /** Stops waiting for every prompt, as the session closes. */
   withdrawAll(): void {
     for (const [id, waiting] of [...this.#open]) {
       this.#open.delete(id);
-      waiting(undefined);
+      waiting.settle(undefined);
     }
   }
 
   /** Shows a prompt and waits for its answer: undefined if the CLI withdraws it first. */
-  #ask(id: string, signal: AbortSignal, prompt: SessionEvent): Promise<SessionAnswer | undefined> {
+  #ask(
+    id: string,
+    signal: AbortSignal,
+    prompt: SessionEvent,
+    check?: (answer: SessionAnswer) => void,
+  ): Promise<SessionAnswer | undefined> {
     return new Promise((resolve) => {
       if (signal.aborted) {
         resolve(undefined);
         return;
       }
-      this.#open.set(id, resolve);
+      this.#open.set(id, { settle: resolve, ...(check === undefined ? {} : { check }) });
       this.#host.emit(prompt);
       this.#host.emit({ type: 'status', status: 'waiting' });
       signal.addEventListener(

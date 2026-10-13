@@ -9,6 +9,8 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
+  McpChange,
+  McpServer,
   PermissionMode,
   PlanMode,
   SessionAnswer,
@@ -18,6 +20,7 @@ import type {
 } from '../../../shared/session';
 import type { LiveSession, SessionHost } from '../connector';
 import type { Inbox } from './inbox';
+import { mcpServer } from './mcp';
 import type { Prompts } from './prompts';
 import { sdkMode } from './translate';
 import type { Translator } from './translate';
@@ -171,6 +174,15 @@ export class SdkSession implements LiveSession {
     await this.#query.setModel(model);
     this.#translator.setModel(model);
     this.#host.emit({ type: 'model', model });
+  }
+
+  async mcpServers(): Promise<McpServer[]> {
+    return (await this.#query.mcpServerStatus()).map(mcpServer);
+  }
+
+  async changeMcpServer(name: string, change: McpChange): Promise<void> {
+    if (change === 'reconnect') await this.#query.reconnectMcpServer(name);
+    else await this.#query.toggleMcpServer(name, change === 'enable');
   }
 
   async close(): Promise<void> {

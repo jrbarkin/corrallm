@@ -186,6 +186,48 @@ describe('SdkConnector through the Agent SDK', () => {
     );
   });
 
+  it('lists, reconnects and turns off its MCP servers, and asks what one asks for', async () => {
+    const { session, events } = await start();
+    await expect(session.mcpServers?.()).resolves.toEqual([
+      {
+        name: 'github',
+        status: 'connected',
+        scope: 'user',
+        server: 'github-mcp 1.2.0',
+        tools: 2,
+      },
+      { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+    ]);
+    await session.changeMcpServer?.('sentry', 'reconnect');
+    await session.changeMcpServer?.('github', 'disable');
+    expect((await session.mcpServers?.())?.map((s) => [s.name, s.status])).toEqual([
+      ['github', 'disabled'],
+      ['sentry', 'connected'],
+    ]);
+    await expect(session.changeMcpServer?.('linear', 'reconnect')).rejects.toThrow(/not found/);
+
+    const id = '00000000-0000-4000-8000-00000000000e';
+    await session.send({ id, text: 'file an issue: fill in a form' });
+    const asked = await waitFor(events, (e) => e.type === 'elicitation');
+    if (asked.type !== 'elicitation') throw new Error('nothing asked');
+    expect(asked).toMatchObject({
+      server: 'github',
+      message: 'Which repository should the issue go in?',
+      fields: [
+        { name: 'repo', label: 'Repository', required: true, kind: 'text' },
+        { name: 'draft', label: 'Draft', required: false, kind: 'boolean' },
+      ],
+    });
+    await session.answer(asked.id, {
+      kind: 'elicitation',
+      action: 'accept',
+      values: { repo: 'acme/shop', draft: true },
+    });
+    await waitFor(events, (e) => e.type === 'end');
+    const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
+    expect(replied).toBe('github got: accept {"repo":"acme/shop","draft":true}');
+  });
+
   it('does not start the session on a Claude subscription login, and says why', async () => {
     const events: SessionEvent[] = [];
     await expect(start('manual', {}, events)).rejects.toThrow(SUBSCRIPTION_LOGIN);

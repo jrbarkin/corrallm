@@ -1,5 +1,7 @@
 import type {
   Connection,
+  McpChange,
+  McpServer,
   PastSession,
   PermissionMode,
   SessionAnswer,
@@ -83,6 +85,13 @@ export interface IpcContract {
    * own: its session ends, and resumes that one when it starts again. Rejects any other id.
    */
   'session:resume': { args: [agentId: string, sessionId: string]; result: null };
+  /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
+  'session:mcp': { args: [agentId: string]; result: McpServer[] };
+  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
+  'session:mcp-change': {
+    args: [agentId: string, server: string, change: McpChange];
+    result: McpServer[];
+  };
   /**
    * Shows an agent's terminal (a Terminal session's) in the renderer's view: main sends
    * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
@@ -156,6 +165,8 @@ export interface InvokeApi {
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
+  mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
+  changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
@@ -189,6 +200,8 @@ export const API_CHANNELS = {
   closeSession: 'session:close',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
+  mcpServers: 'session:mcp',
+  changeMcpServer: 'session:mcp-change',
   attachTerminal: 'terminal:attach',
   detachTerminal: 'terminal:detach',
   writeTerminal: 'terminal:input',

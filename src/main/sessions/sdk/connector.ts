@@ -161,6 +161,8 @@ export class SdkConnector implements Connector {
       // is never in the Shift+Tab cycle, as in Claude Code without this flag).
       allowDangerouslySkipPermissions: true,
       canUseTool: prompts.canUseTool,
+      // MCP servers' requests: a form to fill in, or a link to open.
+      onElicitation: prompts.onElicitation,
       includePartialMessages: true,
       forwardSubagentText: true,
       // Interrupting stops the turn; background subagents and commands go on.

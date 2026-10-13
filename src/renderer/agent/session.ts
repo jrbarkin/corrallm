@@ -2,6 +2,8 @@ import type {
   AskedQuestion,
   Connection,
   DiffLine,
+  ElicitationAction,
+  FormField,
   MessageImage,
   ModelChoice,
   PermissionMode,
@@ -104,6 +106,20 @@ export type Entry =
   | { id: string; kind: 'plan'; plan: string; answer?: PlanAnswer; withdrawn?: boolean }
   | { id: string; kind: 'todos'; items: Todo[] }
   /**
+   * An MCP server asks the user something (an elicitation): to fill in a form (`fields`), or to
+   * open a link (`url`); then how they answered.
+   */
+  | {
+      id: string;
+      kind: 'elicitation';
+      server: string;
+      message: string;
+      fields?: FormField[];
+      url?: string;
+      answer?: ElicitationAction;
+      withdrawn?: boolean;
+    }
+  /**
    * What the session tells the user: compaction, a usage limit, a login problem. `switchTo`: the
    * connection the agent can switch to, to get past it (offered with the notice).
    */
@@ -118,7 +134,7 @@ export type Entry =
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 
 /** An entry the user answers while the turn waits. */
-export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' }>;
+export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' | 'elicitation' }>;
 
 export interface Session {
   entries: Entry[];
@@ -182,6 +198,7 @@ export type SessionAction =
   /** Answers question `index` of the question prompt `id`. */
   | { type: 'answerQuestion'; id: string; index: number; answer: string }
   | { type: 'answerPlan'; id: string; answer: PlanAnswer }
+  | { type: 'answerElicitation'; id: string; action: ElicitationAction }
   /** The prompt `id` no longer waits for an answer. */
   | { type: 'withdraw'; id: string }
   /** Mid-turn: working, or waiting on the user (as a connected session says). */
@@ -215,6 +232,7 @@ export function isOpen(entry: Entry): entry is Prompt {
   switch (entry.kind) {
     case 'permission':
     case 'plan':
+    case 'elicitation':
       return entry.answer === undefined && entry.withdrawn !== true;
     case 'question':
       return entry.withdrawn !== true && entry.questions.some((q) => q.answer === undefined);
@@ -280,6 +298,12 @@ export function reduce(session: Session, action: SessionAction): Session {
       return settled(
         update(action.id, (entry) =>
           entry.kind === 'plan' ? { ...entry, answer: action.answer } : entry,
+        ),
+      );
+    case 'answerElicitation':
+      return settled(
+        update(action.id, (entry) =>
+          entry.kind === 'elicitation' ? { ...entry, answer: action.action } : entry,
         ),
       );
     case 'withdraw':

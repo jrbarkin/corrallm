@@ -756,3 +756,169 @@ describe('an Agent SDK agent’s /resume', () => {
     expect(view.getByRole('alert').textContent).toBe('Choose a project folder');
   });
 });
+
+describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
+  it('lists them, and reconnects, disables and enables them', async () => {
+    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+      fake.backend.mcp.mockResolvedValue([
+        {
+          name: 'github',
+          status: 'connected',
+          scope: 'user',
+          server: 'github-mcp 1.2.0',
+          tools: 2,
+        },
+        { name: 'sentry', status: 'failed', scope: 'project', error: 'Connection refused' },
+        { name: 'linear', status: 'needs-auth', scope: 'claude.ai' },
+      ]);
+      fake.backend.changeMcp.mockResolvedValue([
+        { name: 'github', status: 'disabled', scope: 'user' },
+        { name: 'sentry', status: 'connected', scope: 'project', tools: 1 },
+        { name: 'linear', status: 'needs-auth', scope: 'claude.ai' },
+      ]);
+    });
+    await send('/mcp');
+    expect(backend.send).not.toHaveBeenCalled();
+    expect(backend.mcp).toHaveBeenCalledWith('a');
+    const panel = within(view.getByRole('group', { name: 'MCP servers' }));
+    const row = (name: string) => within(panel.getByRole('listitem', { name }));
+    expect(row('github').getByText('Connected · user · 2 tools')).toBeTruthy();
+    expect(row('sentry').getByText('Failed: Connection refused · project')).toBeTruthy();
+    expect(row('linear').getByText('Needs you to sign in · claude.ai')).toBeTruthy();
+
+    fireEvent.click(row('sentry').getByRole('button', { name: 'Reconnect' }));
+    await settle();
+    expect(backend.changeMcp).toHaveBeenCalledWith('a', 'sentry', 'reconnect');
+    expect(row('sentry').getByText('Connected · project · 1 tool')).toBeTruthy();
+    expect(row('github').getByText('Disabled · user')).toBeTruthy();
+    fireEvent.click(row('github').getByRole('button', { name: 'Enable' }));
+    await settle();
+    expect(backend.changeMcp).toHaveBeenLastCalledWith('a', 'github', 'enable');
+
+    // Esc closes the panel, not the view, wherever the keyboard is (the button clicked is gone).
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(view.queryByRole('group', { name: 'MCP servers' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+  });
+
+  it('signs in to a server in Terminal, where Claude Code’s own /mcp does it', async () => {
+    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+      fake.backend.mcp.mockResolvedValue([{ name: 'linear', status: 'needs-auth' }]);
+    });
+    await send('/mcp');
+    fireEvent.click(view.getByRole('button', { name: 'Sign in in Terminal' }));
+    await settle();
+    expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
+      'Agent: Claude · Terminal',
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: '/mcp',
+    });
+  });
+
+  it('says why they could not be listed', async () => {
+    const { send, view } = await open({ connection: 'sdk' }, (fake) => {
+      fake.backend.mcp.mockRejectedValue(
+        new Error("Error invoking remote method 'session:mcp': Error: Not running."),
+      );
+    });
+    await send('/mcp');
+    expect(view.getByRole('alert').textContent).toBe('Not running.');
+  });
+});
+
+describe('an MCP server asking the user (an elicitation)', () => {
+  const asked = {
+    type: 'elicitation',
+    id: 'e1',
+    server: 'github',
+    message: 'Which repository should the issue go in?',
+    fields: [
+      { name: 'repo', label: 'Repository', required: true, kind: 'text' },
+      { name: 'count', label: 'How many', required: false, kind: 'integer', min: 1 },
+      { name: 'draft', label: 'Draft', required: false, kind: 'boolean' },
+      {
+        name: 'priority',
+        label: 'Priority',
+        required: false,
+        kind: 'choice',
+        options: [
+          { value: 'p1', label: 'High' },
+          { value: 'p2', label: 'Low' },
+        ],
+      },
+      {
+        name: 'labels',
+        label: 'Labels',
+        required: false,
+        kind: 'choices',
+        options: [
+          { value: 'bug', label: 'Bug' },
+          { value: 'ui', label: 'UI' },
+        ],
+      },
+    ],
+  } satisfies SessionEvent;
+
+  it('shows its form in the transcript, and answers with what was filled in', async () => {
+    const { backend, send, emit, sent, transcript } = await open({ connection: 'sdk' });
+    await send('File an issue');
+    emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
+    const form = within(transcript.getByRole('form', { name: 'github asks' }));
+    expect(form.getByText('Which repository should the issue go in?')).toBeTruthy();
+    // It waits for what is required.
+    const submit = form.getByRole('button', { name: 'Submit' });
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(form.getByRole('textbox', { name: 'Repository' }), {
+      target: { value: 'acme/shop' },
+    });
+    fireEvent.change(form.getByRole('spinbutton', { name: 'How many' }), {
+      target: { value: '2' },
+    });
+    fireEvent.click(form.getByRole('checkbox', { name: 'Draft' }));
+    fireEvent.change(form.getByRole('combobox', { name: 'Priority' }), {
+      target: { value: 'p2' },
+    });
+    fireEvent.click(form.getByRole('checkbox', { name: 'UI' }));
+    fireEvent.click(submit);
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'e1', {
+      kind: 'elicitation',
+      action: 'accept',
+      values: { repo: 'acme/shop', count: 2, draft: true, priority: 'p2', labels: ['ui'] },
+    });
+    expect(
+      transcript.getByText('Sent to github: Which repository should the issue go in?'),
+    ).toBeTruthy();
+  });
+
+  it('declines, and opens a link a server asks to open through main', async () => {
+    const { backend, send, emit, sent, transcript, openLink } = await open({ connection: 'sdk' });
+    await send('File an issue');
+    emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
+    fireEvent.click(transcript.getByRole('button', { name: 'Decline' }));
+    await settle();
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'e1', {
+      kind: 'elicitation',
+      action: 'decline',
+    });
+    expect(transcript.getByText('Declined: Which repository should the issue go in?')).toBeTruthy();
+
+    emit({
+      type: 'elicitation',
+      id: 'e2',
+      server: 'linear',
+      message: 'Sign in to Linear to go on',
+      url: 'https://linear.app/oauth/authorize?state=1',
+    });
+    const link = within(transcript.getByRole('group', { name: 'linear asks' }));
+    fireEvent.click(link.getByRole('button', { name: 'Open linear.app' }));
+    await settle();
+    expect(openLink).toHaveBeenCalledWith('https://linear.app/oauth/authorize?state=1');
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'e2', {
+      kind: 'elicitation',
+      action: 'accept',
+    });
+  });
+});

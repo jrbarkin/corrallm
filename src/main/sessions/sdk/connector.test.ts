@@ -1,5 +1,6 @@
 import type {
   CanUseTool,
+  McpServerStatus,
   Options,
   PermissionMode,
   Query,
@@ -42,6 +43,11 @@ class FakeQuery {
     .mockResolvedValue({ still_queued: [] });
   readonly setPermissionMode = vi.fn<(mode: PermissionMode) => Promise<void>>().mockResolvedValue();
   readonly setModel = vi.fn<(model?: string) => Promise<void>>().mockResolvedValue();
+  readonly mcpServerStatus = vi.fn<() => Promise<McpServerStatus[]>>().mockResolvedValue([]);
+  readonly reconnectMcpServer = vi.fn<(name: string) => Promise<void>>().mockResolvedValue();
+  readonly toggleMcpServer = vi
+    .fn<(name: string, enabled: boolean) => Promise<void>>()
+    .mockResolvedValue();
   readonly close = vi.fn(() => {
     this.finish();
   });
@@ -507,6 +513,51 @@ describe('SdkConnector', () => {
     query().setPermissionMode.mockRejectedValueOnce(new Error('Auto mode is not available'));
     await expect(session.setMode('auto')).rejects.toThrow(/not available/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
+  it('lists its MCP servers, and reconnects, enables and disables them as /mcp asks', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    query().mcpServerStatus.mockResolvedValue([
+      { name: 'github', status: 'connected', scope: 'user', tools: [{ name: 'create_issue' }] },
+      { name: 'sentry', status: 'failed', error: 'Connection refused' },
+    ]);
+    await expect(session.mcpServers?.()).resolves.toEqual([
+      { name: 'github', status: 'connected', scope: 'user', tools: 1 },
+      { name: 'sentry', status: 'failed', error: 'Connection refused' },
+    ]);
+    await session.changeMcpServer?.('sentry', 'reconnect');
+    await session.changeMcpServer?.('github', 'disable');
+    await session.changeMcpServer?.('github', 'enable');
+    expect(query().reconnectMcpServer).toHaveBeenCalledWith('sentry');
+    expect(query().toggleMcpServer.mock.calls).toEqual([
+      ['github', false],
+      ['github', true],
+    ]);
+  });
+
+  it('asks the user what an MCP server asks for, in a form', async () => {
+    const { sdk, host, query, events } = connector();
+    const session = await sdk.start(SPEC, host);
+    const elicit = query().options.onElicitation;
+    if (!elicit) throw new Error('no onElicitation');
+    const told = elicit(
+      {
+        serverName: 'github',
+        message: 'Which repository?',
+        mode: 'form',
+        requestedSchema: { type: 'object', properties: { repo: { type: 'string' } } },
+      },
+      { signal: new AbortController().signal, requestId: 'r' },
+    );
+    const asked = events.find((event) => event.type === 'elicitation');
+    if (asked?.type !== 'elicitation') throw new Error('nothing asked');
+    await session.answer(asked.id, {
+      kind: 'elicitation',
+      action: 'accept',
+      values: { repo: 'acme/shop' },
+    });
+    expect(await told).toEqual({ action: 'accept', content: { repo: 'acme/shop' } });
   });
 
   it('carries out an approved plan in the mode chosen, once the CLI has left plan mode', async () => {

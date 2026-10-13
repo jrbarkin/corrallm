@@ -118,6 +118,53 @@ export interface PastSession {
   current: boolean;
 }
 
+/** How an MCP server is, as Claude Code reports it. */
+export const MCP_STATUSES = ['connected', 'failed', 'needs-auth', 'pending', 'disabled'] as const;
+export type McpStatus = (typeof MCP_STATUSES)[number];
+
+/** An MCP server a session has, as /mcp lists it. */
+export interface McpServer {
+  name: string;
+  status: McpStatus;
+  /** Where it is configured: user, project, local, a plugin, claude.ai… */
+  scope?: string;
+  /** What it says it is, once connected ("github 1.2.0"). */
+  server?: string;
+  /** How many tools it gives, once connected. */
+  tools?: number;
+  /** Why it failed. */
+  error?: string;
+}
+
+/** What /mcp can do to a server. */
+export const MCP_CHANGES = ['reconnect', 'enable', 'disable'] as const;
+export type McpChange = (typeof MCP_CHANGES)[number];
+
+/** A value of a form an MCP server asks the user to fill in: text, a number, yes or no, choices. */
+export type FormValue = string | number | boolean | string[];
+
+/** A field of a form an MCP server asks the user to fill in (an elicitation). */
+export interface FormField {
+  /** Its key in the answer. */
+  name: string;
+  label: string;
+  description?: string;
+  required: boolean;
+  /** Text (`format`: an email, a URL, a date), a number, a whole number, yes or no, one or several choices. */
+  kind: 'text' | 'number' | 'integer' | 'boolean' | 'choice' | 'choices';
+  format?: 'email' | 'uri' | 'date' | 'date-time';
+  /** What a choice offers: what is answered, and how it shows. */
+  options?: { value: string; label: string }[];
+  /** Its bounds: a number's, a text's length, or how many choices. */
+  min?: number;
+  max?: number;
+  default?: FormValue;
+}
+
+/** How the user answers an MCP server's request: go ahead (with the form filled in), no, or not now. */
+export const ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
+export type ElicitationAction = (typeof ELICITATION_ACTIONS)[number];
+
 /** A question the agent asks the user (Claude Code's AskUserQuestion), with answers to pick from. */
 export interface AskedQuestion {
   /** A short name for it, as a chip shows it. */
@@ -140,7 +187,9 @@ export type SessionAnswer =
   | { kind: 'permission'; answer: 'once' | 'always' | 'deny' }
   /** An answer to each of the questions asked, in order. */
   | { kind: 'question'; answers: string[] }
-  | { kind: 'plan'; answer: PlanAnswer };
+  | { kind: 'plan'; answer: PlanAnswer }
+  /** An MCP server's request answered: accepted (with the form's values), declined, or cancelled. */
+  | { kind: 'elicitation'; action: ElicitationAction; values?: Record<string, FormValue> };
 
 /** What a session has used: null where its CLI has not said. */
 export interface SessionUsage {
@@ -215,6 +264,18 @@ export type SessionEvent =
   | { type: 'question'; id: string; questions: AskedQuestion[] }
   /** Plan mode's plan (Markdown), for the user to approve. */
   | { type: 'plan'; id: string; plan: string }
+  /**
+   * An MCP server asks the user something (an elicitation): to fill in a form (`fields`), or to
+   * open a link (`url`) and go on there.
+   */
+  | {
+      type: 'elicitation';
+      id: string;
+      server: string;
+      message: string;
+      fields?: FormField[];
+      url?: string;
+    }
   /** A prompt no longer waits for the user: its turn was interrupted, or it was answered elsewhere. */
   | { type: 'withdrawn'; id: string }
   /**
@@ -256,5 +317,9 @@ export const MAX_FILE_QUERY_LENGTH = 500;
 export const MAX_FILE_MATCHES = 50;
 /** At most this many questions in one prompt (Claude Code asks 1 to 4). */
 export const MAX_QUESTIONS = 4;
+/** At most this many fields in an MCP server's form, and choices in one of them. */
+export const MAX_FORM_FIELDS = 50;
+/** The longest name of an MCP server the renderer may give. */
+export const MAX_MCP_NAME_LENGTH = 200;
 /** What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN. */
 export const MODEL_PATTERN = /^[\w.:/@[\]-]{1,200}$/;

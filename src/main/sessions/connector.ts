@@ -1,4 +1,6 @@
 import type {
+  McpChange,
+  McpServer,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -68,6 +70,13 @@ export interface LiveSession {
   close(): Promise<void>;
   /** A Terminal session's screen, which its agent view shows; other connections have none. */
   readonly terminal?: TerminalScreen;
+  /**
+   * Its MCP servers and how each is (/mcp), where the connection shows them itself (a Terminal
+   * session's are in its terminal).
+   */
+  mcpServers?(): Promise<McpServer[]>;
+  /** Reconnects, enables or disables one of them. */
+  changeMcpServer?(name: string, change: McpChange): Promise<void>;
 }
 
 /**

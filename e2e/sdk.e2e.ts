@@ -210,3 +210,48 @@ test('opens another conversation of the project folder in an agent with /resume'
   await composer.press('Enter');
   await expect(transcript.getByText('You said: And the cart')).toBeVisible();
 });
+
+test('shows an agent’s MCP servers with /mcp, and a form one of them asks for', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, folder);
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
+
+  // /mcp: the fake's two servers, one failed until it is reconnected.
+  await composer.fill('/mcp');
+  await composer.press('Enter');
+  const servers = view.getByRole('group', { name: 'MCP servers' });
+  const sentry = servers.getByRole('listitem', { name: 'sentry' });
+  await expect(servers.getByRole('listitem', { name: 'github' })).toContainText(
+    'Connected · user · 2 tools',
+  );
+  await expect(sentry).toContainText('Failed: Connection refused · project');
+  await sentry.getByRole('button', { name: 'Reconnect' }).click();
+  await expect(sentry).toContainText('Connected · project · 2 tools');
+  await page.keyboard.press('Escape');
+  await expect(servers).toHaveCount(0);
+  await expect(view).toBeVisible();
+
+  // A server's form, in the transcript: what is filled in goes back to it.
+  await composer.fill('file an issue: fill in a form');
+  await composer.press('Enter');
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  const form = transcript.getByRole('form', { name: 'github asks' });
+  await form.getByRole('textbox', { name: 'Repository' }).fill('acme/shop');
+  await form.getByRole('button', { name: 'Submit' }).click();
+  await expect(
+    transcript.getByText('github got: accept {"repo":"acme/shop","draft":false}'),
+  ).toBeVisible();
+});

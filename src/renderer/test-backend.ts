@@ -21,6 +21,8 @@ export function fakeBackend() {
     files: vi.fn<SessionBackend['files']>().mockResolvedValue([]),
     sessions: vi.fn<SessionBackend['sessions']>().mockResolvedValue([]),
     resume: vi.fn<SessionBackend['resume']>().mockResolvedValue(null),
+    mcp: vi.fn<SessionBackend['mcp']>().mockResolvedValue([]),
+    changeMcp: vi.fn<SessionBackend['changeMcp']>().mockResolvedValue([]),
     onEvent: vi.fn<SessionBackend['onEvent']>((given) => {
       listener = given;
       return () => {

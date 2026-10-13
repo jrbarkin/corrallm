@@ -1349,3 +1349,89 @@
   box-shadow: none;
   font-size: 13px;
 }
+
+/* /mcp: its servers, a row each: the name, how it is, what can be done to it. */
+.agent-mcp-servers {
+  display: grid;
+  flex-basis: 100%;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-mcp-servers li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.agent-mcp-name {
+  font-weight: 600;
+}
+
+.agent-mcp-status {
+  opacity: 0.75;
+}
+
+.agent-mcp-status[data-status='failed'] {
+  color: #dc2626;
+  opacity: 1;
+}
+
+.agent-mcp-status[data-status='needs-auth'] {
+  color: #b45309;
+  opacity: 1;
+}
+
+.agent-mcp-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* An MCP server's form, in the transcript: a field a line, its label above it. */
+.agent-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+
+.agent-form-field legend {
+  padding: 0;
+}
+
+.agent-form-field input,
+.agent-form-field select {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 6px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+}
+
+.agent-form-check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.agent-form-note {
+  flex-basis: 100%;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.agent-form .agent-permission-choices button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

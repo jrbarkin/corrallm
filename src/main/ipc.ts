@@ -13,6 +13,7 @@ import {
   parseAgentArgs,
   parseAnswerArgs,
   parseFilesArgs,
+  parseMcpChangeArgs,
   parseModeArgs,
   parseModelArgs,
   parseResumeArgs,
@@ -53,6 +54,8 @@ export interface IpcServices {
     | 'close'
     | 'listSessions'
     | 'resumeSession'
+    | 'mcpServers'
+    | 'changeMcpServer'
     | 'canvasOpened'
     | 'canvasForgotten'
     | 'canvasSaved'
@@ -246,6 +249,15 @@ function createHandlers({ projects, files, links, sessions }: IpcServices): Hand
         await sessions.resumeSession(contents, agentId, sessionId);
         return null;
       },
+    },
+    'session:mcp': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => sessions.mcpServers(contents, agentId),
+    },
+    'session:mcp-change': {
+      parseArgs: parseMcpChangeArgs,
+      handler: ({ contents }, agentId, server, change) =>
+        sessions.changeMcpServer(contents, agentId, server, change),
     },
     'terminal:attach': {
       parseArgs: parseAgentArgs,

@@ -2,6 +2,8 @@ import type { WebContents } from 'electron';
 
 import type {
   Connection,
+  McpChange,
+  McpServer,
   PastSession,
   PermissionMode,
   SessionAnswer,
@@ -18,6 +20,7 @@ const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
+const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -145,6 +148,26 @@ export class SessionManager {
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
     await this.#choose(contents, agentId, { model });
+  }
+
+  /** The MCP servers of the agent's session, and how each is (/mcp). */
+  async mcpServers(contents: WebContents, agentId: string): Promise<McpServer[]> {
+    const session = await this.#session(contents, agentId);
+    if (!session.mcpServers) throw new Error(NO_MCP);
+    return session.mcpServers();
+  }
+
+  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
+  async changeMcpServer(
+    contents: WebContents,
+    agentId: string,
+    name: string,
+    change: McpChange,
+  ): Promise<McpServer[]> {
+    const session = await this.#session(contents, agentId);
+    if (!session.changeMcpServer || !session.mcpServers) throw new Error(NO_MCP);
+    await session.changeMcpServer(name, change);
+    return session.mcpServers();
   }
 
   /**

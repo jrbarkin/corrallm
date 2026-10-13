@@ -569,3 +569,44 @@ describe('a connected session opened on another conversation (/resume)', () => {
     expect(store.of('a').entries).toHaveLength(1);
   });
 });
+
+describe('a connected session’s MCP servers', () => {
+  it('lists and changes them in main', async () => {
+    const { store, backend } = connected();
+    const servers = [{ name: 'github', status: 'connected' as const }];
+    backend.mcp.mockResolvedValue(servers);
+    backend.changeMcp.mockResolvedValue(servers);
+    await expect(store.mcpServers('a')).resolves.toEqual(servers);
+    await expect(store.changeMcpServer('a', 'github', 'reconnect')).resolves.toEqual(servers);
+    expect(backend.mcp).toHaveBeenCalledWith('a');
+    expect(backend.changeMcp).toHaveBeenCalledWith('a', 'github', 'reconnect');
+  });
+
+  it('asks what a server asks for, waiting on the user, and passes the answer on', async () => {
+    const { store, backend, emit, sent } = connected();
+    store.send('a', 'Claude', 'File an issue');
+    await settle();
+    emit(
+      'a',
+      'sdk',
+      { type: 'user', id: sent(), text: 'File an issue' },
+      {
+        type: 'elicitation',
+        id: 'e1',
+        server: 'github',
+        message: 'Which repository?',
+        fields: [{ name: 'repo', label: 'Repository', required: true, kind: 'text' }],
+      },
+    );
+    expect(store.of('a').status).toBe('waiting');
+    store.answerElicitation('a', 'e1', 'accept', { repo: 'acme/shop' });
+    expect(store.of('a').status).toBe('working');
+    expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'elicitation', answer: 'accept' });
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'e1', {
+      kind: 'elicitation',
+      action: 'accept',
+      values: { repo: 'acme/shop' },
+    });
+  });
+});

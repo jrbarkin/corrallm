@@ -204,3 +204,95 @@ describe('alwaysWording', () => {
     await Promise.resolve();
   });
 });
+
+describe('Prompts, on MCP servers’ requests (elicitations)', () => {
+  /** What an MCP server asks, as the SDK passes it to onElicitation. */
+  const form = {
+    serverName: 'github',
+    message: 'Which repository should the issue go in?',
+    mode: 'form' as const,
+    requestedSchema: {
+      type: 'object',
+      properties: { repo: { type: 'string', title: 'Repository' }, draft: { type: 'boolean' } },
+      required: ['repo'],
+    },
+  };
+  const elicit = (asking: Prompts, request: Parameters<Prompts['onElicitation']>[0]) =>
+    asking.onElicitation(request, { signal: new AbortController().signal, requestId: 'r' });
+  const promptOf = (events: SessionEvent[]) => {
+    const asked = events.find((e) => e.type === 'elicitation');
+    if (asked?.type !== 'elicitation') throw new Error('nothing asked');
+    return asked;
+  };
+
+  it('asks for a form, and answers with what was filled in, once it is what the form asks', async () => {
+    const { asking, events } = prompts();
+    const told = elicit(asking, form);
+    const asked = promptOf(events);
+    expect(asked).toEqual({
+      type: 'elicitation',
+      id: asked.id,
+      server: 'github',
+      message: 'Which repository should the issue go in?',
+      fields: [
+        { name: 'repo', label: 'Repository', required: true, kind: 'text' },
+        { name: 'draft', label: 'draft', required: false, kind: 'boolean' },
+      ],
+    });
+    expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
+    // Not what the form asks: refused, and it still asks.
+    expect(() => {
+      asking.answer(asked.id, { kind: 'elicitation', action: 'accept', values: { draft: true } });
+    }).toThrow(/Repository is required/);
+    expect(asking.waiting).toBe(true);
+    asking.answer(asked.id, {
+      kind: 'elicitation',
+      action: 'accept',
+      values: { repo: 'acme/shop', draft: false },
+    });
+    expect(await told).toEqual({ action: 'accept', content: { repo: 'acme/shop', draft: false } });
+    expect(events.at(-1)).toEqual({ type: 'status', status: 'working' });
+  });
+
+  it('declines or cancels as the user says, and declines a form it cannot show, saying so', async () => {
+    const { asking, events } = prompts();
+    const declined = elicit(asking, form);
+    asking.answer(promptOf(events).id, { kind: 'elicitation', action: 'decline' });
+    expect(await declined).toEqual({ action: 'decline' });
+
+    const strange = await elicit(asking, {
+      ...form,
+      requestedSchema: { type: 'object', properties: { nested: { type: 'object' } } },
+    });
+    expect(strange).toEqual({ action: 'decline' });
+    expect(events.at(-1)).toMatchObject({
+      type: 'notice',
+      level: 'warning',
+      text: 'github asked for something corrallm can’t show, so it was declined: Which repository should the issue go in?',
+    });
+  });
+
+  it('asks to open a link for a server, and withdraws a request the CLI stops waiting for', async () => {
+    const { asking, events } = prompts();
+    const controller = new AbortController();
+    const told = asking.onElicitation(
+      {
+        serverName: 'linear',
+        message: 'Sign in to Linear',
+        mode: 'url',
+        url: 'https://linear.app/oauth?state=1',
+        elicitationId: 'e1',
+      },
+      { signal: controller.signal, requestId: 'r' },
+    );
+    const asked = promptOf(events);
+    expect(asked).toMatchObject({
+      server: 'linear',
+      message: 'Sign in to Linear',
+      url: 'https://linear.app/oauth?state=1',
+    });
+    controller.abort();
+    expect(await told).toEqual({ action: 'cancel' });
+    expect(events).toContainEqual({ type: 'withdrawn', id: asked.id });
+  });
+});

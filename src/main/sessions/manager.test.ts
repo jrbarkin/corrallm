@@ -267,6 +267,35 @@ describe('SessionManager', () => {
     );
   });
 
+  it('shows and changes a session’s MCP servers, where its connection shows them', async () => {
+    const servers = [{ name: 'github', status: 'connected' as const }];
+    const live = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      mcpServers: vi.fn<NonNullable<LiveSession['mcpServers']>>().mockResolvedValue(servers),
+      changeMcpServer: vi
+        .fn<NonNullable<LiveSession['changeMcpServer']>>()
+        .mockResolvedValue(undefined),
+    };
+    const sessions = manager({ sdk: { start: () => Promise.resolve(live) } });
+    const contents = window();
+    await expect(sessions.mcpServers(contents, 'a')).rejects.toThrow(/not running/);
+    await sessions.start(contents, 'a', OPTIONS);
+    await expect(sessions.mcpServers(contents, 'a')).resolves.toEqual(servers);
+    // A change answers with how they all are then.
+    await expect(sessions.changeMcpServer(contents, 'a', 'github', 'disable')).resolves.toEqual(
+      servers,
+    );
+    expect(live.changeMcpServer).toHaveBeenCalledWith('github', 'disable');
+    // A Terminal session's are its terminal's.
+    await sessions.start(contents, 'b', { ...OPTIONS, connection: 'terminal' });
+    await expect(sessions.mcpServers(contents, 'b')).rejects.toThrow(/run \/mcp in its terminal/);
+  });
+
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {
     const sessions = manager();
     const contents = window('/work/team.corral');

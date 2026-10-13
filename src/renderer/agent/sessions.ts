@@ -1,4 +1,10 @@
-import type { PastSession } from '../../shared/session';
+import type {
+  ElicitationAction,
+  FormValue,
+  McpChange,
+  McpServer,
+  PastSession,
+} from '../../shared/session';
 import { DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
 import { ConnectedDriver, NO_BACKEND } from './connected';
@@ -168,6 +174,30 @@ export class SessionStore {
     this.#driver(agentId).open();
     // What was queued goes on, to that conversation.
     this.#idle(agentId);
+  }
+
+  /** The MCP servers of the agent's running session (/mcp). */
+  mcpServers(agentId: string): Promise<McpServer[]> {
+    return this.#backend.mcp(agentId);
+  }
+
+  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
+  changeMcpServer(agentId: string, server: string, change: McpChange): Promise<McpServer[]> {
+    return this.#backend.changeMcp(agentId, server, change);
+  }
+
+  /** Answers an MCP server's request: accepted (with the form's values), declined or cancelled. */
+  answerElicitation(
+    agentId: string,
+    promptId: string,
+    action: ElicitationAction,
+    values?: Record<string, FormValue>,
+  ): void {
+    this.#drivers.get(agentId)?.driver.answer(promptId, {
+      kind: 'elicitation',
+      action,
+      ...(values === undefined ? {} : { values }),
+    });
   }
 
   /** Answers a permission prompt. */

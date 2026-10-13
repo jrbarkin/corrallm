@@ -989,6 +989,12 @@ function Editor({
               findFiles: (query) => sessionStore.findFiles(query),
               pastSessions: () => sessionStore.pastSessions(openedNode.id),
               resume: (sessionId) => sessionStore.resume(openedNode.id, sessionId),
+              mcpServers: () => sessionStore.mcpServers(openedNode.id),
+              changeMcpServer: (server, change) =>
+                sessionStore.changeMcpServer(openedNode.id, server, change),
+              answerElicitation: (promptId, action, values) => {
+                sessionStore.answerElicitation(openedNode.id, promptId, action, values);
+              },
               answer: (permissionId, answer) => {
                 sessionStore.answer(openedNode.id, permissionId, answer);
               },

@@ -55,6 +55,8 @@ function fakeServices() {
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
       listSessions: vi.fn<IpcServices['sessions']['listSessions']>().mockResolvedValue([]),
       resumeSession: vi.fn<IpcServices['sessions']['resumeSession']>().mockResolvedValue(undefined),
+      mcpServers: vi.fn<IpcServices['sessions']['mcpServers']>().mockResolvedValue([]),
+      changeMcpServer: vi.fn<IpcServices['sessions']['changeMcpServer']>().mockResolvedValue([]),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
         .fn<IpcServices['sessions']['canvasForgotten']>()
@@ -246,6 +248,23 @@ describe('session:* handlers', () => {
     expect(services.sessions.setModel).toHaveBeenCalledWith(sender, 'a', 'claude-haiku-5-5[1m]');
     await invoke('session:close', ['a'], sender);
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
+    const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
+    await invoke('session:answer', ['a', 'e1', form], sender);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'e1', form);
+    await invoke('session:answer', ['a', 'e2', { kind: 'elicitation', action: 'decline' }], sender);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'e2', {
+      kind: 'elicitation',
+      action: 'decline',
+    });
+    await invoke('session:mcp', ['a'], sender);
+    expect(services.sessions.mcpServers).toHaveBeenCalledWith(sender, 'a');
+    await invoke('session:mcp-change', ['a', 'github', 'reconnect'], sender);
+    expect(services.sessions.changeMcpServer).toHaveBeenCalledWith(
+      sender,
+      'a',
+      'github',
+      'reconnect',
+    );
     await invoke('session:list', ['a'], sender);
     expect(services.sessions.listSessions).toHaveBeenCalledWith(sender, 'a');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
@@ -376,6 +395,41 @@ describe('session:* handlers', () => {
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
     ['session:list', 'no agent', [], /an agent/],
+    [
+      'session:answer',
+      'an MCP answer not offered',
+      ['a', 'p', { kind: 'elicitation', action: 'maybe' }],
+      /answer to an MCP server/,
+    ],
+    [
+      'session:answer',
+      'a form value that is an object',
+      ['a', 'p', { kind: 'elicitation', action: 'accept', values: { repo: { path: '/' } } }],
+      /form’s values/,
+    ],
+    [
+      'session:answer',
+      'a form with too many values',
+      [
+        'a',
+        'p',
+        {
+          kind: 'elicitation',
+          action: 'accept',
+          values: Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`f${String(i)}`, 'x'])),
+        },
+      ],
+      /form’s values/,
+    ],
+    ['session:mcp', 'no agent', [], /an agent/],
+    ['session:mcp-change', 'an unknown change', ['a', 'github', 'delete'], /change to an MCP/],
+    ['session:mcp-change', 'no server', ['a', '', 'reconnect'], /MCP server’s name/],
+    [
+      'session:mcp-change',
+      'a server name with control characters',
+      ['a', 'git\nhub', 'reconnect'],
+      /MCP server’s name/,
+    ],
     ['session:resume', 'no conversation', ['a'], /an agent and a conversation/],
     ['session:resume', 'a path', ['a', '../../etc/passwd'], /conversation's id/],
     ['session:resume', 'an id too long', ['a', 'a'.repeat(MAX_ID_LENGTH + 1)], /conversation's id/],

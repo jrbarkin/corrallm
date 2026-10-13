@@ -1,8 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
-import type { Connection, PlanMode } from '../../shared/session';
+import type { Connection, ElicitationAction, FormValue, PlanMode } from '../../shared/session';
 import { CONNECTION_INFO } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
+import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
 import { MODES, sessionQuestions } from './session';
 import type { Answer, Entry, PlanAnswer, Session } from './session';
@@ -27,12 +28,19 @@ export interface TranscriptAnswers {
   onAnswerPlan: (promptId: string, answer: PlanAnswer) => void;
   /** Switches the agent to another connection, as a notice offers (Terminal, for a login). */
   onSwitch?: (connection: Connection) => void;
+  /** Answers an MCP server's request: accepted (with the form's values), declined, cancelled. */
+  onAnswerElicitation?: (
+    promptId: string,
+    action: ElicitationAction,
+    values?: Record<string, FormValue>,
+  ) => void;
 }
 
 /**
  * A session's transcript: the user's messages, the agent's replies, thinking (folded), tool calls
  * (one line each, opening onto a diff or output; a subagent's indented under it), prompts
- * (permission, the agent's questions, a plan to approve), to-do lists, notices, and how long each
+ * (permission, the agent's questions, a plan to approve, an MCP server's form or link:
+ * Elicitation.tsx), to-do lists, notices, and how long each
  * turn took. It keeps to the bottom while new entries arrive, unless scrolled up. `note`: what the
  * empty transcript says about how the session runs.
  */
@@ -161,6 +169,15 @@ function EntryView({
       );
     case 'plan':
       return <Plan entry={entry} onAnswer={answers.onAnswerPlan} />;
+    case 'elicitation':
+      return (
+        <Elicitation
+          entry={entry}
+          onAnswer={(action, values) => {
+            answers.onAnswerElicitation?.(entry.id, action, values);
+          }}
+        />
+      );
     case 'todos':
       return (
         <div className="agent-todos" role="group" aria-label="To-dos">

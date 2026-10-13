@@ -3,14 +3,15 @@ import type { SlashCommand } from '../../shared/session';
 /*
  * The slash commands an Agent SDK agent's composer knows besides its session's own. Claude Code
  * has commands that open a screen of its own (/permissions, /login, /hooks…): the Agent SDK runs
- * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker); for the
- * others it offers to continue the conversation in Terminal, where Claude Code itself runs,
- * instead of sending them.
+ * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker, /mcp's
+ * servers); for the others it offers to continue the conversation in Terminal, where Claude Code
+ * itself runs, instead of sending them.
  */
 
 /** The commands the agent view answers itself, as Claude Code describes them. */
 export const VIEW_COMMANDS = [
   { name: 'resume', description: 'Resume a previous conversation', argumentHint: '' },
+  { name: 'mcp', description: 'Manage MCP servers', argumentHint: '' },
 ] as const satisfies readonly SlashCommand[];
 
 export type ViewCommand = (typeof VIEW_COMMANDS)[number]['name'];
