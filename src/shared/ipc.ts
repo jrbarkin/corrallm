@@ -1,9 +1,12 @@
 import type {
   Connection,
+  FilesRewind,
   McpChange,
   McpServer,
   PastSession,
   PermissionMode,
+  RewindRestore,
+  RewindResult,
   SessionAnswer,
   SessionEvent,
   SessionOptions,
@@ -85,6 +88,20 @@ export interface IpcContract {
    * own: its session ends, and resumes that one when it starts again. Rejects any other id.
    */
   'session:resume': { args: [agentId: string, sessionId: string]; result: null };
+  /**
+   * What rewinding an agent's session to before one of its messages would restore in its files
+   * (a dry run of Claude Code's file checkpoints; Agent SDK sessions).
+   */
+  'session:rewind-preview': { args: [agentId: string, messageId: string]; result: FilesRewind };
+  /**
+   * Rewinds an agent's session to before one of its messages: its files, its conversation (a
+   * copy of it up to that point becomes the agent's own, and its session ends to resume it), or
+   * both. Rejects, changing nothing, if that cannot be done.
+   */
+  'session:rewind': {
+    args: [agentId: string, messageId: string, restore: RewindRestore];
+    result: RewindResult;
+  };
   /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
   'session:mcp': { args: [agentId: string]; result: McpServer[] };
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
@@ -165,6 +182,10 @@ export interface InvokeApi {
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
+  previewRewind(
+    ...args: IpcArgs<'session:rewind-preview'>
+  ): Promise<IpcResult<'session:rewind-preview'>>;
+  rewindSession(...args: IpcArgs<'session:rewind'>): Promise<IpcResult<'session:rewind'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
@@ -200,6 +221,8 @@ export const API_CHANNELS = {
   closeSession: 'session:close',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
+  previewRewind: 'session:rewind-preview',
+  rewindSession: 'session:rewind',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
   attachTerminal: 'terminal:attach',

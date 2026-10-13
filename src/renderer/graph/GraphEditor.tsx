@@ -989,6 +989,9 @@ function Editor({
               findFiles: (query) => sessionStore.findFiles(query),
               pastSessions: () => sessionStore.pastSessions(openedNode.id),
               resume: (sessionId) => sessionStore.resume(openedNode.id, sessionId),
+              previewRewind: (messageId) => sessionStore.previewRewind(openedNode.id, messageId),
+              rewind: (messageId, restore) =>
+                sessionStore.rewind(openedNode.id, messageId, restore),
               mcpServers: () => sessionStore.mcpServers(openedNode.id),
               changeMcpServer: (server, change) =>
                 sessionStore.changeMcpServer(openedNode.id, server, change),

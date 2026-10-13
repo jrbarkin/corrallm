@@ -50,6 +50,9 @@ const api: AppApi = {
   closeSession: (agentId) => invoke(API_CHANNELS.closeSession, agentId),
   listSessions: (agentId) => invoke(API_CHANNELS.listSessions, agentId),
   resumeSession: (agentId, sessionId) => invoke(API_CHANNELS.resumeSession, agentId, sessionId),
+  previewRewind: (agentId, messageId) => invoke(API_CHANNELS.previewRewind, agentId, messageId),
+  rewindSession: (agentId, messageId, restore) =>
+    invoke(API_CHANNELS.rewindSession, agentId, messageId, restore),
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),

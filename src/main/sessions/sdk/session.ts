@@ -9,6 +9,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
+  FilesRewind,
   McpChange,
   McpServer,
   PermissionMode,
@@ -21,6 +22,8 @@ import type {
 import type { LiveSession, SessionHost } from '../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
+import { displayPath } from './tools';
+import type { Places } from './tools';
 import type { Prompts } from './prompts';
 import { sdkMode } from './translate';
 import type { Translator } from './translate';
@@ -54,6 +57,8 @@ export interface SdkSessionParts {
   stderr: Stderr;
   /** The mode it starts in. */
   mode: PermissionMode;
+  /** Where it works, to name the files a rewind restores. */
+  places: Places;
 }
 
 /** The end of what a CLI wrote to stderr: what it said last, when it stops. */
@@ -88,6 +93,7 @@ export class SdkSession implements LiveSession {
   readonly #translator: Translator;
   readonly #prompts: Prompts;
   readonly #stderr: Stderr;
+  readonly #places: Places;
   /** Messages sent whose turn has not ended: the CLI's uuid for each, and the renderer's id. */
   readonly #pending = new Map<string, string>();
   #mode: PermissionMode;
@@ -98,8 +104,9 @@ export class SdkSession implements LiveSession {
   #afterPlan: { mode: PermissionMode; timer: ReturnType<typeof setTimeout> } | undefined;
   readonly #pump: Promise<void>;
 
-  constructor({ query, inbox, host, translator, prompts, stderr, mode }: SdkSessionParts) {
+  constructor({ query, inbox, host, translator, prompts, stderr, mode, places }: SdkSessionParts) {
     this.#mode = mode;
+    this.#places = places;
     this.#query = query;
     this.#inbox = inbox;
     this.#host = host;
@@ -174,6 +181,25 @@ export class SdkSession implements LiveSession {
     await this.#query.setModel(model);
     this.#translator.setModel(model);
     this.#host.emit({ type: 'model', model });
+  }
+
+  /**
+   * Restores the files to how they were before a message (one the CLI knows: by its uuid), or with
+   * `dryRun` says what that would change; never while a turn goes on.
+   */
+  async rewindFiles(messageId: string, dryRun: boolean): Promise<FilesRewind> {
+    if (!UUID.test(messageId)) throw new Error('That message can’t be rewound to.');
+    if (this.#pending.size > 0) {
+      throw new Error('Rewinding waits until it is done: stop it first (Esc).');
+    }
+    const result = await this.#query.rewindFiles(messageId, { dryRun });
+    return {
+      possible: result.canRewind,
+      ...(result.error === undefined || result.error === '' ? {} : { error: result.error }),
+      files: (result.filesChanged ?? []).map((file) => displayPath(file, this.#places)),
+      added: result.insertions ?? 0,
+      removed: result.deletions ?? 0,
+    };
   }
 
   async mcpServers(): Promise<McpServer[]> {

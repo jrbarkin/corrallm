@@ -17,6 +17,7 @@ import {
   MODEL_PATTERN,
   PERMISSION_MODES,
   PLAN_MODES,
+  REWIND_RESTORES,
 } from '../../shared/session';
 import type {
   FormValue,
@@ -147,6 +148,22 @@ export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
     throw new TypeError("Expected the conversation's id");
   }
   return [parseId(agentId, 'agent'), sessionId];
+}
+
+/** session:rewind-preview: an agent, and one of its messages. */
+export function parseRewindPreviewArgs(args: unknown[]): IpcArgs<'session:rewind-preview'> {
+  const [agentId, messageId] = expect(args, 2, 'an agent and a message');
+  return [parseId(agentId, 'agent'), parseId(messageId, 'message')];
+}
+
+/** session:rewind: an agent, one of its messages, and what to restore to before it. */
+export function parseRewindArgs(args: unknown[]): IpcArgs<'session:rewind'> {
+  const [agentId, messageId, restore] = expect(args, 3, 'an agent, a message and what to restore');
+  return [
+    parseId(agentId, 'agent'),
+    parseId(messageId, 'message'),
+    oneOf(restore, REWIND_RESTORES, 'thing to restore'),
+  ];
 }
 
 /** session:mcp-change: an agent, one of its MCP servers by name, and what to do to it. */

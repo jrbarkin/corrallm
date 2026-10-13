@@ -67,6 +67,7 @@ export function Composer({
   placeholder,
   above,
   commands = session.commands,
+  initialDraft = '',
 }: {
   agentName: string;
   agent: AgentType;
@@ -82,8 +83,10 @@ export function Composer({
   above?: ReactNode;
   /** The slash commands it completes: the session's, unless the view knows more. */
   commands?: readonly SlashCommand[] | undefined;
+  /** What its box starts with (a message rewound to, back to edit). */
+  initialDraft?: string;
 }) {
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft);
   const [caret, setCaret] = useState(0);
   const [images, setImages] = useState<Attachment[]>([]);
   const [problem, setProblem] = useState<string>();

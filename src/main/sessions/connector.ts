@@ -1,4 +1,5 @@
 import type {
+  FilesRewind,
   McpChange,
   McpServer,
   PermissionMode,
@@ -77,6 +78,12 @@ export interface LiveSession {
   mcpServers?(): Promise<McpServer[]>;
   /** Reconnects, enables or disables one of them. */
   changeMcpServer?(name: string, change: McpChange): Promise<void>;
+  /**
+   * Restores the files it changed to how they were before message `messageId` (Claude Code's
+   * file checkpoints), or, with `dryRun`, says what that would change. Where a connection rewinds
+   * itself (a Terminal session: Esc Esc in its terminal), it has none.
+   */
+  rewindFiles?(messageId: string, dryRun: boolean): Promise<FilesRewind>;
 }
 
 /**

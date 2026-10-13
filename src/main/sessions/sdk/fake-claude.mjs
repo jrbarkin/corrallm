@@ -2,8 +2,8 @@
 // --output-format stream-json), for tests: it speaks the same protocol, in the shapes the real
 // CLI uses (see fixtures/), without a model. Each message gets a short reply, streamed after a
 // moment's thought ("markdown" in the message: a reply in Markdown). "run" in it also runs
-// `echo hello` with Bash, and "edit" edits notes.txt, each asking first in the default (Manual)
-// and plan modes; "slow" streams slowly enough to interrupt; "a form" has its MCP server github ask
+// `echo hello` with Bash, and "edit" edits notes.txt (in the project folder, for real if it is
+// there: "one" becomes "two"), each asking first in the default (Manual) and plan modes; "slow" streams slowly enough to interrupt; "a form" has its MCP server github ask
 // for a form first (an elicitation), and replies with what it got. It has two MCP servers, github
 // (connected) and sentry (failed until reconnected), which /mcp's requests list and change.
 //
@@ -13,6 +13,10 @@
 // was recorded on. The project's settings (.claude/settings.json, then settings.local.json) also
 // give its default mode, and can disable bypassing permissions.
 //
+// With file checkpointing on (CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING, as the SDK's
+// enableFileCheckpointing sets it), it keeps notes.txt as it was before each message, for the
+// SDK's rewindFiles to restore (only while it runs: a new process, as after a fork, has none).
+//
 // With CLAUDE_CONFIG_DIR set (never otherwise, so that it never writes into the user's own
 // ~/.claude), it keeps each conversation's transcript there, as the CLI does: the user's messages
 // and its replies, chained by parentUuid, under projects/<the folder's path, dashed>/<id>.jsonl, so
@@ -21,11 +25,14 @@
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
+/** A flag's value, given as the SDK gives it ("--resume=<id>"), or as two arguments. */
 const option = (name) => {
+  const joined = args.find((arg) => arg.startsWith(`${name}=`));
+  if (joined !== undefined) return joined.slice(name.length + 1);
   const at = args.indexOf(name);
   return at < 0 ? undefined : args[at + 1];
 };
@@ -128,6 +135,39 @@ function keep(type, uuid, message) {
 }
 /** The turn going on, if any: whether it was interrupted. */
 let turn;
+/** The files it may change: notes.txt in the project folder. */
+const NOTES = `${process.cwd()}/notes.txt`;
+/** What a file holds, or null if it is not there. */
+const contents = (file) => {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+};
+/** The files as they were before each message, by its uuid (file checkpointing). */
+const checkpoints = new Map();
+
+/** Answers rewind_files: what restoring the files to before message `id` changes, done unless `dryRun`. */
+function rewindFiles(id, dryRun) {
+  const checkpoint = checkpoints.get(id);
+  if (!checkpoint) return { canRewind: false, error: 'No file checkpoint found for this message' };
+  const changed = [...checkpoint].filter(([file, was]) => contents(file) !== was);
+  const lines = (text) => (text ?? '').split('\n').filter(Boolean);
+  let insertions = 0;
+  let deletions = 0;
+  for (const [file, was] of changed) {
+    const now = lines(contents(file));
+    const then = lines(was);
+    insertions += then.filter((line) => !now.includes(line)).length;
+    deletions += now.filter((line) => !then.includes(line)).length;
+    if (dryRun) continue;
+    if (was === null) rmSync(file, { force: true });
+    else writeFileSync(file, was);
+  }
+  return { canRewind: true, filesChanged: changed.map(([file]) => file), insertions, deletions };
+}
+
 /** Requests the fake made of the SDK (can_use_tool, elicitation), waiting for its answer. */
 const asked = new Map();
 /** Its MCP servers, as the CLI reports them (mcp_status). */
@@ -225,7 +265,7 @@ function elicit() {
  * A tool call in turn `current` of message `id`: shown, asked about first in the default (Manual)
  * and plan modes, then its result (`said` to the model, `result` structured), or its denial.
  */
-async function useTool(current, id, name, input, { said, result, suggestions }) {
+async function useTool(current, id, name, input, { said, result, suggestions, act }) {
   const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
   say({
     type: 'assistant',
@@ -251,6 +291,7 @@ async function useTool(current, id, name, input, { said, result, suggestions }) 
       ? await canUseTool(name, input, toolUseId, suggestions)
       : { behavior: 'allow' };
   const allowed = answer.behavior === 'allow';
+  if (allowed) act?.();
   say({
     type: 'user',
     message: {
@@ -286,6 +327,9 @@ async function play(message) {
   turn = current;
   const started = Date.now();
   keep('user', uuid, message.message);
+  if (process.env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING) {
+    checkpoints.set(uuid, new Map([[NOTES, contents(NOTES)]]));
+  }
   const stamp = { user_message_uuid: uuid, user_message_uuids: [uuid] };
   say({
     type: 'system',
@@ -448,7 +492,7 @@ async function play(message) {
     );
   }
   if (!current.interrupted && text.includes('edit')) {
-    const file = `${process.cwd()}/notes.txt`;
+    const file = NOTES;
     await useTool(
       current,
       id,
@@ -471,6 +515,10 @@ async function play(message) {
           ],
         },
         suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
+        act: () => {
+          const was = contents(file);
+          if (was !== null) writeFileSync(file, was.replace('one', 'two'));
+        },
       },
     );
   }
@@ -588,6 +636,11 @@ input.on('line', (line) => {
         sources: [],
         applied: { model, effort: null },
       });
+    } else if (subtype === 'rewind_files') {
+      respond(
+        message.request_id,
+        rewindFiles(message.request.user_message_id, message.request.dry_run === true),
+      );
     } else if (subtype === 'mcp_status') {
       respond(message.request_id, { mcpServers: [...servers.values()] });
     } else if (subtype === 'mcp_reconnect' || subtype === 'mcp_toggle') {

@@ -922,3 +922,143 @@ describe('an MCP server asking the user (an elicitation)', () => {
     });
   });
 });
+
+describe('an Agent SDK agent rewound', () => {
+  /** Agent a, through the Agent SDK, after two turns: "Fix the login bug", then "Now the cart". */
+  async function talked(prepare?: (fake: ReturnType<typeof fakeBackend>) => void) {
+    const opened = await open({ connection: 'sdk' }, prepare);
+    const { send, emit, sent } = opened;
+    const ids: string[] = [];
+    for (const text of ['Fix the login bug', 'Now the cart']) {
+      await send(text);
+      const id = sent();
+      ids.push(id);
+      emit(
+        { type: 'user', id, text },
+        { type: 'text', id: `${id}:0`, text: `Done: ${text}` },
+        { type: 'end', messages: [id], seconds: 2, interrupted: false, failed: false },
+      );
+    }
+    return { ...opened, ids };
+  }
+
+  it('rewinds code and conversation to before a message, its text back in the box', async () => {
+    const { backend, view, transcript, composer, ids } = await talked((fake) => {
+      fake.backend.previewRewind.mockResolvedValue({
+        possible: true,
+        files: ['src/cart.ts'],
+        added: 4,
+        removed: 10,
+      });
+      fake.backend.rewind.mockResolvedValue({
+        files: { possible: true, files: ['src/cart.ts'], added: 4, removed: 10 },
+        conversation: true,
+      });
+    });
+    const rewinds = transcript.getAllByRole('button', { name: 'Rewind to here' });
+    expect(rewinds).toHaveLength(2);
+    fireEvent.click(rewinds[1] ?? document.body);
+    await settle();
+    expect(backend.previewRewind).toHaveBeenCalledWith('a', ids[1]);
+    const panel = within(view.getByRole('group', { name: 'Rewind' }));
+    expect(panel.getByText('Rewind to before “Now the cart”?')).toBeTruthy();
+    expect(panel.getByText('Restores src/cart.ts (+4 −10).')).toBeTruthy();
+    expect(
+      panel.getByText(
+        'Drops this message and what followed: it goes back in the box below, to edit.',
+      ),
+    ).toBeTruthy();
+    expect(panel.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Restore code and conversation',
+      'Restore conversation',
+      'Restore code',
+      'Cancel',
+    ]);
+
+    fireEvent.click(panel.getByRole('button', { name: 'Restore code and conversation' }));
+    await settle();
+    expect(backend.rewind).toHaveBeenCalledWith('a', ids[1], 'both');
+    expect(view.queryByRole('group', { name: 'Rewind' })).toBeNull();
+    expect(transcript.queryByText('Fix the login bug')).toBeNull();
+    expect(backend.start).toHaveBeenCalledTimes(2);
+    const box = view.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+    expect(box.value).toBe('Now the cart');
+    expect(composer).not.toBe(box);
+  });
+
+  it('offers the conversation alone where no files changed, or they can’t be restored', async () => {
+    const { backend, view, transcript, ids } = await talked((fake) => {
+      fake.backend.previewRewind.mockResolvedValueOnce({
+        possible: true,
+        files: [],
+        added: 0,
+        removed: 0,
+      });
+      fake.backend.previewRewind.mockResolvedValueOnce({
+        possible: false,
+        error: 'No file checkpoint found for this message',
+        files: [],
+        added: 0,
+        removed: 0,
+      });
+    });
+    fireEvent.click(
+      transcript.getAllByRole('button', { name: 'Rewind to here' })[0] ?? document.body,
+    );
+    await settle();
+    let panel = within(view.getByRole('group', { name: 'Rewind' }));
+    expect(panel.getByText('No files changed since then.')).toBeTruthy();
+    expect(
+      panel.getByText(
+        'Drops this message and the 1 after it: it goes back in the box below, to edit.',
+      ),
+    ).toBeTruthy();
+    expect(panel.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Restore conversation',
+      'Cancel',
+    ]);
+    fireEvent.click(panel.getByRole('button', { name: 'Cancel' }));
+    expect(view.queryByRole('group', { name: 'Rewind' })).toBeNull();
+
+    fireEvent.click(
+      transcript.getAllByRole('button', { name: 'Rewind to here' })[1] ?? document.body,
+    );
+    await settle();
+    panel = within(view.getByRole('group', { name: 'Rewind' }));
+    expect(
+      panel.getByText('Its files can’t be restored: No file checkpoint found for this message.'),
+    ).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Restore conversation' }));
+    await settle();
+    expect(backend.rewind).toHaveBeenCalledWith('a', ids[1], 'conversation');
+  });
+
+  it('asks which message on Esc twice in an empty composer, or /rewind; one Esc still closes', async () => {
+    const { view, composer, send } = await talked();
+    fireEvent.keyDown(composer, { key: 'Escape' });
+    fireEvent.keyDown(composer, { key: 'Escape' });
+    const picker = within(view.getByRole('listbox', { name: 'Rewind to' }));
+    expect(picker.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Now the cart',
+      'Fix the login bug',
+    ]);
+    fireEvent.click(picker.getByRole('option', { name: 'Fix the login bug' }));
+    await settle();
+    expect(view.getByText('Rewind to before “Fix the login bug”?')).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+
+    await send('/rewind');
+    expect(view.getByRole('listbox', { name: 'Rewind to' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(view.queryByRole('listbox', { name: 'Rewind to' })).toBeNull();
+
+    // Once, it goes on to close the view, a moment later.
+    const box = view.getByRole('textbox', { name: 'Message a' });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(screen.queryByRole('dialog', { name: 'a' })).toBeNull();
+  });
+});

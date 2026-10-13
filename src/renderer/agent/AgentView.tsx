@@ -8,6 +8,9 @@ import type {
   McpChange,
   McpServer,
   PastSession,
+  FilesRewind,
+  RewindRestore,
+  RewindResult,
 } from '../../shared/session';
 import {
   AGENT_ACTIONS,
@@ -42,6 +45,7 @@ import { PeerQueue } from './PeerQueue';
 import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
+import { Rewind } from './Rewind';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
@@ -60,6 +64,9 @@ export interface SessionControls extends ComposerControls {
   pastSessions: () => Promise<PastSession[]>;
   /** Opens one of them in the agent, in place of its own. */
   resume: (sessionId: string) => Promise<void>;
+  /** What restoring its files to before a message would change, and rewinding there. */
+  previewRewind: (messageId: string) => Promise<FilesRewind>;
+  rewind: (messageId: string, restore: RewindRestore) => Promise<RewindResult>;
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
   mcpServers: () => Promise<McpServer[]>;
   changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
@@ -104,7 +111,9 @@ export interface SessionControls extends ComposerControls {
  * for an Agent SDK agent (commands.ts' VIEW_COMMANDS), in a panel above the composer: /resume
  * picks another conversation of the project folder to open in its place (ResumePicker.tsx), /mcp
  * shows its MCP servers to reconnect, disable or enable (McpPanel.tsx; signing in to one is
- * Claude Code's /mcp in Terminal).
+ * Claude Code's /mcp in Terminal), and /rewind, Esc twice in its empty composer, or "Rewind to
+ * here" on one of the user's messages rewinds its code, its conversation or both to before a
+ * message (Rewind.tsx), the message going back into the composer to edit.
  */
 export function AgentView({
   node,
@@ -269,6 +278,9 @@ export function AgentView({
   };
 
   const working = session.status !== 'idle';
+  /** Whether it can be rewound now: an idle Agent SDK agent, with a message of the user's. */
+  const rewindable =
+    connection === 'sdk' && !working && session.entries.some((entry) => entry.kind === 'user');
   const { stop } = controls;
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -280,6 +292,18 @@ export function AgentView({
   const [offer, setOffer] = useState<string>();
   /** The view's own command whose panel is open above the composer (/resume). */
   const [opened, setOpened] = useState<ViewCommand>();
+  /** The message picked to rewind to, while /rewind's panel is open (none: it asks which). */
+  const [rewindTo, setRewindTo] = useState<string>();
+  /** What the composer starts with, and its turn (a new one starts it afresh with that). */
+  const [draft, setDraft] = useState({ text: '', turn: 0 });
+  /** The first Esc of a double one, in an empty composer: what closes the view if no second comes. */
+  const firstEsc = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(
+    () => () => {
+      clearTimeout(firstEsc.current);
+    },
+    [],
+  );
   /** Closes that panel, and gives the keyboard back to the composer. */
   const closeOpened = () => {
     setOpened(undefined);
@@ -301,13 +325,26 @@ export function AgentView({
       } else if (choosing) setChoosing(undefined);
       else if (peer !== undefined) setPeer(undefined);
       else if (working) stop();
-      else close();
+      else if (rewindable && event.target === composer.current) {
+        // Twice, in the empty composer, it rewinds, as in Claude Code; once, it closes the view.
+        if (firstEsc.current === undefined) {
+          firstEsc.current = setTimeout(() => {
+            firstEsc.current = undefined;
+            close();
+          }, DOUBLE_ESC_MS);
+        } else {
+          clearTimeout(firstEsc.current);
+          firstEsc.current = undefined;
+          setRewindTo(undefined);
+          setOpened('rewind');
+        }
+      } else close();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [close, working, stop, choosing, peer, opened, offer]);
+  }, [close, working, stop, choosing, peer, opened, offer, rewindable]);
 
   /** Its own queue's edits. */
   const own = editsOf(edits, node.id);
@@ -339,6 +376,10 @@ export function AgentView({
   );
   /** Its card, on top of the stack while it minimizes into the rail. */
   const itself: StackedAgent = { id: node.id, name, agent, status: session.status };
+  /** The user's messages it can rewind to (an idle Agent SDK agent's), oldest first. */
+  const rewindPoints = session.entries.flatMap((entry) =>
+    entry.kind === 'user' ? [{ id: entry.id, text: entry.text }] : [],
+  );
   /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
   const commands = connection === 'sdk' ? completedCommands(session.commands) : session.commands;
   /**
@@ -348,6 +389,7 @@ export function AgentView({
   const send = (text: string, images?: MessageImage[]) => {
     const answered = connection === 'sdk' ? viewCommand(text) : undefined;
     if (answered !== undefined) {
+      setRewindTo(undefined);
       setOpened(answered);
       return;
     }
@@ -536,6 +578,14 @@ export function AgentView({
                       onSwitch: (to) => {
                         onAgent(agent, to);
                       },
+                      ...(rewindable
+                        ? {
+                            onRewind: (messageId: string) => {
+                              setRewindTo(messageId);
+                              setOpened('rewind');
+                            },
+                          }
+                        : {}),
                       onAnswerElicitation: (promptId, action, values) => {
                         controls.answerElicitation(promptId, action, values);
                         composer.current?.focus();
@@ -543,6 +593,8 @@ export function AgentView({
                     }}
                   />
                   <Composer
+                    key={draft.turn}
+                    initialDraft={draft.text}
                     agentName={name}
                     agent={agent}
                     connected={connection !== 'simulated'}
@@ -553,6 +605,21 @@ export function AgentView({
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={
                       <>
+                        {opened === 'rewind' && (
+                          <Rewind
+                            messages={rewindPoints}
+                            start={rewindTo}
+                            preview={controls.previewRewind}
+                            rewind={controls.rewind}
+                            onRewound={(point, result) => {
+                              // The message rewound to goes back in the box, to edit.
+                              if (result.conversation) {
+                                setDraft(({ turn }) => ({ text: point.text, turn: turn + 1 }));
+                              }
+                            }}
+                            onClose={closeOpened}
+                          />
+                        )}
                         {opened === 'mcp' && (
                           <McpPanel
                             list={controls.mcpServers}
@@ -631,6 +698,9 @@ export function AgentView({
     </div>
   );
 }
+
+/** How soon a second Esc must follow the first, in an empty composer, to rewind. */
+const DOUBLE_ESC_MS = 500;
 
 /** What the bar says a slash command typed below does while it asks: it runs, as a command. */
 const COMMAND_HINT = 'A /command typed below runs as a command, not as your answer.';

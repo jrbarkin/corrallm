@@ -11,7 +11,8 @@ import type { PastSession } from '../../../shared/session';
 /*
  * The conversations Claude Code keeps for a folder: the transcripts its CLI writes, whichever
  * connection ran it (Terminal or the Agent SDK), read with the Agent SDK's session functions. They
- * are listed for /resume. The CLI keeps them by the folder's real path.
+ * are listed for /resume, and forked to rewind one: a copy up to before a message, as a new
+ * conversation, which either connection resumes. The CLI keeps them by the folder's real path.
  */
 
 /** At most this many conversations are listed, the most recent. */
@@ -65,6 +66,30 @@ export class Conversations {
             : { branch: info.gitBranch }),
         };
       });
+  }
+
+  /**
+   * Where rewinding conversation `sessionId` to before message `messageId` forks it: the entry
+   * before that message, or null if it is the first (nothing is left before it). Throws if the
+   * message is not in that conversation.
+   */
+  async before(folder: string, sessionId: string, messageId: string): Promise<string | null> {
+    const messages = await this.#deps.getSessionMessages(sessionId, {
+      dir: await this.#real(folder),
+      includeSystemMessages: true,
+    });
+    const at = messages.findIndex((message) => message.uuid === messageId);
+    if (at === -1) throw new Error('That message is not in this conversation.');
+    return messages[at - 1]?.uuid ?? null;
+  }
+
+  /** A copy of conversation `sessionId` up to entry `upTo`, as a new conversation: its id. */
+  async fork(folder: string, sessionId: string, upTo: string): Promise<string> {
+    const { sessionId: forked } = await this.#deps.forkSession(sessionId, {
+      dir: await this.#real(folder),
+      upToMessageId: upTo,
+    });
+    return forked;
   }
 
   #real(folder: string): Promise<string> {

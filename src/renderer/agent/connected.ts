@@ -1,9 +1,12 @@
 import type {
   Connection,
+  FilesRewind,
   McpChange,
   McpServer,
   PastSession,
   PermissionMode,
+  RewindRestore,
+  RewindResult,
   SessionAnswer,
   SessionEvent,
   SessionOptions,
@@ -29,6 +32,13 @@ export interface SessionBackend {
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
   resume(agentId: string, sessionId: string): Promise<null>;
+  /** What restoring the agent's files to before one of its messages would change. */
+  previewRewind(agentId: string, messageId: string): Promise<FilesRewind>;
+  /**
+   * Rewinds the agent's session to before one of its messages: files, conversation, or both
+   * (its session then ends, to resume a copy of the conversation up to there).
+   */
+  rewind(agentId: string, messageId: string, restore: RewindRestore): Promise<RewindResult>;
   /** The MCP servers of the agent's running session (/mcp). */
   mcp(agentId: string): Promise<McpServer[]>;
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
@@ -54,6 +64,8 @@ export const NO_BACKEND: SessionBackend = (() => {
     files: () => Promise.resolve([]),
     sessions: refuse,
     resume: refuse,
+    previewRewind: refuse,
+    rewind: refuse,
     mcp: refuse,
     changeMcp: refuse,
     onEvent: () => () => undefined,

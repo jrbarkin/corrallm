@@ -9,6 +9,16 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { Conversations } from './conversations';
 
+/** A message of a kept transcript, as getSessionMessages reads it. */
+const message = (uuid: string, type: 'user' | 'assistant' = 'user'): SessionMessage => ({
+  type,
+  uuid,
+  session_id: 's',
+  parent_tool_use_id: null,
+  parent_agent_id: null,
+  message: { role: type, content: uuid },
+});
+
 function conversations({
   listed = [],
   messages = [],
@@ -50,5 +60,23 @@ describe('Conversations', () => {
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ dir: '/real/work/shop', includeWorktrees: false }),
     );
+  });
+
+  it('finds where a rewind to a message forks: the entry before it, or none for the first', async () => {
+    const { kept, read } = conversations({
+      messages: [message('u1'), message('a1', 'assistant'), message('u2'), message('a2')],
+    });
+    await expect(kept.before('/work/shop', 's', 'u2')).resolves.toBe('a1');
+    await expect(kept.before('/work/shop', 's', 'u1')).resolves.toBeNull();
+    await expect(kept.before('/work/shop', 's', 'gone')).rejects.toThrow(
+      /not in this conversation/,
+    );
+    expect(read).toHaveBeenCalledWith('s', { dir: '/real/work/shop', includeSystemMessages: true });
+  });
+
+  it('forks a conversation up to an entry, as a new one', async () => {
+    const { kept, fork } = conversations();
+    await expect(kept.fork('/work/shop', 's', 'a1')).resolves.toBe('forked');
+    expect(fork).toHaveBeenCalledWith('s', { dir: '/real/work/shop', upToMessageId: 'a1' });
   });
 });

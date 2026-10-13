@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -226,6 +226,50 @@ describe('SdkConnector through the Agent SDK', () => {
     await waitFor(events, (e) => e.type === 'end');
     const replied = events.flatMap((e) => (e.type === 'text' ? [e.text] : [])).join('');
     expect(replied).toBe('github got: accept {"repo":"acme/shop","draft":true}');
+  });
+
+  it('restores files to before a message, and forks the conversation to before it', async () => {
+    const notes = path.join(folder, 'notes.txt');
+    await writeFile(notes, 'one\nthree\n');
+    const { session: live, events, remembered } = await start('acceptEdits');
+    const ended = (count: number) =>
+      waitFor(events, () => events.filter((e) => e.type === 'end').length === count);
+    const first = '00000000-0000-4000-8000-00000000000f';
+    const second = '00000000-0000-4000-8000-000000000010';
+    await live.send({ id: first, text: 'Remember the shop' });
+    await ended(1);
+    await live.send({ id: second, text: 'please edit it' });
+    await ended(2);
+    expect(await readFile(notes, 'utf8')).toBe('two\nthree\n');
+
+    // Its files: previewed, then restored.
+    await expect(live.rewindFiles?.(second, true)).resolves.toEqual({
+      possible: true,
+      files: ['notes.txt'],
+      added: 1,
+      removed: 1,
+    });
+    expect(await readFile(notes, 'utf8')).toBe('two\nthree\n');
+    await live.rewindFiles?.(second, false);
+    expect(await readFile(notes, 'utf8')).toBe('one\nthree\n');
+
+    // Its conversation: a copy up to before that message, which resumes without it.
+    const kept = new Conversations();
+    const id = remembered.at(-1) ?? '';
+    const point = await kept.before(folder, id, second);
+    if (point === null) throw new Error('nothing before it');
+    const forked = await kept.fork(folder, id, point);
+    await live.close();
+    session = undefined;
+    const again = await start('manual', undefined, [], forked);
+    const history = again.events.find((e) => e.type === 'history');
+    if (history?.type !== 'history') throw new Error('no history');
+    const said = history.events.flatMap((e) => (e.type === 'user' ? [e.text] : []));
+    expect(said).toEqual(['Remember the shop']);
+    // A new process has no checkpoints from before the fork.
+    await expect(again.session.rewindFiles?.(first, true)).resolves.toMatchObject({
+      possible: false,
+    });
   });
 
   it('does not start the session on a Claude subscription login, and says why', async () => {

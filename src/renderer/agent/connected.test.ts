@@ -610,3 +610,56 @@ describe('a connected session’s MCP servers', () => {
     });
   });
 });
+
+describe('a connected session rewound', () => {
+  /** A store whose agent `a` has had a turn: "Edit the notes". */
+  async function talked() {
+    const fake = connected();
+    fake.store.send('a', 'Claude', 'Edit the notes');
+    await settle();
+    const id = fake.sent();
+    fake.emit('a', 'sdk', { type: 'user', id, text: 'Edit the notes' }, end([id]));
+    return { ...fake, id };
+  }
+
+  it('previews what restoring its files would change, from main', async () => {
+    const { store, backend, id } = await talked();
+    const preview = { possible: true, files: ['notes.txt'], added: 1, removed: 1 };
+    backend.previewRewind.mockResolvedValue(preview);
+    await expect(store.previewRewind('a', id)).resolves.toEqual(preview);
+    expect(backend.previewRewind).toHaveBeenCalledWith('a', id);
+  });
+
+  it('restores its files alone, saying which, and leaves the conversation as it is', async () => {
+    const { store, backend, id } = await talked();
+    backend.rewind.mockResolvedValue({
+      files: { possible: true, files: ['notes.txt'], added: 1, removed: 1 },
+      conversation: false,
+    });
+    await store.rewind('a', id, 'code');
+    expect(backend.rewind).toHaveBeenCalledWith('a', id, 'code');
+    expect(backend.close).not.toHaveBeenCalled();
+    expect(store.of('a').entries.map((e) => e.kind)).toEqual(['user', 'end', 'notice']);
+    expect(store.of('a').entries.at(-1)).toMatchObject({
+      level: 'info',
+      text: 'Restored notes.txt (+1 −1) to how it was before “Edit the notes”.',
+    });
+  });
+
+  it('rewinds the conversation: its session starts again on the copy, the transcript empty', async () => {
+    const { store, backend, id } = await talked();
+    backend.rewind.mockResolvedValue({
+      files: { possible: true, files: ['a.ts', 'b.ts', 'c.ts', 'd.ts'], added: 4, removed: 2 },
+      conversation: true,
+    });
+    await store.rewind('a', id, 'both');
+    expect(backend.close).toHaveBeenCalledWith('a');
+    expect(backend.start).toHaveBeenCalledTimes(2);
+    expect(store.of('a').entries).toMatchObject([
+      {
+        kind: 'notice',
+        text: 'Rewound the conversation to before “Edit the notes”, and restored 4 files (a.ts, b.ts, c.ts and 1 more; +4 −2).',
+      },
+    ]);
+  });
+});

@@ -1,9 +1,12 @@
 import type {
   ElicitationAction,
+  FilesRewind,
   FormValue,
   McpChange,
   McpServer,
   PastSession,
+  RewindRestore,
+  RewindResult,
 } from '../../shared/session';
 import { DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
@@ -11,7 +14,7 @@ import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
-import { answersOf, NEW_SESSION, reduce, turnReply } from './session';
+import { answersOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type { Answer, MessageImage, Mode, PlanAnswer, Session, SessionAction } from './session';
 
 /** An agent's driver, how it runs, and whether it is being let go. */
@@ -174,6 +177,37 @@ export class SessionStore {
     this.#driver(agentId).open();
     // What was queued goes on, to that conversation.
     this.#idle(agentId);
+  }
+
+  /** What restoring the agent's files to before one of its messages would change. */
+  previewRewind(agentId: string, messageId: string): Promise<FilesRewind> {
+    return this.#backend.previewRewind(agentId, messageId);
+  }
+
+  /**
+   * Rewinds the agent's session to before one of its messages (`messageId`, a user entry): its
+   * files, its conversation, or both, as main does them, then says what it did. The conversation
+   * goes back as a copy up to there, which main makes the agent's own: its driver goes, the
+   * transcript empties, and the session starts again on the copy, whose history fills it.
+   */
+  async rewind(agentId: string, messageId: string, restore: RewindRestore): Promise<RewindResult> {
+    const message = this.of(agentId).entries.find((entry) => entry.id === messageId);
+    const before = `before “${message?.kind === 'user' ? threadTitle(message.text, 60) : 'that message'}”`;
+    const result = await this.#backend.rewind(agentId, messageId, restore);
+    const { files, conversation } = result;
+    if (conversation) {
+      this.#letGo(agentId);
+      this.#dispatch(agentId, { type: 'clear' });
+      this.#driver(agentId).open();
+    }
+    const text = conversation
+      ? `Rewound the conversation to ${before}${files && files.files.length > 0 ? `, and restored ${restored(files)}` : ''}.`
+      : files && files.files.length > 0
+        ? `Restored ${restored(files)} to how ${files.files.length === 1 ? 'it was' : 'they were'} ${before}.`
+        : `No files to restore: nothing changed since ${before.slice('before '.length)}.`;
+    this.notice(agentId, 'info', text);
+    if (conversation) this.#idle(agentId);
+    return result;
   }
 
   /** The MCP servers of the agent's running session (/mcp). */
@@ -379,4 +413,15 @@ export class SessionStore {
   #notify(): void {
     for (const listener of this.#listeners) listener();
   }
+}
+
+/** The files a rewind restored, as a notice names them: "notes.txt (+1 −1)", "4 files (a, b, c and 1 more; +4 −2)". */
+function restored({ files, added, removed }: FilesRewind): string {
+  const counts = `+${String(added)} −${String(removed)}`;
+  if (files.length === 1) return `${files[0] ?? ''} (${counts})`;
+  const named =
+    files.length <= 3
+      ? files.join(', ')
+      : `${files.slice(0, 3).join(', ')} and ${String(files.length - 3)} more`;
+  return `${String(files.length)} files (${named}; ${counts})`;
 }

@@ -80,6 +80,10 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
     await api.listSessions('a');
     expect(invoke).toHaveBeenLastCalledWith('session:list', 'a');
+    await api.previewRewind('a', 'm');
+    expect(invoke).toHaveBeenLastCalledWith('session:rewind-preview', 'a', 'm');
+    await api.rewindSession('a', 'm', 'both');
+    expect(invoke).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
     await api.mcpServers('a');
     expect(invoke).toHaveBeenLastCalledWith('session:mcp', 'a');
     await api.changeMcpServer('a', 'github', 'disable');

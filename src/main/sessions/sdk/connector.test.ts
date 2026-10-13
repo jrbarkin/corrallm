@@ -1,6 +1,7 @@
 import type {
   CanUseTool,
   McpServerStatus,
+  RewindFilesResult,
   Options,
   PermissionMode,
   Query,
@@ -44,6 +45,9 @@ class FakeQuery {
   readonly setPermissionMode = vi.fn<(mode: PermissionMode) => Promise<void>>().mockResolvedValue();
   readonly setModel = vi.fn<(model?: string) => Promise<void>>().mockResolvedValue();
   readonly mcpServerStatus = vi.fn<() => Promise<McpServerStatus[]>>().mockResolvedValue([]);
+  readonly rewindFiles = vi
+    .fn<(id: string, options?: { dryRun?: boolean }) => Promise<RewindFilesResult>>()
+    .mockResolvedValue({ canRewind: true, filesChanged: [], insertions: 0, deletions: 0 });
   readonly reconnectMcpServer = vi.fn<(name: string) => Promise<void>>().mockResolvedValue();
   readonly toggleMcpServer = vi
     .fn<(name: string, enabled: boolean) => Promise<void>>()
@@ -178,6 +182,8 @@ describe('SdkConnector', () => {
       permissionMode: 'default',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
+      // Claude Code's file checkpoints, which a rewind restores.
+      enableFileCheckpointing: true,
       env: {
         PATH: '/usr/bin',
         HOME: '/home/user',
@@ -513,6 +519,39 @@ describe('SdkConnector', () => {
     query().setPermissionMode.mockRejectedValueOnce(new Error('Auto mode is not available'));
     await expect(session.setMode('auto')).rejects.toThrow(/not available/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
+  it('restores files to how they were before a message, or says what that would change', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    const message = '00000000-0000-4000-8000-0000000000aa';
+    query().rewindFiles.mockResolvedValue({
+      canRewind: true,
+      filesChanged: ['/home/user/shop/src/login.ts', '/home/user/notes.md'],
+      insertions: 4,
+      deletions: 10,
+    });
+    await expect(session.rewindFiles?.(message, true)).resolves.toEqual({
+      possible: true,
+      files: ['src/login.ts', '~/notes.md'],
+      added: 4,
+      removed: 10,
+    });
+    expect(query().rewindFiles).toHaveBeenLastCalledWith(message, { dryRun: true });
+    query().rewindFiles.mockResolvedValue({ canRewind: false, error: 'No checkpoint' });
+    await expect(session.rewindFiles?.(message, false)).resolves.toEqual({
+      possible: false,
+      error: 'No checkpoint',
+      files: [],
+      added: 0,
+      removed: 0,
+    });
+    expect(query().rewindFiles).toHaveBeenLastCalledWith(message, { dryRun: false });
+
+    // Not while a turn goes on, and not to a message the CLI can't know.
+    await session.send({ id: '00000000-0000-4000-8000-0000000000bb', text: 'Go' });
+    await expect(session.rewindFiles?.(message, true)).rejects.toThrow(/until it is done/);
+    await expect(session.rewindFiles?.('m1', true)).rejects.toThrow(/can’t be rewound/);
   });
 
   it('lists its MCP servers, and reconnects, enables and disables them as /mcp asks', async () => {

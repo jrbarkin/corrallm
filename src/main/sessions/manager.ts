@@ -2,10 +2,13 @@ import type { WebContents } from 'electron';
 
 import type {
   Connection,
+  FilesRewind,
   McpChange,
   McpServer,
   PastSession,
   PermissionMode,
+  RewindRestore,
+  RewindResult,
   SessionAnswer,
   SessionEvent,
   SessionOptions,
@@ -21,6 +24,8 @@ const NO_PROJECT =
 const NOT_RUNNING = 'This agent’s session is not running.';
 const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
+const NO_REWIND = 'This agent rewinds in its terminal: press Esc twice there.';
+const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -29,8 +34,15 @@ export interface SessionManagerDeps {
   connectors: Readonly<Record<Connection, Connector>>;
   /** The environment agents run in: the user's login shell's, cleaned (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
-  /** The conversations Claude Code kept for a folder (sdk/conversations.ts), for /resume. */
-  conversations?: { list(folder: string): Promise<KeptConversation[]> };
+  /**
+   * The conversations Claude Code kept for a folder (sdk/conversations.ts): listed for /resume,
+   * forked to rewind one (`before`: where; `fork`: the copy's id).
+   */
+  conversations?: {
+    list(folder: string): Promise<KeptConversation[]>;
+    before(folder: string, sessionId: string, messageId: string): Promise<string | null>;
+    fork(folder: string, sessionId: string, upTo: string): Promise<string>;
+  };
   /** The folder a renderer's canvas's agents work in, if one was chosen (project.ts). */
   projectOf: (contents: WebContents) => string | undefined;
   /** The file a renderer's canvas was opened from or saved to, if any (canvas.ts). */
@@ -148,6 +160,56 @@ export class SessionManager {
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
     await this.#choose(contents, agentId, { model });
+  }
+
+  /** What restoring the agent's files to how they were before a message would change. */
+  async previewRewind(
+    contents: WebContents,
+    agentId: string,
+    messageId: string,
+  ): Promise<FilesRewind> {
+    const session = await this.#session(contents, agentId);
+    if (!session.rewindFiles) throw new Error(NO_REWIND);
+    return session.rewindFiles(messageId, true);
+  }
+
+  /**
+   * Rewinds the agent's session to before one of its messages: its files (Claude Code's file
+   * checkpoints), its conversation, or both. The conversation goes back as a copy of it up to
+   * that point, which becomes the agent's own (none, for its first message: it starts afresh);
+   * its session ends, to resume that copy when it starts again. The original stays, for /resume.
+   * Rejects, changing nothing, if the message is not in the conversation or the files can't be
+   * restored.
+   */
+  async rewind(
+    contents: WebContents,
+    agentId: string,
+    messageId: string,
+    restore: RewindRestore,
+  ): Promise<RewindResult> {
+    const session = await this.#session(contents, agentId);
+    if (!session.rewindFiles) throw new Error(NO_REWIND);
+    const conversation = restore !== 'code';
+    const folder = this.#deps.projectOf(contents);
+    const id = this.#idsOf(contents).get(agentId);
+    const kept = this.#deps.conversations;
+    let point: string | null = null;
+    if (conversation) {
+      if (folder === undefined || id === undefined || !kept) throw new Error(NOTHING_TO_REWIND);
+      point = await kept.before(folder, id, messageId);
+    }
+    let files: FilesRewind | undefined;
+    if (restore !== 'conversation') {
+      files = await session.rewindFiles(messageId, false);
+      if (!files.possible) throw new Error(files.error ?? 'Its files can’t be restored to then.');
+    }
+    if (conversation && folder !== undefined && id !== undefined && kept) {
+      const forked = point === null ? null : await kept.fork(folder, id, point);
+      await this.close(contents, agentId);
+      if (forked === null) await this.#forget(contents, agentId);
+      else await this.#remember(contents, agentId, forked);
+    }
+    return { ...(files === undefined ? {} : { files }), conversation };
   }
 
   /** The MCP servers of the agent's session, and how each is (/mcp). */
@@ -310,6 +372,19 @@ export class SessionManager {
       { agentId, cwd, env, model, mode, resume },
       host,
     );
+  }
+
+  /** Forgets the agent's session: it starts afresh next time. */
+  async #forget(contents: WebContents, agentId: string): Promise<void> {
+    this.#idsOf(contents).delete(agentId);
+    const file = this.#deps.canvasOf(contents);
+    if (file === undefined) return;
+    await this.#deps.memory.update(file, (remembered) => ({
+      ...remembered,
+      sessions: Object.fromEntries(
+        Object.entries(remembered.sessions).filter(([agent]) => agent !== agentId),
+      ),
+    }));
   }
 
   async #remember(contents: WebContents, agentId: string, sessionId: string): Promise<void> {

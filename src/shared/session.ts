@@ -118,6 +118,31 @@ export interface PastSession {
   current: boolean;
 }
 
+/**
+ * What restoring the files to how they were before a message would change (a preview), or
+ * changed: Claude Code's file checkpoints.
+ */
+export interface FilesRewind {
+  /** Whether they can be restored to that point; `error` says why not. */
+  possible: boolean;
+  error?: string;
+  /** The files it changes, relative to the project folder where they are in it. */
+  files: string[];
+  /** The lines it adds and removes. */
+  added: number;
+  removed: number;
+}
+
+/** What rewinding to before a message restores, as Claude Code offers it. */
+export const REWIND_RESTORES = ['both', 'conversation', 'code'] as const;
+export type RewindRestore = (typeof REWIND_RESTORES)[number];
+
+/** What a rewind did: the files it restored, if it did; whether the conversation went back. */
+export interface RewindResult {
+  files?: FilesRewind;
+  conversation: boolean;
+}
+
 /** How an MCP server is, as Claude Code reports it. */
 export const MCP_STATUSES = ['connected', 'failed', 'needs-auth', 'pending', 'disabled'] as const;
 export type McpStatus = (typeof MCP_STATUSES)[number];

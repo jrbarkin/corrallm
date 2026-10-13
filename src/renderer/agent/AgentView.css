@@ -1435,3 +1435,43 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* "Rewind to here", under each of the user's messages: shown where the pointer or keyboard is. */
+.agent-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.agent-rewind-here {
+  margin-top: 2px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.agent-user:hover .agent-rewind-here,
+.agent-rewind-here:focus-visible {
+  opacity: 0.65;
+}
+
+.agent-rewind-here:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+  opacity: 1;
+}
+
+/* Which message to rewind to: the search field and its list, as wide as the composer. */
+.agent-rewind .search-picker {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}

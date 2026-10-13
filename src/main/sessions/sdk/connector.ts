@@ -160,6 +160,8 @@ export class SdkConnector implements Connector {
       // So that the mode menu can switch to bypassing permissions once the user confirms it (it
       // is never in the Shift+Tab cycle, as in Claude Code without this flag).
       allowDangerouslySkipPermissions: true,
+      // Claude Code's file checkpoints, which a rewind restores (rewindFiles).
+      enableFileCheckpointing: true,
       canUseTool: prompts.canUseTool,
       // MCP servers' requests: a form to fill in, or a link to open.
       onElicitation: prompts.onElicitation,
@@ -202,6 +204,7 @@ export class SdkConnector implements Connector {
       prompts,
       stderr,
       mode,
+      places,
     });
     live.session = session;
     host.emit({

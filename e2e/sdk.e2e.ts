@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -254,4 +254,56 @@ test('shows an agent’s MCP servers with /mcp, and a form one of them asks for'
   await expect(
     transcript.getByText('github got: accept {"repo":"acme/shop","draft":false}'),
   ).toBeVisible();
+});
+
+test('rewinds the code and the conversation to before a message', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  const notes = path.join(folder, 'notes.txt');
+  await writeFile(notes, 'one\nthree\n');
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, folder);
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+
+  await composer.fill('Remember the shop');
+  await composer.press('Enter');
+  await expect(transcript.getByText('You said: Remember the shop')).toBeVisible();
+  await composer.fill('please edit it');
+  await composer.press('Enter');
+  await transcript
+    .getByRole('group', { name: 'Edit file: notes.txt' })
+    .getByRole('button', { name: 'Yes', exact: true })
+    .click();
+  await expect(transcript.getByRole('button', { name: 'Edit notes.txt +1 −1' })).toBeVisible();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(2);
+  await expect.poll(() => readFile(notes, 'utf8')).toBe('two\nthree\n');
+
+  // Back to before the edit: its file, and the conversation.
+  const message = transcript.getByText('please edit it', { exact: true });
+  await message.hover();
+  await transcript.getByRole('button', { name: 'Rewind to here' }).nth(1).click();
+  const panel = view.getByRole('group', { name: 'Rewind' });
+  await expect(panel).toContainText('Restores notes.txt (+1 −1).');
+  await panel.getByRole('button', { name: 'Restore code and conversation' }).click();
+  await expect.poll(() => readFile(notes, 'utf8')).toBe('one\nthree\n');
+  await expect(
+    transcript.getByText(
+      'Rewound the conversation to before “please edit it”, and restored notes.txt (+1 −1).',
+    ),
+  ).toBeVisible();
+  await expect(transcript.getByText('You said: Remember the shop')).toBeVisible();
+  await expect(transcript.getByText('please edit it', { exact: true })).toHaveCount(0);
+  await expect(composer).toHaveValue('please edit it');
 });

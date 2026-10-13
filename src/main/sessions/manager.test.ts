@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
-import type { Connection, SessionEvent, SessionOptions } from '../../shared/session';
+import type { Connection, FilesRewind, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
@@ -32,14 +32,17 @@ let heard: Map<Electron.WebContents, [string, Connection, SessionEvent][]>;
 /** What each renderer's terminal views heard: agent and event. */
 let shown: Map<Electron.WebContents, [string, TerminalEvent][]>;
 let environment: () => Promise<Record<string, string>>;
-/** The conversations Claude Code kept for each folder, as the Agent SDK lists them. */
-let listKept: Mock<NonNullable<SessionManagerDeps['conversations']>['list']>;
+type Kept = NonNullable<SessionManagerDeps['conversations']>;
+/** The conversations Claude Code kept for each folder, as the Agent SDK lists and forks them. */
+let listKept: Mock<Kept['list']>;
+let before: Mock<Kept['before']>;
+let fork: Mock<Kept['fork']>;
 
 function manager(connectors: Partial<Record<Connection, Connector>> = {}) {
   return new SessionManager({
     connectors: { sdk: fake, terminal, ...connectors },
     environment: () => environment(),
-    conversations: { list: listKept },
+    conversations: { list: listKept, before, fork },
     projectOf: (contents) => projects.get(contents),
     canvasOf: (contents) => canvases.get(contents),
     memory,
@@ -78,6 +81,8 @@ beforeEach(async () => {
   heard = new Map();
   shown = new Map();
   environment = () => Promise.resolve({ PATH: '/usr/bin' });
+  before = vi.fn<Kept['before']>().mockResolvedValue('reply-1');
+  fork = vi.fn<Kept['fork']>().mockResolvedValue('forked');
   listKept = vi.fn(() =>
     Promise.resolve([
       { id: 'kept-2', title: 'Add a cart', modified: 2000 },
@@ -520,5 +525,113 @@ describe('SessionManager and kept conversations', () => {
     );
     await sessions.start(contents, 'a', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBeNull();
+  });
+});
+
+describe('SessionManager rewinding a session', () => {
+  /** A session that rewinds files as `rewound` says, recording what it was asked. */
+  function rewinding(
+    rewound: FilesRewind = { possible: true, files: ['notes.txt'], added: 1, removed: 1 },
+  ) {
+    const rewindFiles = vi.fn<NonNullable<LiveSession['rewindFiles']>>().mockResolvedValue(rewound);
+    const close = vi.fn<LiveSession['close']>().mockResolvedValue(undefined);
+    const connector: Connector = {
+      start: (spec, host) => {
+        host.remember(spec.resume ?? 'conversation');
+        return Promise.resolve({
+          send: () => Promise.resolve(),
+          answer: () => Promise.resolve(),
+          interrupt: () => Promise.resolve(),
+          setMode: () => Promise.resolve(),
+          setModel: () => Promise.resolve(),
+          close,
+          rewindFiles,
+        });
+      },
+    };
+    const started: (string | null)[] = [];
+    const sdk: Connector = {
+      start: (spec, host) => {
+        started.push(spec.resume);
+        return connector.start(spec, host);
+      },
+    };
+    return { sessions: manager({ sdk }), rewindFiles, close, started };
+  }
+
+  it('previews and restores the files alone, leaving the conversation as it is', async () => {
+    const { sessions, rewindFiles, close } = rewinding();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    await expect(sessions.previewRewind(contents, 'a', 'u2')).resolves.toMatchObject({
+      files: ['notes.txt'],
+    });
+    expect(rewindFiles).toHaveBeenLastCalledWith('u2', true);
+    await expect(sessions.rewind(contents, 'a', 'u2', 'code')).resolves.toEqual({
+      files: { possible: true, files: ['notes.txt'], added: 1, removed: 1 },
+      conversation: false,
+    });
+    expect(rewindFiles).toHaveBeenLastCalledWith('u2', false);
+    expect(fork).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('rewinds the conversation to a copy up to before the message, which it resumes next', async () => {
+    const { sessions, close, started } = rewinding();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    await expect(sessions.rewind(contents, 'a', 'u2', 'both')).resolves.toMatchObject({
+      conversation: true,
+      files: { files: ['notes.txt'] },
+    });
+    expect(before).toHaveBeenCalledWith('/work/app', 'conversation', 'u2');
+    expect(fork).toHaveBeenCalledWith('/work/app', 'conversation', 'reply-1');
+    expect(close).toHaveBeenCalled();
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(started).toEqual([null, 'forked']);
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).sessions).toEqual({ a: 'forked' });
+  });
+
+  it('starts afresh when rewound to its first message, with nothing before it', async () => {
+    const { sessions, started } = rewinding();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    before.mockResolvedValueOnce(null);
+    await sessions.rewind(contents, 'a', 'u1', 'conversation');
+    expect(fork).not.toHaveBeenCalled();
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).sessions).toEqual({});
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(started).toEqual([null, null]);
+  });
+
+  it('changes nothing when the files cannot be restored, or the message is not in it', async () => {
+    const { sessions, close } = rewinding({
+      possible: false,
+      error: 'No checkpoint for that message',
+      files: [],
+      added: 0,
+      removed: 0,
+    });
+    const contents = window();
+    await sessions.start(contents, 'a', OPTIONS);
+    await expect(sessions.rewind(contents, 'a', 'u2', 'both')).rejects.toThrow(
+      'No checkpoint for that message',
+    );
+    before.mockRejectedValueOnce(new Error('That message is not in this conversation.'));
+    await expect(sessions.rewind(contents, 'a', 'gone', 'conversation')).rejects.toThrow(
+      /not in this conversation/,
+    );
+    expect(fork).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('leaves rewinding a Terminal session to its terminal', async () => {
+    const sessions = manager();
+    const contents = window();
+    await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+    await expect(sessions.previewRewind(contents, 'a', 'u1')).rejects.toThrow(/Esc twice/);
+    await expect(sessions.rewind(contents, 'a', 'u1', 'conversation')).rejects.toThrow(/Esc twice/);
   });
 });

@@ -28,6 +28,8 @@ export interface TranscriptAnswers {
   onAnswerPlan: (promptId: string, answer: PlanAnswer) => void;
   /** Switches the agent to another connection, as a notice offers (Terminal, for a login). */
   onSwitch?: (connection: Connection) => void;
+  /** Rewinds to before one of the user's messages: offered on each, where it can be done. */
+  onRewind?: (messageId: string) => void;
   /** Answers an MCP server's request: accepted (with the form's values), declined, cancelled. */
   onAnswerElicitation?: (
     promptId: string,
@@ -127,6 +129,18 @@ function EntryView({
             </div>
           )}
           {entry.text !== '' && <p>{entry.text}</p>}
+          {answers.onRewind && (
+            <button
+              type="button"
+              className="agent-rewind-here"
+              title="Restore the code and conversation to before this message"
+              onClick={() => {
+                answers.onRewind?.(entry.id);
+              }}
+            >
+              Rewind to here
+            </button>
+          )}
         </div>
       );
     case 'text':

@@ -56,6 +56,10 @@ function fakeServices() {
       listSessions: vi.fn<IpcServices['sessions']['listSessions']>().mockResolvedValue([]),
       resumeSession: vi.fn<IpcServices['sessions']['resumeSession']>().mockResolvedValue(undefined),
       mcpServers: vi.fn<IpcServices['sessions']['mcpServers']>().mockResolvedValue([]),
+      previewRewind: vi
+        .fn<IpcServices['sessions']['previewRewind']>()
+        .mockResolvedValue({ possible: true, files: [], added: 0, removed: 0 }),
+      rewind: vi.fn<IpcServices['sessions']['rewind']>().mockResolvedValue({ conversation: false }),
       changeMcpServer: vi.fn<IpcServices['sessions']['changeMcpServer']>().mockResolvedValue([]),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
@@ -256,6 +260,10 @@ describe('session:* handlers', () => {
       kind: 'elicitation',
       action: 'decline',
     });
+    await invoke('session:rewind-preview', ['a', 'm1'], sender);
+    expect(services.sessions.previewRewind).toHaveBeenCalledWith(sender, 'a', 'm1');
+    await invoke('session:rewind', ['a', 'm1', 'conversation'], sender);
+    expect(services.sessions.rewind).toHaveBeenCalledWith(sender, 'a', 'm1', 'conversation');
     await invoke('session:mcp', ['a'], sender);
     expect(services.sessions.mcpServers).toHaveBeenCalledWith(sender, 'a');
     await invoke('session:mcp-change', ['a', 'github', 'reconnect'], sender);
@@ -422,6 +430,10 @@ describe('session:* handlers', () => {
       /form’s values/,
     ],
     ['session:mcp', 'no agent', [], /an agent/],
+    ['session:rewind-preview', 'no message', ['a'], /an agent and a message/],
+    ['session:rewind-preview', 'an empty message id', ['a', ''], /message's id/],
+    ['session:rewind', 'nothing to restore', ['a', 'm1'], /what to restore/],
+    ['session:rewind', 'something else to restore', ['a', 'm1', 'everything'], /thing to restore/],
     ['session:mcp-change', 'an unknown change', ['a', 'github', 'delete'], /change to an MCP/],
     ['session:mcp-change', 'no server', ['a', '', 'reconnect'], /MCP server’s name/],
     [

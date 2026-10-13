@@ -4,7 +4,7 @@ import type { SlashCommand } from '../../shared/session';
  * The slash commands an Agent SDK agent's composer knows besides its session's own. Claude Code
  * has commands that open a screen of its own (/permissions, /login, /hooks…): the Agent SDK runs
  * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker, /mcp's
- * servers); for the others it offers to continue the conversation in Terminal, where Claude Code
+ * servers, /rewind); for the others it offers to continue the conversation in Terminal, where Claude Code
  * itself runs, instead of sending them.
  */
 
@@ -12,6 +12,11 @@ import type { SlashCommand } from '../../shared/session';
 export const VIEW_COMMANDS = [
   { name: 'resume', description: 'Resume a previous conversation', argumentHint: '' },
   { name: 'mcp', description: 'Manage MCP servers', argumentHint: '' },
+  {
+    name: 'rewind',
+    description: 'Restore the code and/or conversation to a previous point',
+    argumentHint: '',
+  },
 ] as const satisfies readonly SlashCommand[];
 
 export type ViewCommand = (typeof VIEW_COMMANDS)[number]['name'];
