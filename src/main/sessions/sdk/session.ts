@@ -175,6 +175,9 @@ export class SdkSession implements LiveSession {
       this.#host.emit({ type: 'mode', mode: before });
       throw error;
     }
+    // Said, so that a view that heard another mode since it asked (the session's 'started', when
+    // the mode was picked as it started) shows the one it is in.
+    this.#host.emit({ type: 'mode', mode });
   }
 
   async setModel(model: string): Promise<void> {

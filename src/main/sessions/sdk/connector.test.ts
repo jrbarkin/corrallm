@@ -505,6 +505,14 @@ describe('SdkConnector', () => {
     expect(events.filter((event) => event.type === 'end')).toEqual([]);
   });
 
+  it('says the mode it switched to, so a view that heard another since shows it', async () => {
+    const { sdk, host, events } = connector();
+    const session = await sdk.start(SPEC, host);
+    // As when the user picked a mode while the session started: 'started' said Manual since.
+    await session.setMode('acceptEdits');
+    expect(events.at(-1)).toEqual({ type: 'mode', mode: 'acceptEdits' });
+  });
+
   it('switches mode and model as the composer asks', async () => {
     const { sdk, host, query, events } = connector();
     const session = await sdk.start(SPEC, host);
