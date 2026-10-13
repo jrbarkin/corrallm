@@ -1,5 +1,5 @@
 import type { GraphNode } from '../graph/graph';
-import { isDelay, isIf, isWait } from '../graph/queue';
+import { isApproval, isDelay, isIf, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
 
 /** An item of a lane, in its row. */
@@ -126,7 +126,8 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   };
   for (const agent of agents) {
     for (const item of agent.data.queue ?? []) {
-      const handed = isWait(item) || isDelay(item) ? [] : isIf(item) ? item.then : [item];
+      const handed =
+        isWait(item) || isDelay(item) || isApproval(item) ? [] : isIf(item) ? item.then : [item];
       for (const step of handed) {
         if (step.target === undefined || step.target === agent.id || !ids.has(step.target))
           continue;

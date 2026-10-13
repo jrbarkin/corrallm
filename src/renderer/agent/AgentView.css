@@ -612,6 +612,49 @@
   content: '';
 }
 
+/*
+ * What the queues' run holds the agent for the user to decide (an OK), right above the message box,
+ * amber like an agent asking on the canvas: what is written below answers it, or a choice.
+ */
+.agent-ok {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #f59e0b 60%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 10%, Canvas);
+  font-size: 13px;
+}
+
+.agent-ok button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-ok button:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-ok button[data-primary] {
+  border-color: var(--queue-handoff, #22a35a);
+  background: var(--queue-handoff, #22a35a);
+  color: white;
+}
+
+.agent-ok button[data-primary]:hover {
+  background: color-mix(in srgb, var(--queue-handoff, #22a35a) 80%, black);
+  color: white;
+}
+
 /* The queue's ⊕, right above the message box; its menus open upwards. */
 .agent-composer .graph-queue-add {
   justify-content: flex-start;

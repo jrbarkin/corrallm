@@ -1,6 +1,6 @@
 import { autosize, bounds, edgeId, nextGroupColor, PADDING, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { isDelay, isIf, isWait } from './queue';
+import { isApproval, isDelay, isIf, isWait } from './queue';
 import type { QueueItem } from './queue';
 
 /** Space between what is on the canvas and a group inserted beside it. */
@@ -22,7 +22,7 @@ export function insertGraph(
   const retarget = (item: QueueItem): QueueItem =>
     isWait(item)
       ? { ...item, waitFor: item.waitFor.map((t) => ({ ...t, agent: rename(t.agent) })) }
-      : isDelay(item)
+      : isDelay(item) || isApproval(item)
         ? item
         : isIf(item)
           ? {

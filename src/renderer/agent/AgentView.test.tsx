@@ -157,6 +157,75 @@ describe('the agent view', () => {
     expect(transcript.getByRole('group', { name: 'Bash command: npm test' })).toBeTruthy();
   });
 
+  it('asks for your OK above the composer while the run holds it, where what you send asks for changes', () => {
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  { id: 'ok', approve: 'the spec in SPEC.md' },
+                  { id: 'next', action: 'Read' },
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const view = shown('a');
+    const session = within(view.getByRole('region', { name: 'Session' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const row = () =>
+      side
+        .getByRole('button', { name: 'Move Your OK on the spec in SPEC.md' })
+        .closest<HTMLElement>('[data-run]');
+    const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+    const bar = () => session.queryByRole('group', { name: 'Needs you' });
+
+    expect(row()?.dataset.run).toBe('asking');
+    const asks = within(bar() ?? document.body);
+    expect(
+      asks.getByText(
+        'Waits for your OK on the spec in SPEC.md: write below what should change, or',
+      ),
+    ).toBeTruthy();
+    expect(asks.getAllByRole('button').map((b) => b.textContent)).toEqual(['Approve', 'Stop here']);
+    expect(composer.placeholder).toBe('What should change?');
+
+    // What is sent from the composer is the changes asked for: the agent works on them.
+    fireEvent.change(composer, { target: { value: 'Cover the empty state too' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(row()?.dataset.run).toBe('running');
+    expect(bar()).toBeNull();
+    expect(composer.placeholder).toBe('Queue a message for a…');
+    const transcript = within(view.getByRole('log', { name: 'Transcript' }));
+    expect(transcript.getByText('Cover the empty state too')).toBeTruthy();
+
+    // Once its turn ends (here, interrupted), it asks again.
+    fireEvent.keyDown(composer, { key: 'Escape' });
+    expect(row()?.dataset.run).toBe('asking');
+    expect(row()?.querySelector('.graph-queue-ok-asked')?.textContent).toBe(
+      'You asked: “Cover the empty state too”',
+    );
+    fireEvent.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
+    expect(row()?.dataset.run).toBe('succeeded');
+    expect(bar()).toBeNull();
+    expect(
+      side
+        .getByRole('button', { name: 'Move Read' })
+        .closest('[data-run]')
+        ?.getAttribute('data-run'),
+    ).toBe('running');
+  });
+
   describe('its rail', () => {
     /** Agent a, a Codex agent, in a group. */
     const grouped: Graph = {

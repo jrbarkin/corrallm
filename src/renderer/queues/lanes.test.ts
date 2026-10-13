@@ -111,6 +111,25 @@ describe('lanesOf', () => {
     expect(rows([a, b])).toEqual({ a: ['build', 'pause', 'ship'], b: [null, null, 'w'] });
   });
 
+  it('puts a wait for an OK in the row after it, linked from it; an OK hands no work on', () => {
+    const a = agent('a', [
+      { id: 'spec', message: 'Write SPEC.md' },
+      { id: 'ok', approve: 'the spec in SPEC.md' },
+      { id: 'plan', message: 'Write PLAN.md' },
+    ]);
+    const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] }]);
+    expect(rows([a, b])).toEqual({ a: ['spec', 'ok', 'plan'], b: [null, null, 'w'] });
+    expect(lanesOf([a, b]).links).toEqual([
+      {
+        key: 'b:w>a:ok',
+        kind: 'wait',
+        from: { lane: 'a', item: 'ok' },
+        to: { lane: 'b', item: 'w' },
+        timed: false,
+      },
+    ]);
+  });
+
   it('marks waits that wait on each other as stuck, and still lays them out', () => {
     const a = agent('a', [{ id: 'w', waitFor: [{ agent: 'b', item: 'w' }] }]);
     const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'w' }] }]);

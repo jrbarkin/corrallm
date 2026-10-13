@@ -33,6 +33,7 @@ import {
   retarget,
   selectOnly,
   setAgent,
+  setApproval,
   setCondition,
   setTime,
   setWaitFor,
@@ -399,6 +400,21 @@ describe('queues', () => {
     expect(editMessage(timed, 'a', 'd1', 'x')).toBe(timed);
   });
 
+  it('holds OKs, whose words can be changed, and which nothing else changes', () => {
+    const ok = { id: 'ok1', approve: 'the spec' };
+    const asked = addToQueue(queued, 'a', ok);
+    expect(queueOf(asked).at(-1)).toEqual(ok);
+    const plan = setApproval(asked, 'a', 'ok1', 'the plan in PLAN.md');
+    expect(queueOf(plan).at(-1)).toEqual({ id: 'ok1', approve: 'the plan in PLAN.md' });
+    expect(queueOf(setApproval(asked, 'a', 'ok1', '')).at(-1)).toEqual({ id: 'ok1', approve: '' });
+    // The same words, or an item that is not an OK, change nothing.
+    expect(setApproval(asked, 'a', 'ok1', 'the spec')).toBe(asked);
+    expect(setApproval(asked, 'a', 'q1', 'the spec')).toBe(asked);
+    expect(retarget(asked, 'a', 'ok1', 'b')).toBe(asked);
+    expect(editMessage(asked, 'a', 'ok1', 'x')).toBe(asked);
+    expect(setTime(asked, 'a', 'ok1', { seconds: 60 })).toBe(asked);
+  });
+
   describe('if-then', () => {
     const block = { id: 'if1', if: { kind: 'failed' as const }, then: [] };
     const withIf = addToQueue(queued, 'a', block);
@@ -409,12 +425,13 @@ describe('queues', () => {
       return found && 'then' in found ? found.then.map((q) => q.id) : undefined;
     };
 
-    it('adds steps inside an if-then, not to the queue; never a wait or a delay', () => {
+    it('adds steps inside an if-then, not to the queue; never a wait, a delay or an OK', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
       expect(addToQueue(withIf, 'a', { id: 'w', waitFor: [{ agent: 'b' }] }, 'if1')).toBe(withIf);
       expect(addToQueue(withIf, 'a', { id: 'd', delay: { seconds: 60 } }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'ok', approve: '' }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {

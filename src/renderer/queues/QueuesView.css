@@ -221,7 +221,15 @@
   animation: queues-blink 1.2s ease-in-out infinite;
 }
 
-/* An agent the run needs: it asks permission. Opens the agent, to answer. */
+/* Stopped at an OK, or waiting on what was: grey, and still. */
+.queues-head[data-run='stopped'] .queues-status {
+  background: var(--queues-held);
+}
+
+/*
+ * An agent the run needs: it waits for the user's decision (an OK), which this takes them to; or
+ * it asks permission, which opening the agent answers.
+ */
 .queues-head .queues-needs {
   flex: none;
   margin-left: auto;

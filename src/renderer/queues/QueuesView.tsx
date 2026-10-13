@@ -23,6 +23,12 @@ import './QueuesView.css';
 /** How wide the gap between two lanes is, where ribbons join their tasks. */
 const GAP = 64;
 
+/**
+ * What the run waits on the user for, in a lane: to decide at the hold its agent is at (an OK), or
+ * to answer its agent, which asks permission.
+ */
+type Needs = 'decide' | 'answer';
+
 /** A wait whose target (in `choice`) is being picked: the agent whose queue it is in, `owner`. */
 interface Choosing {
   owner: string;
@@ -42,7 +48,9 @@ interface Choosing {
  * (run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
  * (counting down to its time, with Go on now on hover), and what it has done is ticked. A wait
  * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
- * that holds one is not stuck.
+ * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
+ * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
+ * stops whatever waits on it.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
  * or a click outside closes it; an agent's name opens that agent.
@@ -175,18 +183,29 @@ export function QueuesView({
     edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
   };
 
-  /** Whether the run waits on the user for an agent: it is on a task, and asks permission. */
-  const needsYou = (id: string) =>
-    run.running && run.agents[id]?.status === 'running' && asking.has(id);
+  /**
+   * What the run waits on the user for, for an agent: to decide at the hold it is at (an OK), or to
+   * answer its agent, which asks permission in a task.
+   */
+  const needsYou = (id: string): Needs | undefined => {
+    const status = run.running ? run.agents[id]?.status : undefined;
+    return status === 'asking'
+      ? 'decide'
+      : status === 'running' && asking.has(id)
+        ? 'answer'
+        : undefined;
+  };
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
-  const needed = count((id) => needsYou(id));
+  const needed = count((id) => needsYou(id) !== undefined);
+  const stopped = count((_, status) => status === 'stopped');
   const runStatus = run.running
     ? [
         `${String(count((id, status) => status === 'running' && !needsYou(id)))} working`,
         `${String(count((_, status) => status === 'waiting'))} waiting`,
         ...(needed > 0 ? [`${String(needed)} need${needed === 1 ? 's' : ''} you`] : []),
+        ...(stopped > 0 ? [`${String(stopped)} stopped`] : []),
       ].join(' · ')
     : agents.length === 0
       ? ''
@@ -228,6 +247,9 @@ export function QueuesView({
             </span>
             <span className="queues-key" data-mark="stuck">
               stuck
+            </span>
+            <span className="queues-key" data-mark="ok">
+              your OK
             </span>
           </p>
         </header>
@@ -354,8 +376,8 @@ function LaneCells({
   /** Its session's status. */
   status: Session['status'];
   run: Run;
-  /** The run waits on the user: the agent asks permission. */
-  needsYou: boolean;
+  /** The run waits on the user: to decide at its hold, or to answer its agent. */
+  needsYou: Needs | undefined;
   focused: boolean;
   isStuck: Lanes['isStuck'];
   marks: (lane: string, item: string | null) => RowMarks;
@@ -413,7 +435,8 @@ function LaneCells({
         data-run={
           needsYou
             ? 'asking'
-            : agentRun && (run.running || agentRun.status === 'done')
+            : agentRun &&
+                (run.running || agentRun.status === 'done' || agentRun.status === 'stopped')
               ? agentRun.status
               : undefined
         }
@@ -433,10 +456,23 @@ function LaneCells({
           <button
             type="button"
             className="queues-needs"
-            aria-label={`Answer ${name(id)}`}
-            title={`${name(id)} asks permission: open it to answer`}
+            aria-label={needsYou === 'decide' ? `Decide for ${name(id)}` : `Answer ${name(id)}`}
+            title={
+              needsYou === 'decide'
+                ? `${name(id)} waits for your OK`
+                : `${name(id)} asks permission: open it to answer`
+            }
             onClick={() => {
-              onOpenAgent(id);
+              if (needsYou === 'answer') {
+                onOpenAgent(id);
+                return;
+              }
+              // The held row, brought into view, with its decision bar's first button focused.
+              const held = [
+                ...(grid.current?.querySelectorAll<HTMLElement>('[data-at]') ?? []),
+              ].find((row) => row.dataset.at === at(id, agentRun?.current ?? null));
+              held?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+              held?.querySelector<HTMLElement>('.graph-queue-decide button')?.focus();
             }}
           >
             Needs you

@@ -141,6 +141,26 @@ describe('fromFile', () => {
     expect(toFile(fromFile(text))).toBe(text);
   });
 
+  it('reads back OKs, on what they name or (no words) on the work before them', () => {
+    const asked: QueueItem[] = [
+      { id: 'spec', message: 'Write SPEC.md' },
+      { id: 'spec-ok', approve: 'the spec in SPEC.md' },
+      { id: 'ok', approve: '' },
+    ];
+    const withOks: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: asked } } : n,
+      ),
+    };
+    const text = toFile(withOks);
+    expect(text).toContain(
+      '{\n          "id": "spec-ok",\n          "approve": "the spec in SPEC.md"\n',
+    );
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(asked);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
   it('reads a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
@@ -255,6 +275,24 @@ describe('fromFile', () => {
           queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'd', delay: { seconds: 60 } }] }],
         }),
       /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a delay$/,
+    ],
+    [
+      'an OK whose words are not text',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'ok', approve: true }] }),
+      /^nodes\[1\]\.queue\[0\]\.approve must be text$/,
+    ],
+    [
+      'an OK without words',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'ok', approve: null }] }),
+      /^nodes\[1\]\.queue\[0\]\.approve must be text$/,
+    ],
+    [
+      'an OK inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'ok', approve: '' }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold an OK$/,
     ],
     [
       'a wait for nobody',

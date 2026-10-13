@@ -1,13 +1,35 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 
+import { threadTitle } from '../agent/session';
+import { answersOf } from '../run/asks';
+import type { Answer } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
-import { agentName, delayText, ifText, itemLabel, waitTargetLabel, waitText } from './labels';
-import { CONDITIONS, isDelay, isIf, isMessage, isWait, sameTarget, unfit } from './queue';
+import {
+  agentName,
+  delayText,
+  ifText,
+  itemLabel,
+  okText,
+  okWhat,
+  waitTargetLabel,
+  waitText,
+} from './labels';
+import {
+  CONDITIONS,
+  isApproval,
+  isDelay,
+  isIf,
+  isMessage,
+  isWait,
+  sameTarget,
+  unfit,
+} from './queue';
 import type {
   Condition,
+  QueueApproval,
   QueueDelay,
   QueueIf,
   QueueItem,
@@ -31,6 +53,7 @@ export type QueueEntry = (
   | Omit<QueueIf, 'id'>
   | Omit<QueueWait, 'id'>
   | Omit<QueueDelay, 'id'>
+  | Omit<QueueApproval, 'id'>
 ) & { id?: string };
 
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
@@ -86,8 +109,12 @@ interface QueueProps {
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   /** Sets a delay's time, or a wait's time limit (`undefined` takes it off). */
   onTime: (itemId: string, time: Time | undefined) => void;
+  /** Sets what an OK is on, in the user's words. */
+  onApproval: (okId: string, approve: string) => void;
   /** Ends now the hold the run has this agent at (Go on now), shown on a row marked waiting. */
   onGoOn: (itemId: string) => void;
+  /** Answers the hold the run has this agent at for the user, on a row marked to decide. */
+  onDecide: (itemId: string, answer: Answer) => void;
   /**
    * Once an agent is picked for a wait, lets the user pick one of its steps (AgentView shows its
    * queue beside). Without it, the wait picker lists their steps too.
@@ -97,7 +124,8 @@ interface QueueProps {
   choosing?: Omit<StepChoice, 'agent'>;
   /**
    * Marks for the row of each item and if-then step, by id, and (null) the queue's end. Where the
-   * run is with a row (`data-run`, `data-until`) gives it its run controls: Go on now, a countdown.
+   * run is with a row (`data-run`, `data-until`, `data-decide`, `data-asked`) gives it its run
+   * controls: Go on now, a countdown, how to decide, the changes asked for.
    */
   marks?: (itemId: string | null) => RowMarks;
 }
@@ -105,9 +133,10 @@ interface QueueProps {
 /**
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
  * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
- * only when a condition holds), waits (until other agents have finished, or at most a time), and
- * delays (a set time, or until a time of day). The ⊕ adds any of them; everything is picked by
- * typing to search. Rows are reordered by dragging their handle, or with the arrow keys on it.
+ * only when a condition holds), waits (until other agents have finished, or at most a time),
+ * delays (a set time, or until a time of day), and OKs (until the user decides about the work
+ * before). The ⊕ adds any of them; everything is picked by typing to search. Rows are reordered by
+ * dragging their handle, or with the arrow keys on it.
  * With `only`, it shows part of the queue (WorkDetail.tsx), where reordering moves items among
  * those shown.
  */
@@ -237,7 +266,7 @@ export function QueueRow({
   return <ItemRow item={item} handle={handle} context={contextOf(props)} props={props} />;
 }
 
-/** An item's row: a step, a message, a wait, a delay, or an if-then with its own steps. */
+/** An item's row: a step, a message, a wait, a delay, an OK, or an if-then with its own steps. */
 function ItemRow({
   item,
   handle,
@@ -257,6 +286,7 @@ function ItemRow({
     );
   if (isWait(item)) return <WaitRow item={item} handle={handle} context={context} />;
   if (isDelay(item)) return <DelayRow item={item} handle={handle} context={context} />;
+  if (isApproval(item)) return <ApprovalRow item={item} handle={handle} context={context} />;
   if (!isIf(item)) return row(item, handle);
   return (
     <IfRow
@@ -286,7 +316,9 @@ function contextOf({
   onEditMessage,
   onWaitFor,
   onTime,
+  onApproval,
   onGoOn,
+  onDecide,
   onChooseStep,
   choosing,
   marks,
@@ -299,11 +331,13 @@ function contextOf({
       ? waitText(item, targetLabel)
       : isDelay(item)
         ? delayText(item)
-        : isIf(item)
-          ? `If ${ifText(item.if)}`
-          : isMessage(item)
-            ? 'Message'
-            : item.action;
+        : isApproval(item)
+          ? okText(item)
+          : isIf(item)
+            ? `If ${ifText(item.if)}`
+            : isMessage(item)
+              ? 'Message'
+              : item.action;
   const queue = node.data.queue ?? EMPTY;
   return {
     agent,
@@ -319,7 +353,9 @@ function contextOf({
     onEditMessage,
     onWaitFor,
     onTime,
+    onApproval,
     onGoOn,
+    onDecide,
     unfit: (item) =>
       unfit(
         queue,
@@ -350,7 +386,9 @@ interface Context extends AddContext {
   onEditMessage: (itemId: string, message: string) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   onTime: (itemId: string, time: Time | undefined) => void;
+  onApproval: (okId: string, approve: string) => void;
   onGoOn: (itemId: string) => void;
+  onDecide: (itemId: string, answer: Answer) => void;
   /** Why an if-then's condition cannot hold where it sits, or undefined if it can. */
   unfit: (item: QueueIf) => string | undefined;
   choosing?: Omit<StepChoice, 'agent'>;
@@ -943,6 +981,165 @@ function DelayRow({
   );
 }
 
+/** What an OK can be on, besides what is typed: the work before it. */
+const OK_ON = [{ label: 'The work before it', approve: '' }] as const;
+
+/**
+ * Picks what an OK is on: the work before it, or what is typed, in the user's own words. With
+ * `current`, its words are typed in to start from.
+ */
+function OkPicker({
+  current = '',
+  onPick,
+  onCancel,
+}: {
+  current?: string;
+  onPick: (approve: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <SearchPicker
+      label="Your OK on…"
+      placeholder="What you check, e.g. the spec in SPEC.md…"
+      options={OK_ON}
+      optionLabel={(option) => option.label}
+      optionKey={(option) => option.label}
+      initialQuery={current.trim()}
+      freeText={{ detail: 'In your own words', onPick }}
+      onPick={(option) => {
+        onPick(option.approve);
+      }}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/**
+ * An OK: "Your OK on" what the user checks (a chip that changes it). Under it, the changes last
+ * asked for there, this run; and while the run holds the queue there for the user, how to answer
+ * (DecideBar), shown without pointing at it.
+ */
+function ApprovalRow({
+  item,
+  handle,
+  context,
+}: {
+  item: QueueApproval;
+  handle: HandleProps;
+  context: Context;
+}) {
+  const [editing, setEditing] = useState(false);
+  const marks = context.marks(item.id);
+  const what = okWhat(item);
+  const asked = marks['data-asked'];
+  const times = marks['data-asked-times'];
+  return (
+    <div className="graph-queue-row graph-queue-ok" {...marks}>
+      <Handle handle={handle} item={item} context={context} />
+      <span className="graph-queue-keyword">Your OK on</span>
+      <button
+        type="button"
+        className="graph-queue-target"
+        aria-label={`Change what you OK: ${what}`}
+        aria-expanded={editing}
+        onClick={() => {
+          setEditing(!editing);
+        }}
+      >
+        {what}
+      </button>
+      <RemoveButton item={item} context={context} />
+      {asked !== undefined && (
+        <span className="graph-queue-ok-asked" title={asked}>
+          You asked: “{threadTitle(asked, 80)}”{times === undefined ? '' : ` (${times} times)`}
+        </span>
+      )}
+      {marks['data-decide'] !== undefined && (
+        <DecideBar
+          item={item}
+          onDecide={(answer) => {
+            context.onDecide(item.id, answer);
+          }}
+        />
+      )}
+      {editing && (
+        <OkPicker
+          current={item.approve}
+          onPick={(approve) => {
+            context.onApproval(item.id, approve);
+            setEditing(false);
+          }}
+          onCancel={() => {
+            setEditing(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * How to answer at an item the run holds its queue at for the user (asks.ts answersOf): the
+ * primary choice, filled; an answer in the user's own words, in a multi-line prompt (Enter sends,
+ * Shift+Enter starts a new line, Esc cancels); then the other choices. Shown on the row whenever
+ * the run waits for the user, never hidden. A plain div, so All queues' groups stay as they are.
+ */
+export function DecideBar({
+  item,
+  onDecide,
+}: {
+  item: QueueItem;
+  onDecide: (answer: Answer) => void;
+}) {
+  const [replying, setReplying] = useState(false);
+  const answers = answersOf(item);
+  if (!answers) return null;
+  const { choices, reply } = answers;
+  const button = (choice: (typeof choices)[number]) => (
+    <button
+      key={choice.key}
+      type="button"
+      data-primary={choice.primary ? '' : undefined}
+      {...(choice.title === undefined ? {} : { title: choice.title })}
+      onClick={() => {
+        onDecide({ choice: choice.key });
+      }}
+    >
+      {choice.label}
+    </button>
+  );
+  return (
+    <div className="graph-queue-decide">
+      {choices.filter((choice) => choice.primary).map(button)}
+      {reply && (
+        <button
+          type="button"
+          aria-expanded={replying}
+          onClick={() => {
+            setReplying(!replying);
+          }}
+        >
+          {reply.button}…
+        </button>
+      )}
+      {choices.filter((choice) => !choice.primary).map(button)}
+      {replying && reply && (
+        <TextPrompt
+          label={reply.label}
+          multiline
+          onSubmit={(text) => {
+            setReplying(false);
+            onDecide({ reply: text });
+          }}
+          onCancel={() => {
+            setReplying(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /**
  * An if-then: "If <condition> then" (the condition a chip that changes it, struck through with
  * the reason as its title when it cannot hold where it sits), and its steps.
@@ -1018,6 +1215,7 @@ type Choice =
   | { kind: 'if' }
   | { kind: 'wait' }
   | { kind: 'delay' }
+  | { kind: 'ok' }
   | { kind: 'message' }
   | { kind: 'action'; action: AgentAction };
 
@@ -1025,6 +1223,7 @@ const CHOICE_TEXT = {
   if: ['If… then', 'Run steps only when a condition holds'],
   wait: ['Wait for…', 'Go on only once other agents have finished'],
   delay: ['Wait a while…', 'Go on after a set time, or at a time of day'],
+  ok: ['Wait for your OK…', 'Hold here until you approve, ask for changes, or stop'],
   message: ['Message', 'Tell an agent something'],
 } as const;
 
@@ -1036,14 +1235,14 @@ type Place = 'queue' | 'if';
  * anywhere). file.ts rejects the rest ("an if-then cannot hold …").
  */
 const PLACES: Readonly<Record<Place, readonly (keyof typeof CHOICE_TEXT)[]>> = {
-  queue: ['if', 'wait', 'delay', 'message'],
+  queue: ['if', 'wait', 'delay', 'ok', 'message'],
   if: ['message'],
 };
 
 /**
  * The ⊕ and its dropdowns: what may be added in its `place` (PLACES), then the agent an action
  * acts on (unless `target` fixes it), the message's text, the if-then's condition, the agent to
- * wait for, or how long to wait.
+ * wait for, how long to wait, or what an OK is on.
  */
 function AddMenu({
   label,
@@ -1063,7 +1262,7 @@ function AddMenu({
   onAdd: (entry: QueueEntry) => void;
 }) {
   const [step, setStep] = useState<
-    'closed' | 'choose' | 'condition' | 'wait' | 'delay' | 'message' | AgentAction
+    'closed' | 'choose' | 'condition' | 'wait' | 'delay' | 'ok' | 'message' | AgentAction
   >('closed');
   const close = () => {
     setStep('closed');
@@ -1154,6 +1353,15 @@ function AddMenu({
           label="Wait how long?"
           onPick={(time) => {
             if (time) onAdd({ delay: time });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'ok' && (
+        <OkPicker
+          onPick={(approve) => {
+            onAdd({ approve });
             close();
           }}
           onCancel={close}

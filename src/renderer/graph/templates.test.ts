@@ -24,6 +24,7 @@ const template: Graph = {
             ],
           },
           { id: 'run', action: 'exec_command' },
+          { id: 'ok', approve: 'the tests for {{feature}}' },
         ],
       },
     },
@@ -34,9 +35,18 @@ const template: Graph = {
 describe('templates', () => {
   it('lists the placeholders a canvas uses, in the order they first appear', () => {
     expect(placeholdersOf(template)).toEqual(['language', 'feature']);
+    // An OK's words are text that may have a blank in it.
+    const asking: Graph = {
+      nodes: template.nodes.map((n) => ({
+        ...n,
+        data: { label: 'Planner', queue: [{ id: 'ok', approve: 'the plan in {{file}}' }] },
+      })),
+      edges: [],
+    };
+    expect(placeholdersOf(asking)).toEqual(['file']);
   });
 
-  it("fills every placeholder in agents' names, messages and conditions, leaving others", () => {
+  it("fills every placeholder in agents' names, messages, conditions and OKs, leaving others", () => {
     const filled = fillTemplate(template, { feature: 'rate limiting', language: 'Go' });
     const [tester] = filled.nodes;
     expect(tester?.data.label).toBe('Go tester');
@@ -48,6 +58,7 @@ describe('templates', () => {
         then: [{ id: 'fix', message: 'Make the tests for rate limiting fail first.', target: 'x' }],
       },
       { id: 'run', action: 'exec_command' },
+      { id: 'ok', approve: 'the tests for rate limiting' },
     ]);
     // Placeholders without a value stay as they are.
     expect(fillTemplate(template, { feature: 'search' }).nodes[0]?.data.label).toBe(
@@ -74,6 +85,7 @@ describe('withAgents', () => {
               if: { kind: 'failed' },
               then: [{ id: 'patch', action: 'apply_patch' }],
             },
+            { id: 'ok', approve: '' },
           ],
         },
       },
@@ -95,6 +107,7 @@ describe('withAgents', () => {
       { id: 'run', action: 'Bash' },
       { id: 'diff', action: '/diff' },
       { id: 'red', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
+      { id: 'ok', approve: '' },
     ]);
     expect(any?.data).toEqual({
       label: 'Any',

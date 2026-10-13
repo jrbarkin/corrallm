@@ -28,8 +28,10 @@ import type {
  * A node's position is relative to its parent's, as React Flow keeps it. Queue items are as
  * queue.ts has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one,
  * is "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" },
- * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. A
- * link's dots are the ones it was drawn between ("top" or "bottom").
+ * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An
+ * OK is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
+ * link's dots are the ones it was drawn between ("top" or "bottom"). Where the queues' run is, and
+ * what the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
 const VERSION = 1;
@@ -214,6 +216,9 @@ function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
   if ('waitFor' in item) return readWait(item, where);
   if ('delay' in item) return readDelay(item, where);
+  if ('approve' in item) {
+    return { id: name(item.id, `${where}.id`), approve: text(item.approve, `${where}.approve`) };
+  }
   if ('if' in item) {
     return {
       id: name(item.id, `${where}.id`),
@@ -230,6 +235,7 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
   if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
   if ('delay' in item) throw new Error(`${where}: an if-then cannot hold a delay`);
+  if ('approve' in item) throw new Error(`${where}: an if-then cannot hold an OK`);
   const id = name(item.id, `${where}.id`);
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };

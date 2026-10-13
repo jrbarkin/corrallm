@@ -1,32 +1,47 @@
 import type { GraphNode } from '../graph/graph';
-import { isDelay, isIf, isMessage, isWait, unfit } from '../graph/queue';
+import { isApproval, isDelay, isIf, isMessage, isPause, isWait, unfit } from '../graph/queue';
 import type { Condition, QueueItem, QueueMessage, QueueStep, WaitTarget } from '../graph/queue';
 import { deadline } from '../graph/time';
 
 /**
  * How a task went. skipped: an if-then whose condition did not hold (or cannot, where it sits), or
  * an empty message. timedOut: a wait that went on without what it waited for, its time limit past
- * (or the user said to go on).
+ * (or the user said to go on). stopped: an OK the user stopped its queue at.
  */
-export type Outcome = 'succeeded' | 'failed' | 'skipped' | 'timedOut';
+export type Outcome = 'succeeded' | 'failed' | 'skipped' | 'timedOut' | 'stopped';
 
 /** Where an agent's queue is, in a run. */
 export interface AgentRun {
   /** The task it is on: an item of its queue, or a step of an if-then (by id). */
   current?: string;
-  /** Doing its task; held at a wait or a delay; or past the end of its queue. */
-  status: 'running' | 'waiting' | 'done';
+  /**
+   * running: doing its task (or, at an OK, the changes the user asked for). waiting: held by the
+   * run, at a wait or a delay. asking: held for the user, at an OK. stopped: stopped at an OK, or
+   * at a wait for what was stopped. done: past the end of its queue.
+   */
+  status: 'running' | 'waiting' | 'asking' | 'stopped' | 'done';
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /** How each task it has finished went, by id. */
   outcomes: Readonly<Record<string, Outcome>>;
+  /** The changes the user asked for at each OK this run, by its id, oldest first. */
+  changes?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface Run {
-  /** Whether queues are running: an agent is doing a task, or waiting for one. */
+  /**
+   * Whether queues are running: an agent is doing a task, or held (by the run, or for the user).
+   * Stopped queues keep no run going.
+   */
   running: boolean;
   agents: Readonly<Record<string, AgentRun>>;
 }
+
+/**
+ * What the user answers at a hold that waits for them: one of its choices (by key, as asks.ts
+ * offers them), or a reply in their words.
+ */
+export type Answer = { choice: string } | { reply: string };
 
 /** What a run needs from its surroundings. */
 export interface RunIO {
@@ -61,8 +76,10 @@ const IDLE: Run = { running: false, agents: {} };
  * to another agent is handed to that agent's session. A wait holds until what it waits for is
  * done (a step, or all of an agent's work), or its time limit passes; a delay holds until its time
  * has come; an if-then runs its steps only if its condition holds of the task before it. Delays
- * and time limits are the run's own, on the real clock (`now`): no agent is asked to wait. Queues
- * are read as they run (`update` gives it the graph as it changes), so edits take effect at once.
+ * and time limits are the run's own, on the real clock (`now`): no agent is asked to wait. An OK
+ * holds until the user decides (`decide`): the queue goes on, the agent makes the changes asked
+ * for and it asks again, or the queue stops there, and with it whatever waits on it. Queues are
+ * read as they run (`update` gives it the graph as it changes), so edits take effect at once.
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -129,6 +146,31 @@ export class RunStore {
     this.#settle(false);
   }
 
+  /**
+   * Answers the hold an agent is at for the user (`item`, an OK). `{ choice: 'approve' }`: its
+   * queue goes on, and so do waits for it. `{ choice: 'stop' }`: its queue stops there, and with it
+   * every wait for it, for what comes after it, or for all of its agent's work. `{ reply }`: the
+   * changes the user asks for, sent as they are (trimmed; empty, nothing is asked) to the agent's
+   * session; once that turn ends, it asks again. Only while the run holds that agent at that item
+   * for the user, so a second click, a stale card or an answer after Stop does nothing.
+   */
+  decide(agent: string, item: string, answer: Answer): void {
+    const at = this.#run.agents[agent];
+    if (!this.#run.running || at?.status !== 'asking' || at.current !== item) return;
+    const node = this.#agents().find((n) => n.id === agent);
+    const ok = node?.data.queue?.find((q) => q.id === item);
+    if (!node || !ok || !isApproval(ok)) return;
+    if ('reply' in answer) {
+      this.#askForChanges(node, at, item, answer.reply.trim());
+      return;
+    }
+    const outcome =
+      answer.choice === 'approve' ? 'succeeded' : answer.choice === 'stop' ? 'stopped' : undefined;
+    if (outcome === undefined) return;
+    this.#record(agent, item, outcome);
+    this.#settle(true);
+  }
+
   /** The graph as it is now: a run goes on with new work, and past waits for what is gone. */
   update(nodes: readonly GraphNode[]): void {
     this.#nodes = nodes;
@@ -163,14 +205,15 @@ export class RunStore {
       }
     }
     const running =
-      this.#busy.size > 0 || Object.values(agents).some((run) => run.status === 'waiting');
+      this.#busy.size > 0 ||
+      Object.values(agents).some((run) => run.status === 'waiting' || run.status === 'asking');
     if (moved || running !== this.#run.running) this.#set({ running, agents });
     this.#arm(now);
   }
 
   /**
-   * Where an agent not busy with a task goes next: its next task, a wait or a delay that holds, or
-   * done.
+   * Where an agent not busy with a task goes next: its next task, a hold (a wait, a delay, an OK),
+   * a stop, or done. What the user asked for at its OKs goes with it.
    */
   #advance(
     node: GraphNode,
@@ -178,11 +221,26 @@ export class RunStore {
     agents: Readonly<Record<string, AgentRun>>,
     now: number,
   ): AgentRun {
-    const outcomes: Record<string, Outcome> = { ...run.outcomes };
+    const next = this.#next(node, run.outcomes, agents, now);
+    return run.changes ? { ...next, changes: run.changes } : next;
+  }
+
+  /** Where in its queue an agent goes next, from how the tasks it has done went (`done`). */
+  #next(
+    node: GraphNode,
+    done: Readonly<Record<string, Outcome>>,
+    agents: Readonly<Record<string, AgentRun>>,
+    now: number,
+  ): AgentRun {
+    const outcomes: Record<string, Outcome> = { ...done };
     const queue = node.data.queue ?? [];
     for (const [index, item] of queue.entries()) {
+      // Stopped at an OK: nothing after it runs.
+      if (outcomes[item.id] === 'stopped') return { current: item.id, status: 'stopped', outcomes };
       if (outcomes[item.id] !== undefined) continue;
       const key = JSON.stringify([node.id, item.id]);
+      // Only the user moves the queue on from an OK (decide): no time, and no chance.
+      if (isApproval(item)) return { current: item.id, status: 'asking', outcomes };
       if (isDelay(item)) {
         const until = deadline(item.delay, this.#arrive(key, now));
         if (!this.#ended.has(key) && now < until)
@@ -192,6 +250,8 @@ export class RunStore {
       }
       if (isWait(item)) {
         const results = item.waitFor.map((target) => this.#resultOf(target, agents));
+        // A stop wins over everything, a time limit too: what it waits for will never be done.
+        if (results.includes('stopped')) return { current: item.id, status: 'stopped', outcomes };
         if (results.every((result) => result !== undefined)) {
           outcomes[item.id] = results.includes('failed') ? 'failed' : 'succeeded';
           continue;
@@ -239,19 +299,24 @@ export class RunStore {
   }
 
   /**
-   * How what a wait waits for went, once it is done; undefined until then. A step: its outcome. An
-   * agent's work: the outcome of its last task that ran. What is gone counts as done, and well.
+   * How what a wait waits for went, once it is done; undefined until then; 'stopped' if it never
+   * will be, its agent's queue stopped short of it. A step: its outcome. An agent's work: the
+   * outcome of its last task that ran. What is gone counts as done, and well.
    */
   #resultOf(target: WaitTarget, agents: Readonly<Record<string, AgentRun>>): Outcome | undefined {
     const node = this.#agents().find((n) => n.id === target.agent);
     if (!node) return 'succeeded';
     const run = agents[target.agent];
+    const stopped = run?.status === 'stopped';
     if (target.item === undefined) {
+      if (stopped) return 'stopped';
       if (run?.status !== 'done') return undefined;
       return lastRan(node.data.queue ?? [], run.outcomes) ?? 'succeeded';
     }
     if (!node.data.queue?.some((item) => item.id === target.item)) return 'succeeded';
-    return run?.outcomes[target.item];
+    const outcome = run?.outcomes[target.item];
+    if (outcome === undefined || outcome === 'stopped') return stopped ? 'stopped' : undefined;
+    return outcome;
   }
 
   #holds(condition: Condition, previous: Outcome | undefined): boolean {
@@ -333,15 +398,37 @@ export class RunStore {
     return { current: task.id, status: 'running', outcomes };
   }
 
+  /**
+   * Sends the changes the user asked for at an OK to the queue's own agent, as a turn of its
+   * session: it works on them at the OK, and once the turn ends (however it ends) the OK asks again.
+   */
+  #askForChanges(node: GraphNode, at: AgentRun, ok: string, note: string): void {
+    if (note === '') return;
+    const token = {};
+    this.#busy.set(node.id, token);
+    const changes = { ...at.changes, [ok]: [...(at.changes?.[ok] ?? []), note] };
+    const run: AgentRun = { ...at, status: 'running', changes };
+    this.#set({ ...this.#run, agents: { ...this.#run.agents, [node.id]: run } });
+    this.#io.send(node, note, () => {
+      if (this.#busy.get(node.id) !== token) return;
+      this.#busy.delete(node.id);
+      this.#settle(true);
+    });
+  }
+
   #finish(agent: string, task: string, token: object, outcome: Outcome): void {
     if (this.#busy.get(agent) !== token) return;
     this.#busy.delete(agent);
-    const run = this.#run.agents[agent];
-    if (run) {
-      const outcomes = { ...run.outcomes, [task]: outcome };
-      this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: { ...run, outcomes } } };
-    }
+    this.#record(agent, task, outcome);
     this.#settle(true);
+  }
+
+  /** Records how an agent's task went, for the next settle to move it on from. */
+  #record(agent: string, task: string, outcome: Outcome): void {
+    const run = this.#run.agents[agent];
+    if (!run) return;
+    const outcomes = { ...run.outcomes, [task]: outcome };
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: { ...run, outcomes } } };
   }
 
   #after(ms: number, run: () => void): void {
@@ -375,7 +462,8 @@ export class RunStore {
 
 /**
  * Where a run is with a task of an agent's (by id; null: the end of its queue), as views mark it:
- * running it or held at it (stopped, once the run is), how it went, or the end reached.
+ * running it, held at it (by the run, or for the user), stopped at it (or held there when the run
+ * was stopped), how it went, or the end reached.
  */
 export function taskState(run: Run, agent: string, item: string | null): string | undefined {
   const at = run.agents[agent];
@@ -387,8 +475,8 @@ export function taskState(run: Run, agent: string, item: string | null): string 
 
 /**
  * The outcome of the last of `items` that ran: what an if-then checks, and how a wait for all of an
- * agent's work went. Items not done yet, skipped ones and delays (which only pause) are passed
- * over.
+ * agent's work went. Items not done yet, skipped ones, and pauses (delays and OKs, which only hold
+ * the queue: queue.ts isPause) are passed over.
  */
 function lastRan(
   items: readonly QueueItem[],
@@ -396,7 +484,7 @@ function lastRan(
 ): Outcome | undefined {
   for (const item of items.toReversed()) {
     const outcome = outcomes[item.id];
-    if (outcome !== undefined && outcome !== 'skipped' && !isDelay(item)) return outcome;
+    if (outcome !== undefined && outcome !== 'skipped' && !isPause(item)) return outcome;
   }
   return undefined;
 }

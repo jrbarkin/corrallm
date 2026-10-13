@@ -40,6 +40,8 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
                      GraphEditor.tsx (node views in nodes.tsx); an agent's queue (QueueEditor.tsx, queue.ts,
                      SortableList.tsx and sortable.ts) and questions (Questions.tsx), shown in its agent view; agent types and their actions (sourced catalogs) in agents.ts;
+                     Questions.tsx's AskCard also shows what the run holds for the user, in the
+                     canvas's Needs you sidebar (above agents' own questions);
                      times (a delay's, a wait's time limit: one Time model in queue.ts) read from
                      what is typed, worded and turned into deadlines in time.ts;
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
@@ -73,10 +75,14 @@ src/renderer/queues/ Every agent's queue side by side, task by task, laid out li
 src/renderer/run/    Running the queues, simulated until agents are connected (runner.ts, a store like
                      sessions.ts): each agent works through its queue, messages go to its session,
                      waits hold until their target is done or their time limit passes, delays until
-                     their time comes. Delays and limits are the run's own, on the real clock (RunIO.now,
-                     one alarm re-checked at least once a minute); Go on now (RunStore.goOn) ends a
-                     hold early. run.css marks where the run is on a queue's rows, wherever they are
-                     shown.
+                     their time comes, OKs until the user decides (RunStore.decide: approve, ask for
+                     changes, which go to the agent's session before it asks again, or stop, which
+                     stops whatever waits on it). Delays and limits are the run's own, on the real
+                     clock (RunIO.now, one alarm re-checked at least once a minute); Go on now
+                     (RunStore.goOn) ends a hold early. asks.ts derives what each hold for the user
+                     asks (never stored), shown on its row, All queues' lane head, the Needs you
+                     sidebar and above the agent's composer. run.css marks where the run is on a
+                     queue's rows, wherever they are shown.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown
                      (its `typed` lists options read from what was typed, such as times, first).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,

@@ -1,11 +1,11 @@
 import { AGENT_ACTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
 import type { AgentType } from './agents';
 import type { Graph } from './graph';
-import { isDelay, isIf, isMessage, isWait } from './queue';
+import { isApproval, isDelay, isIf, isMessage, isWait } from './queue';
 import type { Condition, QueueItem, QueueMessage, QueueStep } from './queue';
 
 /**
- * A blank in a template, written `{{key}}` in its agents' names, messages and conditions: what the
+ * A blank in a template, written `{{key}}` in its agents' names, messages, conditions and OKs: what the
  * gallery asks for (`label`) before it opens the canvas, starting from the template's own example.
  */
 export interface TemplateField {
@@ -22,11 +22,13 @@ function textsOf(graph: Graph): string[] {
   const ofItem = (item: QueueItem): string[] =>
     isWait(item) || isDelay(item)
       ? []
-      : isIf(item)
-        ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
-        : isMessage(item)
-          ? [item.message]
-          : [];
+      : isApproval(item)
+        ? [item.approve]
+        : isIf(item)
+          ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
+          : isMessage(item)
+            ? [item.message]
+            : [];
   return graph.nodes.flatMap((n) => [n.data.label, ...(n.data.queue ?? []).flatMap(ofItem)]);
 }
 
@@ -47,9 +49,11 @@ export function fillTemplate(graph: Graph, values: Readonly<Record<string, strin
   const fillItem = (item: QueueItem): QueueItem =>
     isWait(item) || isDelay(item)
       ? item
-      : isIf(item)
-        ? { ...item, if: fillCondition(item.if), then: item.then.map(fillStep) }
-        : fillStep(item);
+      : isApproval(item)
+        ? { ...item, approve: fill(item.approve) }
+        : isIf(item)
+          ? { ...item, if: fillCondition(item.if), then: item.then.map(fillStep) }
+          : fillStep(item);
   return {
     ...graph,
     nodes: graph.nodes.map((node) => ({
@@ -86,7 +90,7 @@ export function withAgents(
           ? step
           : { ...step, action: equivalentAction(step.action, was, now) ?? step.action };
       const queue = node.data.queue?.map((item): QueueItem =>
-        isWait(item) || isDelay(item)
+        isWait(item) || isDelay(item) || isApproval(item)
           ? item
           : isIf(item)
             ? { ...item, then: item.then.map(translate) }

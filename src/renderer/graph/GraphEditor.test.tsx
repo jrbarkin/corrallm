@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasFile } from '../../shared/ipc';
 import { fromFile, toFile } from './file';
@@ -56,6 +56,10 @@ const actions = (id: string) => {
   if (!toolbar) throw new Error(`no actions for ${id}`);
   return within(toolbar);
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('GraphEditor', () => {
   it('adds a node on double-click on the empty canvas', () => {
@@ -335,6 +339,128 @@ describe('GraphEditor', () => {
     expect(fits.title).toBe('');
   });
 
+  it('queues your OK on the work before it, or on what you name, and changes it from its chip', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    // Typing "wait", "ok" or "approve" finds it.
+    plus();
+    fireEvent.change(field(), { target: { value: 'wait' } });
+    expect(options().slice(0, 3)).toEqual(['Wait for…', 'Wait a while…', 'Wait for your OK…']);
+    for (const typed of ['ok', 'approve']) {
+      fireEvent.change(field(), { target: { value: typed } });
+      expect(options()[0]).toBe('Wait for your OK…');
+    }
+    const choice = panel.getByRole('option', { name: /^Wait for your OK…/ });
+    expect(choice.textContent).toBe(
+      'Wait for your OK… Hold here until you approve, ask for changes, or stop',
+    );
+    fireEvent.click(choice);
+    expect(field().getAttribute('aria-label')).toBe('Your OK on…');
+    expect(field().placeholder).toBe('What you check, e.g. the spec in SPEC.md…');
+    expect(options()).toEqual(['The work before it']);
+    fireEvent.click(panel.getByRole('option', { name: 'The work before it' }));
+    expect(panel.getByRole('button', { name: 'Move Your OK on the work before it' })).toBeTruthy();
+
+    // Or on what you name, in your own words.
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^Wait for your OK…/ }));
+    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md' } });
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '“the spec in SPEC.md” In your own words',
+    ]);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const chip = () => panel.getByRole('button', { name: /^Change what you OK: the spec/ });
+    expect(chip().getAttribute('aria-label')).toBe('Change what you OK: the spec in SPEC.md');
+    expect(chip().textContent).toBe('the spec in SPEC.md');
+    expect(chip().closest('.graph-queue-row')?.getAttribute('data-mark')).toBe('ok');
+
+    // Its chip reopens the picker with its words in the field.
+    fireEvent.click(chip());
+    expect(field().value).toBe('the spec in SPEC.md');
+    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md and its tests' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(chip().textContent).toBe('the spec in SPEC.md and its tests');
+
+    // An if-then holds steps and messages, not OKs.
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'the previous step failed' }));
+    plus('Add to If the previous step failed');
+    expect(options()).not.toContain('Wait for your OK…');
+    expect(options()).toContain('Message');
+  });
+
+  it('asks for your OK on the canvas while the run holds an agent at one', () => {
+    const queue = (approve: string) => [
+      { id: 'spec', action: 'Read' },
+      { id: 'ok', approve },
+      { id: 'next', action: 'Grep' },
+    ];
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, { data: { label: 'Planner', queue: queue('the spec in SPEC.md') } }),
+        agentNode('b', 0, 100, { data: { label: 'Builder', queue: queue('') } }),
+        agentNode('c', 0, 200, { data: { label: 'Tester', queue: queue('the tests') } }),
+      ],
+      edges: [],
+    });
+    const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+
+    // The sidebar asks for each, in graph order, after the work it is on.
+    const list = within(sidebar() ?? document.body);
+    expect(list.getByRole('heading').textContent).toBe('Needs you 3');
+    const card = (agent: string) => {
+      const chip = list.getByRole('button', { name: `Open ${agent}` });
+      const found = chip.closest<HTMLElement>('.graph-question');
+      if (!found) throw new Error(`no card for ${agent}`);
+      return within(found);
+    };
+    expect(card('Planner').getByText('Your OK on the spec in SPEC.md?')).toBeTruthy();
+    expect(card('Planner').getByText('After Read')).toBeTruthy();
+    expect(card('Builder').getByText('Your OK on the work before it?')).toBeTruthy();
+
+    // Approve, Stop here and Ask for changes act on the run; each card then leaves.
+    fireEvent.click(card('Planner').getByRole('button', { name: 'Approve' }));
+    fireEvent.click(card('Builder').getByRole('button', { name: 'Stop here' }));
+    const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
+    fireEvent.change(reply, { target: { value: 'Test the empty state' } });
+    fireEvent.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
+    expect(sidebar()).toBeNull();
+    expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    // The Tester works on the changes asked for, in its session.
+    expect(node('c').classList.contains('working')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    const run = (name: string) =>
+      queues.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(run('Planner: Your OK on the spec in SPEC.md')).toBe('succeeded');
+    expect(run('Planner: Grep')).toBe('running');
+    expect(run('Builder: Your OK on the work before it')).toBe('stopped');
+    expect(run('Tester: Your OK on the tests')).toBe('running');
+  });
+
   it("offers a Claude agent Claude Code's own tools, Workflow included", () => {
     const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
     fireEvent.doubleClick(node('a'));
@@ -373,7 +499,7 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    const sidebar = () => screen.queryByRole('complementary', { name: 'Questions from agents' });
+    const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
     expect(node('a').classList.contains('asking')).toBe(true);
     expect(node('b').classList.contains('asking')).toBe(false);
     expect(node('a').querySelector('.graph-question-count')?.getAttribute('data-count')).toBe('1');

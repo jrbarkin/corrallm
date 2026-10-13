@@ -65,15 +65,24 @@ describe('isWorkBetween', () => {
     const waiting: QueueItem = { id: 'w', waitFor: [{ agent: 'b', item: 's' }] };
     const message: QueueItem = { id: 'm', message: 'Hello' };
     const sent: QueueItem = { id: 'n', message: 'Over to you', target: 'b' };
+    const ok: QueueItem = { id: 'ok', approve: 'the plan' };
     const between = (item: QueueItem, from: string, to: string) =>
       isWorkBetween(item, 'a', from, to);
-    // In a's queue: work for b makes a -> b; waiting for b makes b -> a.
-    const items = [step, holding, waiting, message, sent];
-    expect(items.map((item) => between(item, 'a', 'b'))).toEqual([true, true, false, false, true]);
+    // In a's queue: work for b makes a -> b; waiting for b makes b -> a. An OK is no work.
+    const items = [step, holding, waiting, message, sent, ok];
+    expect(items.map((item) => between(item, 'a', 'b'))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+    ]);
     expect(items.map((item) => between(item, 'b', 'a'))).toEqual([
       false,
       false,
       true,
+      false,
       false,
       false,
     ]);

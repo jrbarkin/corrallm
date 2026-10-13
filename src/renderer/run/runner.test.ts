@@ -378,6 +378,206 @@ describe('RunStore', () => {
     });
   });
 
+  describe('OKs', () => {
+    const ok = (id = 'ok', approve = 'the spec in SPEC.md'): QueueItem => ({ id, approve });
+
+    it('holds a queue at an OK, asking the user, and goes on once they approve', () => {
+      const a = agent('a', [
+        { id: 'spec', message: 'Write SPEC.md' },
+        ok(),
+        { id: 'plan', action: 'Read' },
+      ]);
+      const b = agent('b', [
+        { id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] },
+        { id: 'build', action: 'Edit' },
+      ]);
+      let draws = 0;
+      const { store, tick, advance, reply, where } = setup([a, b], () => {
+        draws += 1;
+        return 0.9;
+      });
+      store.start();
+      reply('a');
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+      expect(store.snapshot().running).toBe(true);
+      // Only the user moves it on: not time, and not chance.
+      advance(60 * MINUTE);
+      tick();
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+      expect(draws).toBe(0);
+
+      store.decide('a', 'ok', { choice: 'approve' });
+      expect(store.snapshot().agents.a?.outcomes.ok).toBe('succeeded');
+      // The wait for it goes on in the same settle.
+      expect(where()).toEqual({ a: 'running plan', b: 'running build' });
+      expect(store.snapshot().agents.b?.outcomes.w).toBe('succeeded');
+    });
+
+    it('passes over an approved OK: an If after it checks the task before it', () => {
+      // The tests fail (chance under a quarter).
+      const a = agent('a', [
+        { id: 'tests', action: 'Bash' },
+        ok('ok', ''),
+        { id: 'broken', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit' }] },
+      ]);
+      let draws = 0;
+      const { store, tick, where } = setup([a], () => (draws++ === 0 ? 0.1 : 0.9));
+      store.start();
+      tick();
+      expect(where()).toEqual({ a: 'asking ok' });
+      store.decide('a', 'ok', { choice: 'approve' });
+      expect(where()).toEqual({ a: 'running fix' });
+    });
+
+    it('sends the changes asked for to the queue’s own agent, then asks again', () => {
+      const a = agent('a', [{ id: 'build', action: 'Edit' }, ok(), { id: 'next', action: 'Read' }]);
+      const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] }]);
+      const { store, tick, reply, where, sent } = setup([a, b]);
+      store.start();
+      tick();
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+
+      store.decide('a', 'ok', { reply: '  Cover the empty state too \n' });
+      expect(sent.map((s) => [s.agent, s.text])).toEqual([['a', 'Cover the empty state too']]);
+      expect(where()).toEqual({ a: 'running ok', b: 'waiting w' });
+      expect(store.snapshot().agents.a?.changes).toEqual({ ok: ['Cover the empty state too'] });
+      // While the agent works on them, the OK is not asked: a decision now is ignored.
+      store.decide('a', 'ok', { choice: 'approve' });
+      expect(where()).toEqual({ a: 'running ok', b: 'waiting w' });
+
+      reply('a');
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+      expect(store.snapshot().agents.a?.outcomes.ok).toBeUndefined();
+      // An interrupted turn asks again too.
+      store.decide('a', 'ok', { reply: 'And the error state' });
+      reply('a', true);
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+      expect(store.snapshot().agents.a?.changes).toEqual({
+        ok: ['Cover the empty state too', 'And the error state'],
+      });
+      // An empty note asks for nothing.
+      store.decide('a', 'ok', { reply: '   ' });
+      expect(sent).toHaveLength(2);
+      expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
+    });
+
+    it('stops the queue at an OK, and whatever waits on it or on what comes after it', () => {
+      const a = agent('a', [
+        { id: 'first', action: 'Read' },
+        ok(),
+        { id: 'after', action: 'Edit' },
+      ]);
+      const queues = [
+        a,
+        // Waits for the OK, for a later step, and (with a time limit) for all of a's work.
+        agent('onOk', [
+          { id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] },
+          { id: 'more', action: 'Read' },
+        ]),
+        agent('onLater', [{ id: 'w', waitFor: [{ agent: 'a', item: 'after' }] }]),
+        agent('onAll', [{ id: 'w', waitFor: [{ agent: 'a' }], timeout: { seconds: 600 } }]),
+        // Down a chain: a wait for what comes after a stopped wait.
+        agent('chain', [{ id: 'w', waitFor: [{ agent: 'onOk', item: 'more' }] }]),
+        // A join naming the OK, beside a wait for a step before it, which goes on.
+        agent('join', [
+          {
+            id: 'w',
+            waitFor: [
+              { agent: 'before', item: 'x' },
+              { agent: 'a', item: 'ok' },
+            ],
+          },
+        ]),
+        agent('before', [
+          { id: 'x', waitFor: [{ agent: 'a', item: 'first' }] },
+          { id: 'y', action: 'Bash' },
+        ]),
+        agent('other', [{ id: 'own', action: 'Grep' }]),
+      ];
+      const { store, tick, advance, where, pending } = setup(queues);
+      store.start();
+      tick();
+      expect(where()).toMatchObject({ a: 'asking ok', before: 'running y', other: 'done' });
+
+      store.decide('a', 'ok', { choice: 'stop' });
+      expect(store.snapshot().agents.a?.outcomes.ok).toBe('stopped');
+      expect(where()).toEqual({
+        a: 'stopped ok',
+        onOk: 'stopped w',
+        onLater: 'stopped w',
+        onAll: 'stopped w',
+        chain: 'stopped w',
+        join: 'stopped w',
+        before: 'running y',
+        other: 'done',
+      });
+      expect(store.snapshot().running).toBe(true);
+      tick();
+      expect(where()).toMatchObject({ a: 'stopped ok', before: 'done', onAll: 'stopped w' });
+      // Stopped queues keep no run going, and a stop wins over a time limit.
+      expect(store.snapshot().running).toBe(false);
+      expect(pending()).toBe(0);
+      advance(60 * MINUTE);
+      expect(where()).toMatchObject({ a: 'stopped ok', onAll: 'stopped w' });
+      expect(store.snapshot().agents.a?.outcomes.after).toBeUndefined();
+    });
+
+    it('ignores a decision before the run, for another item, twice, or after Stop', () => {
+      const a = agent('a', [ok('one'), ok('two'), { id: 'next', action: 'Read' }]);
+      const { store, reply, where, sent } = setup([a]);
+      store.decide('a', 'one', { choice: 'approve' });
+      store.start();
+      expect(where()).toEqual({ a: 'asking one' });
+      store.decide('a', 'two', { choice: 'approve' });
+      store.decide('b', 'one', { choice: 'approve' });
+      expect(where()).toEqual({ a: 'asking one' });
+      store.decide('a', 'one', { choice: 'approve' });
+      // A second click, meant for the OK that was answered, is not taken for the next one.
+      store.decide('a', 'one', { choice: 'stop' });
+      expect(where()).toEqual({ a: 'asking two' });
+
+      // The run's Stop: a changes turn under way plays on in its session, but is not waited for.
+      store.decide('a', 'two', { reply: 'Smaller steps' });
+      store.stop();
+      reply('a');
+      store.decide('a', 'two', { choice: 'approve' });
+      expect(store.snapshot().running).toBe(false);
+      expect(where()).toEqual({ a: 'running two' });
+      expect(sent).toHaveLength(1);
+
+      // Run again: from the top, nothing approved or asked for.
+      store.start();
+      expect(where()).toEqual({ a: 'asking one' });
+      expect(store.snapshot().agents.a?.changes).toBeUndefined();
+    });
+
+    it('goes on past a held OK that is removed, before or during its changes turn', () => {
+      const next: QueueItem = { id: 'next', action: 'Read' };
+      const { store, reply, where, edit } = setup([agent('a', [ok(), next])]);
+      store.start();
+      edit([agent('a', [next])]);
+      expect(where()).toEqual({ a: 'running next' });
+
+      edit([agent('a', [ok(), next])]);
+      store.start();
+      store.decide('a', 'ok', { reply: 'One more test' });
+      edit([agent('a', [next])]);
+      expect(where()).toEqual({ a: 'running ok' });
+      reply('a');
+      expect(where()).toEqual({ a: 'running next' });
+    });
+
+    it('runs first the item a held OK is dragged below', () => {
+      const next: QueueItem = { id: 'next', action: 'Read' };
+      const { store, tick, where, edit } = setup([agent('a', [ok(), next])]);
+      store.start();
+      edit([agent('a', [next, ok()])]);
+      expect(where()).toEqual({ a: 'running next' });
+      tick();
+      expect(where()).toEqual({ a: 'asking ok' });
+    });
+  });
+
   describe('edits and timers', () => {
     const pause = (seconds: number): QueueItem => ({ id: 'pause', delay: { seconds } });
     const next: QueueItem = { id: 'next', action: 'Read' };

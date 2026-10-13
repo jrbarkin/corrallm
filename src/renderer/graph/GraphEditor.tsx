@@ -25,6 +25,7 @@ import { SessionStore } from '../agent/sessions';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
+import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
@@ -54,6 +55,7 @@ import {
   retarget,
   selectOnly,
   setAgent,
+  setApproval,
   setCondition,
   setTime,
   setWaitFor,
@@ -179,6 +181,8 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       }),
   );
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
+  /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
+  const asks = useMemo(() => heldAsks(graph.nodes, run), [graph.nodes, run]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
   const layout = useMemo(() => lanesOf(graph.nodes), [graph.nodes]);
   const marks = useMemo(() => {
@@ -344,8 +348,14 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setTime: (owner, itemId, time) => {
         setGraph((g) => setTime(g, owner, itemId, time));
       },
+      setApproval: (owner, okId, approve) => {
+        setGraph((g) => setApproval(g, owner, okId, approve));
+      },
       goOn: (owner, itemId) => {
         runStore.goOn(owner, itemId);
+      },
+      decide: (owner, itemId, answer) => {
+        runStore.decide(owner, itemId, answer);
       },
     }),
     [setGraph, runStore],
@@ -488,8 +498,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     }
   };
 
-  // Each node shows its group's colour, and an agent with a question for the user glows, through
-  // classes React Flow puts on it (GraphEditor.css). Screen readers hear an agent's type with its label.
+  // Each node shows its group's colour, and an agent with a question for the user (or one the run
+  // holds for the user, at an OK) glows, through classes React Flow puts on it (GraphEditor.css).
+  // Screen readers hear an agent's type with its label.
   const nodes = useMemo(() => {
     const colors = groupColors(graph.nodes);
     return graph.nodes.map((n) => {
@@ -497,7 +508,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       const status = sessions[n.id]?.status ?? 'idle';
       // Waiting on a permission answer is asking too.
       const asking =
-        status === 'waiting' || (n.data.questions?.some((q) => q.answer === undefined) ?? false);
+        status === 'waiting' ||
+        (run.running && run.agents[n.id]?.status === 'asking') ||
+        (n.data.questions?.some((q) => q.answer === undefined) ?? false);
       const classes = [
         ...(color === undefined ? [] : [`group-color-${String(color)}`]),
         ...(asking ? ['asking'] : []),
@@ -510,7 +523,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         ...(n.type === 'agent' ? { ariaLabel: `${name}, ${n.data.agent ?? DEFAULT_AGENT}` } : {}),
       };
     });
-  }, [graph.nodes, sessions]);
+  }, [graph.nodes, sessions, run]);
   const pending = pendingQuestions(graph.nodes);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
@@ -720,9 +733,11 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
               Delete
             </button>
           </NodeToolbar>
-          {pending.length > 0 && (
+          {(pending.length > 0 || asks.length > 0) && (
             <Panel position="top-right">
               <QuestionsSidebar
+                asks={asks}
+                onDecide={edits.decide}
                 pending={pending.map(({ agent, question }) => ({
                   agentId: agent.id,
                   agentName: agent.data.label || 'Unnamed agent',
@@ -829,6 +844,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             }}
             edits={edits}
             marks={marks}
+            ask={asks.find((ask) => ask.agent.id === openedNode.id)}
             onShowQueues={() => {
               setQueues({ from: openedNode.id });
             }}

@@ -2,7 +2,7 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
-import { isDelay, isIf, isMessage, isWait, sameTarget } from './queue';
+import { isApproval, isDelay, isIf, isMessage, isWait, sameTarget } from './queue';
 import type {
   Condition,
   QueueItem,
@@ -221,12 +221,12 @@ export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
 
 /**
  * Appends an item to a node's queue, or with `into` (an if-then's id) a step or message to that
- * if-then's steps. If-thens do not nest, and hold no waits or delays.
+ * if-then's steps. If-thens do not nest, and hold no waits, delays or OKs.
  */
 export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
   return updateQueue(graph, id, (queue) => {
     if (into === undefined) return [...queue, item];
-    if (isIf(item) || isWait(item) || isDelay(item)) return queue;
+    if (isIf(item) || isWait(item) || isDelay(item) || isApproval(item)) return queue;
     return queue.map((q) => (q.id === into && isIf(q) ? { ...q, then: [...q.then, item] } : q));
   });
 }
@@ -272,7 +272,11 @@ export function retarget(
   };
   return updateQueue(graph, id, (queue) =>
     queue.map((q) =>
-      isIf(q) ? withSteps(q, q.then.map(aim)) : isWait(q) || isDelay(q) ? q : aim(q),
+      isIf(q)
+        ? withSteps(q, q.then.map(aim))
+        : isWait(q) || isDelay(q) || isApproval(q)
+          ? q
+          : aim(q),
     ),
   );
 }
@@ -311,6 +315,15 @@ export function setTime(graph: Graph, id: string, itemId: string, time: Time | u
       delete untimed.timeout;
       return untimed;
     }),
+  );
+}
+
+/** Sets what an OK is on, in the user's words ('' for the work before it). */
+export function setApproval(graph: Graph, id: string, okId: string, approve: string): Graph {
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) =>
+      q.id === okId && isApproval(q) && q.approve !== approve ? { ...q, approve } : q,
+    ),
   );
 }
 

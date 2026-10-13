@@ -972,6 +972,66 @@ test('limits a wait, counts it down while it holds, and goes on from it now', as
   await view.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
+test('holds a queue for your OK, pulsing amber with its decision shown, until approved', async () => {
+  const agent = await addAgentAt('Agent 1', 400, 300);
+  await agent.dblclick();
+  const panel = page.getByRole('dialog', { name: 'Agent 1' });
+  // Its queue: a step, your OK on it, and another step (no empty message to start).
+  await panel.getByRole('button', { name: 'Remove Message' }).click();
+  const field = panel.getByRole('combobox');
+  const add = async (choice: string, then: string | null) => {
+    await panel.getByRole('button', { name: 'Add to queue' }).click();
+    await field.fill(choice);
+    await field.press('Enter');
+    if (then !== null) await field.fill(then);
+    await field.press('Enter');
+  };
+  await add('Read', null); // on this agent
+  await add('ok', 'the notes');
+  await add('Grep', null);
+  expect(
+    await panel
+      .getByRole('button', { name: /^Move / })
+      .evaluateAll((handles) => handles.map((handle) => handle.getAttribute('aria-label'))),
+  ).toEqual(['Move Read', 'Move Your OK on the notes', 'Move Grep']);
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+  await view.getByRole('button', { name: 'Run', exact: true }).click();
+  const ok = view.getByRole('group', { name: 'Agent 1: Your OK on the notes' });
+  const row = ok.locator('[data-run]');
+  // Once the step before it is done, the OK holds the queue: it pulses amber.
+  await expect(row).toHaveAttribute('data-run', 'asking', { timeout: 10_000 });
+  expect(await row.evaluate((element) => getComputedStyle(element).animationName)).toContain(
+    'run-pulse',
+  );
+  await expect(view.getByRole('button', { name: 'Decide for Agent 1' })).toBeVisible();
+
+  // Its decision shows without pointing at it: Approve filled green, beside its other answers.
+  await page.mouse.move(0, 0);
+  const approve = ok.getByRole('button', { name: 'Approve' });
+  await expect(approve).toBeVisible();
+  await expect(approve).toHaveCSS('opacity', '1');
+  await expect(approve).toHaveCSS('background-color', 'rgb(34, 163, 90)');
+  await expect(ok.locator('.graph-queue-decide button')).toHaveText([
+    'Approve',
+    'Ask for changes…',
+    'Stop here',
+  ]);
+
+  // Approve ticks it, and the next step runs.
+  await approve.click();
+  await expect(row).toHaveAttribute('data-run', 'succeeded');
+  expect(await row.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('"✓"');
+  await expect(approve).toHaveCount(0);
+  await expect(
+    view.getByRole('group', { name: 'Agent 1: Grep' }).locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'running');
+  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);
@@ -1006,7 +1066,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
-  const sidebar = page.getByRole('complementary', { name: 'Questions from agents' });
+  const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
   await sidebar.getByRole('button', { name: 'Fix them first' }).click();
   await expect(sidebar).toHaveCount(0);

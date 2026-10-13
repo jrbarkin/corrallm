@@ -1,9 +1,11 @@
+import type { Answer } from '../run/runner';
 import type { QueueEntry } from './QueueEditor';
 import type { Condition, Time, WaitTarget } from './queue';
 
 /**
  * What changes a queue, by agent (`owner`): what every queue's editor does to it. And what acts on
- * the queues' run from a queue's rows (`goOn`), so every view of a queue has its run controls.
+ * the queues' run from a queue's rows (`goOn`, `decide`), so every view of a queue has its run
+ * controls.
  */
 export interface QueueEdits {
   /** `into`: the id of the if-then to add a step or message to. */
@@ -16,8 +18,12 @@ export interface QueueEdits {
   setWaitFor: (owner: string, waitId: string, targets: WaitTarget[]) => void;
   /** A delay's time, or a wait's time limit (`undefined` takes the limit off). */
   setTime: (owner: string, itemId: string, time: Time | undefined) => void;
+  /** What an OK is on, in the user's words ('' for the work before it). */
+  setApproval: (owner: string, okId: string, approve: string) => void;
   /** Ends now the hold the run has the agent at, `itemId`: a delay, or a wait (Go on now). */
   goOn: (owner: string, itemId: string) => void;
+  /** Answers the hold the run has the agent at for the user, `itemId` (an OK): see RunStore.decide. */
+  decide: (owner: string, itemId: string, answer: Answer) => void;
 }
 
 /** One agent's queue edits, as a queue's editor takes them (QueueEditor, QueueRow). */
@@ -47,8 +53,14 @@ export function editsOf(edits: QueueEdits, owner: string) {
     onTime: (itemId: string, time: Time | undefined) => {
       edits.setTime(owner, itemId, time);
     },
+    onApproval: (okId: string, approve: string) => {
+      edits.setApproval(owner, okId, approve);
+    },
     onGoOn: (itemId: string) => {
       edits.goOn(owner, itemId);
+    },
+    onDecide: (itemId: string, answer: Answer) => {
+      edits.decide(owner, itemId, answer);
     },
   };
 }

@@ -1,5 +1,5 @@
 import type { GraphNode } from './graph';
-import { isDelay, isIf, isWait } from './queue';
+import { isApproval, isDelay, isIf, isWait } from './queue';
 import type { QueueItem } from './queue';
 
 /**
@@ -23,7 +23,8 @@ export interface WorkEdge {
  */
 export function isWorkBetween(item: QueueItem, owner: string, from: string, to: string): boolean {
   if (isWait(item)) return owner === to && item.waitFor.some((target) => target.agent === from);
-  if (isDelay(item)) return false;
+  // A delay or an OK holds the queue, and is no work.
+  if (isDelay(item) || isApproval(item)) return false;
   if (isIf(item)) return item.then.some((step) => isWorkBetween(step, owner, from, to));
   return owner === from && item.target === to;
 }
@@ -57,7 +58,7 @@ export function workEdges(nodes: readonly GraphNode[]): WorkEdge[] {
         }
       } else if (isIf(item)) {
         for (const step of item.then) visit(step, true);
-      } else if (!isDelay(item) && item.target !== undefined) {
+      } else if (!isDelay(item) && !isApproval(item) && item.target !== undefined) {
         add(node.id, item.target, inIf);
       }
     };

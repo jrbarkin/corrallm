@@ -94,7 +94,18 @@ export interface QueueDelay {
   delay: Time;
 }
 
-export type QueueItem = QueueStep | QueueMessage | QueueIf | QueueWait | QueueDelay;
+/**
+ * An OK: the queue holds here until the user decides about the work before it (`approve`: what
+ * they check, in their words, e.g. "the spec in SPEC.md"; '' for the work before it). They approve
+ * and the queue goes on; ask for changes (a note the queue's own agent gets, after which it asks
+ * again); or stop the queue here. OKs sit in the queue itself, not in an if-then or a repeat.
+ */
+export interface QueueApproval {
+  id: string;
+  approve: string;
+}
+
+export type QueueItem = QueueStep | QueueMessage | QueueIf | QueueWait | QueueDelay | QueueApproval;
 
 export function isIf(item: QueueItem): item is QueueIf {
   return 'if' in item;
@@ -106,6 +117,18 @@ export function isWait(item: QueueItem): item is QueueWait {
 
 export function isDelay(item: QueueItem): item is QueueDelay {
   return 'delay' in item;
+}
+
+export function isApproval(item: QueueItem): item is QueueApproval {
+  return 'approve' in item;
+}
+
+/**
+ * Whether an item is a hold that only pauses (a delay, an OK): what reads the item before it (an
+ * if-then, a wait for all of an agent's work) passes over it to the one above.
+ */
+export function isPause(item: QueueItem): item is QueueDelay | QueueApproval {
+  return isDelay(item) || isApproval(item);
 }
 
 export function isMessage(item: QueueItem): item is QueueMessage {
@@ -134,11 +157,12 @@ export const CONDITIONS = [
 ] as const satisfies readonly { kind: Condition['kind']; label: string }[];
 
 /**
- * The item the if-then at `index` in `queue` checks: the nearest one above it that is not a delay
- * (a delay only pauses, so the If after it checks what came before); undefined if there is none.
+ * The item the if-then at `index` in `queue` checks: the nearest one above it that is not a pause
+ * (a delay or an OK only pauses, so the If after it checks what came before); undefined if there
+ * is none.
  */
 export function checkedBy(queue: readonly QueueItem[], index: number): QueueItem | undefined {
-  return queue.slice(0, Math.max(index, 0)).findLast((item) => !isDelay(item));
+  return queue.slice(0, Math.max(index, 0)).findLast((item) => !isPause(item));
 }
 
 /**

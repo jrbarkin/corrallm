@@ -4,7 +4,7 @@ import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
-import { isDelay, isIf, isWait } from './queue';
+import { isApproval, isDelay, isIf, isWait } from './queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
@@ -27,7 +27,7 @@ describe.each(EXAMPLES)('the $name example', (example) => {
           }
           continue;
         }
-        if (isDelay(item)) continue;
+        if (isDelay(item) || isApproval(item)) continue;
         const steps = isIf(item) ? item.then : [item];
         for (const step of steps) {
           if (step.target !== undefined) expect(agents.has(step.target)).toBe(true);
@@ -39,6 +39,13 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
   it('asks for each of its blanks, and has no field it does not use', () => {
     expect(placeholdersOf(graph).sort()).toEqual((example.fields ?? []).map((f) => f.key).sort());
+  });
+
+  it('holds for your OK where it says you approve something', () => {
+    const oks = [...agents.values()].flatMap((agent) =>
+      (agent.data.queue ?? []).filter(isApproval),
+    );
+    expect(oks.length > 0).toBe(/\byou approve\b/.test(example.description));
   });
 
   it('shows work passing between its agents', () => {

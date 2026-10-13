@@ -10,6 +10,7 @@ import type { WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
+import type { HeldAsk } from '../run/asks';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
 import { queueLinks } from './links';
@@ -42,6 +43,10 @@ export interface SessionControls extends ComposerControls {
  * At its right edge, a rail (Rail.tsx) spawns a new agent, and stacks the others opened from it.
  * Spawning or switching minimizes the panel into the top of the stack, where its card appears; the
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
+ *
+ * While the queues' run holds the agent for the user (`ask`, at an OK), a bar above the composer
+ * asks, with its choices; what is sent from the composer then is the answer in the user's words
+ * (the changes to make), not a message of its own.
  */
 export function AgentView({
   node,
@@ -57,6 +62,7 @@ export function AgentView({
   onSimulateQuestion,
   edits,
   marks,
+  ask,
   onShowQueues,
   session,
   controls,
@@ -87,6 +93,8 @@ export function AgentView({
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (queues/marks.ts). */
   marks: (agent: string, item: string | null) => RowMarks;
+  /** What the queues' run holds this agent for the user to decide, if anything (run/asks.ts). */
+  ask?: HeldAsk | undefined;
   /** Shows every agent's queue, side by side (QueuesView.tsx). */
   onShowQueues: () => void;
   session: Session;
@@ -370,17 +378,37 @@ export function AgentView({
                   agentName={name}
                   agent={agent}
                   session={session}
-                  controls={controls}
+                  controls={
+                    ask?.reply
+                      ? {
+                          ...controls,
+                          send: (text) => {
+                            own.onDecide(ask.item.id, { reply: text });
+                          },
+                        }
+                      : controls
+                  }
                   field={composer}
+                  {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                   above={
-                    <QueueAddMenu
-                      node={node}
-                      nodes={nodes}
-                      actions={AGENT_ACTIONS[agent]}
-                      label="Queue something"
-                      onAdd={own.onAdd}
-                      onChooseStep={chooseStep}
-                    />
+                    <>
+                      {ask && (
+                        <AskBar
+                          ask={ask}
+                          onChoose={(choice) => {
+                            own.onDecide(ask.item.id, { choice });
+                          }}
+                        />
+                      )}
+                      <QueueAddMenu
+                        node={node}
+                        nodes={nodes}
+                        actions={AGENT_ACTIONS[agent]}
+                        label="Queue something"
+                        onAdd={own.onAdd}
+                        onChooseStep={chooseStep}
+                      />
+                    </>
                   }
                 />
               </section>
@@ -404,6 +432,42 @@ export function AgentView({
           }}
         />
       </div>
+    </div>
+  );
+}
+
+/** "Your OK on the spec?" as the bar says it: "Waits for your OK on the spec". */
+const waitsFor = (text: string) =>
+  `Waits for ${text.charAt(0).toLowerCase()}${text.slice(1).replace(/\?$/, '')}`;
+
+/**
+ * What the run holds the agent for, above its composer: what it waits for, that what is written
+ * below answers it (its reply), or its choices: "Waits for your OK on the spec: write below what
+ * should change, or [Approve] [Stop here]".
+ */
+function AskBar({ ask, onChoose }: { ask: HeldAsk; onChoose: (choice: string) => void }) {
+  const below = ask.reply?.label.replace(/\?$/, '');
+  return (
+    <div className="agent-ok" role="group" aria-label="Needs you">
+      <span className="agent-ok-text">
+        {waitsFor(ask.text)}
+        {below === undefined
+          ? ':'
+          : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}
+      </span>
+      {ask.choices.map((choice) => (
+        <button
+          key={choice.key}
+          type="button"
+          data-primary={choice.primary ? '' : undefined}
+          {...(choice.title === undefined ? {} : { title: choice.title })}
+          onClick={() => {
+            onChoose(choice.key);
+          }}
+        >
+          {choice.label}
+        </button>
+      ))}
     </div>
   );
 }

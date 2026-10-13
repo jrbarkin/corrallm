@@ -55,7 +55,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Spec first',
     description:
-      'A planner writes the spec and the plan before any code; a builder works the plan test-first; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.',
+      'A planner writes the spec before any code, and the plan once you approve the spec; a builder works the plan test-first; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.',
     text: specFirst,
     fields: [
       {
