@@ -18,7 +18,16 @@ import { HOOK_TOKEN } from './hooks';
  * the real screen copy, status reports, hook server and typing, at test speed.
  */
 
-const TIMING = { key: 0, enter: 1, confirm: 500, settle: 5, startup: 120, batch: 1, kill: 200 };
+const TIMING = {
+  key: 0,
+  enter: 1,
+  echo: 300,
+  confirm: 500,
+  settle: 5,
+  startup: 120,
+  batch: 1,
+  kill: 200,
+};
 
 let dir: string;
 let runs: FakeClaude[];
@@ -278,6 +287,34 @@ describe('a Terminal session', () => {
       expect(last('end')).toBeDefined();
     });
     expect(claude().prompts).toEqual(['From the queue']);
+  });
+
+  it('presses Enter once the prompt shows what was typed, though Claude Code reads keys late', async () => {
+    // As the real CLI does right after the folder trust dialog and as a turn ends: keys that pile
+    // up while it is busy are read in one go, as a paste, where Enter is not a submit.
+    fake.trust = true;
+    fake.busy = 100;
+    const session = await start();
+    await session.send({ id: 'm1', text: 'Hello' });
+    await until(() => {
+      expect(seen()).toContain('status:waiting');
+    });
+    session.terminal?.input('\r');
+    const ends = () => events.filter((event) => event.type === 'end');
+    await until(() => {
+      expect(ends()).toHaveLength(1);
+    });
+    // Typed as soon as the turn has ended.
+    await session.send({ id: 'm2', text: 'And the changelog' });
+    await until(() => {
+      expect(ends()).toHaveLength(2);
+    });
+    expect(claude().prompts).toEqual(['Hello', 'And the changelog']);
+    expect(seen()).not.toContainEqual(expect.stringMatching(/^notice:/));
+    expect(ends()).toMatchObject([
+      { messages: ['m1'], interrupted: false, failed: false },
+      { messages: ['m2'], interrupted: false, failed: false },
+    ]);
   });
 
   it('waits on the user while a dialog (folder trust) keeps the prompt from showing', async () => {

@@ -32,8 +32,13 @@ import { ENTER, keystrokes, typeable } from './typing';
 export interface TerminalTiming {
   /** Between the writes that type a message. */
   key: number;
-  /** Between a message's last keystrokes and the Enter that sends it. */
+  /** After Claude Code's prompt shows a message's keystrokes, before the Enter that sends it. */
   enter: number;
+  /**
+   * How long Claude Code may take to show a message's keystrokes in its prompt before Enter is
+   * pressed anyway (see `#shown`).
+   */
+  echo: number;
   /**
    * How long Claude Code may take to take a message once Enter is pressed (twice: see `#confirm`).
    */
@@ -51,6 +56,7 @@ export interface TerminalTiming {
 export const TIMING: TerminalTiming = {
   key: 4,
   enter: 80,
+  echo: 3000,
   confirm: 2000,
   settle: 50,
   startup: 3000,
@@ -65,6 +71,9 @@ const ROWS = 30;
 const BATCH_MAX = 64 * 1024;
 const ESCAPE = '\x1b';
 const CTRL_C = '\x03';
+
+/** How much of the end of a message the prompt must show before Enter is pressed. */
+const TAIL = 40;
 
 const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
 const NOT_SENT =
@@ -498,7 +507,10 @@ export class TerminalSession implements LiveSession {
       this.#write(keys);
       await pause(this.#deps.timing.key);
     }
-    if (!typing.stopped && writes.length > 0) await pause(this.#deps.timing.enter);
+    if (!typing.stopped && writes.length > 0) {
+      await this.#shown(typeable(message.text), typing);
+      await pause(this.#deps.timing.enter);
+    }
     this.#typing = undefined;
     if (typing.stopped || this.#exited || this.#closing) {
       this.#settle();
@@ -514,6 +526,22 @@ export class TerminalSession implements LiveSession {
     this.#awaiting = true;
     this.#unconfirmed.push(typeable(message.text).trim());
     this.#confirm(0);
+  }
+
+  /**
+   * Waits until Claude Code's prompt shows the end of what was typed, `text` (it has read those
+   * keys), at most `timing.echo`. Enter read in one go with keys before it is taken for part of a
+   * paste, not a submit: keys pile up so while Claude Code is busy (just after the folder trust
+   * dialog, or as a turn ends), and the message would stay in the prompt.
+   */
+  async #shown(text: string, typing: { stopped: boolean }): Promise<void> {
+    const tail = flat(text).slice(-TAIL);
+    const until = Date.now() + this.#deps.timing.echo;
+    while (!typing.stopped && !this.#exited && Date.now() < until) {
+      await this.#screen.settled();
+      if (flat(this.#screen.draft() ?? '').endsWith(tail)) return;
+      await new Promise((resolve) => setTimeout(resolve, this.#deps.timing.settle));
+    }
   }
 
   /**
@@ -692,4 +720,9 @@ export class TerminalSession implements LiveSession {
 function modeOf(name: string | undefined): PermissionMode | undefined {
   if (name === 'default') return 'manual';
   return PERMISSION_MODES.find((mode) => mode === name);
+}
+
+/** Text with each run of whitespace (line breaks, the prompt's wrapping) as one space. */
+function flat(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
