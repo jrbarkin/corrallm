@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Connection, MessageImage } from '../../shared/session';
-import type { UsageRule, UsageState, UsageWindows } from '../../shared/usage';
+import type { UsageBackend, UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { RunStore } from './runner';
@@ -138,20 +138,20 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     },
     /** The time now on the run's clock. */
     now: () => clock,
-    /** Main tells a new reading of Claude's usage (read now), or a rule. */
-    reading: (windows: UsageWindows | null) => {
-      const others = usage.readings.filter((r) => r.backend !== 'Claude');
+    /** Main tells a new reading of a backend's usage (read now; Claude's unless said), or a rule. */
+    reading: (windows: UsageWindows | null, backend: UsageBackend = 'Claude') => {
+      const others = usage.readings.filter((r) => r.backend !== backend);
       usage = {
         ...usage,
-        readings: [
-          ...others,
-          ...(windows ? [{ backend: 'Claude' as const, windows, at: clock }] : []),
-        ],
+        readings: [...others, ...(windows ? [{ backend, windows, at: clock }] : [])],
       };
       store.usageChanged();
     },
-    rule: (rule: UsageRule | null) => {
-      usage = { ...usage, rules: rule ? { Claude: rule } : {} };
+    rule: (rule: UsageRule | null, backend: UsageBackend = 'Claude') => {
+      const rules = { ...usage.rules };
+      if (rule) rules[backend] = rule;
+      else Reflect.deleteProperty(rules, backend);
+      usage = { ...usage, rules };
       store.usageChanged();
     },
   };
@@ -1464,6 +1464,33 @@ describe('RunStore', () => {
       run.reading(fiveHour(95, 7 * HOUR));
       run.advance(HOUR + MINUTE);
       expect(run.where()).toMatchObject({ a: 'asking two' });
+    });
+
+    it('holds Codex agents by Codex’s rule and readings, on either of its connections', () => {
+      const codex = (id: string, queue: QueueItem[], connection?: Connection) => {
+        const node = connection ? connected(id, queue, connection) : agent(id, queue);
+        return { ...node, data: { ...node.data, agent: 'Codex' as const } };
+      };
+      const run = setup([
+        codex('t', [{ id: 'one', message: 'Write the tests' }], 'codex-terminal'),
+        codex('p', [{ id: 'two', message: 'Review them' }], 'app-server'),
+        codex('x', [{ id: 'three', action: 'Edit' }]),
+        agent('a', [{ id: 'four', action: 'Edit' }]),
+      ]);
+      run.rule(ask, 'Codex');
+      // Claude's usage does not hold a Codex agent, nor Codex's a Claude one.
+      run.reading(fiveHour(95));
+      run.reading(fiveHour(90), 'Codex');
+      run.store.start();
+      expect(run.where()).toEqual({
+        t: 'asking one',
+        p: 'asking two',
+        x: 'asking three',
+        a: 'running four',
+      });
+      expect(run.store.snapshot().agents.t?.usage).toMatchObject({ backend: 'Codex', used: 90 });
+      run.store.decide('t', 'one', { choice: 'goOn' });
+      expect(run.where()).toMatchObject({ t: 'running one', p: 'running two', x: 'running three' });
     });
 
     it('waits for the reset when asked to, or stops the queue there', () => {

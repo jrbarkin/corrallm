@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SessionEvent } from '../../../../shared/session';
+import type { UsageWindows } from '../../../../shared/usage';
 import { property } from '../../transcript';
 import { RECORDED_PLACES, recordedNotifications, recordedResult } from './recorded';
 import { OUTPUT_EVERY_MS, Translator, commandLine, historyEvents, unwrapShell } from './translate';
@@ -74,6 +75,36 @@ describe('the App Server translator, on what Codex did', () => {
           { name: 'weekly', usedPercent: 0, resetsAt: 1_792_483_590_000 },
         ],
       },
+    });
+  });
+
+  it('passes the plan’s limits it shows on to the usage readings, as windows', () => {
+    const readings: UsageWindows[] = [];
+    const translator = new Translator({
+      places: RECORDED_PLACES,
+      now: () => 1_791_880_000_000,
+      usage: (windows) => readings.push(windows),
+    });
+    translator.thread = THREAD;
+    for (const { method, params } of recordedNotifications('turns')) {
+      translator.notification(method, params);
+    }
+    expect(readings).toHaveLength(
+      recordedNotifications('turns').filter(({ method }) => method === 'account/rateLimits/updated')
+        .length,
+    );
+    expect(readings.at(-1)).toEqual({
+      fiveHour: { usedPercent: 0, resetsAt: 1_791_896_790_000 },
+      weekly: { usedPercent: 0, resetsAt: 1_792_483_590_000 },
+    });
+    // What read says at the start goes there too; another limit (a model's) does not.
+    translator.setLimits({
+      limitId: 'codex',
+      primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1_791_896_790 },
+    });
+    translator.setLimits({ limitId: 'gpt-6-sol', primary: { usedPercent: 99 } });
+    expect(readings.at(-1)).toEqual({
+      fiveHour: { usedPercent: 12, resetsAt: 1_791_896_790_000 },
     });
   });
 

@@ -49,10 +49,13 @@ export function createConnectors({
       'app-server': codex,
     } satisfies Record<Connection, Connector<SessionMode>>;
   }
+  // Claude's readings come from its Terminal sessions' status lines, Codex's from its app server
+  // (a Terminal session's own private one, for its readings only); the Agent SDK reads none.
+  const readings = usage ? { usage } : {};
   return {
-    terminal: new TerminalConnector(usage ? { usage } : {}),
+    terminal: new TerminalConnector(readings),
     sdk: new SdkConnector({ clientApp }),
-    'codex-terminal': new CodexTerminalConnector(),
-    'app-server': new AppServerConnector({ clientApp, distribution, consent }),
+    'codex-terminal': new CodexTerminalConnector(readings),
+    'app-server': new AppServerConnector({ clientApp, distribution, consent, ...readings }),
   } satisfies Record<Connection, Connector<SessionMode>>;
 }

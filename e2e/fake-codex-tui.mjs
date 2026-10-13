@@ -6,7 +6,10 @@
 // placeholder and the cursor in it, and the hooks it was given with -c, run as Codex runs them
 // (the user's shell, the event on stdin), but only if trusted as Codex trusts them (hooks.state;
 // else it stops at "Hooks need review"). It asks to trust the folder unless told it is trusted.
-// `codex --version` says 0.160.1, and `codex app-server` lists its hooks (hooks/list).
+// `codex --version` says 0.160.1, and `codex app-server` lists its hooks (hooks/list) and says
+// its usage limits (account/rateLimits/read: the RateLimitSnapshot in .fake-codex-usage.json in
+// the folder it runs in, or, without one, that it has none), logging each request it gets in
+// .fake-codex/app-server.jsonl.
 //
 // It keeps its state in the folder it runs in, under .fake-codex/: log.jsonl (how it was
 // started, each prompt it got, how it ended) for the tests to read, and one file per session
@@ -16,7 +19,7 @@
 // Escape, "fail …" stops without finishing (as at a usage limit), anything else is answered.
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -68,12 +71,20 @@ function hookHash(event, command, timeout) {
 }
 
 if (argv[0] === 'app-server') {
-  // Just enough of its app server: hello, then hooks/list; it ends with its input.
+  // Just enough of its app server: hello, then hooks/list and account/rateLimits/read; it ends
+  // with its input.
   const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+  const home = path.join(process.cwd(), '.fake-codex');
+  const usage = path.join(process.cwd(), '.fake-codex-usage.json');
   createInterface({ input: process.stdin }).on('line', (line) => {
     const { id, method } = JSON.parse(line);
     if (id === undefined) return;
-    if (method === 'initialize') {
+    mkdirSync(home, { recursive: true });
+    appendFileSync(path.join(home, 'app-server.jsonl'), `${JSON.stringify({ method })}\n`);
+    if (method === 'account/rateLimits/read') {
+      if (!existsSync(usage)) send({ id, error: { code: -32600, message: 'no plan limits' } });
+      else send({ id, result: { rateLimits: JSON.parse(readFileSync(usage, 'utf8')) } });
+    } else if (method === 'initialize') {
       send({ id, result: { userAgent: `corrallm/${VERSION}`, codexHome: '/nowhere' } });
     } else if (method === 'hooks/list') {
       const listed = hooks.map(({ key, command, hash }) => ({

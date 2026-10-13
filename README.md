@@ -16,7 +16,7 @@ As models change, the workflows that work best change with them. corrallm is whe
 >
 > In a terminal, what Claude Code asks you (a permission, its questions, a plan to approve), and what Codex waits on you for, is also listed in the canvas's Needs you list, to answer in its terminal; files dropped on the terminal are pasted as their paths, as a terminal pastes them; and on a Mac, Option works as Meta (for the CLI's Option shortcuts) on a US-like keyboard layout, and types its characters on others, as the switch under the terminal says.
 >
-> Claude's usage is read from a Terminal agent's status line (your own status line still shows); an Agent SDK agent runs on an API key and reads none. Either backend's usage can be simulated to try its rule.
+> Usage is read for real: Claude's from a Terminal agent's status line (your own status line still shows; an Agent SDK agent runs on an API key and reads none), Codex's from its app server (an App Server agent hears it as it works; a Terminal agent asks one of its own, which spends no usage, as it starts and after each turn). Either backend's usage can be simulated to try its rule.
 >
 > Through the Agent SDK, the session keeps close to Claude Code's own: questions with their headers, meanings and several answers, permissions answered with 1, 2 or 3 or with what to do instead, live progress on tool calls and subagents, work in the background that you can stop, hooks that fail or block, the effort beside the model (as through Codex's app server: one picker for both), predictions of your next message, earlier messages with Up and Down, and history that fits the transcript (a /clear marked in it).
 

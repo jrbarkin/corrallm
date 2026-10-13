@@ -151,7 +151,6 @@ function windowName(minutes: number | null): string {
   return `${String(minutes)}m`;
 }
 
-/** Something to tell the user, as a session event. */
 /** How the effort picker names reasoning efforts, as the CLIs do (Claude Code's /effort, Codex's). */
 const EFFORT_NAMES: Readonly<Record<string, string>> = {
   none: 'None',
@@ -170,6 +169,7 @@ export function effortChoice(value: string, description?: string): EffortChoice 
   return { value, label, ...(description === undefined ? {} : { description }) };
 }
 
+/** Something to tell the user, as a session event. */
 export function notice(level: 'info' | 'warning' | 'error', text: string): SessionEvent {
   return { type: 'notice', id: randomUUID(), level, text };
 }

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CodexMode, SessionEvent } from '../../../../shared/session';
+import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../../connector';
 import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
@@ -188,9 +189,10 @@ describe('the App Server connection', () => {
         costUsd: null,
         contextTokens: null,
         contextWindow: null,
+        // (The fake's windows reset hours and days from when it starts.)
         limits: [
-          { name: '5h', usedPercent: 12, resetsAt: 1_791_896_790_000 },
-          { name: 'weekly', usedPercent: 3, resetsAt: 1_792_483_590_000 },
+          { name: '5h', usedPercent: 12, resetsAt: expect.any(Number) as number },
+          { name: 'weekly', usedPercent: 3, resetsAt: expect.any(Number) as number },
         ],
       },
     });
@@ -239,6 +241,26 @@ describe('the App Server connection', () => {
         settings: { model: 'gpt-6.1-sol', reasoning_effort: 'low', developer_instructions: null },
       },
     });
+  });
+
+  it('passes Codex’s usage limits on to the usage readings: as it connects, and as they change', async () => {
+    const readings: [UsageBackend, UsageWindows][] = [];
+    const { turn } = await start({}, {}, { usage: (...reading) => readings.push(reading) });
+    const now = Date.now();
+    expect(readings).toEqual([
+      [
+        'Codex',
+        {
+          fiveHour: { usedPercent: 12, resetsAt: expect.any(Number) as number },
+          weekly: { usedPercent: 3, resetsAt: expect.any(Number) as number },
+        },
+      ],
+    ]);
+    expect(readings[0]?.[1].fiveHour?.resetsAt).toBeGreaterThan(now);
+    // Codex tells them again after a turn.
+    await turn('Hello', 'm1');
+    expect(readings).toHaveLength(2);
+    expect(readings[1]?.[0]).toBe('Codex');
   });
 
   it('asks before running a command in Read only, and runs it once allowed', async () => {
@@ -622,6 +644,20 @@ describe('the App Server connection', () => {
       expect(events).toContainEqual({ type: 'withdrawn', id: prompt.id });
       expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true, failed: false });
       expect(await requests('turn/start')).toEqual([]);
+    });
+
+    it('reads the plan’s usage without asking: reading it uses no model', async () => {
+      const readings: [UsageBackend, UsageWindows][] = [];
+      const consent = kept();
+      const { events } = await start({}, CHATGPT, {
+        consent,
+        usage: (...reading) => readings.push(reading),
+      });
+      expect(
+        readings.map(([backend, windows]) => [backend, windows.fiveHour?.usedPercent]),
+      ).toEqual([['Codex', 12]]);
+      expect(consent.given).not.toHaveBeenCalled();
+      expect(events.some((e) => e.type === 'permission')).toBe(false);
     });
 
     it('is refused by a build made as a commercial or hosted product', async () => {

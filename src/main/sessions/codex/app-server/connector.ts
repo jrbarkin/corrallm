@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 
 import { DEFAULT_MODES } from '../../../../shared/session';
 import type { CodexMode, ModelChoice, SessionEvent } from '../../../../shared/session';
+import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
@@ -29,7 +30,9 @@ import { Translator } from './translate';
  * restart. One private app server per session, closed with it.
  *
  * It runs on whatever login Codex has; on a ChatGPT plan only once the user allows it, and never in
- * a build made as a commercial or hosted product (../login.ts says why).
+ * a build made as a commercial or hosted product (../login.ts says why). The plan's usage limits
+ * (read as it connects, then as Codex tells them: ../limits.ts) go to main's usage readings, unasked:
+ * reading them uses no model.
  */
 
 export interface AppServerConnectorDeps {
@@ -46,6 +49,8 @@ export interface AppServerConnectorDeps {
   /** Runs git for /diff, in the agents' environment. */
   git?: (env: Readonly<Record<string, string>>) => RunGit;
   home?: string;
+  /** Takes the usage readings Codex reports (main's UsageReadings). */
+  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
 }
 
 /** How many of a resumed thread's last turns its history shows. */
@@ -61,6 +66,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   readonly #consent: PlanConsent;
   readonly #git: (env: Readonly<Record<string, string>>) => RunGit;
   readonly #home: string;
+  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
 
   constructor({
     clientApp,
@@ -70,6 +76,7 @@ export class AppServerConnector implements Connector<CodexMode> {
     consent = ASK_EACH_SESSION,
     git = runGit,
     home = homedir(),
+    usage,
   }: AppServerConnectorDeps) {
     this.#clientApp = clientApp;
     this.#findCodex = findCodex;
@@ -78,6 +85,7 @@ export class AppServerConnector implements Connector<CodexMode> {
     this.#consent = consent;
     this.#git = git;
     this.#home = home;
+    this.#usage = usage;
   }
 
   async start(spec: SessionSpec<CodexMode>, host: SessionHost): Promise<LiveSession<CodexMode>> {
@@ -88,7 +96,17 @@ export class AppServerConnector implements Connector<CodexMode> {
       home: this.#home,
       ...(realCwd === spec.cwd ? {} : { realCwd }),
     };
-    const translator = new Translator({ places });
+    const usage = this.#usage;
+    const translator = new Translator({
+      places,
+      ...(usage === undefined
+        ? {}
+        : {
+            usage: (windows: UsageWindows) => {
+              usage('Codex', windows);
+            },
+          }),
+    });
     // What the server says before the session runs waits for it (its thread starting, its MCP
     // servers), so that 'started' comes first.
     const early: { method: string; params: unknown }[] = [];

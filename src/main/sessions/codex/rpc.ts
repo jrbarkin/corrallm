@@ -309,6 +309,47 @@ export async function startAppServer({
   };
 }
 
+/**
+ * Starts a private app server only to ask it something (`ask`), then closes it: once it runs,
+ * however long it took to start (waited for if it runs already). Resolves with what `ask` resolves
+ * with; rejects if the server does not start, `ask` fails, or it all takes longer than `ms`
+ * (`slow` says so). Codex's Terminal connection asks this way what its TUI does not say: its
+ * hooks' trust (terminal/trust.ts) and its usage limits (terminal/usage.ts).
+ */
+export async function askAppServer<T>(
+  options: AppServerOptions,
+  ask: (server: AppServer) => Promise<T>,
+  {
+    start = startAppServer,
+    ms,
+    slow,
+  }: { start?: (options: AppServerOptions) => Promise<AppServer>; ms: number; slow: string },
+): Promise<T> {
+  const started = start(options);
+  const progress = { running: false };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      started.then((server) => {
+        progress.running = true;
+        return ask(server);
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(slow));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    const closing = started.then(
+      (server) => server.close(),
+      () => undefined,
+    );
+    if (progress.running) await closing;
+  }
+}
+
 function stringField(value: unknown, name: string): string | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const field = (value as Record<string, unknown>)[name];

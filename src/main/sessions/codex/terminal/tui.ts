@@ -1,5 +1,6 @@
 import { MODEL_PATTERN } from '../../../../shared/session';
 import type { CodexMode } from '../../../../shared/session';
+import type { UsageWindows } from '../../../../shared/usage';
 import type { Launch, TerminalCli, TerminalSignal } from '../../terminal/cli';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import type { Screen } from '../../terminal/screen';
@@ -28,6 +29,8 @@ import type { HookTrust } from './trust';
  * - A message is pasted in (bracketed paste: its line breaks stay, nothing in it is taken as a
  *   key), then sent with Enter. It is typed only into its composer, as drawn (composer.ts): the
  *   title says nothing of its pickers and startup screens.
+ * - Its usage limits are read apart from its terminal (`readUsage`: a private app server, usage.ts),
+ *   never by typing /status into it.
  */
 
 /** Bracketed paste: what a terminal sends around pasted text. */
@@ -56,6 +59,8 @@ export interface CodexTuiOptions {
    */
   effort?: string | null;
   platform?: NodeJS.Platform;
+  /** Reads its account's usage limits (usage.ts: a private app server). */
+  usage?: () => Promise<UsageWindows | undefined>;
 }
 
 export class CodexTui implements TerminalCli<CodexMode> {
@@ -78,6 +83,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   readonly #trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   readonly #effort: string | null;
   readonly #platform: NodeJS.Platform;
+  readonly #usage: (() => Promise<UsageWindows | undefined>) | undefined;
   /** The overrides that add its hooks and trust them, once prepared. */
   #hooks: string[] = [];
 
@@ -93,10 +99,11 @@ export class CodexTui implements TerminalCli<CodexMode> {
   /** The model its hooks last said. */
   #model: string | undefined;
 
-  constructor({ trust, effort = null, platform = process.platform }: CodexTuiOptions) {
+  constructor({ trust, effort = null, platform = process.platform, usage }: CodexTuiOptions) {
     this.#trust = trust;
     this.#effort = effort;
     this.#platform = platform;
+    this.#usage = usage;
   }
 
   newId(): null {
@@ -131,6 +138,10 @@ export class CodexTui implements TerminalCli<CodexMode> {
 
   resumeFailed(screen: string): boolean {
     return /No saved session found/i.test(screen);
+  }
+
+  readUsage(): Promise<UsageWindows | undefined> {
+    return this.#usage?.() ?? Promise.resolve(undefined);
   }
 
   holds(): boolean {

@@ -110,11 +110,13 @@ const MODELS = [
   },
 ];
 
+/** Its plan's limits: windows that reset hours and days from when it runs, as real ones do. */
+const STARTED_S = Math.round(Date.now() / 1000);
 const LIMITS = {
   limitId: 'codex',
   limitName: null,
-  primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1791896790 },
-  secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1792483590 },
+  primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: STARTED_S + 3 * 3600 },
+  secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: STARTED_S + 5 * 86_400 },
   credits: null,
   planType: 'plus',
   rateLimitReachedType: null,

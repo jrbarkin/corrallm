@@ -228,6 +228,49 @@ test('the queues’ Run pastes its message into Codex, and hears its turn end', 
   expect(await prompts()).toEqual(['Write the docs\nand the changelog']);
 });
 
+test('reads Codex’s usage from an app server of its own, as it starts and after each turn', async () => {
+  // What Codex's app server says of the plan's limits (the fake answers with this file).
+  const resetsAt = Math.round(Date.now() / 1000) + 3600;
+  const limits = (used: number) =>
+    writeFile(
+      path.join(folder, '.fake-codex-usage.json'),
+      JSON.stringify({
+        limitId: 'codex',
+        primary: { usedPercent: used, windowDurationMins: 300, resetsAt },
+        secondary: { usedPercent: 17, windowDurationMins: 10_080, resetsAt: resetsAt + 86_400 },
+      }),
+    );
+  await limits(42);
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  const gauge = page.getByRole('button', { name: /^Codex usage:/ });
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(gauge).toHaveAttribute(
+    'aria-label',
+    'Codex usage: 42% of 5-hour window, 17% of weekly window',
+  );
+
+  // A turn spends some: read again once it ends.
+  await limits(55);
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, 'hello', 'Enter');
+  await expect(status(view)).toHaveText('Idle');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(gauge).toHaveAttribute(
+    'aria-label',
+    'Codex usage: 55% of 5-hour window, 17% of weekly window',
+  );
+  // Read apart from its terminal: nothing was typed into it but the prompt, and its app server
+  // was asked nothing that uses the plan.
+  expect(await prompts()).toEqual(['hello']);
+  const asked = (await readFile(path.join(folder, '.fake-codex', 'app-server.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => (JSON.parse(line) as { method: string }).method);
+  expect(new Set(asked)).toEqual(new Set(['initialize', 'hooks/list', 'account/rateLimits/read']));
+});
+
 test('resumes the agent’s Codex session after the app restarts', async () => {
   await canvasFile();
   await chooseProject();

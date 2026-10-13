@@ -1,4 +1,4 @@
-import { startAppServer } from '../rpc';
+import { askAppServer, startAppServer } from '../rpc';
 import type { AppServer, AppServerOptions } from '../rpc';
 import { computedTrust, hookOverrides } from './hooks';
 import type { SessionHook } from './hooks';
@@ -70,37 +70,18 @@ export class HookTruster {
 
   /** What Codex says of the hooks: each one's key and hash, as it trusts them. */
   async #list(hooks: readonly SessionHook[], context: TrustContext): Promise<Map<string, string>> {
-    const started = this.#start({
-      codex: context.codex,
-      cwd: context.cwd,
-      env: context.env,
-      clientInfo: this.#clientInfo,
-      args: hookOverrides(hooks).flatMap((override) => ['-c', override]),
-    });
-    const progress = { running: false };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        started.then((server) => {
-          progress.running = true;
-          return server.request('hooks/list', { cwds: [context.cwd] });
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error('Codex took too long to list its hooks.'));
-          }, this.#listMs);
-        }),
-      ]);
-      return sessionHooksListed(result, hooks);
-    } finally {
-      clearTimeout(timer);
-      // Closed once it runs, however long it takes to start (waited for if it runs already).
-      const closing = started.then(
-        (server) => server.close(),
-        () => undefined,
-      );
-      if (progress.running) await closing;
-    }
+    const result = await askAppServer(
+      {
+        codex: context.codex,
+        cwd: context.cwd,
+        env: context.env,
+        clientInfo: this.#clientInfo,
+        args: hookOverrides(hooks).flatMap((override) => ['-c', override]),
+      },
+      (server) => server.request('hooks/list', { cwds: [context.cwd] }),
+      { start: this.#start, ms: this.#listMs, slow: 'Codex took too long to list its hooks.' },
+    );
+    return sessionHooksListed(result, hooks);
   }
 }
 

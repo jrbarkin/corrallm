@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 import type { CodexMode } from '../../../../shared/session';
+import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { HOOK_TOKEN, HookServer } from '../../terminal/hooks';
 import { spawnPty } from '../../terminal/pty';
@@ -11,6 +12,7 @@ import type { TerminalTiming } from '../../terminal/session';
 import { checkVersion, codexVersion, requireCodex } from '../codex';
 import { HookTruster } from './trust';
 import { CodexTui } from './tui';
+import { UsageReader } from './usage';
 
 /*
  * The Codex Terminal connection: a Codex agent runs Codex's own interactive CLI (the user's
@@ -18,7 +20,9 @@ import { CodexTui } from './tui';
  * in the canvas's project folder, and its agent view shows that terminal, as a Claude agent's
  * Terminal connection does: the shared Terminal session (sessions/terminal/session.ts) with
  * Codex's TerminalCli (tui.ts). Everything Codex does is there, as the user knows it; corrallm
- * follows its turns by its window title and hooks, and types the queue's messages into it.
+ * follows its turns by its window title and hooks, and types the queue's messages into it. Its
+ * usage limits are read apart from it, from a private app server (usage.ts), as it starts and
+ * after each turn.
  */
 
 /** Variables a terminal sets for the programs in it (Codex reads no TERM_PROGRAM of its own). */
@@ -70,6 +74,10 @@ export interface CodexTerminalConnectorOptions {
   version?: (codex: string, env: Readonly<Record<string, string>>) => Promise<string>;
   /** Trusts sessions' hooks (asking Codex itself once per version). */
   truster?: HookTruster;
+  /** Reads Codex's usage limits for its sessions (a private app server). */
+  reader?: UsageReader;
+  /** Takes the usage readings its sessions report (main's UsageReadings). */
+  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
   /** Where sessions' own folders go. */
   tmp?: string;
   timing?: Partial<TerminalTiming>;
@@ -81,6 +89,8 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
   readonly #findCodex: (env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #version: (codex: string, env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #truster: HookTruster;
+  readonly #reader: UsageReader;
+  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #platform: NodeJS.Platform;
@@ -92,6 +102,8 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     findCodex = (env) => requireCodex(env),
     version = codexVersion,
     truster = new HookTruster(),
+    reader = new UsageReader(),
+    usage,
     tmp = tmpdir(),
     timing = {},
     platform = process.platform,
@@ -100,6 +112,8 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     this.#findCodex = findCodex;
     this.#version = version;
     this.#truster = truster;
+    this.#reader = reader;
+    this.#usage = usage;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...CODEX_TIMING, ...timing };
     this.#platform = platform;
@@ -112,18 +126,27 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     if (old !== undefined) throw new Error(old);
     // The folder as Codex resolves it, so that the folder it trusts is the one it works in.
     const cwd = await realpath(spec.cwd).catch(() => spec.cwd);
+    const usage = this.#usage;
     const session = new TerminalSession<CodexMode>({ ...spec, cwd }, host, {
       executable: codex,
       cli: new CodexTui({
         trust: (hooks) => this.#truster.trust(hooks, { codex, version, cwd, env: spec.env }),
         effort: spec.effort ?? null,
         platform: this.#platform,
+        usage: () => this.#reader.read({ codex, cwd, env: spec.env }),
       }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
       env: (token) => codexEnvironment(spec.env, token),
       timing: this.#timing,
+      ...(usage === undefined
+        ? {}
+        : {
+            usage: (windows: UsageWindows) => {
+              usage('Codex', windows);
+            },
+          }),
     });
     await session.launch();
     return session;

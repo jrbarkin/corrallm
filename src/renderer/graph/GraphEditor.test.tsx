@@ -795,6 +795,38 @@ describe('GraphEditor', () => {
     expect(other.queryByRole('option', { name: /usage/ })).toBeNull();
   });
 
+  it("checks a Codex agent's usage in an If and a wait; its gauge says where readings come from", () => {
+    const { node } = setup({
+      nodes: [agentNode('x', 0, 0, { data: { label: 'Coder', agent: 'Codex' } })],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Codex usage: no reading' }));
+    const gauge = within(screen.getByRole('dialog', { name: 'Codex usage' }));
+    expect(gauge.getByText(/Read from Codex’s app server/)).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Codex usage' }), { key: 'Escape' });
+
+    fireEvent.doubleClick(node('x'));
+    const panel = within(screen.getByRole('dialog', { name: 'Coder' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    fireEvent.click(panel.getByRole('option', { name: /^Codex’s usage is over…/ }));
+    fireEvent.change(panel.getByRole('combobox', { name: 'Codex’s usage is over…' }), {
+      target: { value: '80' },
+    });
+    fireEvent.click(panel.getByRole('option', { name: 'Over 80% of the 5-hour window' }));
+    expect(
+      panel.getByRole('button', { name: 'Move If Codex’s usage is over 80% (5-hour)' }),
+    ).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'Until Codex’s usage resets (weekly)' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Codex’s usage resets (weekly)',
+      }),
+    ).toBeTruthy();
+  });
+
   it("offers a Claude agent Claude Code's own tools, Workflow included", () => {
     const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
     fireEvent.doubleClick(node('a'));

@@ -243,6 +243,24 @@ test('resumes the agent’s Codex thread after the app restarts, with its histor
   await expect(again.getByText('You said: remember this')).toBeVisible();
 });
 
+test('reads the plan’s usage as it connects, unasked, for Codex’s gauge', async () => {
+  await fakeCodex('chatgpt');
+  await canvasFile();
+  await chooseProject();
+  const gauge = page.getByRole('button', { name: /^Codex usage:/ });
+  await expect(gauge).toHaveAttribute('aria-label', 'Codex usage: no reading');
+  // Its view opened, its session starts: nothing is sent, so nothing asks to use the plan.
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Shop' });
+  await expect(view.getByText('5h 12% · weekly 3%')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(gauge).toHaveAttribute(
+    'aria-label',
+    'Codex usage: 12% of 5-hour window, 3% of weekly window',
+  );
+  await expect(page.locator('.react-flow__node')).not.toHaveClass(/\basking\b/);
+});
+
 test('runs on the user’s ChatGPT plan once they allow it, and asks no more if told not to', async () => {
   await fakeCodex('chatgpt');
   await canvasFile();

@@ -27,7 +27,8 @@ const NEW_RULE = { window: 'fiveHour', percent: 80 } as const;
 const SOURCES: Readonly<Record<UsageBackend, string>> = {
   Claude:
     'Read from Claude Code’s status line while a Terminal agent works. Agent SDK agents run on an API key, which has no usage windows: they read nothing.',
-  Codex: 'Codex isn’t connected yet: its usage can only be simulated for now.',
+  Codex:
+    'Read from Codex’s app server while an App Server agent works, and as a Terminal agent starts and after each turn (asking one of its own, which spends no usage). On an API key, Codex has no usage windows: it reads nothing.',
 };
 
 const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);

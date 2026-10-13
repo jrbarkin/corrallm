@@ -5,16 +5,21 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CodexMode, SessionEvent } from '../../../../shared/session';
+import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../../connector';
 import { HOOK_TOKEN } from '../../terminal/hooks';
 import type { Pty, PtyOptions } from '../../terminal/pty';
 import { TIMING } from '../../terminal/session';
+import { recordedResult } from '../app-server/recorded';
+import type { AppServerOptions } from '../rpc';
 import { CodexTerminalConnector } from './connector';
+import type { CodexTerminalConnectorOptions } from './connector';
 import { computedTrust } from './hooks';
 import { HookTruster } from './trust';
 import { RECORDED_SESSION, RECORDED_TURNS_SESSION, recordedTerminal } from './recorded';
 import type { TerminalFixture, TerminalRecord } from './recorded';
 import { PASTE_END, PASTE_START } from './tui';
+import { UsageReader } from './usage';
 
 /*
  * Codex in corrallm's terminal, as the real Codex CLI 0.160.1 behaved: each pseudo-terminal plays a
@@ -155,7 +160,11 @@ const SPEC: SessionSpec<CodexMode> = {
 };
 
 /** Starts a session whose pseudo-terminals play `recordings`, one per process, in turn. */
-async function start(recordings: TerminalFixture[], spec: Partial<SessionSpec<CodexMode>> = {}) {
+async function start(
+  recordings: TerminalFixture[],
+  spec: Partial<SessionSpec<CodexMode>> = {},
+  options: Partial<CodexTerminalConnectorOptions> = {},
+) {
   const connector = new CodexTerminalConnector({
     findCodex: () => Promise.resolve('/bin/codex'),
     version: () => Promise.resolve('0.160.1'),
@@ -177,6 +186,7 @@ async function start(recordings: TerminalFixture[], spec: Partial<SessionSpec<Co
       batch: 1,
       kill: 200,
     },
+    ...options,
   });
   const session = await connector.start(
     { ...SPEC, ...spec },
@@ -244,6 +254,57 @@ describe('Codex in a terminal, as the real one ran', () => {
     ]);
     expect(runs[0]?.written).toContain(`${PASTE_START}Say hi in one word.${PASTE_END}`);
     expect(remembered).toEqual([RECORDED_SESSION]);
+  });
+
+  it('reads Codex’s usage as it starts and after each turn, from an app server of its own', async () => {
+    const asked: AppServerOptions[] = [];
+    const reader = new UsageReader({
+      start: (options) => {
+        asked.push(options);
+        return Promise.resolve({
+          userAgent: 'corrallm/0.160.1',
+          version: '0.160.1',
+          codexHome: '/home/user/.codex',
+          // What the real one answered, on a ChatGPT login.
+          request: () => Promise.resolve(recordedResult('handshake', 'account/rateLimits/read')),
+          notify: () => undefined,
+          close: () => Promise.resolve(),
+          exited: new Promise(() => undefined),
+        });
+      },
+      now: () => 1_791_880_000_000,
+    });
+    const readings: [UsageBackend, UsageWindows][] = [];
+    const session = await start(
+      ['prompts'],
+      {},
+      {
+        reader,
+        usage: (...reading) => readings.push(reading),
+      },
+    );
+    await until(() => {
+      expect(readings).toHaveLength(1);
+    });
+    expect(readings[0]).toEqual([
+      'Codex',
+      {
+        fiveHour: { usedPercent: 0, resetsAt: 1_791_896_263_000 },
+        weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },
+      },
+    ]);
+    // The session's own `codex`, in its folder, with the agents' environment.
+    expect(asked[0]).toMatchObject({ codex: '/bin/codex', cwd: '/work/smoke/p2', env: SPEC.env });
+
+    await session.send({ id: 'm1', text: 'Say hi in one word.' });
+    await until(() => {
+      expect(ends()).toBe(1);
+    });
+    await until(() => {
+      expect(readings).toHaveLength(2);
+    });
+    // Nothing was typed into its terminal to read it: only the message.
+    expect(runs[0]?.written.filter((data) => data.includes('/status'))).toEqual([]);
   });
 
   it('hears an approval asked and an interrupt, as corrallm’s own session of it went', async () => {

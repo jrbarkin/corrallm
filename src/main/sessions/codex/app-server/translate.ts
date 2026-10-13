@@ -7,6 +7,7 @@ import type {
   ToolStatus,
   UsageLimit,
 } from '../../../../shared/session';
+import type { UsageWindows } from '../../../../shared/usage';
 import {
   diff,
   displayPath,
@@ -21,6 +22,7 @@ import {
   usageLimit,
 } from '../../transcript';
 import type { Places } from '../../transcript';
+import { codexLimits, usageWindows } from '../limits';
 
 /*
  * Turns what Codex's app server says about a thread (its items as they start, stream and complete;
@@ -53,6 +55,11 @@ export interface TranslatorOptions {
   history?: boolean;
   /** The time, in milliseconds (Date.now). */
   now?: () => number;
+  /**
+   * Takes the plan's usage limits it shows, as usage windows: from account/rateLimits/read (told
+   * through `setLimits`) and each update. For main's usage readings (usage.ts).
+   */
+  usage?: (windows: UsageWindows) => void;
 }
 
 /** A proposed plan (plan mode's plan item), complete. */
@@ -65,6 +72,7 @@ export class Translator {
   readonly #places: Places;
   readonly #history: boolean;
   readonly #now: () => number;
+  readonly #usageOut: ((windows: UsageWindows) => void) | undefined;
   /** The thread the session shows; others are its subagents'. */
   thread: string | undefined;
   /** What each text and thinking entry has shown, by id. */
@@ -93,10 +101,11 @@ export class Translator {
   /** MCP servers that failed to start, shown once each. */
   readonly #failedServers = new Set<string>();
 
-  constructor({ places, history = false, now = Date.now }: TranslatorOptions) {
+  constructor({ places, history = false, now = Date.now, usage }: TranslatorOptions) {
     this.#places = places;
     this.#history = history;
     this.#now = now;
+    this.#usageOut = usage;
   }
 
   /** Whether a running command has output not shown yet: `flush` shows it. */
@@ -198,29 +207,16 @@ export class Translator {
 
   /**
    * The account's usage limits as Codex reports them (a RateLimitSnapshot: account/rateLimits/read's
-   * `rateLimits`, or an update's): its 5-hour and weekly windows. Shown with the session's usage.
+   * `rateLimits`, or an update's; ../limits.ts): its 5-hour and weekly windows. Shown with the
+   * session's usage, and passed on to the usage readings.
    */
   setLimits(snapshot: unknown): SessionEvent[] {
-    const id = property(snapshot, 'limitId');
     // Codex's own limits; others (per model) are not the plan's.
-    if (typeof snapshot !== 'object' || snapshot === null || (id !== 'codex' && id != null)) {
-      return [];
-    }
-    const windows = ['primary', 'secondary'].flatMap((name): UsageLimit[] => {
-      const window = property(snapshot, name);
-      const used = property(window, 'usedPercent');
-      if (typeof used !== 'number') return [];
-      const minutes = property(window, 'windowDurationMins');
-      const resets = property(window, 'resetsAt');
-      return [
-        usageLimit({
-          usedPercent: used,
-          windowMinutes: typeof minutes === 'number' ? minutes : null,
-          resetsAt: typeof resets === 'number' ? resets : null,
-        }),
-      ];
-    });
-    this.#limits = windows;
+    const limits = codexLimits(snapshot);
+    if (!limits) return [];
+    this.#limits = limits.map((limit) => usageLimit(limit));
+    const windows = usageWindows(limits, this.#now());
+    if (windows) this.#usageOut?.(windows);
     return this.#usage();
   }
 
