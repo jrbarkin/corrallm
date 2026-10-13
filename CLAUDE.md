@@ -122,7 +122,7 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      Claude Code's /mcp, in Terminal), and /rewind (Rewind.tsx; also Esc twice in
                      an idle Agent SDK agent's empty composer, as in Claude Code, where one Esc
                      still closes the view half a second later, and "Rewind to here" on the
-                     user's messages) previews what restoring the files to before a message
+                     user's messages since the last /clear: rewindPoints) previews what restoring the files to before a message
                      changes, then restores the code, the conversation or both
                      (SessionStore.rewind; the message goes back into the composer to edit);
                      Esc closes such a panel first. An MCP

@@ -5,7 +5,7 @@ import { CONNECTION_INFO } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
-import { isOpen, MODES, sessionQuestions } from './session';
+import { isOpen, MODES, rewindPoints, sessionQuestions } from './session';
 import type { Answer, BackgroundTask, Entry, PlanAnswer, Session, ToolProgress } from './session';
 
 /** The tools that run commands, and those that edit files, across the agents (agents.ts). */
@@ -71,6 +71,10 @@ export function Transcript({
   }, [session.entries, session.status]);
   /** The permission prompt the keyboard answers: the first still open. */
   const keyed = session.entries.find((entry) => entry.kind === 'permission' && isOpen(entry))?.id;
+  /** The user's messages offered "Rewind to here": the conversation's since the last /clear. */
+  const rewindable = new Set(
+    answers.onRewind ? rewindPoints(session.entries).map((point) => point.id) : [],
+  );
 
   return (
     <div
@@ -97,6 +101,7 @@ export function Transcript({
             session={session}
             answers={answers}
             keys={entry.id === keyed}
+            rewinds={rewindable.has(entry.id)}
           />
         );
         const parent = 'parent' in entry ? entry.parent : undefined;
@@ -124,12 +129,15 @@ function EntryView({
   session,
   answers,
   keys,
+  rewinds,
 }: {
   entry: Entry;
   session: Session;
   answers: TranscriptAnswers;
   /** Whether the keyboard's numbers answer it (a permission prompt). */
   keys: boolean;
+  /** Whether it offers "Rewind to here" (a message of the user's, in the conversation now). */
+  rewinds: boolean;
 }) {
   switch (entry.kind) {
     case 'user':
@@ -147,7 +155,7 @@ function EntryView({
             </div>
           )}
           {entry.text !== '' && <p>{entry.text}</p>}
-          {answers.onRewind && (
+          {rewinds && (
             <button
               type="button"
               className="agent-rewind-here"

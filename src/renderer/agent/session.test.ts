@@ -168,4 +168,24 @@ describe('reduce, for connected sessions', () => {
       failed: true,
     });
   });
+
+  it('empties for another conversation, with what the last one ran and predicted; choices stay', () => {
+    let s = reduce(started, { type: 'mode', mode: 'plan', chosen: true });
+    s = reduce(s, { type: 'effort', effort: 'high' });
+    s = reduce(s, {
+      type: 'tasks',
+      tasks: [{ id: 'b1', description: 'npm run dev', kind: 'command' }],
+    });
+    s = reduce(s, { type: 'suggestion', text: 'Run the tests' });
+    s = reduce(s, {
+      type: 'usage',
+      usage: { costUsd: 0.5, contextTokens: 10, contextWindow: 100 },
+    });
+    const cleared = reduce(s, { type: 'clear' });
+    expect(cleared).toMatchObject({ entries: [], status: 'idle', mode: 'plan', effort: 'high' });
+    expect(cleared.chosen).toEqual({ mode: 'plan' });
+    expect(cleared.tasks ?? []).toEqual([]);
+    expect(cleared.suggestion).toBeUndefined();
+    expect(cleared.usage).toBeUndefined();
+  });
 });

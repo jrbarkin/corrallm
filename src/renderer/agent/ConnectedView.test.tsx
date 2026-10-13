@@ -1370,4 +1370,31 @@ describe('an Agent SDK agent rewound', () => {
     });
     expect(screen.queryByRole('dialog', { name: 'a' })).toBeNull();
   });
+
+  it('rewinds only within the conversation since /clear, as Claude Code does', async () => {
+    const { view, transcript, send, emit, sent } = await talked();
+    await send('/clear');
+    emit(
+      { type: 'user', id: sent(), text: '/clear' },
+      { type: 'cleared', id: 'reset-1' },
+      { type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false },
+    );
+    // What came before stays in view, but is another conversation: nothing to rewind to yet.
+    expect(transcript.getByText('Fix the login bug')).toBeTruthy();
+    expect(transcript.queryAllByRole('button', { name: 'Rewind to here' })).toHaveLength(0);
+
+    await send('Start on the search');
+    emit(
+      { type: 'user', id: sent(), text: 'Start on the search' },
+      { type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false },
+    );
+    const box = view.getByRole('textbox', { name: 'Message a' });
+    expect(transcript.getAllByRole('button', { name: 'Rewind to here' })).toHaveLength(1);
+    fireEvent.keyDown(box, { key: 'Escape' });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    const picker = within(view.getByRole('listbox', { name: 'Rewind to' }));
+    expect(picker.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Start on the search',
+    ]);
+  });
 });

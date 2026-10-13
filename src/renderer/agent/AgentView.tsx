@@ -48,7 +48,7 @@ import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
-import { threadTitle } from './session';
+import { rewindPoints, threadTitle } from './session';
 import type { Answer, MessageImage, PlanAnswer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -279,9 +279,10 @@ export function AgentView({
   };
 
   const working = session.status !== 'idle';
+  /** The user's messages it can rewind to (since the last /clear), oldest first. */
+  const points = rewindPoints(session.entries);
   /** Whether it can be rewound now: an idle Agent SDK agent, with a message of the user's. */
-  const rewindable =
-    connection === 'sdk' && !working && session.entries.some((entry) => entry.kind === 'user');
+  const rewindable = connection === 'sdk' && !working && points.length > 0;
   const { stop } = controls;
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -377,10 +378,6 @@ export function AgentView({
   );
   /** Its card, on top of the stack while it minimizes into the rail. */
   const itself: StackedAgent = { id: node.id, name, agent, status: session.status };
-  /** The user's messages it can rewind to (an idle Agent SDK agent's), oldest first. */
-  const rewindPoints = session.entries.flatMap((entry) =>
-    entry.kind === 'user' ? [{ id: entry.id, text: entry.text }] : [],
-  );
   /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
   const commands = connection === 'sdk' ? completedCommands(session.commands) : session.commands;
   /**
@@ -609,7 +606,7 @@ export function AgentView({
                       <>
                         {opened === 'rewind' && (
                           <Rewind
-                            messages={rewindPoints}
+                            messages={points}
                             start={rewindTo}
                             preview={controls.previewRewind}
                             rewind={controls.rewind}

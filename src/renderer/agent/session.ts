@@ -187,6 +187,17 @@ export interface Session {
 }
 
 /**
+ * The user's messages a rewind can go back to, oldest first: those of the conversation now, since
+ * the last /clear (what came before it is another conversation, as in Claude Code).
+ */
+export function rewindPoints(entries: readonly Entry[]): { id: string; text: string }[] {
+  const cleared = entries.findLastIndex((entry) => entry.kind === 'cleared');
+  return entries
+    .slice(cleared + 1)
+    .flatMap((entry) => (entry.kind === 'user' ? [{ id: entry.id, text: entry.text }] : []));
+}
+
+/**
  * What a chat is called: the start of its first message, on one line, cut at a word and ended
  * with "…" when longer than `max` characters.
  */
@@ -251,7 +262,8 @@ export type SessionAction =
   | { type: 'restore'; entries: Entry[] }
   /**
    * Another conversation takes the transcript's place (/resume), or this one rewound: the
-   * transcript empties, and what it used with it; what the user chose stays.
+   * transcript empties, and what it used, ran in the background and predicted with it; what the
+   * user chose stays.
    */
   | { type: 'clear' };
 
@@ -420,8 +432,9 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'restore':
       return { ...session, entries: mergeHistory(session.entries, action.entries) };
     case 'clear': {
-      const next: Session = { ...session, entries: [], status: 'idle' };
+      const next: Session = { ...session, entries: [], status: 'idle', tasks: [] };
       delete next.usage;
+      delete next.suggestion;
       return next;
     }
   }
