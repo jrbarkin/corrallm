@@ -47,7 +47,8 @@ describe('Conversations', () => {
           lastModified: 5000,
           gitBranch: 'main',
         },
-        { sessionId: 'blank', summary: '   ', lastModified: 3000 },
+        // No branch: the CLI notes HEAD.
+        { sessionId: 'blank', summary: '   ', lastModified: 3000, gitBranch: 'HEAD' },
       ],
     });
     await expect(kept.list('/work/shop')).resolves.toEqual([

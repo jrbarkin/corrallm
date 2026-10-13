@@ -61,7 +61,8 @@ export class Conversations {
           title: title === '' ? 'Untitled conversation' : cut(title),
           modified: info.lastModified,
           ...(info.fileSize === undefined ? {} : { bytes: info.fileSize }),
-          ...(info.gitBranch === undefined || info.gitBranch === ''
+          // HEAD is what the CLI notes on no branch (or a detached one).
+          ...(info.gitBranch === undefined || info.gitBranch === '' || info.gitBranch === 'HEAD'
             ? {}
             : { branch: info.gitBranch }),
         };
