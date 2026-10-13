@@ -23,20 +23,22 @@ export const AGENT_CLI: Record<AgentType, string> = {
 
 /**
  * How an agent's session runs: simulated (scripted in corrallm, nothing really runs), or
- * connected to the real CLI, in a terminal or through the Agent SDK (src/shared/session.ts).
+ * connected to the real CLI (src/shared/session.ts): Claude Code in a terminal or through the
+ * Agent SDK, Codex in a terminal or through its app server.
  */
 export type AgentConnection = 'simulated' | Connection;
 
 /**
- * The ways each agent type can run, in the order the agent chip offers them: Claude can be
- * connected (others not yet), in a Terminal first, since that works with any login, a Claude
- * subscription included; through the Agent SDK only with an API key or a cloud provider (Anthropic
- * doesn't allow other products to use subscription logins through it). An agent is simulated
- * until it is connected.
+ * The ways each agent type can run, in the order the agent chip offers them: Claude and Codex can
+ * be connected (others not yet), in a Terminal first, since that works with any login (a Claude
+ * subscription, a ChatGPT plan); Claude through the Agent SDK only with an API key or a cloud
+ * provider (Anthropic doesn't allow other products to use subscription logins through it); Codex
+ * through its app server with an API key, or on a ChatGPT plan once the user allows it (local
+ * builds only: codex/login.ts). An agent is simulated until it is connected.
  */
 export const AGENT_CONNECTIONS: Record<AgentType, readonly AgentConnection[]> = {
   Claude: ['terminal', 'sdk', 'simulated'],
-  Codex: ['simulated'],
+  Codex: ['codex-terminal', 'app-server', 'simulated'],
   Qwen: ['simulated'],
   Gemini: ['simulated'],
 };
@@ -62,7 +64,27 @@ export const CONNECTION_INFO: Record<
     description:
       'Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider',
   },
+  'codex-terminal': {
+    label: 'Terminal',
+    short: 'Terminal',
+    description: 'Codex itself, in a terminal in its view',
+  },
+  'app-server': {
+    label: 'App Server',
+    short: 'App Server',
+    description: 'Codex through its app server, in corrallm’s transcript',
+  },
 };
+
+/** The ways an agent type can be connected, as a sentence names them ("Terminal or Agent SDK"). */
+export function connectionNames(agent: AgentType): string {
+  const names = AGENT_CONNECTIONS[agent]
+    .filter((connection) => connection !== 'simulated')
+    .map((connection) => CONNECTION_INFO[connection].label);
+  return names.length <= 1
+    ? (names[0] ?? '')
+    : `${names.slice(0, -1).join(', ')} or ${names.at(-1) ?? ''}`;
+}
 
 /** How an agent runs: its connection if its type offers it, otherwise simulated. */
 export function connectionOf(data: {

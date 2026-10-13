@@ -1,0 +1,31 @@
+{"t": 6, "kind": "argv", "data": ["resume", "01a13450-0000-7000-8000-000000000000", "--no-daemon", "-C", "/work/smoke/p2", "-c", "projects={\"/work/smoke/p2\"={trust_level=\"trusted\"}}", "-c", "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65076/hook\"}]}]", "-c", "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65076/hook\"}]}]", "-c", "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65076/hook\"}]}]", "-c", "hooks.Stop=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65076/hook\"}]}]", "-c", "hooks.Interrupt=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65076/hook\",timeout=1}]}]", "-c", "hooks.state={\"/<session-flags>/config.toml:session_start:0:0\"={trusted_hash=\"sha256:5e0037ce4428eee5b9b0f81c70d73ff50e4fedfc0239c18a83e1da96eed76ed6\"},\"/<session-flags>/config.toml:user_prompt_submit:0:0\"={trusted_hash=\"sha256:eca0198c953f7b35ae05a4652f0bf1a91c221df85f186b1af3e77cb5a8656429\"},\"/<session-flags>/config.toml:permission_request:0:0\"={trusted_hash=\"sha256:11b0c3f8d902e7d8401518ae49a66b58e4f9906eb103c77b78c9d7ccbfb5d55b\"},\"/<session-flags>/config.toml:stop:0:0\"={trusted_hash=\"sha256:50b9351d1fc68e60722ecee8daeef218f85b36f322fe52edc29e1a1dfaba4e79\"},\"/<session-flags>/config.toml:interrupt:0:0\"={trusted_hash=\"sha256:de0255c7400087fc616b41a958d3ecda7feaf33ae9851291c37c007d817ba350\"}}", "-c", "tui.terminal_title=[\"activity\",\"run-state\"]", "-c", "check_for_update_on_startup=false", "-c", "tui.auto_recap=false", "-m", "gpt-6-luna", "-c", "model_reasoning_effort=\"low\"", "-s", "read-only", "-a", "on-request"]}
+{"t": 28, "kind": "out", "data": "\u001b[?2004h"}
+{"t": 28, "kind": "out", "data": "\u001b[>4;0m\u001b[>5u\u001b[?1004h\u001b[6n\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[?u\u001b[c"}
+{"t": 29, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 29, "kind": "out", "data": "\u001b[?1049h\u001b[>4;0m\u001b[>5u\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l\u001b[1;1H\u001b[J"}
+{"t": 29, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 29, "kind": "out", "data": "\u001b[26;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[27;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[28;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[2;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.160.1)\u001b[3;6Hloading\u001b[4;1H  Resuming session…\u001b[26;1H\u001b[22m\u001b[39;48;2;55;55;57m \u001b[27;1H\u001b[1m›\u001b[22m \u001b[2mAsk Codex to do anything\u001b[28;1H\u001b[22m \u001b[30;3H\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[1;1H\u001b[0 q\u001b[1;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l\u001b[?2026l"}
+{"t": 29, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 29, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 29, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 32, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 32, "kind": "out", "data": "\u001b[3;6H\u001b[2m/private/tmp/claude-501/-Users-someone-Repos-corrallm/…/scratchpad/codex-smoke/p2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 32, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 32, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 32, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 33, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 35, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 36, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 36, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 40, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 51, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 411, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 411, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 438, "kind": "out", "data": "\u001b[?1006l\u001b[?1015l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[<1u\u001b[?1007l\u001b[?1049l\u001b[<1u\u001b[<u\u001b[>4;0m\u001b[?2004l\u001b[?1004l"}
+{"t": 438, "kind": "out", "data": "\u001b[0 q\u001b[?25h\u001b[1;1H\u001b[J"}
+{"t": 640, "kind": "out", "data": "ERROR: "}
+{"t": 640, "kind": "out", "data": "No saved session found with ID 01a13450-0000-7000-8000-000000000000. Run `codex resume` without an ID to choose from existing sessions.\r\n\u001b[0 q"}
+{"t": 646, "kind": "exit", "data": {"exitCode": 1, "signal": 0}}

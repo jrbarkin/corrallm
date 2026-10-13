@@ -2,6 +2,7 @@ import { homedir, tmpdir } from 'node:os';
 
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
+import { ClaudeCode } from './claude-code';
 import { HOOK_TOKEN, HookServer } from './hooks';
 import { spawnPty } from './pty';
 import type { SpawnPty } from './pty';
@@ -11,7 +12,8 @@ import type { TerminalTiming } from './session';
 /*
  * The Terminal connection: a Claude agent runs Claude Code's own interactive CLI (the user's
  * `claude`, with their login, settings, hooks and MCP servers) in a pseudo-terminal, in the
- * canvas's project folder, and its agent view shows that terminal (session.ts).
+ * canvas's project folder, and its agent view shows that terminal (session.ts, with Claude Code's
+ * TerminalCli: claude-code.ts).
  */
 
 /** Variables a terminal sets for the programs in it. */
@@ -76,13 +78,13 @@ export class TerminalConnector implements Connector {
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#findClaude(spec.env);
     const session = new TerminalSession(spec, host, {
-      claude,
+      executable: claude,
+      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
-      home: this.#home,
     });
     await session.launch();
     return session;

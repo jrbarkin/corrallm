@@ -1,0 +1,1104 @@
+{"t": 13, "kind": "argv", "data": ["--no-daemon", "-C", "/work/smoke/p2", "-c", "projects={\"/work/smoke/p2\"={trust_level=\"trusted\"}}", "-c", "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:64969/hook\"}]}]", "-c", "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:64969/hook\"}]}]", "-c", "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:64969/hook\"}]}]", "-c", "hooks.Stop=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:64969/hook\"}]}]", "-c", "hooks.Interrupt=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:64969/hook\",timeout=1}]}]", "-c", "hooks.state={\"/<session-flags>/config.toml:session_start:0:0\"={trusted_hash=\"sha256:10ec506f426f1df5d3479432e93c9f8253d4e2ece1bedf35bc74fe39402ef438\"},\"/<session-flags>/config.toml:user_prompt_submit:0:0\"={trusted_hash=\"sha256:d05046cb01f5391539bd70ef1863662d9a72ca2e236c2d1a0257049c832c6730\"},\"/<session-flags>/config.toml:permission_request:0:0\"={trusted_hash=\"sha256:a9aefe2fccccd6e2f74eaaefed606a2493f24da04905f9bf33ca38dbaf8ba7be\"},\"/<session-flags>/config.toml:stop:0:0\"={trusted_hash=\"sha256:b54a8c4eddb9485fad7fadbc2e8aca5dabfae19495b264c11ad1dbe29916e0d4\"},\"/<session-flags>/config.toml:interrupt:0:0\"={trusted_hash=\"sha256:48f7eeed264e740192bcb25c3d63936b2114421da0c38d17ba8de17b4d6f7594\"}}", "-c", "tui.terminal_title=[\"activity\",\"run-state\"]", "-c", "check_for_update_on_startup=false", "-c", "tui.auto_recap=false", "-m", "gpt-6-luna", "-c", "model_reasoning_effort=\"low\"", "-s", "read-only", "-a", "on-request"]}
+{"t": 354, "kind": "out", "data": "\u001b[?2004h"}
+{"t": 354, "kind": "out", "data": "\u001b[>4;0m\u001b[>5u\u001b[?1004h\u001b[6n\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[?u\u001b[c"}
+{"t": 361, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 361, "kind": "out", "data": "\u001b[?1049h\u001b[>4;0m\u001b[>5u\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l"}
+{"t": 362, "kind": "out", "data": "\u001b[1;1H\u001b[J"}
+{"t": 369, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 369, "kind": "out", "data": "\u001b[26;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[27;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[28;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[2;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.160.1)\u001b[3;6Hloading\u001b[5;3H\u001b[22m\u001b[38;2;99;168;248;49mFancy a little quality terminal time?\u001b[26;1H\u001b[39;48;2;55;55;57m \u001b[27;1H\u001b[1m›\u001b[22m \u001b[2mAsk Codex to do anything\u001b[28;1H\u001b[22m \u001b[30;3H\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[1;1H\u001b[0 q\u001b[1;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 369, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 369, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 369, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 370, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 370, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 370, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 382, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 383, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 385, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 386, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 386, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 408, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[3;6H\u001b[2m/private/tmp/claude-501/-Users-someone-Repos-corrallm/…/scratchpad/codex-smoke/p2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 408, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 408, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 408, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 409, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 420, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 471, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 475, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 475, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 589, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1003, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1003, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1004, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1004, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 1004, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 1014, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1016, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 1017, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 1024, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2169, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2177, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2188, "kind": "out", "data": "\u001b]0;Ready\u0007"}
+{"t": 2188, "kind": "title", "data": "Ready"}
+{"t": 2190, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2193, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[29;3H\u001b[38;2;246;226;183;49mGPT-6-Luna default\u001b[38;2;148;148;151;49m · \u001b[38;2;171;223;167;49m/private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-000…\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2203, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2211, "kind": "note", "data": "ready: true"}
+{"t": 2233, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2319, "kind": "out", "data": "\u001b]0;⠙ Starting\u0007"}
+{"t": 2319, "kind": "title", "data": "⠙ Starting"}
+{"t": 2372, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[29;14H\u001b[38;2;246;226;183;49mlow\u001b[38;2;148;148;151;49m · \u001b[38;2;171;223;167;49m/private/tmp\u001b[29;33Hclaude-501/-Users-someone-Repos-c\u001b[29;67Hrrallm/00000000-0000-0000-0000-00\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2373, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2474, "kind": "out", "data": "\u001b]0;⠹ Starting\u0007"}
+{"t": 2474, "kind": "title", "data": "⠹ Starting"}
+{"t": 2523, "kind": "out", "data": "\u001b]0;⠸ Starting\u0007"}
+{"t": 2523, "kind": "title", "data": "⠸ Starting"}
+{"t": 2525, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 2525, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 2619, "kind": "out", "data": "\u001b]0;⠼ Starting\u0007"}
+{"t": 2619, "kind": "title", "data": "⠼ Starting"}
+{"t": 2620, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2642, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2694, "kind": "out", "data": "\u001b]0;⠴ Starting\u0007"}
+{"t": 2694, "kind": "title", "data": "⠴ Starting"}
+{"t": 2713, "kind": "in", "data": "Say hi in one word."}
+{"t": 2714, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[27;22H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[27;3HSay hi in one word.\u001b[30;3H\u001b[1m\u001b[38;2;228;228;231;49mtab\u001b[22m\u001b[38;2;148;148;151;49m to queue message\u001b[39m\u001b[49m\u001b[0m\u001b[27;22H"}
+{"t": 2714, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 2816, "kind": "out", "data": "\u001b]0;⠦ Starting\u0007"}
+{"t": 2816, "kind": "title", "data": "⠦ Starting"}
+{"t": 2825, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;22H\u001b[?25h\u001b[?2026l"}
+{"t": 2924, "kind": "out", "data": "\u001b]0;⠧ Starting\u0007"}
+{"t": 2924, "kind": "title", "data": "⠧ Starting"}
+{"t": 2924, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;22H\u001b[?25h\u001b[?2026l"}
+{"t": 2964, "kind": "in", "data": "\\r"}
+{"t": 2965, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;22H\u001b[?25h\u001b[?2026l"}
+{"t": 2966, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 2966, "kind": "out", "data": "\u001b[30;18H\u001b[0m\u001b[49m\u001b[K\u001b[27;3H\u001b[2m\u001b[39;48;2;55;55;57mAsk Codex to do anything\u001b[30;3H\u001b[22m\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2967, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[7;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[8;22H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[9;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[7;1H \u001b[8;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mSay hi in one word.\u001b[9;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 2967, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 2977, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 2987, "kind": "out", "data": "\u001b]0;⠇ Starting\u0007"}
+{"t": 2988, "kind": "title", "data": "⠇ Starting"}
+{"t": 2988, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3002, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[24;3H\u001b[22m\u001b[38;2;128;128;131;49mWorking\u001b[24;11H\u001b[2m\u001b[39;49m(0s • \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to interrupt)\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3036, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3070, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3103, "kind": "out", "data": "\u001b]0;⠏ Starting\u0007"}
+{"t": 3103, "kind": "title", "data": "⠏ Starting"}
+{"t": 3103, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3137, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3171, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3205, "kind": "out", "data": "\u001b]0;⠋ Starting\u0007"}
+{"t": 3205, "kind": "title", "data": "⠋ Starting"}
+{"t": 3205, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3239, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3272, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3306, "kind": "out", "data": "\u001b]0;⠙ Starting\u0007"}
+{"t": 3307, "kind": "title", "data": "⠙ Starting"}
+{"t": 3307, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3341, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3357, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 3357, "kind": "title", "data": "⠙ Working"}
+{"t": 3358, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 3358, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 3367, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3400, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 3400, "kind": "title", "data": "⠹ Working"}
+{"t": 3400, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3434, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3468, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3502, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 3502, "kind": "title", "data": "⠸ Working"}
+{"t": 3502, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3535, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3569, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3603, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 3603, "kind": "title", "data": "⠼ Working"}
+{"t": 3603, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3637, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3671, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;3H\u001b[22m\u001b[38;2;132;132;135;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3704, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 3704, "kind": "title", "data": "⠴ Working"}
+{"t": 3704, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;146;146;149;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3739, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;167;167;170;49mW\u001b[38;2;130;130;133;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 3739, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 3772, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;3H\u001b[22m\u001b[38;2;190;190;193;49mW\u001b[38;2;142;142;145;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 3772, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 3806, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 3807, "kind": "title", "data": "⠦ Working"}
+{"t": 3807, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;210;210;213;49mW\u001b[38;2;161;161;164;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3841, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;224;224;227;49mW\u001b[38;2;184;184;187;49mo\u001b[38;2;138;138;141;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3874, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[24;3H\u001b[22m\u001b[38;2;227;227;230;49mW\u001b[38;2;205;205;208;49mo\u001b[38;2;155;155;158;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3906, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 3907, "kind": "title", "data": "⠧ Working"}
+{"t": 3907, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;221;221;224;49mW\u001b[38;2;220;220;223;49mo\u001b[38;2;176;176;179;49mr\u001b[38;2;134;134;137;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3919, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;217;217;220;49mW\u001b[38;2;224;224;227;49mo\u001b[38;2;185;185;188;49mr\u001b[38;2;138;138;141;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3939, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "SessionStart", "model": "gpt-6-luna", "permission_mode": "default", "source": "startup"}}}
+{"t": 3941, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 3941, "kind": "out", "data": "\u001b[24;3H\u001b[38;2;206;206;209;49mW\u001b[38;2;227;227;230;49mo\u001b[38;2;199;199;202;49mr\u001b[38;2;149;149;152;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3952, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "turn_id": "01a13450-a3a0-79f3-88c9-5892d0051fb3", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "UserPromptSubmit", "model": "gpt-6-luna", "permission_mode": "default", "prompt": "Say hi in one word."}}}
+{"t": 3954, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 3954, "kind": "out", "data": "\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[24;3H\u001b[22m\u001b[38;2;198;198;201;49mW\u001b[24;5H\u001b[38;2;207;207;210;49mr\u001b[38;2;157;157;160;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 3964, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;192;192;195;49mW\u001b[38;2;226;226;229;49mo\u001b[38;2;212;212;215;49mr\u001b[38;2;163;163;166;49mk\u001b[38;2;129;129;132;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 3964, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 3997, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 3997, "kind": "title", "data": "⠇ Working"}
+{"t": 3997, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;169;169;172;49mW\u001b[38;2;216;216;219;49mo\u001b[38;2;224;224;227;49mr\u001b[38;2;186;186;189;49mk\u001b[38;2;139;139;142;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4032, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;148;148;151;49mW\u001b[38;2;197;197;200;49mo\u001b[38;2;227;227;230;49mr\u001b[38;2;207;207;210;49mk\u001b[38;2;158;158;161;49mi\u001b[24;12H\u001b[2m\u001b[39;49m1\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4066, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[24;3H\u001b[22m\u001b[38;2;133;133;136;49mW\u001b[38;2;175;175;178;49mo\u001b[38;2;219;219;222;49mr\u001b[38;2;222;222;225;49mk\u001b[38;2;180;180;183;49mi\u001b[38;2;136;136;139;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4100, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 4101, "kind": "title", "data": "⠏ Working"}
+{"t": 4101, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;128;128;131;49mW\u001b[38;2;153;153;156;49mo\u001b[38;2;203;203;206;49mr\u001b[38;2;228;228;231;49mk\u001b[38;2;202;202;205;49mi\u001b[38;2;152;152;155;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4134, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;136;136;139;49mo\u001b[38;2;181;181;184;49mr\u001b[38;2;222;222;225;49mk\u001b[38;2;219;219;222;49mi\u001b[38;2;174;174;177;49mn\u001b[38;2;133;133;136;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4168, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;4H\u001b[22m\u001b[38;2;128;128;131;49mo\u001b[38;2;158;158;161;49mr\u001b[38;2;208;208;211;49mk\u001b[38;2;227;227;230;49mi\u001b[38;2;197;197;200;49mn\u001b[38;2;147;147;150;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4202, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 4202, "kind": "title", "data": "⠋ Working"}
+{"t": 4203, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;140;140;143;49mr\u001b[38;2;187;187;190;49mk\u001b[38;2;225;225;228;49mi\u001b[38;2;215;215;218;49mn\u001b[38;2;168;168;171;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4236, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;129;129;132;49mr\u001b[38;2;164;164;167;49mk\u001b[38;2;212;212;215;49mi\u001b[38;2;226;226;229;49mn\u001b[38;2;191;191;194;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 4236, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 4269, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;5H\u001b[22m\u001b[38;2;128;128;131;49mr\u001b[38;2;144;144;147;49mk\u001b[38;2;193;193;196;49mi\u001b[24;9H\u001b[38;2;211;211;214;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4304, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 4304, "kind": "title", "data": "⠙ Working"}
+{"t": 4304, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;6H\u001b[38;2;131;131;134;49mk\u001b[38;2;170;170;173;49mi\u001b[38;2;216;216;219;49mn\u001b[38;2;224;224;227;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4338, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[24;6H\u001b[22m\u001b[38;2;128;128;131;49mk\u001b[38;2;149;149;152;49mi\u001b[38;2;199;199;202;49mn\u001b[38;2;227;227;230;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4372, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;133;133;136;49mi\u001b[38;2;176;176;179;49mn\u001b[38;2;220;220;223;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4406, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 4406, "kind": "title", "data": "⠹ Working"}
+{"t": 4406, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;128;128;131;49mi\u001b[38;2;154;154;157;49mn\u001b[38;2;204;204;207;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4441, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[24;8H\u001b[22m\u001b[38;2;136;136;139;49mn\u001b[38;2;182;182;185;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4474, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;128;128;131;49mn\u001b[38;2;159;159;162;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4507, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 4507, "kind": "title", "data": "⠸ Working"}
+{"t": 4507, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;141;141;144;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4541, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;130;130;133;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 4541, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 4575, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;128;128;131;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4609, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 4609, "kind": "title", "data": "⠼ Working"}
+{"t": 4610, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4644, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4678, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4712, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 4712, "kind": "title", "data": "⠴ Working"}
+{"t": 4712, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4745, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4779, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4814, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 4814, "kind": "title", "data": "⠦ Working"}
+{"t": 4815, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4848, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4883, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 4883, "kind": "title", "data": "⠧ Working"}
+{"t": 4884, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4918, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4952, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 4953, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 4985, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 4986, "kind": "title", "data": "⠇ Working"}
+{"t": 4986, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5021, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5054, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5088, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 5089, "kind": "title", "data": "⠏ Working"}
+{"t": 5089, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5122, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5157, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5191, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 5191, "kind": "title", "data": "⠋ Working"}
+{"t": 5191, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5225, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5259, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5293, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 5294, "kind": "title", "data": "⠙ Working"}
+{"t": 5294, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5327, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5360, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5394, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 5395, "kind": "title", "data": "⠹ Working"}
+{"t": 5395, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5429, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5462, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5495, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 5496, "kind": "title", "data": "⠸ Working"}
+{"t": 5496, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5530, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5563, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5597, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 5598, "kind": "title", "data": "⠼ Working"}
+{"t": 5598, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5632, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5666, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5699, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 5700, "kind": "title", "data": "⠴ Working"}
+{"t": 5700, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5733, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5767, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 5768, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 5801, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 5801, "kind": "title", "data": "⠦ Working"}
+{"t": 5801, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5835, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5868, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 5869, "kind": "out", "data": "\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5902, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 5902, "kind": "title", "data": "⠧ Working"}
+{"t": 5902, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5937, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 5971, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 5971, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 6005, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 6005, "kind": "title", "data": "⠇ Working"}
+{"t": 6005, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m3\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6039, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6073, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6107, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 6107, "kind": "title", "data": "⠏ Working"}
+{"t": 6107, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6141, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6175, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6209, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 6209, "kind": "title", "data": "⠋ Working"}
+{"t": 6209, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6244, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6277, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6311, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 6311, "kind": "title", "data": "⠙ Working"}
+{"t": 6311, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6346, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6380, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6414, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 6415, "kind": "title", "data": "⠹ Working"}
+{"t": 6415, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6449, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6483, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6516, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 6516, "kind": "title", "data": "⠸ Working"}
+{"t": 6517, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6550, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6583, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6617, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 6618, "kind": "title", "data": "⠼ Working"}
+{"t": 6618, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6651, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6685, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 6685, "kind": "title", "data": "⠴ Working"}
+{"t": 6686, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6710, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6720, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6755, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6789, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 6789, "kind": "title", "data": "⠦ Working"}
+{"t": 6789, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6823, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6858, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6892, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 6892, "kind": "title", "data": "⠧ Working"}
+{"t": 6892, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6925, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6960, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 6994, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 6995, "kind": "title", "data": "⠇ Working"}
+{"t": 6995, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7023, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;2H\u001b[0m\u001b[49m\u001b[K\u001b[11;1H\u001b[2m• \u001b[22mHi\u001b[24;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7033, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7083, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 7083, "kind": "title", "data": "⠏ Working"}
+{"t": 7084, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7093, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7098, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "turn_id": "01a13450-a3a0-79f3-88c9-5892d0051fb3", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "Stop", "model": "gpt-6-luna", "permission_mode": "default", "stop_hook_active": false, "last_assistant_message": "Hi"}}}
+{"t": 7103, "kind": "out", "data": "\u001b]0;Ready\u0007"}
+{"t": 7103, "kind": "title", "data": "Ready"}
+{"t": 7103, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 7113, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[13;1H\u001b[2m  Worked for 4s • 10:11 PM                                                                          \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 7113, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 7144, "kind": "note", "data": "turn 1 done"}
+{"t": 7945, "kind": "in", "data": "Create a file named bye.txt containing the word bye."}
+{"t": 7947, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[30;2H\u001b[0m\u001b[49m\u001b[K\u001b[27;3H\u001b[39;48;2;55;55;57mCreate a file named bye.txt\u001b[27;31Hcontaining\u001b[27;42Hthe\u001b[27;46Hword\u001b[27;51Hbye.\u001b[39m\u001b[49m\u001b[0m\u001b[27;55H"}
+{"t": 7947, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 8196, "kind": "in", "data": "\\r"}
+{"t": 8197, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;55H\u001b[?25h\u001b[?2026l"}
+{"t": 8198, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 8198, "kind": "out", "data": "\u001b[15;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[16;55H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[17;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[27;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[15;1H\u001b[39;48;2;64;64;66m \u001b[16;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate a file named bye.txt containing the word bye.\u001b[17;1H \u001b[27;3H\u001b[2m\u001b[39;48;2;55;55;57mAsk Codex to do anything\u001b[30;3H\u001b[22m\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8206, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8206, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 8207, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 8213, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 8213, "kind": "title", "data": "⠋ Working"}
+{"t": 8216, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;3H\u001b[22m\u001b[38;2;128;128;131;49mWorking\u001b[24;11H\u001b[2m\u001b[39;49m(0s • \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to interrupt)\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8231, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8240, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "turn_id": "01a13450-b80e-75f0-b3e4-d6f73d90bb3e", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "UserPromptSubmit", "model": "gpt-6-luna", "permission_mode": "default", "prompt": "Create a file named bye.txt containing the word bye."}}}
+{"t": 8241, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 8241, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 8277, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8310, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 8311, "kind": "title", "data": "⠙ Working"}
+{"t": 8311, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8345, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8379, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8412, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 8412, "kind": "title", "data": "⠹ Working"}
+{"t": 8413, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8447, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8481, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8515, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 8516, "kind": "title", "data": "⠸ Working"}
+{"t": 8516, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8550, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8584, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 8584, "kind": "title", "data": "⠼ Working"}
+{"t": 8584, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8618, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8651, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8684, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 8684, "kind": "title", "data": "⠴ Working"}
+{"t": 8684, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8717, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8751, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8786, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 8786, "kind": "title", "data": "⠦ Working"}
+{"t": 8787, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8820, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8854, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8886, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 8887, "kind": "title", "data": "⠧ Working"}
+{"t": 8887, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 8887, "kind": "out", "data": "\u001b[24;3H\u001b[38;2;133;133;136;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8921, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;149;149;152;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 8955, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;170;170;173;49mW\u001b[38;2;131;131;134;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 8955, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 8989, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 8989, "kind": "title", "data": "⠇ Working"}
+{"t": 8989, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 8989, "kind": "out", "data": "\u001b[24;3H\u001b[38;2;193;193;196;49mW\u001b[38;2;144;144;147;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9022, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;212;212;215;49mW\u001b[38;2;163;163;166;49mo\u001b[38;2;129;129;132;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9023, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9057, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;225;225;228;49mW\u001b[38;2;186;186;189;49mo\u001b[38;2;139;139;142;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9057, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9091, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 9091, "kind": "title", "data": "⠏ Working"}
+{"t": 9091, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;227;227;230;49mW\u001b[38;2;208;208;211;49mo\u001b[38;2;158;158;161;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9124, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;219;219;222;49mW\u001b[38;2;222;222;225;49mo\u001b[38;2;180;180;183;49mr\u001b[38;2;136;136;139;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9159, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;202;202;205;49mW\u001b[38;2;228;228;231;49mo\u001b[38;2;203;203;206;49mr\u001b[38;2;153;153;156;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9159, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9193, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 9193, "kind": "title", "data": "⠋ Working"}
+{"t": 9193, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;180;180;183;49mW\u001b[38;2;222;222;225;49mo\u001b[38;2;219;219;222;49mr\u001b[38;2;175;175;178;49mk\u001b[38;2;133;133;136;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9228, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;157;157;160;49mW\u001b[38;2;207;207;210;49mo\u001b[38;2;227;227;230;49mr\u001b[38;2;198;198;201;49mk\u001b[38;2;148;148;151;49mi\u001b[24;12H\u001b[2m\u001b[39;49m1\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9228, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9262, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;139;139;142;49mW\u001b[38;2;186;186;189;49mo\u001b[38;2;224;224;227;49mr\u001b[38;2;216;216;219;49mk\u001b[38;2;169;169;172;49mi\u001b[38;2;131;131;134;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9262, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9296, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 9296, "kind": "title", "data": "⠙ Working"}
+{"t": 9296, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;129;129;132;49mW\u001b[38;2;163;163;166;49mo\u001b[38;2;212;212;215;49mr\u001b[38;2;226;226;229;49mk\u001b[38;2;192;192;195;49mi\u001b[38;2;143;143;146;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9331, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;128;128;131;49mW\u001b[38;2;143;143;146;49mo\u001b[38;2;191;191;194;49mr\u001b[24;7H\u001b[38;2;212;212;215;49mi\u001b[38;2;164;164;167;49mn\u001b[38;2;129;129;132;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9331, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9365, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;130;130;133;49mo\u001b[38;2;168;168;171;49mr\u001b[38;2;215;215;218;49mk\u001b[38;2;225;225;228;49mi\u001b[38;2;187;187;190;49mn\u001b[38;2;140;140;143;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9365, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9399, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 9400, "kind": "title", "data": "⠹ Working"}
+{"t": 9400, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;128;128;131;49mo\u001b[38;2;147;147;150;49mr\u001b[38;2;196;196;199;49mk\u001b[38;2;227;227;230;49mi\u001b[38;2;208;208;211;49mn\u001b[38;2;159;159;162;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9434, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;132;132;135;49mr\u001b[38;2;174;174;177;49mk\u001b[38;2;219;219;222;49mi\u001b[38;2;223;223;226;49mn\u001b[38;2;181;181;184;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 9434, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 9467, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;128;128;131;49mr\u001b[38;2;152;152;155;49mk\u001b[38;2;202;202;205;49mi\u001b[38;2;227;227;230;49mn\u001b[38;2;203;203;206;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9468, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9501, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 9502, "kind": "title", "data": "⠸ Working"}
+{"t": 9502, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;6H\u001b[38;2;135;135;138;49mk\u001b[38;2;180;180;183;49mi\u001b[38;2;222;222;225;49mn\u001b[38;2;220;220;223;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9536, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;6H\u001b[38;2;128;128;131;49mk\u001b[38;2;157;157;160;49mi\u001b[38;2;207;207;210;49mn\u001b[38;2;227;227;230;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9537, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9571, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;139;139;142;49mi\u001b[38;2;185;185;188;49mn\u001b[38;2;224;224;227;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9604, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 9605, "kind": "title", "data": "⠼ Working"}
+{"t": 9605, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[24;7H\u001b[22m\u001b[38;2;129;129;132;49mi\u001b[38;2;162;162;165;49mn\u001b[38;2;211;211;214;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9639, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;128;128;131;49mi\u001b[38;2;142;142;145;49mn\u001b[38;2;191;191;194;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9673, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;8H\u001b[22m\u001b[38;2;130;130;133;49mn\u001b[38;2;168;168;171;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9673, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9707, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 9707, "kind": "title", "data": "⠴ Working"}
+{"t": 9707, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;128;128;131;49mn\u001b[38;2;147;147;150;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9707, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9742, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;132;132;135;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9775, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;9H\u001b[22m\u001b[38;2;128;128;131;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 9775, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 9808, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 9809, "kind": "title", "data": "⠦ Working"}
+{"t": 9809, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9843, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9876, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9877, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 9910, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 9910, "kind": "title", "data": "⠧ Working"}
+{"t": 9910, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9944, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 9977, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 9977, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 10012, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 10012, "kind": "title", "data": "⠇ Working"}
+{"t": 10013, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10045, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10078, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10113, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 10113, "kind": "title", "data": "⠏ Working"}
+{"t": 10113, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10147, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10181, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10214, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 10215, "kind": "title", "data": "⠋ Working"}
+{"t": 10215, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10250, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10283, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 10284, "kind": "title", "data": "⠙ Working"}
+{"t": 10284, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10318, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10353, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10387, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 10387, "kind": "title", "data": "⠹ Working"}
+{"t": 10388, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10422, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10456, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10489, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 10489, "kind": "title", "data": "⠸ Working"}
+{"t": 10489, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10523, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10556, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10589, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 10589, "kind": "title", "data": "⠼ Working"}
+{"t": 10589, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10622, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10657, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10691, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 10691, "kind": "title", "data": "⠴ Working"}
+{"t": 10691, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10725, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10758, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10792, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 10793, "kind": "title", "data": "⠦ Working"}
+{"t": 10793, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10826, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10860, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10894, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 10894, "kind": "title", "data": "⠧ Working"}
+{"t": 10894, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10929, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10963, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 10997, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 10998, "kind": "title", "data": "⠇ Working"}
+{"t": 10998, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11032, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11066, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11100, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 11100, "kind": "title", "data": "⠏ Working"}
+{"t": 11100, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11134, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11169, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11203, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 11203, "kind": "title", "data": "⠋ Working"}
+{"t": 11204, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11239, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m3\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 11239, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 11273, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11307, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 11307, "kind": "title", "data": "⠙ Working"}
+{"t": 11307, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 11307, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 11341, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11376, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11410, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 11410, "kind": "title", "data": "⠹ Working"}
+{"t": 11410, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11444, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11479, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11512, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 11513, "kind": "title", "data": "⠸ Working"}
+{"t": 11513, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11547, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11581, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11615, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 11615, "kind": "title", "data": "⠼ Working"}
+{"t": 11615, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11649, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11683, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11717, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 11717, "kind": "title", "data": "⠴ Working"}
+{"t": 11718, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11752, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11786, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 11786, "kind": "title", "data": "⠦ Working"}
+{"t": 11786, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11820, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11854, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11888, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 11889, "kind": "title", "data": "⠧ Working"}
+{"t": 11889, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11923, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11958, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 11991, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 11991, "kind": "title", "data": "⠇ Working"}
+{"t": 11992, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12024, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12058, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12092, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 12092, "kind": "title", "data": "⠏ Working"}
+{"t": 12092, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12125, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12136, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;2H\u001b[0m\u001b[49m\u001b[K\u001b[19;1H\u001b[2m• \u001b[22mI\u001b[24;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12237, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 12238, "kind": "title", "data": "⠋ Working"}
+{"t": 12265, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[19;4H’ll\u001b[19;8Hcreate\u001b[19;15H`bye\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12274, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[19;15H\u001b[38;2;166;227;161;49mbye.txt\u001b[19;23H\u001b[39;49min\u001b[19;26Hthe\u001b[19;30Hworkspace\u001b[19;40Hwith\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 12274, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 12366, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 12367, "kind": "title", "data": "⠙ Working"}
+{"t": 12367, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[19;45Hexactly\u001b[19;53H`\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12377, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[19;53H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[24;3H\u001b[22m\u001b[38;2;128;128;131;49mWorking\u001b[24;11H\u001b[2m\u001b[39;49m(4s • \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to interrupt)\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 12377, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 12410, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 12410, "kind": "title", "data": "⠹ Working"}
+{"t": 12411, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12445, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 12445, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 12479, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12512, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 12512, "kind": "title", "data": "⠸ Working"}
+{"t": 12513, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12547, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12580, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 12580, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 12614, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 12614, "kind": "title", "data": "⠼ Working"}
+{"t": 12615, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12649, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12682, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12716, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 12716, "kind": "title", "data": "⠴ Working"}
+{"t": 12716, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12750, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12784, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 12784, "kind": "title", "data": "⠦ Working"}
+{"t": 12784, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12817, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12852, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12886, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 12886, "kind": "title", "data": "⠧ Working"}
+{"t": 12886, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12916, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 12916, "kind": "out", "data": "\u001b[3;2H\u001b[0m\u001b[49m\u001b[K\u001b[5;2H\u001b[0m\u001b[49m\u001b[K\u001b[6;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[8;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[9;2H\u001b[0m\u001b[49m\u001b[K\u001b[11;2H\u001b[0m\u001b[49m\u001b[K\u001b[13;2H\u001b[0m\u001b[49m\u001b[K\u001b[14;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[16;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[17;2H\u001b[0m\u001b[49m\u001b[K\u001b[19;2H\u001b[0m\u001b[49m\u001b[K\u001b[1;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.160.1)\u001b[2;3H\u001b[22m   \u001b[2m/private/tmp/claude-501/-Users-someone-Repos-corrallm/…/scratchpad/codex-smoke/p2\u001b[4;3H\u001b[22m\u001b[38;2;99;168;248;49mFancy a little quality terminal time?\u001b[6;1H\u001b[39;48;2;64;64;66m \u001b[7;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mSay\u001b[7;7Hhi\u001b[7;10Hin\u001b[7;13Hone\u001b[7;17Hword.\u001b[8;1H \u001b[9;1H\u001b[39;49m \u001b[10;1H\u001b[2m• \u001b[22mHi\u001b[11;1H \u001b[12;1H\u001b[2m  Worked for 4s • 10:11 PM                                                                          \u001b[13;1H\u001b[22m \u001b[14;1H\u001b[39;48;2;64;64;66m \u001b[15;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate\u001b[15;10Ha\u001b[15;12Hfile\u001b[15;17Hnamed\u001b[15;23Hbye.txt\u001b[15;31Hcontaining\u001b[15;42Hthe\u001b[15;46Hword\u001b[15;51Hbye.\u001b[16;1H \u001b[17;1H\u001b[39;49m \u001b[18;1H\u001b[2m• \u001b[22mI’ll\u001b[18;8Hcreate\u001b[18;15H\u001b[38;2;166;227;161;"}
+{"t": 12916, "kind": "out", "data": "49mbye.txt\u001b[18;23H\u001b[39;49min\u001b[18;26Hthe\u001b[18;30Hworkspace\u001b[18;40Hwith\u001b[18;45Hexactly\u001b[18;53H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[19;1H \u001b[20;1H\u001b[1m\u001b[38;5;2;49m•\u001b[20;3H\u001b[39;49mRan\u001b[20;7H\u001b[22m\u001b[38;2;137;180;250;49mpwd\u001b[21;1H\u001b[2m\u001b[39;49m  └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[22;1H    + 1 line (ctrl+t to expand)                                                                     \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12917, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12952, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 12985, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 12985, "kind": "title", "data": "⠇ Working"}
+{"t": 12985, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13019, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13053, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;137;137;140;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13054, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13087, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 13087, "kind": "title", "data": "⠏ Working"}
+{"t": 13087, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;155;155;158;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13121, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;177;177;180;49mW\u001b[38;2;134;134;137;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13122, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13156, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;200;200;203;49mW\u001b[38;2;150;150;153;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13189, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 13189, "kind": "title", "data": "⠋ Working"}
+{"t": 13189, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;217;217;220;49mW\u001b[38;2;171;171;174;49mo\u001b[38;2;131;131;134;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13224, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;227;227;230;49mW\u001b[38;2;194;194;197;49mo\u001b[38;2;145;145;148;49mr\u001b[24;12H\u001b[2m\u001b[39;49m5\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13259, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;225;225;228;49mW\u001b[38;2;214;214;217;49mo\u001b[38;2;166;166;169;49mr\u001b[38;2;130;130;133;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13259, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13292, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 13292, "kind": "title", "data": "⠙ Working"}
+{"t": 13292, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;214;214;217;49mW\u001b[38;2;225;225;228;49mo\u001b[38;2;188;188;191;49mr\u001b[38;2;141;141;144;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 13292, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 13327, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;195;195;198;49mW\u001b[38;2;227;227;230;49mo\u001b[38;2;209;209;212;49mr\u001b[38;2;160;160;163;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13362, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;171;171;174;49mW\u001b[38;2;217;217;220;49mo\u001b[38;2;224;224;227;49mr\u001b[38;2;184;184;187;49mk\u001b[38;2;138;138;141;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13397, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 13398, "kind": "title", "data": "⠹ Working"}
+{"t": 13398, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;149;149;152;49mW\u001b[38;2;199;199;202;49mo\u001b[38;2;227;227;230;49mr\u001b[38;2;206;206;209;49mk\u001b[38;2;156;156;159;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13430, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;134;134;137;49mW\u001b[38;2;177;177;180;49mo\u001b[38;2;221;221;224;49mrk\u001b[38;2;178;178;181;49mi\u001b[38;2;134;134;137;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13431, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13464, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;128;128;131;49mW\u001b[38;2;155;155;158;49mo\u001b[38;2;205;205;208;49mr\u001b[38;2;227;227;230;49mk\u001b[38;2;200;200;203;49mi\u001b[38;2;150;150;153;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13497, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 13497, "kind": "title", "data": "⠸ Working"}
+{"t": 13497, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;138;138;141;49mo\u001b[38;2;184;184;187;49mr\u001b[38;2;224;224;227;49mk\u001b[38;2;217;217;220;49mi\u001b[38;2;171;171;174;49mn\u001b[38;2;131;131;134;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13532, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;128;128;131;49mo\u001b[38;2;161;161;164;49mr\u001b[38;2;210;210;213;49mk\u001b[38;2;227;227;230;49mi\u001b[38;2;194;194;197;49mn\u001b[38;2;145;145;148;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13566, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;141;141;144;49mr\u001b[38;2;189;189;192;49mk\u001b[38;2;225;225;228;49mi\u001b[38;2;214;214;217;49mn\u001b[38;2;166;166;169;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13600, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 13601, "kind": "title", "data": "⠼ Working"}
+{"t": 13601, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[24;5H\u001b[22m\u001b[38;2;130;130;133;49mr\u001b[38;2;166;166;169;49mk\u001b[38;2;214;214;217;49mi\u001b[38;2;225;225;228;49mn\u001b[38;2;189;189;192;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13635, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;128;128;131;49mr\u001b[38;2;145;145;148;49mk\u001b[38;2;195;195;198;49mi\u001b[38;2;227;227;230;49mn\u001b[38;2;210;210;213;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13669, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;6H\u001b[22m\u001b[38;2;132;132;135;49mk\u001b[38;2;172;172;175;49mi\u001b[38;2;218;218;221;49mn\u001b[38;2;223;223;226;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13670, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13703, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 13703, "kind": "title", "data": "⠴ Working"}
+{"t": 13703, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;6H\u001b[38;2;128;128;131;49mk\u001b[38;2;150;150;153;49mi\u001b[38;2;200;200;203;49mn\u001b[38;2;227;227;230;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13736, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;135;135;138;49mi\u001b[38;2;178;178;181;49mn\u001b[38;2;221;221;224;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13770, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;7H\u001b[22m\u001b[38;2;128;128;131;49mi\u001b[38;2;156;156;159;49mn\u001b[38;2;206;206;209;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13804, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 13805, "kind": "title", "data": "⠦ Working"}
+{"t": 13805, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;138;138;141;49mn\u001b[38;2;184;184;187;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 13805, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 13838, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;129;129;132;49mn\u001b[38;2;162;162;165;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 13838, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 13871, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[24;8H\u001b[22m\u001b[38;2;128;128;131;49mn\u001b[38;2;142;142;145;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 13872, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 13904, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 13905, "kind": "title", "data": "⠧ Working"}
+{"t": 13905, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;130;130;133;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13939, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;128;128;131;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 13973, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14007, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 14007, "kind": "title", "data": "⠇ Working"}
+{"t": 14007, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14041, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14075, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14108, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 14109, "kind": "title", "data": "⠏ Working"}
+{"t": 14109, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14143, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14177, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14211, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 14211, "kind": "title", "data": "⠋ Working"}
+{"t": 14211, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14245, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;12H\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m6\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14280, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14314, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 14314, "kind": "title", "data": "⠙ Working"}
+{"t": 14314, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14348, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14381, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14414, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 14414, "kind": "title", "data": "⠹ Working"}
+{"t": 14414, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14447, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14481, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14513, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 14514, "kind": "title", "data": "⠸ Working"}
+{"t": 14514, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14548, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14581, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14615, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 14615, "kind": "title", "data": "⠼ Working"}
+{"t": 14616, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14649, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14683, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 14683, "kind": "title", "data": "⠴ Working"}
+{"t": 14683, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14717, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14751, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14785, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 14785, "kind": "title", "data": "⠦ Working"}
+{"t": 14785, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14819, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14854, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14887, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 14887, "kind": "title", "data": "⠧ Working"}
+{"t": 14887, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14922, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14955, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 14989, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 14989, "kind": "title", "data": "⠇ Working"}
+{"t": 14989, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15024, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15058, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15092, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 15093, "kind": "title", "data": "⠏ Working"}
+{"t": 15093, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15128, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15161, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15195, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 15196, "kind": "title", "data": "⠋ Working"}
+{"t": 15196, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15230, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m7\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 15230, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 15264, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15298, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 15298, "kind": "title", "data": "⠙ Working"}
+{"t": 15298, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15332, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15366, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15399, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 15400, "kind": "title", "data": "⠹ Working"}
+{"t": 15400, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15466, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15499, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 15500, "kind": "title", "data": "⠸ Working"}
+{"t": 15500, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15534, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15567, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15600, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 15601, "kind": "title", "data": "⠼ Working"}
+{"t": 15601, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15634, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15668, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15703, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 15703, "kind": "title", "data": "⠴ Working"}
+{"t": 15703, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15737, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15770, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15803, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 15804, "kind": "title", "data": "⠦ Working"}
+{"t": 15804, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15837, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15871, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15905, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 15905, "kind": "title", "data": "⠧ Working"}
+{"t": 15905, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15938, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 15973, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16005, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 16006, "kind": "title", "data": "⠇ Working"}
+{"t": 16006, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16040, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16074, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16107, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 16107, "kind": "title", "data": "⠏ Working"}
+{"t": 16108, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16142, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16176, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16209, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 16210, "kind": "title", "data": "⠋ Working"}
+{"t": 16210, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16244, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;12H\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m8\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 16244, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 16278, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16311, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 16311, "kind": "title", "data": "⠙ Working"}
+{"t": 16311, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16346, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16380, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16414, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 16414, "kind": "title", "data": "⠹ Working"}
+{"t": 16414, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16449, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16483, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16517, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 16517, "kind": "title", "data": "⠸ Working"}
+{"t": 16518, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16553, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16586, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 16586, "kind": "title", "data": "⠼ Working"}
+{"t": 16587, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 16587, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 16622, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16655, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16688, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 16689, "kind": "title", "data": "⠴ Working"}
+{"t": 16689, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16723, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16757, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16791, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 16791, "kind": "title", "data": "⠦ Working"}
+{"t": 16791, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16826, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16860, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16894, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 16894, "kind": "title", "data": "⠧ Working"}
+{"t": 16894, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16929, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16963, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 16996, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 16997, "kind": "title", "data": "⠇ Working"}
+{"t": 16997, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 17030, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;130;130;133;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 17040, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;133;133;136;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 17047, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "turn_id": "01a13450-b80e-75f0-b3e4-d6f73d90bb3e", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "PermissionRequest", "model": "gpt-6-luna", "permission_mode": "default", "tool_name": "Bash", "tool_input": {"command": "printf 'bye' > bye.txt", "description": "Do you want to allow creating bye.txt in the workspace with the word bye?"}}}}
+{"t": 17051, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;136;136;139;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 17051, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 17062, "kind": "out", "data": "\u001b]0;[ ! ] Action Required\u0007"}
+{"t": 17062, "kind": "title", "data": "[ ! ] Action Required"}
+{"t": 17062, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 17062, "kind": "out", "data": "\u001b[1;22H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[4;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[5;55H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[7;2H\u001b[0m\u001b[49m\u001b[K\u001b[8;57H\u001b[0m\u001b[49m\u001b[K\u001b[14;33H\u001b[0m\u001b[49m\u001b[K\u001b[15;2H\u001b[0m\u001b[49m\u001b[K\u001b[16;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[17;47H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[18;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[19;21H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[20;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[21;84H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[22;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[23;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[24;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[25;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[29;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[1;1H\u001b[1m\u001b[2m\u001b[39;48;2;64;64;66m› \u001b[22m\u001b[22mSay hi in one word.\u001b[2;1H\u001b[2m\u001b[39;49m  Worked for 4s • 10:11 PM                                                                          \u001b[4;1H\u001b[22m\u001b[39;48;2;64;64;66m \u001b[5;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate a file named bye.txt containing the word bye.\u001b[7;1H\u001b[39;49m \u001b[8;1H\u001b[2m• \u001b[22mI’ll create \u001b[38;2;166;227;161;49mbye.txt\u001b[39;49m in the workspace with exactly \u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[10;1H\u001b[1m\u001b[38;5;2;49m•\u001b[22m\u001b[39;49m \u001b[1mRan\u001b[10;7H\u001b[22m\u001b[38;2;137;180;250;"}
+{"t": 17063, "kind": "out", "data": "49mpwd\u001b[11;1H\u001b[2m\u001b[39;49m  └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[12;3H  + 1 line\u001b[12;14H(ctrl+t to\u001b[12;25Hexpand)\u001b[14;1H\u001b[22m\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[22m\u001b[39;49m \u001b[1mRunning\u001b[22m \u001b[38;2;137;180;250;49mprintf\u001b[38;2;205;214;244;49m \u001b[38;2;166;227;161;49m'bye'\u001b[38;2;205;214;244;49m \u001b[38;2;148;226;213;49m>\u001b[38;2;205;214;244;49m bye.txt\u001b[15;1H\u001b[39;49m \u001b[16;1H\u001b[39;48;2;55;55;57m \u001b[17;1H  \u001b[1mWould you like to run the following command?\u001b[18;1H\u001b[22m \u001b[19;1H  Environment: \u001b[1mlocal\u001b[20;1H\u001b[22m \u001b[21;1H  Reason: \u001b[3mDo you want to allow creating bye.txt in the workspace with the word bye?\u001b[22;1H\u001b[23m \u001b[23;1H  $ \u001b[38;2;137;180;250;48;2;55;55;57mprintf\u001b[38;2;205;214;244;48;2;55;55;57m \u001b[38;2;166;227;161;48;2;55;55;57m'bye'\u001b[38;2;205;214;244;48;2;55;55;57m \u001b[38;2;148;226;213;48;2;55;55;57m>\u001b[38;2;205;214;244;48;2;55;55;57m bye.txt\u001b[24;1H\u001b[39;48;2;55;55;57m \u001b[25;1H \u001b[26;1H\u001b[1m\u001b[38;2;0;0;46;48;2;99;168;248m› 1. Yes, proceed (\u001b[38;2;59;59;60;48;2;99;168"}
+{"t": 17063, "kind": "out", "data": ";248my\u001b[38;2;0;0;46;48;2;99;168;248m)                                                                               \u001b[27;1H\u001b[22m\u001b[39;48;2;55;55;57m \u001b[27;3H2. Yes, and don't ask again\u001b[27;31Hfor\u001b[27;35Hcommands\u001b[27;44Hthat\u001b[27;49Hstart\u001b[27;55Hwith\u001b[27;60H`printf\u001b[27;68H'bye'\u001b[27;74H>\u001b[27;76Hbye.txt`\u001b[27;85H(\u001b[1m\u001b[38;2;228;228;231;48;2;55;55;57mp\u001b[22m\u001b[39;48;2;55;55;57m)\u001b[28;3H3.\u001b[28;6HNo,\u001b[28;10Hand\u001b[28;14Htell\u001b[28;19HCodex\u001b[28;25Hwhat\u001b[28;30Hto\u001b[28;33Hdo\u001b[28;36Hdifferently\u001b[28;48H(\u001b[1m\u001b[38;2;228;228;231;48;2;55;55;57mesc\u001b[22m\u001b[39;48;2;55;55;57m)\u001b[29;1H \u001b[30;3H\u001b[2m\u001b[39;49mPress \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49menter\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to confirm or \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to cancel                                                           \u001b[39m\u001b[49m\u001b[0m\u001b[?2026l"}
+{"t": 17077, "kind": "note", "data": "asked: true"}
+{"t": 18064, "kind": "out", "data": "\u001b]0;[ . ] Action Required\u0007"}
+{"t": 18064, "kind": "title", "data": "[ . ] Action Required"}
+{"t": 18579, "kind": "in", "data": "y"}
+{"t": 18580, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 18581, "kind": "title", "data": "⠸ Working"}
+{"t": 18581, "kind": "out", "data": "\u001b[?2026h\u001b[1;2H\u001b[0m\u001b[49m\u001b[K\u001b[2;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[3;22H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[5;2H\u001b[0m\u001b[49m\u001b[K\u001b[6;5H\u001b[0m\u001b[49m\u001b[K\u001b[10;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[11;55H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[12;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[16;10H\u001b[0m\u001b[49m\u001b[K\u001b[19;2H\u001b[0m\u001b[49m\u001b[K\u001b[20;61H\u001b[0m\u001b[49m\u001b[K\u001b[21;2H\u001b[0m\u001b[49m\u001b[K\u001b[22;33H\u001b[0m\u001b[49m\u001b[K\u001b[23;2H\u001b[0m\u001b[49m\u001b[K\u001b[24;34H\u001b[0m\u001b[49m\u001b[K\u001b[25;2H\u001b[0m\u001b[49m\u001b[K\u001b[26;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[27;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[28;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[30;18H\u001b[0m\u001b[49m\u001b[K\u001b[1;1H \u001b[2;1H\u001b[39;48;2;64;64;66m \u001b[3;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mSay hi in one word.\u001b[5;1H\u001b[39;49m \u001b[6;1H\u001b[2m• \u001b[22mHi\u001b[8;1H\u001b[2m \u001b[8;3HWorked for 4s • 10:11 PM                                                                          \u001b[10;1H\u001b[22m\u001b[39;48;2;64;64;66m \u001b[11;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate a file named bye.txt containing the word bye.\u001b[12;1H \u001b[14;1H\u001b[2m\u001b[39;49m• \u001b[22mI’ll create \u001b[38;2;166;227;161;49mbye.txt\u001b[39;49m in the workspace\u001b[14;40Hwith\u001b[14;45Hexactly\u001b[14;53H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[16;1H\u001b[1m\u001b[38;5;2;49m•"}
+{"t": 18581, "kind": "out", "data": "\u001b[22m\u001b[39;49m \u001b[1mRan\u001b[22m \u001b[38;2;137;180;250;49mpwd\u001b[17;1H\u001b[2m\u001b[39;49m  └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[18;1H    + 1 line (ctrl+t to expand)                                                                     \u001b[19;1H\u001b[22m \u001b[20;1H\u001b[38;5;2;49m✔ \u001b[39;49mYou \u001b[1mapproved\u001b[22m codex to run \u001b[2mprintf 'bye' > bye.txt\u001b[22m\u001b[1m this time\u001b[21;1H\u001b[22m \u001b[22;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[22m\u001b[39;49m \u001b[1mRunning\u001b[22m \u001b[38;2;137;180;250;49mprintf\u001b[38;2;205;214;244;49m \u001b[38;2;166;227;161;49m'bye'\u001b[38;2;205;214;244;49m \u001b[38;2;148;226;213;49m>\u001b[38;2;205;214;244;49m bye.txt\u001b[23;1H\u001b[39;49m \u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[22m\u001b[39;49m \u001b[38;2;128;128;131;49mWorking\u001b[39;49m \u001b[2m(8s • \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to interrupt)\u001b[25;1H\u001b[22m \u001b[26;1H\u001b[39;48;2;55;55;57m \u001b[27;1H\u001b[1m›\u001b[27;3H\u001b[22m\u001b[2m\u001b[2mAsk Codex to do anything\u001b[29;1H\u001b[22m\u001b[39;49m  \u001b[38;2;246;226;183;49mGPT-6-Luna low\u001b[38;2;148;148;151;49m · \u001b[38;2;171;223;16"}
+{"t": 18581, "kind": "out", "data": "7;49m/private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-00…\u001b[30;3H\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18614, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 18614, "kind": "title", "data": "⠼ Working"}
+{"t": 18614, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 18614, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 18629, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 18629, "kind": "out", "data": "\u001b[1;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[3;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[4;2H\u001b[0m\u001b[49m\u001b[K\u001b[6;2H\u001b[0m\u001b[49m\u001b[K\u001b[8;2H\u001b[0m\u001b[49m\u001b[K\u001b[9;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[11;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[12;2H\u001b[0m\u001b[49m\u001b[K\u001b[14;2H\u001b[0m\u001b[49m\u001b[K\u001b[18;2H\u001b[0m\u001b[49m\u001b[K\u001b[20;2H\u001b[0m\u001b[49m\u001b[K\u001b[22;16H\u001b[0m\u001b[49m\u001b[K\u001b[1;1H\u001b[39;48;2;64;64;66m \u001b[2;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mSay\u001b[2;7Hhi\u001b[2;10Hin\u001b[2;13Hone\u001b[2;17Hword.\u001b[3;1H \u001b[4;1H\u001b[39;49m \u001b[5;1H\u001b[2m• \u001b[22mHi\u001b[6;1H \u001b[7;1H\u001b[2m  Worked for 4s • 10:11 PM                                                                          \u001b[8;1H\u001b[22m \u001b[9;1H\u001b[39;48;2;64;64;66m \u001b[10;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate\u001b[10;10Ha\u001b[10;12Hfile\u001b[10;17Hnamed\u001b[10;23Hbye.txt\u001b[10;31Hcontaining\u001b[10;42Hthe\u001b[10;46Hword\u001b[10;51Hbye.\u001b[11;1H \u001b[12;1H\u001b[39;49m \u001b[13;1H\u001b[2m• \u001b[22mI’ll\u001b[13;8Hcreate\u001b[13;15H\u001b[38;2;166;227;161;49mbye.txt\u001b[13;23H\u001b[39;49min\u001b[13;26Hthe\u001b[13;30Hworkspace\u001b[13;40Hwith\u001b[13;45Hexactly\u001b[13;53H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[14;1H \u001b[15;1H\u001b[1m\u001b[38;5;2;49m•\u001b[15;3H\u001b[39;49mRan\u001b[15;7H\u001b[22m\u001b[38;2;137;180;250;49mpwd\u001b[16;1H\u001b[2m\u001b[39;49m "}
+{"t": 18629, "kind": "out", "data": " └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[17;3H \u001b[17;5H+ 1 lin\u001b[17;13H (ctrl+t to expand)                                                                     \u001b[18;1H\u001b[22m \u001b[19;1H\u001b[38;5;2;49m✔ \u001b[39;49mYou\u001b[19;7H\u001b[1mapproved\u001b[19;16H\u001b[22mcodex\u001b[19;22Hto\u001b[19;25Hrun\u001b[19;29H\u001b[2mprintf 'bye' > bye.txt\u001b[22m\u001b[1m this time\u001b[20;1H\u001b[22m \u001b[21;1H\u001b[1m\u001b[38;5;2;49m•\u001b[21;3H\u001b[39;49mRan\u001b[21;7H\u001b[22m\u001b[38;2;137;180;250;49mprintf\u001b[38;2;205;214;244;49m \u001b[38;2;166;227;161;49m'bye'\u001b[38;2;205;214;244;49m \u001b[38;2;148;226;213;49m>\u001b[38;2;205;214;244;49m bye.txt\u001b[22;1H\u001b[2m\u001b[39;49m  └ (no output)\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18638, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18671, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18705, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 18705, "kind": "title", "data": "⠴ Working"}
+{"t": 18706, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18740, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m9\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18774, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18806, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 18806, "kind": "title", "data": "⠦ Working"}
+{"t": 18807, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18841, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18874, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18907, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 18907, "kind": "title", "data": "⠧ Working"}
+{"t": 18907, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18941, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 18974, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19008, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 19008, "kind": "title", "data": "⠇ Working"}
+{"t": 19008, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19042, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19076, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19109, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 19110, "kind": "title", "data": "⠏ Working"}
+{"t": 19110, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19144, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19178, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19213, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 19213, "kind": "title", "data": "⠋ Working"}
+{"t": 19213, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19247, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19281, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19316, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 19316, "kind": "title", "data": "⠙ Working"}
+{"t": 19316, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19351, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19384, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 19384, "kind": "title", "data": "⠹ Working"}
+{"t": 19384, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19419, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19453, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19486, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 19487, "kind": "title", "data": "⠸ Working"}
+{"t": 19487, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19521, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19556, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19590, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 19590, "kind": "title", "data": "⠼ Working"}
+{"t": 19590, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19624, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19658, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19692, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 19693, "kind": "title", "data": "⠴ Working"}
+{"t": 19693, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19727, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19761, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[2m10s • \u001b[22m\u001b[1m\u001b[38;2;228;228;231;49mesc\u001b[22m\u001b[2m\u001b[2m\u001b[39;49m to inte\u001b[24;30Hrupt)\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19795, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 19795, "kind": "title", "data": "⠦ Working"}
+{"t": 19795, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19830, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19864, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 19864, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 19897, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 19897, "kind": "title", "data": "⠧ Working"}
+{"t": 19897, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19932, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 19966, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 19966, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 19999, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 20000, "kind": "title", "data": "⠇ Working"}
+{"t": 20000, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20034, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20068, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20102, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 20102, "kind": "title", "data": "⠏ Working"}
+{"t": 20102, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20136, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20169, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20204, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 20204, "kind": "title", "data": "⠋ Working"}
+{"t": 20204, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20237, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20272, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 20272, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 20306, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 20306, "kind": "title", "data": "⠙ Working"}
+{"t": 20306, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20340, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20374, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20407, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 20407, "kind": "title", "data": "⠹ Working"}
+{"t": 20407, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20441, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20474, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20507, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 20508, "kind": "title", "data": "⠸ Working"}
+{"t": 20508, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20542, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20576, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20610, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 20610, "kind": "title", "data": "⠼ Working"}
+{"t": 20610, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 20610, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 20645, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20679, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20713, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 20713, "kind": "title", "data": "⠴ Working"}
+{"t": 20713, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20748, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;13H\u001b[2m1\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20782, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20816, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 20816, "kind": "title", "data": "⠦ Working"}
+{"t": 20816, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20851, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20885, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 20885, "kind": "title", "data": "⠧ Working"}
+{"t": 20886, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20919, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20954, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 20988, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 20988, "kind": "title", "data": "⠇ Working"}
+{"t": 20988, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21023, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;129;129;132;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21057, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;139;139;142;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21091, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 21091, "kind": "title", "data": "⠏ Working"}
+{"t": 21091, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;157;157;160;49mW\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21091, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21125, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;180;180;183;49mW\u001b[38;2;135;135;138;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21160, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;202;202;205;49mW\u001b[38;2;152;152;155;49mo\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21194, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 21194, "kind": "title", "data": "⠋ Working"}
+{"t": 21194, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;219;219;222;49mW\u001b[38;2;174;174;177;49mo\u001b[38;2;133;133;136;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21229, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;227;227;230;49mW\u001b[38;2;197;197;200;49mo\u001b[38;2;148;148;151;49mr\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21263, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;225;225;228;49mW\u001b[38;2;216;216;219;49mo\u001b[38;2;169;169;172;49mr\u001b[38;2;130;130;133;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21263, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21296, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 21297, "kind": "title", "data": "⠙ Working"}
+{"t": 21297, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;212;212;215;49mW\u001b[38;2;226;226;229;49mo\u001b[38;2;192;192;195;49mr\u001b[38;2;143;143;146;49mk\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21330, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;193;193;196;49mW\u001b[24;5H\u001b[38;2;211;211;214;49mr\u001b[38;2;162;162;165;49mk\u001b[38;2;129;129;132;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21365, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;169;169;172;49mW\u001b[38;2;216;216;219;49mo\u001b[38;2;224;224;227;49mr\u001b[38;2;186;186;189;49mk\u001b[38;2;139;139;142;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21365, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21399, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 21399, "kind": "title", "data": "⠹ Working"}
+{"t": 21399, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;148;148;151;49mW\u001b[38;2;198;198;201;49mo\u001b[38;2;227;227;230;49mr\u001b[38;2;207;207;210;49mk\u001b[38;2;157;157;160;49mi\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21433, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;133;133;136;49mW\u001b[38;2;175;175;178;49mo\u001b[38;2;220;220;223;49mr\u001b[38;2;222;222;225;49mk\u001b[38;2;180;180;183;49mi\u001b[38;2;135;135;138;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21466, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;3H\u001b[38;2;128;128;131;49mW\u001b[38;2;154;154;157;49mo\u001b[38;2;204;204;207;49mr\u001b[38;2;227;227;230;49mk\u001b[38;2;201;201;204;49mi\u001b[38;2;151;151;154;49mn\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21500, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 21500, "kind": "title", "data": "⠸ Working"}
+{"t": 21500, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;136;136;139;49mo\u001b[38;2;182;182;185;49mr\u001b[38;2;223;223;226;49mk\u001b[38;2;219;219;222;49mi\u001b[38;2;173;173;176;49mn\u001b[38;2;132;132;135;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21535, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;4H\u001b[38;2;128;128;131;49mo\u001b[38;2;159;159;162;49mr\u001b[38;2;208;208;211;49mk\u001b[38;2;227;227;230;49mi\u001b[38;2;196;196;199;49mn\u001b[38;2;147;147;150;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21535, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21569, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;140;140;143;49mr\u001b[38;2;187;187;190;49mk\u001b[38;2;225;225;228;49mi\u001b[38;2;215;215;218;49mn\u001b[38;2;168;168;171;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21603, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 21604, "kind": "title", "data": "⠼ Working"}
+{"t": 21604, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[24;5H\u001b[22m\u001b[38;2;129;129;132;49mr\u001b[38;2;164;164;167;49mk\u001b[38;2;212;212;215;49mi\u001b[38;2;226;226;229;49mn\u001b[38;2;191;191;194;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21638, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;5H\u001b[38;2;128;128;131;49mr\u001b[38;2;144;144;147;49mk\u001b[38;2;192;192;195;49mi\u001b[24;9H\u001b[38;2;211;211;214;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21673, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[24;6H\u001b[22m\u001b[38;2;131;131;134;49mk\u001b[38;2;169;169;172;49mi\u001b[38;2;216;216;219;49mn\u001b[38;2;224;224;227;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21673, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21706, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 21707, "kind": "title", "data": "⠴ Working"}
+{"t": 21707, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;6H\u001b[38;2;128;128;131;49mk\u001b[38;2;148;148;151;49mi\u001b[38;2;198;198;201;49mn\u001b[38;2;227;227;230;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21741, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;7H\u001b[38;2;133;133;136;49mi\u001b[38;2;175;175;178;49mn\u001b[38;2;220;220;223;49mg\u001b[24;13H\u001b[2m\u001b[39;49m2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21775, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[24;7H\u001b[22m\u001b[38;2;128;128;131;49mi\u001b[38;2;153;153;156;49mn\u001b[38;2;203;203;206;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 21775, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 21809, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 21809, "kind": "title", "data": "⠦ Working"}
+{"t": 21810, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;136;136;139;49mn\u001b[38;2;181;181;184;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21844, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;8H\u001b[38;2;128;128;131;49mn\u001b[38;2;158;158;161;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21879, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[24;9H\u001b[22m\u001b[38;2;139;139;142;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21913, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 21913, "kind": "title", "data": "⠧ Working"}
+{"t": 21913, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;129;129;132;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21947, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;9H\u001b[38;2;128;128;131;49mg\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 21981, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;48;48;51;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22015, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 22015, "kind": "title", "data": "⠇ Working"}
+{"t": 22015, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22050, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;65;65;68;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22083, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 22084, "kind": "title", "data": "⠏ Working"}
+{"t": 22084, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22118, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22153, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;110;110;113;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22187, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 22187, "kind": "title", "data": "⠋ Working"}
+{"t": 22188, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22222, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22256, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;165;165;168;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 22257, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 22290, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 22290, "kind": "title", "data": "⠙ Working"}
+{"t": 22290, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22324, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22359, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;210;210;213;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 22359, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 22392, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 22392, "kind": "title", "data": "⠹ Working"}
+{"t": 22393, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22426, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22460, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;1H\u001b[1m\u001b[38;2;228;228;231;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 22461, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 22495, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 22495, "kind": "title", "data": "⠸ Working"}
+{"t": 22495, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22529, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22564, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22598, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 22598, "kind": "title", "data": "⠼ Working"}
+{"t": 22598, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22633, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22667, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22700, "kind": "out", "data": "\u001b]0;⠴ Working\u0007"}
+{"t": 22700, "kind": "title", "data": "⠴ Working"}
+{"t": 22700, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22735, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 22736, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 22771, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;13H\u001b[2m3\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22804, "kind": "out", "data": "\u001b]0;⠦ Working\u0007"}
+{"t": 22805, "kind": "title", "data": "⠦ Working"}
+{"t": 22805, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22839, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22873, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22907, "kind": "out", "data": "\u001b]0;⠧ Working\u0007"}
+{"t": 22907, "kind": "title", "data": "⠧ Working"}
+{"t": 22907, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 22907, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 22941, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 22975, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23009, "kind": "out", "data": "\u001b]0;⠇ Working\u0007"}
+{"t": 23009, "kind": "title", "data": "⠇ Working"}
+{"t": 23009, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23044, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23078, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23111, "kind": "out", "data": "\u001b]0;⠏ Working\u0007"}
+{"t": 23112, "kind": "title", "data": "⠏ Working"}
+{"t": 23112, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23146, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23178, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;12H\u001b[0m\u001b[49m\u001b[K\u001b[24;1H\u001b[2m• \u001b[22mCreated\u001b[24;11H[\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23186, "kind": "out", "data": "\u001b]0;⠋ Working\u0007"}
+{"t": 23186, "kind": "title", "data": "⠋ Working"}
+{"t": 23186, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23286, "kind": "out", "data": "\u001b]0;⠙ Working\u0007"}
+{"t": 23287, "kind": "title", "data": "⠙ Working"}
+{"t": 23291, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 23292, "kind": "out", "data": "\u001b[24;12Hbye.txt]\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23392, "kind": "out", "data": "\u001b]0;⠹ Working\u0007"}
+{"t": 23393, "kind": "title", "data": "⠹ Working"}
+{"t": 23494, "kind": "out", "data": "\u001b]0;⠸ Working\u0007"}
+{"t": 23495, "kind": "title", "data": "⠸ Working"}
+{"t": 23576, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[24;11H\u001b[38;2;166;227;161;49mbye.txt\u001b[39;49m with\u001b[24;24Hthe\u001b[24;28Hword\u001b[24;33H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 23576, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 23653, "kind": "out", "data": "\u001b]0;⠼ Working\u0007"}
+{"t": 23654, "kind": "title", "data": "⠼ Working"}
+{"t": 23655, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23664, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23671, "kind": "hook", "data": {"ok": true, "ev": {"session_id": "01a13450-a090-78e2-aba2-01792d6d732d", "turn_id": "01a13450-b80e-75f0-b3e4-d6f73d90bb3e", "transcript_path": "/Users/someone/.codex/sessions/2026/10/12/rollout-2026-10-12T22-11-01-01a13450-a090-78e2-aba2-01792d6d732d.jsonl", "cwd": "/work/smoke/p2", "hook_event_name": "Stop", "model": "gpt-6-luna", "permission_mode": "default", "stop_hook_active": false, "last_assistant_message": "Created [bye.txt](/work/smoke/p2/bye.txt) with the word `bye`."}}}
+{"t": 23674, "kind": "out", "data": "\u001b]0;Ready\u0007"}
+{"t": 23674, "kind": "title", "data": "Ready"}
+{"t": 23674, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 23674, "kind": "out", "data": "\u001b[2;2H\u001b[0m\u001b[49m\u001b[K\u001b[3;5H\u001b[0m\u001b[49m\u001b[K\u001b[7;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[8;55H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[10;2H\u001b[0m\u001b[49m\u001b[K\u001b[11;57H\u001b[0m\u001b[49m\u001b[K\u001b[13;10H\u001b[0m\u001b[49m\u001b[K\u001b[16;2H\u001b[0m\u001b[49m\u001b[K\u001b[17;61H\u001b[0m\u001b[49m\u001b[K\u001b[19;29H\u001b[0m\u001b[49m\u001b[K\u001b[21;2H\u001b[0m\u001b[49m\u001b[K\u001b[2;1H \u001b[3;1H\u001b[2m• \u001b[22mHi\u001b[5;1H\u001b[2m \u001b[5;3HWorked for 4s • 10:11 PM                                                                          \u001b[7;1H\u001b[22m\u001b[39;48;2;64;64;66m \u001b[8;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate a file named bye.txt containing the word bye.\u001b[10;1H\u001b[39;49m \u001b[11;1H\u001b[2m• \u001b[22mI’ll create \u001b[38;2;166;227;161;49mbye.txt\u001b[39;49m in the workspace with exactly \u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[13;1H\u001b[1m\u001b[38;5;2;49m•\u001b[22m\u001b[39;49m \u001b[1mRan\u001b[22m \u001b[38;2;137;180;250;49mpwd\u001b[14;1H\u001b[2m\u001b[39;49m  └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[15;1H    + 1 line (ctrl+t to expand)                                                                     \u001b[16;1H\u001b[22m \u001b[17;1H\u001b[38;5;2;49m✔ \u001b[39;49mYou \u001b[1mapproved\u001b[22m codex to r"}
+{"t": 23674, "kind": "out", "data": "un \u001b[2mprintf\u001b[17;36H'bye'\u001b[17;42H>\u001b[17;44Hbye.txt\u001b[22m\u001b[1m this time\u001b[19;1H\u001b[38;5;2;49m•\u001b[22m\u001b[39;49m \u001b[1mRan\u001b[19;7H\u001b[22m\u001b[38;2;137;180;250;49mprintf\u001b[38;2;205;214;244;49m \u001b[38;2;166;227;161;49m'bye'\u001b[38;2;205;214;244;49m \u001b[38;2;148;226;213;49m>\u001b[38;2;205;214;244;49m bye.txt\u001b[20;1H\u001b[2m\u001b[39;49m  └ (no output)\u001b[21;1H\u001b[22m \u001b[22;1H\u001b[2m•\u001b[22;3H\u001b[22mCreated \u001b[38;2;166;227;161;49mbye.txt\u001b[22;19H\u001b[39;49mwith\u001b[22;24Hthe\u001b[22;28Hword\u001b[22;33H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[24;1H\u001b[2m \u001b[24;3HWorked for 15s • 10:11 PM                                                                         \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 23678, "kind": "note", "data": "turn 2 done"}
+{"t": 23684, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 24479, "kind": "in", "data": "/quit"}
+{"t": 24483, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 24483, "kind": "out", "data": "\u001b[27;8H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[30;2H\u001b[0m\u001b[49m\u001b[K\u001b[25;1H\u001b[1m\u001b[38;2;0;0;46;48;2;99;168;248m› /quit  \u001b[22mexit Codex\u001b[1m                                                                                 \u001b[27;3H\u001b[22m\u001b[39;48;2;55;55;57m/quit\u001b[39m\u001b[49m\u001b[0m\u001b[27;8H\u001b[?25h\u001b[?2026l"}
+{"t": 24782, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[25;2H\u001b[0m\u001b[49m\u001b[K\u001b[25;1H \u001b[27;3H\u001b[2m\u001b[39;48;2;55;55;57mAsk Codex to do anything\u001b[30;3H\u001b[22m\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H"}
+{"t": 24782, "kind": "out", "data": "\u001b[?25h\u001b[?2026l"}
+{"t": 24782, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[27;19H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[30;2H\u001b[0m\u001b[49m\u001b[K\u001b[27;1H\u001b[2m\u001b[39;48;2;55;55;57m›\u001b[27;3HShutting down...\u001b[39m\u001b[49m\u001b[0m\u001b[?2026l"}
+{"t": 26100, "kind": "out", "data": "\u001b[1;1H\u001b[J"}
+{"t": 26100, "kind": "out", "data": "\u001b]0;\u0007"}
+{"t": 26100, "kind": "title", "data": ""}
+{"t": 26102, "kind": "out", "data": "\u001b[?1006l\u001b[?1015l\u001b[?1003l\u001b[?1002l\u001b[?1000l"}
+{"t": 26102, "kind": "out", "data": "\u001b[<1u\u001b[?1007l\u001b[?1049l\u001b[<1u\u001b[<u\u001b[>4;0m\u001b[?2004l\u001b[?1004l\u001b[0 q\u001b[?25h\u001b[0 q\u001b[?25h"}
+{"t": 26508, "kind": "out", "data": "Token usage: total=12,672 input=12,489 (+ 56,320 cached) output=183\r\nTo continue this session, run:\r\n  \u001b[36mcodex resume 01a13450-a090-78e2-aba2-01792d6d732d\u001b[39m\r\nOr run \u001b[36mcodex resume\u001b[39m and select \u001b[36mSay hi\u001b[39m.\r\n"}
+{"t": 26523, "kind": "exit", "data": {"exitCode": 0, "signal": 0}}

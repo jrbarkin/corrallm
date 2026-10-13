@@ -1,15 +1,18 @@
+import { DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
 import type {
   AskedQuestion,
-  Connection,
   BackgroundTask,
+  CodexMode,
+  Connection,
   DiffLine,
+  EffortChoice,
   ElicitationAction,
   FormField,
-  EffortLevel,
   MessageImage,
   ModelChoice,
   PermissionMode,
   PlanAnswer,
+  SessionMode,
   SessionUsage,
   SlashCommand,
   TerminalAsk,
@@ -18,13 +21,14 @@ import type {
   ToolProgress,
   ToolStatus,
 } from '../../shared/session';
+import { AgentType } from '../graph/agents';
 import type { CardQuestion } from '../graph/Questions';
 import { mergeHistory } from './history';
 
 export type {
   BackgroundTask,
   DiffLine,
-  EffortLevel,
+  EffortChoice,
   MessageImage,
   ModelChoice,
   PlanAnswer,
@@ -45,15 +49,25 @@ export type {
  * real CLI (connected.ts).
  */
 
-/** When the agent asks before acting: Claude Code's permission modes (its settings' names). */
-export type Mode = PermissionMode;
+/**
+ * When the agent asks before acting: its CLI's modes (Claude Code's permission modes, by its
+ * settings' names; Codex's permission presets and plan mode).
+ */
+export type Mode = SessionMode;
+
+/** A mode as the composer shows it. */
+export interface ModeInfo {
+  mode: Mode;
+  label: string;
+  description: string;
+}
 
 /**
- * The modes as Claude Code's desktop app names them, in its order. Shift+Tab cycles them, all but
- * bypassing permissions (CYCLED_MODES), which is chosen from the mode menu, once confirmed, as
+ * Claude Code's modes as its desktop app names them, in its order. Shift+Tab cycles them, all but
+ * bypassing permissions (cycledModes), which is chosen from the mode menu, once confirmed, as
  * Claude Code offers it only when told to.
  */
-export const MODES: readonly { mode: Mode; label: string; description: string }[] = [
+export const MODES: readonly (ModeInfo & { mode: PermissionMode })[] = [
   { mode: 'manual', label: 'Manual', description: 'Asks before editing files or running commands' },
   {
     mode: 'acceptEdits',
@@ -65,10 +79,47 @@ export const MODES: readonly { mode: Mode; label: string; description: string }[
   { mode: 'auto', label: 'Auto', description: 'Decides for itself what needs your approval' },
 ];
 
-/** The modes Shift+Tab cycles, in order: never bypassing permissions. */
-export const CYCLED_MODES: readonly Mode[] = MODES.flatMap(({ mode }) =>
-  mode === 'bypassPermissions' ? [] : [mode],
-);
+/**
+ * Codex's modes, as its /permissions names its presets, then plan mode; Default first in use. Full
+ * access, like bypassing permissions, is chosen from the mode menu only, once confirmed.
+ */
+export const CODEX_MODES: readonly (ModeInfo & { mode: CodexMode })[] = [
+  {
+    mode: 'read-only',
+    label: 'Read only',
+    description: 'Reads and runs read-only commands; asks before editing',
+  },
+  {
+    mode: 'auto',
+    label: 'Default',
+    description: 'Edits and runs commands in the project folder; asks before going outside it',
+  },
+  {
+    mode: 'full-access',
+    label: 'Full access',
+    description: 'Edits and runs anything, with network access; never asks',
+  },
+  { mode: 'plan', label: 'Plan', description: 'Explores and proposes a plan; changes nothing' },
+];
+
+/** The modes an agent offers: a Codex agent Codex's, the others Claude Code's. */
+export function modesOf(agent: AgentType): readonly ModeInfo[] {
+  return agent === AgentType.Codex ? CODEX_MODES : MODES;
+}
+
+/** The modes Shift+Tab cycles an agent through, in order: never one that never asks. */
+export function cycledModes(agent: AgentType): readonly Mode[] {
+  return modesOf(agent).flatMap(({ mode }) => (UNASKING_MODES.includes(mode) ? [] : [mode]));
+}
+
+/** How an agent shows `mode`: as the mode, if it has it, else as the mode it starts in. */
+export function modeOf(agent: AgentType, mode: Mode): ModeInfo {
+  const modes = modesOf(agent);
+  const fallback = agent === AgentType.Codex ? DEFAULT_MODES.codex : DEFAULT_MODES.claude;
+  const shown = modes.find((m) => m.mode === mode) ?? modes.find((m) => m.mode === fallback);
+  if (!shown) throw new Error(`${agent} has no ${fallback} mode`);
+  return shown;
+}
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';
@@ -176,15 +227,20 @@ export interface Session {
   /** The model picked for it; null for its agent's default. */
   model: string | null;
   /**
-   * The mode and model the user chose for it here (in its composer), as opposed to what its
+   * The mode, model and effort the user chose for it here (in its composer), as opposed to what its
    * session said: what a connected session is started with. Anything not chosen is main's to fill
    * in (what the agent was given before, else the user's own default).
    */
-  chosen?: { mode?: Mode; model?: string };
+  chosen?: { mode?: Mode; model?: string; effort?: string | null };
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
   /** The modes a connected session can switch to, when not all (bypassing turned off). */
   modes?: readonly Mode[];
+  /**
+   * How hard its model reasons (one of the efforts its model offers), where its connection lets
+   * the user choose; null for the model's default.
+   */
+  effort?: string | null;
   /** What a connected session has used, as it last said. */
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
@@ -193,8 +249,6 @@ export interface Session {
   tasks?: readonly BackgroundTask[];
   /** What a connected session predicts the user sends next, until a turn starts. */
   suggestion?: string;
-  /** The effort picked for a connected session (null: its model's default), once picked. */
-  effort?: EffortLevel | null;
   /** What a Terminal session's Claude Code asks the user in its terminal now (answered there). */
   asking?: readonly TerminalAsk[];
 }
@@ -262,22 +316,28 @@ export type SessionAction =
    * the message leaves the transcript for the head of the queue, unsent, and the session is idle.
    */
   | { type: 'refuse'; id: string }
-  /** The mode or model: `chosen` when the user chose it, rather than the session saying so. */
+  /**
+   * The mode, model or effort: `chosen` when the user chose it, rather than the session saying so.
+   */
   | { type: 'mode'; mode: Mode; chosen?: boolean }
   | { type: 'model'; model: string; chosen?: boolean }
-  /** A connected session started: the models (and modes, if not all) it offers, its model and mode. */
+  | { type: 'effort'; effort: string | null; chosen?: boolean }
+  /**
+   * A connected session started: the models (and modes, if not all) it offers, its model and mode,
+   * and its effort (where its model offers a choice).
+   */
   | {
       type: 'connected';
       models: readonly ModelChoice[];
       model: string | null;
       mode: Mode;
       modes?: readonly Mode[];
+      effort?: string | null;
     }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
   | { type: 'tasks'; tasks: readonly BackgroundTask[] }
   | { type: 'suggestion'; text: string }
-  | { type: 'effort'; effort: EffortLevel | null }
   | { type: 'asking'; asks: readonly TerminalAsk[] }
   /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] }
@@ -442,12 +502,19 @@ export function reduce(session: Session, action: SessionAction): Session {
         model: action.model,
         ...(action.chosen === true ? { chosen: { ...session.chosen, model: action.model } } : {}),
       };
+    case 'effort':
+      return {
+        ...session,
+        effort: action.effort,
+        ...(action.chosen === true ? { chosen: { ...session.chosen, effort: action.effort } } : {}),
+      };
     case 'connected': {
-      const { models, model, mode, modes } = action;
+      const { models, model, mode, modes, effort } = action;
       // A session that starts runs nothing in the background yet, and asks nothing.
       const next: Session = { ...session, models, model, mode, tasks: [] };
       if (modes === undefined) delete next.modes;
       else next.modes = modes;
+      if (effort !== undefined) next.effort = effort;
       delete next.asking;
       return next;
     }
@@ -459,8 +526,6 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, tasks: action.tasks };
     case 'suggestion':
       return { ...session, suggestion: action.text };
-    case 'effort':
-      return { ...session, effort: action.effort };
     case 'asking': {
       if (action.asks.length > 0) return { ...session, asking: action.asks };
       const asked: Session = { ...session };

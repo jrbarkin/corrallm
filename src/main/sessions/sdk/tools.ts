@@ -1,43 +1,19 @@
-import path from 'node:path';
-
 import type { DiffLine, ToolDetail } from '../../../shared/session';
+import { diff, displayPath, firstLine, output, property, replacement, text } from '../transcript';
+import type { Places } from '../transcript';
 
 /*
  * How Claude Code's tool calls read in corrallm's transcript: what each acts on (a file, a
  * command, a pattern), and what opening it shows (an edit's diff, a command's output, a result).
  * Inputs and results come from the CLI as JSON, so every field is read as `unknown` and checked.
+ * What every connection words the same way is in ../transcript.ts.
  */
 
-/** The most lines of a diff, and characters of output, a tool call carries to the renderer. */
-const MAX_DIFF_LINES = 2000;
-const MAX_OUTPUT = 40_000;
+export { displayPath, output, property, text };
+export type { Places };
 
 /** Tools whose input names a file. */
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead']);
-
-/**
- * Where a tool acts: paths in the project folder relative to it, the home folder as ~. The CLI
- * works in the folder's real path (`realCwd`, where it differs: a folder reached through a link).
- */
-export interface Places {
-  cwd: string;
-  realCwd?: string;
-  home: string;
-}
-
-/** A path as the transcript shows it: relative to the project folder, or with ~ for home. */
-export function displayPath(file: string, { cwd, realCwd, home }: Places): string {
-  const inside = (folder: string) => {
-    const relative = path.relative(folder, file);
-    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
-      ? relative
-      : undefined;
-  };
-  const relative = inside(cwd) ?? (realCwd === undefined ? undefined : inside(realCwd));
-  if (relative !== undefined) return relative;
-  const fromHome = inside(home);
-  return fromHome === undefined ? file : `~${path.sep}${fromHome}`;
-}
 
 /** What a tool call acts on, in a line: the file, the command, the pattern, the URL. */
 export function toolSummary(tool: string, input: unknown, places: Places): string {
@@ -158,17 +134,6 @@ export function resultText(content: unknown): string {
   return blocksText(content) ?? '';
 }
 
-/** A command's output, or any result, cut to what the renderer is sent. */
-export function output(value: string): ToolDetail {
-  return {
-    kind: 'output',
-    text:
-      value.length > MAX_OUTPUT
-        ? `${value.slice(0, MAX_OUTPUT)}\n… (${String(value.length - MAX_OUTPUT)} more characters)`
-        : value,
-  };
-}
-
 /** A diff from a patch's hunks (lines starting ' ', '-' or '+'), with "…" between hunks. */
 function diffFromPatch(hunks: unknown[]): ToolDetail {
   const lines: DiffLine[] = [];
@@ -186,30 +151,6 @@ function diffFromPatch(hunks: unknown[]): ToolDetail {
     }
   });
   return diff(lines);
-}
-
-/** The diff of replacing `before` with `after`: every line of one removed, of the other added. */
-function replacement(before: string, after: string): ToolDetail {
-  const split = (value: string) => (value === '' ? [] : value.replace(/\n$/, '').split('\n'));
-  return diff([
-    ...split(before).map((line): DiffLine => ({ kind: 'remove', text: line })),
-    ...split(after).map((line): DiffLine => ({ kind: 'add', text: line })),
-  ]);
-}
-
-function diff(lines: DiffLine[]): ToolDetail {
-  return {
-    kind: 'diff',
-    added: lines.filter((line) => line.kind === 'add').length,
-    removed: lines.filter((line) => line.kind === 'remove').length,
-    lines:
-      lines.length > MAX_DIFF_LINES
-        ? [
-            ...lines.slice(0, MAX_DIFF_LINES),
-            { kind: 'same', text: `… (${String(lines.length - MAX_DIFF_LINES)} more lines)` },
-          ]
-        : lines,
-  };
 }
 
 /**
@@ -242,26 +183,10 @@ function blocksText(content: unknown): string | undefined {
     .join('\n');
 }
 
-function firstLine(value: string): string {
-  const [first = ''] = value.trim().split('\n');
-  return first.length < value.trim().length ? `${first} …` : first;
-}
-
 /** The first short text in an object's values: what an unknown tool acts on, most likely. */
 function firstText(input: unknown): string | undefined {
   if (typeof input !== 'object' || input === null) return undefined;
   return Object.values(input).find(
     (value): value is string => typeof value === 'string' && value !== '' && value.length <= 200,
   );
-}
-
-/** `value[name]`, if `value` is an object. */
-export function property(value: unknown, name: string): unknown {
-  if (typeof value !== 'object' || value === null) return undefined;
-  return (value as Record<string, unknown>)[name];
-}
-
-/** `value`, if it is a string. */
-export function text(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
 }

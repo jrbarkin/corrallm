@@ -687,7 +687,7 @@ describe('GraphEditor', () => {
 
     fireEvent.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex · Simulated' }));
     fireEvent.click(panel.getByRole('option', { name: 'Qwen' }));
     expect(tag('a')).toBe('Qwen');
     expect(panel.getByRole('button', { name: 'Agent: Qwen' })).toBeTruthy();

@@ -1,24 +1,32 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 
-import { MODEL_PATTERN, PERMISSION_MODES } from '../shared/session';
-import type { PermissionMode } from '../shared/session';
+import { CLI_MODES, EFFORT_PATTERN, MODEL_PATTERN } from '../shared/session';
+import type { Cli, SessionMode } from '../shared/session';
 
-/** The model and mode an agent was given (each only if it was): it starts with them again. */
+/**
+ * The model, mode and reasoning effort an agent was given in a CLI (each only if it was): it starts
+ * with them again.
+ */
 export interface Chosen {
   model?: string;
-  mode?: PermissionMode;
+  mode?: SessionMode;
+  effort?: string;
 }
 
 /**
- * What main remembers of a canvas file: its project folder, its agents' sessions' ids, and the
- * model and mode each agent was given.
+ * What main remembers of a canvas file: its project folder, its agents' sessions' ids (Claude
+ * Code's sessions, Codex's threads), and the model, mode and effort each agent was given in each.
  */
 export interface Remembered {
   project?: string;
   /** The id of each agent's Claude Code session, by agent id: resumed when the agent starts. */
   sessions: Readonly<Record<string, string>>;
-  /** What each agent was given, by agent id: what its session starts with. */
+  /** The id of each agent's Codex thread (Codex's sessions), by agent id, likewise. */
+  threads?: Readonly<Record<string, string>>;
+  /** What each agent was given in Claude Code, by agent id: what its session starts with. */
   chosen?: Readonly<Record<string, Chosen>>;
+  /** What each agent was given in Codex, likewise. */
+  codexChosen?: Readonly<Record<string, Chosen>>;
 }
 
 const NOTHING: Remembered = { sessions: {} };
@@ -31,8 +39,9 @@ const VERSION = 1;
  * app's user data. The canvas file itself only holds what the canvas means (src/renderer/graph/
  * file.ts), so it can be shared: where it runs on this machine is kept here.
  *
- *   { "version": 1, "canvases": { "<canvas path>": {
- *       "project"?, "sessions": { "<agent>": id }, "chosen"?: { "<agent>": { "model"?, "mode"? } } } } }
+ *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id },
+ *       "threads"?: { "<agent>": id },
+ *       "chosen"?: { "<agent>": { "model"?, "mode"?, "effort"? } }, "codexChosen"?: { … } } } }
  *
  * Updates are applied one at a time, in order, and written whole (beside it, then moved over it).
  */
@@ -82,15 +91,22 @@ export class CanvasMemory {
   }
 
   async #write(canvases: Map<string, Remembered>): Promise<void> {
-    const text = `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`;
-    const partial = `${this.#file}.${String(process.pid)}.partial`;
-    try {
-      await writeFile(partial, text, 'utf8');
-      await rename(partial, this.#file);
-    } catch (error) {
-      await rm(partial, { force: true });
-      throw error;
-    }
+    await writeWhole(
+      this.#file,
+      `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`,
+    );
+  }
+}
+
+/** Writes a file whole: beside it, then moved over it, so it is never left half written. */
+export async function writeWhole(file: string, text: string): Promise<void> {
+  const partial = `${file}.${String(process.pid)}.partial`;
+  try {
+    await writeFile(partial, text, 'utf8');
+    await rename(partial, file);
+  } catch (error) {
+    await rm(partial, { force: true });
+    throw error;
   }
 }
 
@@ -106,34 +122,50 @@ function parse(text: string): Map<string, Remembered> {
   if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     if (!isRecord(value)) continue;
-    const { project, sessions, chosen } = value;
+    const { project, sessions, threads, chosen, codexChosen } = value;
     if (project !== undefined && typeof project !== 'string') continue;
-    const ids = Object.entries(isRecord(sessions) ? sessions : {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    );
-    const choices = Object.entries(isRecord(chosen) ? chosen : {}).flatMap(
-      ([agent, given]): [string, Chosen][] => {
-        const parsed = parseChosen(given);
-        return parsed === undefined ? [] : [[agent, parsed]];
-      },
-    );
+    const given = parseChoices(chosen, 'claude');
+    const codexGiven = parseChoices(codexChosen, 'codex');
     canvases.set(canvas, {
       ...(project === undefined ? {} : { project }),
-      sessions: Object.fromEntries(ids),
-      ...(choices.length === 0 ? {} : { chosen: Object.fromEntries(choices) }),
+      sessions: ids(sessions),
+      ...(isRecord(threads) ? { threads: ids(threads) } : {}),
+      ...(given === undefined ? {} : { chosen: given }),
+      ...(codexGiven === undefined ? {} : { codexChosen: codexGiven }),
     });
   }
   return canvases;
 }
 
-/** The model and mode an entry gives, those that are right; undefined if neither is. */
-function parseChosen(value: unknown): Chosen | undefined {
+/** The ids in a record of them, by agent; values that are not ids are left out. */
+function ids(value: unknown): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(isRecord(value) ? value : {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
+  );
+}
+
+/** What each agent was given in `cli`, those entries that are right; undefined if none is. */
+function parseChoices(value: unknown, cli: Cli): Record<string, Chosen> | undefined {
+  const choices = Object.entries(isRecord(value) ? value : {}).flatMap(
+    ([agent, given]): [string, Chosen][] => {
+      const parsed = parseChosen(given, cli);
+      return parsed === undefined ? [] : [[agent, parsed]];
+    },
+  );
+  return choices.length === 0 ? undefined : Object.fromEntries(choices);
+}
+
+/** The model, mode and effort an entry gives, those that are right; undefined if none is. */
+function parseChosen(value: unknown, cli: Cli): Chosen | undefined {
   if (!isRecord(value)) return undefined;
-  const { model, mode } = value;
-  const known = PERMISSION_MODES.find((m) => m === mode);
+  const { model, mode, effort } = value;
+  const known = (CLI_MODES[cli] as readonly SessionMode[]).find((m) => m === mode);
   const chosen: Chosen = {
     ...(typeof model === 'string' && MODEL_PATTERN.test(model) ? { model } : {}),
     ...(known === undefined ? {} : { mode: known }),
+    ...(typeof effort === 'string' && EFFORT_PATTERN.test(effort) ? { effort } : {}),
   };
   return Object.keys(chosen).length === 0 ? undefined : chosen;
 }

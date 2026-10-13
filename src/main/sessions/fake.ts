@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ModelChoice, PermissionMode, SessionAnswer, UserMessage } from '../../shared/session';
+import { DEFAULT_MODES } from '../../shared/session';
+import type {
+  Cli,
+  ModelChoice,
+  SessionAnswer,
+  SessionMode,
+  UserMessage,
+} from '../../shared/session';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 
 /** The models a fake session offers. */
@@ -9,26 +16,46 @@ export const FAKE_MODELS: ModelChoice[] = [
   { value: 'fast', label: 'Fast', description: 'Another model to pick' },
 ];
 
+/** The models a fake Codex session offers: with reasoning efforts to choose, as Codex's have. */
+export const FAKE_CODEX_MODELS: ModelChoice[] = [
+  {
+    value: 'default',
+    label: 'Default',
+    description: 'The fake’s default model',
+    efforts: [
+      { value: 'low', label: 'Low', description: 'Fast responses' },
+      { value: 'high', label: 'High', description: 'Deeper reasoning' },
+    ],
+    defaultEffort: 'low',
+  },
+  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
+];
+
 /**
- * A connector that runs no CLI, for tests. Each turn echoes the message, thinks, and runs a
- * command, asking first in Manual mode; a message starting "/question" asks the user a question
- * instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes and models, and remembers a made-up session id.
+ * A connector that runs no CLI, for tests, standing in for any connection of its CLI (Claude
+ * Code's, or Codex's: `cli`). Each turn echoes the message, thinks, and runs a command, asking first in the modes
+ * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
+ * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes,
+ * models and (for Codex, whose models offer them) reasoning efforts, and remembers a made-up
+ * session id.
  *
  * The manager's tests use it, and so do the e2e tests (CORRALLM_FAKE_SESSIONS=1, honoured only by
  * unpackaged builds), to drive the whole path from the renderer through IPC and back.
  */
-export class FakeConnector implements Connector {
+export class FakeConnector implements Connector<SessionMode> {
   /** Every session it started, as it was started, and the id each one remembered. */
-  readonly started: SessionSpec[] = [];
+  readonly started: SessionSpec<SessionMode>[] = [];
   readonly ids: string[] = [];
   readonly #pause: number;
+  readonly #cli: Cli;
 
-  /** `pause`: how long (ms) between the events of a turn. */
-  constructor({ pause = 0 }: { pause?: number } = {}) {
+  /** `pause`: how long (ms) between the events of a turn; `cli`: the CLI it stands in for. */
+  constructor({ pause = 0, cli = 'claude' }: { pause?: number; cli?: Cli } = {}) {
     this.#pause = pause;
+    this.#cli = cli;
   }
 
-  start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
+  start(spec: SessionSpec<SessionMode>, host: SessionHost): Promise<LiveSession<SessionMode>> {
     this.started.push(spec);
     const id = spec.resume ?? randomUUID();
     this.ids.push(id);
@@ -36,9 +63,16 @@ export class FakeConnector implements Connector {
     if (spec.resume !== null) {
       host.emit({ type: 'notice', id: randomUUID(), level: 'info', text: `Resumed ${id}` });
     }
-    // Its user's own default mode is Manual.
-    const mode = spec.mode ?? 'manual';
-    host.emit({ type: 'started', model: spec.model ?? 'default', mode, models: FAKE_MODELS });
+    // Its user's own default mode is its CLI's.
+    const mode = spec.mode ?? DEFAULT_MODES[this.#cli];
+    const codex = this.#cli === 'codex';
+    host.emit({
+      type: 'started',
+      model: spec.model ?? 'default',
+      mode,
+      models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
+      ...(codex ? { effort: spec.effort ?? null } : {}),
+    });
     return Promise.resolve(new FakeSession(mode, host, this.#pause));
   }
 }
@@ -53,14 +87,17 @@ interface Turn {
   prompt: string | undefined;
 }
 
-class FakeSession implements LiveSession {
-  #mode: PermissionMode;
+/** The modes in which a fake session asks before running its command. */
+const ASKING: readonly SessionMode[] = ['manual', 'plan', 'read-only'];
+
+class FakeSession implements LiveSession<SessionMode> {
+  #mode: SessionMode;
   readonly #host: SessionHost;
   readonly #pause: number;
   #turn: Turn | undefined;
   #turns = 0;
 
-  constructor(mode: PermissionMode, host: SessionHost, pause: number) {
+  constructor(mode: SessionMode, host: SessionHost, pause: number) {
     this.#mode = mode;
     this.#host = host;
     this.#pause = pause;
@@ -91,7 +128,7 @@ class FakeSession implements LiveSession {
     return Promise.resolve();
   }
 
-  setMode(mode: PermissionMode): Promise<void> {
+  setMode(mode: SessionMode): Promise<void> {
     this.#mode = mode;
     this.#host.emit({ type: 'mode', mode });
     return Promise.resolve();
@@ -99,6 +136,11 @@ class FakeSession implements LiveSession {
 
   setModel(model: string): Promise<void> {
     this.#host.emit({ type: 'model', model });
+    return Promise.resolve();
+  }
+
+  setEffort(effort: string | null): Promise<void> {
+    this.#host.emit({ type: 'effort', effort });
     return Promise.resolve();
   }
 
@@ -179,7 +221,7 @@ class FakeSession implements LiveSession {
       const command = { tool: 'Bash', summary: 'echo hello' };
       turn.tool = tool;
       emit({ type: 'tool', id: tool, ...command, status: 'running' });
-      if (this.#mode === 'manual' || this.#mode === 'plan') {
+      if (ASKING.includes(this.#mode)) {
         const answer = await ask(`${id}/permission`, () => {
           emit({
             type: 'permission',

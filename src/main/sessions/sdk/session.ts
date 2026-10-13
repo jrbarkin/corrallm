@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  EffortLevel,
   Query,
   SDKControlInterruptResponse,
   SDKMessage,
@@ -8,11 +9,11 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { isPermissionMode } from '../../../shared/session';
 import type {
   FilesRewind,
   McpChange,
   McpServer,
-  EffortLevel,
   PermissionMode,
   PlanMode,
   SessionAnswer,
@@ -35,6 +36,19 @@ import type { Translator } from './translate';
  * says comes back through the translator as session events; prompts wait on the user. Each turn
  * ends with the CLI's result for the message that started it.
  */
+
+/**
+ * Claude Code's /effort levels, least to most, with what its effort menu says of each (as the
+ * picker offers them, where a model takes one).
+ */
+export const CLAUDE_EFFORTS: Readonly<Record<EffortLevel, string>> = {
+  low: 'Quick, straightforward implementation',
+  medium: 'Balanced approach with standard testing',
+  high: 'Comprehensive implementation with extensive testing',
+  xhigh: 'Extended reasoning with thorough analysis',
+  max: 'Maximum capability with deepest reasoning (this session only)',
+};
+const CLAUDE_EFFORT_LEVELS = Object.keys(CLAUDE_EFFORTS) as EffortLevel[];
 
 /** How long after a plan is approved the CLI may take to leave plan mode, before the mode is set. */
 const PLAN_EXIT_MS = 1500;
@@ -216,8 +230,10 @@ export class SdkSession implements LiveSession {
   }
 
   /** For this session only, as Claude Code's /effort does without saving it. */
-  async setEffort(effort: EffortLevel | null): Promise<void> {
-    await this.#query.applyFlagSettings({ effortLevel: effort });
+  async setEffort(effort: string | null): Promise<void> {
+    const level = effort === null ? null : CLAUDE_EFFORT_LEVELS.find((one) => one === effort);
+    if (level === undefined) throw new Error(`Claude Code has no ${String(effort)} effort.`);
+    await this.#query.applyFlagSettings({ effortLevel: level });
   }
 
   /** Stops a task the CLI runs in the background; its notification says it stopped. */
@@ -294,7 +310,7 @@ export class SdkSession implements LiveSession {
       this.#host.emit({ type: 'commands', commands: SdkSession.commands(message.commands) });
     }
     for (const event of this.#translator.translate(message)) {
-      if (event.type === 'mode') this.#mode = event.mode;
+      if (event.type === 'mode' && isPermissionMode(event.mode)) this.#mode = event.mode;
       this.#host.emit(event);
     }
     if (

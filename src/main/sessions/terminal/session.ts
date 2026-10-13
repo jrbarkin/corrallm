@@ -1,44 +1,43 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-import {
-  MAX_ANSWER_LENGTH,
-  MAX_QUESTIONS,
-  MODEL_PATTERN,
-  PERMISSION_MODES,
+import type {
+  PermissionMode,
+  SessionMode,
+  TerminalAsk,
+  UserMessage,
 } from '../../../shared/session';
-import type { PermissionMode, TerminalAsk, UserMessage } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
-import { askedQuestions } from '../sdk/prompts';
-import { property, text as textOf, toolSummary } from '../sdk/tools';
-import type { Places } from '../sdk/tools';
-import { hookSettings } from './hooks';
+import type { TerminalCli, TerminalSignal } from './cli';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
 import { Screen } from './screen';
 import type { ProgramStatus } from './status';
-import { ENTER, keystrokes, typeable } from './typing';
+import { ENTER } from './typing';
 
 /*
- * A Terminal session: Claude Code's own interactive CLI in a pseudo-terminal, which the agent's
- * view shows as it is (every feature of Claude Code works there, as the user knows it), while
- * corrallm follows it to orchestrate it: it knows when the session works, waits on the user, or
- * is done, from Claude Code's Program Status reports (status.ts), and what its hooks tell
- * (hooks.ts); it types the queue's messages into the prompt (typing.ts), and hears each turn end.
+ * A Terminal session: a CLI's own interactive terminal (Claude Code's, Codex's) in a
+ * pseudo-terminal, which the agent's view shows as it is (every feature of the CLI works there, as
+ * the user knows it), while corrallm follows it to orchestrate it: it knows when the session
+ * works, waits on the user, or is done, from what the CLI reports on its screen (Claude Code's
+ * Program Status reports: status.ts; or its window title) and what its hooks tell (hooks.ts); it
+ * types the queue's messages into the prompt, and hears each turn end. What differs between CLIs
+ * (their command line, how they report, their prompt, their hooks) is their TerminalCli's
+ * (cli.ts: Claude Code's is claude-code.ts).
  *
- * A turn, as corrallm sees it, starts with a message corrallm sends, or with Claude Code starting
- * to work on its own (a prompt the user typed in the terminal, a background task reporting back),
- * and lasts until Claude Code has taken every message corrallm sent in it and stopped working.
- * corrallm types a message only once the prompt is ready: Claude Code idle (or done), and nothing
- * the user typed in the prompt; meanwhile, a session kept from it by a dialog (as Claude Code's
- * folder trust prompt) or by the user's draft is waiting on the user.
+ * A turn, as corrallm sees it, starts with a message corrallm sends, or with the CLI starting to
+ * work on its own (a prompt the user typed in the terminal, a background task reporting back), and
+ * lasts until the CLI has taken every message corrallm sent in it and stopped working. corrallm
+ * types a message only once the prompt is ready: the CLI idle (or done), and nothing the user
+ * typed in the prompt; meanwhile, a session kept from it by a dialog (as Claude Code's folder
+ * trust prompt) or by the user's draft is waiting on the user.
  *
- * What Claude Code asks the user in its terminal is listed outside it ('asking'), never answered:
- * its hooks tell what a permission prompt is for, its questions and a plan to approve, just before
- * it shows them; its status reports say when it waits on the user (and, in a word, for what), and
- * when it goes on (the user answered, in the terminal).
+ * What the CLI asks the user in its terminal is listed outside it ('asking'), never answered: its
+ * hooks may tell what it is about to ask (Claude Code's: what a permission prompt is for, its
+ * questions and a plan to approve, just before it shows them); its reports say when it waits on
+ * the user (and, in a word, for what), and when it goes on (the user answered, in the terminal).
  */
 
 /** How long things take, in ms. */
@@ -48,16 +47,16 @@ export interface TerminalTiming {
   /** Between a message's last keystrokes and the Enter that sends it. */
   enter: number;
   /**
-   * How long Claude Code may take to take a message once Enter is pressed (twice: see `#confirm`).
+   * How long the CLI may take to take a message once Enter is pressed (twice: see `#confirm`).
    */
   confirm: number;
   /** After output, how long the screen is let settle before corrallm reads it. */
   settle: number;
-  /** How long Claude Code may take to show its prompt before a message waiting for it waits on the user (a dialog). */
+  /** How long the CLI may take to show its prompt before a message waiting for it waits on the user (a dialog). */
   startup: number;
   /** How long output collects before it goes to the view. */
   batch: number;
-  /** How long Claude Code may take to exit once told to, before it is killed. */
+  /** How long the CLI may take to exit once told to, before it is killed. */
   kill: number;
 }
 
@@ -82,35 +81,17 @@ const CTRL_C = '\x03';
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 
-const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
-/** What it waits on, by its status's kind, when nothing tells more. */
-const WAITING = {
-  permission: 'Claude Code asks for your permission.',
-  question: 'Claude Code asks you something.',
-  auth: LOGIN,
-  none: 'Claude Code is waiting for you.',
-} as const;
-/** Notifications that Claude Code needs the user (not that it is idle, or done). */
-const NEEDS_YOU = new Set([
-  'permission_prompt',
-  'elicitation_dialog',
-  'elicitation_url_dialog',
-  'agent_needs_input',
-]);
 /**
- * How long before Claude Code waits on the user its hooks may have told what it asks, in ms: it
- * shows a dialog right after them. Older ones were for dialogs it did not show (another hook of
- * the user's answered them).
+ * How long before the CLI waits on the user its hooks may have told what it asks, in ms: it shows
+ * a dialog right after them. Older ones were for dialogs it did not show (another hook of the
+ * user's answered them).
  */
 const ASK_WINDOW = 5000;
-/** At most this many asks are listed, and this much of a plan or a notification. */
+/** At most this many asks are listed. */
 const MAX_ASKS = 8;
-const MAX_ASK_TEXT = 2000;
-const NOT_SENT =
-  'corrallm typed the message into the terminal, but Claude Code did not send it: send it there.';
 
 type State = ProgramStatus['state'];
-/** Claude Code at work on a turn, or waiting on the user in one. */
+/** The CLI at work on a turn, or waiting on the user in one. */
 const busy = (state: State | undefined) => state === 'working' || state === 'blocked';
 
 /** A turn going on, as corrallm sees it. */
@@ -118,7 +99,7 @@ interface Turn {
   /** The messages it answers: corrallm's, and prompts typed in the terminal. */
   messages: string[];
   started: number;
-  /** Whether Claude Code worked in it (said it was working, or waiting on the user). */
+  /** Whether the CLI worked in it (said it was working, or waiting on the user). */
   ran: boolean;
   interrupted: boolean;
   failed: boolean;
@@ -135,9 +116,11 @@ interface Link {
   queued: TerminalEvent[];
 }
 
-export interface TerminalSessionDeps {
-  /** The `claude` executable. */
-  claude: string;
+export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
+  /** The CLI's executable (the user's `claude`, `codex`). */
+  executable: string;
+  /** What is particular to the CLI (cli.ts). */
+  cli: TerminalCli<M>;
   spawn: SpawnPty;
   hooks: HookServer;
   /** Where its settings file goes (a folder of its own is made in it). */
@@ -145,19 +128,21 @@ export interface TerminalSessionDeps {
   /** Its environment: the agents' (spec.env), as a terminal sets it up (connector.ts). */
   env: (token: string) => Record<string, string>;
   timing: TerminalTiming;
-  /** The user's home folder: where the files it asks about are shown from (as ~), outside the project. */
-  home: string;
 }
 
-export class TerminalSession implements LiveSession {
-  readonly #spec: SessionSpec;
+export class TerminalSession<M extends SessionMode = PermissionMode> implements LiveSession<M> {
+  readonly #spec: SessionSpec<M>;
   readonly #host: SessionHost;
-  readonly #deps: TerminalSessionDeps;
-  /** Its CLI's session id: the one it resumes or was given, then whatever its hooks say. */
-  #id: string;
-  /** Whether its CLI resumes a session it may not find (then it starts that id afresh). */
+  readonly #deps: TerminalSessionDeps<M>;
+  readonly #cli: TerminalCli<M>;
+  /**
+   * Its CLI's session id: the one it resumes or was given, then whatever its hooks say (null
+   * until they say, for a CLI that picks its own).
+   */
+  #id: string | null;
+  /** Whether its CLI resumes a session it may not find (then it starts afresh). */
   #resuming: boolean;
-  #mode: PermissionMode;
+  #mode: M;
   #registration: HookRegistration | undefined;
   #settingsDir: string | undefined;
   #pty: Pty | undefined;
@@ -170,7 +155,7 @@ export class TerminalSession implements LiveSession {
   #closing = false;
   #cleaned = false;
 
-  /** The latest Program Status of the session itself, and whether it ever sent one. */
+  /** The latest state the CLI reported of the session itself, and whether it ever reported one. */
   #state: State | undefined;
   #reporting = false;
   #turn: Turn | undefined;
@@ -178,16 +163,14 @@ export class TerminalSession implements LiveSession {
   #pending: UserMessage[] = [];
   /** A message being typed, until it is (or the typing is stopped). */
   #typing: { stopped: boolean } | undefined;
-  /** Enter was pressed on a message: Claude Code has yet to take it. */
+  /** Enter was pressed on a message: the CLI has yet to take it. */
   #awaiting = false;
   /** The messages typed this turn whose prompt its hooks have yet to tell (as typed). */
   #unconfirmed: string[] = [];
 
-  /** Where it works, for the files its asks are about. */
-  #places: Places;
-  /** What its hooks said Claude Code asks the user since it last went on, and when. */
+  /** What its hooks said the CLI asks the user since it last went on, and when. */
   #asks: { ask: TerminalAsk; at: number }[] = [];
-  /** What keeps Claude Code waiting on the user, by status record ('' for its own): since when. */
+  /** What keeps the CLI waiting on the user, by status record ('' for its own): since when. */
   readonly #blocks = new Map<string, { report: ProgramStatus; since: number; id: string }>();
   /** What its last notification that it needs the user said (until it goes on). */
   #notified: { id: string; text: string } | undefined;
@@ -219,39 +202,32 @@ export class TerminalSession implements LiveSession {
     },
   };
 
-  constructor(spec: SessionSpec, host: SessionHost, deps: TerminalSessionDeps) {
+  constructor(spec: SessionSpec<M>, host: SessionHost, deps: TerminalSessionDeps<M>) {
     this.#spec = spec;
     this.#host = host;
     this.#deps = deps;
-    this.#id = spec.resume ?? randomUUID();
+    this.#cli = deps.cli;
+    this.#id = spec.resume ?? deps.cli.newId();
     this.#resuming = spec.resume !== null;
-    // Until its hooks say otherwise: Manual, if the user's own default mode applies.
-    this.#mode = spec.mode ?? 'manual';
-    this.#places = { cwd: spec.cwd, home: deps.home };
+    // Until its hooks say otherwise: the CLI's own default, if the user's applies.
+    this.#mode = spec.mode ?? deps.cli.defaultMode;
     this.#screen = this.#newScreen();
   }
 
   /** Starts its CLI: resolves once it runs. */
   async launch(): Promise<void> {
-    // The CLI works in the folder's real path (a folder reached through a link).
-    const realCwd = await realpath(this.#spec.cwd).catch(() => this.#spec.cwd);
-    if (realCwd !== this.#spec.cwd) this.#places = { ...this.#places, realCwd };
     try {
       this.#registration = await this.#deps.hooks.register((event) => {
         this.#hook(event);
       });
-      this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-claude-'));
-      await writeFile(
-        path.join(this.#settingsDir, 'settings.json'),
-        JSON.stringify(hookSettings(this.#registration.url)),
-        { mode: 0o600 },
-      );
+      this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-terminal-'));
+      await this.#cli.prepare(this.#settingsDir, this.#registration);
       await this.#start();
     } catch (error) {
       await this.#cleanUp();
       throw error;
     }
-    this.#host.remember(this.#id);
+    if (this.#id !== null) this.#host.remember(this.#id);
     this.#host.emit({
       type: 'started',
       model: this.#spec.model,
@@ -263,7 +239,7 @@ export class TerminalSession implements LiveSession {
 
   send(message: UserMessage): Promise<void> {
     if (this.#exited || this.#closing) {
-      return Promise.reject(new Error('Claude Code is not running in this terminal.'));
+      return Promise.reject(new Error(`${this.#cli.name} is not running in this terminal.`));
     }
     const turn = this.#turn ?? this.#begin();
     turn.messages.push(message.id);
@@ -275,12 +251,12 @@ export class TerminalSession implements LiveSession {
   }
 
   answer(): Promise<void> {
-    return Promise.reject(new Error('Answer Claude Code in its terminal.'));
+    return Promise.reject(new Error(this.#cli.words.answer));
   }
 
   async interrupt(): Promise<void> {
     if (this.#gone()) return;
-    // What Claude Code printed so far is read first: it may have just started working.
+    // What the CLI printed so far is read first: it may have just started working.
     await this.#screen.settled();
     const turn = this.#turn;
     if (!turn || this.#gone()) return;
@@ -296,11 +272,11 @@ export class TerminalSession implements LiveSession {
   }
 
   setMode(): Promise<void> {
-    return Promise.reject(new Error('Switch modes in Claude Code’s terminal (Shift+Tab).'));
+    return Promise.reject(new Error(this.#cli.words.mode));
   }
 
   setModel(): Promise<void> {
-    return Promise.reject(new Error('Switch models in Claude Code’s terminal (/model).'));
+    return Promise.reject(new Error(this.#cli.words.model));
   }
 
   async close(): Promise<void> {
@@ -326,18 +302,16 @@ export class TerminalSession implements LiveSession {
 
   /** Runs the CLI in a new pseudo-terminal, on a fresh screen (shown to the view, if any). */
   async #start(): Promise<void> {
-    const settings = path.join(this.#settingsDir ?? '', 'settings.json');
-    const { model, mode } = this.#spec;
-    const args = [
-      '--settings',
-      settings,
-      ...(this.#resuming ? ['--resume', this.#id] : ['--session-id', this.#id]),
-      // Only what corrallm was given: otherwise the user's own default model and mode apply.
-      ...(model === null || model === 'default' ? [] : ['--model', model]),
-      // (Its flag takes corrallm's names: 'manual' among them, as of 2.1.296.)
-      ...(mode === null ? [] : ['--permission-mode', mode]),
-    ];
-    const pty = await this.#deps.spawn(this.#deps.claude, args, {
+    const { model, mode, cwd } = this.#spec;
+    const args = this.#cli.args({
+      dir: this.#settingsDir ?? '',
+      id: this.#id,
+      resume: this.#resuming,
+      model,
+      mode,
+      cwd,
+    });
+    const pty = await this.#deps.spawn(this.#deps.executable, args, {
       cwd: this.#spec.cwd,
       env: this.#deps.env(this.#registration?.token ?? ''),
       ...this.#size,
@@ -367,6 +341,10 @@ export class TerminalSession implements LiveSession {
       status: (report) => {
         this.#status(report);
       },
+      title: (title) => {
+        const report = this.#cli.title?.(title);
+        if (report) this.#status(report);
+      },
       // A view's terminal answers what the CLI asks; with none, this screen does.
       answersQueries: () => this.#link === undefined,
     });
@@ -380,9 +358,10 @@ export class TerminalSession implements LiveSession {
       !this.#closing &&
       this.#resuming &&
       !this.#reporting &&
-      /No conversation found/i.test(this.#screen.text())
+      this.#cli.resumeFailed(this.#screen.text())
     ) {
-      // Its transcript is gone (or it never had one: no message was sent): that id starts afresh.
+      // Its transcript is gone (or it never had one: no message was sent): it starts afresh (Claude
+      // Code under the same id).
       this.#resuming = false;
       this.#screen.dispose();
       this.#screen = this.#newScreen();
@@ -402,7 +381,7 @@ export class TerminalSession implements LiveSession {
     this.#forgetAsks();
     this.#host.emit({
       type: 'closed',
-      ...(code === 0 ? {} : { error: `Claude Code exited with code ${String(code)}.` }),
+      ...(code === 0 ? {} : { error: `${this.#cli.name} exited with code ${String(code)}.` }),
     });
     await this.#cleanUp();
   }
@@ -482,7 +461,10 @@ export class TerminalSession implements LiveSession {
     return turn;
   }
 
-  /** A Program Status report: the session's own drives its turns; its tasks' are left out. */
+  /**
+   * A report of the CLI's state (Program Status, or what its title says): the session's own drives
+   * its turns; its tasks' are left out.
+   */
   #status(report: ProgramStatus): void {
     this.#block(report);
     if (report.id !== undefined || report.state === 'clear') return;
@@ -490,17 +472,19 @@ export class TerminalSession implements LiveSession {
     this.#become(report.state, report);
   }
 
-  /** Claude Code's state changed (as it reported, or as its hooks tell when it does not report). */
+  /** The CLI's state changed (as it reported, or as its hooks tell when it does not report). */
   #become(state: State, report?: ProgramStatus): void {
     this.#state = state;
     if (busy(state)) {
       const turn = this.#turn ?? this.#begin();
       turn.ran = true;
       this.#taken();
-      if (state === 'blocked' && report?.kind === 'auth') this.#tell(turn, 'error', LOGIN);
+      if (state === 'blocked' && report?.kind === 'auth') {
+        this.#tell(turn, 'error', this.#cli.words.login);
+      }
     } else {
       if (state === 'error' && this.#turn) {
-        this.#tell(this.#turn, 'error', report?.msg ?? 'Claude Code stopped with an error.');
+        this.#tell(this.#turn, 'error', report?.msg ?? `${this.#cli.name} stopped with an error.`);
       }
       this.#settle();
       // Once it has drawn its prompt again (with what it may put back in it).
@@ -509,7 +493,7 @@ export class TerminalSession implements LiveSession {
     this.#updateStatus();
   }
 
-  /** Claude Code took the message corrallm sent. */
+  /** The CLI took the message corrallm sent. */
   #taken(): void {
     if (!this.#awaiting) return;
     this.#awaiting = false;
@@ -541,12 +525,14 @@ export class TerminalSession implements LiveSession {
     });
   }
 
-  /** Whether a message can be typed now: Claude Code's prompt is ready, and empty. */
+  /** Whether a message can be typed now: the CLI's prompt is ready, and empty. */
   #ready(): boolean {
-    const draft = this.#screen.draft();
+    const draft = this.#cli.draft(this.#screen);
     if (draft !== undefined && draft !== '') return false;
-    // Without reports (an older Claude Code), its prompt on screen says it is ready.
-    return this.#reporting ? !busy(this.#state) : draft === '';
+    // Without reports (an older Claude Code), its prompt on screen says it is ready; a CLI whose
+    // reports leave out some dialogs (Codex's) needs its prompt on screen as well.
+    if (!this.#reporting) return draft === '';
+    return !busy(this.#state) && (draft === '' || !this.#cli.waitsForPrompt);
   }
 
   /** Types the next message, if one waits and the prompt is ready (read once the screen settles). */
@@ -561,7 +547,7 @@ export class TerminalSession implements LiveSession {
   async #type(message: UserMessage): Promise<void> {
     const typing = { stopped: false };
     this.#typing = typing;
-    const writes = keystrokes(message.text);
+    const writes = this.#cli.keystrokes(message.text);
     const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     for (const keys of writes) {
       if (typing.stopped) break;
@@ -582,24 +568,30 @@ export class TerminalSession implements LiveSession {
     }
     this.#write(ENTER);
     this.#awaiting = true;
-    this.#unconfirmed.push(typeable(message.text).trim());
+    this.#unconfirmed.push(this.#cli.submitted(message.text));
     this.#confirm(0);
   }
 
   /**
-   * Waits for Claude Code to take the message (to say it works on it). If it is still in the
-   * prompt, Enter again, once; then it was not sent. If it left the prompt but nothing started (a
-   * command that runs at once, as /clear), it is done with once it has stayed quiet a while.
+   * Waits for the CLI to take the message (to say it works on it). If it is still in the prompt,
+   * Enter again, once; then it was not sent. If it left the prompt but nothing started (a command
+   * that runs at once, as /clear), it is done with once it has stayed quiet a while, unless the
+   * CLI holds it until it is ready.
    */
   #confirm(tries: number): void {
     this.#confirming = this.#later(() => {
       this.#confirming = undefined;
       void this.#screen.settled().then(() => {
         if (!this.#awaiting || this.#exited) return;
-        const draft = this.#screen.draft();
+        const draft = this.#cli.draft(this.#screen);
         const stuck = draft !== undefined && draft !== '';
         if (tries === 0) {
           if (stuck) this.#write(ENTER);
+          this.#confirm(1);
+          return;
+        }
+        // Sent, and held until the CLI is ready (its MCP servers start): it will take it then.
+        if (!stuck && this.#cli.holds?.()) {
           this.#confirm(1);
           return;
         }
@@ -607,7 +599,11 @@ export class TerminalSession implements LiveSession {
         const turn = this.#turn;
         if (turn && stuck) {
           turn.failed = true;
-          this.#tell(turn, 'warning', NOT_SENT);
+          this.#tell(
+            turn,
+            'warning',
+            `corrallm typed the message into the terminal, but ${this.#cli.name} did not send it: send it there.`,
+          );
         }
         this.#settle();
         this.#check();
@@ -623,7 +619,7 @@ export class TerminalSession implements LiveSession {
     let status: 'working' | 'waiting' = 'working';
     if (this.#state === 'blocked') status = 'waiting';
     else if (this.#pending.length > 0 && !this.#typing && !this.#awaiting && !this.#ready()) {
-      const draft = this.#screen.draft();
+      const draft = this.#cli.draft(this.#screen);
       // The user's draft is in the way; or something (a dialog) keeps the prompt from showing.
       if (draft !== undefined && draft !== '') status = 'waiting';
       else if (!busy(this.#state) && Date.now() - this.#spawned >= this.#deps.timing.startup) {
@@ -659,25 +655,27 @@ export class TerminalSession implements LiveSession {
 
   #hook(event: HookEvent): void {
     if (this.#exited || this.#closing) return;
-    const text = (key: string) => {
-      const value = event[key];
-      return typeof value === 'string' ? value : undefined;
-    };
-    const id = text('session_id');
-    if (id !== undefined && id !== this.#id && /^[\w-]{1,200}$/.test(id)) {
-      this.#id = id;
-      this.#host.remember(id);
-    }
-    const mode = modeOf(text('permission_mode'));
-    if (mode !== undefined && mode !== this.#mode) {
-      this.#mode = mode;
-      this.#host.emit({ type: 'mode', mode });
-    }
-    switch (text('hook_event_name')) {
-      case 'UserPromptSubmit': {
-        const prompt = text('prompt') ?? '';
-        // A message corrallm typed (often told after Claude Code said it is working on it).
-        const typed = this.#unconfirmed.indexOf(prompt.trim());
+    for (const signal of this.#cli.hook(event)) this.#signal(signal);
+  }
+
+  /** Acts on what a hook told (cli.ts: TerminalSignal). */
+  #signal(signal: TerminalSignal<M>): void {
+    switch (signal.kind) {
+      case 'session':
+        if (signal.id !== this.#id && /^[\w-]{1,200}$/.test(signal.id)) {
+          this.#id = signal.id;
+          this.#host.remember(signal.id);
+        }
+        return;
+      case 'cleared':
+        // A new session, whose id a later hook tells. Until then, an id of its own: resumed after
+        // a restart, it starts afresh, as the cleared session did.
+        this.#id = randomUUID();
+        this.#host.remember(this.#id);
+        return;
+      case 'prompt': {
+        // A message corrallm typed (often told after the CLI said it is working on it).
+        const typed = this.#unconfirmed.indexOf(signal.text.trim());
         if (typed !== -1) this.#unconfirmed.splice(typed, 1);
         if (typed !== -1 || this.#awaiting) this.#taken();
         else {
@@ -685,87 +683,45 @@ export class TerminalSession implements LiveSession {
           const turn = this.#turn ?? this.#begin();
           const message = randomUUID();
           turn.messages.push(message);
-          this.#host.emit({ type: 'user', id: message, text: prompt });
+          this.#host.emit({ type: 'user', id: message, text: signal.text });
         }
-        if (!this.#reporting) this.#become('working');
         return;
       }
-      case 'Stop': {
-        const reply = text('last_assistant_message');
-        if (reply !== undefined && reply.trim() !== '' && this.#turn) {
-          this.#host.emit({ type: 'text', id: randomUUID(), text: reply });
+      case 'reply':
+        if (signal.text.trim() !== '' && this.#turn) {
+          this.#host.emit({ type: 'text', id: randomUUID(), text: signal.text });
         }
-        if (!this.#reporting) this.#become('done');
         return;
-      }
-      case 'StopFailure': {
+      case 'failed':
         if (this.#turn) {
-          const why = text('error_details') ?? text('last_assistant_message') ?? text('error');
-          this.#tell(this.#turn, 'error', why ?? 'Claude Code stopped with an error.');
-        }
-        if (!this.#reporting) this.#become('error');
-        return;
-      }
-      case 'SessionEnd':
-        // /clear: the session goes on under a new id, which its next hook tells. Until then, an
-        // id of its own: resumed after a restart, it starts afresh, as the cleared session did.
-        if (text('reason') === 'clear') {
-          this.#id = randomUUID();
-          this.#host.remember(this.#id);
+          this.#tell(this.#turn, 'error', signal.why ?? `${this.#cli.name} stopped with an error.`);
         }
         return;
-      case 'PostModelSwitch': {
-        const model = text('to_model');
-        if (model !== undefined && MODEL_PATTERN.test(model)) {
-          this.#host.emit({ type: 'model', model });
+      case 'state':
+        if (!this.#reporting) this.#become(signal.state);
+        return;
+      case 'mode':
+        if (signal.mode !== this.#mode) {
+          this.#mode = signal.mode;
+          this.#host.emit({ type: 'mode', mode: signal.mode });
         }
         return;
-      }
-      // What it is about to ask the user: a permission prompt (and its questions or plan, as
-      // their tools start: told by both).
-      case 'PermissionRequest':
-      case 'PreToolUse': {
-        const ask = this.#askOf(text('tool_name'), event.tool_input, text('tool_use_id'));
-        if (ask) this.#told(ask);
+      case 'model':
+        this.#host.emit({ type: 'model', model: signal.model });
         return;
-      }
-      case 'Notification': {
-        const message = text('message')?.trim() ?? '';
-        if (message !== '' && NEEDS_YOU.has(text('notification_type') ?? '')) {
-          this.#notified = { id: randomUUID(), text: message.slice(0, MAX_ASK_TEXT) };
-          this.#list();
-        }
+      case 'ask':
+        this.#told(signal.ask);
         return;
-      }
+      case 'needs':
+        this.#notified = { id: randomUUID(), text: signal.text };
+        this.#list();
+        return;
     }
   }
 
   // ---- What it asks the user, in its terminal.
 
-  /** What a tool call asks of the user, as a hook tells it: its questions, a plan, or permission. */
-  #askOf(tool: string | undefined, input: unknown, toolUseId: string | undefined) {
-    if (tool === undefined || tool === '') return undefined;
-    const id =
-      toolUseId !== undefined && /^[\w-]{1,200}$/.test(toolUseId) ? toolUseId : randomUUID();
-    if (tool === 'AskUserQuestion') {
-      const questions = askedQuestions(property(input, 'questions'));
-      return (
-        questions && { kind: 'question' as const, id, questions: questions.slice(0, MAX_QUESTIONS) }
-      );
-    }
-    if (tool === 'ExitPlanMode') {
-      const plan = (textOf(property(input, 'plan')) ?? '').slice(0, MAX_ANSWER_LENGTH);
-      return { kind: 'plan' as const, id, plan };
-    }
-    return {
-      kind: 'permission' as const,
-      id,
-      tool,
-      summary: toolSummary(tool, input, this.#places),
-    };
-  }
-
-  /** A hook told what Claude Code is about to ask (once, though two hooks may tell it). */
+  /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
   #told(ask: TerminalAsk): void {
     const same = (other: TerminalAsk) =>
       JSON.stringify({ ...other, id: '' }) === JSON.stringify({ ...ask, id: '' });
@@ -775,7 +731,7 @@ export class TerminalSession implements LiveSession {
   }
 
   /**
-   * Follows what keeps Claude Code (or a task of it) waiting on the user, from its status reports.
+   * Follows what keeps the CLI (or a task of it) waiting on the user, from its reports.
    * Once a wait ends, what it asked was answered (in the terminal).
    */
   #block(report: ProgramStatus): void {
@@ -807,10 +763,10 @@ export class TerminalSession implements LiveSession {
   }
 
   /**
-   * What Claude Code asks the user now. While it waits on them: what its hooks told just before
-   * (or, if they told nothing, what it waits for in its status's words, or its notification's). It
-   * may tell without waiting: what a notification says it needs. Without status reports (an older
-   * Claude Code), what its hooks told, until the turn ends.
+   * What the CLI asks the user now. While it waits on them: what its hooks told just before (or,
+   * if they told nothing, what it waits for in its report's words, or its notification's, or its
+   * CLI's). It may tell without waiting: what a notification says it needs. Without reports (an
+   * older Claude Code), what its hooks told, until the turn ends.
    */
   #asking(): TerminalAsk[] {
     if (this.#exited) return [];
@@ -826,11 +782,11 @@ export class TerminalSession implements LiveSession {
     return blocks.map(({ report, id }) => ({
       kind: 'other',
       id,
-      text: report.msg ?? this.#notified?.text ?? WAITING[report.kind ?? 'none'],
+      text: report.msg ?? this.#notified?.text ?? this.#cli.words.waiting[report.kind ?? 'none'],
     }));
   }
 
-  /** Lists what Claude Code asks now, if that changed. */
+  /** Lists what the CLI asks now, if that changed. */
   #list(): void {
     const asks = this.#asking();
     const listed = JSON.stringify(asks);
@@ -876,10 +832,4 @@ export class TerminalSession implements LiveSession {
     }
     this.#screen.dispose();
   }
-}
-
-/** A permission mode as Claude Code's hooks name it ('default' is Manual). */
-function modeOf(name: string | undefined): PermissionMode | undefined {
-  if (name === 'default') return 'manual';
-  return PERMISSION_MODES.find((mode) => mode === name);
 }

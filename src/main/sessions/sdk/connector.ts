@@ -12,6 +12,7 @@ import { PERMISSION_MODES } from '../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../shared/session';
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
+import { effortChoice } from '../transcript';
 import { historyEvents } from './history';
 import { Inbox } from './inbox';
 import {
@@ -21,7 +22,7 @@ import {
   uncheckedLogin,
 } from './login';
 import { Prompts } from './prompts';
-import { SdkSession, Stderr, stopped } from './session';
+import { CLAUDE_EFFORTS, SdkSession, Stderr, stopped } from './session';
 import { modeSettings } from './settings';
 import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
@@ -194,7 +195,11 @@ export class SdkConnector implements Connector {
       label: m.displayName,
       description: m.description,
       ...(m.supportsEffort === true && m.supportedEffortLevels !== undefined
-        ? { efforts: [...m.supportedEffortLevels] }
+        ? {
+            efforts: m.supportedEffortLevels.map((level) =>
+              effortChoice(level, CLAUDE_EFFORTS[level]),
+            ),
+          }
         : {}),
     }));
     const current = model ?? (models.some((m) => m.value === 'default') ? 'default' : null);
@@ -214,11 +219,17 @@ export class SdkConnector implements Connector {
       places,
     });
     live.session = session;
+    // The effort it was given, if its model takes it (for this session, as /effort sets it).
+    const offered = models.find((m) => m.value === current)?.efforts ?? [];
+    const effort =
+      spec.effort != null && offered.some((e) => e.value === spec.effort) ? spec.effort : null;
+    if (effort !== null) await session.setEffort(effort);
     host.emit({
       type: 'started',
       model: current,
       mode,
       models,
+      effort,
       // Bypassing permissions is not offered where the CLI's settings turn it off.
       ...(settings.bypassDisabled
         ? { modes: PERMISSION_MODES.filter((m) => m !== 'bypassPermissions') }

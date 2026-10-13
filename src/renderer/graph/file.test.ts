@@ -231,7 +231,7 @@ describe('fromFile', () => {
     expect(fromFile(JSON.stringify(saved)).nodes[1]?.data.queue).toEqual(queue);
   });
 
-  it('saves how a Claude agent runs when it is connected, and reads it back', () => {
+  it('saves how a Claude or Codex agent runs when it is connected, and reads it back', () => {
     const connected: Graph = {
       nodes: [
         {
@@ -246,18 +246,25 @@ describe('fromFile', () => {
           position: { x: 200, y: 0 },
           data: { label: 'S', agent: 'Claude', connection: 'sdk' },
         },
+        {
+          id: 'c',
+          type: 'agent',
+          position: { x: 400, y: 0 },
+          data: { label: 'C', agent: 'Codex', connection: 'codex-terminal' },
+        },
+        {
+          id: 'x',
+          type: 'agent',
+          position: { x: 600, y: 0 },
+          data: { label: 'X', agent: 'Codex', connection: 'app-server' },
+        },
       ],
       edges: [],
     };
     const file = JSON.parse(toFile(connected)) as typeof saved;
-    expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual([
-      'terminal',
-      'sdk',
-    ]);
-    expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual([
-      'terminal',
-      'sdk',
-    ]);
+    const ways = ['terminal', 'sdk', 'codex-terminal', 'app-server'];
+    expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual(ways);
+    expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual(ways);
     // Simulated is the default: written, it reads as no connection at all.
     const simulated = structuredClone(saved);
     Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
@@ -302,12 +309,12 @@ describe('fromFile', () => {
     [
       'an unknown connection',
       (f) => Object.assign(f.nodes[2] ?? {}, { connection: 'ssh' }),
-      /^nodes\[2\]\.connection must be one of: simulated, terminal, sdk$/,
+      /^nodes\[2\]\.connection must be one of: simulated, terminal, sdk, codex-terminal, app-server$/,
     ],
     [
       'a connection its agent type does not offer',
       (f) => Object.assign(f.nodes[1] ?? {}, { connection: 'terminal' }),
-      /^nodes\[1\]\.connection: Codex agents can only be simulated$/,
+      /^nodes\[1\]\.connection: Codex agents run only codex-terminal, app-server or simulated$/,
     ],
     [
       'a group with a connection',

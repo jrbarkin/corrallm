@@ -17,7 +17,6 @@ import { ScriptedDriver } from './scripted';
 import { answersOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
   Answer,
-  EffortLevel,
   MessageImage,
   Mode,
   PlanAnswer,
@@ -302,9 +301,9 @@ export class SessionStore {
     this.#drivers.get(agentId)?.driver.setModel(model);
   }
 
-  /** Sets how much effort Claude puts into its replies (null: its model's default). */
-  setEffort(agentId: string, effort: EffortLevel | null): void {
-    this.#dispatch(agentId, { type: 'effort', effort });
+  /** The user chose how hard its model reasons (null: the model's default): its session switches, or starts at it. */
+  setEffort(agentId: string, effort: string | null): void {
+    this.#dispatch(agentId, { type: 'effort', effort, chosen: true });
     this.#drivers.get(agentId)?.driver.setEffort(effort);
   }
 

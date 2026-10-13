@@ -300,6 +300,32 @@ describe('session:* handlers', () => {
     );
   });
 
+  it('start Codex sessions in Codex’s modes, and switch to them', async () => {
+    const sender = {};
+    const options = { connection: 'app-server', model: 'gpt-6-luna', mode: 'full-access' };
+    await invoke('session:start', ['a', options], sender);
+    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    await invoke('session:start', ['b', { ...options, connection: 'codex-terminal' }], sender);
+    await invoke('session:mode', ['a', 'read-only'], sender);
+    expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'read-only');
+  });
+
+  it('start sessions at a reasoning effort, and switch it (or back to the model’s default)', async () => {
+    const sender = {};
+    const options = {
+      connection: 'app-server',
+      model: 'gpt-6-luna',
+      mode: 'auto',
+      effort: 'xhigh',
+    };
+    await invoke('session:start', ['a', options], sender);
+    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    await invoke('session:effort', ['a', 'low'], sender);
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'low');
+    await invoke('session:effort', ['a', null], sender);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+  });
+
   const start = { connection: 'terminal', model: null, mode: 'manual' };
   it.each([
     ['session:start', 'no options', ['a'], /Expected an agent and how to start/],
@@ -313,6 +339,13 @@ describe('session:* handlers', () => {
       /connection/,
     ],
     ['session:start', 'an unknown mode', ['a', { ...start, mode: 'yolo' }], /mode/],
+    [
+      'session:start',
+      'a mode of another CLI',
+      ['a', { ...start, connection: 'app-server', mode: 'acceptEdits' }],
+      /mode of Codex/,
+    ],
+    ['session:start', 'a Codex mode for Claude', ['a', { ...start, mode: 'read-only' }], /mode/],
     ['session:start', 'a model with spaces', ['a', { ...start, model: 'rm -rf /' }], /model/],
     ['session:start', 'a path to resume', ['a', { ...start, resume: '/etc/passwd' }], /options/],
     ['session:send', 'a message without text', ['a', { id: 'm' }], /text/],
@@ -461,8 +494,6 @@ describe('session:* handlers', () => {
     ['session:resume', 'no conversation', ['a'], /an agent and a conversation/],
     ['session:resume', 'a path', ['a', '../../etc/passwd'], /conversation's id/],
     ['session:resume', 'an id too long', ['a', 'a'.repeat(MAX_ID_LENGTH + 1)], /conversation's id/],
-    ['session:effort', 'an unknown effort', ['a', 'ultra'], /effort/],
-    ['session:effort', 'no effort', ['a'], /an agent and an effort/],
     ['session:stopTask', 'a task that is not named', ['a', ''], /task's id/],
     ['session:stopTask', 'a very long task id', ['a', 't'.repeat(MAX_ID_LENGTH + 1)], /task's id/],
     [
@@ -480,6 +511,15 @@ describe('session:* handlers', () => {
         { kind: 'permission', answer: 'deny', feedback: 'x'.repeat(MAX_ANSWER_LENGTH + 1) },
       ],
       /what to do instead/,
+    ],
+    ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
+    ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
+    ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],
+    [
+      'session:start',
+      'an effort that is not a word',
+      ['a', { connection: 'app-server', model: null, mode: 'auto', effort: '--yolo' }],
+      /reasoning effort/,
     ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);

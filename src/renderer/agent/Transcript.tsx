@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { Connection, ElicitationAction, FormValue, PlanMode } from '../../shared/session';
-import { CONNECTION_INFO } from '../graph/agents';
+import { AgentType, CONNECTION_INFO } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
-import { isOpen, MODES, rewindPoints, sessionQuestions } from './session';
+import { isOpen, modeOf, rewindPoints, sessionQuestions } from './session';
 import type { Answer, BackgroundTask, Entry, PlanAnswer, Session, ToolProgress } from './session';
 
 /** The tools that run commands, and those that edit files, across the agents (agents.ts). */
@@ -49,16 +49,19 @@ export interface TranscriptAnswers {
  * Elicitation.tsx), to-do lists, notices, where /clear cleared the conversation, and how long each
  * turn took. The first permission prompt open takes its answers' numbers from the keyboard, as in
  * Claude Code. It keeps to the bottom while new entries arrive, unless scrolled up. `note`: what
- * the empty transcript says about how the session runs.
+ * the empty transcript says about how the session runs. `agent`: the agent's type, whose CLI's
+ * words its prompts use.
  */
 export function Transcript({
   session,
   agentName,
+  agent = AgentType.Claude,
   note,
   answers,
 }: {
   session: Session;
   agentName: string;
+  agent?: AgentType;
   note: string;
   answers: TranscriptAnswers;
 }) {
@@ -98,6 +101,7 @@ export function Transcript({
           <EntryView
             key={entry.id}
             entry={entry}
+            agent={agent}
             session={session}
             answers={answers}
             keys={entry.id === keyed}
@@ -126,12 +130,14 @@ export function Transcript({
 
 function EntryView({
   entry,
+  agent,
   session,
   answers,
   keys,
   rewinds,
 }: {
   entry: Entry;
+  agent: AgentType;
   session: Session;
   answers: TranscriptAnswers;
   /** Whether the keyboard's numbers answer it (a permission prompt). */
@@ -179,7 +185,8 @@ function EntryView({
       return (
         <details className="agent-thinking">
           <summary>Thought for {entry.seconds}s</summary>
-          <p>{entry.text}</p>
+          {/* Markdown: Codex's reasoning summaries open with a bold title. */}
+          <Markdown text={entry.text} />
         </details>
       );
     case 'tool': {
@@ -200,7 +207,7 @@ function EntryView({
       );
     }
     case 'permission':
-      return <Permission entry={entry} keys={keys} onAnswer={answers.onAnswer} />;
+      return <Permission agent={agent} entry={entry} keys={keys} onAnswer={answers.onAnswer} />;
     case 'question':
       return (
         <div className="agent-questions" role="group" aria-label="Questions for you">
@@ -223,7 +230,7 @@ function EntryView({
         </div>
       );
     case 'plan':
-      return <Plan entry={entry} onAnswer={answers.onAnswerPlan} />;
+      return <Plan agent={agent} entry={entry} onAnswer={answers.onAnswerPlan} />;
     case 'elicitation':
       return (
         <Elicitation
@@ -403,16 +410,18 @@ function Detail({ detail }: { detail: NonNullable<Extract<Entry, { kind: 'tool' 
 
 /**
  * A permission prompt, as Claude Code words it: its answers numbered (with `keys`, typing the
- * number answers, unless the user is typing elsewhere: a draft in the composer, another box), and
- * a box to say no and tell Claude what to do instead (Enter, or Tell Claude). Once answered (or no
- * longer asked), a line with the answer. A connected session says what "always" allows, or that it
- * offers no "always".
+ * number answers, unless the user is typing elsewhere: a draft in the composer, another box), and,
+ * for Claude, a box to say no and tell Claude what to do instead (Enter, or Tell Claude; Codex's
+ * No stops the turn, for the user to say so next). Once answered (or no longer asked), a line with
+ * the answer. A connected session says what "always" allows, or that it offers no "always".
  */
 function Permission({
+  agent,
   entry,
   keys,
   onAnswer,
 }: {
+  agent: AgentType;
   entry: Extract<Entry, { kind: 'permission' }>;
   keys: boolean;
   onAnswer: (permissionId: string, answer: Answer, feedback?: string) => void;
@@ -505,22 +514,24 @@ function Permission({
           </button>
         ))}
       </div>
-      <div className="graph-question-reply agent-permission-instead">
-        <input
-          aria-label={INSTEAD}
-          placeholder={INSTEAD}
-          value={instead}
-          onChange={(event) => {
-            setInstead(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') deny();
-          }}
-        />
-        <button type="button" disabled={instead.trim() === ''} onClick={deny}>
-          Tell Claude
-        </button>
-      </div>
+      {agent !== AgentType.Codex && (
+        <div className="graph-question-reply agent-permission-instead">
+          <input
+            aria-label={INSTEAD}
+            placeholder={INSTEAD}
+            value={instead}
+            onChange={(event) => {
+              setInstead(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') deny();
+            }}
+          />
+          <button type="button" disabled={instead.trim() === ''} onClick={deny}>
+            Tell Claude
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -542,34 +553,46 @@ function typing(target: EventTarget | null): boolean {
   return false;
 }
 
-/** How a plan can be carried out once approved, as Claude Code offers it. */
-const PLAN_CHOICES: readonly [PlanMode, string][] = [
-  ['auto', 'Yes, and use auto mode'],
-  ['acceptEdits', 'Yes, and auto-accept edits'],
-  ['manual', 'Yes, and manually approve edits'],
-];
+/**
+ * How a plan can be carried out once approved, as each CLI offers it: Claude Code in a mode of the
+ * user's choice, Codex in its Default mode.
+ */
+const PLAN_CHOICES: Readonly<Record<'Claude' | 'Codex', readonly [PlanMode, string][]>> = {
+  Claude: [
+    ['auto', 'Yes, and use auto mode'],
+    ['acceptEdits', 'Yes, and auto-accept edits'],
+    ['manual', 'Yes, and manually approve edits'],
+  ],
+  Codex: [['auto', 'Yes, implement this plan']],
+};
 
 /** Plan mode's plan: approve it (and the mode to carry it out in), or say what to change. */
 function Plan({
   entry,
+  agent,
   onAnswer,
 }: {
   entry: Extract<Entry, { kind: 'plan' }>;
+  agent: AgentType;
   onAnswer: (promptId: string, answer: PlanAnswer) => void;
 }) {
+  const codex = agent === AgentType.Codex;
   const [feedback, setFeedback] = useState('');
   const { answer } = entry;
   const open = answer === undefined && entry.withdrawn !== true;
   return (
     <div className="agent-plan" role="group" aria-label="Plan">
-      <p className="agent-permission-title">Ready to code? Here is the plan:</p>
+      <p className="agent-permission-title">
+        {codex ? 'Proposed plan' : 'Ready to code? Here is the plan:'}
+      </p>
       <div className="agent-text agent-plan-text">
         <Markdown text={entry.plan} />
       </div>
       {open ? (
         <>
+          {codex && <p>Implement this plan?</p>}
           <div className="agent-permission-choices">
-            {PLAN_CHOICES.map(([mode, text]) => (
+            {PLAN_CHOICES[codex ? 'Codex' : 'Claude'].map(([mode, text]) => (
               <button
                 key={mode}
                 type="button"
@@ -584,7 +607,7 @@ function Plan({
           <div className="graph-question-reply">
             <input
               aria-label="What to change"
-              placeholder="No, keep planning: tell Claude what to change"
+              placeholder={`No, keep planning: tell ${codex ? 'Codex' : 'Claude'} what to change`}
               value={feedback}
               onChange={(event) => {
                 setFeedback(event.target.value);
@@ -608,7 +631,7 @@ function Plan({
           {answer === undefined
             ? 'Not answered'
             : answer.approve
-              ? `Approved: carrying it out in ${MODES.find((m) => m.mode === answer.mode)?.label ?? answer.mode}`
+              ? `Approved: carrying it out in ${modeOf(agent, answer.mode).label}`
               : `Kept planning${answer.feedback === '' ? '' : `: ${answer.feedback}`}`}
         </p>
       )}

@@ -1,4 +1,4 @@
-import { AgentType } from '../graph/agents';
+import { AGENT_CLI, AGENT_CONNECTIONS, AgentType, connectionNames } from '../graph/agents';
 import type { Step } from './player';
 import type { Entry, Mode, Todo } from './session';
 
@@ -58,8 +58,8 @@ export function scriptedTurn(
   const tools = TOOLS[agent];
   const codex = agent === AgentType.Codex;
   const note =
-    agent === AgentType.Claude
-      ? '_This is a scripted session, so nothing here really ran: connect Claude Code from the agent chip (Terminal, or Agent SDK with an API key) to run it._'
+    AGENT_CONNECTIONS[agent].length > 1
+      ? `_This is a scripted session, so nothing here really ran: connect ${AGENT_CLI[agent]} from the agent chip (${agent === AgentType.Claude ? 'Terminal, or Agent SDK with an API key' : connectionNames(agent)}) to run it._`
       : `_This is a scripted session: corrallm isn't connected to ${agent} yet, so nothing here really ran._`;
 
   /** A tool call that runs for `ms`, then shows `detail`. */
@@ -148,7 +148,8 @@ export function scriptedTurn(
     ];
   }
 
-  const free = mode === 'auto' || mode === 'bypassPermissions';
+  // Claude Code's Auto and Bypass, Codex's Default (in its sandbox) and Full access.
+  const free = mode === 'auto' || mode === 'bypassPermissions' || mode === 'full-access';
   return [
     ...look,
     {

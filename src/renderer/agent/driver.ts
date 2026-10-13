@@ -1,4 +1,4 @@
-import type { EffortLevel, MessageImage, SessionAnswer } from '../../shared/session';
+import type { MessageImage, SessionAnswer } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Refusal, Session, SessionAction } from './session';
 
@@ -32,7 +32,8 @@ export interface SessionDriver {
   /** The user switched mode, model or effort: the store has already recorded it. */
   setMode(mode: Mode): void;
   setModel(model: string): void;
-  setEffort(effort: EffortLevel | null): void;
+  /** The user chose how hard the model reasons (null: its default), where its connection lets them. */
+  setEffort(effort: string | null): void;
   /** Stops a task the session runs in the background (one its `tasks` lists). */
   stopTask(taskId: string): void;
   /** Makes sure the session runs, as when its view opens: a connected one starts or resumes. */

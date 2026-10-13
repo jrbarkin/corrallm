@@ -259,12 +259,27 @@ describe('SdkConnector', () => {
       'sonnet',
       'haiku',
     ]);
-    expect(started?.models[4]).toEqual({
+    expect(started?.models[4]).toMatchObject({
       value: 'haiku',
       label: 'Haiku 5.5',
       description: 'Fastest for quick answers',
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     });
+    // Its effort levels, as Claude Code's effort menu offers them.
+    const efforts = started?.models[4]?.efforts;
+    expect(efforts?.map((effort) => effort.value)).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(efforts?.[3]).toEqual({
+      value: 'xhigh',
+      label: 'Extra high',
+      description: 'Extended reasoning with thorough analysis',
+    });
+    // At its model's default effort, unless given one.
+    expect(started?.effort).toBeNull();
     // A model that takes no effort level offers none.
     expect(started?.models.find((m) => m.value === 'claude-haiku-4-5-20251001')).not.toHaveProperty(
       'efforts',
@@ -619,15 +634,32 @@ describe('SdkConnector', () => {
     expect(await told).toEqual({ action: 'accept', content: { repo: 'acme/shop' } });
   });
 
-  it('sets the effort the composer picks, for this session', async () => {
+  it('sets the effort the composer picks, for this session, and only one Claude Code has', async () => {
     const { sdk, host, query } = connector();
     const session = await sdk.start(SPEC, host);
     await session.setEffort?.('xhigh');
     await session.setEffort?.(null);
+    await expect(session.setEffort?.('ultra')).rejects.toThrow(/no ultra effort/);
     expect(query().applyFlagSettings.mock.calls).toEqual([
       [{ effortLevel: 'xhigh' }],
       [{ effortLevel: null }],
     ]);
+  });
+
+  it('starts at the effort it was given, where its model takes one', async () => {
+    const { sdk, host, query, events } = connector();
+    await sdk.start({ ...SPEC, model: 'haiku', effort: 'high' }, host);
+    expect(query().applyFlagSettings.mock.calls).toEqual([[{ effortLevel: 'high' }]]);
+    expect(events[0]).toMatchObject({ type: 'started', model: 'haiku', effort: 'high' });
+
+    // A model that takes none starts at none.
+    const other = connector();
+    await other.sdk.start(
+      { ...SPEC, model: 'claude-haiku-4-5-20251001', effort: 'high' },
+      other.host,
+    );
+    expect(other.query().applyFlagSettings).not.toHaveBeenCalled();
+    expect(other.events[0]).toMatchObject({ type: 'started', effort: null });
   });
 
   it('stops a task running in the background, and only one that is', async () => {

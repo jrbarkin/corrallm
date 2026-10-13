@@ -9,9 +9,12 @@ import {
   MAX_TERMINAL_ROWS,
 } from '../../shared/terminal';
 import {
+  CLI_MODES,
+  CODEX_MODES,
+  CONNECTION_CLI,
   CONNECTIONS,
   ELICITATION_ACTIONS,
-  EFFORT_LEVELS,
+  EFFORT_PATTERN,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
@@ -30,11 +33,11 @@ import {
 } from '../../shared/session';
 import type {
   FormValue,
-  EffortLevel,
+  Cli,
   MessageImage,
-  PermissionMode,
   PlanAnswer,
   SessionAnswer,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
@@ -50,18 +53,32 @@ const SESSION_ID = /^[\w-]{1,200}$/;
 
 export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
-  const { connection, model, mode } = record(options, 'the session options', [
+  const { connection, model, mode, effort } = record(options, 'the session options', [
     'connection',
     'model',
     'mode',
+    'effort',
   ]);
+  const connected = oneOf(connection, CONNECTIONS, 'connection');
   const parsed: SessionOptions = {
-    connection: oneOf(connection, CONNECTIONS, 'connection'),
+    connection: connected,
     model: model === null ? null : parseModel(model),
-    mode: mode === null ? null : parseMode(mode),
+    // One of its CLI's modes, or null for the one it was given before, else the user's own.
+    mode:
+      mode === null
+        ? null
+        : oneOf(
+            mode,
+            CLI_MODES[CONNECTION_CLI[connected]],
+            `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
+          ),
+    ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
   };
   return [parseId(agentId, 'agent'), parsed];
 }
+
+/** How messages name each CLI. */
+const CLI_NAMES: Record<Cli, string> = { claude: 'Claude Code', codex: 'Codex' };
 
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
@@ -224,12 +241,10 @@ export function parseModelArgs(args: unknown[]): IpcArgs<'session:model'> {
   return [parseId(agentId, 'agent'), parseModel(model)];
 }
 
-/** session:effort: an agent, and an effort level (null: its model's default). */
+/** session:effort: an agent, and a reasoning effort (null: its model's default). */
 export function parseEffortArgs(args: unknown[]): IpcArgs<'session:effort'> {
-  const [agentId, effort] = expect(args, 2, 'an agent and an effort');
-  const level: EffortLevel | null =
-    effort === null ? null : oneOf(effort, EFFORT_LEVELS, 'effort level');
-  return [parseId(agentId, 'agent'), level];
+  const [agentId, effort] = expect(args, 2, 'an agent and a reasoning effort');
+  return [parseId(agentId, 'agent'), parseEffort(effort)];
 }
 
 /** session:stopTask: an agent, and the id of a task its session runs (main checks it does). */
@@ -316,8 +331,18 @@ function parsePlanAnswer(value: unknown): PlanAnswer {
   return { approve: false, feedback };
 }
 
-function parseMode(value: unknown): PermissionMode {
-  return oneOf(value, PERMISSION_MODES, 'mode');
+/** Any CLI's mode: the manager checks it is one of the running session's CLI. */
+function parseMode(value: unknown): SessionMode {
+  return oneOf<SessionMode>(value, [...PERMISSION_MODES, ...CODEX_MODES], 'mode');
+}
+
+/** A reasoning effort ('high'), or null for the model's default. */
+function parseEffort(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !EFFORT_PATTERN.test(value)) {
+    throw new TypeError('Expected a reasoning effort');
+  }
+  return value;
 }
 
 function parseModel(value: unknown): string {

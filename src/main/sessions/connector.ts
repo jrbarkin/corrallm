@@ -2,28 +2,31 @@ import type {
   FilesRewind,
   McpChange,
   McpServer,
-  EffortLevel,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
+  SessionMode,
   UserMessage,
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 
 /*
- * The seam a connection plugs into. A connector starts an agent's session (Claude Code in a
- * terminal, or through the Agent SDK) and turns what its CLI does into corrallm's session events
- * (src/shared/session.ts). The manager (manager.ts) owns everything around it: which renderer and
+ * The seam a connection plugs into. A connector starts an agent's session (Claude Code or Codex,
+ * in a terminal or through a structured interface) and turns what its CLI does into corrallm's
+ * session events (src/shared/session.ts). The manager (manager.ts) owns everything around it: which renderer and
  * agent a session belongs to, the project folder it runs in, the environment, which session to
  * resume, remembering session ids, routing the renderer's requests, and closing every session
  * when its canvas changes, its renderer goes, or the app quits.
  *
  * To add a connection: write a `Connector` in its own folder (src/main/sessions/<name>/) and
  * register it in connectors.ts. Its tests use a fake CLI, never the real one.
+ *
+ * `M` is the modes of the CLI a connection runs (Claude Code's permission modes unless said
+ * otherwise; Codex's modes for a Codex connection): the manager passes only those.
  */
 
 /** What a connector is given to start a session. */
-export interface SessionSpec {
+export interface SessionSpec<M extends SessionMode = PermissionMode> {
   /**
    * The agent the session is for, as the renderer names it: for logs only. Events are routed by the
    * manager; never put it in a path or a command line.
@@ -39,7 +42,12 @@ export interface SessionSpec {
    * The mode to start in, or null for the user's own default mode (their settings'): the session
    * says which it is ('started', then 'mode' if the CLI says otherwise).
    */
-  mode: PermissionMode | null;
+  mode: M | null;
+  /**
+   * The reasoning effort to start with, where its model offers a choice (one it offers); null or
+   * absent for the model's default.
+   */
+  effort?: string | null;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
 }
@@ -59,20 +67,21 @@ export interface SessionHost {
 }
 
 /** A session that runs. The manager calls these with arguments it has validated. */
-export interface LiveSession {
+export interface LiveSession<M extends SessionMode = PermissionMode> {
   /** Sends a message: a turn starts (the manager sends one at a time, once the last has ended). */
   send(message: UserMessage): Promise<void>;
   /** Answers a prompt it emitted, by the prompt's id. */
   answer(promptId: string, answer: SessionAnswer): Promise<void>;
   /** Interrupts the turn going on, if any: it ends with an 'end' that says so. */
   interrupt(): Promise<void>;
-  setMode(mode: PermissionMode): Promise<void>;
+  setMode(mode: M): Promise<void>;
   setModel(model: string): Promise<void>;
   /**
-   * Sets how much effort Claude puts into its replies (null: its model's default), for a
-   * connection that takes it from corrallm; a Terminal session's is set in its terminal.
+   * Switches the reasoning effort for this session (one its model offers; null: the model's
+   * default), for a connection that takes it from corrallm (the Agent SDK's, Codex's app
+   * server's); a Terminal session's is set in its terminal.
    */
-  setEffort?(effort: EffortLevel | null): Promise<void>;
+  setEffort?(effort: string | null): Promise<void>;
   /**
    * Stops a task running in the background (a subagent, a command) that the session listed
    * ('tasks'); rejects for any other.
@@ -119,13 +128,13 @@ export interface TerminalScreen {
 }
 
 /** Starts sessions of one kind of connection. */
-export interface Connector {
+export interface Connector<M extends SessionMode = PermissionMode> {
   /** Starts (or resumes) a session: resolves once it runs, or rejects saying why it could not. */
-  start(spec: SessionSpec, host: SessionHost): Promise<LiveSession>;
+  start(spec: SessionSpec<M>, host: SessionHost): Promise<LiveSession<M>>;
 }
 
 /** A connector for a connection not built yet: starting it says so. */
-export function unavailable(what: string): Connector {
+export function unavailable<M extends SessionMode = PermissionMode>(what: string): Connector<M> {
   return {
     start: () => Promise.reject(new Error(`corrallm can't run ${what} yet.`)),
   };

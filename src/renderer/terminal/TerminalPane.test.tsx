@@ -32,16 +32,24 @@ beforeEach(() => {
   fakeScreens.made.length = 0;
 });
 
-/** The editor, with Terminal agent `a` (with `queue`) opened in its view, and main faked. */
+/**
+ * The editor, with Terminal agent `a` (with `queue`; a Claude agent, unless `data` says otherwise)
+ * opened in its view, and main faked.
+ */
 async function open({
   start,
   queue,
-}: { start?: () => Promise<null>; queue?: GraphNode['data']['queue'] } = {}) {
+  data = { connection: 'terminal' },
+}: {
+  start?: () => Promise<null>;
+  queue?: GraphNode['data']['queue'];
+  data?: Partial<GraphNode['data']> & { connection: 'terminal' | 'codex-terminal' };
+} = {}) {
   const sessions = fakeBackend();
   if (start) sessions.backend.start.mockImplementation(start);
   const terminals = fakeTerminals();
   const graph: Graph = {
-    nodes: [agent('a', { connection: 'terminal', ...(queue ? { queue } : {}) })],
+    nodes: [agent('a', { ...data, ...(queue ? { queue } : {}) })],
     edges: [],
   };
   const openLink = vi.fn<(url: string) => void>();
@@ -71,7 +79,7 @@ async function open({
     /** Main says `events` happened in a's session. */
     session: (...events: SessionEvent[]) => {
       act(() => {
-        sessions.emit('a', 'terminal', ...events);
+        sessions.emit('a', data.connection, ...events);
       });
     },
     /** Main shows `events` in a's terminal. */
@@ -200,6 +208,44 @@ describe('a Terminal agent', () => {
     // Answered there: nothing is listed any more.
     session({ type: 'asking', asks: [] }, { type: 'status', status: 'working' });
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+  });
+
+  it('shows Codex’s own terminal for a Codex agent, and follows its turns there and on the canvas', async () => {
+    const { sessions, terminals, card, view, session } = await open({
+      data: { agent: 'Codex', connection: 'codex-terminal' },
+    });
+    expect(view.getByText('Starting Codex CLI…')).toBeTruthy();
+    // Nothing chosen: main starts it as it was given before, else in Codex's own default mode.
+    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+      connection: 'codex-terminal',
+      model: null,
+      mode: null,
+    });
+    expect(terminals.backend.attach).toHaveBeenCalledWith('a');
+    const status = () => view.getByText(/^(Idle|Working|Needs you, in the terminal)$/);
+    session(
+      { type: 'status', status: 'working' },
+      { type: 'user', id: 'typed', text: 'Fix the tests' },
+    );
+    expect(card().classList.contains('working')).toBe(true);
+    session(
+      {
+        type: 'asking',
+        asks: [{ kind: 'other', id: 'w', text: 'Codex needs you: see its terminal.' }],
+      },
+      { type: 'status', status: 'waiting' },
+    );
+    expect(status().textContent).toBe('Needs you, in the terminal');
+    expect(card().classList.contains('asking')).toBe(true);
+    // Listed in Needs you, as a Claude agent's terminal asks are, to answer there.
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(sidebar.getByRole('group', { name: 'a asks, in its terminal' }).textContent).toContain(
+      'Codex needs you: see its terminal.',
+    );
+    session({ type: 'asking', asks: [] });
+    session({ type: 'end', messages: ['typed'], seconds: 2, interrupted: false, failed: false });
+    expect(status().textContent).toBe('Idle');
+    expect(card().classList.contains('working')).toBe(false);
   });
 
   it('says why Claude Code cannot run, and tries again', async () => {

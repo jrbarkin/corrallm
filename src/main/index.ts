@@ -14,6 +14,7 @@ import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
 import { hardenSession, installNavigationGuards } from './security';
+import { planConsent, Settings } from './settings';
 import { createConnectors } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { SessionManager } from './sessions/manager';
@@ -90,6 +91,8 @@ function main(): void {
       }
       // What main remembers of canvas files, their project folders, and their agents' sessions.
       const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
+      // What the user chose for the app as a whole.
+      const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
       const projects = new ProjectFolders(memory, canvasFile);
       let environment: Promise<Record<string, string>> | undefined;
       // Resolved once, when the first session starts.
@@ -101,6 +104,8 @@ function main(): void {
         connectors: createConnectors({
           fake: fakeSessions,
           clientApp: `${app.getName()}/${app.getVersion()}`,
+          distribution: CORRALLM_DISTRIBUTION,
+          consent: planConsent(settings),
         }),
         environment: agentsEnvironment,
         // The conversations Claude Code kept, whichever connection ran them.
@@ -145,11 +150,14 @@ function main(): void {
         if (quitting) return;
         quitting = true;
         event.preventDefault();
-        void Promise.all([sessions.closeEverything(), memory.flush(), links.flush()]).finally(
-          () => {
-            app.quit();
-          },
-        );
+        void Promise.all([
+          sessions.closeEverything(),
+          memory.flush(),
+          settings.flush(),
+          links.flush(),
+        ]).finally(() => {
+          app.quit();
+        });
       });
 
       await openMainWindow();

@@ -1,16 +1,38 @@
 /*
- * Connected sessions: an agent's session run by the main process (Claude Code in a terminal, or
- * through the Agent SDK), what the renderer asks of it, and what main tells it back. Main's
- * connectors (src/main/sessions/) turn their CLI's own output into these events; the renderer's
- * connected driver (src/renderer/agent/connected.ts) plays them onto the session its view shows
- * (src/renderer/agent/session.ts).
+ * Connected sessions: an agent's session run by the main process (Claude Code or Codex, in a
+ * terminal or through a structured interface), what the renderer asks of it, and what main tells
+ * it back. Main's connectors (src/main/sessions/) turn their CLI's own output into these events;
+ * the renderer's connected driver (src/renderer/agent/connected.ts) plays them onto the session its
+ * view shows (src/renderer/agent/session.ts).
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 
-/** How a Claude agent can be connected, besides simulated: the CLI in a terminal, or the Agent SDK. */
-export const CONNECTIONS = ['terminal', 'sdk'] as const;
+/** The CLIs agents can be connected to: Claude Code and Codex. */
+export const CLIS = ['claude', 'codex'] as const;
+export type Cli = (typeof CLIS)[number];
+
+/**
+ * How an agent can be connected, besides simulated: each names what runs its session. Claude Code
+ * in a terminal ('terminal') or through the Agent SDK ('sdk'); Codex in a terminal
+ * ('codex-terminal') or through its app server ('app-server', JSON-RPC over stdio).
+ */
+export const CONNECTIONS = ['terminal', 'sdk', 'codex-terminal', 'app-server'] as const;
 export type Connection = (typeof CONNECTIONS)[number];
+
+/** The CLI each connection runs. */
+export const CONNECTION_CLI: Readonly<Record<Connection, Cli>> = {
+  terminal: 'claude',
+  sdk: 'claude',
+  'codex-terminal': 'codex',
+  'app-server': 'codex',
+};
+
+/**
+ * The connections whose view is their CLI's own terminal (src/shared/terminal.ts), rather than
+ * corrallm's transcript and composer.
+ */
+export const TERMINAL_CONNECTIONS: readonly Connection[] = ['terminal', 'codex-terminal'];
 
 /**
  * Claude Code's permission modes, by its settings' names, in the order Shift+Tab cycles them.
@@ -24,6 +46,50 @@ export const PERMISSION_MODES = [
   'auto',
 ] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/**
+ * Codex's modes: its permission presets (what its /permissions offers, by their ids in its source,
+ * codex-rs/utils/approval-presets), then plan mode. 'read-only': a read-only sandbox, asking before
+ * anything more; 'auto' (Codex's Default): edits and commands in a sandbox of the project folder,
+ * asking before leaving it; 'full-access': no sandbox and never asking; 'plan': Codex's plan
+ * collaboration mode, which explores and proposes a plan before changing anything (with Default's
+ * permissions).
+ */
+export const CODEX_MODES = ['read-only', 'auto', 'full-access', 'plan'] as const;
+export type CodexMode = (typeof CODEX_MODES)[number];
+
+/** A session's mode: one of its CLI's. */
+export type SessionMode = PermissionMode | CodexMode;
+
+/** Each CLI's modes. */
+export const CLI_MODES: {
+  readonly claude: readonly PermissionMode[];
+  readonly codex: readonly CodexMode[];
+} = {
+  claude: PERMISSION_MODES,
+  codex: CODEX_MODES,
+};
+
+/** The mode each CLI starts in unless told otherwise: Claude Code's Manual, Codex's Default. */
+export const DEFAULT_MODES: { readonly claude: PermissionMode; readonly codex: CodexMode } = {
+  claude: 'manual',
+  codex: 'auto',
+};
+
+/** Whether `mode` is one of Claude Code's permission modes. */
+export function isPermissionMode(mode: SessionMode): mode is PermissionMode {
+  return (PERMISSION_MODES as readonly SessionMode[]).includes(mode);
+}
+
+/** Whether `mode` is one of `cli`'s modes. */
+export function isModeOf(cli: Cli, mode: SessionMode): boolean {
+  return (CLI_MODES[cli] as readonly SessionMode[]).includes(mode);
+}
+
+/** `mode` if it is one of `cli`'s, else the mode `cli` starts in. */
+export function modeFor(cli: Cli, mode: SessionMode): SessionMode {
+  return isModeOf(cli, mode) ? mode : DEFAULT_MODES[cli];
+}
 
 export type ToolStatus = 'running' | 'done' | 'failed' | 'interrupted';
 
@@ -64,22 +130,30 @@ export interface Todo {
   status: 'pending' | 'active' | 'done';
 }
 
-/** How much effort Claude puts into a reply, least to most (Claude Code's /effort levels). */
-export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type EffortLevel = (typeof EFFORT_LEVELS)[number];
-
-/** A model a session offers: what the CLI calls it, and how the model picker shows it. */
+/**
+ * A model a session offers: what the CLI calls it, and how the model picker shows it; and how hard
+ * it can reason, where the CLI lets the user choose (Claude Code's /effort levels, Codex's reasoning
+ * efforts, as their pickers offer them), with the effort it reasons at unless one is chosen, where
+ * the CLI says (Codex does; Claude Code's is "the model's default").
+ */
 export interface ModelChoice {
   value: string;
   label: string;
   description?: string;
-  /** The effort levels it can be set to, if it takes one. */
-  efforts?: EffortLevel[];
+  efforts?: EffortChoice[];
+  defaultEffort?: string;
+}
+
+/** A reasoning effort a model offers: what the CLI calls it ('high'), and how the picker shows it. */
+export interface EffortChoice {
+  value: string;
+  label: string;
+  description?: string;
 }
 
 /**
  * How a session is started. Main picks the folder (the canvas's project) and what it resumes, and
- * remembers the model and mode each agent was given, so that it starts with them again.
+ * remembers the model, mode and effort each agent was given, so that it starts with them again.
  */
 export interface SessionOptions {
   connection: Connection;
@@ -89,11 +163,19 @@ export interface SessionOptions {
    */
   model: string | null;
   /**
-   * The mode the user chose, or null: the one the agent was last given, else the user's own
-   * default mode (their Claude Code settings).
+   * The mode the user chose (one of its connection's CLI's), or null: the one the agent was last
+   * given, else the user's own default (their Claude Code settings; Codex's Default).
    */
-  mode: PermissionMode | null;
+  mode: SessionMode | null;
+  /**
+   * The reasoning effort the user chose (one its model offered; null: the model's default), or
+   * absent: the one the agent was last given, else the model's default.
+   */
+  effort?: string | null;
 }
+
+/** The modes that never ask before acting: chosen only once confirmed, and never remembered. */
+export const UNASKING_MODES: readonly SessionMode[] = ['bypassPermissions', 'full-access'];
 
 /** The kinds of image the user can paste into a message (those Claude reads). */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
@@ -229,10 +311,10 @@ export interface AskedQuestion {
 }
 
 /**
- * What a session's CLI asks the user in its own terminal (a Terminal session's Claude Code), as
- * corrallm lists it outside the terminal: a permission (the tool, and what it acts on), its
- * questions, a plan to approve, or anything else it waits on, in its own words. corrallm never
- * answers it: the user does, in the terminal.
+ * What a session's CLI asks the user in its own terminal (a Terminal session's), as corrallm lists
+ * it outside the terminal: a permission (the tool, and what it acts on), its questions, a plan to
+ * approve, or anything else it waits on, in its own words. corrallm never answers it: the user
+ * does, in the terminal.
  */
 export type TerminalAsk =
   | { kind: 'permission'; id: string; tool: string; summary: string }
@@ -240,7 +322,10 @@ export type TerminalAsk =
   | { kind: 'plan'; id: string; plan: string }
   | { kind: 'other'; id: string; text: string };
 
-/** The modes a plan can be carried out in once approved, as Claude Code offers them. */
+/**
+ * The modes a plan can be carried out in once approved, as Claude Code offers them. Codex carries
+ * out a plan in its Default mode ('auto').
+ */
 export const PLAN_MODES = ['auto', 'acceptEdits', 'manual'] as const;
 export type PlanMode = (typeof PLAN_MODES)[number];
 
@@ -266,6 +351,21 @@ export interface SessionUsage {
   /** Tokens in its context window now, and the window's size. */
   contextTokens: number | null;
   contextWindow: number | null;
+  /**
+   * How much of each of the user's plan's usage limits is used (Codex's rate-limit windows: the
+   * 5-hour one, the weekly one), where the CLI says.
+   */
+  limits?: UsageLimit[];
+}
+
+/** A usage limit of the user's plan: a window of time, how much of it is used, when it resets. */
+export interface UsageLimit {
+  /** What it is called ("5h", "weekly"). */
+  name: string;
+  /** How much of it is used, from 0 to 100. */
+  usedPercent: number;
+  /** When it resets (milliseconds since the epoch), if the CLI said. */
+  resetsAt: number | null;
 }
 
 /**
@@ -282,16 +382,18 @@ export interface SessionUsage {
  */
 export type SessionEvent =
   /**
-   * The session runs (started, or resumed): its model and mode, and the models it offers.
+   * The session runs (started, or resumed): its model and mode, and the models it offers; the
+   * reasoning effort it runs at, where its model offers a choice (null: the model's default).
    * `modes`: the modes it can switch to, when not all of them (bypassing permissions turned off
    * in the user's or their organization's settings).
    */
   | {
       type: 'started';
       model: string | null;
-      mode: PermissionMode;
+      mode: SessionMode;
       models: ModelChoice[];
-      modes?: PermissionMode[];
+      effort?: string | null;
+      modes?: SessionMode[];
     }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }
@@ -378,8 +480,10 @@ export type SessionEvent =
    */
   | { type: 'cleared'; id: string }
   | { type: 'usage'; usage: SessionUsage }
-  | { type: 'mode'; mode: PermissionMode }
+  | { type: 'mode'; mode: SessionMode }
   | { type: 'model'; model: string }
+  /** The reasoning effort it runs at now (null: its model's default). */
+  | { type: 'effort'; effort: string | null }
   /** The turn ended: interrupted by the user, or failed (an API error, a usage limit). */
   | { type: 'end'; messages: string[]; seconds: number; interrupted: boolean; failed: boolean }
   /**
@@ -410,3 +514,5 @@ export const MAX_FORM_FIELDS = 50;
 export const MAX_MCP_NAME_LENGTH = 200;
 /** What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN. */
 export const MODEL_PATTERN = /^[\w.:/@[\]-]{1,200}$/;
+/** What a reasoning effort's value may look like ('low', 'xhigh'). */
+export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;

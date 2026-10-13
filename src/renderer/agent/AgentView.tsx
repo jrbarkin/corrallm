@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 
 import type { ProjectFolder } from '../../shared/ipc';
+import { TERMINAL_CONNECTIONS } from '../../shared/session';
 import type {
   ElicitationAction,
   FormValue,
@@ -19,6 +20,7 @@ import {
   AgentType,
   agentLabel,
   CONNECTION_INFO,
+  connectionNames,
   DEFAULT_AGENT,
 } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
@@ -93,9 +95,10 @@ export interface SessionControls extends ComposerControls {
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
  * The agent chip sets its type and how it runs (`connection`): simulated, or connected to the real
- * CLI. A session connected through the Agent SDK shows in the same transcript and composer, fed by
- * the main process (connected.ts); one in a Terminal shows the CLI's own terminal instead
- * (TerminalPane.tsx), where the user works with Claude Code as in any terminal.
+ * CLI. A session connected through a structured interface (Claude's Agent SDK, Codex's app server)
+ * shows in the same transcript and composer, fed by the main process (connected.ts); one in a
+ * Terminal shows the CLI's own terminal instead (TerminalPane.tsx), where the user works with
+ * Claude Code or Codex as in any terminal.
  *
  * While the queues' run holds the agent for the user (`ask`, at an OK or a repeat out of rounds),
  * a bar above the composer asks, with its choices; what is sent from the composer then is the
@@ -524,9 +527,10 @@ export function AgentView({
                   }}
                 />
               )}
-              {connection === 'terminal' ? (
+              {connection !== 'simulated' && TERMINAL_CONNECTIONS.includes(connection) ? (
                 <TerminalPane
                   agentId={node.id}
+                  cli={AGENT_CLI[agent]}
                   backend={terminal}
                   session={session}
                   note={sessionNote(agent, connection, project)}
@@ -562,6 +566,7 @@ export function AgentView({
                   <Transcript
                     session={session}
                     agentName={name}
+                    agent={agent}
                     note={sessionNote(agent, connection, project)}
                     answers={{
                       // The prompt's buttons are gone: the keyboard goes back to the composer.
@@ -850,10 +855,12 @@ function sessionNote(
   const cli = AGENT_CLI[agent];
   if (connection === 'simulated') {
     return AGENT_CONNECTIONS[agent].length > 1
-      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (Terminal, or Agent SDK with an API key) to run it.`
+      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (${agent === AgentType.Claude ? 'Terminal, or Agent SDK with an API key' : connectionNames(agent)}) to run it.`
       : `This session is simulated: corrallm isn't connected to ${cli} yet.`;
   }
-  const how = connection === 'terminal' ? 'in a terminal' : 'through the Agent SDK';
+  const how = TERMINAL_CONNECTIONS.includes(connection)
+    ? 'in a terminal'
+    : `through ${connection === 'sdk' ? 'the Agent SDK' : 'its app server'}`;
   return project === null
     ? `Choose a project folder for this canvas (top left of the canvas) to run ${cli} in it, ${how}.`
     : `${cli} works in ${project.name}, ${how}.`;

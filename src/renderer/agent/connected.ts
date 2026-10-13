@@ -1,15 +1,15 @@
+import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
   Connection,
   FilesRewind,
   McpChange,
   McpServer,
   PastSession,
-  EffortLevel,
-  PermissionMode,
   RewindRestore,
   RewindResult,
   SessionAnswer,
   SessionEvent,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
@@ -24,9 +24,9 @@ export interface SessionBackend {
   send(agentId: string, message: UserMessage): Promise<null>;
   answer(agentId: string, promptId: string, answer: SessionAnswer): Promise<null>;
   interrupt(agentId: string): Promise<null>;
-  setMode(agentId: string, mode: PermissionMode): Promise<null>;
+  setMode(agentId: string, mode: SessionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
-  setEffort(agentId: string, effort: EffortLevel | null): Promise<null>;
+  setEffort(agentId: string, effort: string | null): Promise<null>;
   stopTask(agentId: string, taskId: string): Promise<null>;
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
@@ -85,10 +85,11 @@ interface SentTurn {
 }
 
 /**
- * Drives a connected agent's session: one the main process runs (Claude Code in a terminal, or
- * through the Agent SDK; src/main/sessions/). It starts the session when first needed, sends each
- * turn's message, and plays the events main sends back (src/shared/session.ts) onto the session:
- * entries, prompts, status, mode and model, usage, and each turn's end. Mode and model changes,
+ * Drives a connected agent's session: one the main process runs (Claude Code or Codex, in a
+ * terminal or through a structured interface; src/main/sessions/). It starts the session when
+ * first needed (with the mode, model and effort the user chose here), sends each turn's message,
+ * and plays the events main sends back (src/shared/session.ts) onto the session: entries, prompts,
+ * status, mode, model and effort, usage, and each turn's end. Mode, model and effort changes,
  * answers and interrupts go to main. A session that would not start says why (a notice offering
  * another connection) before its start fails: the turn that started it never was, and the store
  * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's.
@@ -186,7 +187,7 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.interrupt(agentId));
   }
 
-  setMode(mode: PermissionMode): void {
+  setMode(mode: SessionMode): void {
     // Not started yet: it starts in the session's mode.
     this.#tell((agentId) => this.#backend.setMode(agentId, mode));
   }
@@ -195,8 +196,8 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.setModel(agentId, model));
   }
 
-  setEffort(effort: EffortLevel | null): void {
-    // Not started yet: it is set once it starts.
+  setEffort(effort: string | null): void {
+    // Not started yet: it starts at the effort chosen.
     this.#tell((agentId) => this.#backend.setEffort(agentId, effort));
   }
 
@@ -223,22 +224,16 @@ export class ConnectedDriver implements SessionDriver {
     const find = (id: string) => io.session().entries.find((entry) => entry.id === id);
     const parent = (p: string | undefined) => (p === undefined ? {} : { parent: p });
     switch (event.type) {
-      case 'started': {
+      case 'started':
         io.dispatch({
           type: 'connected',
           models: event.models,
           model: event.model,
           mode: event.mode,
           ...(event.modes === undefined ? {} : { modes: event.modes }),
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
         });
-        // The effort picked goes on in a session started again, if its model takes one.
-        const { effort } = io.session();
-        const model = event.models.find((m) => m.value === event.model);
-        if (effort !== undefined && effort !== null && (model?.efforts?.length ?? 0) > 0) {
-          this.setEffort(effort);
-        }
         return;
-      }
       case 'commands':
         io.dispatch({ type: 'commands', commands: event.commands });
         return;
@@ -397,6 +392,9 @@ export class ConnectedDriver implements SessionDriver {
       case 'model':
         io.dispatch({ type: 'model', model: event.model });
         return;
+      case 'effort':
+        io.dispatch({ type: 'effort', effort: event.effort });
+        return;
       case 'end':
         this.#end(event.messages, event);
         return;
@@ -421,15 +419,18 @@ export class ConnectedDriver implements SessionDriver {
     if (this.#closed) return Promise.reject(new Error('This session was closed.'));
     if (!this.#running) {
       const { chosen = {}, models } = this.#io.session();
+      const cli = CONNECTION_CLI[this.connection];
       const model = models?.some((m) => m.value === chosen.model) ? chosen.model : undefined;
       this.#refusal = undefined;
       const running = this.#backend
         .start(this.#agentId, {
           connection: this.connection,
-          // What the user chose here (a model a connected session offered); main fills in the
-          // rest: what the agent was given before, or the user's own defaults.
+          // What the user chose here (a model a connected session offered; a mode of its CLI: the
+          // agent may have run another CLI before); main fills in the rest: what the agent was
+          // given before, or the user's own defaults.
           model: model ?? null,
-          mode: chosen.mode ?? null,
+          mode: chosen.mode !== undefined && isModeOf(cli, chosen.mode) ? chosen.mode : null,
+          ...(chosen.effort === undefined ? {} : { effort: chosen.effort }),
         })
         .then(() => undefined);
       running.catch(() => {

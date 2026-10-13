@@ -32,16 +32,52 @@ describe('CanvasMemory', () => {
     expect(await readdir(dir)).toEqual(['canvases.json']);
   });
 
-  it('remembers the model and mode each agent was given', async () => {
+  it('remembers the model, mode and effort each agent was given, in each CLI', async () => {
     const memory = new CanvasMemory(file);
     await memory.update('/work/team.corral', (m) => ({
       ...m,
       sessions: { a: 'id-a' },
-      chosen: { a: { model: 'haiku', mode: 'plan' }, b: { mode: 'acceptEdits' } },
+      chosen: { a: { model: 'haiku', mode: 'plan', effort: 'high' }, b: { mode: 'acceptEdits' } },
+      codexChosen: { a: { model: 'gpt-6-luna', mode: 'read-only', effort: 'low' } },
     }));
     expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
       sessions: { a: 'id-a' },
-      chosen: { a: { model: 'haiku', mode: 'plan' }, b: { mode: 'acceptEdits' } },
+      chosen: { a: { model: 'haiku', mode: 'plan', effort: 'high' }, b: { mode: 'acceptEdits' } },
+      codexChosen: { a: { model: 'gpt-6-luna', mode: 'read-only', effort: 'low' } },
+    });
+  });
+
+  it('leaves out what was given that is not one of its CLI’s', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        canvases: {
+          '/c.corral': {
+            sessions: {},
+            chosen: { a: { mode: 'read-only' }, b: { mode: 'plan', effort: 'very hard' } },
+            codexChosen: { a: { mode: 'acceptEdits', model: 'gpt-6-luna' } },
+          },
+        },
+      }),
+    );
+    expect(await new CanvasMemory(file).get('/c.corral')).toEqual({
+      sessions: {},
+      chosen: { b: { mode: 'plan' } },
+      codexChosen: { a: { model: 'gpt-6-luna' } },
+    });
+  });
+
+  it('remembers agents’ Codex threads apart from their Claude Code sessions', async () => {
+    const memory = new CanvasMemory(file);
+    await memory.update('/work/team.corral', (m) => ({
+      ...m,
+      sessions: { a: 'claude-a' },
+      threads: { a: 'codex-a' },
+    }));
+    expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
+      sessions: { a: 'claude-a' },
+      threads: { a: 'codex-a' },
     });
   });
 

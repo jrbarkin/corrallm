@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
+import { TERMINAL_CONNECTIONS } from '../../shared/session';
 import { AgentView } from '../agent/AgentView';
 import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
@@ -616,12 +617,15 @@ function Editor({
       };
     });
   }, [graph.nodes, sessions, run]);
-  /** What Terminal agents' Claude Code asks in their terminals: listed, answered there. */
-  const inTerminal = graph.nodes.flatMap((agent) =>
-    agent.type === 'agent' && connectionOf(agent.data) === 'terminal'
+  /** What Terminal agents' CLIs ask in their terminals: listed, answered there. */
+  const inTerminal = graph.nodes.flatMap((agent) => {
+    const connection = connectionOf(agent.data);
+    return agent.type === 'agent' &&
+      connection !== 'simulated' &&
+      TERMINAL_CONNECTIONS.includes(connection)
       ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
-      : [],
-  );
+      : [];
+  });
   /** The questions agents wait on: asked on the canvas, and asked in their sessions. */
   const pending: { agent: GraphNode; question: CardQuestion; asked?: AskedInSession }[] = [
     ...pendingQuestions(graph.nodes),

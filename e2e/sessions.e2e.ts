@@ -220,3 +220,45 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
   await expect(transcript.getByText(/^Interrupted · \d+s$/)).toBeVisible();
   await expect(question.getByText('Not answered: Shall I go on?')).toBeVisible();
 });
+
+test('runs a Codex agent through its app server, in Codex’s own modes', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  await answerDialogs(folder, path.join(dir, 'team.corral'));
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
+
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('codex app server');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('button', { name: 'Agent: Codex · App Server' })).toBeVisible();
+  await expect(view.getByText('Codex CLI works in shop, through its app server.')).toBeVisible();
+  await expect(page.locator('.react-flow__node')).toHaveAttribute(
+    'aria-label',
+    'Agent 1, Codex · App Server',
+  );
+
+  // It starts in Codex's Default mode, which runs the command without asking.
+  const mode = view.getByRole('button', { name: /^Mode: / });
+  await expect(mode).toHaveAccessibleName('Mode: Default');
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
+  await composer.fill('Hello');
+  await composer.press('Enter');
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  await expect(transcript.getByText('You said: Hello')).toBeVisible();
+  await expect(transcript.getByRole('button', { name: 'Bash echo hello' })).toBeVisible();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
+
+  // Read only asks first: main took the Codex mode.
+  await mode.click();
+  await view.getByRole('menuitemradio', { name: /^Read only/ }).click();
+  await expect(mode).toHaveAccessibleName('Mode: Read only');
+  await composer.fill('Again');
+  await composer.press('Enter');
+  const prompt = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  await prompt.getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(2);
+});

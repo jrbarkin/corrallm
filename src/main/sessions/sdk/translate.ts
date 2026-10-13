@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type {
   ModelInfo,
   PermissionMode as SdkMode,
@@ -21,6 +19,7 @@ import type {
   ToolProgress,
   ToolStatus,
 } from '../../../shared/session';
+import { notice, resetTime } from '../transcript';
 import type { Places } from './tools';
 import { output, property, resultDetail, resultText, text, toolSummary } from './tools';
 
@@ -80,16 +79,9 @@ export function corrallmMode(mode: unknown): PermissionMode | undefined {
   }
 }
 
-/** When a limit resets, as Claude Code says it: a time today, or a day and time. */
+/** When a limit resets, as Claude Code says it: a time today (its 5-hour limit), or a day and time. */
 export function formatReset(epochSeconds: number, window?: string): string {
-  const at = new Date(epochSeconds * 1000);
-  const time = at
-    .toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-    .replace(/\s/g, '')
-    .toLowerCase();
-  if (window === 'five_hour') return time;
-  const day = at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  return `${day}, ${time}`;
+  return resetTime(epochSeconds, { timeOnly: window === 'five_hour' });
 }
 
 export interface TranslatorOptions {
@@ -744,10 +736,6 @@ function used(usage: {
 /** The entry a block of a message is: its message's id and its place in it. */
 export function blockId(messageId: string, index: number): string {
   return `${messageId}:${String(index)}`;
-}
-
-function notice(level: 'info' | 'warning' | 'error', said: string): SessionEvent {
-  return { type: 'notice', id: randomUUID(), level, text: said };
 }
 
 function tokens(count: number): string {

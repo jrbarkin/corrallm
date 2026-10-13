@@ -59,10 +59,10 @@ async function open(
     await settle();
   };
   const transcript = within(view.getByRole('log', { name: 'Transcript' }));
-  /** Main says `events` happened in a's session. */
+  /** Main says `events` happened in a's session (connected as `data` says, or through the SDK). */
   const emit = (...events: SessionEvent[]) => {
     act(() => {
-      fake.emit('a', 'sdk', ...events);
+      fake.emit('a', data.connection ?? 'sdk', ...events);
     });
   };
   return { ...fake, container, card, view, composer, send, transcript, emit, openLink };
@@ -96,6 +96,181 @@ const MODELS = [
   { value: 'haiku', label: 'Haiku', description: 'The fastest' },
 ];
 
+describe('a connected Codex agent', () => {
+  it('runs in a terminal or through its app server, as its chip says', async () => {
+    const { backend, card, view } = await open({ agent: 'Codex' });
+    const chip = () => view.getByRole('button', { name: /^Agent: / });
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Codex · Simulated');
+    fireEvent.click(chip());
+    expect(view.getByRole('option', { name: /^Codex · Terminal/ }).textContent).toMatch(
+      /Codex itself, in a terminal/,
+    );
+    fireEvent.click(view.getByRole('option', { name: /^Codex · App Server/ }));
+    expect(card().getAttribute('aria-label')).toBe('a, Codex · App Server');
+    await settle();
+    // Nothing chosen: main starts it as it was given before, else in Codex's default mode.
+    expect(backend.start).toHaveBeenCalledWith('a', {
+      connection: 'app-server',
+      model: null,
+      mode: null,
+    });
+  });
+
+  it('switches between Codex’s modes, and shows its plan’s usage limits', async () => {
+    const { backend, view, composer, emit } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    emit({ type: 'started', model: null, mode: 'auto', models: [] });
+    const mode = () => view.getByRole('button', { name: /^Mode: / });
+    expect(mode().getAttribute('aria-label')).toBe('Mode: Default');
+    fireEvent.click(mode());
+    const menu = within(view.getByRole('menu', { name: 'Mode' }));
+    expect(menu.getAllByRole('menuitemradio').map((item) => item.firstChild?.textContent)).toEqual([
+      'Read only',
+      'Default',
+      'Full access',
+      'Plan',
+    ]);
+    fireEvent.click(menu.getByRole('menuitemradio', { name: /^Read only/ }));
+    await settle();
+    expect(backend.setMode).toHaveBeenLastCalledWith('a', 'read-only');
+    // Shift+Tab goes on to the next.
+    fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+    await settle();
+    expect(backend.setMode).toHaveBeenLastCalledWith('a', 'auto');
+
+    const resets = new Date(2026, 9, 12, 15, 4).getTime();
+    emit({
+      type: 'usage',
+      usage: {
+        costUsd: null,
+        contextTokens: 10_000,
+        contextWindow: 200_000,
+        limits: [
+          { name: '5h', usedPercent: 12, resetsAt: resets },
+          { name: 'weekly', usedPercent: 3, resetsAt: null },
+        ],
+      },
+    });
+    const usage = view.getByText('5% context · 5h 12% · weekly 3%');
+    expect(usage.getAttribute('title')).toMatch(/12% of your 5h limit used; it resets .*3:04/);
+  });
+
+  it('asks to implement its plan, as Codex does, carried out in its Default mode', async () => {
+    const { backend, send, sent, emit, transcript } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    await send('Plan the change');
+    emit(
+      { type: 'user', id: sent(), text: 'Plan the change' },
+      { type: 'plan', id: 'p', plan: '1. Read it\n2. Change it' },
+    );
+    const plan = within(transcript.getByRole('group', { name: 'Plan' }));
+    // As Codex's TUI shows it: the proposed plan, then whether to implement it.
+    expect(plan.getByText('Proposed plan')).toBeTruthy();
+    expect(plan.getByText('Implement this plan?')).toBeTruthy();
+    expect(plan.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Yes, implement this plan',
+      'Keep planning',
+    ]);
+    expect(plan.getByRole('textbox', { name: 'What to change' }).getAttribute('placeholder')).toBe(
+      'No, keep planning: tell Codex what to change',
+    );
+    fireEvent.click(plan.getByRole('button', { name: 'Yes, implement this plan' }));
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'p', {
+      kind: 'plan',
+      answer: { approve: true, mode: 'auto' },
+    });
+    expect(plan.getByText('Approved: carrying it out in Default')).toBeTruthy();
+  });
+});
+
+const CODEX_MODELS = [
+  {
+    value: 'gpt-6.1-sol',
+    label: 'GPT-6.1-Sol',
+    efforts: [
+      { value: 'low', label: 'Low', description: 'Fast responses' },
+      { value: 'xhigh', label: 'Extra high', description: 'Deepest' },
+    ],
+    defaultEffort: 'low',
+  },
+  { value: 'gpt-6-luna', label: 'GPT-6-Luna' },
+];
+
+describe('a Codex agent’s reasoning', () => {
+  it('shows its summary as Codex writes it: Markdown, a bold title first', async () => {
+    const { send, sent, emit, transcript } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    await send('Why?');
+    emit(
+      { type: 'user', id: sent(), text: 'Why?' },
+      { type: 'thinking', id: 'rs_1', text: '**Reading the code**\n\nThe bug is in `start`.' },
+    );
+    const thinking = transcript.getByText(/^Thought for/).closest('details');
+    if (!thinking) throw new Error('no thinking shown');
+    expect(within(thinking).getByText('Reading the code').tagName).toBe('STRONG');
+    expect(within(thinking).getByText('start').tagName).toBe('CODE');
+  });
+});
+
+describe('a Codex agent’s reasoning effort', () => {
+  it('is chosen beside its model, from the efforts the model offers', async () => {
+    const { backend, view, emit, send, sent } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
+    emit({
+      type: 'started',
+      model: 'gpt-6.1-sol',
+      mode: 'auto',
+      models: CODEX_MODELS,
+      effort: null,
+    });
+    // The model's default, until one is chosen.
+    const effort = () => view.getByRole('button', { name: /^Effort: / });
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Low');
+    fireEvent.click(effort());
+    const menu = within(view.getByRole('menu', { name: 'Effort' }));
+    expect(menu.getAllByRole('menuitemradio').map((item) => item.firstChild?.textContent)).toEqual([
+      'Low',
+      'Extra high',
+    ]);
+    fireEvent.click(menu.getByRole('menuitemradio', { name: /^Extra high/ }));
+    await settle();
+    expect(backend.setEffort).toHaveBeenCalledWith('a', 'xhigh');
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Extra high');
+
+    // Main says it changed (a model without that effort): shown so.
+    emit({ type: 'effort', effort: 'low' });
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Low');
+    // A model with no efforts to choose has no picker.
+    emit({ type: 'model', model: 'gpt-6-luna' });
+    expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
+
+    // Started again (after it stopped), it starts at the effort chosen; main fills in the rest.
+    emit(
+      { type: 'model', model: 'gpt-6.1-sol' },
+      { type: 'effort', effort: 'xhigh' },
+      { type: 'closed' },
+    );
+    await send('Again');
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'app-server',
+      model: null,
+      mode: null,
+      effort: 'xhigh',
+    });
+    expect(sent()).toBeTruthy();
+  });
+});
+
 describe('a connected agent', () => {
   it('is connected from its agent chip: shown on its card, its chip and its lane in All queues', async () => {
     const { backend, card, view } = await open();
@@ -122,9 +297,9 @@ describe('a connected agent', () => {
     expect(queues.getByText('SDK').getAttribute('title')).toMatch(/Agent SDK/);
     fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
 
-    // Another type of agent is simulated: the session closes.
+    // Another type of agent, simulated: the session closes.
     fireEvent.click(chip());
-    fireEvent.click(screen.getByRole('option', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('option', { name: /^Codex · Simulated/ }));
     expect(card().getAttribute('aria-label')).toBe('a, Codex');
     expect(backend.close).toHaveBeenCalledWith('a');
   });
@@ -972,13 +1147,23 @@ describe('a connected agent', () => {
   });
 
   it('sets its effort beside the model, when the model takes one', async () => {
-    const { backend, view, emit } = await open({ connection: 'sdk' });
+    const { backend, view, emit, send } = await open({ connection: 'sdk' });
     emit({
       type: 'started',
       model: 'opus',
       mode: 'manual',
       models: [
-        { value: 'opus', label: 'Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        {
+          value: 'opus',
+          label: 'Opus',
+          efforts: [
+            { value: 'low', label: 'Low' },
+            { value: 'medium', label: 'Medium' },
+            { value: 'high', label: 'High' },
+            { value: 'xhigh', label: 'Extra high' },
+            { value: 'max', label: 'Max' },
+          ],
+        },
         { value: 'old', label: 'Old model' },
       ],
     });
@@ -999,6 +1184,14 @@ describe('a connected agent', () => {
     fireEvent.click(view.getByRole('button', { name: 'Model: Opus' }));
     fireEvent.click(view.getByRole('menuitemradio', { name: /^Old model/ }));
     expect(effort()).toBeNull();
+
+    // Started again, it starts at the effort chosen (main checks its model takes it).
+    emit({ type: 'closed' });
+    await send('Again');
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'sdk', model: 'old', effort: 'high' }),
+    );
   });
 });
 

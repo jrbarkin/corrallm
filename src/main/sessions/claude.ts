@@ -1,7 +1,7 @@
-import { constants } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+
+import { findExecutable } from './executables';
 
 /*
  * The `claude` executable both Claude connections run: Terminal runs it in a pty, and the Agent
@@ -23,19 +23,10 @@ export async function findClaude(
     override = process.env.CORRALLM_CLAUDE_PATH,
   }: { home?: string; override?: string | undefined } = {},
 ): Promise<string | undefined> {
-  const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1];
-  const candidates = [
+  return findExecutable(EXECUTABLE, env, [
     ...(override ? [override] : []),
     path.join(home, '.local', 'bin', EXECUTABLE),
-    ...(searchPath ?? '')
-      .split(path.delimiter)
-      .filter((folder) => path.isAbsolute(folder))
-      .map((folder) => path.join(folder, EXECUTABLE)),
-  ];
-  for (const candidate of candidates) {
-    if (await canRun(candidate)) return candidate;
-  }
-  return undefined;
+  ]);
 }
 
 /** Where `claude` is (see `findClaude`); rejects, saying how to install it, if there is none. */
@@ -51,14 +42,4 @@ export async function requireClaude(
     );
   }
   return found;
-}
-
-async function canRun(file: string): Promise<boolean> {
-  try {
-    if (!(await stat(file)).isFile()) return false;
-    if (process.platform !== 'win32') await access(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }

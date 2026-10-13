@@ -9,7 +9,7 @@ import type { Mock } from 'vitest';
 import type { Connection, FilesRewind, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { CanvasMemory } from '../memory';
-import type { Connector, LiveSession, SessionHost } from './connector';
+import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { SessionManager } from './manager';
@@ -109,6 +109,8 @@ describe('SessionManager', () => {
         env: { PATH: '/usr/bin' },
         model: 'fast',
         mode: 'acceptEdits',
+        // Nothing chosen, nor given before: the model's default.
+        effort: null,
         resume: null,
       },
     ]);
@@ -234,6 +236,82 @@ describe('SessionManager', () => {
     expect(fake.started.at(-1)?.mode).toBeNull();
   });
 
+  it('keeps an agent’s Codex thread apart from its Claude Code session, each resumed in turn', async () => {
+    const codex = new FakeConnector({ cli: 'codex' });
+    const sessions = manager({ 'app-server': codex, 'codex-terminal': codex });
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    // A Claude Code session's id means nothing to Codex: its thread starts afresh.
+    await sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'auto' });
+    expect(codex.started[0]).toMatchObject({ resume: null, mode: 'auto' });
+    // Codex in a terminal resumes the same thread; Claude Code its own session.
+    await sessions.start(contents, 'a', {
+      connection: 'codex-terminal',
+      model: null,
+      mode: 'auto',
+    });
+    expect(codex.started[1]?.resume).toBe(codex.ids[0]);
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started[1]?.resume).toBe(fake.ids[0]);
+    await sessions.closeEverything();
+    await memory.flush();
+    expect(await memory.get('/work/team.corral')).toEqual({
+      sessions: { a: fake.ids[0] },
+      threads: { a: codex.ids[0] },
+      // What it was given in Codex, apart from what it was given in Claude Code (nothing).
+      codexChosen: { a: { mode: 'auto' } },
+    });
+
+    // After a restart, each is resumed by its own CLI.
+    const after = manager({ 'app-server': codex });
+    const reopened = window('/work/team.corral');
+    await after.canvasOpened(reopened);
+    await after.start(reopened, 'a', { connection: 'app-server', model: null, mode: 'plan' });
+    expect(codex.started.at(-1)?.resume).toBe(codex.ids[0]);
+  });
+
+  it('starts and switches a session only in modes of its CLI', async () => {
+    const codex = new FakeConnector({ cli: 'codex' });
+    const sessions = manager({ 'app-server': codex });
+    const contents = window();
+    await expect(
+      sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'manual' }),
+    ).rejects.toThrow(/mode/);
+    await sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'auto' });
+    await sessions.setMode(contents, 'a', 'full-access');
+    expect(types(contents)).toContain('a:mode');
+    await expect(sessions.setMode(contents, 'a', 'acceptEdits')).rejects.toThrow(/mode/);
+  });
+
+  it('remembers what an agent was given in each CLI apart, never Codex’s Full access', async () => {
+    const codex = new FakeConnector({ cli: 'codex' });
+    const sessions = manager({ 'app-server': codex });
+    const contents = window('/work/team.corral');
+    const appServer: SessionOptions = { connection: 'app-server', model: null, mode: null };
+    await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
+    await sessions.start(contents, 'a', { ...appServer, mode: 'read-only' });
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.mode).toBe('plan');
+    await sessions.start(contents, 'a', appServer);
+    expect(codex.started.at(-1)?.mode).toBe('read-only');
+    // Full access is the user's to choose each time.
+    await sessions.setMode(contents, 'a', 'full-access');
+    await sessions.close(contents, 'a');
+    await sessions.start(contents, 'a', appServer);
+    expect(codex.started.at(-1)?.mode).toBeNull();
+    await memory.flush();
+    const remembered = await memory.get('/work/team.corral');
+    expect(remembered.chosen?.a).toEqual({ mode: 'plan' });
+    expect(remembered.codexChosen?.a).toBeUndefined();
+  });
+
+  it('says a connection corrallm cannot run', async () => {
+    const sessions = manager();
+    await expect(
+      sessions.start(window(), 'a', { connection: 'app-server', model: null, mode: 'auto' }),
+    ).rejects.toThrow(/can't run/);
+  });
+
   it('remembers the sessions of a canvas first saved after they started', async () => {
     const sessions = manager();
     const contents = window();
@@ -331,6 +409,41 @@ describe('SessionManager', () => {
     await sessions.start(contents, 'b', { ...OPTIONS, connection: 'terminal' });
     await expect(sessions.setEffort(contents, 'b', 'low')).rejects.toThrow(/in its terminal/);
     await expect(sessions.stopTask(contents, 'b', 'b1')).rejects.toThrow(/in its terminal/);
+  });
+
+  it('starts a session at the effort it was given, and remembers the effort chosen', async () => {
+    const setEffort = vi.fn<NonNullable<LiveSession['setEffort']>>().mockResolvedValue(undefined);
+    const specs: SessionSpec[] = [];
+    const plain: LiveSession = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const start = (spec: SessionSpec) => {
+      specs.push(spec);
+      return Promise.resolve({ ...plain, setEffort });
+    };
+    const sessions = manager({ sdk: { start } });
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', { ...OPTIONS, effort: 'high' });
+    expect(specs.at(-1)?.effort).toBe('high');
+    await sessions.setEffort(contents, 'a', 'low');
+    expect(setEffort).toHaveBeenCalledWith('low');
+    await sessions.closeEverything();
+
+    // After a restart: the effort it was last given, unless the renderer chooses one.
+    const after = manager({ sdk: { start } });
+    const reopened = window('/work/team.corral');
+    await after.canvasOpened(reopened);
+    await after.start(reopened, 'a', OPTIONS);
+    expect(specs.at(-1)?.effort).toBe('low');
+    // The model's default, chosen: forgotten.
+    await after.setEffort(reopened, 'a', null);
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).chosen?.a).toBeUndefined();
   });
 
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {

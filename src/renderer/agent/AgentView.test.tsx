@@ -202,6 +202,30 @@ describe('the agent view', () => {
     expect(menu().getAttribute('aria-label')).toBe('Mode: Manual');
   });
 
+  it('keeps Codex’s Full access out of Shift+Tab, and switches to it once confirmed', () => {
+    const { view, composer } = open({
+      nodes: [agent('a', { data: { label: 'a', agent: 'Codex' } })],
+      edges: [],
+    });
+    const menu = () => view.getByRole('button', { name: /^Mode: / });
+    const seen = [menu().getAttribute('aria-label')];
+    for (let i = 0; i < 3; i += 1) {
+      fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+      seen.push(menu().getAttribute('aria-label'));
+    }
+    expect(seen).toEqual(['Mode: Default', 'Mode: Plan', 'Mode: Read only', 'Mode: Default']);
+
+    fireEvent.click(menu());
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Full access/ }));
+    const confirm = within(view.getByRole('alertdialog', { name: 'Full access?' }));
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Default');
+    fireEvent.click(confirm.getByRole('button', { name: 'Full access' }));
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Full access');
+    // Out of it with Shift+Tab, to the first.
+    fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Read only');
+  });
+
   it('asks for your OK above the composer while the run holds it, where what you send asks for changes', () => {
     render(
       <GraphEditor
@@ -448,7 +472,7 @@ describe('the agent view', () => {
       expect(card.classList.contains('group-color-3')).toBe(true);
       expect(card.classList.contains('selected')).toBe(true);
       expect(container.querySelectorAll('.react-flow__edge')).toHaveLength(0);
-      expect(next.getByRole('button', { name: 'Agent: Codex' })).toBeTruthy();
+      expect(next.getByRole('button', { name: 'Agent: Codex · Simulated' })).toBeTruthy();
       // a waits on top of the stack, still working.
       expect(stacked()).toEqual(['Switch to a']);
       expect(next.getByRole('button', { name: 'Switch to a' }).dataset.status).toBe('working');

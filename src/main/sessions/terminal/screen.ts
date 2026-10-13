@@ -1,6 +1,7 @@
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { Terminal } from '@xterm/headless';
+import type { IBuffer } from '@xterm/headless';
 
 import { parseProgramStatus, PROBE_REPLY, PROGRAM_STATUS } from './status';
 import type { ProgramStatus } from './status';
@@ -8,10 +9,11 @@ import type { ProgramStatus } from './status';
 /*
  * Main's copy of what a Terminal session's screen shows: a headless xterm.js fed everything the
  * CLI prints. A view that opens starts from its snapshot, then follows the CLI's output. It also
- * reads what main needs from the screen: Claude Code's Program Status reports (status.ts), whose
- * probe it answers, and the draft in Claude Code's prompt. While no view is open it answers the
- * one query a terminal must (Device Attributes): Windows' ConPTY holds output until it is
- * answered. Otherwise the view's terminal answers queries; this one never does.
+ * reads what main needs from the screen: Program Status reports (status.ts, as Claude Code makes
+ * them), whose probe it answers; the window title (as Codex reports its state there); and the
+ * draft in Claude Code's prompt. While no view is open it answers the one query a terminal must
+ * (Device Attributes): Windows' ConPTY holds output until it is answered. Otherwise the view's
+ * terminal answers queries; this one never does.
  */
 
 /** The screen as it is: what to write to an empty terminal of its size to show the same. */
@@ -36,6 +38,8 @@ export interface ScreenOptions {
   reply: (data: string) => void;
   /** A Program Status report the CLI made. */
   status: (report: ProgramStatus) => void;
+  /** The CLI set the window's title (OSC 0 or 2). */
+  title?: (title: string) => void;
   /** Whether this screen answers terminal queries itself (no view's terminal does). */
   answersQueries: () => boolean;
 }
@@ -43,8 +47,10 @@ export interface ScreenOptions {
 export class Screen {
   readonly #terminal: Terminal;
   readonly #serialize = new SerializeAddon();
+  /** Whether the cursor shows (DECTCEM): a CLI shows it where it takes typing. */
+  #cursorShown = true;
 
-  constructor({ cols, rows, reply, status, answersQueries }: ScreenOptions) {
+  constructor({ cols, rows, reply, status, title, answersQueries }: ScreenOptions) {
     this.#terminal = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
     // The addons are written for the browser's Terminal; the headless one has the same API.
     this.#terminal.loadAddon(new Unicode11Addon());
@@ -58,10 +64,21 @@ export class Screen {
       }
       return true;
     });
+    if (title) this.#terminal.onTitleChange(title);
     this.#terminal.parser.registerCsiHandler({ final: 'c' }, (params) => {
       if ((params[0] ?? 0) === 0 && answersQueries()) reply(DEVICE_ATTRIBUTES);
       return true;
     });
+    // Noted, then left to the terminal (false: its own handler runs too).
+    for (const [final, shown] of [
+      ['h', true],
+      ['l', false],
+    ] as const) {
+      this.#terminal.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
+        if (params.includes(25)) this.#cursorShown = shown;
+        return false;
+      });
+    }
   }
 
   get cols(): number {
@@ -117,6 +134,20 @@ export class Screen {
       lines.push(buffer.getLine(y)?.translateToString(true) ?? '');
     }
     return lines.join('\n').trim();
+  }
+
+  /**
+   * The rows in view, for a CLI's reading: the active buffer, where its view starts and ends, and
+   * whether its cursor shows.
+   */
+  view(): { buffer: IBuffer; top: number; bottom: number; cursorShown: boolean } {
+    const buffer = this.#terminal.buffer.active;
+    return {
+      buffer,
+      top: buffer.viewportY,
+      bottom: buffer.viewportY + this.#terminal.rows,
+      cursorShown: this.#cursorShown,
+    };
   }
 
   /**

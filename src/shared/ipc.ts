@@ -4,12 +4,11 @@ import type {
   McpChange,
   McpServer,
   PastSession,
-  EffortLevel,
-  PermissionMode,
   RewindRestore,
   RewindResult,
   SessionAnswer,
   SessionEvent,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from './session';
@@ -73,15 +72,16 @@ export interface IpcContract {
   };
   /** Interrupts the turn an agent's session is on, as Escape does in Claude Code. */
   'session:interrupt': { args: [agentId: string]; result: null };
-  /** Switches an agent's session's permission mode. */
-  'session:mode': { args: [agentId: string, mode: PermissionMode]; result: null };
+  /** Switches an agent's session's mode (one of its CLI's: permission mode, or Codex's preset). */
+  'session:mode': { args: [agentId: string, mode: SessionMode]; result: null };
   /** Switches an agent's session's model (a value from the models it offers). */
   'session:model': { args: [agentId: string, model: string]; result: null };
   /**
-   * Sets how much effort Claude puts into an agent's session's replies, for that session (null:
-   * its model's default). Rejects for a session that does not take it (a Terminal's).
+   * Switches an agent's session's reasoning effort, for that session (one its model offers; null:
+   * the model's default). Rejects for a session that does not take it (a Terminal's: set it in
+   * its terminal).
    */
-  'session:effort': { args: [agentId: string, effort: EffortLevel | null]; result: null };
+  'session:effort': { args: [agentId: string, effort: string | null]; result: null };
   /**
    * Stops a task an agent's session runs in the background (a subagent, a command), by the id its
    * 'tasks' event gave. Rejects for a task it does not run in the background.

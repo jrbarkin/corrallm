@@ -1,15 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
-import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../shared/session';
+import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, UNASKING_MODES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
 import { AgentType } from '../graph/agents';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
-import { CYCLED_MODES, MODES } from './session';
+import { cycledModes, modeOf, modesOf } from './session';
 import type {
   BackgroundTask,
-  EffortLevel,
   MessageImage,
   Mode,
   ModelChoice,
@@ -25,8 +24,8 @@ export interface ComposerControls {
   unqueue: (queuedId: string) => void;
   setMode: (mode: Mode) => void;
   setModel: (model: string) => void;
-  /** How much effort Claude puts into replies (null: the model's default), for a connected session. */
-  setEffort?: (effort: EffortLevel | null) => void;
+  /** Chooses how hard the model reasons (null: its default), where the session's models offer efforts. */
+  setEffort?: (effort: string | null) => void;
   /** Stops a task a connected session runs in the background. */
   stopTask?: (taskId: string) => void;
   /** The project folder's files matching what follows an "@", for a connected session. */
@@ -56,24 +55,19 @@ const MODELS: Record<AgentType, readonly string[]> = {
 /** What a connected session offers before it has said: its CLI's default model. */
 const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Default model' }];
 
-/** The effort levels, as the effort menu names them, with what Claude Code says of each. */
-const EFFORTS: Record<EffortLevel, { label: string; detail: string }> = {
-  low: { label: 'Low', detail: 'Quick, straightforward implementation' },
-  medium: { label: 'Medium', detail: 'Balanced approach with standard testing' },
-  high: { label: 'High', detail: 'Comprehensive implementation with extensive testing' },
-  xhigh: { label: 'Extra high', detail: 'Extended reasoning with thorough analysis' },
-  max: { label: 'Max', detail: 'Maximum capability with deepest reasoning (this session only)' },
-};
+/** The effort menu's key for the model's default effort. */
+const DEFAULT_EFFORT = 'default';
 
 /**
  * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
- * line, Shift+Tab switches mode (never into bypassing permissions), Up and Down bring back the
+ * line, Shift+Tab switches mode (never into one that never asks), Up and Down bring back the
  * messages sent before (from the first or last line of the box; Down past the last brings the
  * draft back). While the agent works, Enter queues the message (shown above, ✕ takes it back to
- * edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the permission mode
- * (its menu offers bypassing permissions, once the user confirms it, unless the session says its
- * settings turn it off), the model (a connected session's own models, once it has started) and
- * its effort (when the model takes one), what a connected session has used, and Send (or Stop).
+ * edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the mode (its CLI's: its
+ * menu offers bypassing permissions or Codex's Full access once the user confirms it, unless the
+ * session says its settings turn it off), the model (a connected session's own models, once it has
+ * started), how hard it reasons (where its model offers a choice, as Claude Code's /effort levels
+ * and Codex's reasoning efforts), what a connected session has used, and Send (or Stop).
  *
  * A connected session's composer also completes slash commands ("/" at the start: Tab puts one
  * in, Enter runs it) and file mentions ("@": the project folder's files), takes images pasted
@@ -114,8 +108,8 @@ export function Composer({
   const [caret, setCaret] = useState(0);
   const [images, setImages] = useState<Attachment[]>([]);
   const [problem, setProblem] = useState<string>();
-  /** Whether it asks the user to confirm bypassing permissions, picked from the mode menu. */
-  const [confirming, setConfirming] = useState(false);
+  /** The mode that never asks it asks the user to confirm, picked from the mode menu. */
+  const [confirming, setConfirming] = useState<Mode>();
   /** The completion picked in the menu, by its place. */
   const [active, setActive] = useState(0);
   /** The draft as it was when Esc closed the menu: it stays closed until the draft changes. */
@@ -137,21 +131,24 @@ export function Composer({
       ? DEFAULT_MODEL
       : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
   const model = models.find((m) => m.value === session.model) ?? models[0];
-  const mode = MODES.find((m) => m.mode === session.mode) ?? MODES[0];
-  /** The modes it can switch to: all, unless the session said otherwise. */
-  const modes = MODES.filter((m) => session.modes?.includes(m.mode) ?? true);
-  /** Switches to a mode picked from the menu: bypassing permissions only once confirmed. */
+  const mode = modeOf(agent, session.mode);
+  /** The modes it can switch to: its CLI's, unless the session said otherwise. */
+  const modes = modesOf(agent).filter((m) => session.modes?.includes(m.mode) ?? true);
+  /** Switches to a mode picked from the menu: one that never asks only once confirmed. */
   const pickMode = (picked: Mode) => {
-    if (picked === 'bypassPermissions' && session.mode !== picked) {
-      setConfirming(true);
+    if (UNASKING_MODES.includes(picked) && session.mode !== picked) {
+      setConfirming(picked);
       return;
     }
-    setConfirming(false);
+    setConfirming(undefined);
     controls.setMode(picked);
     field.current?.focus();
   };
+  const confirmed = confirming === undefined ? undefined : modeOf(agent, confirming);
   const efforts = connected && controls.setEffort ? (model?.efforts ?? []) : [];
-  const effort = session.effort ?? null;
+  /** The effort it reasons at: the one chosen, else its model's default (where its CLI says it). */
+  const effort = session.effort ?? model?.defaultEffort ?? null;
+  const effortName = efforts.find((e) => e.value === effort)?.label ?? effort ?? 'Default';
   const tasks = session.tasks ?? [];
   /** What the empty box offers: Claude Code's guess at what is sent next. */
   const suggestion = working || placeholder !== undefined ? undefined : session.suggestion;
@@ -303,21 +300,21 @@ export function Composer({
         </ul>
       )}
       {above}
-      {confirming && (
+      {confirmed && (
         <div
           className="agent-bypass"
           role="alertdialog"
-          aria-label="Bypass permissions?"
+          aria-label={`${confirmed.label}?`}
           onKeyDown={(event) => {
             if (event.key !== 'Escape') return;
             // Esc says no, and leaves the view open.
             event.stopPropagation();
-            setConfirming(false);
+            setConfirming(undefined);
             field.current?.focus();
           }}
         >
           <p>
-            <strong>Bypass permissions?</strong> {agentName} won’t ask before it edits files or runs
+            <strong>{confirmed.label}?</strong> {agentName} won’t ask before it edits files or runs
             commands, so use it only where mistakes are easy to undo.
           </p>
           <button
@@ -326,17 +323,17 @@ export function Composer({
             // It asks for the user's attention: the keyboard comes here.
             autoFocus
             onClick={() => {
-              setConfirming(false);
-              controls.setMode('bypassPermissions');
+              setConfirming(undefined);
+              controls.setMode(confirmed.mode);
               field.current?.focus();
             }}
           >
-            Bypass permissions
+            {confirmed.label}
           </button>
           <button
             type="button"
             onClick={() => {
-              setConfirming(false);
+              setConfirming(undefined);
               field.current?.focus();
             }}
           >
@@ -496,9 +493,11 @@ export function Composer({
               submit();
             } else if (event.key === 'Tab' && event.shiftKey) {
               event.preventDefault();
-              // Never into bypassing permissions; out of it, back to the first.
-              const cycle = CYCLED_MODES.filter((m) => modes.some((offered) => offered.mode === m));
-              const next = cycle[(cycle.indexOf(session.mode) + 1) % cycle.length];
+              // Never into a mode that never asks; out of it, back to the first.
+              const cycle = cycledModes(agent).filter((m) =>
+                modes.some((offered) => offered.mode === m),
+              );
+              const next = cycle[(cycle.indexOf(mode.mode) + 1) % cycle.length];
               if (next !== undefined) controls.setMode(next);
             } else if (event.key === 'Escape' && (working || draft !== '' || images.length > 0)) {
               // Otherwise Esc goes on to close the view.
@@ -514,10 +513,10 @@ export function Composer({
         <div className="agent-input-bar">
           <ChoiceMenu
             label="Mode"
-            value={mode?.label ?? ''}
-            title={`${mode?.description ?? ''} (Shift+Tab to switch)`}
+            value={mode.label}
+            title={`${mode.description} (Shift+Tab to switch)`}
             choices={modes.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
-            chosen={session.mode}
+            chosen={mode.mode}
             onChoose={(key) => {
               const picked = modes.find((m) => m.mode === key);
               if (picked) pickMode(picked.mode);
@@ -541,17 +540,24 @@ export function Composer({
           {efforts.length > 0 && (
             <ChoiceMenu
               label="Effort"
-              value={effort === null ? 'Default' : EFFORTS[effort].label}
-              shown={effort === null ? 'Default effort' : `${EFFORTS[effort].label} effort`}
-              title="How much effort Claude puts into its replies, this session"
+              value={effortName}
+              shown={`${effortName} effort`}
+              title="How hard the model reasons, this session"
               choices={[
-                { key: 'default', label: 'Default', detail: 'The model’s own' },
-                ...efforts.map((level) => ({ key: level, ...EFFORTS[level] })),
+                // A model whose CLI does not say its default effort offers it as such.
+                ...(model?.defaultEffort === undefined
+                  ? [{ key: DEFAULT_EFFORT, label: 'Default', detail: 'The model’s own' }]
+                  : []),
+                ...efforts.map((e) => ({
+                  key: e.value,
+                  label: e.label,
+                  ...(e.description === undefined ? {} : { detail: e.description }),
+                })),
               ]}
-              chosen={effort ?? 'default'}
+              chosen={effort ?? DEFAULT_EFFORT}
               onChoose={(key) => {
-                const picked = efforts.find((level) => level === key);
-                controls.setEffort?.(picked ?? null);
+                const picked = efforts.find((e) => e.value === key);
+                controls.setEffort?.(picked?.value ?? null);
                 field.current?.focus();
               }}
             />
@@ -583,9 +589,12 @@ export function Composer({
   );
 }
 
-/** What a connected session has used: its cost so far, and how full its context is. */
+/**
+ * What a connected session has used: its cost so far, how full its context is, and how much of
+ * each of the user's plan's usage limits is used (with when each resets, in its title).
+ */
 function Usage({ usage }: { usage: SessionUsage }) {
-  const { costUsd, contextTokens, contextWindow } = usage;
+  const { costUsd, contextTokens, contextWindow, limits = [] } = usage;
   const context =
     contextTokens !== null && contextWindow !== null && contextWindow > 0
       ? Math.round((contextTokens / contextWindow) * 100)
@@ -593,6 +602,7 @@ function Usage({ usage }: { usage: SessionUsage }) {
   const parts = [
     ...(costUsd === null ? [] : [`$${costUsd.toFixed(2)}`]),
     ...(context === null ? [] : [`${String(context)}% context`]),
+    ...limits.map((limit) => `${limit.name} ${String(Math.round(limit.usedPercent))}%`),
   ];
   if (parts.length === 0) return null;
   return (
@@ -603,6 +613,11 @@ function Usage({ usage }: { usage: SessionUsage }) {
         ...(context === null
           ? []
           : [`${String(contextTokens)} of ${String(contextWindow)} tokens of context used`]),
+        ...limits.map(
+          (limit) =>
+            `${String(Math.round(limit.usedPercent))}% of your ${limit.name} limit used` +
+            (limit.resetsAt === null ? '' : `; it resets ${resetTime(limit.resetsAt)}`),
+        ),
       ].join('. ')}
     >
       {parts.join(' · ')}
@@ -645,6 +660,16 @@ function BackgroundTasks({
       ))}
     </ul>
   );
+}
+
+/** When a usage limit resets, as a date and time ("Oct 12, 3:04 PM"). */
+function resetTime(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 /**
