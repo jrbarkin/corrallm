@@ -2,7 +2,7 @@
 
 **An orchestrator for coding agents that can adopt any agentic workflow, and combine them.**
 
-Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working. corrallm treats each one as a building block you can adopt, change, and run alongside the others.
+Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working, or leave you to script your own orchestration. corrallm is GUI-first and takes that busy work away: pick a workflow off the shelf, say what to build, and go; or adapt it, and run several side by side as parts of one larger effort.
 
 - **A canvas of agents.** Each agent is one of those CLIs, with its own session and a queue of work.
 - **Queues you can read.** Steps (the agent's own actions), messages, if-thens, and waits on other agents' work make the order and hand-offs of a workflow explicit, and editable.
