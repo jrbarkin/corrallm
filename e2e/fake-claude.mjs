@@ -12,7 +12,8 @@
 // Prompts: "ask …" asks for permission first (its permission hook, then its report; 1 or Enter:
 // yes), "question …" asks a question (AskUserQuestion: its tool's hook, then the permission
 // hook; 1 or Enter answers), "slow …" works until Escape, "link …" is answered with a link,
-// anything else is answered at once. A paste (bracketed, as it asks for) goes into the prompt,
+// "files …" with links (OSC 8) to notes.txt in its folder and outside.txt beside it, anything
+// else is answered at once. A paste (bracketed, as it asks for) goes into the prompt,
 // and is logged. Its terminal's size is logged as it changes, so a test can tell where a cell is
 // drawn.
 //
@@ -33,6 +34,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -216,13 +218,22 @@ async function submit() {
   setTimeout(() => void finish(), 300);
 }
 
+/** `text`, as an OSC 8 link to `file` (as Claude Code prints the files it names). */
+const fileLink = (file, text) => `\x1b]8;;${pathToFileURL(file).href}\x07${text}\x1b]8;;\x07`;
+
 async function finish() {
   if (state !== 'working') return;
   const said = lines.at(-1)?.slice(2) ?? '';
   const reply = said.startsWith('link')
     ? 'See https://docs.example.com/hooks for more'
-    : `You said: ${said}`;
-  lines.push(`⏺ ${reply}`);
+    : said.startsWith('files')
+      ? 'Wrote notes.txt and read outside.txt'
+      : `You said: ${said}`;
+  lines.push(
+    said.startsWith('files')
+      ? `⏺ Wrote ${fileLink(path.resolve('notes.txt'), 'notes.txt')} and read ${fileLink(path.resolve('..', 'outside.txt'), 'outside.txt')}`
+      : `⏺ ${reply}`,
+  );
   await hook('Stop', { last_assistant_message: reply });
   if (state !== 'working') return;
   become('done');

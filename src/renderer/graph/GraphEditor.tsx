@@ -239,6 +239,7 @@ function Editor({
         now: () => Date.now(),
         chance: Math.random,
         usage: () => usageStore.snapshot(),
+        unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
       }),
   );
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);

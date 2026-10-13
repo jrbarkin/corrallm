@@ -13,6 +13,7 @@ import { LinkOpener } from './links';
 import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
+import { FileRevealer } from './reveal';
 import { hardenSession, installNavigationGuards } from './security';
 import { planConsent, Settings } from './settings';
 import { createConnectors } from './sessions/connectors';
@@ -154,7 +155,14 @@ function main(): void {
         },
         openExternal: (url) => shell.openExternal(url),
       });
-      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions, usage });
+      // file:// links in a terminal: shown in the file manager, if in the project folder.
+      const reveal = new FileRevealer({
+        folderOf: (contents) => projects.of(contents),
+        show: (file) => {
+          shell.showItemInFolder(file);
+        },
+      });
+      registerIpcHandlers(trustedOrigin, { projects, files, links, reveal, sessions, usage });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;

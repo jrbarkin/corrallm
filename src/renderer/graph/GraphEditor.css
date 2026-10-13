@@ -1750,3 +1750,9 @@ input.graph-label {
   border-style: solid;
   background: color-mix(in srgb, var(--queue-wait) 16%, transparent);
 }
+
+/* What a permission asked in a terminal is for (a diff, a command): a short preview, in the card. */
+.graph-question .agent-tool-detail {
+  max-height: 200px;
+  margin: 0;
+}

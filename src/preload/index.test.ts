@@ -138,6 +138,13 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
   });
 
+  it('asks main to show a file:// link’s file in the file manager, with only the link', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(true);
+    await expect(api.revealFile('file:///work/app/notes.txt')).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('link:reveal', 'file:///work/app/notes.txt');
+  });
+
   it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {
     const api = await exposed();
     invoke.mockResolvedValue(null);

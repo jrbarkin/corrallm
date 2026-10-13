@@ -308,6 +308,78 @@ describe('a connected agent', () => {
     expect(backend.close).toHaveBeenCalledWith('a');
   });
 
+  it('offers to simulate a question only while simulated: a connected agent asks its own', async () => {
+    const { view } = await open();
+    const simulate = () => view.queryByRole('button', { name: 'Simulate a question' });
+    expect(simulate()).toBeTruthy();
+    const chip = () => view.getByRole('button', { name: /^Agent: / });
+    for (const connection of [/^Claude · Agent SDK/, /^Claude · Terminal/]) {
+      fireEvent.click(chip());
+      fireEvent.click(view.getByRole('option', { name: connection }));
+      await settle();
+      expect(simulate()).toBeNull();
+    }
+    fireEvent.click(chip());
+    fireEvent.click(view.getByRole('option', { name: /^Claude · Simulated/ }));
+    expect(simulate()).toBeTruthy();
+  });
+
+  it('names the chat by the first message of the conversation it is on now', async () => {
+    const { backend, view, send, sent, emit } = await open();
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const chat = () =>
+      side.queryByRole('group', { name: /^Current chat/ })?.getAttribute('aria-label') ?? null;
+    const runAs = async (connection: RegExp) => {
+      fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
+      fireEvent.click(screen.getByRole('option', { name: connection }));
+      await settle();
+    };
+    const turn = async (text: string, ...events: SessionEvent[]) => {
+      await send(text);
+      emit({ type: 'user', id: sent(), text }, ...events, {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+    };
+    await send('Sketch the plan');
+    expect(chat()).toBe('Current chat: Sketch the plan');
+
+    // Through the Agent SDK: Claude Code's own conversation, with no message yet.
+    await runAs(/^Claude · Agent SDK/);
+    expect(chat()).toBeNull();
+    await turn('Fix the tests');
+    expect(chat()).toBe('Current chat: Fix the tests');
+    // /clear starts another.
+    await turn('/clear', { type: 'cleared', id: 'reset-1' });
+    expect(chat()).toBeNull();
+    await turn('Write the docs');
+    expect(chat()).toBe('Current chat: Write the docs');
+
+    // Codex: its thread, resumed with its history.
+    await runAs(/^Codex · App Server/);
+    expect(chat()).toBeNull();
+    const [hear] = backend.onEvent.mock.calls.at(-1) ?? [];
+    act(() => {
+      hear?.('a', 'app-server', {
+        type: 'history',
+        events: [
+          { type: 'user', id: 'x1', text: 'Review the pull request' },
+          { type: 'end', messages: ['x1'], seconds: 3, interrupted: false, failed: false },
+        ],
+      });
+    });
+    expect(chat()).toBe('Current chat: Review the pull request');
+
+    // Back to Claude Code's conversation, and to the simulated chat.
+    await runAs(/^Claude · Agent SDK/);
+    expect(chat()).toBe('Current chat: Write the docs');
+    await runAs(/^Claude · Simulated/);
+    expect(chat()).toBe('Current chat: Sketch the plan');
+  });
+
   it('does not run through the Agent SDK on a Claude subscription: it says why, and switches to Terminal', async () => {
     const { backend, view, transcript, card } = await open({ connection: 'sdk' }, refuseSdk);
     expect(transcript.getAllByRole('alert').map((alert) => alert.textContent)).toEqual([

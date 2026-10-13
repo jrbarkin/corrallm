@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { SessionBackend } from './agent/connected';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
-import { OpenLinkContext } from './open-link';
+import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
 import type { UsageSource } from './usage/store';
@@ -50,10 +50,11 @@ const terminalBackend: TerminalBackend = {
   onEvent: (listener) => window.api.onTerminalEvent(listener),
 };
 
-/** Links clicked in the app open in the browser if main says so (src/main/links.ts). */
-const openLink: OpenLink = (url) => {
-  window.api.openLink(url).catch(() => undefined);
-};
+/**
+ * Links clicked in the app open in the browser if main says so (src/main/links.ts); a file://
+ * link's file is shown in the file manager if it is in the project folder (src/main/reveal.ts).
+ */
+const openLink: OpenLink = openLinkWith(() => window.api);
 
 /** Usage readings and rules are main's (src/main/usage.ts): one per backend, for every canvas. */
 const usageSource: UsageSource = {

@@ -46,6 +46,9 @@ function fakeServices() {
     links: {
       open: vi.fn<IpcServices['links']['open']>().mockResolvedValue(true),
     },
+    reveal: {
+      reveal: vi.fn<IpcServices['reveal']['reveal']>().mockResolvedValue(true),
+    },
     sessions: {
       start: vi.fn<IpcServices['sessions']['start']>().mockResolvedValue(undefined),
       send: vi.fn<IpcServices['sessions']['send']>().mockResolvedValue(undefined),
@@ -144,6 +147,7 @@ describe('every channel', () => {
     );
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.links.open).not.toHaveBeenCalled();
+    expect(services.reveal.reveal).not.toHaveBeenCalled();
   });
 });
 
@@ -162,6 +166,25 @@ describe('link:open handler', () => {
   ])('rejects %s', (_label, args, message) => {
     expect(() => invoke('link:open', args)).toThrow(message);
     expect(services.links.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('link:reveal handler', () => {
+  it('passes the link on, for main to check against the sender’s project folder', async () => {
+    const sender = {};
+    const link = 'file:///work/app/notes.txt';
+    await expect(invoke('link:reveal', [link], sender)).resolves.toBe(true);
+    expect(services.reveal.reveal).toHaveBeenCalledWith(sender, link);
+  });
+
+  it.each([
+    ['no link', [], /Expected a link/],
+    ['a link that is not a string', [{ href: 'file:///work/app' }], /Expected a link/],
+    ['an extra argument', ['file:///work/app/notes.txt', true], /Expected a link/],
+    ['a link too long', [`file:///work/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
+  ])('rejects %s', (_label, args, message) => {
+    expect(() => invoke('link:reveal', args)).toThrow(message);
+    expect(services.reveal.reveal).not.toHaveBeenCalled();
   });
 });
 
@@ -530,6 +553,7 @@ describe('session:* handlers', () => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.links.open).not.toHaveBeenCalled();
+    expect(services.reveal.reveal).not.toHaveBeenCalled();
   });
 });
 
@@ -608,6 +632,7 @@ describe('terminal:* handlers', () => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.links.open).not.toHaveBeenCalled();
+    expect(services.reveal.reveal).not.toHaveBeenCalled();
   });
 });
 

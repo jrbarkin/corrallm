@@ -63,6 +63,7 @@ const api: AppApi = {
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
   resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
   openLink: (url) => invoke(API_CHANNELS.openLink, url),
+  revealFile: (url) => invoke(API_CHANNELS.revealFile, url),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
   // never names a path, and main checks these again.
   dropOnTerminal: (agentId, files) => {

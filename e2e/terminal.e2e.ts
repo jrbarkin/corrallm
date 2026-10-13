@@ -345,6 +345,62 @@ test('opens a link Cmd-clicked in the terminal in the browser, once main has ask
   expect(await seen()).toEqual(opened);
 });
 
+test('shows a file Claude Code names, Cmd-clicked, in the file manager if it is in the project folder', async () => {
+  await app.evaluate(({ shell }) => {
+    const seen = globalThis as unknown as { shown: string[] };
+    seen.shown = [];
+    Object.assign(shell, {
+      showItemInFolder: (file: string) => {
+        seen.shown.push(file);
+      },
+    });
+  });
+  const shown = () =>
+    app.evaluate(() => (globalThis as unknown as { shown: string[] }).shown.slice());
+  await writeFile(path.join(folder, 'notes.txt'), 'hello\n');
+  await writeFile(path.join(dir, 'outside.txt'), 'secret\n');
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await typeIn(terminal, 'files please', 'Enter');
+  await expect
+    .poll(async () => (await logged()).some((entry) => entry.event === 'replied'))
+    .toBe(true);
+
+  // The reply is on the screen's fourth row: "⏺ Wrote notes.txt and read outside.txt".
+  const sizes = (await logged()).filter((entry) => entry.event === 'size');
+  const { cols, rows } = sizes.at(-1) as unknown as { cols: number; rows: number };
+  const screen = await view.locator('.xterm-screen').boundingBox();
+  if (!screen) throw new Error('no terminal screen');
+  const cell = (col: number, row: number) => ({
+    x: screen.x + ((col + 0.5) * screen.width) / cols,
+    y: screen.y + ((row + 0.5) * screen.height) / rows,
+  });
+  const cmdClick = async (col: number) => {
+    const away = cell(2, 3);
+    const at = cell(col, 3);
+    await page.mouse.move(away.x, away.y);
+    await page.mouse.move(at.x, at.y, { steps: 2 });
+    await page.keyboard.down('ControlOrMeta');
+    await page.mouse.click(at.x, at.y);
+    await page.keyboard.up('ControlOrMeta');
+  };
+  // notes.txt, in the project folder: shown, by its real path.
+  await expect
+    .poll(async () => {
+      await cmdClick(12);
+      return (await shown()).length;
+    })
+    .toBeGreaterThan(0);
+  await page.waitForTimeout(300);
+  expect(new Set(await shown())).toEqual(new Set([realpathSync(path.join(folder, 'notes.txt'))]));
+  const before = (await shown()).length;
+  // outside.txt, beside it: inert.
+  for (let i = 0; i < 3; i++) await cmdClick(31);
+  await page.waitForTimeout(300);
+  expect(await shown()).toHaveLength(before);
+});
+
 test('the queues’ Run types its message into the terminal, and hears its turn end', async () => {
   await canvasFile([{ id: 'docs', message: 'Write the docs\nand the changelog' }]);
   await chooseProject();

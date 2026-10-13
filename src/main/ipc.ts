@@ -9,6 +9,7 @@ import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
 import type { ProjectFiles } from './files';
 import type { LinkOpener } from './links';
 import type { ProjectFolders } from './project';
+import type { FileRevealer } from './reveal';
 import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
@@ -43,13 +44,14 @@ export type IpcHandler<C extends IpcChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on besides canvas files: project folders, their files, links to open, and
- * sessions.
+ * What the handlers act on besides canvas files: project folders, their files, links to open (and
+ * project files to show), and sessions.
  */
 export interface IpcServices {
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
   links: Pick<LinkOpener, 'open'>;
+  reveal: Pick<FileRevealer, 'reveal'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -143,10 +145,11 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
 }
 
 /**
- * `ArgsParser` for link:open: the URL clicked, a string within MAX_LINK_LENGTH. Whether it may
- * open, and how, is main's to decide (links.ts), never the renderer's.
+ * `ArgsParser` for link:open and link:reveal: the URL clicked, a string within MAX_LINK_LENGTH.
+ * Whether it may open (or its file be shown), and how, is main's to decide (links.ts, reveal.ts),
+ * never the renderer's.
  */
-export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open'> {
+export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open' | 'link:reveal'> {
   const [url] = args;
   if (args.length !== 1 || typeof url !== 'string') throw new TypeError('Expected a link');
   if (url.length > MAX_LINK_LENGTH) throw new RangeError('The link is too long');
@@ -167,7 +170,14 @@ export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
   return [parseBackend(backend), windows === null ? null : parseWindows(windows, Date.now())];
 }
 
-function createHandlers({ projects, files, links, sessions, usage }: IpcServices): HandlerTable {
+function createHandlers({
+  projects,
+  files,
+  links,
+  reveal,
+  sessions,
+  usage,
+}: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'canvas:open': {
@@ -334,6 +344,10 @@ function createHandlers({ projects, files, links, sessions, usage }: IpcServices
     'link:open': {
       parseArgs: parseLinkArgs,
       handler: ({ contents }, url) => links.open(contents, url),
+    },
+    'link:reveal': {
+      parseArgs: parseLinkArgs,
+      handler: ({ contents }, url) => reveal.reveal(contents, url),
     },
     'terminal:resize': {
       parseArgs: parseTerminalResizeArgs,

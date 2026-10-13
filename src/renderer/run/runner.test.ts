@@ -34,7 +34,7 @@ const MINUTE = 60_000;
  * went (`failed`) with what the agent replied (`text`). A message the run took back is marked
  * `withdrawn`; what the run told the user in an agent's session is `told`.
  */
-function setup(initial: GraphNode[], chance = () => 0.9) {
+function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<string> = new Set()) {
   let clock = 0;
   let timers: { run: () => void; at: number }[] = [];
   /** How long each timer set was for. */
@@ -83,6 +83,7 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     now: () => clock,
     chance,
     usage: () => usage,
+    unheard: (to) => unheard.has(to.id),
   });
   store.update(initial);
   const tick = () => {
@@ -1162,6 +1163,54 @@ describe('RunStore', () => {
         review: 'succeeded',
       });
       expect(told).toHaveLength(1);
+    });
+
+    it('says once when it can’t read an agent’s replies, and asks it nothing', () => {
+      const a = connected(
+        'a',
+        [
+          { id: 'tests', action: 'Bash' },
+          {
+            id: 'green',
+            if: { kind: 'outputContains', text: '0 failed' },
+            then: [{ id: 'tag', message: 'Tag it' }],
+          },
+          {
+            id: 'flaky',
+            if: { kind: 'freeText', text: 'a test is flaky' },
+            then: [{ id: 'fix', message: 'Fix it' }],
+          },
+          { id: 'again', action: 'Bash' },
+        ],
+        'terminal',
+      );
+      const { store, reply, where, sent, told } = setup([a], never, new Set(['a']));
+      store.start();
+      // Its hooks are off: its turn ends, with no reply heard.
+      reply('a');
+      expect(where()).toEqual({ a: 'running again' });
+      reply('a');
+      expect(where()).toEqual({ a: 'done' });
+      expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+        tests: 'succeeded',
+        green: 'skipped',
+        flaky: 'skipped',
+        again: 'succeeded',
+      });
+      // Not asked whether a test is flaky: it could not be heard answering.
+      expect(sent).toHaveLength(2);
+      expect(told).toEqual([
+        [
+          'a',
+          'corrallm can’t read this agent’s replies (its hooks are off), so in this run “the ' +
+            'output contains” and conditions in your words don’t hold, without asking it, and its ' +
+            'steps count as succeeded.',
+        ],
+      ]);
+      // Said again in the next run.
+      store.start();
+      reply('a');
+      expect(told).toHaveLength(2);
     });
 
     it('judges a Codex agent’s steps by what it says too, on either connection', () => {

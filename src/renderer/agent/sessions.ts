@@ -14,7 +14,7 @@ import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
-import { answersOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
+import { answersOf, conversationOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
   Answer,
   MessageImage,
@@ -335,7 +335,12 @@ export class SessionStore {
   ): void {
     const pasted = images === undefined || images.length === 0 ? {} : { images };
     this.#turns.set(agentId, id);
-    this.#dispatch(agentId, { type: 'start', entry: { id, kind: 'user', text, ...pasted } });
+    // Sent in the conversation the agent is on: its CLI's, or its simulated session's.
+    const conversation = conversationOf(this.#connections.get(agentId) ?? 'simulated');
+    this.#dispatch(agentId, {
+      type: 'start',
+      entry: { id, kind: 'user', text, ...pasted, conversation },
+    });
     this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) => {
       // The next queued message may have started already.
       if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);

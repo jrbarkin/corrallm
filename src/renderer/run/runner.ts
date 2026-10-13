@@ -161,6 +161,11 @@ export interface RunIO {
    * between tasks (and again whenever main tells a new reading: RunStore.usageChanged).
    */
   usage?: () => UsageState;
+  /**
+   * Whether corrallm can't read what a connected agent replies (its session said so: its CLI's
+   * settings turn off the hooks that tell it), so the run takes nothing from its replies.
+   */
+  unheard?: (agent: GraphNode) => boolean;
 }
 
 /** How long a simulated agent's step takes, at least and at most. */
@@ -187,6 +192,11 @@ const UNANSWERED = 'corrallm took that as no: the question wasn’t answered.';
 /** What the run says when a connected agent's step reply gives no verdict (turns.ts). */
 const NO_VERDICT =
   'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.';
+/** What the run says, once a run, when it can't read a connected agent's replies (RunIO.unheard). */
+const UNHEARD =
+  'corrallm can’t read this agent’s replies (its hooks are off), so in this run “the output ' +
+  'contains” and conditions in your words don’t hold, without asking it, and its steps count as ' +
+  'succeeded.';
 
 const IDLE: Run = { running: false, agents: {} };
 
@@ -256,6 +266,8 @@ export class RunStore {
   readonly #usageDecided = new Map<string, { choice: 'goOn' | 'wait'; until: number }>();
   /** The windows (by backend, window and reset) whose rule has warned the user this run. */
   readonly #warned = new Set<string>();
+  /** The agents the run said it can't read the replies of, this run. */
+  readonly #toldUnheard = new Set<string>();
 
   constructor(io: RunIO) {
     this.#io = io;
@@ -818,11 +830,17 @@ export class RunStore {
         break;
       case 'outputContains':
         held = isConnected(node)
-          ? replyContains(this.#replyOf(node.id, checked, at.outcomes), condition.text)
+          ? !this.#unheard(node) &&
+            replyContains(this.#replyOf(node.id, checked, at.outcomes), condition.text)
           : this.#io.chance() < HOLDS;
         break;
       case 'freeText':
-        if (isConnected(node)) return this.#ask(node, key, condition.text, at);
+        if (isConnected(node)) {
+          // Never asked when its answer can't be heard.
+          if (!this.#unheard(node)) return this.#ask(node, key, condition.text, at);
+          held = false;
+          break;
+        }
         held = this.#io.chance() < HOLDS;
         break;
       case 'usageAbove': {
@@ -865,6 +883,19 @@ export class RunStore {
       },
     });
     return { current, status: 'running', outcomes };
+  }
+
+  /**
+   * Whether corrallm can't read what a connected agent replies (RunIO.unheard): the first time a run
+   * needs to, it says so in the agent's session.
+   */
+  #unheard(node: GraphNode): boolean {
+    if (this.#io.unheard?.(node) !== true) return false;
+    if (!this.#toldUnheard.has(node.id)) {
+      this.#toldUnheard.add(node.id);
+      this.#io.tell(node, UNHEARD);
+    }
+    return true;
   }
 
   /**
@@ -941,7 +972,7 @@ export class RunStore {
             return;
           }
           const verdict = stepVerdict(reply);
-          if (verdict === undefined) this.#io.tell(node, NO_VERDICT);
+          if (verdict === undefined && !this.#unheard(node)) this.#io.tell(node, NO_VERDICT);
           finish(verdict === false ? 'failed' : 'succeeded', reply);
         };
         this.#send(node, this.#stepMessage(node, task), {
@@ -1173,6 +1204,7 @@ export class RunStore {
     this.#due.clear();
     this.#usageDecided.clear();
     this.#warned.clear();
+    this.#toldUnheard.clear();
   }
 
   #set(run: Run): void {

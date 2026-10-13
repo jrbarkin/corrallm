@@ -250,7 +250,13 @@ export class ConnectedDriver implements SessionDriver {
         if (!known) {
           io.dispatch({
             type: 'start',
-            entry: { id: event.id, kind: 'user', text: event.text, reached: true },
+            entry: {
+              id: event.id,
+              kind: 'user',
+              text: event.text,
+              reached: true,
+              conversation: CONNECTION_CLI[this.connection],
+            },
           });
         } else if (known.kind === 'user' && known.reached !== true) {
           io.dispatch({
@@ -321,6 +327,11 @@ export class ConnectedDriver implements SessionDriver {
       case 'asking':
         io.dispatch({ type: 'asking', asks: event.asks });
         return;
+      case 'unheard':
+        // Said as a warning (a Terminal agent's bar shows it), and kept for the queues' Run.
+        this.#notice('warning', event.text);
+        io.dispatch({ type: 'unheard', text: event.text });
+        return;
       case 'todos':
         this.#put({ id: event.id, kind: 'todos', items: event.items });
         return;
@@ -381,7 +392,12 @@ export class ConnectedDriver implements SessionDriver {
         });
         return;
       case 'cleared':
-        if (!find(event.id)) io.dispatch({ type: 'add', entry: { id: event.id, kind: 'cleared' } });
+        if (!find(event.id)) {
+          io.dispatch({
+            type: 'add',
+            entry: { id: event.id, kind: 'cleared', conversation: CONNECTION_CLI[this.connection] },
+          });
+        }
         return;
       case 'usage':
         io.dispatch({ type: 'usage', usage: event.usage });
