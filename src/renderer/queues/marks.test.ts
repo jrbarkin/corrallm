@@ -75,6 +75,37 @@ describe('queueMarks', () => {
     });
   });
 
+  it('marks how a step expected to fail went against what was expected, once judged', () => {
+    const red = lanesOf([
+      agent('a', [
+        { id: 'red', action: 'Bash', expect: 'fails' },
+        { id: 'again', action: 'Bash', expect: 'fails' },
+        { id: 'broken', action: 'Bash', expect: 'fails' },
+      ]),
+    ]);
+    const marks = queueMarks(
+      red,
+      {
+        running: false,
+        agents: {
+          a: {
+            status: 'done',
+            outcomes: { red: 'succeeded', again: 'failed', broken: 'failed' },
+            asExpected: { red: true, again: false },
+          },
+        },
+      },
+      new Set(),
+    );
+    expect(marks('a', 'red')).toMatchObject({ 'data-run': 'succeeded', 'data-expected': 'met' });
+    expect(marks('a', 'again')).toMatchObject({ 'data-run': 'failed', 'data-expected': 'unmet' });
+    // Its turn failed: it did not run as asked, so it went neither way.
+    expect(marks('a', 'broken')).toMatchObject({
+      'data-run': 'failed',
+      'data-expected': undefined,
+    });
+  });
+
   it('leaves a decision to the run alone: not while its agent asks permission, nor once stopped', () => {
     // A permission prompt in a task, or in the turn that makes the changes asked for at the OK.
     const task = marksOf({ current: 'build', status: 'running', outcomes: {} }, { asking: ['a'] });

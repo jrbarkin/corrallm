@@ -19,12 +19,13 @@
         {
           "id": "red",
           "action": "exec_command",
-          "instruction": "Run the new tests."
+          "instruction": "Run the new tests.",
+          "expect": "fails"
         },
         {
           "id": "red-check",
           "if": {
-            "kind": "succeeded"
+            "kind": "failed"
           },
           "then": [
             {

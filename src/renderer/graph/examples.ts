@@ -26,7 +26,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
     description:
-      'Codex writes the tests; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. After claudex.',
+      'Codex writes the tests and checks they fail first; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. After claudex.',
     text: tddRelay,
     fields: [
       {
@@ -55,7 +55,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Spec first',
     description:
-      'A planner writes the spec before any code, and the plan once you approve the spec; a builder works the plan test-first; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.',
+      "A planner writes the spec before any code, and the plan once you approve the spec; a builder writes the plan's tests, checks they fail, then makes them pass; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.",
     text: specFirst,
     fields: [
       {

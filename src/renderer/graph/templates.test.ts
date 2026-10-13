@@ -104,7 +104,7 @@ describe('withAgents', () => {
           label: 'Tester',
           agent: 'Codex',
           queue: [
-            { id: 'run', action: 'exec_command' },
+            { id: 'run', action: 'exec_command', expect: 'fails' },
             { id: 'diff', action: '/diff' },
             {
               id: 'red',
@@ -140,7 +140,8 @@ describe('withAgents', () => {
     expect(tester?.data.agent).toBe('Claude');
     // Codex's /diff has no Claude equivalent: it stays, for the user to see and change.
     expect(tester?.data.queue).toEqual([
-      { id: 'run', action: 'Bash' },
+      // What it is expected to do goes with it.
+      { id: 'run', action: 'Bash', expect: 'fails' },
       { id: 'diff', action: '/diff' },
       { id: 'red', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
       { id: 'ok', approve: '' },
@@ -166,7 +167,7 @@ describe('withAgents', () => {
   it('leaves an agent left open without a type, to be the default agent', () => {
     const [tester] = withAgents(pinned, { tester: undefined }).nodes;
     expect(tester?.data.agent).toBeUndefined();
-    expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash' });
+    expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash', expect: 'fails' });
   });
 
   it('only names, as equivalents, actions each agent type has', () => {

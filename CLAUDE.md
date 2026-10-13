@@ -193,7 +193,14 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      tests that fail; no verdict counts as succeeded, said in its session by
                      RunIO.tell), for Claude and Codex agents alike, a command's as its turn
                      ended; a simulated agent's steps take a timer and may fail (and ignore the
-                     instruction). A connected agent's conditions are real (never
+                     instruction). A step expected to fail (QueueStep.expect, set from a tool's
+                     action in its row, then shown as an "expect: fails" chip under the step; in
+                     .corral files) asks the agent the same, and is
+                     turned round once judged: failing is its success, passing its failure, so
+                     Ifs, repeats and waits read whether it went as expected (AgentRun.asExpected,
+                     on its row: "failed, as expected" or "passed, but was expected to fail"); a
+                     tool's turn that fails is no verdict and fails it, and a reply with none goes
+                     as expected. A connected agent's conditions are real (never
                      chance): "the output contains" is matched, exactly, against what it replied in
                      the checked task's turn (RunIO.send's `done`: SessionStore's turnReply, its
                      top-level text; for a Terminal agent, the Stop hook's last reply), and one in

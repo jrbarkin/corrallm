@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { Connection, MessageImage } from '../../shared/session';
 import type { UsageBackend, UsageRule, UsageState, UsageWindows } from '../../shared/usage';
+import { AGENT_CONNECTIONS, DEFAULT_AGENT } from '../graph/agents';
+import { EXAMPLES } from '../graph/examples';
+import { fromFile } from '../graph/file';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
+import { fillTemplate } from '../graph/templates';
 import { RunStore } from './runner';
 import type { Refusal, TurnEnd } from './runner';
 
@@ -243,6 +247,33 @@ describe('RunStore', () => {
       'fix-a': 'succeeded',
       failing: 'succeeded',
       after: 'succeeded',
+    });
+  });
+
+  it('turns a step expected to fail round: failing is its success, and passing its failure', () => {
+    const queue = (id: string): QueueItem[] => [
+      { id: 'red', action: 'Bash', expect: 'fails' },
+      {
+        id: 'early',
+        if: { kind: 'failed' },
+        then: [{ id: `redo-${id}`, message: 'They pass already: make them fail' }],
+      },
+    ];
+    // a's step goes as expected: it fails. b's goes wrong (under a quarter): it passes.
+    let draws = 0;
+    const { store, tick, where } = setup([agent('a', queue('a')), agent('b', queue('b'))], () =>
+      draws++ === 0 ? 0.9 : 0.1,
+    );
+    store.start();
+    tick();
+    expect(where()).toEqual({ a: 'done', b: 'running redo-b' });
+    expect(store.snapshot().agents.a).toMatchObject({
+      outcomes: { red: 'succeeded', early: 'skipped' },
+      asExpected: { red: true },
+    });
+    expect(store.snapshot().agents.b).toMatchObject({
+      outcomes: { red: 'failed' },
+      asExpected: { red: false },
     });
   });
 
@@ -1162,6 +1193,144 @@ describe('RunStore', () => {
         review: 'succeeded',
       });
       expect(told).toHaveLength(1);
+    });
+
+    describe('a step expected to fail', () => {
+      const red = {
+        id: 'red',
+        action: 'Bash',
+        instruction: 'Run the new tests.',
+        expect: 'fails',
+      } as const;
+      const early = (id: string): QueueItem => ({
+        id: 'early',
+        if: { kind: 'failed' },
+        then: [{ id, message: 'They pass already: make them fail' }],
+      });
+
+      it('turns its verdict round, asking the agent just the same', () => {
+        const { store, reply, where, sent, told } = setup(
+          [connected('a', [red, early('redo-a')]), connected('b', [red, early('redo-b')])],
+          never,
+        );
+        store.start();
+        // Whether it succeeded, as for any step: what the agent says is turned round after.
+        const asked = `Use the Bash tool for this step: Run the new tests.\n\n${VERDICT.trim()}`;
+        expect(sent.map((s) => s.text)).toEqual([asked, asked]);
+        reply('a', false, 'All 12 fail: wc.js is missing, as expected.\nFAILED');
+        reply('b', false, 'All 12 pass.\nSUCCEEDED');
+        expect(where()).toEqual({ a: 'done', b: 'running redo-b' });
+        expect(store.snapshot().agents.a).toMatchObject({
+          outcomes: { red: 'succeeded', early: 'skipped' },
+          asExpected: { red: true },
+        });
+        expect(store.snapshot().agents.b).toMatchObject({
+          outcomes: { red: 'failed' },
+          asExpected: { red: false },
+        });
+        expect(told).toEqual([]);
+      });
+
+      it('fails when its turn fails, and goes as expected when its reply says neither', () => {
+        const a = connected('a', [
+          { ...red, id: 'broken' },
+          red,
+          // A slash command's turn is how it went: turned round too.
+          { id: 'review', action: '/code-review', expect: 'fails' },
+        ]);
+        const { store, reply, told } = setup([a], never);
+        store.start();
+        // Interrupted, or an error: the tests never ran, so they did not fail as expected.
+        reply('a', true, 'Interrupted');
+        reply('a', false, 'Ran them: 12 tests failed.');
+        expect(told).toEqual([
+          [
+            'a',
+            'corrallm took the step as failed, as expected: its reply didn’t end with SUCCEEDED or FAILED.',
+          ],
+        ]);
+        reply('a', false, 'No issues found.');
+        expect(store.snapshot().agents.a).toMatchObject({
+          outcomes: { broken: 'failed', red: 'succeeded', review: 'failed' },
+          asExpected: { red: true, review: false },
+        });
+        expect(store.snapshot().agents.a?.asExpected).not.toHaveProperty('broken');
+      });
+
+      it('ends a repeat once it fails, forgetting each round how it went', () => {
+        const a = connected('a', [
+          {
+            id: 'loop',
+            repeat: [{ id: 'write', message: 'Write a test that fails until it is built' }, red],
+            until: { kind: 'succeeded' },
+            rounds: 3,
+            otherwise: 'ask',
+          },
+        ]);
+        const { store, reply, where } = setup([a], never);
+        store.start();
+        reply('a');
+        reply('a', false, 'It passes already.\nSUCCEEDED');
+        // Round 2: how the round's step went, and against what was expected, are cleared.
+        expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+        expect(store.snapshot().agents.a?.asExpected).toBeUndefined();
+        reply('a');
+        reply('a', false, 'It fails now.\nFAILED');
+        expect(where()).toEqual({ a: 'done' });
+        expect(store.snapshot().agents.a).toMatchObject({
+          outcomes: { red: 'succeeded', loop: 'succeeded' },
+          asExpected: { red: true },
+        });
+      });
+
+      it.each(['TDD relay', 'Spec first'])(
+        'checks the %s template’s new tests fail before anything is built',
+        (name) => {
+          const example = EXAMPLES.find((e) => e.name === name);
+          const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
+          const nodes = fillTemplate(fromFile(example?.text ?? ''), values).nodes.map((n) => {
+            const connection = AGENT_CONNECTIONS[n.data.agent ?? DEFAULT_AGENT].find(
+              (c) => c !== 'simulated',
+            );
+            return n.type === 'agent' && connection ? { ...n, data: { ...n.data, connection } } : n;
+          });
+          const red = nodes.flatMap((n) =>
+            (n.data.queue ?? []).flatMap((item) =>
+              'action' in item && item.expect === 'fails' ? [{ agent: n.id, step: item.id }] : [],
+            ),
+          );
+          expect(red).toHaveLength(1);
+          const { agent: tester = '', step = '' } = red[0] ?? {};
+          /** Runs to the red step (every turn before it ends well, every OK given), then says how it went. */
+          const run = (verdict: string) => {
+            const { store, reply, sent } = setup(nodes, never);
+            store.start();
+            for (let turn = 0; turn < 20; turn++) {
+              const { agents } = store.snapshot();
+              const ok = Object.entries(agents).find(([, at]) => at.status === 'asking');
+              if (ok) {
+                store.decide(ok[0], ok[1].current ?? '', { choice: 'approve' });
+              } else if (agents[tester]?.current === step) {
+                reply(tester, false, verdict);
+                break;
+              } else {
+                reply(sent.find((s) => s.done)?.agent ?? '', false, 'Done.');
+              }
+            }
+            return { outcome: store.snapshot().agents[tester]?.outcomes[step], sent };
+          };
+          // Failing, as expected: the If after it is skipped.
+          const failing = run('The new tests fail: nothing is built yet.\nFAILED');
+          expect(failing.outcome).toBe('succeeded');
+          // Passing already: the If after it asks for tests that fail.
+          const passing = run('The new tests pass.\nSUCCEEDED');
+          expect(passing.outcome).toBe('failed');
+          const redo = passing.sent.at(-1);
+          expect(redo?.agent).toBe(tester);
+          expect(redo?.text).toMatch(/^The new tests pass before anything/);
+          expect(failing.sent.map((s) => s.text)).not.toContain(redo?.text);
+        },
+      );
     });
 
     it('judges a Codex agent’s steps by what it says too, on either connection', () => {

@@ -44,8 +44,30 @@
           ]
         },
         {
+          "id": "write-tests",
+          "message": "Write the tests PLAN.md names, for every task, and nothing else: don't build anything yet. Put them where this project keeps its tests."
+        },
+        {
+          "id": "red",
+          "action": "Bash",
+          "instruction": "Run the new tests.",
+          "expect": "fails"
+        },
+        {
+          "id": "red-check",
+          "if": {
+            "kind": "failed"
+          },
+          "then": [
+            {
+              "id": "make-red",
+              "message": "The new tests pass before anything is built, so they don't test anything new. Make them fail until PLAN.md's work is done."
+            }
+          ]
+        },
+        {
           "id": "build",
-          "message": "Work through PLAN.md one task at a time: write the task's test, make it pass, then tick the task off. If the plan turns out to be wrong, stop and say why."
+          "message": "Work through PLAN.md one task at a time: make its tests pass, fixing the code and not the tests, then tick the task off. If the plan turns out to be wrong, stop and say why."
         },
         {
           "id": "tests",

@@ -118,6 +118,41 @@ describe('GraphEditor', () => {
     ).toBe('Arguments');
   });
 
+  it('expects a step to fail from its action, then shows it in a chip; not a slash command', () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'a',
+            queue: [
+              { id: 's', action: 'Bash' },
+              { id: 'c', action: '/code-review' },
+            ],
+          },
+          selected: true,
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const chip = () =>
+      panel.queryByRole('button', { name: 'Change what Bash is expected to do: fail' });
+    const action = panel.getByRole('button', { name: 'Change what Bash is expected to do' });
+    expect(action.textContent).toBe('Bash');
+    expect(chip()).toBeNull();
+    fireEvent.click(action);
+    fireEvent.click(panel.getByRole('option', { name: /^Fail/ }));
+    expect(chip()?.textContent).toBe('expect: fails');
+    // A command's turn is not judged pass or fail: nothing to expect of it.
+    expect(
+      panel.queryByRole('button', { name: /^Change what \/code-review is expected/ }),
+    ).toBeNull();
+    fireEvent.click(chip() ?? action);
+    fireEvent.click(panel.getByRole('option', { name: /^Succeed/ }));
+    expect(chip()).toBeNull();
+  });
+
   it('adds a node inside a group when double-clicking its body', () => {
     const { nodes, node } = setup({ nodes: [frame], edges: [] });
     fireEvent.doubleClick(node('F'), { clientX: 200, clientY: 150 });

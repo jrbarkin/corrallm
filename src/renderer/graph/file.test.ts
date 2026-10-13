@@ -165,6 +165,32 @@ describe('fromFile', () => {
     expect(fromFile(empty).nodes[0]?.data.queue).toEqual([{ id: 's', action: 'Bash' }]);
   });
 
+  it('reads back steps expected to fail, in a repeat and an if-then too', () => {
+    const red: QueueItem[] = [
+      { id: 'red', action: 'Bash', instruction: 'Run the new tests.', expect: 'fails' },
+      {
+        id: 'early',
+        if: { kind: 'failed' },
+        then: [{ id: 'redo', action: 'Edit', expect: 'fails' }],
+      },
+      {
+        id: 'loop',
+        repeat: [{ id: 'again', action: 'Bash', expect: 'fails' }],
+        until: { kind: 'succeeded' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+    ];
+    const withRed: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === 'a' ? { ...n, data: { ...n.data, queue: red } } : n)),
+    };
+    const text = toFile(withRed);
+    expect(text).toContain('"expect": "fails"');
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(red);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
   it('reads back usage conditions, and delays and time limits until a usage window resets', () => {
     const usage: QueueItem[] = [
       { id: 'reset', delay: { resets: 'fiveHour', backend: 'Claude' } },
@@ -362,6 +388,12 @@ describe('fromFile', () => {
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 's', action: 'Bash', instruction: 3 }] }),
       /^nodes\[1\]\.queue\[0\]\.instruction must be text$/,
+    ],
+    [
+      'a step expected to do something other than fail',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 's', action: 'Bash', expect: 'passes' }] }),
+      /^nodes\[1\]\.queue\[0\]\.expect must be "fails"$/,
     ],
     [
       'a broken condition',
