@@ -8,6 +8,8 @@ export interface TerminalBackend {
   /** Keystrokes for the agent's CLI. */
   write(agentId: string, data: string): Promise<null>;
   resize(agentId: string, cols: number, rows: number): Promise<null>;
+  /** Files dropped on the agent's terminal: their paths are pasted into it (main reads them). */
+  drop(agentId: string, files: readonly File[]): Promise<null>;
   /** Listens for what terminals show; returns a function that stops listening. */
   onEvent(listener: (agentId: string, event: TerminalEvent) => void): () => void;
 }
@@ -18,5 +20,6 @@ export const NO_TERMINAL: TerminalBackend = {
   detach: () => Promise.resolve(null),
   write: () => Promise.resolve(null),
   resize: () => Promise.resolve(null),
+  drop: () => Promise.resolve(null),
   onEvent: () => () => undefined,
 };

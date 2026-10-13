@@ -12,6 +12,10 @@ Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting 
 As models change, the workflows that work best change with them. corrallm is where you build, mix and run them.
 
 > **Status:** early. A Claude agent can run Claude Code itself, with your own `claude`, its login and settings, in the canvas's project folder, connected one of two ways: in a terminal in its agent view (all of Claude Code, while corrallm types the queue's messages in and follows each turn; it works with any login, a Claude subscription included), or through the Agent SDK (a real Claude Code session shown in corrallm's own transcript and composer; it needs an API key or a cloud provider, since Anthropic doesn't allow other products to use subscription logins through the Agent SDK). Other agents' sessions, and agents left Simulated, are scripted. The queues' Run drives a connected agent for real: its steps and messages are turns of its session, an If reads what it replied (or asks it, yes or no, about a condition in your own words), and Stop interrupts what the run started. An Agent SDK agent can continue its conversation in Terminal at any time, as it does for Claude Code's own screens (`/permissions`, `/login`, `/hooks`…), `/resume` opens any conversation Claude Code kept for the project folder in it, `/mcp` shows its MCP servers to reconnect or turn off, an MCP server's forms show in its transcript, and it rewinds its code, its conversation or both to before any of your messages (Esc twice, as in Claude Code, or "Rewind to here").
+>
+> In a terminal, what Claude Code asks you (a permission, its questions, a plan to approve) is also listed in the canvas's Needs you list, to answer in its terminal; files dropped on the terminal are pasted as their paths, as a terminal pastes them; and on a Mac, Option works as Meta (for Claude Code's Option shortcuts) on a US-like keyboard layout, and types its characters on others, as the switch under the terminal says.
+>
+> Through the Agent SDK, the session keeps close to Claude Code's own: questions with their headers, meanings and several answers, permissions answered with 1, 2 or 3 or with what to do instead, live progress on tool calls and subagents, work in the background that you can stop, hooks that fail or block, the effort beside the model, predictions of your next message, earlier messages with Up and Down, and history that fits the transcript (a /clear marked in it).
 
 ## Development
 
@@ -102,6 +106,8 @@ What happens when you save a file while `pnpm dev` is running:
 | `forge.config.mts`, `vite.*.config.mts`, `package.json` | Stop with Ctrl+C and run `pnpm dev` again                                                         |
 
 To try the production build, run `pnpm package` and open the app in `out/` (for example `open out/corrallm-darwin-arm64/corrallm.app`).
+
+To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFTEST=1` (for example `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`): it checks that node-pty, the terminal's screen copy and the Agent SDK work in it (the SDK against a fake `claude` of its own, run with the `node` on your PATH; no login needed), and exits with 0.
 
 ## Common scripts
 

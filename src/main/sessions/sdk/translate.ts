@@ -4,17 +4,21 @@ import type {
   ModelInfo,
   PermissionMode as SdkMode,
   SDKAssistantMessage,
+  SDKHookResponseMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKRateLimitInfo,
   SDKResultMessage,
+  SDKToolProgressMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
+  BackgroundTask,
   PermissionMode,
   SessionEvent,
   Todo,
   ToolDetail,
+  ToolProgress,
   ToolStatus,
 } from '../../../shared/session';
 import type { Places } from './tools';
@@ -23,9 +27,11 @@ import { output, property, resultDetail, resultText, text, toolSummary } from '.
 /*
  * Turns what the Agent SDK says (SDKMessage) into corrallm's session events
  * (src/shared/session.ts): streamed text and thinking, each tool call with what it acted on and
- * how it went (diffs, output), a subagent's work nested under its Agent call, to-do lists,
- * notices (compaction, retries, usage limits, login problems), usage, and the mode and model the
- * CLI reports. Turns (who sent what, when one ends) and prompts are the session's (session.ts,
+ * how it went (diffs, output, how long it has run; a subagent's progress), a subagent's work
+ * nested under its Agent call, to-do lists, the work going on in the background, notices
+ * (compaction, retries, usage limits, login problems, hooks that failed or blocked), where /clear
+ * cleared the conversation, what the user might send next, usage, and the mode and model the CLI
+ * reports. Turns (who sent what, when one ends) and prompts are the session's (session.ts,
  * prompts.ts); this only follows the CLI's messages, keeping what it needs to tie them together.
  */
 
@@ -40,6 +46,8 @@ const LOGIN_ERRORS = new Set([
   'cloud_credential_error',
   'verification_required',
 ]);
+/** How Claude Code words a hook's non-blocking failure, before what it printed. */
+const NON_BLOCKING = 'Failed with non-blocking status code: ';
 const LOGIN_HELP =
   'corrallm uses Claude Code’s own login: run `claude` in a terminal and log in there (or switch this agent to Terminal and use /login), then send your message again.';
 
@@ -108,6 +116,7 @@ interface ToolCall {
   background: boolean;
   status: ToolStatus;
   detail: ToolDetail | undefined;
+  progress: ToolProgress | undefined;
 }
 
 /** The main thread's message streaming in: its id, and each text or thinking block's text so far. */
@@ -130,6 +139,10 @@ export class Translator {
   readonly #tools = new Map<string, ToolCall>();
   /** The task list the task tools keep (TaskCreate, TaskUpdate), by task id. */
   readonly #tasks = new Map<string, Todo>();
+  /** The tool call that started each task the CLI runs (a subagent, a command), by task id. */
+  readonly #taskCalls = new Map<string, string>();
+  /** The work going on in the background, as the CLI last listed it (housekeeping left out). */
+  #background: BackgroundTask[] = [];
   #cost: number | null = null;
   #context: number | null = null;
   #window: number | null = null;
@@ -146,6 +159,11 @@ export class Translator {
 
   constructor(options: TranslatorOptions) {
     this.#options = options;
+  }
+
+  /** Whether task `id` runs in the background now: one the user may stop. */
+  runsInBackground(id: string): boolean {
+    return this.#background.some((task) => task.id === id);
   }
 
   /** The models the session offers, and the one it was started with. */
@@ -191,17 +209,18 @@ export class Translator {
         return this.#result(message);
       case 'rate_limit_event':
         return this.#limits(message.rate_limit_info);
+      case 'tool_progress':
+        return this.#toolProgress(message);
+      case 'prompt_suggestion':
+        return message.suggestion.trim() === ''
+          ? []
+          : [{ type: 'suggestion', text: message.suggestion.trim() }];
       case 'auth_status':
         return message.error === undefined
           ? []
           : [notice('error', `Claude Code could not log in: ${message.error}. ${LOGIN_HELP}`)];
       case 'conversation_reset':
-        return [
-          notice(
-            'info',
-            'The conversation was cleared: Claude starts afresh from here (the earlier session can still be resumed).',
-          ),
-        ];
+        return [{ type: 'cleared', id: message.uuid }];
       default:
         return [];
     }
@@ -326,6 +345,7 @@ export class Translator {
       background: false,
       status: aborted ? 'interrupted' : 'running',
       detail: undefined,
+      progress: undefined,
     };
     this.#tools.set(id, call);
     if (tool === 'TodoWrite') {
@@ -488,23 +508,42 @@ export class Translator {
         const why = message.decision_reason ?? message.message;
         return [notice('warning', `Not allowed: ${what}${why === '' ? '' : ` (${why})`}`)];
       }
-      case 'task_started':
-        if (message.is_backgrounded === true && message.tool_use_id !== undefined) {
-          const call = this.#tools.get(message.tool_use_id);
-          if (call) call.background = true;
-        }
-        return [];
+      case 'task_started': {
+        if (message.tool_use_id === undefined) return [];
+        this.#taskCalls.set(message.task_id, message.tool_use_id);
+        const call = this.#tools.get(message.tool_use_id);
+        if (call && message.is_backgrounded === true) call.background = true;
+        // The CLI may list it in the background before it says which call started it.
+        return this.runsInBackground(message.task_id) ? [this.#tasksEvent()] : [];
+      }
       case 'task_updated': {
         if (message.patch.is_backgrounded !== true) return [];
-        for (const call of this.#tools.values()) {
-          if (call.status === 'running' && (call.tool === 'Agent' || call.tool === 'Bash')) {
-            call.background = true;
+        const known = this.#taskCalls.get(message.task_id);
+        const call = known === undefined ? undefined : this.#tools.get(known);
+        if (call) call.background = true;
+        else {
+          for (const other of this.#tools.values()) {
+            if (other.status === 'running' && (other.tool === 'Agent' || other.tool === 'Bash')) {
+              other.background = true;
+            }
           }
         }
         return [];
       }
+      case 'task_progress': {
+        const id = message.tool_use_id ?? this.#taskCalls.get(message.task_id);
+        const call = id === undefined ? undefined : this.#tools.get(id);
+        if (id === undefined || !call?.shown || call.status !== 'running') return [];
+        const doing = message.summary ?? message.description;
+        call.progress = {
+          ...(doing.trim() === '' ? {} : { doing: doing.trim() }),
+          ...used(message.usage),
+        };
+        return [this.#toolEvent(id, call)];
+      }
       case 'task_notification': {
-        const id = message.tool_use_id;
+        const id = message.tool_use_id ?? this.#taskCalls.get(message.task_id);
+        this.#taskCalls.delete(message.task_id);
         const call = id === undefined ? undefined : this.#tools.get(id);
         if (id === undefined || !call?.shown || call.status !== 'running') return [];
         call.status =
@@ -514,11 +553,72 @@ export class Translator {
               ? 'failed'
               : 'interrupted';
         if (message.summary !== '') call.detail = output(message.summary);
+        if (message.usage) call.progress = used(message.usage);
         return [this.#toolEvent(id, call)];
       }
+      case 'background_tasks_changed':
+        this.#background = message.tasks
+          .filter((task) => task.ambient !== true)
+          .map((task) => ({
+            id: task.task_id,
+            description: task.description,
+            kind:
+              task.task_type === 'local_agent'
+                ? 'agent'
+                : task.task_type === 'local_bash'
+                  ? 'command'
+                  : 'other',
+          }));
+        return [this.#tasksEvent()];
+      case 'hook_response':
+        return this.#hook(message);
       default:
         return [];
     }
+  }
+
+  /** How long a tool call has run, when that is news (a second more). */
+  #toolProgress({ tool_use_id: id, elapsed_time_seconds }: SDKToolProgressMessage): SessionEvent[] {
+    const call = this.#tools.get(id);
+    if (!call?.shown || call.status !== 'running') return [];
+    const seconds = Math.floor(elapsed_time_seconds);
+    if (call.progress?.seconds === seconds) return [];
+    call.progress = { ...call.progress, seconds };
+    return [this.#toolEvent(id, call)];
+  }
+
+  /** The work going on in the background, each task with the call that started it, if known. */
+  #tasksEvent(): SessionEvent {
+    return {
+      type: 'tasks',
+      tasks: this.#background.map((task) => {
+        const tool = this.#taskCalls.get(task.id);
+        return tool === undefined ? task : { ...task, tool };
+      }),
+    };
+  }
+
+  /**
+   * What a hook said, when it failed or blocked something, as Claude Code words it ("PreToolUse:Bash
+   * hook returned blocking error: …"). What hooks print when they work is not shown, as in Claude
+   * Code.
+   */
+  #hook(message: SDKHookResponseMessage): SessionEvent[] {
+    if (message.outcome !== 'error') return [];
+    const printed =
+      [message.stderr, message.output, message.stdout]
+        .map((said) => said.trim())
+        .find((said) => said !== '') ??
+      (message.exit_code === undefined ? '' : `exit code ${String(message.exit_code)}`);
+    const reason = printed.startsWith(NON_BLOCKING) ? printed.slice(NON_BLOCKING.length) : printed;
+    const name = message.hook_name;
+    const [level, said]: ['info' | 'error', string] =
+      message.exit_code !== 2
+        ? ['error', `${name} hook error`]
+        : message.hook_event === 'Stop' || message.hook_event === 'SubagentStop'
+          ? ['info', `${name} hook feedback`]
+          : ['error', `${name} hook returned blocking error`];
+    return [notice(level, reason === '' ? said : `${said}: ${reason}`)];
   }
 
   /** A turn ended: what it cost, and why, if it failed. */
@@ -623,8 +723,22 @@ export class Translator {
       status: call.status,
       ...(call.detail === undefined ? {} : { detail: call.detail }),
       ...(call.parent === undefined ? {} : { parent: call.parent }),
+      ...(call.progress === undefined ? {} : { progress: call.progress }),
     };
   }
+}
+
+/** What a task has used so far: its tool uses, tokens and time. */
+function used(usage: {
+  total_tokens: number;
+  tool_uses: number;
+  duration_ms: number;
+}): ToolProgress {
+  return {
+    toolUses: usage.tool_uses,
+    tokens: usage.total_tokens,
+    seconds: Math.floor(usage.duration_ms / 1000),
+  };
 }
 
 /** The entry a block of a message is: its message's id and its place in it. */

@@ -879,9 +879,120 @@ input.graph-label {
   cursor: default;
 }
 
+/* A question's header, as Claude Code shows it: a chip above the question. */
+.graph-question-header {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Answers that say what they mean: a list, each meaning under its answer. */
+.graph-question-options[data-described] {
+  flex-direction: column;
+}
+
+.graph-question-options[data-described] button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.graph-question-option-detail {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+/* An answer picked, where several may be. */
+.graph-question-options button[aria-pressed='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 12%, Canvas);
+}
+
 .graph-question-answer {
   margin: 0;
   opacity: 0.65;
+}
+
+/* What a Terminal agent's Claude Code asks in its terminal: shown here, answered there. */
+.graph-question-code {
+  padding: 4px 8px;
+  overflow-wrap: anywhere;
+  border-radius: 6px;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.graph-question-asked {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.graph-question-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-question-choices li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 10px;
+  border: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 8px;
+}
+
+.graph-question-plan {
+  max-height: 160px;
+  padding: 2px 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+  font-size: 12px;
+}
+
+.graph-question-plan.agent-text .agent-md-heading {
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+
+.graph-question-terminal {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.graph-question-terminal span {
+  opacity: 0.65;
+}
+
+.graph-question-terminal button {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: var(--graph-accent, #2563eb);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-question-terminal button:hover,
+.graph-question-terminal button:focus-visible {
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 85%, black);
 }
 
 /* An agent's own questions, at the top of its panel, each in a callout. */

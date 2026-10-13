@@ -1,4 +1,4 @@
-import type { MessageImage, SessionAnswer } from '../../shared/session';
+import type { EffortLevel, MessageImage, SessionAnswer } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Session, SessionAction } from './session';
 
@@ -28,9 +28,12 @@ export interface SessionDriver {
   answer(id: string, answer: SessionAnswer): void;
   /** Interrupts the turn going on, if any, as Escape does in Claude Code. */
   stop(): void;
-  /** The user switched mode or model: the store has already recorded it. */
+  /** The user switched mode, model or effort: the store has already recorded it. */
   setMode(mode: Mode): void;
   setModel(model: string): void;
+  setEffort(effort: EffortLevel | null): void;
+  /** Stops a task the session runs in the background (one its `tasks` lists). */
+  stopTask(taskId: string): void;
   /** Makes sure the session runs, as when its view opens: a connected one starts or resumes. */
   open(): void;
   /** Lets the session go, for another driver or none: a turn going on ends, interrupted. */

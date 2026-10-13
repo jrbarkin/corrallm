@@ -4,6 +4,7 @@ import type {
   McpChange,
   McpServer,
   PastSession,
+  EffortLevel,
   PermissionMode,
   RewindRestore,
   RewindResult,
@@ -25,6 +26,8 @@ export interface SessionBackend {
   interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: PermissionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
+  setEffort(agentId: string, effort: EffortLevel | null): Promise<null>;
+  stopTask(agentId: string, taskId: string): Promise<null>;
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
@@ -60,6 +63,8 @@ export const NO_BACKEND: SessionBackend = (() => {
     interrupt: refuse,
     setMode: refuse,
     setModel: refuse,
+    setEffort: refuse,
+    stopTask: refuse,
     close: refuse,
     files: () => Promise.resolve([]),
     sessions: refuse,
@@ -136,7 +141,13 @@ export class ConnectedDriver implements SessionDriver {
   answer(id: string, answer: SessionAnswer): void {
     // A question's answers are recorded one by one by the store; the others here.
     if (answer.kind === 'permission') {
-      this.#io.dispatch({ type: 'answer', id, answer: answer.answer });
+      const { feedback } = answer;
+      this.#io.dispatch({
+        type: 'answer',
+        id,
+        answer: answer.answer,
+        ...(feedback === undefined ? {} : { feedback }),
+      });
     } else if (answer.kind === 'plan') {
       this.#io.dispatch({ type: 'answerPlan', id, answer: answer.answer });
     } else if (answer.kind === 'elicitation') {
@@ -164,8 +175,18 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.setModel(agentId, model));
   }
 
+  setEffort(effort: EffortLevel | null): void {
+    // Not started yet: it is set once it starts.
+    this.#tell((agentId) => this.#backend.setEffort(agentId, effort));
+  }
+
+  stopTask(taskId: string): void {
+    this.#tell((agentId) => this.#backend.stopTask(agentId, taskId));
+  }
+
   close(): void {
     this.#closed = true;
+    this.#stopAsking();
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
       this.#end([...this.#turns.keys()], { interrupted: true, failed: false });
     }
@@ -182,7 +203,7 @@ export class ConnectedDriver implements SessionDriver {
     const find = (id: string) => io.session().entries.find((entry) => entry.id === id);
     const parent = (p: string | undefined) => (p === undefined ? {} : { parent: p });
     switch (event.type) {
-      case 'started':
+      case 'started': {
         io.dispatch({
           type: 'connected',
           models: event.models,
@@ -190,16 +211,22 @@ export class ConnectedDriver implements SessionDriver {
           mode: event.mode,
           ...(event.modes === undefined ? {} : { modes: event.modes }),
         });
+        // The effort picked goes on in a session started again, if its model takes one.
+        const { effort } = io.session();
+        const model = event.models.find((m) => m.value === event.model);
+        if (effort !== undefined && effort !== null && (model?.efforts?.length ?? 0) > 0) {
+          this.setEffort(effort);
+        }
         return;
+      }
       case 'commands':
         io.dispatch({ type: 'commands', commands: event.commands });
         return;
       case 'history': {
-        // Shown already (the session was resumed after it closed): not again.
-        const shown = new Set(io.session().entries.map((entry) => entry.id));
+        // What the transcript shows already (the session was resumed after it closed, or the
+        // agent ran in a Terminal meanwhile) is not shown again; the rest goes where it happened.
         const entries = replay(event.events, this.#agentId, this.connection);
-        if (entries.length === 0 || entries.some((entry) => shown.has(entry.id))) return;
-        io.dispatch({ type: 'restore', entries });
+        if (entries.length > 0) io.dispatch({ type: 'restore', entries });
         return;
       }
       case 'user':
@@ -245,7 +272,7 @@ export class ConnectedDriver implements SessionDriver {
         return;
       }
       case 'tool': {
-        const { id, tool, summary, status, detail } = event;
+        const { id, tool, summary, status, detail, progress } = event;
         this.#put({
           id,
           kind: 'tool',
@@ -254,9 +281,19 @@ export class ConnectedDriver implements SessionDriver {
           status,
           ...(detail === undefined ? {} : { detail }),
           ...parent(event.parent),
+          ...(progress === undefined ? {} : { progress }),
         });
         return;
       }
+      case 'tasks':
+        io.dispatch({ type: 'tasks', tasks: event.tasks });
+        return;
+      case 'suggestion':
+        io.dispatch({ type: 'suggestion', text: event.text });
+        return;
+      case 'asking':
+        io.dispatch({ type: 'asking', asks: event.asks });
+        return;
       case 'todos':
         this.#put({ id: event.id, kind: 'todos', items: event.items });
         return;
@@ -313,6 +350,9 @@ export class ConnectedDriver implements SessionDriver {
           ...(event.switchTo === undefined ? {} : { switchTo: event.switchTo }),
         });
         return;
+      case 'cleared':
+        if (!find(event.id)) io.dispatch({ type: 'add', entry: { id: event.id, kind: 'cleared' } });
+        return;
       case 'usage':
         io.dispatch({ type: 'usage', usage: event.usage });
         return;
@@ -327,6 +367,9 @@ export class ConnectedDriver implements SessionDriver {
         return;
       case 'closed':
         this.#running = undefined;
+        // Its CLI is gone, and what it ran in the background or asked with it.
+        if ((io.session().tasks?.length ?? 0) > 0) io.dispatch({ type: 'tasks', tasks: [] });
+        this.#stopAsking();
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
           this.#end([...this.#turns.keys()], {
@@ -369,6 +412,11 @@ export class ConnectedDriver implements SessionDriver {
       .catch((error: unknown) => {
         this.#notice('error', ipcErrorMessage(error));
       });
+  }
+
+  /** Its CLI asks nothing in its terminal any more (it is gone). */
+  #stopAsking(): void {
+    if (this.#io.session().asking !== undefined) this.#io.dispatch({ type: 'asking', asks: [] });
   }
 
   /** Adds an entry, or replaces the one with its id. */

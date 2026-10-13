@@ -9,9 +9,12 @@
 // (its "transcript", which --resume needs). A file .fake-claude-untrusted in the folder makes it
 // ask whether to trust the folder first.
 //
-// Prompts: "ask …" asks for permission first (1 or Enter: yes), "slow …" works until Escape,
-// "link …" is answered with a link, anything else is answered at once. Its terminal's size is
-// logged as it changes, so a test can tell where a cell is drawn.
+// Prompts: "ask …" asks for permission first (its permission hook, then its report; 1 or Enter:
+// yes), "question …" asks a question (AskUserQuestion: its tool's hook, then the permission
+// hook; 1 or Enter answers), "slow …" works until Escape, "link …" is answered with a link,
+// anything else is answered at once. A paste (bracketed, as it asks for) goes into the prompt,
+// and is logged. Its terminal's size is logged as it changes, so a test can tell where a cell is
+// drawn.
 //
 // `claude auth status --json` reports a Claude subscription login (claude.ai), unless the
 // environment has an API key, as the real one does; it logs nothing.
@@ -76,8 +79,11 @@ for (const signal of ['SIGHUP', 'SIGTERM']) {
 async function hook(name, fields = {}) {
   const settings = arg('--settings');
   if (!settings) return;
-  const url = JSON.parse(readFileSync(settings, 'utf8')).hooks[name]?.[0]?.hooks[0]?.url;
+  const group = JSON.parse(readFileSync(settings, 'utf8')).hooks[name]?.[0];
+  const url = group?.hooks[0]?.url;
   if (!url) return;
+  // Only for the tools its matcher names, if it names any.
+  if (group.matcher && !group.matcher.split('|').includes(fields.tool_name)) return;
   await fetch(url, {
     method: 'POST',
     headers: {
@@ -129,8 +135,43 @@ async function submit() {
   draw();
   await hook('UserPromptSubmit', { prompt });
   if (prompt.startsWith('ask')) {
-    become('blocked', ':kind=permission');
+    await hook('PermissionRequest', {
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello', description: 'Say hello' },
+    });
+    become(
+      'blocked',
+      `:kind=permission:msg=${Buffer.from('approve Bash: echo hello').toString('base64')}`,
+    );
     lines.push('Bash(echo hello) · Do you want to proceed? 1. Yes  2. No');
+    draw();
+    return;
+  }
+  if (prompt.startsWith('question')) {
+    const input = {
+      questions: [
+        {
+          question: 'Which database?',
+          header: 'Database',
+          options: [
+            { label: 'Postgres', description: 'What the app uses today' },
+            { label: 'SQLite', description: 'One file, for tests' },
+          ],
+          multiSelect: false,
+        },
+      ],
+    };
+    await hook('PreToolUse', {
+      tool_name: 'AskUserQuestion',
+      tool_input: input,
+      tool_use_id: 'toolu_question',
+    });
+    await hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: input });
+    become(
+      'blocked',
+      `:kind=question:msg=${Buffer.from('answer: Which database? (Postgres · SQLite)').toString('base64')}`,
+    );
+    lines.push('Which database? 1. Postgres  2. SQLite');
     draw();
     return;
   }
@@ -160,6 +201,14 @@ function key(data) {
       become('idle');
       draw();
     }
+    return;
+  }
+  if (data.startsWith('\x1b[200~')) {
+    const end = data.indexOf('\x1b[201~');
+    const text = data.slice(6, end === -1 ? undefined : end);
+    log({ event: 'paste', text });
+    draft += text;
+    draw();
     return;
   }
   if (data.startsWith('\x1b[?') || data.startsWith('\x1b]')) return;

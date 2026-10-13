@@ -25,3 +25,6 @@ export const MAX_TERMINAL_INPUT = 65_536;
 /** The largest terminal the renderer may ask for, in columns and rows. */
 export const MAX_TERMINAL_COLS = 1000;
 export const MAX_TERMINAL_ROWS = 500;
+/** The most files one drop on a terminal pastes, and the longest path it takes. */
+export const MAX_DROPPED_FILES = 50;
+export const MAX_DROPPED_PATH = 4096;

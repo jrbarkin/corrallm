@@ -72,6 +72,11 @@ export class Screen {
     return this.#terminal.rows;
   }
 
+  /** Whether the CLI asked for pastes to be bracketed (as Claude Code does, to tell them from typing). */
+  get bracketedPaste(): boolean {
+    return this.#terminal.modes.bracketedPasteMode;
+  }
+
   /** Something the CLI printed. */
   write(data: string): void {
     this.#terminal.write(data);

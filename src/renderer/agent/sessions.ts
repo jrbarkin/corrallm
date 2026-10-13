@@ -15,7 +15,15 @@ import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
 import { answersOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
-import type { Answer, MessageImage, Mode, PlanAnswer, Session, SessionAction } from './session';
+import type {
+  Answer,
+  EffortLevel,
+  MessageImage,
+  Mode,
+  PlanAnswer,
+  Session,
+  SessionAction,
+} from './session';
 
 /** An agent's driver, how it runs, and whether it is being let go. */
 interface Driving {
@@ -234,9 +242,13 @@ export class SessionStore {
     });
   }
 
-  /** Answers a permission prompt. */
-  answer(agentId: string, permissionId: string, answer: Answer): void {
-    this.#drivers.get(agentId)?.driver.answer(permissionId, { kind: 'permission', answer });
+  /** Answers a permission prompt; with a no, `feedback` tells Claude what to do instead. */
+  answer(agentId: string, permissionId: string, answer: Answer, feedback?: string): void {
+    this.#drivers.get(agentId)?.driver.answer(permissionId, {
+      kind: 'permission',
+      answer,
+      ...(feedback === undefined || feedback.trim() === '' ? {} : { feedback: feedback.trim() }),
+    });
   }
 
   /** Answers one of the questions of a question prompt; once all have answers, they go. */
@@ -275,6 +287,17 @@ export class SessionStore {
   setModel(agentId: string, model: string): void {
     this.#dispatch(agentId, { type: 'model', model, chosen: true });
     this.#drivers.get(agentId)?.driver.setModel(model);
+  }
+
+  /** Sets how much effort Claude puts into its replies (null: its model's default). */
+  setEffort(agentId: string, effort: EffortLevel | null): void {
+    this.#dispatch(agentId, { type: 'effort', effort });
+    this.#drivers.get(agentId)?.driver.setEffort(effort);
+  }
+
+  /** Stops a task the agent's session runs in the background. */
+  stopTask(agentId: string, taskId: string): void {
+    this.#drivers.get(agentId)?.driver.stopTask(taskId);
   }
 
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */

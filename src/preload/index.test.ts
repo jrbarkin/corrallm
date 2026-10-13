@@ -4,15 +4,17 @@ import type { AppApi } from '../shared/ipc';
 import type { SessionEvent } from '../shared/session';
 
 type Listener = (event: unknown, ...args: unknown[]) => void;
-const { exposeInMainWorld, invoke, on, removeListener } = vi.hoisted(() => ({
+const { exposeInMainWorld, invoke, on, removeListener, getPathForFile } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn<(key: string, api: unknown) => void>(),
   invoke: vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>(),
   on: vi.fn<(channel: string, listener: Listener) => void>(),
   removeListener: vi.fn<(channel: string, listener: Listener) => void>(),
+  getPathForFile: vi.fn<(file: File) => string>(),
 }));
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld },
   ipcRenderer: { invoke, on, removeListener },
+  webUtils: { getPathForFile },
 }));
 
 // Each test loads the preload afresh: Vitest clears mock calls between tests.
@@ -76,6 +78,10 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
     await api.setSessionModel('a', 'opus');
     expect(invoke).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
+    await api.setSessionEffort('a', 'high');
+    expect(invoke).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
+    await api.stopSessionTask('a', 'b1');
+    expect(invoke).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
     await api.closeSession('a');
     expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
     await api.listSessions('a');
@@ -130,6 +136,20 @@ describe('preload', () => {
     invoke.mockResolvedValue(true);
     await expect(api.openLink('https://docs.example.com/a')).resolves.toBe(true);
     expect(invoke).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
+  });
+
+  it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(null);
+    const shot = new File(['png'], 'Screen Shot.png');
+    const made = new File(['made by the page'], 'made.txt');
+    getPathForFile.mockImplementation((file) => (file === shot ? '/Users/me/Screen Shot.png' : ''));
+    await api.dropOnTerminal('a', [shot, made]);
+    expect(invoke).toHaveBeenLastCalledWith('terminal:drop', 'a', ['/Users/me/Screen Shot.png']);
+    // Files that are not on disk (made by the page) name no path: nothing is sent.
+    invoke.mockClear();
+    await expect(api.dropOnTerminal('a', [made])).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('passes terminal events on without Electron’s event object, until told to stop', async () => {

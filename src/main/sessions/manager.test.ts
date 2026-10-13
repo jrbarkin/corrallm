@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +14,7 @@ import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { SessionManager } from './manager';
 import type { SessionManagerDeps } from './manager';
+import { quotePath } from './terminal/drop';
 
 /** A stand-in for a renderer's web contents: the manager keys sessions by it, and hears it go. */
 const renderer = () => new EventEmitter() as unknown as Electron.WebContents;
@@ -301,6 +302,37 @@ describe('SessionManager', () => {
     await expect(sessions.mcpServers(contents, 'b')).rejects.toThrow(/run \/mcp in its terminal/);
   });
 
+  it('sets the effort and stops background tasks of a session that takes them, and of no other', async () => {
+    // A Terminal session has neither: its terminal sets them.
+    const terminal: LiveSession = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const live = {
+      ...terminal,
+      setEffort: vi.fn<NonNullable<LiveSession['setEffort']>>().mockResolvedValue(undefined),
+      stopTask: vi.fn<NonNullable<LiveSession['stopTask']>>().mockResolvedValue(undefined),
+    };
+    const sessions = manager({
+      sdk: { start: () => Promise.resolve(live) },
+      terminal: { start: () => Promise.resolve(terminal) },
+    });
+    const contents = window();
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.setEffort(contents, 'a', 'max');
+    await sessions.stopTask(contents, 'a', 'b1');
+    expect(live.setEffort).toHaveBeenCalledWith('max');
+    expect(live.stopTask).toHaveBeenCalledWith('b1');
+
+    await sessions.start(contents, 'b', { ...OPTIONS, connection: 'terminal' });
+    await expect(sessions.setEffort(contents, 'b', 'low')).rejects.toThrow(/in its terminal/);
+    await expect(sessions.stopTask(contents, 'b', 'b1')).rejects.toThrow(/in its terminal/);
+  });
+
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {
     const sessions = manager();
     const contents = window('/work/team.corral');
@@ -388,10 +420,15 @@ describe('SessionManager', () => {
   describe('terminal views', () => {
     /** A Terminal session faked: its screen says which run it is, and records what it is told. */
     function terminals() {
-      const runs: { input: string[]; sizes: number[][]; shown: number }[] = [];
+      const runs: { input: string[]; sizes: number[][]; pastes: string[]; shown: number }[] = [];
       const connector: Connector = {
         start: () => {
-          const run = { input: [] as string[], sizes: [] as number[][], shown: 0 };
+          const run = {
+            input: [] as string[],
+            sizes: [] as number[][],
+            pastes: [] as string[],
+            shown: 0,
+          };
           runs.push(run);
           const screen = `run ${String(runs.length)}`;
           return Promise.resolve({
@@ -411,6 +448,7 @@ describe('SessionManager', () => {
               },
               input: (data) => run.input.push(data),
               resize: (cols, rows) => run.sizes.push([cols, rows]),
+              paste: (text) => run.pastes.push(text),
             },
           });
         },
@@ -468,6 +506,26 @@ describe('SessionManager', () => {
       sessions.attachTerminal(contents, 'b');
       await sessions.inputTerminal(contents, 'b', 'x');
       expect(screens(contents)).toEqual([]);
+    });
+
+    it('pastes the files dropped on a view into its terminal: those that are there, quoted', async () => {
+      const { runs, connector } = terminals();
+      const sessions = manager({ terminal: connector });
+      const contents = window();
+      const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-drop-'));
+      try {
+        const shot = path.join(dir, 'Screen Shot.png');
+        await writeFile(shot, 'png');
+        await sessions.start(contents, 'a', TERMINAL);
+        await sessions.dropOnTerminal(contents, 'a', [shot, path.join(dir, 'gone.png')]);
+        await sessions.dropOnTerminal(contents, 'a', [path.join(dir, 'gone.png')]);
+        expect(runs[0]?.pastes).toEqual([`${quotePath(shot)} `]);
+        // Nothing runs for another agent: nothing is pasted.
+        await sessions.dropOnTerminal(contents, 'b', [shot]);
+        expect(runs).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
   });
 });

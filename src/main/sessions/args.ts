@@ -1,8 +1,17 @@
+import path from 'node:path';
+
 import type { IpcArgs } from '../../shared/ipc';
-import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
+import {
+  MAX_DROPPED_FILES,
+  MAX_DROPPED_PATH,
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_INPUT,
+  MAX_TERMINAL_ROWS,
+} from '../../shared/terminal';
 import {
   CONNECTIONS,
   ELICITATION_ACTIONS,
+  EFFORT_LEVELS,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
@@ -21,6 +30,7 @@ import {
 } from '../../shared/session';
 import type {
   FormValue,
+  EffortLevel,
   MessageImage,
   PermissionMode,
   PlanAnswer,
@@ -123,6 +133,30 @@ export function parseTerminalInputArgs(args: unknown[]): IpcArgs<'terminal:input
   return [parseId(agentId, 'agent'), data];
 }
 
+/**
+ * terminal:drop: an agent, and the paths of the files dropped on its terminal (read from the files
+ * by the preload): a few, each absolute, not too long, with no control characters.
+ */
+export function parseTerminalDropArgs(args: unknown[]): IpcArgs<'terminal:drop'> {
+  const [agentId, paths] = expect(args, 2, 'an agent and the files dropped');
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_DROPPED_FILES) {
+    throw new TypeError(`Expected 1 to ${String(MAX_DROPPED_FILES)} files dropped`);
+  }
+  const files = paths.map((file: unknown) => {
+    if (
+      typeof file !== 'string' ||
+      file.length > MAX_DROPPED_PATH ||
+      !path.isAbsolute(file) ||
+      // eslint-disable-next-line no-control-regex
+      /[\u0000-\u001f\u007f]/.test(file)
+    ) {
+      throw new TypeError('Expected the path of a file dropped');
+    }
+    return file;
+  });
+  return [parseId(agentId, 'agent'), files];
+}
+
 /** terminal:resize: an agent, and its terminal's columns and rows. */
 export function parseTerminalResizeArgs(args: unknown[]): IpcArgs<'terminal:resize'> {
   const [agentId, cols, rows] = expect(args, 3, 'an agent and a size');
@@ -190,15 +224,33 @@ export function parseModelArgs(args: unknown[]): IpcArgs<'session:model'> {
   return [parseId(agentId, 'agent'), parseModel(model)];
 }
 
+/** session:effort: an agent, and an effort level (null: its model's default). */
+export function parseEffortArgs(args: unknown[]): IpcArgs<'session:effort'> {
+  const [agentId, effort] = expect(args, 2, 'an agent and an effort');
+  const level: EffortLevel | null =
+    effort === null ? null : oneOf(effort, EFFORT_LEVELS, 'effort level');
+  return [parseId(agentId, 'agent'), level];
+}
+
+/** session:stopTask: an agent, and the id of a task its session runs (main checks it does). */
+export function parseStopTaskArgs(args: unknown[]): IpcArgs<'session:stopTask'> {
+  const [agentId, taskId] = expect(args, 2, 'an agent and a task');
+  return [parseId(agentId, 'agent'), parseId(taskId, 'task')];
+}
+
 function parseAnswer(value: unknown): SessionAnswer {
   const kind = isRecord(value) ? value.kind : undefined;
   switch (kind) {
     case 'permission': {
-      const { answer } = record(value, 'the answer', ['kind', 'answer']);
-      return {
-        kind,
-        answer: oneOf(answer, ['once', 'always', 'deny'] as const, 'permission answer'),
-      };
+      const { answer, feedback } = record(value, 'the answer', ['kind', 'answer', 'feedback']);
+      const given = oneOf(answer, ['once', 'always', 'deny'] as const, 'permission answer');
+      if (feedback === undefined) return { kind, answer: given };
+      // "No, and tell Claude what to do differently".
+      if (typeof feedback !== 'string' || feedback.length > MAX_ANSWER_LENGTH) {
+        throw new TypeError('Expected what to do instead, as text');
+      }
+      if (given !== 'deny') throw new TypeError('What to do instead goes only with a no');
+      return { kind, answer: given, feedback };
     }
     case 'question': {
       const { answers } = record(value, 'the answer', ['kind', 'answers']);

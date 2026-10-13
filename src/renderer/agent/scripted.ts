@@ -50,6 +50,14 @@ export class ScriptedDriver implements SessionDriver {
     // A scripted turn is the same whatever the model.
   }
 
+  setEffort(): void {
+    // Nor does effort change it.
+  }
+
+  stopTask(): void {
+    // Nothing runs in the background.
+  }
+
   open(): void {
     // Nothing to start.
   }

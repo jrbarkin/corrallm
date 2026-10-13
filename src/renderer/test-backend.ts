@@ -17,6 +17,8 @@ export function fakeBackend() {
     interrupt: vi.fn<SessionBackend['interrupt']>().mockResolvedValue(null),
     setMode: vi.fn<SessionBackend['setMode']>().mockResolvedValue(null),
     setModel: vi.fn<SessionBackend['setModel']>().mockResolvedValue(null),
+    setEffort: vi.fn<SessionBackend['setEffort']>().mockResolvedValue(null),
+    stopTask: vi.fn<SessionBackend['stopTask']>().mockResolvedValue(null),
     close: vi.fn<SessionBackend['close']>().mockResolvedValue(null),
     files: vi.fn<SessionBackend['files']>().mockResolvedValue([]),
     sessions: vi.fn<SessionBackend['sessions']>().mockResolvedValue([]),

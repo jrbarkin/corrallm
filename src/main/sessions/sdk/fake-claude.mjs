@@ -2,10 +2,15 @@
 // --output-format stream-json), for tests: it speaks the same protocol, in the shapes the real
 // CLI uses (see fixtures/), without a model. Each message gets a short reply, streamed after a
 // moment's thought ("markdown" in the message: a reply in Markdown). "run" in it also runs
-// `echo hello` with Bash, and "edit" edits notes.txt (in the project folder, for real if it is
-// there: "one" becomes "two"), each asking first in the default (Manual) and plan modes; "slow" streams slowly enough to interrupt; "a form" has its MCP server github ask
-// for a form first (an elicitation), and replies with what it got. It has two MCP servers, github
-// (connected) and sentry (failed until reconnected), which /mcp's requests list and change.
+// `echo hello` with Bash, "test" runs `npm test`, reporting its progress as it goes, "edit" edits
+// notes.txt (in the project folder, for real if it is there: "one" becomes "two"), and
+// "background" starts `npm run dev` in the background (until stopped: stop_task), each asking
+// first in the default (Manual) and plan modes; "slow" streams slowly enough to interrupt. "ask"
+// asks a question taking several answers (AskUserQuestion); "hook" has a PreToolUse hook block a
+// command (with --include-hook-events); "suggest" ends with a prediction of the next message (when
+// the SDK asked for them); "a form" has its MCP server github ask for a form first (an
+// elicitation), and replies with what it got. It has two MCP servers, github (connected) and
+// sentry (failed until reconnected), which /mcp's requests list and change.
 //
 // `claude auth status --json` says how it is logged in, as the real one would: with a cloud
 // provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
@@ -182,6 +187,12 @@ const servers = new Map([
   ['github', GITHUB],
   ['sentry', { name: 'sentry', status: 'failed', error: 'Connection refused', scope: 'project' }],
 ]);
+/** What runs in the background, by task id: the call that started it, and what it is. */
+const background = new Map();
+let tasks = 0;
+/** Whether the SDK asked for predictions of the next message (initialize). */
+let suggestions = false;
+const hookEvents = args.includes('--include-hook-events');
 
 const MODELS = [
   {
@@ -189,6 +200,8 @@ const MODELS = [
     resolvedModel: 'claude-opus-5-5',
     displayName: 'Default (recommended)',
     description: 'Opus 5.5 · Best for everyday, complex tasks',
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
     value: 'haiku',
@@ -310,6 +323,179 @@ async function useTool(current, id, name, input, { said, result, suggestions, ac
     ...(allowed ? { tool_use_result: result } : {}),
   });
   if (!allowed && answer.interrupt) current.interrupted = true;
+}
+
+/** The work running in the background, as background_tasks_changed lists it. */
+function backgroundTasks() {
+  say({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [...background].map(([taskId, task]) => ({
+      task_id: taskId,
+      task_type: 'local_bash',
+      description: task.description,
+    })),
+    uuid: randomUUID(),
+  });
+}
+
+/** Starts `npm run dev` in the background (asking first, as for any command). */
+async function startInBackground(current, id) {
+  const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+  const input = {
+    command: 'npm run dev',
+    description: 'Start the dev server',
+    run_in_background: true,
+  };
+  say({
+    type: 'assistant',
+    message: {
+      id,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input }],
+      stop_reason: null,
+      usage: { input_tokens: 2, output_tokens: 30 },
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  const answer =
+    mode === 'default' || mode === 'plan'
+      ? await canUseTool('Bash', input, toolUseId, [])
+      : { behavior: 'allow' };
+  if (answer.behavior !== 'allow') {
+    say({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { tool_use_id: toolUseId, type: 'tool_result', content: answer.message, is_error: true },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+    });
+    if (answer.interrupt) current.interrupted = true;
+    return;
+  }
+  const taskId = `b${String(++tasks)}`;
+  background.set(taskId, { toolUseId, description: input.command });
+  // As the CLI does: the task joins the set before it says it started.
+  backgroundTasks();
+  say({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: taskId,
+    tool_use_id: toolUseId,
+    description: input.command,
+    task_type: 'local_bash',
+    is_backgrounded: true,
+    uuid: randomUUID(),
+  });
+  say({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          tool_use_id: toolUseId,
+          type: 'tool_result',
+          content: `Command running in background with ID: ${taskId}`,
+          is_error: false,
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    tool_use_result: {
+      stdout: '',
+      stderr: '',
+      interrupted: false,
+      isImage: false,
+      backgroundTaskId: taskId,
+    },
+  });
+}
+
+/** Stops a task running in the background: it says so, and it leaves the set. */
+function stopInBackground(taskId) {
+  const task = background.get(taskId);
+  if (!task) return;
+  background.delete(taskId);
+  say({
+    type: 'system',
+    subtype: 'task_updated',
+    task_id: taskId,
+    patch: { status: 'killed', end_time: Date.now() },
+    uuid: randomUUID(),
+  });
+  say({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: taskId,
+    tool_use_id: task.toolUseId,
+    status: 'stopped',
+    output_file: '/tmp/claude/tasks/output',
+    summary: '',
+    uuid: randomUUID(),
+  });
+  backgroundTasks();
+}
+
+/** Asks a question taking several answers, as AskUserQuestion does; says what was answered. */
+async function askQuestion(id) {
+  const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+  const input = {
+    questions: [
+      {
+        question: 'Which checks should run?',
+        header: 'Checks',
+        options: [
+          { label: 'Lint', description: 'ESLint, zero warnings' },
+          { label: 'Tests', description: 'Vitest, every project' },
+          { label: 'E2E', description: 'Playwright, on the built app' },
+        ],
+        multiSelect: true,
+      },
+    ],
+  };
+  say({
+    type: 'assistant',
+    message: {
+      id,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'tool_use', id: toolUseId, name: 'AskUserQuestion', input }],
+      stop_reason: null,
+      usage: { input_tokens: 2, output_tokens: 30 },
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
+  const answer = await canUseTool('AskUserQuestion', input, toolUseId, []);
+  const answers = answer.updatedInput?.answers ?? {};
+  say({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          tool_use_id: toolUseId,
+          type: 'tool_result',
+          content:
+            answer.behavior === 'allow'
+              ? `User has answered your questions: ${JSON.stringify(answers)}`
+              : answer.message,
+          is_error: answer.behavior !== 'allow',
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  });
 }
 
 async function play(message) {
@@ -491,6 +677,74 @@ async function play(message) {
       },
     );
   }
+  if (!current.interrupted && text.includes('hook') && hookEvents) {
+    say({
+      type: 'system',
+      subtype: 'hook_started',
+      hook_id: 'hook_1',
+      hook_name: 'PreToolUse:Bash',
+      hook_event: 'PreToolUse',
+      uuid: randomUUID(),
+    });
+    say({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_id: 'hook_1',
+      hook_name: 'PreToolUse:Bash',
+      hook_event: 'PreToolUse',
+      output: 'Use pnpm, not npm.\n',
+      stdout: '',
+      stderr: 'Use pnpm, not npm.\n',
+      exit_code: 2,
+      outcome: 'error',
+      uuid: randomUUID(),
+    });
+  }
+  if (!current.interrupted && text.includes('test')) {
+    const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
+    say({
+      type: 'assistant',
+      message: {
+        id,
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [
+          { type: 'tool_use', id: toolUseId, name: 'Bash', input: { command: 'npm test' } },
+        ],
+        stop_reason: null,
+        usage: { input_tokens: 2, output_tokens: 30 },
+      },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+    });
+    for (const elapsed of [1, 2, 3]) {
+      await pause(400);
+      if (current.interrupted) break;
+      say({
+        type: 'tool_progress',
+        tool_use_id: toolUseId,
+        tool_name: 'Bash',
+        parent_tool_use_id: null,
+        elapsed_time_seconds: elapsed + 0.2,
+        uuid: randomUUID(),
+      });
+    }
+    say({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { tool_use_id: toolUseId, type: 'tool_result', content: '42 passed', is_error: false },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+      tool_use_result: { stdout: '42 passed', stderr: '', interrupted: false, isImage: false },
+    });
+  }
+  if (!current.interrupted && text.includes('background')) await startInBackground(current, id);
+  if (!current.interrupted && text.includes('ask')) await askQuestion(id);
   if (!current.interrupted && text.includes('edit')) {
     const file = NOTES;
     await useTool(
@@ -581,6 +835,10 @@ async function play(message) {
       terminal_reason: 'completed',
       ...common,
     });
+    // After the result, as the CLI predicts the next message.
+    if (suggestions && text.includes('suggest')) {
+      say({ type: 'prompt_suggestion', suggestion: 'Run the tests', uuid: randomUUID() });
+    }
   }
 }
 
@@ -591,6 +849,7 @@ input.on('line', (line) => {
   if (message.type === 'control_request') {
     const { subtype } = message.request;
     if (subtype === 'initialize') {
+      suggestions = message.request.promptSuggestions === true;
       respond(message.request_id, {
         commands: COMMANDS,
         agents: [],
@@ -666,6 +925,9 @@ input.on('line', (line) => {
           : { name: server.name, status: 'disabled', scope: server.scope },
       );
       respond(message.request_id, {});
+    } else if (subtype === 'stop_task') {
+      respond(message.request_id, {});
+      stopInBackground(message.request.task_id);
     } else if (subtype === 'set_model') {
       model = message.request.model ?? 'claude-opus-5-5';
       respond(message.request_id, {});

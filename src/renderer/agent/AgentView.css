@@ -294,6 +294,48 @@
   opacity: 0.8;
 }
 
+/* How a tool call is going: how long it has run; what a subagent does, and has used. */
+.agent-tool-progress {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+/* A tool call running in the background: a Stop at the end of its line. */
+.agent-tool {
+  position: relative;
+}
+
+.agent-tool[data-background] > button {
+  padding-right: 64px;
+}
+
+.agent-tool-actions {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+
+.agent-tool-actions button,
+.agent-tasks button {
+  padding: 1px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-tool-actions button:hover,
+.agent-tasks button:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
 .agent-tool-detail {
   margin: 4px 0 0 22px;
   padding: 10px 12px;
@@ -355,6 +397,18 @@
   color: white;
 }
 
+/* An answer's number: typing it answers, as in Claude Code. */
+.agent-key {
+  margin-right: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.agent-permission-instead {
+  margin-top: 8px;
+}
+
 .agent-permission-choices button:hover {
   filter: brightness(0.95);
 }
@@ -407,6 +461,9 @@
 .agent-notice {
   margin: 0;
   padding: 6px 12px;
+  /* A command's output, a hook's error: their lines as written. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   border-left: 3px solid color-mix(in srgb, CanvasText 30%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, CanvasText 4%, transparent);
@@ -443,6 +500,23 @@
 .agent-end[data-failed] {
   color: #dc2626;
   opacity: 0.85;
+}
+
+/* Where /clear cleared the conversation: a rule across, saying so. */
+.agent-cleared {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.agent-cleared::before,
+.agent-cleared::after {
+  flex: 1;
+  border-top: 1px dashed color-mix(in srgb, CanvasText 40%, transparent);
+  content: '';
 }
 
 .agent-todos ul {
@@ -513,7 +587,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .agent-spinner,
-  .agent-tool[data-status='running'] .agent-tool-status {
+  .agent-tool[data-status='running'] .agent-tool-status,
+  .agent-tasks-kind::before {
     animation: none;
   }
 }
@@ -521,6 +596,50 @@
 /* The composer: queued messages, then the box with mode, model and Send under it. */
 .agent-composer {
   padding: 8px max(24px, calc((100% - 760px) / 2)) 18px;
+}
+
+/* The work a session runs in the background, above the box: each with a Stop. */
+.agent-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-tasks li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--agent-color, CanvasText) 35%, transparent);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.agent-tasks-kind {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
+.agent-tasks-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tasks-kind::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--agent-color, #d97757);
+  animation: agent-pulse 1s ease-in-out infinite;
+  content: '';
 }
 
 .agent-queued {

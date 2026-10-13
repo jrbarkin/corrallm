@@ -15,6 +15,8 @@ import { Translator } from './translate';
 
 /** What the CLI notes in the transcript when the user interrupts a turn. */
 const INTERRUPTED = '[Request interrupted by user';
+/** How the transcript keeps a slash command's output (what it printed, and its errors). */
+const LOCAL_OUTPUT = /^<local-command-(stdout|stderr)>([\s\S]*)<\/local-command-\1>$/;
 
 /** The events of a session's history, turn by turn. */
 export function historyEvents(messages: readonly SessionMessage[], places: Places): SessionEvent[] {
@@ -40,8 +42,15 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
 
   for (const message of messages) {
     const at = timestamp(message);
-    if (turn && at !== undefined) turn.last = at;
+    /**
+     * The turn did something: it lasts until then. Only its own work counts, not what the CLI
+     * noted later (meta messages, system lines) nor the next message, which may come hours after.
+     */
+    const worked = () => {
+      if (turn && at !== undefined) turn.last = at;
+    };
     if (message.type === 'assistant') {
+      worked();
       events.push(...translate.translate(asSdk({ ...message, type: 'assistant' })));
       continue;
     }
@@ -56,26 +65,35 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
       });
       continue;
     }
-    if (flag(message, 'is_meta')) continue;
     const content = property(message.message, 'content');
     const said = typed(content);
+    // A slash command's output: kept as meta when only the user saw it (as /context's is).
+    const local = said === undefined ? null : LOCAL_OUTPUT.exec(said);
+    if (local) {
+      worked();
+      // /compact's "Compacted": the compaction's own notice says it.
+      const output = local[2]?.trim() ?? '';
+      if (output !== '' && !output.startsWith('Compacted')) {
+        events.push({
+          type: 'notice',
+          id: message.uuid,
+          level: local[1] === 'stderr' ? 'error' : 'info',
+          text: output,
+        });
+      }
+      continue;
+    }
+    if (flag(message, 'is_meta')) continue;
     if (said === undefined) {
+      worked();
       events.push(
         ...translate.translate(asSdk({ ...message, type: 'user', tool_use_result: undefined })),
       );
       continue;
     }
     if (said.startsWith(INTERRUPTED)) {
+      worked();
       if (turn) turn.interrupted = true;
-      continue;
-    }
-    const stdout = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/.exec(said);
-    if (stdout) {
-      // /compact's "Compacted": the compaction's own notice says it.
-      const output = stdout[1]?.trim() ?? '';
-      if (output !== '' && !output.startsWith('Compacted')) {
-        events.push({ type: 'notice', id: message.uuid, level: 'info', text: output });
-      }
       continue;
     }
     end();

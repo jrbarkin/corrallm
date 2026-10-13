@@ -12,6 +12,7 @@ import type {
   FilesRewind,
   McpChange,
   McpServer,
+  EffortLevel,
   PermissionMode,
   PlanMode,
   SessionAnswer,
@@ -212,6 +213,19 @@ export class SdkSession implements LiveSession {
   async changeMcpServer(name: string, change: McpChange): Promise<void> {
     if (change === 'reconnect') await this.#query.reconnectMcpServer(name);
     else await this.#query.toggleMcpServer(name, change === 'enable');
+  }
+
+  /** For this session only, as Claude Code's /effort does without saving it. */
+  async setEffort(effort: EffortLevel | null): Promise<void> {
+    await this.#query.applyFlagSettings({ effortLevel: effort });
+  }
+
+  /** Stops a task the CLI runs in the background; its notification says it stopped. */
+  async stopTask(taskId: string): Promise<void> {
+    if (!this.#translator.runsInBackground(taskId)) {
+      throw new Error('That task is not running in the background.');
+    }
+    await this.#query.stopTask(taskId);
   }
 
   async close(): Promise<void> {

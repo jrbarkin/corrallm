@@ -2,6 +2,7 @@ import type {
   FilesRewind,
   McpChange,
   McpServer,
+  EffortLevel,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -67,6 +68,16 @@ export interface LiveSession {
   interrupt(): Promise<void>;
   setMode(mode: PermissionMode): Promise<void>;
   setModel(model: string): Promise<void>;
+  /**
+   * Sets how much effort Claude puts into its replies (null: its model's default), for a
+   * connection that takes it from corrallm; a Terminal session's is set in its terminal.
+   */
+  setEffort?(effort: EffortLevel | null): Promise<void>;
+  /**
+   * Stops a task running in the background (a subagent, a command) that the session listed
+   * ('tasks'); rejects for any other.
+   */
+  stopTask?(taskId: string): Promise<void>;
   /** Ends the session: resolves once its process has exited. It need not emit 'closed'. */
   close(): Promise<void>;
   /** A Terminal session's screen, which its agent view shows; other connections have none. */
@@ -100,6 +111,11 @@ export interface TerminalScreen {
   input(data: string): void;
   /** The view's size changed: the terminal takes it. */
   resize(cols: number, rows: number): void;
+  /**
+   * Text pasted into the view (the paths of files dropped on it): typed in as a terminal pastes,
+   * bracketed when the CLI asked for that (as Claude Code does, to tell a paste from typing).
+   */
+  paste(text: string): void;
 }
 
 /** Starts sessions of one kind of connection. */

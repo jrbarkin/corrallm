@@ -1,7 +1,7 @@
 // Runs sandboxed: only 'electron' may be imported, and Vite bundles this into one CJS file.
 // Never expose ipcRenderer itself; expose one typed function per contract channel, and one per
 // event that listens for it (never passing Electron's event object on).
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 
 import {
@@ -47,6 +47,8 @@ const api: AppApi = {
   interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),
   setSessionMode: (agentId, mode) => invoke(API_CHANNELS.setSessionMode, agentId, mode),
   setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
+  setSessionEffort: (agentId, effort) => invoke(API_CHANNELS.setSessionEffort, agentId, effort),
+  stopSessionTask: (agentId, taskId) => invoke(API_CHANNELS.stopSessionTask, agentId, taskId),
   closeSession: (agentId) => invoke(API_CHANNELS.closeSession, agentId),
   listSessions: (agentId) => invoke(API_CHANNELS.listSessions, agentId),
   resumeSession: (agentId, sessionId) => invoke(API_CHANNELS.resumeSession, agentId, sessionId),
@@ -61,6 +63,16 @@ const api: AppApi = {
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
   resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
   openLink: (url) => invoke(API_CHANNELS.openLink, url),
+  // The paths of the files dropped, as the files say (a file the page made has none): the page
+  // never names a path, and main checks these again.
+  dropOnTerminal: (agentId, files) => {
+    const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter(
+      (file) => file !== '',
+    );
+    return paths.length === 0
+      ? Promise.resolve(null)
+      : invoke(API_CHANNELS.dropOnTerminal, agentId, paths);
+  },
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
   onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
 };

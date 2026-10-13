@@ -6,6 +6,7 @@ import type {
   McpChange,
   McpServer,
   PastSession,
+  EffortLevel,
   PermissionMode,
   RewindRestore,
   RewindResult,
@@ -18,6 +19,7 @@ import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory, Chosen, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { KeptConversation } from './sdk/conversations';
+import { droppedPaste } from './terminal/drop';
 
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
@@ -26,6 +28,8 @@ const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 const NO_MCP = 'This agent’s MCP servers are managed in its terminal: run /mcp in its terminal.';
 const NO_REWIND = 'This agent rewinds in its terminal: press Esc twice there.';
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
+const NO_EFFORT = 'This agent’s effort is set in its terminal (/effort).';
+const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -259,6 +263,23 @@ export class SessionManager {
     await this.#remember(contents, agentId, sessionId);
   }
 
+  async setEffort(
+    contents: WebContents,
+    agentId: string,
+    effort: EffortLevel | null,
+  ): Promise<void> {
+    const session = await this.#session(contents, agentId);
+    if (!session.setEffort) throw new Error(NO_EFFORT);
+    await session.setEffort(effort);
+  }
+
+  /** Stops a task the agent's session runs in the background (the session checks it does). */
+  async stopTask(contents: WebContents, agentId: string, taskId: string): Promise<void> {
+    const session = await this.#session(contents, agentId);
+    if (!session.stopTask) throw new Error(NO_TASKS);
+    await session.stopTask(taskId);
+  }
+
   /**
    * Shows an agent's terminal in the renderer's view (terminal:event): the screen of the session
    * that runs, if any, and of each one that starts until the view is detached.
@@ -282,6 +303,21 @@ export class SessionManager {
   /** Keystrokes typed in an agent's terminal view, for its session's terminal, if it runs. */
   async inputTerminal(contents: WebContents, agentId: string, data: string): Promise<void> {
     (await this.#running(contents, agentId))?.terminal?.input(data);
+  }
+
+  /**
+   * Files dropped on an agent's terminal view (checked paths): those that are there are pasted
+   * into its session's terminal, if it runs, quoted (drop.ts).
+   */
+  async dropOnTerminal(
+    contents: WebContents,
+    agentId: string,
+    paths: readonly string[],
+  ): Promise<void> {
+    const terminal = (await this.#running(contents, agentId))?.terminal;
+    if (!terminal) return;
+    const text = await droppedPaste(paths);
+    if (text !== '') terminal.paste(text);
   }
 
   /** An agent's terminal view was resized: so is its session's terminal, if it runs. */

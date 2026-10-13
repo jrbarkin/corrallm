@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
 
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import {
+  MAX_ANSWER_LENGTH,
   MAX_FILE_MATCHES,
   MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
@@ -19,7 +20,7 @@ import {
   MAX_IMAGES,
   MAX_MESSAGE_LENGTH,
 } from '../shared/session';
-import { MAX_TERMINAL_INPUT } from '../shared/terminal';
+import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../shared/terminal';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
 
@@ -52,6 +53,8 @@ function fakeServices() {
       interrupt: vi.fn<IpcServices['sessions']['interrupt']>().mockResolvedValue(undefined),
       setMode: vi.fn<IpcServices['sessions']['setMode']>().mockResolvedValue(undefined),
       setModel: vi.fn<IpcServices['sessions']['setModel']>().mockResolvedValue(undefined),
+      setEffort: vi.fn<IpcServices['sessions']['setEffort']>().mockResolvedValue(undefined),
+      stopTask: vi.fn<IpcServices['sessions']['stopTask']>().mockResolvedValue(undefined),
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
       listSessions: vi.fn<IpcServices['sessions']['listSessions']>().mockResolvedValue([]),
       resumeSession: vi.fn<IpcServices['sessions']['resumeSession']>().mockResolvedValue(undefined),
@@ -74,6 +77,9 @@ function fakeServices() {
       inputTerminal: vi.fn<IpcServices['sessions']['inputTerminal']>().mockResolvedValue(undefined),
       resizeTerminal: vi
         .fn<IpcServices['sessions']['resizeTerminal']>()
+        .mockResolvedValue(undefined),
+      dropOnTerminal: vi
+        .fn<IpcServices['sessions']['dropOnTerminal']>()
         .mockResolvedValue(undefined),
     },
   };
@@ -250,6 +256,16 @@ describe('session:* handlers', () => {
     expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'bypassPermissions');
     await invoke('session:model', ['a', 'claude-haiku-5-5[1m]'], sender);
     expect(services.sessions.setModel).toHaveBeenCalledWith(sender, 'a', 'claude-haiku-5-5[1m]');
+    await invoke('session:effort', ['a', 'xhigh'], sender);
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'xhigh');
+    await invoke('session:effort', ['a', null], sender);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+    await invoke('session:stopTask', ['a', 'b1'], sender);
+    expect(services.sessions.stopTask).toHaveBeenCalledWith(sender, 'a', 'b1');
+    // Denied, with what to do instead.
+    const denied = { kind: 'permission', answer: 'deny', feedback: 'Use pnpm' };
+    await invoke('session:answer', ['a', 'p3', denied], sender);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'p3', denied);
     await invoke('session:close', ['a'], sender);
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
     const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
@@ -445,6 +461,26 @@ describe('session:* handlers', () => {
     ['session:resume', 'no conversation', ['a'], /an agent and a conversation/],
     ['session:resume', 'a path', ['a', '../../etc/passwd'], /conversation's id/],
     ['session:resume', 'an id too long', ['a', 'a'.repeat(MAX_ID_LENGTH + 1)], /conversation's id/],
+    ['session:effort', 'an unknown effort', ['a', 'ultra'], /effort/],
+    ['session:effort', 'no effort', ['a'], /an agent and an effort/],
+    ['session:stopTask', 'a task that is not named', ['a', ''], /task's id/],
+    ['session:stopTask', 'a very long task id', ['a', 't'.repeat(MAX_ID_LENGTH + 1)], /task's id/],
+    [
+      'session:answer',
+      'what to do instead, with a yes',
+      ['a', 'p', { kind: 'permission', answer: 'once', feedback: 'Go' }],
+      /only with a no/,
+    ],
+    [
+      'session:answer',
+      'what to do instead, too long',
+      [
+        'a',
+        'p',
+        { kind: 'permission', answer: 'deny', feedback: 'x'.repeat(MAX_ANSWER_LENGTH + 1) },
+      ],
+      /what to do instead/,
+    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
@@ -482,6 +518,11 @@ describe('terminal:* handlers', () => {
     expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(sender, 'a', 120, 40);
     await invoke('terminal:detach', ['a'], sender);
     expect(services.sessions.detachTerminal).toHaveBeenCalledWith(sender, 'a');
+    // The paths of files dropped (as the preload read them), checked: main sees if they are there.
+    await invoke('terminal:drop', ['a', ['/Users/me/Screen Shot.png']], sender);
+    expect(services.sessions.dropOnTerminal).toHaveBeenCalledWith(sender, 'a', [
+      '/Users/me/Screen Shot.png',
+    ]);
   });
 
   it.each([
@@ -501,6 +542,23 @@ describe('terminal:* handlers', () => {
     ['terminal:resize', 'a size too large', ['a', 100_000, 24], /terminal size/],
     ['terminal:resize', 'a size that is not a number', ['a', '80', 24], /terminal size/],
     ['terminal:detach', 'an extra argument', ['a', 'b'], /an agent/],
+    ['terminal:drop', 'no files', ['a', []], /files dropped/],
+    ['terminal:drop', 'a path that is not a list', ['a', '/Users/me/a.png'], /files dropped/],
+    [
+      'terminal:drop',
+      'too many files',
+      ['a', Array.from({ length: MAX_DROPPED_FILES + 1 }, (_, i) => `/f${String(i)}`)],
+      /files dropped/,
+    ],
+    ['terminal:drop', 'a relative path', ['a', ['shot.png']], /path of a file/],
+    ['terminal:drop', 'a path with a line break', ['a', ['/a\n/b.png']], /path of a file/],
+    ['terminal:drop', 'a path that is not text', ['a', [42]], /path of a file/],
+    [
+      'terminal:drop',
+      'a path too long',
+      ['a', [`/${'x'.repeat(MAX_DROPPED_PATH)}`]],
+      /path of a file/,
+    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

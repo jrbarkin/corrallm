@@ -63,7 +63,9 @@ jobs:
       - run: pnpm run package
 
       # Checks the packaged, fused app on every OS: node-pty loads and spawns in the main process,
-      # and launch switches that could hijack the app are refused.
+      # main's terminal screen (@xterm/headless) works, the bundled Agent SDK runs a query against
+      # the self-test's own fake claude (with the node set up above), and launch switches that
+      # could hijack the app are refused.
       - name: Allow Chromium sandbox (Linux)
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

@@ -26,6 +26,8 @@ const sessionBackend: SessionBackend = {
   interrupt: (agentId) => window.api.interruptSession(agentId),
   setMode: (agentId, mode) => window.api.setSessionMode(agentId, mode),
   setModel: (agentId, model) => window.api.setSessionModel(agentId, model),
+  setEffort: (agentId, effort) => window.api.setSessionEffort(agentId, effort),
+  stopTask: (agentId, taskId) => window.api.stopSessionTask(agentId, taskId),
   close: (agentId) => window.api.closeSession(agentId),
   files: (query) => window.api.findProjectFiles(query),
   sessions: (agentId) => window.api.listSessions(agentId),
@@ -43,6 +45,7 @@ const terminalBackend: TerminalBackend = {
   detach: (agentId) => window.api.detachTerminal(agentId),
   write: (agentId, data) => window.api.writeTerminal(agentId, data),
   resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
+  drop: (agentId, files) => window.api.dropOnTerminal(agentId, files),
   onEvent: (listener) => window.api.onTerminalEvent(listener),
 };
 

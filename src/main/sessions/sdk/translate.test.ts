@@ -159,6 +159,17 @@ describe('Translator, on what the real Claude Code did', () => {
     expect([...texts(replies, 'text').values()][0]).toBe('Corral the agents');
   });
 
+  it('shows how a subagent is going while it works, and what it used once done', () => {
+    const agent = calls(play('subagent-and-interrupt'), 'Agent');
+    expect(agent.map((call) => [call.status, call.progress])).toEqual([
+      ['running', undefined],
+      ['running', { doing: 'Reading README.md', toolUses: 1, tokens: 21465, seconds: 1 }],
+      // Its task ends, then its call returns.
+      ['done', { toolUses: 1, tokens: 25546, seconds: 4 }],
+      ['done', { toolUses: 1, tokens: 25546, seconds: 4 }],
+    ]);
+  });
+
   it('keeps the whole of a reply cut short by an interrupt, and calls it no error', () => {
     const events = play('subagent-and-interrupt');
     const story = [...texts(events, 'text').values()].at(-1) ?? '';
@@ -401,6 +412,136 @@ describe('Translator, on to-dos and background work', () => {
     ]);
   });
 
+  it('shows how long a tool call has run, as the CLI reports it', () => {
+    const translate = translator();
+    translate.translate(toolUse('toolu_t', 'Bash', { command: 'npm test' }));
+    const progress = (seconds: number) =>
+      translate.translate(
+        sdk({
+          type: 'tool_progress',
+          tool_use_id: 'toolu_t',
+          tool_name: 'Bash',
+          parent_tool_use_id: null,
+          elapsed_time_seconds: seconds,
+        }),
+      );
+    expect(progress(12.4)).toEqual([
+      {
+        type: 'tool',
+        id: 'toolu_t',
+        tool: 'Bash',
+        summary: 'npm test',
+        status: 'running',
+        progress: { seconds: 12 },
+      },
+    ]);
+    // The same second again is not news; once done, it no longer runs.
+    expect(progress(12.6)).toEqual([]);
+    translate.translate(toolResult('toolu_t', 'ok'));
+    expect(progress(14)).toEqual([]);
+  });
+
+  it('keeps the background tasks that run, and which tool call started each', () => {
+    const translate = translator();
+    translate.translate(
+      toolUse('toolu_dev', 'Bash', { command: 'npm run dev', run_in_background: true }),
+    );
+    const changed = (tasks: object[]) =>
+      translate.translate(
+        sdk({ type: 'system', subtype: 'background_tasks_changed', tasks, uuid: 'u' }),
+      );
+    // The set comes first, as the CLI sends it; housekeeping tasks are not the user's to stop.
+    expect(
+      changed([
+        { task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' },
+        { task_id: 'w1', task_type: 'local_watch', description: 'Watching', ambient: true },
+      ]),
+    ).toEqual([
+      { type: 'tasks', tasks: [{ id: 'b1', description: 'npm run dev', kind: 'command' }] },
+    ]);
+    expect(
+      translate.translate(
+        sdk({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'b1',
+          tool_use_id: 'toolu_dev',
+          description: 'npm run dev',
+          task_type: 'local_bash',
+          is_backgrounded: true,
+        }),
+      ),
+    ).toEqual([
+      {
+        type: 'tasks',
+        tasks: [{ id: 'b1', description: 'npm run dev', kind: 'command', tool: 'toolu_dev' }],
+      },
+    ]);
+    expect(translate.runsInBackground('b1')).toBe(true);
+    expect(translate.runsInBackground('w1')).toBe(false);
+    expect(
+      translate.translate(toolResult('toolu_dev', 'Command running in background with ID: b1')),
+    ).toMatchObject([{ type: 'tool', id: 'toolu_dev', status: 'running' }]);
+
+    // Stopped: its line says so, and it no longer runs.
+    expect(
+      translate.translate(
+        sdk({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'b1',
+          tool_use_id: 'toolu_dev',
+          status: 'stopped',
+          output_file: '/tmp/out',
+          summary: '',
+        }),
+      ),
+    ).toMatchObject([{ type: 'tool', id: 'toolu_dev', status: 'interrupted' }]);
+    expect(changed([])).toEqual([{ type: 'tasks', tasks: [] }]);
+    expect(translate.runsInBackground('b1')).toBe(false);
+  });
+
+  it('shows the CLI’s prediction of what the user might send next', () => {
+    expect(
+      translator().translate(sdk({ type: 'prompt_suggestion', suggestion: 'Run the tests' })),
+    ).toEqual([{ type: 'suggestion', text: 'Run the tests' }]);
+  });
+
+  it('tells the user what their hooks said when they failed or blocked, as Claude Code does', () => {
+    const response = (name: string, event: string, outcome: string, more: object) =>
+      sdk({
+        type: 'system',
+        subtype: 'hook_response',
+        hook_id: 'h',
+        hook_name: name,
+        hook_event: event,
+        output: '',
+        stdout: '',
+        stderr: '',
+        outcome,
+        ...more,
+      });
+    const said = [
+      response('PreToolUse:Bash', 'PreToolUse', 'error', {
+        exit_code: 2,
+        stderr: 'Use pnpm, not npm.\n',
+      }),
+      response('PostToolUse:Edit', 'PostToolUse', 'error', {
+        exit_code: 1,
+        stderr: 'Failed with non-blocking status code: prettier: command not found',
+      }),
+      response('Stop', 'Stop', 'error', { exit_code: 2, stderr: 'The tests fail.' }),
+      // What a hook says when it works is Claude's, not the user's: Claude Code shows nothing.
+      response('SessionStart:startup', 'SessionStart', 'success', { stdout: 'Loaded' }),
+      response('PreToolUse:Read', 'PreToolUse', 'cancelled', {}),
+    ].flatMap((message) => ofType(translator().translate(message), 'notice'));
+    expect(said.map((n) => [n.level, n.text])).toEqual([
+      ['error', 'PreToolUse:Bash hook returned blocking error: Use pnpm, not npm.'],
+      ['error', 'PostToolUse:Edit hook error: prettier: command not found'],
+      ['info', 'Stop hook feedback: The tests fail.'],
+    ]);
+  });
+
   it('shows a tool call that failed, with what went wrong', () => {
     const translate = translator();
     translate.translate(toolUse('toolu_rm', 'Bash', { command: 'rm -rf build' }));
@@ -418,7 +559,7 @@ describe('Translator, on to-dos and background work', () => {
     ]);
   });
 
-  it('tells the user of retries, auto-denials and a cleared conversation', () => {
+  it('tells the user of retries and auto-denials', () => {
     const translate = translator();
     translate.translate(toolUse('toolu_x', 'Bash', { command: 'curl example.com' }));
     const said = [
@@ -439,15 +580,23 @@ describe('Translator, on to-dos and background work', () => {
         decision_reason: 'network access is not allowed',
         message: 'Denied',
       }),
-      sdk({ type: 'conversation_reset', new_conversation_id: 'n', trigger: 'clear' }),
     ].flatMap((message) => ofType(translate.translate(message), 'notice'));
     expect(said.map((n) => [n.level, n.text])).toEqual([
       ['warning', 'API error 529 (overloaded): retrying in 4s (attempt 2 of 10).'],
       ['warning', 'Not allowed: Bash curl example.com (network access is not allowed)'],
-      [
-        'info',
-        'The conversation was cleared: Claude starts afresh from here (the earlier session can still be resumed).',
-      ],
     ]);
+  });
+
+  it('marks where /clear cleared the conversation', () => {
+    expect(
+      translator().translate(
+        sdk({
+          type: 'conversation_reset',
+          new_conversation_id: 'n',
+          trigger: 'clear',
+          uuid: 'reset-1',
+        }),
+      ),
+    ).toEqual([{ type: 'cleared', id: 'reset-1' }]);
   });
 });

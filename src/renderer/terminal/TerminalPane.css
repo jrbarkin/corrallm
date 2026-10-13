@@ -20,7 +20,8 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  /* xterm.js stacks its layers up to z-index 11: kept inside, under the view's menus. */
+  /* xterm.js stacks its layers up to z-index 11: kept inside, under the overlay and the view's
+     menus. */
   isolation: isolate;
 }
 
@@ -43,6 +44,12 @@
 
 .agent-terminal .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
   background: #ffffff80;
+}
+
+/* Files dragged over it, to drop: their paths are pasted. */
+.agent-terminal[data-dragging] {
+  outline: 2px dashed var(--agent-color, #e4e4e7);
+  outline-offset: -4px;
 }
 
 /* While no CLI runs: why, over its last screen. */
@@ -181,6 +188,33 @@
   opacity: 0.6;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Whether Option is Meta in the terminal (macOS): a switch at the bar's end. */
+.agent-terminal-option {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.agent-terminal-option[aria-pressed='true'] {
+  border-color: var(--agent-color, CanvasText);
+  background: color-mix(in srgb, var(--agent-color, CanvasText) 14%, transparent);
+  opacity: 1;
+}
+
+.agent-terminal-option:hover,
+.agent-terminal-option:focus-visible {
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {

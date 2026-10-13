@@ -1,30 +1,39 @@
 import type {
   AskedQuestion,
   Connection,
+  BackgroundTask,
   DiffLine,
   ElicitationAction,
   FormField,
+  EffortLevel,
   MessageImage,
   ModelChoice,
   PermissionMode,
   PlanAnswer,
   SessionUsage,
   SlashCommand,
+  TerminalAsk,
   Todo,
   ToolDetail,
+  ToolProgress,
   ToolStatus,
 } from '../../shared/session';
-import type { Question } from '../graph/queue';
+import type { CardQuestion } from '../graph/Questions';
+import { mergeHistory } from './history';
 
 export type {
+  BackgroundTask,
   DiffLine,
+  EffortLevel,
   MessageImage,
   ModelChoice,
   PlanAnswer,
   SessionUsage,
   SlashCommand,
+  TerminalAsk,
   Todo,
   ToolDetail,
+  ToolProgress,
   ToolStatus,
 };
 
@@ -86,6 +95,8 @@ export type Entry =
       status: ToolStatus;
       detail?: ToolDetail;
       parent?: string;
+      /** How it is going, as a connected session reports: time, a subagent's work. */
+      progress?: ToolProgress;
     }
   | {
       id: string;
@@ -99,6 +110,8 @@ export type Entry =
       /** What it asks, as the CLI words it, when it says. */
       title?: string;
       answer?: Answer;
+      /** What the user told Claude to do instead, with a no. */
+      feedback?: string;
       withdrawn?: boolean;
     }
   | { id: string; kind: 'question'; questions: SessionQuestion[]; withdrawn?: boolean }
@@ -130,6 +143,8 @@ export type Entry =
       text: string;
       switchTo?: Connection;
     }
+  /** Where the conversation was cleared (/clear): Claude starts afresh after it. */
+  | { id: string; kind: 'cleared' }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 
@@ -161,6 +176,14 @@ export interface Session {
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
   commands?: readonly SlashCommand[];
+  /** The work a connected session runs in the background now, which the user can stop. */
+  tasks?: readonly BackgroundTask[];
+  /** What a connected session predicts the user sends next, until a turn starts. */
+  suggestion?: string;
+  /** The effort picked for a connected session (null: its model's default), once picked. */
+  effort?: EffortLevel | null;
+  /** What a Terminal session's Claude Code asks the user in its terminal now (answered there). */
+  asking?: readonly TerminalAsk[];
 }
 
 /**
@@ -194,7 +217,8 @@ export type SessionAction =
   | { type: 'stream'; id: string; text: string }
   /** Shows a prompt and waits for its answer. */
   | { type: 'ask'; entry: Prompt }
-  | { type: 'answer'; id: string; answer: Answer }
+  /** Answers a permission prompt; `feedback`, with a no: what to do instead. */
+  | { type: 'answer'; id: string; answer: Answer; feedback?: string }
   /** Answers question `index` of the question prompt `id`. */
   | { type: 'answerQuestion'; id: string; index: number; answer: string }
   | { type: 'answerPlan'; id: string; answer: PlanAnswer }
@@ -219,7 +243,11 @@ export type SessionAction =
     }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
-  /** What a resumed session did before: entries put ahead of the transcript's. */
+  | { type: 'tasks'; tasks: readonly BackgroundTask[] }
+  | { type: 'suggestion'; text: string }
+  | { type: 'effort'; effort: EffortLevel | null }
+  | { type: 'asking'; asks: readonly TerminalAsk[] }
+  /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] }
   /**
    * Another conversation takes the transcript's place (/resume), or this one rewound: the
@@ -251,8 +279,16 @@ export function reduce(session: Session, action: SessionAction): Session {
     status: session.status === 'idle' ? 'idle' : entries.some(isOpen) ? 'waiting' : 'working',
   });
   switch (action.type) {
-    case 'start':
-      return { ...session, status: 'working', entries: [...session.entries, action.entry] };
+    case 'start': {
+      // What was predicted for it is no longer.
+      const started: Session = {
+        ...session,
+        status: 'working',
+        entries: [...session.entries, action.entry],
+      };
+      delete started.suggestion;
+      return started;
+    }
     case 'add':
       return { ...session, entries: [...session.entries, action.entry] };
     case 'update':
@@ -275,7 +311,13 @@ export function reduce(session: Session, action: SessionAction): Session {
       return {
         ...settled(
           update(action.id, (entry) =>
-            entry.kind === 'permission' ? { ...entry, answer: action.answer } : entry,
+            entry.kind === 'permission'
+              ? {
+                  ...entry,
+                  answer: action.answer,
+                  ...(action.feedback === undefined ? {} : { feedback: action.feedback }),
+                }
+              : entry,
           ),
         ),
         allowed: always ? [...session.allowed, asked.tool] : session.allowed,
@@ -352,17 +394,31 @@ export function reduce(session: Session, action: SessionAction): Session {
       };
     case 'connected': {
       const { models, model, mode, modes } = action;
-      const next: Session = { ...session, models, model, mode };
+      // A session that starts runs nothing in the background yet, and asks nothing.
+      const next: Session = { ...session, models, model, mode, tasks: [] };
       if (modes === undefined) delete next.modes;
       else next.modes = modes;
+      delete next.asking;
       return next;
     }
     case 'usage':
       return { ...session, usage: action.usage };
     case 'commands':
       return { ...session, commands: action.commands };
+    case 'tasks':
+      return { ...session, tasks: action.tasks };
+    case 'suggestion':
+      return { ...session, suggestion: action.text };
+    case 'effort':
+      return { ...session, effort: action.effort };
+    case 'asking': {
+      if (action.asks.length > 0) return { ...session, asking: action.asks };
+      const asked: Session = { ...session };
+      delete asked.asking;
+      return asked;
+    }
     case 'restore':
-      return { ...session, entries: [...action.entries, ...session.entries] };
+      return { ...session, entries: mergeHistory(session.entries, action.entries) };
     case 'clear': {
       const next: Session = { ...session, entries: [], status: 'idle' };
       delete next.usage;
@@ -395,7 +451,8 @@ export interface AskedInSession {
   /** The question prompt it is in, and where in it. */
   prompt: string;
   index: number;
-  question: Question;
+  /** With Claude Code's header, what each answer means, and whether several may be given. */
+  question: CardQuestion;
 }
 
 /** The questions a session asked that still wait for an answer, oldest first. */
@@ -413,7 +470,9 @@ export function sessionQuestions(session: Session): AskedInSession[] {
           question: {
             id: `${entry.id}#${String(index)}`,
             text: q.text,
-            ...(q.options.length > 0 ? { options: q.options.map((o) => o.label) } : {}),
+            ...(q.header === '' ? {} : { header: q.header }),
+            ...(q.options.length > 0 ? { options: q.options } : {}),
+            ...(q.multiple ? { multiple: true } : {}),
             ...(q.answer === undefined ? {} : { answer: q.answer }),
           },
         }))

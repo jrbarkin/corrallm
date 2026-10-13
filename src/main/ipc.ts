@@ -12,6 +12,7 @@ import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
   parseAnswerArgs,
+  parseEffortArgs,
   parseFilesArgs,
   parseMcpChangeArgs,
   parseModeArgs,
@@ -21,6 +22,8 @@ import {
   parseRewindPreviewArgs,
   parseSendArgs,
   parseStartArgs,
+  parseStopTaskArgs,
+  parseTerminalDropArgs,
   parseTerminalInputArgs,
   parseTerminalResizeArgs,
 } from './sessions/args';
@@ -53,6 +56,8 @@ export interface IpcServices {
     | 'interrupt'
     | 'setMode'
     | 'setModel'
+    | 'setEffort'
+    | 'stopTask'
     | 'close'
     | 'listSessions'
     | 'resumeSession'
@@ -68,6 +73,7 @@ export interface IpcServices {
     | 'detachTerminal'
     | 'inputTerminal'
     | 'resizeTerminal'
+    | 'dropOnTerminal'
   >;
 }
 
@@ -236,6 +242,20 @@ function createHandlers({ projects, files, links, sessions }: IpcServices): Hand
         return null;
       },
     },
+    'session:effort': {
+      parseArgs: parseEffortArgs,
+      handler: async ({ contents }, agentId, effort) => {
+        await sessions.setEffort(contents, agentId, effort);
+        return null;
+      },
+    },
+    'session:stopTask': {
+      parseArgs: parseStopTaskArgs,
+      handler: async ({ contents }, agentId, taskId) => {
+        await sessions.stopTask(contents, agentId, taskId);
+        return null;
+      },
+    },
     'session:close': {
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
@@ -302,6 +322,13 @@ function createHandlers({ projects, files, links, sessions }: IpcServices): Hand
       parseArgs: parseTerminalResizeArgs,
       handler: async ({ contents }, agentId, cols, rows) => {
         await sessions.resizeTerminal(contents, agentId, cols, rows);
+        return null;
+      },
+    },
+    'terminal:drop': {
+      parseArgs: parseTerminalDropArgs,
+      handler: async ({ contents }, agentId, paths) => {
+        await sessions.dropOnTerminal(contents, agentId, paths);
         return null;
       },
     },

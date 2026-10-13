@@ -8,7 +8,9 @@ import type { Pty, PtyOptions } from './pty';
  * one does (as recorded from Claude Code 2.1.296): its terminal probes, Program Status reports,
  * a prompt box with a dim placeholder, and the hooks it was given in --settings, posted to their
  * server. Each prompt submitted gets a turn: "ask …" asks for permission first (answered with
- * "1"), "slow …" works until told otherwise, "fail …" fails, anything else is answered at once.
+ * "1"), as "question …" asks a question (AskUserQuestion) and "plan …" a plan to approve
+ * (ExitPlanMode), and "elicit …" waits on the user for an MCP server, told only by a notification;
+ * "slow …" works until told otherwise, "fail …" fails, anything else is answered at once.
  */
 
 const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
@@ -35,6 +37,8 @@ export class FakeClaude implements Pty {
   readonly written: string[] = [];
   /** The prompts it was sent, as its hooks told them. */
   readonly prompts: string[] = [];
+  /** What its hooks were answered, by event: a decision would change what it does. */
+  readonly answers: { hook: string; answer: string }[] = [];
   readonly kills: (string | undefined)[] = [];
   /** Whether it has exited. */
   exited = false;
@@ -103,11 +107,17 @@ export class FakeClaude implements Pty {
     const file = this.arg('--settings');
     if (file === undefined) return;
     const settings = JSON.parse(readFileSync(file, 'utf8')) as {
-      hooks: Record<string, { hooks: { url: string }[] }[] | undefined>;
+      hooks: Record<string, { matcher?: string; hooks: { url: string }[] }[] | undefined>;
     };
-    const url = settings.hooks[name]?.[0]?.hooks[0]?.url;
+    const group = settings.hooks[name]?.[0];
+    const url = group?.hooks[0]?.url;
     if (url === undefined) return;
-    await fetch(url, {
+    // Only for the tools its matcher names, if it names any.
+    const tool = fields.tool_name;
+    if (group?.matcher !== undefined && !group.matcher.split('|').some((one) => one === tool)) {
+      return;
+    }
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -121,6 +131,7 @@ export class FakeClaude implements Pty {
         ...fields,
       }),
     });
+    this.answers.push({ hook: name, answer: await response.text() });
   }
 
   /** Reports a Program Status, if it does. */
@@ -217,9 +228,71 @@ export class FakeClaude implements Pty {
     await this.hook('UserPromptSubmit', { prompt });
     this.print(`\r\n⏺ ${prompt}\r\n`);
     if (prompt.startsWith('ask')) {
-      // As recorded: what it waits for, in base64.
+      // As recorded: its permission hook first, then its report of what it waits for (base64).
+      await this.hook('PermissionRequest', {
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hello', description: 'Say hello' },
+        permission_suggestions: [
+          {
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'echo hello' }],
+            behavior: 'allow',
+            destination: 'localSettings',
+          },
+        ],
+      });
       this.#become('blocked', `:kind=permission:msg=${base64('approve Bash: echo hello')}`);
       this.print('Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n');
+      return;
+    }
+    if (prompt.startsWith('question')) {
+      // As recorded: the tool's hook, then the permission hook for it (with no call id).
+      const input = {
+        questions: [
+          {
+            question: 'Pick a color',
+            header: 'Color',
+            options: [
+              { label: 'Red', description: 'Warm' },
+              { label: 'Blue', description: 'Cool' },
+            ],
+            multiSelect: false,
+          },
+        ],
+      };
+      await this.hook('PreToolUse', {
+        tool_name: 'AskUserQuestion',
+        tool_input: input,
+        tool_use_id: 'toolu_question',
+      });
+      await this.hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: input });
+      this.#become('blocked', `:kind=question:msg=${base64('answer: Pick a color (Red · Blue)')}`);
+      this.print('Pick a color\r\n ❯ 1. Red\r\n   2. Blue\r\n');
+      return;
+    }
+    if (prompt.startsWith('plan')) {
+      const input = {
+        plan: '## Plan\nRun `git init`.\n',
+        planFilePath: '/home/me/.claude/plans/a.md',
+      };
+      await this.hook('PreToolUse', {
+        tool_name: 'ExitPlanMode',
+        tool_input: input,
+        tool_use_id: 'toolu_plan',
+      });
+      await this.hook('PermissionRequest', { tool_name: 'ExitPlanMode', tool_input: input });
+      this.#become('blocked', `:kind=permission:msg=${base64('approve plan')}`);
+      this.print('Would you like to proceed?\r\n ❯ 1. Yes\r\n   2. No, keep planning\r\n');
+      return;
+    }
+    if (prompt.startsWith('elicit')) {
+      await this.hook('Notification', {
+        notification_type: 'elicitation_dialog',
+        message: 'shop-db needs your input',
+        title: 'Input needed',
+      });
+      this.#become('blocked', ':kind=question');
+      this.print('shop-db asks: Which region?\r\n');
       return;
     }
     if (prompt.startsWith('slow')) return;

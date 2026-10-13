@@ -4,6 +4,7 @@ import type {
   McpChange,
   McpServer,
   PastSession,
+  EffortLevel,
   PermissionMode,
   RewindRestore,
   RewindResult,
@@ -76,6 +77,16 @@ export interface IpcContract {
   'session:mode': { args: [agentId: string, mode: PermissionMode]; result: null };
   /** Switches an agent's session's model (a value from the models it offers). */
   'session:model': { args: [agentId: string, model: string]; result: null };
+  /**
+   * Sets how much effort Claude puts into an agent's session's replies, for that session (null:
+   * its model's default). Rejects for a session that does not take it (a Terminal's).
+   */
+  'session:effort': { args: [agentId: string, effort: EffortLevel | null]; result: null };
+  /**
+   * Stops a task an agent's session runs in the background (a subagent, a command), by the id its
+   * 'tasks' event gave. Rejects for a task it does not run in the background.
+   */
+  'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
   /**
@@ -127,6 +138,12 @@ export interface IpcContract {
    * said to always open it. Resolves with whether it opened.
    */
   'link:open': { args: [url: string]; result: boolean };
+  /**
+   * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
+   * dropped files: window.api takes the files, never paths): main pastes those that exist into its
+   * terminal, quoted, as a terminal does.
+   */
+  'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
@@ -165,7 +182,10 @@ export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 export type IpcEvent = keyof IpcEvents;
 export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
 
-/** A method per contract channel: what `window.api` invokes. */
+/**
+ * A method per contract channel: what `window.api` invokes, with the channel's arguments (but
+ * dropOnTerminal, which takes the dropped files).
+ */
 export interface InvokeApi {
   ping(): Promise<IpcResult<'app:ping'>>;
   openCanvas(): Promise<IpcResult<'canvas:open'>>;
@@ -179,6 +199,8 @@ export interface InvokeApi {
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
+  setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
+  stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
@@ -193,6 +215,8 @@ export interface InvokeApi {
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
   resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
   openLink(...args: IpcArgs<'link:open'>): Promise<IpcResult<'link:open'>>;
+  /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
+  dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
@@ -218,6 +242,8 @@ export const API_CHANNELS = {
   interruptSession: 'session:interrupt',
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
+  setSessionEffort: 'session:effort',
+  stopSessionTask: 'session:stopTask',
   closeSession: 'session:close',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
@@ -230,6 +256,7 @@ export const API_CHANNELS = {
   writeTerminal: 'terminal:input',
   resizeTerminal: 'terminal:resize',
   openLink: 'link:open',
+  dropOnTerminal: 'terminal:drop',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */

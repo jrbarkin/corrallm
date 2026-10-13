@@ -100,6 +100,8 @@ async function logged(): Promise<
 }
 const prompts = async () =>
   (await logged()).flatMap((entry) => (entry.event === 'prompt' ? [entry.text] : []));
+const pastes = async () =>
+  (await logged()).flatMap((entry) => (entry.event === 'paste' ? [entry.text] : []));
 const starts = async () =>
   (await logged()).flatMap((entry) => (entry.event === 'start' ? [entry.args ?? []] : []));
 /** Waits for the fake's `count`th run to take keys (keys typed earlier the tty buffers as a line). */
@@ -205,21 +207,39 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   await typeIn(terminal, 'Escape');
   await expect(view).toBeVisible();
 
-  // It asks for permission: it needs the user, here and on the canvas.
+  // It asks for permission: it needs the user, here and on the canvas, where the Needs you
+  // sidebar says what it asks (as its hooks told), to answer in the terminal.
   await typeIn(terminal, 'ask to run echo', 'Enter');
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(view).toHaveCount(0);
   const card = page.locator('.react-flow__node');
   await expect(card).toHaveClass(/\basking\b/);
+  const needsYou = page.getByRole('complementary', { name: 'Needs you' });
+  const asked = needsYou.getByRole('group', { name: 'Agent 1 asks, in its terminal' });
+  await expect(asked).toContainText('Bashecho helloDo you want to proceed?');
 
   // The session ran on with its view closed; opened again, it shows the same terminal.
-  await card.dblclick();
+  await asked.getByRole('button', { name: 'Open terminal' }).click();
   await expect(terminal).toHaveAttribute('data-state', 'live');
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
   await expect(card).not.toHaveClass(/\basking\b/);
+  await expect(needsYou).toHaveCount(0);
   expect(await starts()).toHaveLength(1);
+
+  // Its question (AskUserQuestion), with its header and what its answers mean, read only.
+  await typeIn(terminal, 'question about the database', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(asked).toContainText(
+    'DatabaseWhich database?PostgresWhat the app uses todaySQLiteOne file, for tests',
+  );
+  await expect(asked.getByRole('textbox')).toHaveCount(0);
+  await asked.getByRole('button', { name: 'Open terminal' }).click();
+  await typeIn(terminal, '1');
+  await expect(status(view)).toHaveText('Idle');
+  await expect(needsYou).toHaveCount(0);
 });
 
 test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {
@@ -325,6 +345,54 @@ test('the queues’ Run types its message into the terminal, and hears its turn 
   await expect(queues.getByRole('status')).toHaveText('All done');
   // Typed in as a person types it: one prompt, its line break kept, not pasted.
   expect(await prompts()).toEqual(['Write the docs\nand the changelog']);
+});
+
+test('starts Claude Code again from its view once it exits, drawn at the view’s size', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  const screen = terminal.locator('.xterm-screen');
+  const fitted = await screen.boundingBox();
+  await typeIn(terminal, '/exit', 'Enter');
+  await expect(view.getByText('Claude Code exited.')).toBeVisible();
+  // Over the terminal's last screen, its button takes the click.
+  await view.getByRole('button', { name: 'Start it again' }).click();
+  await expect(terminal).toHaveAttribute('data-state', 'live');
+  await claudeReady(2);
+  expect(await starts()).toHaveLength(2);
+  // Its new screen came at main's size; the view fits it to itself again.
+  await expect.poll(async () => (await screen.boundingBox())?.width).toBe(fitted?.width);
+  await expect.poll(async () => (await screen.boundingBox())?.height).toBe(fitted?.height);
+});
+
+test('pastes the paths of files dropped on its terminal, quoted, as a terminal does', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { terminal } = await openShop();
+  const shot = path.join(dir, 'Screen Shot.png');
+  await writeFile(shot, 'png');
+  // A file from the disk, as one dragged from the Finder: picked in a file input, then dropped.
+  const input = (
+    await page.evaluateHandle(() => {
+      const element = document.createElement('input');
+      element.type = 'file';
+      element.hidden = true;
+      document.body.append(element);
+      return element;
+    })
+  ).asElement();
+  await input.setInputFiles(shot);
+  await terminal.evaluate((target, element) => {
+    const data = new DataTransfer();
+    for (const file of element.files ?? []) data.items.add(file);
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      target.dispatchEvent(
+        new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }),
+      );
+    }
+  }, input);
+  // Pasted as Claude Code asked (bracketed), its path quoted, with a space after it.
+  await expect.poll(pastes).toEqual([`'${shot}' `]);
 });
 
 test('resumes the agent’s session after the app restarts', async () => {
