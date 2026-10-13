@@ -2,11 +2,21 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
-import { isApproval, isDelay, isIf, isMessage, isWait, sameTarget } from './queue';
+import {
+  isApproval,
+  isDelay,
+  isIf,
+  isMessage,
+  isRepeat,
+  isWait,
+  MAX_ROUNDS,
+  sameTarget,
+} from './queue';
 import type {
   Condition,
   QueueItem,
   QueueMessage,
+  QueueRepeat,
   Question,
   QueueStep,
   Time,
@@ -220,36 +230,53 @@ export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
 }
 
 /**
- * Appends an item to a node's queue, or with `into` (an if-then's id) a step or message to that
- * if-then's steps. If-thens do not nest, and hold no waits, delays or OKs.
+ * Appends an item to a node's queue, or with `into` (the id of an if-then or a repeat in it) to
+ * what that holds: an if-then holds steps and messages; a repeat, waits and delays too. Neither
+ * holds if-thens, repeats or OKs.
  */
 export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
   return updateQueue(graph, id, (queue) => {
     if (into === undefined) return [...queue, item];
-    if (isIf(item) || isWait(item) || isDelay(item) || isApproval(item)) return queue;
-    return queue.map((q) => (q.id === into && isIf(q) ? { ...q, then: [...q.then, item] } : q));
+    if (isIf(item) || isRepeat(item) || isApproval(item)) return queue;
+    return queue.map((q) => {
+      if (q.id !== into) return q;
+      if (isRepeat(q)) return { ...q, repeat: [...q.repeat, item] };
+      return isIf(q) && !isWait(item) && !isDelay(item) ? { ...q, then: [...q.then, item] } : q;
+    });
   });
 }
 
-/** Removes one item from a node's queue, or one step from an if-then in it. */
+/** Removes one item from a node's queue, or from an if-then or a repeat in it. */
 export function removeFromQueue(graph: Graph, id: string, itemId: string): Graph {
+  const keep = (q: QueueItem) => q.id !== itemId;
   return updateQueue(graph, id, (queue) =>
     queue
-      .filter((q) => q.id !== itemId)
+      .filter(keep)
       .map((q) =>
-        isIf(q) && q.then.some((step) => step.id === itemId)
-          ? { ...q, then: q.then.filter((step) => step.id !== itemId) }
-          : q,
+        isIf(q)
+          ? withList(q, 'then', q.then.filter(keep))
+          : isRepeat(q)
+            ? withList(q, 'repeat', q.repeat.filter(keep))
+            : q,
       ),
   );
 }
 
-/** Moves an item to `index` in its list (the queue, or an if-then's steps), clamped to its ends. */
+/**
+ * Moves an item to `index` in its list (the queue, an if-then's steps, or what a repeat holds),
+ * clamped to its ends.
+ */
 export function moveInQueue(graph: Graph, id: string, itemId: string, index: number): Graph {
   return updateQueue(graph, id, (queue) =>
     queue.some((q) => q.id === itemId)
       ? moveTo(queue, itemId, index)
-      : queue.map((q) => (isIf(q) ? withSteps(q, moveTo(q.then, itemId, index)) : q)),
+      : queue.map((q) =>
+          isIf(q)
+            ? withList(q, 'then', moveTo(q.then, itemId, index))
+            : isRepeat(q)
+              ? withList(q, 'repeat', moveTo(q.repeat, itemId, index))
+              : q,
+        ),
   );
 }
 
@@ -263,22 +290,13 @@ export function retarget(
   itemId: string,
   target: string | undefined,
 ): Graph {
-  const aim = (step: QueueStep | QueueMessage): QueueStep | QueueMessage => {
-    if (step.id !== itemId || step.target === target) return step;
-    const next = { ...step };
+  return mapItems(graph, id, itemId, (q) => {
+    if (!isStep(q) || q.target === target) return q;
+    const next = { ...q };
     if (target === undefined) delete next.target;
     else next.target = target;
     return next;
-  };
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) =>
-      isIf(q)
-        ? withSteps(q, q.then.map(aim))
-        : isWait(q) || isDelay(q) || isApproval(q)
-          ? q
-          : aim(q),
-    ),
-  );
+  });
 }
 
 /** Sets what a wait waits for (see WaitTarget). A wait waits for something: an empty list is ignored. */
@@ -290,10 +308,8 @@ export function setWaitFor(graph: Graph, id: string, waitId: string, targets: Wa
       const other = targets[i];
       return other !== undefined && sameTarget(target, other);
     });
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) =>
-      q.id === waitId && isWait(q) && !same(q.waitFor) ? { ...q, waitFor: targets } : q,
-    ),
+  return mapItems(graph, id, waitId, (q) =>
+    isWait(q) && !same(q.waitFor) ? { ...q, waitFor: targets } : q,
   );
 }
 
@@ -302,37 +318,55 @@ export function setWaitFor(graph: Graph, id: string, waitId: string, targets: Wa
  * a time: `undefined` leaves it as it is.
  */
 export function setTime(graph: Graph, id: string, itemId: string, time: Time | undefined): Graph {
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) => {
-      if (q.id !== itemId) return q;
-      if (isDelay(q))
-        return time === undefined || sameTime(q.delay, time) ? q : { ...q, delay: time };
-      if (!isWait(q)) return q;
-      if (time !== undefined)
-        return q.timeout && sameTime(q.timeout, time) ? q : { ...q, timeout: time };
-      if (q.timeout === undefined) return q;
-      const untimed = { ...q };
-      delete untimed.timeout;
-      return untimed;
-    }),
-  );
+  return mapItems(graph, id, itemId, (q) => {
+    if (isDelay(q))
+      return time === undefined || sameTime(q.delay, time) ? q : { ...q, delay: time };
+    if (!isWait(q)) return q;
+    if (time !== undefined)
+      return q.timeout && sameTime(q.timeout, time) ? q : { ...q, timeout: time };
+    if (q.timeout === undefined) return q;
+    const untimed = { ...q };
+    delete untimed.timeout;
+    return untimed;
+  });
 }
 
 /** Sets what an OK is on, in the user's words ('' for the work before it). */
 export function setApproval(graph: Graph, id: string, okId: string, approve: string): Graph {
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) =>
-      q.id === okId && isApproval(q) && q.approve !== approve ? { ...q, approve } : q,
-    ),
+  return mapItems(graph, id, okId, (q) =>
+    isApproval(q) && q.approve !== approve ? { ...q, approve } : q,
   );
 }
 
-/** Changes the text of a message in the queue (or in an if-then in it). */
+/**
+ * Changes a repeat: when it stops, how many rounds it runs at most (a whole number from 1 to
+ * MAX_ROUNDS; others are rounded and clamped), or what it does after the last.
+ */
+export function setRepeat(
+  graph: Graph,
+  id: string,
+  repeatId: string,
+  change: Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>,
+): Graph {
+  return mapItems(graph, id, repeatId, (q) => {
+    if (!isRepeat(q)) return q;
+    const next = {
+      ...q,
+      ...change,
+      rounds: Math.min(Math.max(Math.round(change.rounds ?? q.rounds), 1), MAX_ROUNDS),
+    };
+    const same =
+      next.rounds === q.rounds &&
+      next.otherwise === q.otherwise &&
+      JSON.stringify(next.until) === JSON.stringify(q.until);
+    return same ? q : next;
+  });
+}
+
+/** Changes the text of a message in the queue (or in an if-then or a repeat in it). */
 export function editMessage(graph: Graph, id: string, itemId: string, message: string): Graph {
-  const edit = <T extends QueueItem>(q: T): T =>
-    q.id === itemId && isMessage(q) && q.message !== message ? { ...q, message } : q;
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) => (isIf(q) ? withSteps(q, q.then.map(edit)) : edit(q))),
+  return mapItems(graph, id, itemId, (q) =>
+    isMessage(q) && q.message !== message ? { ...q, message } : q,
   );
 }
 
@@ -383,8 +417,8 @@ function updateQuestions(
 
 /** Sets what an if-then checks. */
 export function setCondition(graph: Graph, id: string, ifId: string, condition: Condition): Graph {
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) => (q.id === ifId && isIf(q) ? { ...q, if: condition } : q)),
+  return mapItems(graph, id, ifId, (q) =>
+    isIf(q) && JSON.stringify(q.if) !== JSON.stringify(condition) ? { ...q, if: condition } : q,
   );
 }
 
@@ -399,14 +433,39 @@ function moveTo<T extends { id: string }>(list: T[], itemId: string, index: numb
     : [...rest.slice(0, at), item, ...rest.slice(at)];
 }
 
-/** An if-then with these steps: itself when they are the same steps. */
-function withSteps<T extends { then: (QueueStep | QueueMessage)[] }>(
-  q: T,
-  then: (QueueStep | QueueMessage)[],
-): T {
-  return then.length === q.then.length && then.every((step, i) => step === q.then[i])
+/** An if-then or a repeat holding `list` (its `key`): itself when that is what it holds. */
+function withList<T extends QueueItem, K extends keyof T>(q: T, key: K, list: T[K] & unknown[]): T {
+  const before = q[key] as unknown[];
+  return list.length === before.length && list.every((item, i) => item === before[i])
     ? q
-    : { ...q, then };
+    : { ...q, [key]: list };
+}
+
+/** Whether an item is a step or a message: what acts on, or goes to, an agent. */
+function isStep(item: QueueItem): item is QueueStep | QueueMessage {
+  return !isIf(item) && !isWait(item) && !isDelay(item) && !isApproval(item) && !isRepeat(item);
+}
+
+/**
+ * Changes the item `itemId` of a node's queue, wherever it is (at the top, in an if-then or in a
+ * repeat), by `change`: an item of the same kind, or the item itself to change nothing.
+ */
+function mapItems(
+  graph: Graph,
+  id: string,
+  itemId: string,
+  change: (item: QueueItem) => QueueItem,
+): Graph {
+  const one = <T extends QueueItem>(q: T): T => (q.id === itemId ? (change(q) as T) : q);
+  return updateQueue(graph, id, (queue) =>
+    queue.map((q) => {
+      const changed = one(q);
+      if (changed !== q) return changed;
+      if (isIf(q)) return withList(q, 'then', q.then.map(one));
+      if (isRepeat(q)) return withList(q, 'repeat', q.repeat.map(one));
+      return q;
+    }),
+  );
 }
 
 function updateQueue(graph: Graph, id: string, update: (queue: QueueItem[]) => QueueItem[]): Graph {

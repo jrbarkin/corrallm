@@ -7,7 +7,7 @@ import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
 import { itemLabel, taskLabel } from '../graph/labels';
-import { chooseTarget, isWait } from '../graph/queue';
+import { chooseTarget, findItem, isRepeat, isWait } from '../graph/queue';
 import type { WaitTarget } from '../graph/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
@@ -50,7 +50,8 @@ interface Choosing {
  * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
  * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
  * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
- * stops whatever waits on it.
+ * stops whatever waits on it. A repeat is one card in its lane, over the rows of what it holds,
+ * each in its row: its round shows in a pill, and once out of rounds it asks, as an OK does.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
  * or a click outside closes it; an agent's name opens that agent.
@@ -163,9 +164,8 @@ export function QueuesView({
   const marks = queueMarks(layout, run, asking, activeEnds);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
-    ? nodes
-        .find((n) => n.id === choosing.owner)
-        ?.data.queue?.find((q) => q.id === choosing.choice.waitId)
+    ? findItem(nodes.find((n) => n.id === choosing.owner)?.data.queue ?? [], choosing.choice.waitId)
+        ?.item
     : undefined;
   const choosingTarget =
     choosing && waitChosen && isWait(waitChosen)
@@ -176,7 +176,7 @@ export function QueuesView({
     if (!choosing) return;
     const { owner, choice } = choosing;
     setChoosing(undefined);
-    const wait = nodes.find((n) => n.id === owner)?.data.queue?.find((q) => q.id === choice.waitId);
+    const wait = findItem(nodes.find((n) => n.id === owner)?.data.queue ?? [], choice.waitId)?.item;
     if (!wait || !isWait(wait)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choice.agent } : { agent: choice.agent, item };
@@ -184,8 +184,8 @@ export function QueuesView({
   };
 
   /**
-   * What the run waits on the user for, for an agent: to decide at the hold it is at (an OK), or to
-   * answer its agent, which asks permission in a task.
+   * What the run waits on the user for, for an agent: to decide at the hold it is at (an OK, or a
+   * repeat out of rounds), or to answer its agent, which asks permission in a task.
    */
   const needsYou = (id: string): Needs | undefined => {
     const status = run.running ? run.agents[id]?.status : undefined;
@@ -404,7 +404,8 @@ function LaneCells({
   const agentRun = run.agents[id];
   /** Where the agent has nothing to do until what it waits for is done. */
   const idle = lane.cells.flatMap(({ row }, n) => {
-    const after = n === 0 ? 0 : (lane.cells[n - 1]?.row ?? 0) + 1;
+    const previous = lane.cells[n - 1];
+    const after = previous ? previous.row + previous.span : 0;
     const before = lane.cells[n];
     const held =
       run.running && agentRun?.status === 'waiting' && agentRun.current === before?.item.id;
@@ -419,6 +420,11 @@ function LaneCells({
     onChooseStep: onChoose,
     marks: (itemId: string | null) => marks(id, itemId),
   };
+  /** The item the run holds the agent at, if any. */
+  const held =
+    agentRun?.current === undefined
+      ? undefined
+      : findItem(node.data.queue ?? [], agentRun.current)?.item;
   return (
     <>
       <div
@@ -458,9 +464,11 @@ function LaneCells({
             className="queues-needs"
             aria-label={needsYou === 'decide' ? `Decide for ${name(id)}` : `Answer ${name(id)}`}
             title={
-              needsYou === 'decide'
-                ? `${name(id)} waits for your OK`
-                : `${name(id)} asks permission: open it to answer`
+              needsYou === 'answer'
+                ? `${name(id)} asks permission: open it to answer`
+                : held && isRepeat(held)
+                  ? `${name(id)}'s repeat is out of rounds`
+                  : `${name(id)} waits for your OK`
             }
             onClick={() => {
               if (needsYou === 'answer') {
@@ -488,14 +496,16 @@ function LaneCells({
           style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
         />
       ))}
-      {lane.cells.map(({ item, row }, index) => (
+      {lane.cells.map(({ item, row, span, inner }, index) => (
         <div
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
           role="group"
           aria-label={`${name(id)}: ${taskLabel(nodes, item)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
           data-lane={id}
-          style={{ gridColumn: column, gridRow: row + 2 }}
+          // A repeat's cell is a subgrid of the rows it spans: each item it holds in its own.
+          data-repeat={inner ? '' : undefined}
+          style={{ gridColumn: column, gridRow: `${String(row + 2)} / span ${String(span)}` }}
         >
           <QueueRow
             item={item}
@@ -503,6 +513,14 @@ function LaneCells({
             {...edit}
             {...(choosing?.owner === id
               ? { choosing: { waitId: choosing.choice.waitId, index: choosing.choice.index } }
+              : {})}
+            {...(inner
+              ? {
+                  rowOf: (itemId: string) => {
+                    const cell = inner.find((c) => c.item.id === itemId);
+                    return cell && cell.row - row;
+                  },
+                }
               : {})}
           />
           {picking && (

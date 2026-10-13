@@ -226,6 +226,81 @@ describe('the agent view', () => {
     ).toBe('running');
   });
 
+  it('asks above the composer when a repeat is out of rounds, where what you send is what to try next', () => {
+    // An empty message is skipped: no round ends with its last step succeeding.
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  {
+                    id: 'loop',
+                    repeat: [{ id: 'note', message: '' }],
+                    until: { kind: 'succeeded' },
+                    rounds: 1,
+                    otherwise: 'ask',
+                  },
+                  { id: 'next', action: 'Read' },
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    play(10);
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const view = shown('a');
+    const session = within(view.getByRole('region', { name: 'Session' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const card = () =>
+      side
+        .getByRole('button', { name: 'Move Repeat until its last step succeeds' })
+        .closest<HTMLElement>('.graph-queue-repeat');
+    const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+    const bar = () => within(session.getByRole('group', { name: 'Needs you' }));
+
+    expect(card()?.dataset.run).toBe('asking');
+    expect(
+      bar().getByText(
+        '1 round done, and still not: its last step succeeds. What should it try next? Write it below, or',
+      ),
+    ).toBeTruthy();
+    expect(
+      bar()
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['One more round', 'Go on']);
+    expect(composer.placeholder).toBe('What should it try next?');
+
+    // Sent from the composer: it goes to the agent, and one more round runs.
+    fireEvent.change(composer, { target: { value: 'Try a smaller fix' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    const transcript = within(view.getByRole('log', { name: 'Transcript' }));
+    expect(transcript.getByText('Try a smaller fix')).toBeTruthy();
+    play(10);
+    expect(card()?.dataset.round).toBe('Round 2 of 2');
+    expect(bar().getByText(/^2 rounds done/)).toBeTruthy();
+
+    fireEvent.click(bar().getByRole('button', { name: 'Go on' }));
+    expect(card()?.dataset.run).toBe('failed');
+    expect(card()?.dataset.round).toBe('2 rounds');
+    expect(session.queryByRole('group', { name: 'Needs you' })).toBeNull();
+    expect(
+      side
+        .getByRole('button', { name: 'Move Read' })
+        .closest('[data-run]')
+        ?.getAttribute('data-run'),
+    ).toBe('running');
+  });
+
   describe('its rail', () => {
     /** Agent a, a Codex agent, in a group. */
     const grouped: Graph = {

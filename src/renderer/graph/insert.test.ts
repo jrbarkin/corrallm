@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { absolutePosition, CARD_SIZE, edgeId } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { insertGraph } from './insert';
+import type { QueueItem, QueueRepeat } from './queue';
 
 const agent = (
   id: string,
@@ -16,11 +17,26 @@ const agent = (
   data: { label: id, ...data },
 });
 
-/** A two-agent part: x hands y a message, and y waits for it. */
+/** A two-agent part: x hands y a message, and y waits for it, then loops waiting and handing back. */
+const loop = (inner: QueueItem[]): QueueItem => ({
+  id: 'loop',
+  repeat: inner as QueueRepeat['repeat'],
+  until: { kind: 'succeeded' },
+  rounds: 2,
+  otherwise: 'goOn',
+});
 const part: Graph = {
   nodes: [
     agent('x', 100, 50, { queue: [{ id: 'hand', message: 'Over to you', target: 'y' }] }),
-    agent('y', 100, 250, { queue: [{ id: 'w', waitFor: [{ agent: 'x', item: 'hand' }] }] }),
+    agent('y', 100, 250, {
+      queue: [
+        { id: 'w', waitFor: [{ agent: 'x', item: 'hand' }] },
+        loop([
+          { id: 'again', waitFor: [{ agent: 'x' }] },
+          { id: 'back', message: 'Back to you', target: 'x' },
+        ]),
+      ],
+    }),
   ],
   edges: [{ id: edgeId('x', 'y'), source: 'x', target: 'y' }],
 };
@@ -51,7 +67,14 @@ describe('insertGraph', () => {
     expect(absolutePosition(y, byId).y - absolutePosition(x, byId).y).toBe(200);
     // What pointed at x and y points at their new selves.
     expect(x.data.queue).toEqual([{ id: 'hand', message: 'Over to you', target: 'new-2' }]);
-    expect(y.data.queue).toEqual([{ id: 'w', waitFor: [{ agent: 'new-1', item: 'hand' }] }]);
+    expect(y.data.queue).toEqual([
+      { id: 'w', waitFor: [{ agent: 'new-1', item: 'hand' }] },
+      // Inside a repeat too.
+      loop([
+        { id: 'again', waitFor: [{ agent: 'new-1' }] },
+        { id: 'back', message: 'Back to you', target: 'new-1' },
+      ]),
+    ]);
     expect(edges.map((e) => [e.source, e.target])).toEqual([['new-1', 'new-2']]);
   });
 

@@ -1,12 +1,24 @@
 import { threadTitle } from '../agent/session';
 import type { GraphNode } from './graph';
-import { CONDITIONS, isApproval, isDelay, isIf, isMessage, isWait } from './queue';
+import {
+  CONDITIONS,
+  findItem,
+  isApproval,
+  isDelay,
+  isIf,
+  isMessage,
+  isRepeat,
+  isWait,
+  UNTIL_CONDITIONS,
+} from './queue';
 import type {
   Condition,
   QueueApproval,
   QueueDelay,
   QueueItem,
+  QueueRepeat,
   QueueWait,
+  Until,
   WaitTarget,
 } from './queue';
 import { limitText, timeText } from './time';
@@ -18,6 +30,33 @@ export const ifText = (condition: Condition): string =>
     : condition.kind === 'freeText'
       ? condition.text
       : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
+
+/**
+ * How a repeat's `until` reads after "Repeat until": "its last step succeeds", "the output contains
+ * “APPROVED”", or the user's own words.
+ */
+export function untilText(_nodes: readonly GraphNode[], until: Until): string {
+  switch (until.kind) {
+    case 'outputContains':
+      return `the output contains “${until.text}”`;
+    case 'freeText':
+      return until.text;
+    default:
+      return UNTIL_CONDITIONS.find((c) => c.kind === until.kind)?.label ?? '';
+  }
+}
+
+/** "up to 3 rounds", "up to 1 round". */
+export const roundsText = (rounds: number): string =>
+  `up to ${String(rounds)} round${rounds === 1 ? '' : 's'}`;
+
+/** What a repeat does after its last round, as its chip reads: "then ask me", "then go on". */
+export const otherwiseText = (repeat: QueueRepeat): string =>
+  repeat.otherwise === 'ask' ? 'then ask me' : 'then go on';
+
+/** How a repeat reads: "Repeat until its last step succeeds". */
+export const repeatText = (nodes: readonly GraphNode[], repeat: QueueRepeat): string =>
+  `Repeat until ${untilText(nodes, repeat.until)}`;
 
 /** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
 export const delayText = (item: QueueDelay): string => `Wait ${timeText(item.delay)}`;
@@ -39,17 +78,19 @@ export const waitText = (item: QueueWait, targetLabel: (target: WaitTarget) => s
 export const itemLabel = (item: QueueItem): string =>
   isWait(item)
     ? 'its wait'
-    : isDelay(item)
-      ? delayText(item)
-      : isApproval(item)
-        ? okText(item, 24)
-        : isIf(item)
-          ? `If ${ifText(item.if)}`
-          : isMessage(item)
-            ? item.message.trim() === ''
-              ? 'an empty message'
-              : `“${threadTitle(item.message, 24)}”`
-            : item.action;
+    : isRepeat(item)
+      ? 'its repeat'
+      : isDelay(item)
+        ? delayText(item)
+        : isApproval(item)
+          ? okText(item, 24)
+          : isIf(item)
+            ? `If ${ifText(item.if)}`
+            : isMessage(item)
+              ? item.message.trim() === ''
+                ? 'an empty message'
+                : `“${threadTitle(item.message, 24)}”`
+              : item.action;
 
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
 export function agentName(nodes: readonly GraphNode[], id: string): string {
@@ -60,8 +101,8 @@ export function agentName(nodes: readonly GraphNode[], id: string): string {
 /** What a wait waits for, in words: an agent (all of its work), or one of its items. */
 export function waitTargetLabel(nodes: readonly GraphNode[], { agent, item }: WaitTarget): string {
   if (item === undefined) return agentName(nodes, agent);
-  const found = nodes.find((n) => n.id === agent)?.data.queue?.find((q) => q.id === item);
-  return `${agentName(nodes, agent)}: ${found ? itemLabel(found) : 'a removed step'}`;
+  const found = findItem(nodes.find((n) => n.id === agent)?.data.queue ?? [], item);
+  return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item) : 'a removed step'}`;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -71,9 +112,16 @@ export function andList(names: readonly string[]): string {
     : `${names.slice(0, -1).join(', ')} and ${String(names.at(-1))}`;
 }
 
-/** How an item reads in full, as All queues names it: what it does, and to which agent. */
+/**
+ * How an item reads in full, as All queues names it: what it does, and to which agent; a repeat,
+ * how many rounds it runs at most (unless it goes round with another).
+ */
 export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string {
   if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
+  if (isRepeat(item)) {
+    const text = repeatText(nodes, item);
+    return `${text} (${roundsText(item.rounds)})`;
+  }
   if (isDelay(item)) return delayText(item);
   if (isApproval(item)) return okText(item);
   if (isIf(item)) return `If ${ifText(item.if)}`;
@@ -81,4 +129,17 @@ export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string 
     ? `Message ${item.message.trim() === '' ? '(empty)' : `“${threadTitle(item.message, 32)}”`}`
     : item.action;
   return item.target === undefined ? what : `${what} → ${agentName(nodes, item.target)}`;
+}
+
+/**
+ * How an item reads on its own buttons ("Move …", "Remove …", "Go on now: …"): what it is, and
+ * for a wait, a delay, an OK, an if-then or a repeat, what it waits for or checks.
+ */
+export function describe(nodes: readonly GraphNode[], item: QueueItem): string {
+  if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
+  if (isRepeat(item)) return repeatText(nodes, item);
+  if (isDelay(item)) return delayText(item);
+  if (isApproval(item)) return okText(item);
+  if (isIf(item)) return `If ${ifText(item.if)}`;
+  return isMessage(item) ? 'Message' : item.action;
 }

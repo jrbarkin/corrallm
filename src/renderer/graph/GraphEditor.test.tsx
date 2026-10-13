@@ -396,6 +396,105 @@ describe('GraphEditor', () => {
     expect(options()).toContain('Message');
   });
 
+  it('repeats steps until a condition holds, a few rounds at most, changed from its chips', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    // Offered right after If… then; "repeat", "loop" or "round" finds it.
+    plus();
+    expect(options().slice(0, 6)).toEqual([
+      'If… then',
+      'Repeat until…',
+      'Wait for…',
+      'Wait a while…',
+      'Wait for your OK…',
+      'Message',
+    ]);
+    for (const typed of ['repeat', 'loop', 'round']) {
+      fireEvent.change(field(), { target: { value: typed } });
+      expect(options()[0]).toBe('Repeat until…');
+    }
+    const choice = panel.getByRole('option', { name: /^Repeat until…/ });
+    expect(choice.textContent).toBe(
+      'Repeat until… Loop: run steps again until a condition holds, a few rounds at most',
+    );
+    fireEvent.click(choice);
+    expect(field().getAttribute('aria-label')).toBe('Repeat until…');
+    expect(field().placeholder).toBe('Pick when to stop, or describe it…');
+    expect(options()).toEqual([
+      'its last step succeeds',
+      'its last step fails',
+      'the output contains…',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'the output contains…' }));
+    const text = panel.getByRole('textbox', { name: 'Text to look for' });
+    fireEvent.change(text, { target: { value: 'Converged' } });
+    fireEvent.keyDown(text, { key: 'Enter' });
+
+    // A card: when it stops, up to 3 rounds, then ask me; each a chip.
+    expect(
+      panel.getByRole('button', { name: 'Move Repeat until the output contains “Converged”' }),
+    ).toBeTruthy();
+    const until = panel.getByRole('button', {
+      name: 'Change when it stops: the output contains “Converged”',
+    });
+    expect(until.textContent).toBe('the output contains “Converged”');
+    const rounds = () => panel.getByRole('button', { name: /^Change how many rounds: / });
+    const then = () =>
+      panel.getByRole('button', { name: /^Change what happens after the last round: / });
+    expect([rounds().textContent, then().textContent]).toEqual(['up to 3 rounds', 'then ask me']);
+
+    // Typing 5 finds 5 rounds; Go on carries on with the queue.
+    fireEvent.click(rounds());
+    expect(field().getAttribute('aria-label')).toBe('How many rounds at most?');
+    expect(options()).toHaveLength(20);
+    fireEvent.change(field(), { target: { value: '5' } });
+    expect(options()[0]).toBe('5 rounds');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(rounds().getAttribute('aria-label')).toBe('Change how many rounds: up to 5 rounds');
+    fireEvent.click(then());
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Ask me Stop and ask: one more round, or go on',
+      'Go on Carry on with the queue; an If after it sees that it failed',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: /^Go on/ }));
+    expect(then().getAttribute('aria-label')).toBe(
+      'Change what happens after the last round: then go on',
+    );
+    expect(then().textContent).toBe('then go on');
+
+    // Its own ⊕ adds what it runs each round: waits, delays, messages and actions; no if-thens.
+    plus('Add to Repeat until the output contains “Converged”');
+    expect(options().slice(0, 4)).toEqual(['Wait for…', 'Wait a while…', 'Message', 'Read']);
+    expect(options()).not.toContain('If… then');
+    expect(options()).not.toContain('Repeat until…');
+    expect(options()).not.toContain('Wait for your OK…');
+    fireEvent.click(panel.getByRole('option', { name: /^Message/ }));
+    const note = panel.getByRole('textbox', { name: 'New message to the agent' });
+    fireEvent.change(note, { target: { value: 'Tune the model' } });
+    fireEvent.keyDown(note, { key: 'Enter' });
+    const inner = panel.getByRole('list', { name: 'Each round: the output contains “Converged”' });
+    expect(
+      within(inner)
+        .getAllByRole('button', { name: /^Move / })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual(['Move Message']);
+
+    // Its condition, in your own words, is changed starting from them.
+    fireEvent.click(until);
+    fireEvent.change(field(), { target: { value: 'the loss stops falling' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const words = panel.getByRole('button', { name: /^Change when it stops: / });
+    expect(words.textContent).toBe('the loss stops falling');
+    fireEvent.click(words);
+    expect(field().value).toBe('the loss stops falling');
+  });
+
   it('asks for your OK on the canvas while the run holds an agent at one', () => {
     const queue = (approve: string) => [
       { id: 'spec', action: 'Read' },

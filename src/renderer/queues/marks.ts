@@ -1,6 +1,6 @@
 import type { RowMarks } from '../graph/QueueEditor';
-import { isApproval, isWait } from '../graph/queue';
-import type { QueueItem } from '../graph/queue';
+import { isApproval, isRepeat, isWait } from '../graph/queue';
+import type { QueueItem, QueueRepeat } from '../graph/queue';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
 import type { Lanes } from './lanes';
@@ -17,8 +17,9 @@ export function taskKey(lane: string, item: string | null): string {
  * user for it as its agent (in `asking`) asks permission, or how it went), `data-until` (while the
  * run holds the agent at it, a delay or a wait with a time limit: when its time comes, in epoch
  * ms), `data-decide` (the run holds the agent there for the user to decide: its decision bar
- * shows), and at an OK, `data-asked` (the last changes asked for there, this run) with
- * `data-asked-times` (how many times, when more than once).
+ * shows), at an OK, `data-asked` (the last changes asked for there, this run) with
+ * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
+ * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
  */
 export function queueMarks(
   { lanes, links, isStuck }: Lanes,
@@ -32,15 +33,24 @@ export function queueMarks(
   const waitedFor = new Set(
     links.flatMap((l) => (l.kind === 'wait' ? [taskKey(l.from.lane, l.from.item)] : [])),
   );
-  /** The tasks of a kind, by key. */
+  /** The tasks of a kind, by key: in lanes, and in their repeats. */
   const kinds = (is: (item: QueueItem) => boolean) =>
     new Set(
       lanes.flatMap((lane) =>
-        lane.cells.flatMap(({ item }) => (is(item) ? [taskKey(lane.agent.id, item.id)] : [])),
+        lane.cells
+          .flatMap(({ item, inner }) => [item, ...(inner ?? []).map((cell) => cell.item)])
+          .flatMap((item) => (is(item) ? [taskKey(lane.agent.id, item.id)] : [])),
       ),
     );
   const waits = kinds(isWait);
   const oks = kinds(isApproval);
+  const repeats = new Map(
+    lanes.flatMap((lane) =>
+      lane.cells.flatMap(({ item }) =>
+        isRepeat(item) ? [[taskKey(lane.agent.id, item.id), item] as const] : [],
+      ),
+    ),
+  );
   return (lane, item) => {
     const key = taskKey(lane, item);
     const state = taskState(run, lane, item);
@@ -58,6 +68,7 @@ export function queueMarks(
     const held = run.running && at?.current === item;
     const until = held ? at.until : undefined;
     const asked = item === null ? undefined : at?.changes?.[item];
+    const repeat = repeats.get(key);
     return {
       'data-at': key,
       'data-mark': mark,
@@ -69,6 +80,23 @@ export function queueMarks(
       'data-decide': held && at.status === 'asking' ? '' : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
+      'data-round': repeat && roundText(repeat, run.agents[lane]),
     };
   };
+}
+
+/**
+ * Where a run is with a repeat, as its pill reads: the round it is on, of how many it runs at most
+ * (its rounds, and those the user added), while the run is in it; once over, how many it took.
+ */
+function roundText(repeat: QueueRepeat, at: Run['agents'][string] | undefined): string | undefined {
+  const state = at?.rounds?.[repeat.id];
+  if (!at || !state) return undefined;
+  const { round, more = 0 } = state;
+  if (at.outcomes[repeat.id] !== undefined)
+    return `${String(round)} round${round === 1 ? '' : 's'}`;
+  const inside =
+    at.status !== 'done' &&
+    (at.current === repeat.id || repeat.repeat.some((item) => item.id === at.current));
+  return inside ? `Round ${String(round)} of ${String(repeat.rounds + more)}` : undefined;
 }

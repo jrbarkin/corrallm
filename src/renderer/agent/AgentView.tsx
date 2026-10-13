@@ -5,7 +5,7 @@ import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
-import { chooseTarget, isWait } from '../graph/queue';
+import { chooseTarget, findItem, isApproval, isWait } from '../graph/queue';
 import type { WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
@@ -44,9 +44,9 @@ export interface SessionControls extends ComposerControls {
  * Spawning or switching minimizes the panel into the top of the stack, where its card appears; the
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
- * While the queues' run holds the agent for the user (`ask`, at an OK), a bar above the composer
- * asks, with its choices; what is sent from the composer then is the answer in the user's words
- * (the changes to make), not a message of its own.
+ * While the queues' run holds the agent for the user (`ask`, at an OK or a repeat out of rounds),
+ * a bar above the composer asks, with its choices; what is sent from the composer then is the
+ * answer in the user's words (the changes to make, or what to try next), not a message of its own.
  */
 export function AgentView({
   node,
@@ -228,9 +228,8 @@ export function AgentView({
   const own = editsOf(edits, node.id);
   const peerNode = nodes.find((n) => n.id === peer && n.type === 'agent');
   const links = useMemo(() => (peerNode ? queueLinks(node, peerNode) : []), [node, peerNode]);
-  const waiting = node.data.queue?.find((item) => item.id === choosing?.waitId);
-  const chosen =
-    waiting && isWait(waiting) && choosing ? waiting.waitFor[choosing.index] : undefined;
+  const waiting = choosing && findItem(node.data.queue ?? [], choosing.waitId)?.item;
+  const chosen = waiting && isWait(waiting) ? waiting.waitFor[choosing.index] : undefined;
   /** Sets the target being picked to one of the peer's steps, or (undefined) all of its work. */
   const pick = (item: string | undefined) => {
     if (!choosing || !waiting || !isWait(waiting)) return;
@@ -441,20 +440,21 @@ const waitsFor = (text: string) =>
   `Waits for ${text.charAt(0).toLowerCase()}${text.slice(1).replace(/\?$/, '')}`;
 
 /**
- * What the run holds the agent for, above its composer: what it waits for, that what is written
- * below answers it (its reply), or its choices: "Waits for your OK on the spec: write below what
- * should change, or [Approve] [Stop here]".
+ * What the run holds the agent for, above its composer: what it waits for (or what it says), that
+ * what is written below answers it (its reply), and its choices. At an OK: "Waits for your OK on
+ * the spec: write below what should change, or [Approve] [Stop here]". Otherwise, its question:
+ * "3 rounds done, and still not: its last step succeeds. What should it try next? Write it below,
+ * or [One more round] [Go on]".
  */
 function AskBar({ ask, onChoose }: { ask: HeldAsk; onChoose: (choice: string) => void }) {
-  const below = ask.reply?.label.replace(/\?$/, '');
+  const reply = ask.reply?.label;
+  const below = reply?.replace(/\?$/, '');
+  const text = isApproval(ask.item)
+    ? `${waitsFor(ask.text)}${below === undefined ? ':' : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}`
+    : `${ask.text}${reply === undefined ? '' : ` ${reply} Write it below, or`}`;
   return (
     <div className="agent-ok" role="group" aria-label="Needs you">
-      <span className="agent-ok-text">
-        {waitsFor(ask.text)}
-        {below === undefined
-          ? ':'
-          : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}
-      </span>
+      <span className="agent-ok-text">{text}</span>
       {ask.choices.map((choice) => (
         <button
           key={choice.key}

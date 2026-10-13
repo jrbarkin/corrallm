@@ -56,6 +56,7 @@ import {
   selectOnly,
   setAgent,
   setApproval,
+  setRepeat,
   setCondition,
   setTime,
   setWaitFor,
@@ -350,6 +351,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       },
       setApproval: (owner, okId, approve) => {
         setGraph((g) => setApproval(g, owner, okId, approve));
+      },
+      setRepeat: (owner, repeatId, change) => {
+        setGraph((g) => setRepeat(g, owner, repeatId, change));
       },
       goOn: (owner, itemId) => {
         runStore.goOn(owner, itemId);

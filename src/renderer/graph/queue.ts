@@ -73,7 +73,8 @@ export const MAX_SECONDS = 7 * 24 * 60 * 60;
 /**
  * A wait: the queue stops here until everything in `waitFor` is done (see WaitTarget). Naming
  * several makes a join: the queue goes on once the last of them is. Waits sit in the queue itself,
- * not in an if-then.
+ * or in a repeat (where a wait for a step in another repeat waits for that round of it), not in an
+ * if-then.
  */
 export interface QueueWait {
   id: string;
@@ -87,7 +88,7 @@ export interface QueueWait {
 
 /**
  * A delay: the queue stops here until its time has come, then goes on. Delays sit in the queue
- * itself, not in an if-then.
+ * itself, or in a repeat (counted afresh each round), not in an if-then.
  */
 export interface QueueDelay {
   id: string;
@@ -105,7 +106,30 @@ export interface QueueApproval {
   approve: string;
 }
 
-export type QueueItem = QueueStep | QueueMessage | QueueIf | QueueWait | QueueDelay | QueueApproval;
+/** What a repeat holds: steps, messages, waits and delays (no if-thens, repeats or OKs). */
+export type RepeatedItem = QueueStep | QueueMessage | QueueWait | QueueDelay;
+
+/** When a repeat stops: a condition (any but timedOut) of each round's last task that ran. */
+export type Until = Exclude<Condition, { kind: 'timedOut' }>;
+
+/** The most rounds a repeat runs unattended. */
+export const MAX_ROUNDS = 20;
+
+/**
+ * A repeat: runs `repeat` in rounds; after each it stops if `until` holds, else runs again, up to
+ * `rounds` in all; then asks the user ('ask': one more round, or go on) or goes on having failed
+ * ('goOn'). Repeats sit in the queue itself, not in an if-then or another repeat.
+ */
+export interface QueueRepeat {
+  id: string;
+  repeat: RepeatedItem[];
+  until: Until;
+  rounds: number;
+  otherwise: 'ask' | 'goOn';
+}
+
+export type QueueItem =
+  QueueStep | QueueMessage | QueueIf | QueueWait | QueueDelay | QueueApproval | QueueRepeat;
 
 export function isIf(item: QueueItem): item is QueueIf {
   return 'if' in item;
@@ -121,6 +145,31 @@ export function isDelay(item: QueueItem): item is QueueDelay {
 
 export function isApproval(item: QueueItem): item is QueueApproval {
   return 'approve' in item;
+}
+
+export function isRepeat(item: QueueItem): item is QueueRepeat {
+  return 'repeat' in item;
+}
+
+/**
+ * An item by id: at the top level of a queue, or inside a repeat (or an if-then) in it; with the
+ * repeat holding it, if one does.
+ */
+export function findItem(
+  queue: readonly QueueItem[],
+  id: string,
+): { item: QueueItem; repeat?: QueueRepeat } | undefined {
+  for (const item of queue) {
+    if (item.id === id) return { item };
+    if (isRepeat(item)) {
+      const inner = item.repeat.find((q) => q.id === id);
+      if (inner) return { item: inner, repeat: item };
+    } else if (isIf(item)) {
+      const step = item.then.find((q) => q.id === id);
+      if (step) return { item: step };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -155,6 +204,13 @@ export const CONDITIONS = [
   { kind: 'outputContains', label: 'the output contains…' },
   { kind: 'timedOut', label: 'the wait ran out of time' },
 ] as const satisfies readonly { kind: Condition['kind']; label: string }[];
+
+/** The conditions a repeat can stop on, as the dropdown offers them (besides free text). */
+export const UNTIL_CONDITIONS = [
+  { kind: 'succeeded', label: 'its last step succeeds' },
+  { kind: 'failed', label: 'its last step fails' },
+  { kind: 'outputContains', label: 'the output contains…' },
+] as const satisfies readonly { kind: Until['kind']; label: string }[];
 
 /**
  * The item the if-then at `index` in `queue` checks: the nearest one above it that is not a pause

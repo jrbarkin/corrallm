@@ -4,7 +4,8 @@ import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
-import { isApproval, isDelay, isIf, isWait } from './queue';
+import { findItem, isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
+import type { QueueItem } from './queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
@@ -18,22 +19,24 @@ describe.each(EXAMPLES)('the $name example', (example) => {
   it("aims only at its own agents, and uses only each agent's own actions", () => {
     for (const agent of agents.values()) {
       const actions = AGENT_ACTIONS[agent.data.agent ?? DEFAULT_AGENT].map((a) => a.name);
-      for (const item of agent.data.queue ?? []) {
+      // Every level of nesting: what if-thens and repeats hold too.
+      const check = (item: QueueItem) => {
         if (isWait(item)) {
           for (const { agent: waited, item: step } of item.waitFor) {
-            const queue = agents.get(waited)?.data.queue ?? [];
             expect(agents.has(waited)).toBe(true);
-            if (step !== undefined) expect(queue.map((q) => q.id)).toContain(step);
+            if (step !== undefined)
+              expect(findItem(agents.get(waited)?.data.queue ?? [], step)).toBeDefined();
           }
-          continue;
+        } else if (isIf(item)) {
+          item.then.forEach(check);
+        } else if (isRepeat(item)) {
+          item.repeat.forEach(check);
+        } else if (!isDelay(item) && !isApproval(item)) {
+          if (item.target !== undefined) expect(agents.has(item.target)).toBe(true);
+          if ('action' in item) expect(actions).toContain(item.action);
         }
-        if (isDelay(item) || isApproval(item)) continue;
-        const steps = isIf(item) ? item.then : [item];
-        for (const step of steps) {
-          if (step.target !== undefined) expect(agents.has(step.target)).toBe(true);
-          if ('action' in step) expect(actions).toContain(step.action);
-        }
-      }
+      };
+      (agent.data.queue ?? []).forEach(check);
     }
   });
 

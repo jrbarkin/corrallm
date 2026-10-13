@@ -249,7 +249,7 @@
 }
 
 /* Tasks: every queue's own cards (GraphEditor.css); a lane's end sits at the top of its row. */
-.queues-cell.dragging :is(.graph-queue-row, .graph-queue-if) {
+.queues-cell.dragging :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat) {
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
 
@@ -259,6 +259,46 @@
 
 .queues-end-cell .graph-queue-plus:not(:hover, :focus-visible, [aria-expanded='true']) {
   opacity: 0.5;
+}
+
+/*
+ * A repeat: one cell over the rows of what it holds. The cell, its card and the list in it are
+ * subgrids of the lanes' rows, so each item it holds sits in the row lanes.ts gives it, level with
+ * the other lanes (ribbons meet it there); its ⊕ sits in the card's foot.
+ */
+.queues-cell[data-repeat],
+.queues-cell[data-repeat] > .graph-queue-repeat,
+.queues-cell[data-repeat] .graph-queue-rounds {
+  display: grid;
+  grid-template-rows: subgrid;
+  row-gap: normal;
+}
+
+.queues-cell[data-repeat] > .graph-queue-repeat {
+  grid-row: 1 / -1;
+  padding-bottom: 38px;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat-head {
+  grid-row: 1;
+  align-self: start;
+}
+
+.queues-cell[data-repeat] .graph-queue-rounds {
+  grid-row: 2 / -1;
+  margin-top: 0;
+}
+
+.queues-cell[data-repeat] .graph-queue-rounds > li {
+  align-self: start;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat > .graph-queue-add {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  margin: 0;
+  transform: translateX(-50%);
 }
 
 /* Where an agent has nothing to do, waiting: its stripes run while the run holds it there. */

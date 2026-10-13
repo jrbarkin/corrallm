@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { RunStore } from './runner';
 
 const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
@@ -623,6 +623,192 @@ describe('RunStore', () => {
       store.start();
       expect(store.snapshot().agents.a?.until).toBe(19 * MINUTE);
       expect(where()).toEqual({ a: 'waiting pause', b: 'running busy' });
+    });
+  });
+
+  describe('repeats', () => {
+    const loop = (
+      repeat: RepeatedItem[],
+      more: Partial<Omit<QueueRepeat, 'id' | 'repeat'>> = {},
+    ): QueueRepeat => ({
+      id: 'loop',
+      repeat,
+      until: { kind: 'succeeded' },
+      rounds: 3,
+      otherwise: 'ask',
+      ...more,
+    });
+    const fix: RepeatedItem = { id: 'fix', message: 'Make the tests pass' };
+    const tests: RepeatedItem = { id: 'tests', action: 'Bash' };
+    const next: QueueItem = { id: 'next', action: 'Read' };
+    /** Chance as listed, then 0.9: a step fails under a quarter, a condition holds under a half. */
+    const draws =
+      (...values: number[]) =>
+      () =>
+        values.shift() ?? 0.9;
+
+    it('runs its steps in rounds until its last step succeeds, then goes on', () => {
+      // The tests fail in the first round, and pass in the second.
+      const { store, tick, reply, where, sent } = setup(
+        [agent('a', [loop([fix, tests]), next])],
+        draws(0.1),
+      );
+      store.start();
+      expect(where()).toEqual({ a: 'running fix' });
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 1 } });
+      reply('a');
+      tick();
+      // Round 2: the round's outcomes are cleared, and the message is sent again.
+      expect(where()).toEqual({ a: 'running fix' });
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+      expect(store.snapshot().agents.a?.outcomes).toEqual({});
+      expect(sent.map((s) => s.text)).toEqual(['Make the tests pass', 'Make the tests pass']);
+      reply('a');
+      tick();
+      expect(where()).toEqual({ a: 'running next' });
+      expect(store.snapshot().agents.a?.outcomes).toEqual({
+        fix: 'succeeded',
+        tests: 'succeeded',
+        loop: 'succeeded',
+      });
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+    });
+
+    it('judges its last step passing over a skipped last task and a delay', () => {
+      const a = agent('a', [
+        loop([tests, { id: 'note', message: '' }, { id: 'pause', delay: { seconds: 60 } }]),
+        next,
+      ]);
+      const { store, tick, advance, where } = setup([a]);
+      store.start();
+      tick();
+      tick();
+      expect(where()).toEqual({ a: 'waiting pause' });
+      advance(MINUTE);
+      expect(where()).toEqual({ a: 'running next' });
+      expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+        tests: 'succeeded',
+        note: 'skipped',
+        loop: 'succeeded',
+      });
+    });
+
+    it('goes on having failed when out of rounds, then go on: an If after it can escalate', () => {
+      const a = agent('a', [
+        loop([tests], { rounds: 2, otherwise: 'goOn' }),
+        { id: 'stuck', if: { kind: 'failed' }, then: [{ id: 'help', message: 'Ask for help' }] },
+      ]);
+      // The tests always fail.
+      const { store, tick, where } = setup([a], () => 0.1);
+      store.start();
+      tick();
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+      tick();
+      expect(where()).toEqual({ a: 'running help' });
+      expect(store.snapshot().agents.a?.outcomes.loop).toBe('failed');
+    });
+
+    describe('out of rounds, it asks the user', () => {
+      const build: RepeatedItem = { id: 'build', message: 'Build it' };
+      const approved = loop([build], {
+        until: { kind: 'outputContains', text: 'APPROVED' },
+        rounds: 1,
+      });
+
+      it('one more round, what to try next, or to go on', () => {
+        // The output never contains it (chance over a half).
+        const { store, reply, where, sent } = setup([agent('a', [approved, next])]);
+        store.start();
+        reply('a');
+        expect(where()).toEqual({ a: 'asking loop' });
+        expect(store.snapshot().running).toBe(true);
+
+        store.decide('a', 'loop', { choice: 'more' });
+        expect(where()).toEqual({ a: 'running build' });
+        expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2, more: 1 } });
+        // A second click, meant for the ask that was answered, does nothing.
+        store.decide('a', 'loop', { choice: 'more' });
+        reply('a');
+        expect(where()).toEqual({ a: 'asking loop' });
+
+        // What to try next goes to the agent before the extra round's message.
+        store.decide('a', 'loop', { reply: '  Try smaller steps ' });
+        expect(where()).toEqual({ a: 'running build' });
+        expect(sent.map((s) => s.text)).toEqual([
+          'Build it',
+          'Build it',
+          'Try smaller steps',
+          'Build it',
+        ]);
+        expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 3, more: 2 } });
+        reply('a');
+
+        // An empty reply, an OK's answer, or another item: nothing.
+        store.decide('a', 'loop', { reply: '   ' });
+        store.decide('a', 'loop', { choice: 'approve' });
+        store.decide('a', 'next', { choice: 'goOn' });
+        expect(where()).toEqual({ a: 'asking loop' });
+
+        store.decide('a', 'loop', { choice: 'goOn' });
+        expect(where()).toEqual({ a: 'running next' });
+        expect(store.snapshot().agents.a?.outcomes.loop).toBe('failed');
+        store.decide('a', 'loop', { choice: 'more' });
+        expect(where()).toEqual({ a: 'running next' });
+      });
+
+      it('runs another round when its rounds are raised, and goes on when told to go on', () => {
+        const queue = (repeat: QueueRepeat) => [agent('a', [repeat, next])];
+        const { store, reply, where, edit } = setup(queue(approved));
+        store.start();
+        reply('a');
+        expect(where()).toEqual({ a: 'asking loop' });
+        edit(queue({ ...approved, rounds: 2 }));
+        expect(where()).toEqual({ a: 'running build' });
+        reply('a');
+        expect(where()).toEqual({ a: 'asking loop' });
+        edit(queue({ ...approved, rounds: 2, otherwise: 'goOn' }));
+        expect(where()).toEqual({ a: 'running next' });
+        expect(store.snapshot().agents.a?.outcomes.loop).toBe('failed');
+      });
+    });
+
+    it('moves past a repeat that is removed, and skips an empty one', () => {
+      const pause: RepeatedItem = { id: 'pause', delay: { seconds: 600 } };
+      const { store, where, edit } = setup([agent('a', [loop([pause]), next])]);
+      store.start();
+      expect(where()).toEqual({ a: 'waiting pause' });
+      edit([agent('a', [next])]);
+      expect(where()).toEqual({ a: 'running next' });
+
+      edit([agent('a', [loop([]), next])]);
+      store.start();
+      expect(where()).toEqual({ a: 'running next' });
+      expect(store.snapshot().agents.a?.outcomes.loop).toBe('skipped');
+    });
+
+    it('counts a delay inside it afresh each round, ends it on Go on now, and starts over on Run', () => {
+      // The tests fail in the first round, and pass after.
+      const a = agent('a', [loop([{ id: 'pause', delay: { seconds: 600 } }, tests]), next]);
+      const { store, tick, advance, where } = setup([a], draws(0.1));
+      store.start();
+      expect(store.snapshot().agents.a?.until).toBe(10 * MINUTE);
+      advance(10 * MINUTE);
+      expect(where()).toEqual({ a: 'running tests' });
+      tick();
+      expect(where()).toEqual({ a: 'waiting pause' });
+      expect(store.snapshot().agents.a?.until).toBe(20 * MINUTE);
+      store.goOn('a', 'pause');
+      expect(where()).toEqual({ a: 'running tests' });
+      tick();
+      expect(where()).toEqual({ a: 'running next' });
+      tick();
+
+      // Run again: from round 1, the delay counted from now.
+      advance(MINUTE);
+      store.start();
+      expect(where()).toEqual({ a: 'waiting pause' });
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 1 } });
+      expect(store.snapshot().agents.a?.until).toBe(21 * MINUTE);
     });
   });
 });

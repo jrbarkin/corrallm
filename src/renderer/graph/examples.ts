@@ -26,7 +26,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
     description:
-      'Codex writes the tests, Claude makes them pass, Codex refactors, with the tests run at every hand-off. After claudex.',
+      'Codex writes the tests; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. After claudex.',
     text: tddRelay,
     fields: [
       {

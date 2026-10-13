@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { lanesOf } from './lanes';
 
 const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
@@ -25,6 +25,14 @@ const rows = (nodes: GraphNode[]) => {
     ]),
   );
 };
+
+const loop = (id: string, repeat: RepeatedItem[]): QueueRepeat => ({
+  id,
+  repeat,
+  until: { kind: 'succeeded' },
+  rounds: 3,
+  otherwise: 'ask',
+});
 
 describe('lanesOf', () => {
   it('puts each agent’s queue in a lane, a wait in the row after what it waits for', () => {
@@ -158,5 +166,75 @@ describe('lanesOf', () => {
       true,
     ]);
     expect(rows([a, b, c])).toEqual({ a: ['w', 'next'], b: ['w', null], c: ['x', null] });
+  });
+
+  it('puts a repeat in one cell spanning its own row and those of what it holds', () => {
+    const a = agent('a', [
+      { id: 'build', action: 'Edit' },
+      loop('green', [
+        { id: 'fix', message: 'Make the tests pass' },
+        { id: 'tests', action: 'Bash' },
+      ]),
+      { id: 'ship', action: 'Bash' },
+      loop('empty', []),
+    ]);
+    const { lanes, rows } = lanesOf([a]);
+    expect(
+      lanes[0]?.cells.map(({ item, row, span, inner }) => [
+        item.id,
+        row,
+        span,
+        inner?.map((cell) => [cell.item.id, cell.row]),
+      ]),
+    ).toEqual([
+      ['build', 0, 1, undefined],
+      // Its items in the rows below its own; the next item right after the last of them.
+      [
+        'green',
+        1,
+        3,
+        [
+          ['fix', 2],
+          ['tests', 3],
+        ],
+      ],
+      ['ship', 4, 1, undefined],
+      ['empty', 5, 1, []],
+    ]);
+    expect([lanes[0]?.end, rows]).toEqual([6, 7]);
+  });
+
+  it('links waits and work handed on inside a repeat, a wait outside one after the repeat', () => {
+    const a = agent('a', [
+      loop('loop', [
+        { id: 'build', action: 'Edit' },
+        { id: 'hand', message: 'Over to you', target: 'b' },
+      ]),
+    ]);
+    // b waits for a step inside a's repeat from outside one: once the repeat is over.
+    const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'build' }] }]);
+    // c waits for it from inside a repeat: round by round, right after the step.
+    const c = agent('c', [loop('again', [{ id: 'w', waitFor: [{ agent: 'a', item: 'build' }] }])]);
+    const { lanes, links } = lanesOf([a, b, c]);
+    expect(
+      lanes.map((lane) => lane.cells.map((cell) => [cell.item.id, cell.row, cell.span])),
+    ).toEqual([[['loop', 0, 3]], [['w', 3, 1]], [['again', 0, 3]]]);
+    expect(lanes[2]?.cells[0]?.inner?.map((cell) => cell.row)).toEqual([2]);
+    expect(links.map((link) => link.key)).toEqual(['a:hand>b', 'b:w>a:build', 'c:w>a:build']);
+    expect(links[2]).toMatchObject({
+      from: { lane: 'a', item: 'build' },
+      to: { lane: 'c', item: 'w' },
+    });
+  });
+
+  it('marks waits inside repeats stuck when they wait on each other', () => {
+    const a = agent('a', [loop('la', [{ id: 'x', waitFor: [{ agent: 'b', item: 'y' }] }])]);
+    const b = agent('b', [loop('lb', [{ id: 'y', waitFor: [{ agent: 'a', item: 'x' }] }])]);
+    const lanes = lanesOf([a, b]);
+    expect([lanes.isStuck('a', 'x'), lanes.isStuck('b', 'y'), lanes.isStuck('a', 'la')]).toEqual([
+      true,
+      true,
+      false,
+    ]);
   });
 });

@@ -339,7 +339,8 @@ input.graph-label {
 }
 
 .graph-queue > li.dragging > .graph-queue-row,
-.graph-queue > li.dragging > .graph-queue-if {
+.graph-queue > li.dragging > .graph-queue-if,
+.graph-queue > li.dragging > .graph-queue-repeat {
   z-index: 1;
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
@@ -382,15 +383,24 @@ input.graph-label {
   resize: none;
 }
 
-/* An if-then: its row, then its own steps, indented, with their own ⊕. */
-.graph-queue-if {
+/*
+ * An if-then: its row, then its own steps, indented, with their own ⊕. A repeat likewise, its
+ * border solid and tinted: its steps run again, round after round.
+ */
+.graph-queue-if,
+.graph-queue-repeat {
   position: relative;
   padding: 0 0 10px;
   border: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
   border-radius: 12px;
 }
 
-.graph-queue-if > .graph-queue-row {
+.graph-queue-repeat {
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+  background: Canvas;
+}
+
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-row {
   border: 0;
   background: transparent;
 }
@@ -400,14 +410,58 @@ input.graph-label {
   margin: 4px 10px 0 28px;
 }
 
-.graph-queue-if > .graph-queue-add {
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-add {
   margin-top: 10px;
 }
 
-.graph-queue-if > .graph-queue-add > .graph-queue-plus {
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-add > .graph-queue-plus {
   width: 26px;
   height: 26px;
   font-size: 16px;
+}
+
+/* A repeat's header: its chips, and under them how to decide once it is out of rounds. */
+.graph-queue-repeat-head {
+  flex-wrap: wrap;
+}
+
+.graph-queue-repeat-head > .graph-queue-target {
+  white-space: nowrap;
+}
+
+/* What a repeat runs each round: a thin rail down its left, ending in ↺. */
+.graph-queue-rounds {
+  position: relative;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 1.5px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+}
+
+.graph-queue-rounds::after {
+  position: absolute;
+  bottom: -15px;
+  left: -6px;
+  color: color-mix(in srgb, var(--graph-accent, #2563eb) 60%, transparent);
+  content: '↺';
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* While the run is in a repeat: which round, in a pill on its top edge; once over, how many. */
+.graph-queue-repeat[data-round]::before {
+  position: absolute;
+  z-index: 1;
+  top: -9px;
+  right: 16px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: var(--graph-accent, #2563eb);
+  content: attr(data-round);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .graph-queue-handle {
@@ -1353,8 +1407,9 @@ input.graph-label {
  * Every queue looks the same wherever it shows (an agent's own, the one beside it, the work
  * between two agents, All queues): cards at rest, each with its handle to drag it by; what else
  * edits a task (remove, the agent it is aimed at when that is its own, a wait's + and its
- * "at most…", an if-then's ⊕) or acts on the run (Go on now) shows on the task pointed at, or
- * with the keyboard in it. What the run waits for the user to decide (an OK's) always shows.
+ * "at most…", an if-then's or a repeat's ⊕) or acts on the run (Go on now) shows on the task
+ * pointed at, or with the keyboard in it. What the run waits for the user to decide (an OK's, a
+ * repeat's out of rounds) always shows.
  */
 :root {
   --queue-wait: #3b82f6;
@@ -1386,7 +1441,7 @@ input.graph-label {
     .graph-queue-target[data-more],
     .graph-queue-goon
   ),
-.graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
+:is(.graph-queue-if, .graph-queue-repeat):not(:hover, :focus-within) > .graph-queue-add {
   opacity: 0;
 }
 
@@ -1415,7 +1470,7 @@ input.graph-label {
   color: var(--queue-stuck);
 }
 
-:where(.graph-queue-row, .graph-queue-if)[data-waited-for]:not([data-mark]) {
+:where(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-waited-for]:not([data-mark]) {
   border-color: color-mix(in srgb, var(--queue-wait) 55%, transparent);
   background-color: color-mix(in srgb, var(--queue-wait) 5%, Canvas);
 }

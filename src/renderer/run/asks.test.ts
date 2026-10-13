@@ -50,6 +50,44 @@ describe('heldAsks', () => {
   });
 });
 
+describe('a repeat out of rounds', () => {
+  const coder = agent('c', 'Coder', [
+    {
+      id: 'loop',
+      repeat: [{ id: 'build', message: 'Build it' }],
+      until: { kind: 'outputContains', text: 'APPROVED' },
+      rounds: 3,
+      otherwise: 'ask',
+    },
+  ]);
+
+  it('asks for one more round, or to go on, or what to try next', () => {
+    const run: Run = {
+      running: true,
+      agents: { c: { ...at('loop', 'asking'), rounds: { loop: { round: 3 } } } },
+    };
+    const [ask] = heldAsks([coder], run);
+    expect([ask?.item.id, ask?.text, ask?.detail]).toEqual([
+      'loop',
+      '3 rounds done, and still not: the output contains “APPROVED”.',
+      undefined,
+    ]);
+    expect(ask?.choices).toEqual([
+      { key: 'more', label: 'One more round', primary: true },
+      { key: 'goOn', label: 'Go on', title: 'End the repeat as failed and carry on' },
+    ]);
+    expect(ask?.reply).toEqual({ label: 'What should it try next?', button: 'Try this' });
+    // One round: said so.
+    const once: Run = {
+      running: true,
+      agents: { c: { ...at('loop', 'asking'), rounds: { loop: { round: 1 } } } },
+    };
+    expect(heldAsks([coder], once)[0]?.text).toBe(
+      '1 round done, and still not: the output contains “APPROVED”.',
+    );
+  });
+});
+
 describe('answersOf', () => {
   it('answers an OK with Approve, Stop here, or the changes to make', () => {
     expect(answersOf({ id: 'ok', approve: '' })).toEqual({

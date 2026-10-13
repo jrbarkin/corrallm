@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ChangeEvent, KeyboardEvent } from 'react';
 
 import { threadTitle } from '../agent/session';
 import { answersOf } from '../run/asks';
@@ -7,15 +7,17 @@ import type { Answer } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
+import type { RepeatChange } from './edits';
 import {
   agentName,
-  delayText,
+  describe,
   ifText,
   itemLabel,
-  okText,
   okWhat,
+  otherwiseText,
+  roundsText,
+  untilText,
   waitTargetLabel,
-  waitText,
 } from './labels';
 import {
   CONDITIONS,
@@ -23,9 +25,12 @@ import {
   isDelay,
   isIf,
   isMessage,
+  isRepeat,
   isWait,
+  MAX_ROUNDS,
   sameTarget,
   unfit,
+  UNTIL_CONDITIONS,
 } from './queue';
 import type {
   Condition,
@@ -34,9 +39,12 @@ import type {
   QueueIf,
   QueueItem,
   QueueMessage,
+  QueueRepeat,
   QueueStep,
   QueueWait,
+  RepeatedItem,
   Time,
+  Until,
   WaitTarget,
 } from './queue';
 import { leftText, limitText, parseTime, TIME_PRESETS, timeText } from './time';
@@ -54,6 +62,7 @@ export type QueueEntry = (
   | Omit<QueueWait, 'id'>
   | Omit<QueueDelay, 'id'>
   | Omit<QueueApproval, 'id'>
+  | Omit<QueueRepeat, 'id'>
 ) & { id?: string };
 
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
@@ -99,7 +108,7 @@ interface QueueProps {
   agent: AgentType;
   /** What the agent can do. */
   actions: readonly AgentAction[];
-  /** `into`: the id of the if-then to add a step or message to. */
+  /** `into`: the id of the if-then or repeat to add to. */
   onAdd: (entry: QueueEntry, into?: string) => void;
   onRemove: (itemId: string) => void;
   onMove: (itemId: string, index: number) => void;
@@ -111,6 +120,8 @@ interface QueueProps {
   onTime: (itemId: string, time: Time | undefined) => void;
   /** Sets what an OK is on, in the user's words. */
   onApproval: (okId: string, approve: string) => void;
+  /** Changes when a repeat stops, how many rounds it runs at most, or what it does then. */
+  onRepeat: (repeatId: string, change: RepeatChange) => void;
   /** Ends now the hold the run has this agent at (Go on now), shown on a row marked waiting. */
   onGoOn: (itemId: string) => void;
   /** Answers the hold the run has this agent at for the user, on a row marked to decide. */
@@ -123,20 +134,27 @@ interface QueueProps {
   /** The wait target being picked, to show which. */
   choosing?: Omit<StepChoice, 'agent'>;
   /**
-   * Marks for the row of each item and if-then step, by id, and (null) the queue's end. Where the
-   * run is with a row (`data-run`, `data-until`, `data-decide`, `data-asked`) gives it its run
-   * controls: Go on now, a countdown, how to decide, the changes asked for.
+   * Marks for the row of each item, if-then step and item in a repeat, by id, and (null) the
+   * queue's end. Where the run is with a row (`data-run`, `data-until`, `data-decide`,
+   * `data-asked`, `data-round`) gives it its run controls: Go on now, a countdown, how to decide,
+   * the changes asked for, the round.
    */
   marks?: (itemId: string | null) => RowMarks;
+  /**
+   * The grid row of each item in a repeat, counted from the first row below the repeat's own (All
+   * queues lines them up with the other lanes).
+   */
+  rowOf?: (itemId: string) => number | undefined;
 }
 
 /**
  * An agent's queue, in order: steps (one of the agent's actions, done to an agent: this one unless
  * another is picked), messages (text passed to an agent), if-thens (steps and messages that run
- * only when a condition holds), waits (until other agents have finished, or at most a time),
- * delays (a set time, or until a time of day), and OKs (until the user decides about the work
- * before). The ⊕ adds any of them; everything is picked by typing to search. Rows are reordered by
- * dragging their handle, or with the arrow keys on it.
+ * only when a condition holds), repeats (steps, messages, waits and delays run in rounds until a
+ * condition holds, a few rounds at most), waits (until other agents have finished, or at most a
+ * time), delays (a set time, or until a time of day), and OKs (until the user decides about the
+ * work before). The ⊕ adds any of them; everything is picked by typing to search. Rows are
+ * reordered by dragging their handle, or with the arrow keys on it.
  * With `only`, it shows part of the queue (WorkDetail.tsx), where reordering moves items among
  * those shown.
  */
@@ -266,7 +284,10 @@ export function QueueRow({
   return <ItemRow item={item} handle={handle} context={contextOf(props)} props={props} />;
 }
 
-/** An item's row: a step, a message, a wait, a delay, an OK, or an if-then with its own steps. */
+/**
+ * An item's row: a step, a message, a wait, a delay, an OK, an if-then with its own steps, or a
+ * repeat with what it runs each round.
+ */
 function ItemRow({
   item,
   handle,
@@ -278,22 +299,29 @@ function ItemRow({
   context: Context;
   props: QueueProps;
 }) {
-  const row = (step: QueueStep | QueueMessage, stepHandle: HandleProps) =>
-    isMessage(step) ? (
-      <MessageRow item={step} handle={stepHandle} context={context} />
-    ) : (
-      <StepRow item={step} handle={stepHandle} context={context} />
-    );
-  if (isWait(item)) return <WaitRow item={item} handle={handle} context={context} />;
-  if (isDelay(item)) return <DelayRow item={item} handle={handle} context={context} />;
   if (isApproval(item)) return <ApprovalRow item={item} handle={handle} context={context} />;
-  if (!isIf(item)) return row(item, handle);
+  if (isRepeat(item)) {
+    return (
+      <RepeatRow
+        item={item}
+        handle={handle}
+        context={context}
+        onMove={props.onMove}
+        onAdd={(entry) => {
+          props.onAdd(entry, item.id);
+        }}
+        onRepeat={(change) => {
+          props.onRepeat(item.id, change);
+        }}
+      />
+    );
+  }
+  if (!isIf(item)) return <RepeatedRow item={item} handle={handle} context={context} />;
   return (
     <IfRow
       item={item}
       handle={handle}
       context={context}
-      row={row}
       onMove={props.onMove}
       onAdd={(entry) => {
         props.onAdd(entry, item.id);
@@ -302,6 +330,25 @@ function ItemRow({
         props.onCondition(item.id, condition);
       }}
     />
+  );
+}
+
+/** The row of a step, a message, a wait or a delay: what a repeat holds. */
+function RepeatedRow({
+  item,
+  handle,
+  context,
+}: {
+  item: RepeatedItem;
+  handle: HandleProps;
+  context: Context;
+}) {
+  if (isWait(item)) return <WaitRow item={item} handle={handle} context={context} />;
+  if (isDelay(item)) return <DelayRow item={item} handle={handle} context={context} />;
+  return isMessage(item) ? (
+    <MessageRow item={item} handle={handle} context={context} />
+  ) : (
+    <StepRow item={item} handle={handle} context={context} />
   );
 }
 
@@ -322,22 +369,11 @@ function contextOf({
   onChooseStep,
   choosing,
   marks,
+  rowOf,
 }: QueueProps): Context {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
-  const describe = (item: QueueItem) =>
-    isWait(item)
-      ? waitText(item, targetLabel)
-      : isDelay(item)
-        ? delayText(item)
-        : isApproval(item)
-          ? okText(item)
-          : isIf(item)
-            ? `If ${ifText(item.if)}`
-            : isMessage(item)
-              ? 'Message'
-              : item.action;
   const queue = node.data.queue ?? EMPTY;
   return {
     agent,
@@ -345,9 +381,10 @@ function contextOf({
     others,
     name,
     ifText,
+    untilText: (until) => untilText(nodes, until),
     itemLabel,
     targetLabel,
-    describe,
+    describe: (item) => describe(nodes, item),
     onRemove,
     onRetarget,
     onEditMessage,
@@ -364,6 +401,7 @@ function contextOf({
     marks: marks ?? (() => ({})),
     ...(onChooseStep ? { onChooseStep } : {}),
     ...(choosing ? { choosing } : {}),
+    ...(rowOf ? { rowOf } : {}),
   };
 }
 
@@ -379,6 +417,7 @@ interface Context extends AddContext {
   agent: AgentType;
   name: (id: string | undefined) => string;
   ifText: (condition: Condition) => string;
+  untilText: (until: Until) => string;
   targetLabel: (target: WaitTarget) => string;
   describe: (item: QueueItem) => string;
   onRemove: (itemId: string) => void;
@@ -393,6 +432,7 @@ interface Context extends AddContext {
   unfit: (item: QueueIf) => string | undefined;
   choosing?: Omit<StepChoice, 'agent'>;
   marks: (itemId: string) => RowMarks;
+  rowOf?: (itemId: string) => number | undefined;
 }
 
 /**
@@ -730,7 +770,7 @@ function waitOptions(context: AddContext) {
     ...(agent.data.queue ?? []).map((item) => ({
       target: { agent: agent.id, item: item.id },
       label: `${nameOf(agent)}: ${context.itemLabel(item)}`,
-      detail: 'Just this step',
+      detail: isRepeat(item) ? 'All of its rounds' : 'Just this step',
     })),
   ]);
 }
@@ -1148,7 +1188,6 @@ function IfRow({
   item,
   handle,
   context,
-  row,
   onMove,
   onAdd,
   onCondition,
@@ -1156,7 +1195,6 @@ function IfRow({
   item: QueueIf;
   handle: HandleProps;
   context: Context;
-  row: (item: QueueStep | QueueMessage, handle: HandleProps) => ReactNode;
   onMove: (itemId: string, index: number) => void;
   onAdd: (entry: QueueEntry) => void;
   onCondition: (condition: Condition) => void;
@@ -1203,7 +1241,9 @@ function IfRow({
           className="graph-queue graph-queue-then"
           label={`Then: ${text}`}
           onMove={onMove}
-          renderItem={row}
+          renderItem={(step, stepHandle) => (
+            <RepeatedRow item={step} handle={stepHandle} context={context} />
+          )}
         />
       )}
       <AddMenu label={`Add to If ${text}`} place="if" context={context} onAdd={onAdd} />
@@ -1213,6 +1253,7 @@ function IfRow({
 
 type Choice =
   | { kind: 'if' }
+  | { kind: 'repeat' }
   | { kind: 'wait' }
   | { kind: 'delay' }
   | { kind: 'ok' }
@@ -1221,28 +1262,30 @@ type Choice =
 
 const CHOICE_TEXT = {
   if: ['If… then', 'Run steps only when a condition holds'],
+  repeat: ['Repeat until…', 'Loop: run steps again until a condition holds, a few rounds at most'],
   wait: ['Wait for…', 'Go on only once other agents have finished'],
   delay: ['Wait a while…', 'Go on after a set time, or at a time of day'],
   ok: ['Wait for your OK…', 'Hold here until you approve, ask for changes, or stop'],
   message: ['Message', 'Tell an agent something'],
 } as const;
 
-/** Where a ⊕ adds: to the queue itself, or to an if-then's steps. */
-type Place = 'queue' | 'if';
+/** Where a ⊕ adds: to the queue itself, to what a repeat holds, or to an if-then's steps. */
+type Place = 'queue' | 'repeat' | 'if';
 
 /**
  * What may sit where, in the order the ⊕ offers it, before the agent's actions (which go
- * anywhere). file.ts rejects the rest ("an if-then cannot hold …").
+ * anywhere). file.ts rejects the rest ("an if-then cannot hold …", "a repeat cannot hold …").
  */
 const PLACES: Readonly<Record<Place, readonly (keyof typeof CHOICE_TEXT)[]>> = {
-  queue: ['if', 'wait', 'delay', 'ok', 'message'],
+  queue: ['if', 'repeat', 'wait', 'delay', 'ok', 'message'],
+  repeat: ['wait', 'delay', 'message'],
   if: ['message'],
 };
 
 /**
  * The ⊕ and its dropdowns: what may be added in its `place` (PLACES), then the agent an action
- * acts on (unless `target` fixes it), the message's text, the if-then's condition, the agent to
- * wait for, how long to wait, or what an OK is on.
+ * acts on (unless `target` fixes it), the message's text, the if-then's condition, when a repeat
+ * stops, the agent to wait for, how long to wait, or what an OK is on.
  */
 function AddMenu({
   label,
@@ -1262,7 +1305,7 @@ function AddMenu({
   onAdd: (entry: QueueEntry) => void;
 }) {
   const [step, setStep] = useState<
-    'closed' | 'choose' | 'condition' | 'wait' | 'delay' | 'ok' | 'message' | AgentAction
+    'closed' | 'choose' | 'condition' | 'until' | 'wait' | 'delay' | 'ok' | 'message' | AgentAction
   >('closed');
   const close = () => {
     setStep('closed');
@@ -1305,9 +1348,11 @@ function AddMenu({
             setStep(
               choice.kind === 'if'
                 ? 'condition'
-                : choice.kind === 'action'
-                  ? choice.action
-                  : choice.kind,
+                : choice.kind === 'repeat'
+                  ? 'until'
+                  : choice.kind === 'action'
+                    ? choice.action
+                    : choice.kind,
             );
           }}
           onCancel={close}
@@ -1317,6 +1362,18 @@ function AddMenu({
         <ConditionPicker
           onPick={(condition) => {
             onAdd({ if: condition, then: [] });
+            close();
+          }}
+          onCancel={close}
+        />
+      )}
+      {step === 'until' && (
+        <ConditionPicker
+          mode="until"
+          onPick={(until) => {
+            if (until.kind !== 'timedOut') {
+              onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
+            }
             close();
           }}
           onCancel={close}
@@ -1392,15 +1449,26 @@ function AddMenu({
   );
 }
 
+/** The conditions a dropdown offers: an if-then's, or (`until`) a repeat's. */
+const CONDITION_CHOICES: Readonly<
+  Record<
+    'if' | 'until',
+    readonly { kind: 'succeeded' | 'failed' | 'outputContains' | 'timedOut'; label: string }[]
+  >
+> = { if: CONDITIONS, until: UNTIL_CONDITIONS };
+
 /**
  * Picks a condition, then the text to look for if it needs one. Or takes what was typed as the
- * condition, in the user's own words; changing such a condition starts from them.
+ * condition, in the user's own words; changing such a condition starts from them. An if-then's
+ * (`mode` 'if'), or when a repeat stops ('until'), which offers no timedOut.
  */
 function ConditionPicker({
+  mode = 'if',
   current,
   onPick,
   onCancel,
 }: {
+  mode?: 'if' | 'until';
   current?: Condition;
   onPick: (condition: Condition) => void;
   onCancel: () => void;
@@ -1419,9 +1487,11 @@ function ConditionPicker({
   }
   return (
     <SearchPicker
-      label="If…"
-      placeholder="Pick a condition, or describe one…"
-      options={CONDITIONS}
+      label={mode === 'if' ? 'If…' : 'Repeat until…'}
+      placeholder={
+        mode === 'if' ? 'Pick a condition, or describe one…' : 'Pick when to stop, or describe it…'
+      }
+      options={CONDITION_CHOICES[mode]}
       optionLabel={(c) => c.label}
       optionKey={(c) => c.kind}
       {...(current?.kind === 'freeText' ? { initialQuery: current.text } : {})}
@@ -1437,5 +1507,178 @@ function ConditionPicker({
       }}
       onCancel={onCancel}
     />
+  );
+}
+
+/** How many rounds a new repeat runs at most. */
+const DEFAULT_ROUNDS = 3;
+
+/** Every number of rounds a repeat may run at most: 1 to MAX_ROUNDS. */
+const ROUNDS = Array.from({ length: MAX_ROUNDS }, (_, i) => i + 1);
+
+/** Picks how many rounds a repeat runs at most, by typing: "5" finds 5 rounds. */
+function RoundsPicker({
+  onPick,
+  onCancel,
+}: {
+  onPick: (rounds: number) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <SearchPicker
+      label="How many rounds at most?"
+      placeholder="3, 5, 10…"
+      options={ROUNDS}
+      optionLabel={(n) => `${String(n)} round${n === 1 ? '' : 's'}`}
+      optionKey={String}
+      onPick={onPick}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/** What a repeat can do after its last round, if its condition still does not hold. */
+const OTHERWISE = [
+  { otherwise: 'ask', label: 'Ask me', detail: 'Stop and ask: one more round, or go on' },
+  {
+    otherwise: 'goOn',
+    label: 'Go on',
+    detail: 'Carry on with the queue; an If after it sees that it failed',
+  },
+] as const;
+
+/** Picks what a repeat does after its last round: ask the user, or go on (having failed). */
+function OtherwisePicker({
+  onPick,
+  onCancel,
+}: {
+  onPick: (otherwise: QueueRepeat['otherwise']) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <SearchPicker
+      label="After the last round…"
+      options={OTHERWISE}
+      optionLabel={(option) => option.label}
+      optionDetail={(option) => option.detail}
+      optionKey={(option) => option.otherwise}
+      onPick={(option) => {
+        onPick(option.otherwise);
+      }}
+      onCancel={onCancel}
+    />
+  );
+}
+
+/**
+ * A repeat: "Repeat until <condition>", how many rounds at most and what then (each a chip that
+ * changes it), and under it, indented on a rail that ends in ↺, the steps, messages, waits and
+ * delays it runs each round, with its own ⊕. While the run is in it, a pill says which round
+ * (`data-round`); once it is out of rounds and asks the user, how to decide shows under its header,
+ * without pointing at it.
+ */
+function RepeatRow({
+  item,
+  handle,
+  context,
+  onMove,
+  onAdd,
+  onRepeat,
+}: {
+  item: QueueRepeat;
+  handle: HandleProps;
+  context: Context;
+  onMove: (itemId: string, index: number) => void;
+  onAdd: (entry: QueueEntry) => void;
+  onRepeat: (change: RepeatChange) => void;
+}) {
+  const [editing, setEditing] = useState<'until' | 'rounds' | 'otherwise'>();
+  const marks = context.marks(item.id);
+  const text = context.untilText(item.until);
+  const rounds = roundsText(item.rounds);
+  const then = otherwiseText(item);
+  const { rowOf } = context;
+  const close = () => {
+    setEditing(undefined);
+  };
+  const chip = (which: 'until' | 'rounds' | 'otherwise', label: string, shown: string) => (
+    <button
+      type="button"
+      className="graph-queue-target"
+      aria-label={label}
+      aria-expanded={editing === which}
+      onClick={() => {
+        setEditing(editing === which ? undefined : which);
+      }}
+    >
+      {shown}
+    </button>
+  );
+  return (
+    <div className="graph-queue-repeat" {...marks}>
+      <div className="graph-queue-row graph-queue-repeat-head">
+        <Handle handle={handle} item={item} context={context} />
+        <span className="graph-queue-keyword">Repeat until</span>
+        {chip('until', `Change when it stops: ${text}`, text)}
+        {chip('rounds', `Change how many rounds: ${rounds}`, rounds)}
+        {chip('otherwise', `Change what happens after the last round: ${then}`, then)}
+        <RemoveButton item={item} context={context} />
+        {marks['data-decide'] !== undefined && (
+          <DecideBar
+            item={item}
+            onDecide={(answer) => {
+              context.onDecide(item.id, answer);
+            }}
+          />
+        )}
+        {editing === 'until' && (
+          <ConditionPicker
+            mode="until"
+            current={item.until}
+            onPick={(until) => {
+              if (until.kind !== 'timedOut') onRepeat({ until });
+              close();
+            }}
+            onCancel={close}
+          />
+        )}
+        {editing === 'rounds' && (
+          <RoundsPicker
+            onPick={(n) => {
+              onRepeat({ rounds: n });
+              close();
+            }}
+            onCancel={close}
+          />
+        )}
+        {editing === 'otherwise' && (
+          <OtherwisePicker
+            onPick={(otherwise) => {
+              onRepeat({ otherwise });
+              close();
+            }}
+            onCancel={close}
+          />
+        )}
+      </div>
+      {item.repeat.length > 0 && (
+        <SortableList
+          items={item.repeat}
+          className="graph-queue graph-queue-then graph-queue-rounds"
+          label={`Each round: ${text}`}
+          onMove={onMove}
+          {...(rowOf ? { rowOf: (inner: RepeatedItem) => rowOf(inner.id) } : {})}
+          renderItem={(inner, innerHandle) => (
+            <RepeatedRow item={inner} handle={innerHandle} context={context} />
+          )}
+        />
+      )}
+      <AddMenu
+        label={`Add to ${context.describe(item)}`}
+        place="repeat"
+        context={context}
+        onAdd={onAdd}
+      />
+    </div>
   );
 }

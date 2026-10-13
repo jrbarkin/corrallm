@@ -5,9 +5,10 @@
  * whose agent asks permission) pulses amber, as an agent with a question does on the canvas; a
  * queue stopped at an OK (or held when the run was stopped), and a wait for what was stopped, is
  * ringed grey; a task done is ticked, one that failed crossed, one skipped faded, and a wait that
- * ran out of time marked with an amber "!".
+ * ran out of time marked with an amber "!". A repeat breathes grey while it waits, pulses amber
+ * when out of rounds it asks the user, and once over is ticked (or crossed) as a whole.
  */
-:is(.graph-queue-row, .graph-queue-if)[data-run] {
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run] {
   --run: var(--graph-accent, #2563eb);
 }
 
@@ -24,23 +25,23 @@
     run-sheen 1.6s linear infinite;
 }
 
-.graph-queue-row[data-run='waiting'] {
+:is(.graph-queue-row, .graph-queue-repeat)[data-run='waiting'] {
   --run: color-mix(in srgb, CanvasText 40%, Canvas);
 
   animation: run-pulse 2.4s ease-in-out infinite;
 }
 
-.graph-queue-row[data-run='asking'] {
+:is(.graph-queue-row, .graph-queue-repeat)[data-run='asking'] {
   --run: #f59e0b;
 
   animation: run-pulse 1.2s ease-in-out infinite;
 }
 
-.graph-queue-row[data-run='stopped'] {
+:is(.graph-queue-row, .graph-queue-repeat)[data-run='stopped'] {
   box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
 }
 
-:is(.graph-queue-row, .graph-queue-if):is(
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat):is(
   [data-run='succeeded'],
   [data-run='failed'],
   [data-run='timedOut']
@@ -48,11 +49,11 @@
   opacity: 0.6;
 }
 
-:is(.graph-queue-row, .graph-queue-if)[data-run='skipped'] {
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run='skipped'] {
   opacity: 0.4;
 }
 
-:is(.graph-queue-row, .graph-queue-if):is(
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat):is(
     [data-run='succeeded'],
     [data-run='failed'],
     [data-run='skipped'],
@@ -74,17 +75,17 @@
   line-height: 1;
 }
 
-:is(.graph-queue-row, .graph-queue-if)[data-run='failed']::after {
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run='failed']::after {
   background: #e5484d;
   content: '✕';
 }
 
-:is(.graph-queue-row, .graph-queue-if)[data-run='skipped']::after {
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run='skipped']::after {
   background: color-mix(in srgb, CanvasText 45%, Canvas);
   content: '–';
 }
 
-:is(.graph-queue-row, .graph-queue-if)[data-run='timedOut']::after {
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run='timedOut']::after {
   background: #f59e0b;
   content: '!';
 }
@@ -115,11 +116,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.graph-queue-row, .graph-queue-if)[data-run] {
+  :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run] {
     animation: none;
   }
 
-  .graph-queue-row:is([data-run='running'], [data-run='waiting'], [data-run='asking']) {
+  :is(.graph-queue-row, .graph-queue-repeat):is(
+    [data-run='running'],
+    [data-run='waiting'],
+    [data-run='asking']
+  ) {
     box-shadow: 0 0 0 2px var(--run);
   }
 }

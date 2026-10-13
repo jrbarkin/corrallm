@@ -41,6 +41,7 @@ function setup(initial: Graph = graph) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('the queues view', () => {
@@ -362,5 +363,66 @@ describe('the queues view', () => {
         'stopped',
       );
     });
+  });
+
+  it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', () => {
+    // Steps succeed, and the output never contains it (the run's chance is Math.random).
+    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [
+          {
+            id: 'loop',
+            repeat: [{ id: 'build', action: 'Read' }],
+            until: { kind: 'outputContains', text: 'APPROVED' },
+            rounds: 1,
+            otherwise: 'ask',
+          },
+          { id: 'next', action: 'Grep' },
+        ]),
+      ],
+      edges: [],
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    const name = 'a: Repeat until the output contains “APPROVED” (up to 1 round)';
+    // In the view open now: it is closed and opened again.
+    const card = () => {
+      const found = within(queues())
+        .getByRole('group', { name })
+        .querySelector<HTMLElement>('[data-at]');
+      if (!found) throw new Error('no repeat');
+      return found;
+    };
+    const step = () => card().querySelector<HTMLElement>('[data-at="[\\"a\\",\\"build\\"]"]');
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    expect(card().dataset.round).toBe('Round 1 of 1');
+    expect(step()?.dataset.run).toBe('running');
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    // Out of rounds: it asks, as an OK does.
+    expect(card().dataset.run).toBe('asking');
+    expect(view.getByRole('status').textContent).toBe('0 working · 0 waiting · 1 needs you');
+    const pill = view.getByRole('button', { name: 'Decide for a' });
+    expect(pill.title).toBe("a's repeat is out of rounds");
+    expect(
+      [...card().querySelectorAll('.graph-queue-decide > button')].map((b) => b.textContent),
+    ).toEqual(['One more round', 'Try this…', 'Go on']);
+
+    // The canvas's Needs you sidebar asks too: one more round runs another.
+    fireEvent.click(view.getByRole('button', { name: 'Back' }));
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(
+      sidebar.getByText('1 round done, and still not: the output contains “APPROVED”.'),
+    ).toBeTruthy();
+    fireEvent.click(sidebar.getByRole('button', { name: 'One more round' }));
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    expect(card().dataset.round).toBe('Round 2 of 2');
+    expect(step()?.dataset.run).toBe('running');
+    expect(card().dataset.run).toBeUndefined();
   });
 });
