@@ -52,8 +52,12 @@ const api: AppApi = {
   detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
   writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
   resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
+  getUsage: () => invoke(API_CHANNELS.getUsage),
+  setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
+  simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
   onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
+  onUsageChanged: (listener) => listen(API_EVENTS.onUsageChanged, listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

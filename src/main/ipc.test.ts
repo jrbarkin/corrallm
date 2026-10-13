@@ -65,6 +65,11 @@ function fakeServices() {
         .fn<IpcServices['sessions']['resizeTerminal']>()
         .mockResolvedValue(undefined),
     },
+    usage: {
+      state: vi.fn<IpcServices['usage']['state']>().mockReturnValue({ readings: [], rules: {} }),
+      setRule: vi.fn<IpcServices['usage']['setRule']>(),
+      simulate: vi.fn<IpcServices['usage']['simulate']>(),
+    },
   };
 }
 
@@ -378,5 +383,61 @@ describe('terminal:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+  });
+});
+
+describe('usage:* handlers', () => {
+  it('pass checked arguments on', () => {
+    expect(invoke('usage:get', [])).toEqual({ readings: [], rules: {} });
+    const rule = { window: 'fiveHour', percent: 80, action: 'ask' };
+    invoke('usage:rule', ['Claude', rule]);
+    expect(services.usage.setRule).toHaveBeenCalledWith('Claude', rule);
+    invoke('usage:rule', ['Claude', null]);
+    expect(services.usage.setRule).toHaveBeenLastCalledWith('Claude', null);
+    const resetsAt = Date.now() + 60 * 60 * 1000;
+    invoke('usage:simulate', [
+      'Codex',
+      { weekly: { usedPercent: 91, resetsAt, extra: 'dropped' }, other: {} },
+    ]);
+    expect(services.usage.simulate).toHaveBeenCalledWith('Codex', {
+      weekly: { usedPercent: 91, resetsAt },
+    });
+    invoke('usage:simulate', ['Claude', null]);
+    expect(services.usage.simulate).toHaveBeenLastCalledWith('Claude', null);
+  });
+
+  it.each([
+    ['usage:get', 'an argument', ['Claude'], /no arguments/],
+    ['usage:rule', 'no rule', ['Claude'], /a backend and a rule/],
+    ['usage:rule', 'a backend corrallm reads no usage of', ['Gemini', null], /Expected one of/],
+    [
+      'usage:rule',
+      'a share out of range',
+      ['Claude', { window: 'weekly', percent: 100, action: 'ask' }],
+      /1 to 99/,
+    ],
+    [
+      'usage:rule',
+      'an action not built yet',
+      ['Claude', { window: 'weekly', percent: 80, action: 'nextBackend' }],
+      /Expected one of/,
+    ],
+    ['usage:simulate', 'no windows', ['Claude'], /a backend and its windows/],
+    [
+      'usage:simulate',
+      'a share over 100',
+      ['Claude', { fiveHour: { usedPercent: 150, resetsAt: null } }],
+      /from 0 to 100/,
+    ],
+    [
+      'usage:simulate',
+      'a reset too far ahead',
+      ['Claude', { fiveHour: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } }],
+      /reset/,
+    ],
+  ])('%s rejects %s', (channel, _label, args, message) => {
+    expect(() => invoke(channel, args)).toThrow(message);
+    expect(services.usage.setRule).not.toHaveBeenCalled();
+    expect(services.usage.simulate).not.toHaveBeenCalled();
   });
 });

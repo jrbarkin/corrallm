@@ -5,12 +5,14 @@ import path from 'node:path';
 import { MODEL_PATTERN, PERMISSION_MODES } from '../../../shared/session';
 import type { PermissionMode, UserMessage } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
+import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
 import { Screen } from './screen';
 import type { ProgramStatus } from './status';
+import { statusLineSettings, statusLineUsage } from './statusline';
 import { ENTER, keystrokes, typeable } from './typing';
 
 /*
@@ -106,6 +108,8 @@ export interface TerminalSessionDeps {
   /** Its environment: the agents' (spec.env), as a terminal sets it up (connector.ts). */
   env: (token: string) => Record<string, string>;
   timing: TerminalTiming;
+  /** Takes what Claude Code's status line says of its usage limits (statusline.ts). */
+  usage?: (windows: UsageWindows) => void;
 }
 
 export class TerminalSession implements LiveSession {
@@ -176,13 +180,26 @@ export class TerminalSession implements LiveSession {
   /** Starts its CLI: resolves once it runs. */
   async launch(): Promise<void> {
     try {
-      this.#registration = await this.#deps.hooks.register((event) => {
-        this.#hook(event);
-      });
+      this.#registration = await this.#deps.hooks.register(
+        (event) => {
+          this.#hook(event);
+        },
+        (input) => {
+          this.#statusLine(input);
+        },
+      );
       this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-claude-'));
+      // corrallm's status line, which wraps the user's own, reports Claude Code's usage limits.
+      const statusLine = await statusLineSettings({
+        dir: this.#settingsDir,
+        url: this.#registration.statusUrl,
+        token: this.#registration.token,
+        env: this.#spec.env,
+        cwd: this.#spec.cwd,
+      });
       await writeFile(
         path.join(this.#settingsDir, 'settings.json'),
-        JSON.stringify(hookSettings(this.#registration.url)),
+        JSON.stringify({ ...hookSettings(this.#registration.url), ...statusLine }),
         { mode: 0o600 },
       );
       await this.#start();
@@ -652,6 +669,13 @@ export class TerminalSession implements LiveSession {
         return;
       }
     }
+  }
+
+  /** What Claude Code gave its status line: its usage limits go to main's readings. */
+  #statusLine(input: HookEvent): void {
+    if (this.#exited || this.#closing) return;
+    const windows = statusLineUsage(input, Date.now());
+    if (windows) this.#deps.usage?.(windows);
   }
 
   // ---- Housekeeping.

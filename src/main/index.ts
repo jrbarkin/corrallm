@@ -16,6 +16,7 @@ import { createConnectors } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { SessionManager } from './sessions/manager';
 import { originKey } from './url-policy';
+import { UsageReadings } from './usage';
 import { createMainWindow } from './window';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
@@ -88,6 +89,14 @@ function main(): void {
       // What main remembers of canvas files, their project folders, and their agents' sessions.
       const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
       const projects = new ProjectFolders(memory, canvasFile);
+      // Every backend's usage, read from its agents' CLIs: every window hears each change.
+      const usage = new UsageReadings({ file: path.join(app.getPath('userData'), 'usage.json') });
+      await usage.load();
+      usage.subscribe((state) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendEvent(window.webContents, 'usage:changed', state);
+        }
+      });
       let environment: Promise<Record<string, string>> | undefined;
       // Resolved once, when the first session starts.
       const agentsEnvironment = () =>
@@ -98,6 +107,9 @@ function main(): void {
         connectors: createConnectors({
           fake: fakeSessions,
           clientApp: `${app.getName()}/${app.getVersion()}`,
+          usage: (backend, windows) => {
+            usage.take(backend, windows);
+          },
         }),
         environment: agentsEnvironment,
         projectOf: (contents) => projects.of(contents),
@@ -111,7 +123,7 @@ function main(): void {
         },
       });
       const files = new ProjectFiles({ environment: agentsEnvironment });
-      registerIpcHandlers(trustedOrigin, { projects, files, sessions });
+      registerIpcHandlers(trustedOrigin, { projects, files, sessions, usage });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;
@@ -119,9 +131,11 @@ function main(): void {
         if (quitting) return;
         quitting = true;
         event.preventDefault();
-        void Promise.all([sessions.closeEverything(), memory.flush()]).finally(() => {
-          app.quit();
-        });
+        void Promise.all([sessions.closeEverything(), memory.flush(), usage.flush()]).finally(
+          () => {
+            app.quit();
+          },
+        );
       });
 
       await openMainWindow();

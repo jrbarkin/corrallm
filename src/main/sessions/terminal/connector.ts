@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os';
 
+import type { UsageBackend, UsageWindows } from '../../../shared/usage';
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { HOOK_TOKEN, HookServer } from './hooks';
@@ -46,6 +47,8 @@ export interface TerminalConnectorOptions {
   /** Where sessions' settings files go. */
   tmp?: string;
   timing?: Partial<TerminalTiming>;
+  /** Takes the usage readings its sessions' status lines report (main's UsageReadings). */
+  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
 }
 
 export class TerminalConnector implements Connector {
@@ -53,6 +56,7 @@ export class TerminalConnector implements Connector {
   readonly #findClaude: (env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
+  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
 
@@ -61,11 +65,13 @@ export class TerminalConnector implements Connector {
     findClaude = (env) => requireClaude(env),
     tmp = tmpdir(),
     timing = {},
+    usage,
   }: TerminalConnectorOptions = {}) {
     this.#spawn = spawn;
     this.#findClaude = findClaude;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...timing };
+    this.#usage = usage;
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
@@ -77,6 +83,7 @@ export class TerminalConnector implements Connector {
       tmp: this.#tmp,
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
+      usage: (windows) => this.#usage?.('Claude', windows),
     });
     await session.launch();
     return session;

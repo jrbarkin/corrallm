@@ -50,6 +50,8 @@ export function hookSettings(url: string): { hooks: Record<string, unknown[]> } 
 /** A session's place on the server: where its hooks post, and with what token. */
 export interface HookRegistration {
   url: string;
+  /** Where its status line posts its input (statusline.ts), with the same token. */
+  statusUrl: string;
   token: string;
   /** Stops hearing its hooks. */
   release(): void;
@@ -61,24 +63,38 @@ export interface HookRegistration {
  */
 export class HookServer {
   readonly #listeners = new Map<string, (event: HookEvent) => void>();
+  /** What hears each session's status line input (at /status), by token. */
+  readonly #statusListeners = new Map<string, (input: HookEvent) => void>();
   #server: Promise<{ server: Server; url: string }> | undefined;
 
-  /** Starts hearing a session's hooks: `listener` hears each event its CLI posts. */
-  async register(listener: (event: HookEvent) => void): Promise<HookRegistration> {
+  /**
+   * Starts hearing a session's hooks: `listener` hears each event its CLI posts, and `status` (if
+   * given) each status line input its CLI's status line posts (statusline.ts).
+   */
+  async register(
+    listener: (event: HookEvent) => void,
+    status?: (input: HookEvent) => void,
+  ): Promise<HookRegistration> {
     const token = randomBytes(24).toString('hex');
     this.#listeners.set(token, listener);
+    if (status) this.#statusListeners.set(token, status);
+    const forget = () => {
+      this.#listeners.delete(token);
+      this.#statusListeners.delete(token);
+    };
     try {
       const { url } = await (this.#server ??= this.#listen());
       return {
         url,
+        statusUrl: url.replace(/\/hook$/, '/status'),
         token,
         release: () => {
-          this.#listeners.delete(token);
+          forget();
           if (this.#listeners.size === 0) this.#close();
         },
       };
     } catch (error) {
-      this.#listeners.delete(token);
+      forget();
       throw error;
     }
   }
@@ -115,10 +131,18 @@ export class HookServer {
       response.end(status === 200 ? '{}' : '');
     };
     const token = /^Bearer ([0-9a-f]+)$/.exec(request.headers.authorization ?? '')?.[1];
-    const listener = token === undefined ? undefined : this.#listeners.get(token);
-    if (request.method !== 'POST' || request.url !== '/hook' || listener === undefined) {
+    const known = token !== undefined && this.#listeners.has(token);
+    const route = request.url === '/hook' || request.url === '/status' ? request.url : undefined;
+    // A session's status line input goes to its status listener, if it has one; else nowhere.
+    const listener =
+      token === undefined
+        ? undefined
+        : route === '/status'
+          ? (this.#statusListeners.get(token) ?? (() => undefined))
+          : this.#listeners.get(token);
+    if (request.method !== 'POST' || route === undefined || !known || listener === undefined) {
       request.resume();
-      reply(request.method === 'POST' && request.url === '/hook' ? 401 : 404);
+      reply(request.method === 'POST' && route !== undefined ? 401 : 404);
       return;
     }
     const chunks: Buffer[] = [];
