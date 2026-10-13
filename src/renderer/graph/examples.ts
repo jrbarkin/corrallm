@@ -4,12 +4,18 @@ import featureCrew from './examples/feature-crew.corral?raw';
 import releaseChecks from './examples/release-checks.corral?raw';
 import reviewLoop from './examples/review-loop.corral?raw';
 import teamLead from './examples/team-lead.corral?raw';
+import type { TemplateField } from './templates';
 
-/** A canvas that shows what corrallm does, in the Examples gallery: a `.corral` file's text. */
+/**
+ * A canvas to start from, in the Templates gallery: a `.corral` file's text. Its `fields` are the
+ * blanks (`{{key}}`) in its agents' names, messages and conditions, filled in before it opens
+ * (templates.ts); without any, it opens as it is.
+ */
 export interface Example {
   name: string;
   description: string;
   text: string;
+  fields?: readonly TemplateField[];
 }
 
 export const EXAMPLES: readonly Example[] = [

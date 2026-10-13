@@ -64,6 +64,7 @@ import { EXAMPLES } from './examples';
 import type { Example } from './examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from './file';
+import { fillTemplate } from './templates';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
 import type { KeyAction } from './keys';
@@ -385,11 +386,11 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
           }, failed('open the canvas'));
         });
       },
-      /** Opens an example as a new canvas, saved nowhere yet. */
-      example: (example: Example, edited: boolean) => {
+      /** Opens a template as a new canvas, saved nowhere yet, its blanks filled from `values`. */
+      example: (example: Example, values: Readonly<Record<string, string>>, edited: boolean) => {
         unless(edited, () => {
-          load(fromFile(example.text), undefined);
-          files.forget().catch(failed('open the example'));
+          load(fillTemplate(fromFile(example.text), values), undefined);
+          files.forget().catch(failed('open the template'));
         });
       },
       save: (text: string, choose: boolean) => {
@@ -729,7 +730,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
                   setGallery(true);
                 }}
               >
-                Start from an example…
+                Start from a template…
               </button>
             </Panel>
           )}
@@ -825,9 +826,9 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         {gallery && (
           <ExampleGallery
             examples={EXAMPLES}
-            onPick={(example) => {
+            onPick={(example, values) => {
               setGallery(false);
-              commands?.example(example, edited);
+              commands?.example(example, values, edited);
             }}
             onClose={closeGallery}
           />

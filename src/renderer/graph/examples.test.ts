@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
+import { placeholdersOf } from './templates';
 import { isIf, isWait } from './queue';
 import { workEdges } from './work';
 
@@ -33,6 +34,10 @@ describe.each(EXAMPLES)('the $name example', (example) => {
         }
       }
     }
+  });
+
+  it('asks for each of its blanks, and has no field it does not use', () => {
+    expect(placeholdersOf(graph).sort()).toEqual((example.fields ?? []).map((f) => f.key).sort());
   });
 
   it('shows work passing between its agents', () => {

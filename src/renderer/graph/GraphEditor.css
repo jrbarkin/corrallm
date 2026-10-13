@@ -1029,7 +1029,7 @@ input.graph-label {
   cursor: pointer;
 }
 
-/* The examples gallery: a card for each example. */
+/* The templates gallery: a card for each template; one with blanks asks for them first. */
 .graph-examples {
   position: absolute;
   top: 50%;
@@ -1105,6 +1105,59 @@ input.graph-label {
   height: 10px;
   border-radius: 50%;
   background: var(--agent-color);
+}
+
+/* A template's blanks: what each asks for, over a box to fill it in, then Back or Create. */
+.graph-template-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.graph-template-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.graph-template-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+  resize: vertical;
+}
+
+.graph-template-field textarea:focus {
+  border-color: var(--graph-accent, #2563eb);
+  outline: none;
+}
+
+.graph-template-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.graph-template-actions button {
+  padding: 6px 14px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-template-actions button.primary {
+  border-color: var(--graph-accent, #2563eb);
+  background: var(--graph-accent, #2563eb);
+  color: white;
 }
 
 /* A wait: a chip for each agent it waits for, with a button that takes it off. */

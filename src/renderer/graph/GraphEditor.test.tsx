@@ -676,15 +676,15 @@ describe('GraphEditor', () => {
     it('opens an example as a new canvas, from an empty canvas or the file bar', () => {
       const files = fakeFiles();
       const { nodes } = setup(undefined, files);
-      fireEvent.click(button('Start from an example…'));
-      const gallery = within(screen.getByRole('dialog', { name: 'Examples' }));
+      fireEvent.click(button('Start from a template…'));
+      const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
       fireEvent.click(gallery.getByRole('button', { name: /^Team lead/ }));
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(nodes().map((n) => n.textContent)).toContain('Lead');
       expect(files.forget).toHaveBeenCalled();
       expect(document.title).toBe('Untitled — corrallm');
       // Not empty now: the file bar still has them.
-      expect(screen.queryByRole('button', { name: 'Start from an example…' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Start from a template…' })).toBeNull();
       fireEvent.click(button('Examples…'));
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(screen.queryByRole('dialog')).toBeNull();

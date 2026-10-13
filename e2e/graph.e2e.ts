@@ -741,9 +741,9 @@ test('links a wait to the step it waits for, across two queues side by side', as
 });
 
 test('shows every queue side by side, a wait below what it waits for and linked to it', async () => {
-  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
   await page
-    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
   await page.getByRole('button', { name: 'Show all queues' }).click();
@@ -767,9 +767,9 @@ test('shows every queue side by side, a wait below what it waits for and linked 
 });
 
 test('edits a queue in its lane by dragging, and animates the task each queue is on', async () => {
-  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
   await page
-    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Feature crew/ })
     .click();
   await page.getByRole('button', { name: 'Show all queues' }).click();
@@ -937,7 +937,7 @@ test('groups nest and take a parent node just like nodes do', async () => {
 });
 
 test('opens each example from the gallery, drawing its agents and the work between them', async () => {
-  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
   for (const name of [
     'Independent cross-check',
     'Review loop',
@@ -945,7 +945,7 @@ test('opens each example from the gallery, drawing its agents and the work betwe
     'Fan-out research',
     'Release checks',
   ]) {
-    const gallery = page.getByRole('dialog', { name: 'Examples' });
+    const gallery = page.getByRole('dialog', { name: 'Templates' });
     if ((await gallery.count()) === 0)
       await page.getByRole('button', { name: 'Examples…' }).click();
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
@@ -961,9 +961,9 @@ test('opens each example from the gallery, drawing its agents and the work betwe
 });
 
 test('keeps work both ways readable, gives messages room, and shows the menus of long queues', async () => {
-  await page.getByRole('button', { name: 'Start from an example…' }).click();
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
   await page
-    .getByRole('dialog', { name: 'Examples' })
+    .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
 
