@@ -31,6 +31,7 @@ const sessionBackend: SessionBackend = {
   stopTask: (agentId, taskId) => window.api.stopSessionTask(agentId, taskId),
   close: (agentId) => window.api.closeSession(agentId),
   files: (query) => window.api.findProjectFiles(query),
+  options: (cli) => window.api.settingsOptions(cli),
   sessions: (agentId) => window.api.listSessions(agentId),
   resume: (agentId, sessionId) => window.api.resumeSession(agentId, sessionId),
   previewRewind: (agentId, messageId) => window.api.previewRewind(agentId, messageId),

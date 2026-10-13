@@ -1,10 +1,10 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { findClaude, requireClaude } from './claude';
+import { claudeFlags, findClaude, helpFlags, requireClaude } from './claude';
 
 let dir: string;
 beforeEach(async () => {
@@ -54,4 +54,46 @@ describe('findClaude', () => {
       requireClaude({ PATH: path.join(dir, 'nothing') }, { home: dir, override: undefined }),
     ).rejects.toThrow(/Claude Code isn't installed/);
   });
+});
+
+describe('claudeFlags', () => {
+  it('reads the flags its --help lists', () => {
+    const help = [
+      'Options:',
+      '  --effort <level>                      Effort level for the current session',
+      '  --model <model>                       Model for the current session.',
+      '  -r, --resume [value]                  Resume a conversation',
+      '  --allowedTools, --allowed-tools <tools...>',
+      'Commands:',
+      '  auth                                  Manage authentication',
+    ].join('\n');
+    expect([...helpFlags(help)].sort()).toEqual([
+      '--allowed-tools',
+      '--allowedTools',
+      '--effort',
+      '--model',
+      '--resume',
+      '-r',
+    ]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'asks each claude once, and takes none from one that cannot say',
+    async () => {
+      const claude = await install('bin');
+      const count = path.join(dir, 'asked');
+      await writeFile(
+        claude,
+        `#!/bin/sh\necho x >> "${count}"\n[ "$1" = --help ] && echo '  --effort <level>  Effort'\n`,
+      );
+      const flags = claudeFlags();
+      expect((await flags(claude, {})).has('--effort')).toBe(true);
+      expect((await flags(claude, {})).has('--effort')).toBe(true);
+      expect((await readFile(count, 'utf8')).trim().split('\n')).toHaveLength(1);
+
+      const broken = await install('broken');
+      await writeFile(broken, '#!/bin/sh\nexit 1\n');
+      expect([...(await flags(broken, {}))]).toEqual([]);
+    },
+  );
 });

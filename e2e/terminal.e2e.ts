@@ -21,6 +21,8 @@ test.skip(process.platform === 'win32', 'The fake claude is a Node script run th
 let dir: string;
 let folder: string;
 let profile: string;
+/** The user's own Claude Code settings (CLAUDE_CONFIG_DIR), never the real ~/.claude. */
+let config: string;
 let claude: string;
 let app: ElectronApplication;
 let closeApp: () => Promise<void>;
@@ -31,8 +33,10 @@ test.beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
   folder = path.join(dir, 'shop');
   profile = path.join(dir, 'profile');
+  config = path.join(dir, 'claude-config');
   await mkdir(folder);
   await mkdir(profile);
+  await mkdir(config);
   // Runs the fake with this Node, whatever the login shell's PATH has.
   claude = path.join(dir, 'claude');
   const fake = path.join(import.meta.dirname, 'fake-claude.mjs');
@@ -49,7 +53,7 @@ test.afterEach(async () => {
 
 async function launch() {
   ({ app, close: closeApp } = await launchApp({
-    env: { CORRALLM_CLAUDE_PATH: claude },
+    env: { CORRALLM_CLAUDE_PATH: claude, CLAUDE_CONFIG_DIR: config },
     profile,
   }));
   page = await app.firstWindow();
@@ -111,8 +115,8 @@ async function claudeReady(count = 1) {
     .toBe(count);
 }
 
-/** A canvas with one Terminal agent, Shop, whose queue holds `queue`. */
-async function canvasFile(queue: { id: string; message: string }[] = []) {
+/** A canvas with one Terminal agent, Shop, whose queue holds `queue`, set as `settings` say. */
+async function canvasFile(queue: { id: string; message: string }[] = [], settings?: unknown) {
   const file = path.join(dir, 'team.corral');
   await writeFile(
     file,
@@ -127,6 +131,7 @@ async function canvasFile(queue: { id: string; message: string }[] = []) {
           position: { x: 0, y: 0 },
           agent: 'Claude',
           connection: 'terminal',
+          ...(settings === undefined ? {} : { settings }),
           ...(queue.length > 0 ? { queue } : {}),
         },
       ],
@@ -240,6 +245,71 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
   await expect(needsYou).toHaveCount(0);
+});
+
+test('starts Claude Code with the model, effort and mode its agent is set to, chosen beside its chip', async () => {
+  // The user's own: what applies where nothing is chosen, read without a prompt.
+  await writeFile(
+    path.join(config, 'settings.json'),
+    JSON.stringify({ model: 'opus', effortLevel: 'xhigh', permissions: { defaultMode: 'auto' } }),
+  );
+  await canvasFile([], { claude: { model: 'haiku', effort: 'low', mode: 'plan' } });
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  // Passed per session on its command line, never saved in the user's settings.
+  const [args = []] = await starts();
+  const flag = (name: string) => args[args.indexOf(name) + 1];
+  expect([flag('--model'), flag('--effort'), flag('--permission-mode')]).toEqual([
+    'haiku',
+    'low',
+    'plan',
+  ]);
+  const settings = view.getByRole('button', { name: /^Settings: / });
+  await expect(settings).toHaveText('Haiku · Low · Plan');
+  // A conversation, for a restart to resume.
+  await typeIn(terminal, 'hello', 'Enter');
+  await expect.poll(prompts).toEqual(['hello']);
+  await expect(status(view)).toHaveText('Idle');
+
+  // Back to the user's own model and mode: what they are shows.
+  await settings.click();
+  const panel = view.getByRole('dialog', { name: 'Claude Code settings' });
+  await panel.getByRole('button', { name: 'Model: Haiku' }).click();
+  await expect(panel.getByRole('menu', { name: 'Model' })).toContainText('Default (Opus)');
+  await panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }).click();
+  await panel.getByRole('button', { name: 'Mode: Plan' }).click();
+  await panel.getByRole('menuitemradio', { name: /^Default \(Auto\)/ }).click();
+  await expect(settings).toHaveText('Opus · Low · Auto');
+
+  // Restarted with them, resuming its conversation.
+  await panel.getByRole('button', { name: 'Restart with these' }).click();
+  await expect.poll(async () => (await starts()).length).toBe(2);
+  await claudeReady(2);
+  const again = (await starts())[1] ?? [];
+  expect(again[again.indexOf('--resume') + 1]).toBe(args[args.indexOf('--session-id') + 1]);
+  expect(again[again.indexOf('--effort') + 1]).toBe('low');
+  expect(again).not.toContain('--model');
+  expect(again).not.toContain('--permission-mode');
+  await expect(panel.getByRole('button', { name: 'Restart with these' })).toHaveCount(0);
+
+  // Saved with the agent, in the canvas's file.
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(view).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect
+    .poll(async () => {
+      const file = JSON.parse(await readFile(path.join(dir, 'team.corral'), 'utf8')) as {
+        nodes: { settings?: unknown }[];
+      };
+      return file.nodes[0]?.settings;
+    })
+    .toEqual({ claude: { effort: 'low' } });
+  // The user's own settings are as they were.
+  expect(JSON.parse(await readFile(path.join(config, 'settings.json'), 'utf8'))).toEqual({
+    model: 'opus',
+    effortLevel: 'xhigh',
+    permissions: { defaultMode: 'auto' },
+  });
 });
 
 test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {

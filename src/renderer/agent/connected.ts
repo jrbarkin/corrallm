@@ -1,5 +1,7 @@
 import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
+  AgentSettings,
+  Cli,
   Connection,
   FilesRewind,
   McpChange,
@@ -11,6 +13,7 @@ import type {
   SessionEvent,
   SessionMode,
   SessionOptions,
+  SettingsOptions,
   UserMessage,
 } from '../../shared/session';
 import { ipcErrorMessage } from '../ipc-error';
@@ -31,6 +34,8 @@ export interface SessionBackend {
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
+  /** What an agent of `cli` can be set to run with, and the user's own defaults (session:options). */
+  options(cli: Cli): Promise<SettingsOptions>;
   /** The conversations Claude Code kept for the project folder (/resume), the agent's marked. */
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
@@ -67,6 +72,7 @@ export const NO_BACKEND: SessionBackend = (() => {
     stopTask: refuse,
     close: refuse,
     files: () => Promise.resolve([]),
+    options: refuse,
     sessions: refuse,
     resume: refuse,
     previewRewind: refuse,
@@ -87,7 +93,8 @@ interface SentTurn {
 /**
  * Drives a connected agent's session: one the main process runs (Claude Code or Codex, in a
  * terminal or through a structured interface; src/main/sessions/). It starts the session when
- * first needed (with the mode, model and effort the user chose here), sends each turn's message,
+ * first needed (with what the agent is set to run with in its CLI: its settings' model, effort and
+ * mode), sends each turn's message,
  * and plays the events main sends back (src/shared/session.ts) onto the session: entries, prompts,
  * status, mode, model and effort, usage, and each turn's end. Mode, model and effort changes,
  * answers and interrupts go to main. A session that would not start says why (a notice offering
@@ -213,6 +220,7 @@ export class ConnectedDriver implements SessionDriver {
     }
     if (this.#running) {
       this.#running = undefined;
+      this.#io.dispatch({ type: 'running', settings: undefined });
       // It is going either way.
       this.#backend.close(this.#agentId).catch(() => undefined);
     }
@@ -400,6 +408,7 @@ export class ConnectedDriver implements SessionDriver {
         return;
       case 'closed':
         this.#running = undefined;
+        io.dispatch({ type: 'running', settings: undefined });
         // Its CLI is gone, and what it ran in the background or asked with it.
         if ((io.session().tasks?.length ?? 0) > 0) io.dispatch({ type: 'tasks', tasks: [] });
         this.#stopAsking();
@@ -418,21 +427,28 @@ export class ConnectedDriver implements SessionDriver {
   #run(): Promise<void> {
     if (this.#closed) return Promise.reject(new Error('This session was closed.'));
     if (!this.#running) {
-      const { chosen = {}, models } = this.#io.session();
+      const settings = this.#io.settings();
       const cli = CONNECTION_CLI[this.connection];
-      const model = models?.some((m) => m.value === chosen.model) ? chosen.model : undefined;
+      // Only a mode of its CLI's (one that asks: settings never hold another).
+      const mode =
+        settings.mode !== undefined && isModeOf(cli, settings.mode) ? settings.mode : null;
+      const given: AgentSettings = {
+        ...(settings.model === undefined ? {} : { model: settings.model }),
+        ...(settings.effort === undefined ? {} : { effort: settings.effort }),
+        ...(mode === null ? {} : { mode }),
+      };
       this.#refusal = undefined;
       const running = this.#backend
         .start(this.#agentId, {
           connection: this.connection,
-          // What the user chose here (a model a connected session offered; a mode of its CLI: the
-          // agent may have run another CLI before); main fills in the rest: what the agent was
-          // given before, or the user's own defaults.
-          model: model ?? null,
-          mode: chosen.mode !== undefined && isModeOf(cli, chosen.mode) ? chosen.mode : null,
-          ...(chosen.effort === undefined ? {} : { effort: chosen.effort }),
+          // What is not set is the user's own: their CLI's settings, else its defaults.
+          model: given.model ?? null,
+          mode,
+          ...(given.effort === undefined ? {} : { effort: given.effort }),
         })
-        .then(() => undefined);
+        .then(() => {
+          if (this.#running === running) this.#io.dispatch({ type: 'running', settings: given });
+        });
       running.catch(() => {
         // Not started: the next message tries again.
         if (this.#running === running) this.#running = undefined;
@@ -522,6 +538,7 @@ function replay(events: readonly SessionEvent[], agentId: string, connection: Co
       session = reduce(session, action);
     },
     session: () => session,
+    settings: () => ({}),
     idle: () => undefined,
     refused: () => undefined,
     newId: () => crypto.randomUUID(),

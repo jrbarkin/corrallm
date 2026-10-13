@@ -261,14 +261,51 @@ test('reads Codex’s usage from an app server of its own, as it starts and afte
     'aria-label',
     'Codex usage: 55% of 5-hour window, 17% of weekly window',
   );
-  // Read apart from its terminal: nothing was typed into it but the prompt, and its app server
-  // was asked nothing that uses the plan.
+  // Read apart from its terminal: nothing was typed into it but the prompt, and its app servers
+  // were asked nothing that uses the plan (its settings, beside its chip, read its models and
+  // the user's config).
   expect(await prompts()).toEqual(['hello']);
   const asked = (await readFile(path.join(folder, '.fake-codex', 'app-server.jsonl'), 'utf8'))
     .trim()
     .split('\n')
     .map((line) => (JSON.parse(line) as { method: string }).method);
-  expect(new Set(asked)).toEqual(new Set(['initialize', 'hooks/list', 'account/rateLimits/read']));
+  expect(new Set(asked)).toEqual(
+    new Set(['initialize', 'hooks/list', 'account/rateLimits/read', 'model/list', 'config/read']),
+  );
+});
+
+test('starts Codex with the model, effort and mode its agent is set to, from Codex’s own models', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view } = await openShop();
+  // Nothing set: the user's own config, as Codex's app server reads it, with no flags of corrallm's.
+  const settings = view.getByRole('button', { name: /^Settings: / });
+  await expect(settings).toHaveText('GPT-6.1-Sol · Max · Default');
+  const [first = []] = await starts();
+  expect(first).not.toContain('-m');
+  expect(first.some((arg) => arg.startsWith('model_reasoning_effort='))).toBe(false);
+
+  await settings.click();
+  const panel = view.getByRole('dialog', { name: 'Codex settings' });
+  await panel.getByRole('button', { name: 'Model: Default (GPT-6.1-Sol)' }).click();
+  await panel.getByRole('menuitemradio', { name: /^GPT-6-Luna/ }).click();
+  await panel.getByRole('button', { name: /^Effort: / }).click();
+  await panel.getByRole('menuitemradio', { name: /^Low/ }).click();
+  await panel.getByRole('button', { name: 'Mode: Default' }).click();
+  await panel.getByRole('menuitemradio', { name: /^Read only/ }).click();
+  await expect(settings).toHaveText('GPT-6-Luna · Low · Read only');
+
+  await panel.getByRole('button', { name: 'Restart with these' }).click();
+  await codexReady(2);
+  const again = (await starts())[1] ?? [];
+  expect(again[again.indexOf('-m') + 1]).toBe('gpt-6-luna');
+  expect(again).toContain('model_reasoning_effort="low"');
+  expect(again.slice(again.indexOf('-s'), again.indexOf('-s') + 4)).toEqual([
+    '-s',
+    'read-only',
+    '-a',
+    'on-request',
+  ]);
 });
 
 test('resumes the agent’s Codex session after the app restarts', async () => {

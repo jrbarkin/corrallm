@@ -10,6 +10,7 @@ import type { SessionEvent } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageBackend, UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../connector';
+import { helpFlags } from '../claude';
 import { TerminalConnector } from './connector';
 import { FakeClaude } from './fake-claude';
 import type { FakeClaudeOptions } from './fake-claude';
@@ -38,6 +39,8 @@ let events: SessionEvent[];
 let remembered: string[];
 let sessions: LiveSession[];
 let readings: [UsageBackend, UsageWindows][];
+/** What its claude's --help says. */
+let help: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
@@ -47,6 +50,7 @@ beforeEach(async () => {
   remembered = [];
   sessions = [];
   readings = [];
+  help = '  --effort <level>  Effort level for the current session\n  --model <model>  Model';
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -70,6 +74,7 @@ async function start(spec: Partial<SessionSpec> = {}) {
       return Promise.resolve(run);
     },
     findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
+    flags: () => Promise.resolve(helpFlags(help)),
     tmp: dir,
     timing: TIMING,
     usage: (backend, windows) => readings.push([backend, windows]),
@@ -176,6 +181,22 @@ describe('a Terminal session', () => {
     await start({ mode: 'plan', model: 'haiku' });
     expect(claude().arg('--permission-mode')).toBe('plan');
     expect(claude().arg('--model')).toBe('haiku');
+  });
+
+  it('starts at the effort chosen in corrallm, where its claude takes --effort', async () => {
+    await start({ effort: 'low' });
+    expect(claude().arg('--effort')).toBe('low');
+    // None chosen: the user's own.
+    await start({ effort: null });
+    expect(claude().args).not.toContain('--effort');
+    // Not one of Claude Code's levels: left out.
+    await start({ effort: 'ultra' });
+    expect(claude().args).not.toContain('--effort');
+    // An older claude, without the flag, would not start with it: left out.
+    help = '  --model <model>  Model for the current session';
+    await start({ effort: 'low' });
+    expect(claude().args).not.toContain('--effort');
+    expect(claude().arg('--settings')).toBeDefined();
   });
 
   it('starts in Manual when that was chosen, whatever the user’s default; the default model as such', async () => {

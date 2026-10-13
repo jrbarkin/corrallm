@@ -17,7 +17,8 @@
 // drawn.
 //
 // `claude auth status --json` reports a Claude subscription login (claude.ai), unless the
-// environment has an API key, as the real one does; it logs nothing.
+// environment has an API key, as the real one does; `claude --help` lists some of the real one's
+// options (--effort among them). Neither logs anything.
 //
 // With a file .fake-claude-usage.json in the folder (its usage limits, as Claude Code's status line
 // input has them: { "five_hour": { "used_percentage", "resets_at" }, ... }), it runs the status
@@ -39,6 +40,26 @@ const arg = (flag) => {
   const at = args.indexOf(flag);
   return at === -1 ? undefined : args[at + 1];
 };
+if (args[0] === '--help') {
+  process.stdout.write(
+    [
+      'Usage: claude [options] [command] [prompt]',
+      '',
+      'Options:',
+      '  --effort <level>                      Effort level for the current session',
+      '                                        (low, medium, high, xhigh, max)',
+      '  --model <model>                       Model for the current session. Provide',
+      '                                        an alias for the latest model (e.g.',
+      "                                        'fable', 'opus', or 'sonnet')",
+      '  --permission-mode <mode>              Permission mode to use for the session',
+      '  -r, --resume [value]                  Resume a conversation by session ID',
+      '  --session-id <uuid>                   Use a specific session ID',
+      '  --settings <file-or-json>             Path to a settings JSON file',
+      '',
+    ].join('\n'),
+  );
+  process.exit(0);
+}
 if (args[0] === 'auth' && args[1] === 'status') {
   const status = process.env.ANTHROPIC_API_KEY
     ? { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }

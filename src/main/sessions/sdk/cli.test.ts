@@ -150,6 +150,26 @@ describe('SdkConnector through the Agent SDK', () => {
     expect(events.some((e) => e.type === 'permission' || e.type === 'mode')).toBe(false);
   });
 
+  it('shows the model and effort the user’s settings start it with, before its first turn', async () => {
+    await mkdir(path.join(folder, '.claude'));
+    const settings = path.join(folder, '.claude', 'settings.json');
+    // Their own effort: what the composer shows for each model that takes it, none being chosen.
+    await writeFile(settings, JSON.stringify({ effortLevel: 'xhigh' }));
+    const first = await start();
+    const started = first.events[0];
+    if (started?.type !== 'started') throw new Error('it never started');
+    expect(started).toMatchObject({ model: 'default', effort: null });
+    expect(started.models.find((m) => m.value === 'default')?.defaultEffort).toBe('xhigh');
+    // A model that takes no effort has none.
+    expect(started.models.find((m) => m.value === 'haiku')?.defaultEffort).toBeUndefined();
+    await first.session.close();
+
+    // Their own model, rather than the account's default.
+    await writeFile(settings, JSON.stringify({ model: 'haiku' }));
+    const second = await start();
+    expect(second.events[0]).toMatchObject({ type: 'started', model: 'haiku' });
+  });
+
   it('leaves bypassing permissions out where the project’s settings turn it off, as the CLI does', async () => {
     await mkdir(path.join(folder, '.claude'));
     await writeFile(

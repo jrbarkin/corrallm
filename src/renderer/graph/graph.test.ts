@@ -37,6 +37,7 @@ import {
   setCondition,
   setConnection,
   setInstruction,
+  setSettings,
   setRepeat,
   setTime,
   setWaitFor,
@@ -289,9 +290,15 @@ describe('spawnAgent', () => {
     expectValid(linked);
   });
 
-  it('runs the new agent as the agent runs: connected or simulated', () => {
-    const g = graphOf([agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal' } })]);
-    expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data.connection).toBe('terminal');
+  it('runs the new agent as the agent runs: connected or simulated, set as it is', () => {
+    const settings = { claude: { model: 'haiku' } };
+    const g = graphOf([
+      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings } }),
+    ]);
+    expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data).toMatchObject({
+      connection: 'terminal',
+      settings,
+    });
     expect(
       get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data,
     ).not.toHaveProperty('connection');
@@ -632,6 +639,23 @@ describe('setConnection', () => {
     expect(get(setConnection(sdk, 'a', 'simulated'), 'a').data).toEqual({ label: 'a' });
     expect(setConnection(g, 'b', 'terminal')).toBe(g);
     expect(setConnection(g, 'F', 'terminal')).toBe(g);
+  });
+});
+
+describe('setSettings', () => {
+  it('sets what an agent runs with in one CLI, keeping the other’s; nothing set leaves nothing', () => {
+    const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
+    const claude = setSettings(g, 'a', 'claude', { model: 'haiku', mode: 'plan' });
+    const both = setSettings(claude, 'a', 'codex', { effort: 'low' });
+    expect(get(both, 'a').data.settings).toEqual({
+      claude: { model: 'haiku', mode: 'plan' },
+      codex: { effort: 'low' },
+    });
+    expect(get(setSettings(both, 'a', 'codex', {}), 'a').data.settings).toEqual({
+      claude: { model: 'haiku', mode: 'plan' },
+    });
+    expect(get(setSettings(claude, 'a', 'claude', {}), 'a').data).toEqual({ label: 'a' });
+    expect(setSettings(g, 'F', 'claude', { model: 'haiku' })).toBe(g);
   });
 });
 

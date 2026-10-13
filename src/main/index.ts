@@ -15,7 +15,7 @@ import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
 import { hardenSession, installNavigationGuards } from './security';
 import { planConsent, Settings } from './settings';
-import { createConnectors } from './sessions/connectors';
+import { createConnectors, createOptions } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { SessionManager } from './sessions/manager';
 import { Conversations } from './sessions/sdk/conversations';
@@ -120,6 +120,7 @@ function main(): void {
           },
         }),
         environment: agentsEnvironment,
+        options: createOptions({ fake: fakeSessions }),
         // The conversations Claude Code kept, whichever connection ran them.
         conversations: new Conversations(),
         projectOf: (contents) => projects.of(contents),

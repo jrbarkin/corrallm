@@ -55,6 +55,7 @@ const api: AppApi = {
   previewRewind: (agentId, messageId) => invoke(API_CHANNELS.previewRewind, agentId, messageId),
   rewindSession: (agentId, messageId, restore) =>
     invoke(API_CHANNELS.rewindSession, agentId, messageId, restore),
+  settingsOptions: (cli) => invoke(API_CHANNELS.settingsOptions, cli),
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),

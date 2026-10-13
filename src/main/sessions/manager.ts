@@ -1,6 +1,8 @@
 import type { WebContents } from 'electron';
 
-import { CLIS, CONNECTION_CLI, isModeOf, UNASKING_MODES } from '../../shared/session';
+import { homedir } from 'node:os';
+
+import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
   Cli,
   Connection,
@@ -14,10 +16,11 @@ import type {
   SessionEvent,
   SessionMode,
   SessionOptions,
+  SettingsOptions,
   UserMessage,
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
-import type { CanvasMemory, Chosen, Remembered } from '../memory';
+import type { CanvasMemory, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { KeptConversation } from './sdk/conversations';
 import { droppedPaste } from './terminal/drop';
@@ -31,6 +34,7 @@ const NO_REWIND = 'This agent rewinds in its terminal: press Esc twice there.';
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
+const NO_OPTIONS = 'corrallm can’t read that CLI’s settings.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -57,6 +61,21 @@ export interface SessionManagerDeps {
   canvasOf: (contents: WebContents) => string | undefined;
   /** Where each canvas file's agents' session ids are remembered. */
   memory: CanvasMemory;
+  /**
+   * What an agent of each CLI can be set to run with, read in a folder for the agents' environment
+   * (claude-settings.ts, codex/options.ts): without a session, or a prompt.
+   */
+  options?: Readonly<
+    Partial<
+      Record<
+        Cli,
+        (context: {
+          cwd: string;
+          env: Readonly<Record<string, string>>;
+        }) => Promise<SettingsOptions>
+      >
+    >
+  >;
   /** Sends an event to the renderer whose agent's session it is. */
   emit: (
     contents: WebContents,
@@ -75,11 +94,11 @@ interface Agent {
   session: Promise<LiveSession<SessionMode>>;
 }
 
-/** Where each CLI's session ids, and what agents were given in it, are remembered (memory.ts). */
+/** Where each CLI's session ids are remembered (memory.ts). */
 const REMEMBERED = {
-  claude: { ids: 'sessions', chosen: 'chosen' },
-  codex: { ids: 'threads', chosen: 'codexChosen' },
-} as const satisfies Record<Cli, { ids: keyof Remembered; chosen: keyof Remembered }>;
+  claude: { ids: 'sessions' },
+  codex: { ids: 'threads' },
+} as const satisfies Record<Cli, { ids: keyof Remembered }>;
 
 /**
  * Every connected session, by the renderer whose canvas it belongs to and the agent's id. It
@@ -87,19 +106,15 @@ const REMEMBERED = {
  * project folder, resuming the agent's last session, and passes the renderer's requests on to it.
  * It remembers each agent's session id with the canvas's file (memory.ts), so that sessions survive
  * a restart: one per CLI (Claude Code's session, Codex's thread), which each of its connections
- * resumes. It remembers too the model, mode and effort each agent was given in each CLI (at its
- * start, or switched to since), so that it starts with them again; never a mode that never asks
- * (bypassing permissions, Codex's Full access), which the user chooses afresh each time. A canvas
- * opened or forgotten, a new project folder, a renderer that goes, and the app quitting all end
- * sessions.
+ * resumes. What an agent starts with (its model, effort and mode) is the renderer's to say: its
+ * settings, saved in the canvas's file. A canvas opened or forgotten, a new project folder, a
+ * renderer that goes, and the app quitting all end sessions.
  */
 export class SessionManager {
   readonly #deps: SessionManagerDeps;
   readonly #agents = new Map<WebContents, Map<string, Agent>>();
   /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
   readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
-  /** What each renderer's agents were given, per CLI: what starting them again uses. */
-  readonly #chosen = new WeakMap<WebContents, Record<Cli, Map<string, Chosen>>>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
   /** The conversations each renderer was last listed (session:list): the only ones it may open. */
@@ -130,15 +145,8 @@ export class SessionManager {
     const cwd = this.#deps.projectOf(contents);
     if (cwd === undefined) throw new Error(NO_PROJECT);
     this.#watch(contents);
-    // What the user chose now, or else what the agent was given before (in this CLI).
-    void this.#choose(contents, cli, agentId, options);
-    const chosen = this.#chosenOf(contents)[cli].get(agentId);
-    const given: SessionOptions = {
-      connection: options.connection,
-      model: options.model ?? chosen?.model ?? null,
-      mode: options.mode ?? chosen?.mode ?? null,
-      effort: options.effort === undefined ? (chosen?.effort ?? null) : options.effort,
-    };
+    // What is not given is the user's own: their CLI's settings, else its defaults.
+    const given: SessionOptions = { ...options, effort: options.effort ?? null };
     const agent: Agent = {
       connection: options.connection,
       session: this.#launch(contents, agentId, cwd, given, () => agents.get(agentId) === agent),
@@ -171,33 +179,40 @@ export class SessionManager {
     await (await this.#session(contents, agentId)).interrupt();
   }
 
-  /** Switches the agent's session's mode (one of its CLI's): what it starts in next time too. */
+  /** Switches the agent's session's mode (one of its CLI's). */
   async setMode(contents: WebContents, agentId: string, mode: SessionMode): Promise<void> {
     const agent = this.#agents.get(contents)?.get(agentId);
     if (agent && !isModeOf(CONNECTION_CLI[agent.connection], mode)) {
       throw new TypeError(`${mode} is not a mode of ${agent.connection} sessions`);
     }
     await (await this.#session(contents, agentId)).setMode(mode);
-    if (agent) await this.#choose(contents, CONNECTION_CLI[agent.connection], agentId, { mode });
   }
 
-  /** Switches the agent's session's model: what it starts with next time too. */
+  /** Switches the agent's session's model. */
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
-    const agent = this.#agents.get(contents)?.get(agentId);
     await (await this.#session(contents, agentId)).setModel(model);
-    if (agent) await this.#choose(contents, CONNECTION_CLI[agent.connection], agentId, { model });
   }
 
   /**
    * Switches the agent's session's reasoning effort (null: its model's default), where its
-   * connection takes it from corrallm: what it starts with next time too.
+   * connection takes it from corrallm.
    */
   async setEffort(contents: WebContents, agentId: string, effort: string | null): Promise<void> {
-    const agent = this.#agents.get(contents)?.get(agentId);
     const session = await this.#session(contents, agentId);
     if (!session.setEffort) throw new Error(NO_EFFORT);
     await session.setEffort(effort);
-    if (agent) await this.#choose(contents, CONNECTION_CLI[agent.connection], agentId, { effort });
+  }
+
+  /**
+   * What an agent of `cli` can be set to run with (its models and their efforts), and the user's
+   * own defaults, as read in the canvas's project folder (else the home folder, for the user's own
+   * settings alone): without a session, or a prompt.
+   */
+  async settingsOptions(contents: WebContents, cli: Cli): Promise<SettingsOptions> {
+    const read = this.#deps.options?.[cli];
+    if (!read) throw new Error(NO_OPTIONS);
+    const env = await this.#deps.environment();
+    return read({ cwd: this.#deps.projectOf(contents) ?? env.HOME ?? homedir(), env });
   }
 
   /** What restoring the agent's files to how they were before a message would change. */
@@ -361,10 +376,7 @@ export class SessionManager {
     if (agent) await this.#end(contents, agentId, agent, false);
   }
 
-  /**
-   * A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load, and
-   * what its agents were given.
-   */
+  /** A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load. */
   async canvasOpened(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
     const file = this.#deps.canvasOf(contents);
@@ -373,33 +385,24 @@ export class SessionManager {
       claude: new Map(Object.entries(remembered?.sessions ?? {})),
       codex: new Map(Object.entries(remembered?.threads ?? {})),
     });
-    this.#chosen.set(contents, {
-      claude: new Map(Object.entries(remembered?.chosen ?? {})),
-      codex: new Map(Object.entries(remembered?.codexChosen ?? {})),
-    });
   }
 
   /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
   async canvasForgotten(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
     this.#ids.set(contents, noIds());
-    this.#chosen.set(contents, noChoices());
   }
 
-  /**
-   * The canvas was saved (maybe to a new file): the file remembers its agents' sessions, and what
-   * they were given.
-   */
+  /** The canvas was saved (maybe to a new file): the file remembers its agents' sessions. */
   async canvasSaved(contents: WebContents): Promise<void> {
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
     const ids = this.#idsOf(contents);
-    const chosen = this.#chosenOf(contents);
     await this.#deps.memory.update(file, (remembered) => {
       const next: Remembered = { ...remembered, sessions: Object.fromEntries(ids.claude) };
       if (ids.codex.size > 0) next.threads = Object.fromEntries(ids.codex);
       else delete next.threads;
-      return CLIS.reduce((all, cli) => withChosen(all, cli, Object.fromEntries(chosen[cli])), next);
+      return next;
     });
   }
 
@@ -472,44 +475,6 @@ export class SessionManager {
       ...remembered,
       [field]: { ...remembered[field], [agentId]: sessionId },
     }));
-  }
-
-  /**
-   * Records what the user chose for an agent in `cli` (each of `model` and `mode` that is not null,
-   * and `effort` if given: null forgets it), with the canvas's file if it has one. Choosing a mode
-   * that never asks (bypassing permissions, Codex's Full access) forgets the mode instead: a
-   * session never starts in one unless the user says so then.
-   */
-  async #choose(
-    contents: WebContents,
-    cli: Cli,
-    agentId: string,
-    {
-      model = null,
-      mode = null,
-      effort,
-    }: { model?: string | null; mode?: SessionMode | null; effort?: string | null },
-  ): Promise<void> {
-    if (model === null && mode === null && effort === undefined) return;
-    const all = this.#chosenOf(contents)[cli];
-    const before = all.get(agentId) ?? {};
-    const kept = mode === null ? before.mode : UNASKING_MODES.includes(mode) ? undefined : mode;
-    const reasoning = effort === undefined ? before.effort : (effort ?? undefined);
-    const chosen: Chosen = {
-      ...((model ?? before.model) === undefined ? {} : { model: model ?? before.model }),
-      ...(kept === undefined ? {} : { mode: kept }),
-      ...(reasoning === undefined ? {} : { effort: reasoning }),
-    };
-    if (Object.keys(chosen).length === 0) all.delete(agentId);
-    else all.set(agentId, chosen);
-    const file = this.#deps.canvasOf(contents);
-    if (file === undefined) return;
-    const field = REMEMBERED[cli].chosen;
-    await this.#deps.memory.update(file, (remembered) => {
-      const others = Object.entries(remembered[field] ?? {}).filter(([id]) => id !== agentId);
-      if (Object.keys(chosen).length > 0) others.push([agentId, chosen]);
-      return withChosen(remembered, cli, Object.fromEntries(others));
-    });
   }
 
   /** Shows the agent's session's screen in the renderer's view, if it has a view and a screen. */
@@ -590,15 +555,6 @@ export class SessionManager {
     return agents;
   }
 
-  #chosenOf(contents: WebContents): Record<Cli, Map<string, Chosen>> {
-    let chosen = this.#chosen.get(contents);
-    if (!chosen) {
-      chosen = noChoices();
-      this.#chosen.set(contents, chosen);
-    }
-    return chosen;
-  }
-
   #idsOf(contents: WebContents): Record<Cli, Map<string, string>> {
     let ids = this.#ids.get(contents);
     if (!ids) {
@@ -627,25 +583,5 @@ export class SessionManager {
 
 /** No session ids, for any CLI. */
 function noIds(): Record<Cli, Map<string, string>> {
-  return { claude: new Map(), codex: new Map() };
-}
-
-/** What is remembered, with what agents were given in `cli` replaced (none: left out). */
-function withChosen(
-  remembered: Remembered,
-  cli: Cli,
-  chosen: Readonly<Record<string, Chosen>>,
-): Remembered {
-  const { chosen: claude, codexChosen: codex, ...rest } = remembered;
-  const given = { claude, codex, [cli]: Object.keys(chosen).length === 0 ? undefined : chosen };
-  return {
-    ...rest,
-    ...(given.claude === undefined ? {} : { chosen: given.claude }),
-    ...(given.codex === undefined ? {} : { codexChosen: given.codex }),
-  };
-}
-
-/** Nothing given to any agent, in any CLI. */
-function noChoices(): Record<Cli, Map<string, Chosen>> {
   return { claude: new Map(), codex: new Map() };
 }

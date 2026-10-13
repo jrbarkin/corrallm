@@ -381,7 +381,7 @@ describe('the Codex Terminal connector', () => {
     ).rejects.toThrow('corrallm needs Codex 0.160.0 or later');
   });
 
-  it('starts Codex with the reasoning effort chosen for the agent (on its App Server, say)', async () => {
+  it('starts Codex with the model and reasoning effort the agent is set to', async () => {
     await start(['resume'], { resume: RECORDED_SESSION, model: 'gpt-6-luna', effort: 'high' });
     expect(runs[0]?.args).toContain('model_reasoning_effort="high"');
     expect(runs[0]?.args.slice(-2)).toEqual(['-m', 'gpt-6-luna']);

@@ -8,8 +8,10 @@ import type {
   RewindResult,
   SessionAnswer,
   SessionEvent,
+  Cli,
   SessionMode,
   SessionOptions,
+  SettingsOptions,
   UserMessage,
 } from './session';
 import type { TerminalEvent } from './terminal';
@@ -114,6 +116,11 @@ export interface IpcContract {
     args: [agentId: string, messageId: string, restore: RewindRestore];
     result: RewindResult;
   };
+  /**
+   * What an agent of a CLI can be set to run with (its models, with their efforts) and the user's
+   * own defaults, read in the canvas's project folder without a session or a prompt.
+   */
+  'session:options': { args: [cli: Cli]; result: SettingsOptions };
   /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
   'session:mcp': { args: [agentId: string]; result: McpServer[] };
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
@@ -223,6 +230,7 @@ export interface InvokeApi {
     ...args: IpcArgs<'session:rewind-preview'>
   ): Promise<IpcResult<'session:rewind-preview'>>;
   rewindSession(...args: IpcArgs<'session:rewind'>): Promise<IpcResult<'session:rewind'>>;
+  settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
@@ -268,6 +276,7 @@ export const API_CHANNELS = {
   resumeSession: 'session:resume',
   previewRewind: 'session:rewind-preview',
   rewindSession: 'session:rewind',
+  settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
   attachTerminal: 'terminal:attach',

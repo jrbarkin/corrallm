@@ -97,7 +97,8 @@ if (args[0] === 'auth' && args[1] === 'status') {
 
 const sessionId = option('--resume') ?? option('--session-id') ?? randomUUID();
 let mode = option('--permission-mode') ?? projectSettings().permissions.defaultMode ?? 'default';
-let model = option('--model') ?? 'claude-opus-5-5';
+// As the CLI: --model, else the settings' model, else the account's default.
+let model = option('--model') ?? projectSettings().model ?? 'claude-opus-5-5';
 let cost = 0;
 
 /** Where it keeps the conversation's transcript, if anywhere. */
@@ -893,7 +894,7 @@ input.on('line', (line) => {
       respond(message.request_id, {
         effective: projectSettings(),
         sources: [],
-        applied: { model, effort: null },
+        applied: { model, effort: projectSettings().effortLevel ?? null },
       });
     } else if (subtype === 'rewind_files') {
       respond(

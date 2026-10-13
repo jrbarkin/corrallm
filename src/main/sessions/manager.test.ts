@@ -109,7 +109,7 @@ describe('SessionManager', () => {
         env: { PATH: '/usr/bin' },
         model: 'fast',
         mode: 'acceptEdits',
-        // Nothing chosen, nor given before: the model's default.
+        // No effort given: the user's own, else the model's default.
         effort: null,
         resume: null,
       },
@@ -181,38 +181,23 @@ describe('SessionManager', () => {
     expect(fake.started.at(-1)?.resume).toBeNull();
   });
 
-  it('starts an agent with the model and mode it was last given, after a restart too', async () => {
+  it('starts an agent with the settings the renderer gives, else the user’s own', async () => {
     const before = manager();
     const contents = window('/work/team.corral');
-    // Nothing chosen: the CLI's default model, and the user's own default mode.
-    await before.start(contents, 'a', OPTIONS);
-    expect(fake.started.at(-1)).toMatchObject({ model: null, mode: null });
-    await before.setModel(contents, 'a', 'fast');
-    await before.setMode(contents, 'a', 'plan');
-    // Chosen before it started: given at the start.
-    await before.start(contents, 'b', { ...OPTIONS, mode: 'acceptEdits' });
+    await before.start(contents, 'a', { ...OPTIONS, model: 'fast', mode: 'plan', effort: 'high' });
+    expect(fake.started.at(-1)).toMatchObject({ model: 'fast', mode: 'plan', effort: 'high' });
+    await before.setModel(contents, 'a', 'slow');
     await before.closeEverything();
 
+    // After a restart: what the renderer gives (its agent's settings, saved in the canvas's
+    // file), and nothing main kept. Nothing given: the user's own defaults.
     const after = manager();
     const reopened = window('/work/team.corral');
     await after.canvasOpened(reopened);
     await after.start(reopened, 'a', OPTIONS);
-    expect(fake.started.at(-1)).toMatchObject({ agentId: 'a', model: 'fast', mode: 'plan' });
-    await after.start(reopened, 'b', { ...OPTIONS, connection: 'terminal' });
-    expect(terminal.started.at(-1)).toMatchObject({
-      agentId: 'b',
-      model: null,
-      mode: 'acceptEdits',
-    });
-    // What the renderer chose now wins, and is what is remembered next.
-    await after.close(reopened, 'a');
-    await after.start(reopened, 'a', { ...OPTIONS, model: 'default' });
-    expect(fake.started.at(-1)).toMatchObject({ model: 'default', mode: 'plan' });
+    expect(fake.started.at(-1)).toMatchObject({ model: null, mode: null, effort: null });
     await memory.flush();
-    expect((await memory.get('/work/team.corral')).chosen?.a).toEqual({
-      model: 'default',
-      mode: 'plan',
-    });
+    expect(Object.keys(await memory.get('/work/team.corral'))).toEqual(['sessions']);
   });
 
   it('never starts an agent bypassing permissions because it did before', async () => {
@@ -221,17 +206,6 @@ describe('SessionManager', () => {
     await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
     await sessions.setMode(contents, 'a', 'bypassPermissions');
     await sessions.close(contents, 'a');
-    await sessions.start(contents, 'a', OPTIONS);
-    expect(fake.started.at(-1)?.mode).toBeNull();
-    await memory.flush();
-    expect((await memory.get('/work/team.corral')).chosen?.a).toBeUndefined();
-  });
-
-  it('forgets the model and mode chosen when the canvas is replaced by a new one', async () => {
-    const sessions = manager();
-    const contents = window();
-    await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
-    await sessions.canvasForgotten(contents);
     await sessions.start(contents, 'a', OPTIONS);
     expect(fake.started.at(-1)?.mode).toBeNull();
   });
@@ -258,8 +232,6 @@ describe('SessionManager', () => {
     expect(await memory.get('/work/team.corral')).toEqual({
       sessions: { a: fake.ids[0] },
       threads: { a: codex.ids[0] },
-      // What it was given in Codex, apart from what it was given in Claude Code (nothing).
-      codexChosen: { a: { mode: 'auto' } },
     });
 
     // After a restart, each is resumed by its own CLI.
@@ -281,28 +253,6 @@ describe('SessionManager', () => {
     await sessions.setMode(contents, 'a', 'full-access');
     expect(types(contents)).toContain('a:mode');
     await expect(sessions.setMode(contents, 'a', 'acceptEdits')).rejects.toThrow(/mode/);
-  });
-
-  it('remembers what an agent was given in each CLI apart, never Codex’s Full access', async () => {
-    const codex = new FakeConnector({ cli: 'codex' });
-    const sessions = manager({ 'app-server': codex });
-    const contents = window('/work/team.corral');
-    const appServer: SessionOptions = { connection: 'app-server', model: null, mode: null };
-    await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
-    await sessions.start(contents, 'a', { ...appServer, mode: 'read-only' });
-    await sessions.start(contents, 'a', OPTIONS);
-    expect(fake.started.at(-1)?.mode).toBe('plan');
-    await sessions.start(contents, 'a', appServer);
-    expect(codex.started.at(-1)?.mode).toBe('read-only');
-    // Full access is the user's to choose each time.
-    await sessions.setMode(contents, 'a', 'full-access');
-    await sessions.close(contents, 'a');
-    await sessions.start(contents, 'a', appServer);
-    expect(codex.started.at(-1)?.mode).toBeNull();
-    await memory.flush();
-    const remembered = await memory.get('/work/team.corral');
-    expect(remembered.chosen?.a).toEqual({ mode: 'plan' });
-    expect(remembered.codexChosen?.a).toBeUndefined();
   });
 
   it('says a connection corrallm cannot run', async () => {
@@ -411,7 +361,7 @@ describe('SessionManager', () => {
     await expect(sessions.stopTask(contents, 'b', 'b1')).rejects.toThrow(/in its terminal/);
   });
 
-  it('starts a session at the effort it was given, and remembers the effort chosen', async () => {
+  it('starts a session at the effort it is given', async () => {
     const setEffort = vi.fn<NonNullable<LiveSession['setEffort']>>().mockResolvedValue(undefined);
     const specs: SessionSpec[] = [];
     const plain: LiveSession = {
@@ -432,18 +382,31 @@ describe('SessionManager', () => {
     expect(specs.at(-1)?.effort).toBe('high');
     await sessions.setEffort(contents, 'a', 'low');
     expect(setEffort).toHaveBeenCalledWith('low');
-    await sessions.closeEverything();
+  });
 
-    // After a restart: the effort it was last given, unless the renderer chooses one.
-    const after = manager({ sdk: { start } });
-    const reopened = window('/work/team.corral');
-    await after.canvasOpened(reopened);
-    await after.start(reopened, 'a', OPTIONS);
-    expect(specs.at(-1)?.effort).toBe('low');
-    // The model's default, chosen: forgotten.
-    await after.setEffort(reopened, 'a', null);
-    await memory.flush();
-    expect((await memory.get('/work/team.corral')).chosen?.a).toBeUndefined();
+  it('reads what each CLI’s agents can be set to in the project folder, for the agents’ environment', async () => {
+    const claude = vi.fn(() =>
+      Promise.resolve({ models: [], defaults: { model: 'opus', effort: null, mode: null } }),
+    );
+    const sessions = new SessionManager({
+      connectors: {},
+      environment: () => Promise.resolve({ PATH: '/usr/bin', HOME: '/home/me' }),
+      projectOf: (contents) => projects.get(contents),
+      canvasOf: () => undefined,
+      memory,
+      emit: () => undefined,
+      options: { claude },
+    });
+    const contents = window();
+    expect((await sessions.settingsOptions(contents, 'claude')).defaults.model).toBe('opus');
+    expect(claude).toHaveBeenLastCalledWith({
+      cwd: '/work/app',
+      env: { PATH: '/usr/bin', HOME: '/home/me' },
+    });
+    // No project folder yet: the user's own settings, read from their home folder.
+    await sessions.settingsOptions(renderer(), 'claude');
+    expect(claude).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/home/me' }));
+    await expect(sessions.settingsOptions(contents, 'codex')).rejects.toThrow(/can’t read/);
   });
 
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {

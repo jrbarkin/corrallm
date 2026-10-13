@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent } from '../../shared/session';
+import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
+import { fromFile } from '../graph/file';
 import { GraphEditor } from '../graph/GraphEditor';
+import type { CanvasFiles } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../test-backend';
@@ -44,13 +46,25 @@ async function open({
   start,
   queue,
   data = { connection: 'terminal' },
+  options,
 }: {
   start?: () => Promise<null>;
   queue?: GraphNode['data']['queue'];
   data?: Partial<GraphNode['data']> & { connection: 'terminal' | 'codex-terminal' };
+  /** What main reads of what its CLI's agents can be set to, or why it could not. */
+  options?: SettingsOptions | Error;
 } = {}) {
+  /** Where the canvas is saved, as a .corral file's text. */
+  const save = vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral');
+  const files: CanvasFiles = {
+    open: () => Promise.resolve(null),
+    save,
+    forget: () => Promise.resolve(null),
+  };
   const sessions = fakeBackend();
   if (start) sessions.backend.start.mockImplementation(start);
+  if (options instanceof Error) sessions.backend.options.mockRejectedValue(options);
+  else if (options) sessions.backend.options.mockResolvedValue(options);
   const terminals = fakeTerminals();
   const graph: Graph = {
     nodes: [agent('a', { ...data, ...(queue ? { queue } : {}) })],
@@ -61,6 +75,7 @@ async function open({
     <OpenLinkContext.Provider value={openLink}>
       <GraphEditor
         initialGraph={graph}
+        files={files}
         sessionBackend={sessions.backend}
         terminalBackend={terminals.backend}
       />
@@ -77,6 +92,7 @@ async function open({
   return {
     sessions,
     terminals,
+    save,
     openLink,
     card,
     view,
@@ -219,7 +235,7 @@ describe('a Terminal agent', () => {
       data: { agent: 'Codex', connection: 'codex-terminal' },
     });
     expect(view.getByText('Starting Codex CLI…')).toBeTruthy();
-    // Nothing chosen: main starts it as it was given before, else in Codex's own default mode.
+    // Nothing set: the user's own defaults (Codex's Default mode, which leaves their own config).
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
       connection: 'codex-terminal',
       model: null,
@@ -557,5 +573,148 @@ describe('the Option key in a Terminal agent’s terminal', () => {
   it('is no choice off a Mac, where Alt is Meta anyway', async () => {
     const { view } = await open();
     expect(view.queryByRole('button', { name: 'Option as Meta' })).toBeNull();
+  });
+});
+
+describe('a Terminal agent’s settings', () => {
+  const EFFORTS = [
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'xhigh', label: 'Extra high' },
+  ];
+  /** What main reads of Claude Code: its aliases, and the user's own defaults. */
+  const CLAUDE = {
+    models: [
+      { value: 'opus', label: 'Opus', description: 'For complex work', efforts: EFFORTS },
+      { value: 'haiku', label: 'Haiku', description: 'Fastest', efforts: EFFORTS.slice(0, 2) },
+    ],
+    defaults: { model: 'opus', effort: 'xhigh', mode: 'auto' as const },
+  };
+  /** The items of a menu, by label. */
+  const items = (menu: HTMLElement) =>
+    within(menu)
+      .getAllByRole('menuitemradio')
+      .map((item) => item.firstChild?.textContent);
+
+  it('starts Claude Code with what it is set to, chosen beside its chip, the user’s own shown', async () => {
+    const { sessions, save, view } = await open({
+      data: { connection: 'terminal', settings: { claude: { model: 'haiku' } } },
+      options: CLAUDE,
+    });
+    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+      connection: 'terminal',
+      model: 'haiku',
+      mode: null,
+    });
+    expect(sessions.backend.options).toHaveBeenCalledWith('claude');
+    // What it starts with, the user's own where nothing is chosen.
+    const button = () => view.getByRole('button', { name: /^Settings: / });
+    expect(button().textContent).toBe('Haiku · Auto');
+    fireEvent.click(button());
+    const panel = within(view.getByRole('dialog', { name: 'Claude Code settings' }));
+    expect(panel.getByRole('button', { name: 'Model: Haiku' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Mode: Default (Auto)' })).toBeTruthy();
+
+    fireEvent.click(panel.getByRole('button', { name: 'Model: Haiku' }));
+    expect(items(panel.getByRole('menu', { name: 'Model' }))).toEqual([
+      'Default (Opus)',
+      'Opus',
+      'Haiku',
+    ]);
+    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }));
+    // Back to the user's own: their effort shows too, as Opus has it.
+    expect(button().textContent).toBe('Opus · Extra high · Auto');
+    fireEvent.click(panel.getByRole('button', { name: 'Effort: Default (Extra high)' }));
+    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Low/ }));
+    // Never a mode that never asks: that is chosen in its terminal, each time.
+    fireEvent.click(panel.getByRole('button', { name: 'Mode: Default (Auto)' }));
+    expect(items(panel.getByRole('menu', { name: 'Mode' }))).toEqual([
+      'Default (Auto)',
+      'Manual',
+      'Accept edits',
+      'Plan',
+      'Auto',
+    ]);
+    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Plan/ }));
+    expect(button().textContent).toBe('Opus · Low · Plan');
+    // Saved with the agent, in the canvas's file.
+    fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+    const [text] = save.mock.calls.at(-1) ?? [];
+    expect(fromFile(text ?? '').nodes[0]?.data.settings).toEqual({
+      claude: { effort: 'low', mode: 'plan' },
+    });
+
+    // Its session runs as it started: restarted, it starts with these, resuming its conversation.
+    expect(sessions.backend.start).toHaveBeenCalledOnce();
+    fireEvent.click(panel.getByRole('button', { name: 'Restart with these' }));
+    await settle();
+    expect(sessions.backend.close).toHaveBeenCalledWith('a');
+    expect(sessions.backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'terminal',
+      model: null,
+      mode: 'plan',
+      effort: 'low',
+    });
+    expect(panel.queryByRole('button', { name: 'Restart with these' })).toBeNull();
+  });
+
+  it('drops an effort the model chosen does not have, and restarts only once it is done working', async () => {
+    const { session, view } = await open({
+      data: { connection: 'terminal', settings: { claude: { effort: 'xhigh' } } },
+      options: CLAUDE,
+    });
+    fireEvent.click(view.getByRole('button', { name: /^Settings: / }));
+    const panel = within(view.getByRole('dialog', { name: 'Claude Code settings' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Model: Default (Opus)' }));
+    fireEvent.click(panel.getByRole('menuitemradio', { name: /^Haiku/ }));
+    expect(panel.getByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    session({ type: 'user', id: 'typed', text: 'Fix it' }, { type: 'status', status: 'working' });
+    expect(
+      panel.getByRole<HTMLButtonElement>('button', { name: 'Restart with these' }).disabled,
+    ).toBe(true);
+  });
+
+  it('offers a Codex agent Codex’s models, and the modes its command line starts it in', async () => {
+    const { sessions, view } = await open({
+      data: { agent: 'Codex', connection: 'codex-terminal' },
+      options: {
+        models: [
+          {
+            value: 'gpt-6.1-sol',
+            label: 'GPT-6.1-Sol',
+            efforts: EFFORTS,
+            defaultEffort: 'low',
+          },
+        ],
+        defaults: { model: 'gpt-6.1-sol', effort: null, mode: 'auto' },
+      },
+    });
+    expect(sessions.backend.options).toHaveBeenCalledWith('codex');
+    const button = view.getByRole('button', { name: /^Settings: / });
+    // Codex's Default needs no more saying; the model's own effort, its config setting none.
+    expect(button.textContent).toBe('GPT-6.1-Sol · Low · Default');
+    fireEvent.click(button);
+    const panel = within(view.getByRole('dialog', { name: 'Codex settings' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Mode: Default' }));
+    // Its Default is the user's own config: no more to choose than Read only.
+    expect(items(panel.getByRole('menu', { name: 'Mode' }))).toEqual(['Default', 'Read only']);
+  });
+
+  it('says why it cannot list the models, and still starts with what it is set to', async () => {
+    const { sessions, view } = await open({
+      data: { connection: 'terminal', settings: { claude: { model: 'haiku', mode: 'plan' } } },
+      options: new Error(
+        "Error invoking remote method 'session:options': Error: Codex could not list its models",
+      ),
+    });
+    expect(sessions.backend.start).toHaveBeenCalledWith('a', {
+      connection: 'terminal',
+      model: 'haiku',
+      mode: 'plan',
+    });
+    const button = view.getByRole('button', { name: /^Settings: / });
+    expect(button.textContent).toBe('haiku · Plan');
+    fireEvent.click(button);
+    expect(view.getByRole('alert').textContent).toBe('Codex could not list its models');
   });
 });

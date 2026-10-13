@@ -6,7 +6,7 @@ import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import type { Screen } from '../../terminal/screen';
 import type { ProgramStatus } from '../../terminal/status';
 import { composerDraft } from './composer';
-import { hookOverrides, sessionHooks, toml, trustOverride } from './hooks';
+import { folderTrust, hookOverrides, sessionHooks, toml, trustOverride } from './hooks';
 import type { SessionHook } from './hooks';
 import type { HookTrust } from './trust';
 
@@ -57,8 +57,8 @@ export interface CodexTuiOptions {
   /** The trust its hooks need: their keys and hashes (trust.ts). */
   trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   /**
-   * The reasoning effort corrallm chose (on the agent's App Server connection: its terminal has no
-   * picker of corrallm's), or null for the user's own.
+   * The reasoning effort the agent is set to (its settings, beside its agent chip, or its App
+   * Server composer's), or null for the user's own.
    */
   effort?: string | null;
   platform?: NodeJS.Platform;
@@ -121,7 +121,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
 
   args({ id, resume, model, mode, cwd }: Launch<CodexMode>): string[] {
     const overrides = [
-      `projects={${toml(cwd)}={trust_level="trusted"}}`,
+      folderTrust(cwd),
       ...this.#hooks,
       `tui.terminal_title=${TITLE}`,
       'check_for_update_on_startup=false',

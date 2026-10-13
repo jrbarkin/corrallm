@@ -18,9 +18,13 @@ import path from 'node:path';
  *   requests as it makes them): a patch and a command, then /diff, /status, /mcp and /skills; a
  *   command interrupted while it runs; a pasted image; the patch's thread resumed (its last turns
  *   as history), then /compact.
+ * - options: config/read and model/list, asked together as corrallm asks them for an agent's
+ *   settings (codex/options.ts), on a server of their own; only what corrallm reads of the
+ *   config is kept.
  */
 
-export type Fixture = 'handshake' | 'turns' | 'patch' | 'interrupt' | 'image' | 'resume';
+export type Fixture =
+  'handshake' | 'turns' | 'patch' | 'interrupt' | 'image' | 'resume' | 'options';
 
 /** One message: sent to the app server ('out'), from it ('in'), or its exit ('close'). */
 export interface RecordedLine {

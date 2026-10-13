@@ -112,7 +112,7 @@ describe('a connected Codex agent', () => {
     fireEvent.click(view.getByRole('option', { name: /^Codex · App Server/ }));
     expect(card().getAttribute('aria-label')).toBe('a, Codex · App Server');
     await settle();
-    // Nothing chosen: main starts it as it was given before, else in Codex's default mode.
+    // Nothing set: the user's own defaults (Codex's Default mode).
     expect(backend.start).toHaveBeenCalledWith('a', {
       connection: 'app-server',
       model: null,
@@ -1196,6 +1196,33 @@ describe('a connected agent', () => {
       'a',
       expect.objectContaining({ connection: 'sdk', model: 'old', effort: 'high' }),
     );
+  });
+
+  it('is set to what its composer chooses, in Terminal too; never to a mode that never asks', async () => {
+    const { backend, view, emit, card } = await open({ connection: 'sdk' });
+    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    fireEvent.click(view.getByRole('button', { name: 'Model: Opus' }));
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Haiku/ }));
+    fireEvent.click(view.getByRole('button', { name: 'Mode: Manual' }));
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Plan/ }));
+    // Bypassing permissions, once confirmed, is for this session alone: the agent is set to no
+    // mode then (the user's own default), never to that one.
+    fireEvent.click(view.getByRole('button', { name: 'Mode: Plan' }));
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    fireEvent.click(view.getByRole('button', { name: 'Bypass permissions' }));
+    await settle();
+    expect(backend.setMode).toHaveBeenLastCalledWith('a', 'bypassPermissions');
+
+    // The same CLI's other connection starts with them.
+    fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
+    fireEvent.click(view.getByRole('option', { name: /^Claude · Terminal/ }));
+    await settle();
+    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'terminal',
+      model: 'haiku',
+      mode: null,
+    });
   });
 });
 

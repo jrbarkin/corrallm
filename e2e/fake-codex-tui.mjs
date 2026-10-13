@@ -6,10 +6,11 @@
 // placeholder and the cursor in it, and the hooks it was given with -c, run as Codex runs them
 // (the user's shell, the event on stdin), but only if trusted as Codex trusts them (hooks.state;
 // else it stops at "Hooks need review"). It asks to trust the folder unless told it is trusted.
-// `codex --version` says 0.160.1, and `codex app-server` lists its hooks (hooks/list) and says
+// `codex --version` says 0.160.1, and `codex app-server` lists its hooks (hooks/list), says
 // its usage limits (account/rateLimits/read: the RateLimitSnapshot in .fake-codex-usage.json in
-// the folder it runs in, or, without one, that it has none), logging each request it gets in
-// .fake-codex/app-server.jsonl.
+// the folder it runs in, or, without one, that it has none), lists two models (model/list) and
+// says the user's config (config/read: GPT-6.1-Sol at max effort, no sandbox or approvals set),
+// logging each request it gets in .fake-codex/app-server.jsonl.
 //
 // It keeps its state in the folder it runs in, under .fake-codex/: log.jsonl (how it was
 // started, each prompt it got, how it ended) for the tests to read, and one file per session
@@ -86,6 +87,39 @@ if (argv[0] === 'app-server') {
       else send({ id, result: { rateLimits: JSON.parse(readFileSync(usage, 'utf8')) } });
     } else if (method === 'initialize') {
       send({ id, result: { userAgent: `corrallm/${VERSION}`, codexHome: '/nowhere' } });
+    } else if (method === 'model/list') {
+      const model = (name, displayName, efforts, isDefault) => ({
+        id: name,
+        model: name,
+        displayName,
+        description: `${displayName}, for tests`,
+        hidden: false,
+        supportedReasoningEfforts: efforts.map((reasoningEffort) => ({
+          reasoningEffort,
+          description: `${reasoningEffort} effort`,
+        })),
+        defaultReasoningEffort: efforts[0],
+        inputModalities: ['text', 'image'],
+        isDefault,
+      });
+      send({
+        id,
+        result: {
+          data: [
+            model('gpt-6.1-sol', 'GPT-6.1-Sol', ['low', 'medium', 'high', 'xhigh', 'max'], true),
+            model('gpt-6-luna', 'GPT-6-Luna', ['low', 'medium', 'high'], false),
+          ],
+          nextCursor: null,
+        },
+      });
+    } else if (method === 'config/read') {
+      const config = {
+        model: 'gpt-6.1-sol',
+        model_reasoning_effort: 'max',
+        approval_policy: null,
+        sandbox_mode: null,
+      };
+      send({ id, result: { config, origins: {}, layers: null } });
     } else if (method === 'hooks/list') {
       const listed = hooks.map(({ key, command, hash }) => ({
         key,

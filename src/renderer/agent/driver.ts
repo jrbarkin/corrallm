@@ -1,4 +1,4 @@
-import type { MessageImage, SessionAnswer } from '../../shared/session';
+import type { AgentSettings, MessageImage, SessionAnswer } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Refusal, Session, SessionAction } from './session';
 
@@ -54,6 +54,11 @@ export interface DriverIO {
    * the store keeps the message, queued, for when the agent runs another way.
    */
   refused: (id: string, refusal: Refusal) => void;
+  /**
+   * What the agent is set to run with in the CLI of the driver's connection (its settings, saved in
+   * the canvas's file), now: what a connected session starts with.
+   */
+  settings: () => AgentSettings;
   newId: () => string;
   now: () => number;
   /** Runs `run` in `ms`; returns a function that cancels it. */

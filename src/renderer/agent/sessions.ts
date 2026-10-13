@@ -1,4 +1,7 @@
+import { CONNECTION_CLI } from '../../shared/session';
 import type {
+  AgentSettings,
+  Cli,
   ElicitationAction,
   FilesRewind,
   FormValue,
@@ -7,6 +10,7 @@ import type {
   PastSession,
   RewindRestore,
   RewindResult,
+  SettingsOptions,
 } from '../../shared/session';
 import { DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
@@ -51,6 +55,10 @@ export class SessionStore {
   readonly #drivers = new Map<string, Driving>();
   /** How each agent runs, as the canvas last said (`sync`). */
   readonly #connections = new Map<string, AgentConnection>();
+  /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
+  readonly #settings = new Map<string, Partial<Record<Cli, AgentSettings>>>();
+  /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
+  readonly #options = new Map<Cli, Promise<SettingsOptions>>();
   /** Each agent's type, as it was last sent a message: what its scripted turns are like. */
   readonly #types = new Map<string, AgentType>();
   /**
@@ -88,14 +96,24 @@ export class SessionStore {
   }
 
   /**
-   * The agents on the canvas, and how each runs. The session of an agent that is gone ends and is
-   * forgotten; one whose agent runs another way now ends its turn and goes on with a new driver.
+   * The agents on the canvas, how each runs, and what each is set to run with (its settings, by
+   * CLI: what its connected sessions start with). The session of an agent that is gone ends and is
+   * forgotten; one whose agent runs another way now ends its turn and goes on with a new driver. A
+   * session that runs keeps the settings it started with until it is restarted (`restart`).
    */
-  sync(agents: readonly { id: string; connection: AgentConnection }[]): void {
+  sync(
+    agents: readonly {
+      id: string;
+      connection: AgentConnection;
+      settings?: Partial<Record<Cli, AgentSettings>> | undefined;
+    }[],
+  ): void {
     const wanted = new Map(agents.map(({ id, connection }) => [id, connection]));
     const known = new Set([...Object.keys(this.#sessions), ...this.#drivers.keys()]);
     for (const id of known) if (!wanted.has(id)) this.#forget(id);
     for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
+    this.#settings.clear();
+    for (const { id, settings } of agents) if (settings) this.#settings.set(id, settings);
     for (const [id, connection] of wanted) {
       this.#connections.set(id, connection);
       const driving = this.#drivers.get(id);
@@ -114,6 +132,38 @@ export class SessionStore {
   /** Makes sure the agent's session runs, as when its view opens. */
   open(agentId: string): void {
     this.#driver(agentId).open();
+  }
+
+  /**
+   * Starts the agent's connected session again, with what the agent is set to run with now: main
+   * ends it first, and resumes its conversation as it starts it. A turn going on ends, interrupted.
+   */
+  async restart(agentId: string): Promise<void> {
+    if (!this.#drivers.has(agentId)) return;
+    await this.#backend.close(agentId).catch(() => null);
+    this.#letGo(agentId);
+    this.#driver(agentId).open();
+  }
+
+  /**
+   * What an agent of `cli` can be set to run with, and the user's own defaults: asked of main once,
+   * then kept (until `forgetOptions`, or a failure, which is asked again next time).
+   */
+  settingsOptions(cli: Cli): Promise<SettingsOptions> {
+    let options = this.#options.get(cli);
+    if (!options) {
+      options = this.#backend.options(cli);
+      options.catch(() => {
+        if (this.#options.get(cli) === options) this.#options.delete(cli);
+      });
+      this.#options.set(cli, options);
+    }
+    return options;
+  }
+
+  /** What CLIs' agents can be set to is read again when next asked (another project folder). */
+  forgetOptions(): void {
+    this.#options.clear();
   }
 
   /**
@@ -289,21 +339,24 @@ export class SessionStore {
     this.#heard(queuedId)?.(true, '');
   }
 
-  /** The user chose a mode for the agent: its session switches to it, or starts in it. */
+  /**
+   * The user chose a mode for the agent's session: it switches to it (once it runs). What it starts
+   * in is the agent's settings' (`sync`).
+   */
   setMode(agentId: string, mode: Mode): void {
-    this.#dispatch(agentId, { type: 'mode', mode, chosen: true });
+    this.#dispatch(agentId, { type: 'mode', mode });
     this.#drivers.get(agentId)?.driver.setMode(mode);
   }
 
-  /** The user chose a model for the agent: its session switches to it, or starts with it. */
+  /** The user chose a model for the agent's session: it switches to it (once it runs). */
   setModel(agentId: string, model: string): void {
-    this.#dispatch(agentId, { type: 'model', model, chosen: true });
+    this.#dispatch(agentId, { type: 'model', model });
     this.#drivers.get(agentId)?.driver.setModel(model);
   }
 
-  /** The user chose how hard its model reasons (null: the model's default): its session switches, or starts at it. */
+  /** The user chose how hard its model reasons (null: the model's default): its session switches. */
   setEffort(agentId: string, effort: string | null): void {
-    this.#dispatch(agentId, { type: 'effort', effort, chosen: true });
+    this.#dispatch(agentId, { type: 'effort', effort });
     this.#drivers.get(agentId)?.driver.setEffort(effort);
   }
 
@@ -320,6 +373,8 @@ export class SessionStore {
     this.#onRefused.clear();
     this.#turns.clear();
     this.#onceIn.clear();
+    this.#settings.clear();
+    this.#options.clear();
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#sessions = {};
@@ -405,6 +460,10 @@ export class SessionStore {
         if (current()) this.#dispatch(agentId, action);
       },
       session: () => this.of(agentId),
+      settings: () =>
+        driving.connection === 'simulated'
+          ? {}
+          : (this.#settings.get(agentId)?.[CONNECTION_CLI[driving.connection]] ?? {}),
       idle: () => {
         if (current() && !driving.closing) this.#idle(agentId);
       },

@@ -19,7 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
-import { TERMINAL_CONNECTIONS } from '../../shared/session';
+import { CONNECTION_CLI, TERMINAL_CONNECTIONS, UNASKING_MODES } from '../../shared/session';
+import type { AgentSettings } from '../../shared/session';
 import { AgentView } from '../agent/AgentView';
 import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
@@ -69,6 +70,7 @@ import {
   setRepeat,
   setCondition,
   setConnection,
+  setSettings,
   setInstruction,
   setTime,
   setWaitFor,
@@ -259,7 +261,9 @@ function Editor({
   useEffect(() => {
     sessionStore.sync(
       graph.nodes.flatMap((n) =>
-        n.type === 'agent' ? [{ id: n.id, connection: connectionOf(n.data) }] : [],
+        n.type === 'agent'
+          ? [{ id: n.id, connection: connectionOf(n.data), settings: n.data.settings }]
+          : [],
       ),
     );
   }, [graph.nodes, sessionStore]);
@@ -319,6 +323,10 @@ function Editor({
   const [problem, setProblem] = useState<string>();
   /** The folder the canvas's agents work in (main keeps it; this is what the file bar shows). */
   const [project, setProject] = useState<ProjectFolder | null>(null);
+  // What agents can be set to is read there (its own settings count): again for another folder.
+  useEffect(() => {
+    sessionStore.forgetOptions();
+  }, [project?.path, sessionStore]);
   /** Whether the templates gallery is open. */
   const [gallery, setGallery] = useState(false);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
@@ -393,6 +401,23 @@ function Editor({
     if (front !== undefined) nodeElement(front)?.focus();
     setOpened({ ids: [] });
   }, [front, nodeElement]);
+
+  /**
+   * Changes what a connected agent is set to run with in the CLI it runs now (its settings, saved
+   * with it). What it runs with changes nothing laid out; a simulated agent has none to change.
+   */
+  const updateSettings = useCallback(
+    (id: string, change: (settings: AgentSettings) => AgentSettings) => {
+      setRawGraph((g) => {
+        const node = g.nodes.find((n) => n.id === id);
+        const connection = node ? connectionOf(node.data) : 'simulated';
+        if (!node || connection === 'simulated') return g;
+        const cli = CONNECTION_CLI[connection];
+        return setSettings(g, id, cli, change(node.data.settings?.[cli] ?? {}));
+      });
+    },
+    [],
+  );
 
   // Also dismisses React Flow's selection rectangle, which would keep covering the old selection.
   const apply = useCallback(
@@ -1012,6 +1037,9 @@ function Editor({
                 setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
               );
             }}
+            onSettings={(cli, settings) => {
+              setRawGraph((g) => setSettings(g, openedNode.id, cli, settings));
+            }}
             onContinueInTerminal={(command) => {
               // Its terminal resumes the conversation (the connections share it), and runs the
               // command typed for it once the agent runs there.
@@ -1082,14 +1110,32 @@ function Editor({
               unqueue: (queuedId) => {
                 sessionStore.unqueue(openedNode.id, queuedId);
               },
+              // What the composer chooses for a connected agent is what it is set to run with in
+              // its CLI (saved with it), as well as what its session switches to; a mode that
+              // never asks only for the session, never saved.
               setMode: (mode) => {
                 sessionStore.setMode(openedNode.id, mode);
+                updateSettings(openedNode.id, (settings) => {
+                  const next = { ...settings };
+                  delete next.mode;
+                  return UNASKING_MODES.includes(mode) ? next : { ...next, mode };
+                });
               },
               setModel: (model) => {
                 sessionStore.setModel(openedNode.id, model);
+                updateSettings(openedNode.id, (settings) => ({ ...settings, model }));
               },
               setEffort: (effort) => {
                 sessionStore.setEffort(openedNode.id, effort);
+                updateSettings(openedNode.id, (settings) => {
+                  const next = { ...settings };
+                  delete next.effort;
+                  return effort === null ? next : { ...next, effort };
+                });
+              },
+              settingsOptions: (cli) => sessionStore.settingsOptions(cli),
+              restart: () => {
+                void sessionStore.restart(openedNode.id);
               },
               stopTask: (taskId) => {
                 sessionStore.stopTask(openedNode.id, taskId);

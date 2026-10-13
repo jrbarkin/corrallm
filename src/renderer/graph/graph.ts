@@ -1,6 +1,6 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
-import type { Connection } from '../../shared/session';
+import type { AgentSettings, Cli, Connection } from '../../shared/session';
 import { AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
 import type { AgentConnection, AgentType } from './agents';
 import {
@@ -36,14 +36,16 @@ import { sameTime } from './time';
 export type NodeKind = 'agent' | 'frame';
 /**
  * `agent`: the coding agent an item runs (frames have none), and `connection`, how it runs when not
- * simulated (agents.ts). `color`: a group's colour, an index into the GROUP_COLORS palette
- * (GraphEditor.css).
+ * simulated (agents.ts); `settings`, what it is set to run with in each CLI it has run (its model,
+ * effort and starting mode: src/shared/session.ts). `color`: a group's colour, an index into the
+ * GROUP_COLORS palette (GraphEditor.css).
  */
 export type GraphNode = Node<
   {
     label: string;
     agent?: AgentType;
     connection?: Connection;
+    settings?: Partial<Record<Cli, AgentSettings>>;
     queue?: QueueItem[];
     questions?: Question[];
     color?: number;
@@ -191,6 +193,7 @@ export function spawnAgent(
         label: nextLabel(nodes, 'Agent'),
         ...newAgent(id, source.data.agent),
         ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
+        ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
       },
       selected: true,
     },
@@ -239,6 +242,28 @@ export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
     ...graph,
     nodes: graph.nodes.map((n) =>
       n === node ? { ...n, data: { ...data, agent, ...(kept ? { connection } : {}) } } : n,
+    ),
+  };
+}
+
+/**
+ * Sets what an agent is set to run with in `cli` (what is not in `settings` is the user's own
+ * default); nothing set in any CLI leaves it no settings at all.
+ */
+export function setSettings(graph: Graph, id: string, cli: Cli, settings: AgentSettings): Graph {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (node?.type !== 'agent') return graph;
+  const { settings: before = {}, ...data } = node.data;
+  const all = { ...before, [cli]: settings };
+  const kept = Object.fromEntries(
+    Object.entries(all).filter(([, one]) => Object.keys(one).length > 0),
+  );
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n === node
+        ? { ...n, data: Object.keys(kept).length === 0 ? data : { ...data, settings: kept } }
+        : n,
     ),
   };
 }
