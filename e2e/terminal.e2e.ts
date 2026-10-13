@@ -234,6 +234,47 @@ test('the queues’ Run types its message into the terminal, and hears its turn 
   expect(await prompts()).toEqual(['Write the docs\nand the changelog']);
 });
 
+test('reads Claude’s usage from its status line, and still shows the user’s own', async () => {
+  // The user's own status line, in the project's local settings: it keeps the input it is given.
+  await mkdir(path.join(folder, '.claude'));
+  await writeFile(
+    path.join(folder, '.claude', 'settings.local.json'),
+    JSON.stringify({
+      statusLine: { type: 'command', command: 'cat > status-input.json; echo "my status line"' },
+    }),
+  );
+  // What Claude Code's status line input says of its usage limits (the fake passes it on).
+  const resetsAt = Math.round(Date.now() / 1000) + 3600;
+  await writeFile(
+    path.join(folder, '.fake-claude-usage.json'),
+    JSON.stringify({
+      five_hour: { used_percentage: 42, resets_at: resetsAt },
+      seven_day: { used_percentage: 17, resets_at: resetsAt + 2 * 86_400 },
+    }),
+  );
+  await canvasFile();
+  await chooseProject();
+  await openShop();
+
+  // The user's status line ran, given Claude Code's input, and shows what it printed.
+  await expect
+    .poll(async () => (await logged()).find((entry) => entry.event === 'statusline'))
+    .toMatchObject({ output: 'my status line\n', code: 0 });
+  const input = JSON.parse(await readFile(path.join(folder, 'status-input.json'), 'utf8')) as {
+    rate_limits: unknown;
+  };
+  expect(input.rate_limits).toEqual({
+    five_hour: { used_percentage: 42, resets_at: resetsAt },
+    seven_day: { used_percentage: 17, resets_at: resetsAt + 2 * 86_400 },
+  });
+  // corrallm read Claude's usage from it: its gauge says so.
+  await page.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(page.getByRole('button', { name: /^Claude usage:/ })).toHaveAttribute(
+    'aria-label',
+    'Claude usage: 42% of 5-hour window, 17% of weekly window',
+  );
+});
+
 test('resumes the agent’s session after the app restarts', async () => {
   await canvasFile();
   await chooseProject();

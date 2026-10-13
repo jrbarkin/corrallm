@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { deadline, leftText, limitText, parseTime, TIME_PRESETS, timeText } from './time';
+import { deadline, leftText, limitText, parseTime, sameTime, TIME_PRESETS, timeText } from './time';
 
 const minutes = (n: number) => ({ seconds: n * 60 });
 const hours = (n: number) => ({ seconds: n * 3600 });
@@ -71,6 +71,25 @@ describe('the wording of times', () => {
     expect(limitText({ at: '18:00' }, 'en-US')).toBe('no later than 6:00 PM');
   });
 
+  it('says when a backend’s usage window resets', () => {
+    expect(timeText({ resets: 'fiveHour', backend: 'Claude' })).toBe(
+      'until Claude’s usage resets (5-hour)',
+    );
+    expect(timeText({ resets: 'weekly', backend: 'Codex' })).toBe(
+      'until Codex’s usage resets (weekly)',
+    );
+    expect(limitText({ resets: 'weekly', backend: 'Claude' })).toBe(
+      'no later than Claude’s usage resets (weekly)',
+    );
+    expect(
+      sameTime({ resets: 'weekly', backend: 'Claude' }, { resets: 'weekly', backend: 'Claude' }),
+    ).toBe(true);
+    expect(
+      sameTime({ resets: 'weekly', backend: 'Claude' }, { resets: 'fiveHour', backend: 'Claude' }),
+    ).toBe(false);
+    expect(sameTime({ resets: 'weekly', backend: 'Claude' }, { seconds: 60 })).toBe(false);
+  });
+
   it('says how long is left: minutes and seconds, or hours and minutes from an hour on', () => {
     expect(leftText(245_000)).toBe('4:05 left');
     expect(leftText(59_001)).toBe('1:00 left');
@@ -100,6 +119,14 @@ describe('deadline', () => {
 
   it('counts a length from when the queue reached it', () => {
     expect(deadline({ seconds: 600 }, 1_000)).toBe(601_000);
+  });
+
+  it('takes a usage window’s reset from its reading, or now if it has reset or is not read', () => {
+    const reset = { resets: 'fiveHour', backend: 'Claude' } as const;
+    expect(deadline(reset, 1_000, () => 90_000)).toBe(90_000);
+    expect(deadline(reset, 1_000, () => 500)).toBe(1_000);
+    expect(deadline(reset, 1_000, () => undefined)).toBe(1_000);
+    expect(deadline(reset, 1_000)).toBe(1_000);
   });
 
   it('takes a time of day later today, or tomorrow once it has passed or is now', () => {

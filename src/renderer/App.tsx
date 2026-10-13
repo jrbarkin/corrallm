@@ -4,6 +4,7 @@ import type { SessionBackend } from './agent/connected';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
 import type { TerminalBackend } from './terminal/backend';
+import type { UsageSource } from './usage/store';
 
 /**
  * Canvases are opened and saved by the main process (src/main/canvas.ts), which also keeps the
@@ -36,6 +37,14 @@ const terminalBackend: TerminalBackend = {
   write: (agentId, data) => window.api.writeTerminal(agentId, data),
   resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
   onEvent: (listener) => window.api.onTerminalEvent(listener),
+};
+
+/** Usage readings and rules are main's (src/main/usage.ts): one per backend, for every canvas. */
+const usageSource: UsageSource = {
+  get: () => window.api.getUsage(),
+  setRule: (backend, rule) => window.api.setUsageRule(backend, rule),
+  simulate: (backend, windows) => window.api.simulateUsage(backend, windows),
+  onChanged: (listener) => window.api.onUsageChanged(listener),
 };
 
 type PingState =
@@ -78,6 +87,7 @@ export function App() {
         files={files}
         sessionBackend={sessionBackend}
         terminalBackend={terminalBackend}
+        usageSource={usageSource}
       />
     </main>
   );

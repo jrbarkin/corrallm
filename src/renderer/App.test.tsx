@@ -4,8 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
 
+/** Stubs window.api: the usage functions the canvas reads at once, and `api`. */
 function stubApi(api: Partial<AppApi>) {
-  Object.defineProperty(window, 'api', { value: api, configurable: true });
+  const usage: Partial<AppApi> = {
+    getUsage: vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} }),
+    onUsageChanged: vi.fn<AppApi['onUsageChanged']>(() => () => undefined),
+  };
+  Object.defineProperty(window, 'api', { value: { ...usage, ...api }, configurable: true });
 }
 
 describe('App', () => {
@@ -25,6 +30,23 @@ describe('App', () => {
     });
     expect(result.textContent).toBe('corrallm 0.1.0');
     expect(ping).toHaveBeenCalled();
+  });
+
+  it('reads the usage readings and rules main keeps, and hears their changes', async () => {
+    const getUsage = vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} });
+    const onUsageChanged = vi.fn<AppApi['onUsageChanged']>(() => () => undefined);
+    stubApi({
+      ping: vi.fn<AppApi['ping']>().mockResolvedValue('corrallm 0.1.0'),
+      getUsage,
+      onUsageChanged,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(getUsage).toHaveBeenCalled();
+    });
+    expect(onUsageChanged).toHaveBeenCalled();
   });
 
   it('shows an error when the ping fails', async () => {

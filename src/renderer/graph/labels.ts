@@ -1,3 +1,4 @@
+import { WINDOW_NAMES } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
 import type { GraphNode } from './graph';
 import {
@@ -21,6 +22,7 @@ import type {
   QueueWait,
   RepeatEnds,
   Until,
+  UsageAbove,
   WaitTarget,
 } from './queue';
 import { limitText, timeText } from './time';
@@ -31,7 +33,13 @@ export const ifText = (condition: Condition): string =>
     ? `the output contains "${condition.text}"`
     : condition.kind === 'freeText'
       ? condition.text
-      : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
+      : condition.kind === 'usageAbove'
+        ? usageAboveText(condition)
+        : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
+
+/** How a usage condition reads: "Claude’s usage is over 80% (5-hour)". */
+export const usageAboveText = ({ backend, percent, window }: UsageAbove): string =>
+  `${backend}’s usage is over ${String(percent)}% (${WINDOW_NAMES[window]})`;
 
 /**
  * How a repeat's `until` reads after "Repeat until": "its last step succeeds", "the output contains

@@ -1077,6 +1077,13 @@ input.graph-label {
   border-color: color-mix(in srgb, CanvasText 20%, transparent);
 }
 
+/* Under the file's commands: the folder the canvas's agents work in, and the usage gauges. */
+.graph-file-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
 /* The folder the canvas's agents work in, under the file's commands. */
 .graph-file-project {
   max-width: 320px;
@@ -1326,12 +1333,19 @@ input.graph-label {
 }
 
 .graph-queue-ok-asked,
+.graph-queue-usage,
 .graph-queue-decide {
   /* Under the keyword: past the handle (14px) and the gap after it (8px). */
   flex: 1 1 calc(100% - 22px);
   order: 1;
   min-width: 0;
   margin-left: 22px;
+}
+
+/* Why a usage rule holds the run before this task. */
+.graph-queue-usage {
+  color: #b45309;
+  font-size: 12px;
 }
 
 .graph-queue-ok-asked {

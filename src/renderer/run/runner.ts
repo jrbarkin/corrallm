@@ -1,4 +1,6 @@
 import type { MessageImage } from '../../shared/session';
+import { WINDOW_NAMES, windowNow } from '../../shared/usage';
+import type { UsageBackend, UsageReading, UsageState } from '../../shared/usage';
 import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { agentName } from '../graph/labels';
@@ -11,6 +13,7 @@ import {
   isPause,
   isRepeat,
   isRepeatEnds,
+  isUsageReset,
   isWait,
   unfit,
 } from '../graph/queue';
@@ -23,9 +26,12 @@ import type {
   QueueStep,
   RepeatEnds,
   RepeatedItem,
+  Time,
   WaitTarget,
 } from '../graph/queue';
 import { deadline } from '../graph/time';
+import { usageBackendOf, warningText } from '../usage/usage';
+import type { UsageHold } from '../usage/usage';
 import { conditionQuestion, replyContains, stepMessage, yesOrNo } from './turns';
 
 /**
@@ -67,6 +73,11 @@ export interface AgentRun {
   rounds?: Readonly<Record<string, Round>>;
   /** The changes the user asked for at each OK this run, by its id, oldest first. */
   changes?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * While the usage rule of the backend it spends holds it before its next task (`current`):
+   * asking the user, or waiting for the window to reset (`until`).
+   */
+  usage?: UsageHold;
 }
 
 export interface Run {
@@ -117,6 +128,12 @@ export interface RunIO {
    * condition holds that only a real agent could judge. Never taken for a connected agent.
    */
   chance: () => number;
+  /**
+   * Every backend's latest usage reading and its usage rule (main's: src/main/usage.ts), read when
+   * the run needs them: an If on usage, a wait for a usage window's reset, and the rules, checked
+   * between tasks (and again whenever main tells a new reading: RunStore.usageChanged).
+   */
+  usage?: () => UsageState;
 }
 
 /** How long a simulated agent's step takes, at least and at most. */
@@ -132,6 +149,10 @@ const ALARM_MS = 60_000;
  */
 const FAILS = 0.25;
 const HOLDS = 0.5;
+
+/** What the run says when it waits for a usage window's reset that has never been read. */
+const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
+  `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
 
 /** What the run says when it takes a connected agent's answer to its question as no. */
 const UNCLEAR = 'corrallm took that as no: the answer wasn’t a clear yes or no.';
@@ -187,6 +208,19 @@ export class RunStore {
   readonly #past = new Map<string, Outcome>();
   /** The one timer that wakes the run when the next delay or time limit comes. */
   #alarm: { at: number; cancel: () => void } | undefined;
+  /**
+   * When each hold until a usage window's reset comes (by agent and item), as its reading said when
+   * the agent reached it, with the time it was for: the next window's reset, read meanwhile, does
+   * not hold it again.
+   */
+  readonly #due = new Map<string, { time: string; at: number | undefined }>();
+  /**
+   * What the user decided where a usage rule held agents (by backend and window): go on, or wait
+   * for the reset; for every agent on that backend, until the window resets (`until`).
+   */
+  readonly #usageDecided = new Map<string, { choice: 'goOn' | 'wait'; until: number }>();
+  /** The windows (by backend, window and reset) whose rule has warned the user this run. */
+  readonly #warned = new Set<string>();
 
   constructor(io: RunIO) {
     this.#io = io;
@@ -234,6 +268,12 @@ export class RunStore {
   goOn(agent: string, item: string): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || at?.status !== 'waiting' || at.current !== item) return;
+    if (at.usage) {
+      // Waiting for a usage window's reset, as its rule says: every agent on it goes on, until then.
+      this.#decideUsage(at.usage, 'goOn');
+      this.#settle(false);
+      return;
+    }
     // A repeat that follows another ends with it, not before.
     const queue = this.#agents().find((n) => n.id === agent)?.data.queue ?? [];
     const held = findItem(queue, item)?.item;
@@ -259,6 +299,10 @@ export class RunStore {
     const node = this.#agents().find((n) => n.id === agent);
     const held = node && findItem(node.data.queue ?? [], item)?.item;
     if (!node || !held) return;
+    if (at.usage) {
+      this.#answerUsage(node, at.usage, item, answer);
+      return;
+    }
     if (isRepeat(held)) {
       this.#decideRounds(node, at, held, answer);
       return;
@@ -278,6 +322,14 @@ export class RunStore {
   /** The graph as it is now: a run goes on with new work, and past waits for what is gone. */
   update(nodes: readonly GraphNode[]): void {
     this.#nodes = nodes;
+    if (this.#run.running) this.#settle(false);
+  }
+
+  /**
+   * Main told a new usage reading or rule (RunIO.usage): the rules are checked again for every
+   * agent between tasks, and holds they no longer call for end.
+   */
+  usageChanged(): void {
     if (this.#run.running) this.#settle(false);
   }
 
@@ -380,20 +432,21 @@ export class RunStore {
   ): AgentRun | Outcome {
     const key = JSON.stringify([agent, item.id]);
     if (isDelay(item)) {
-      const until = deadline(item.delay, this.#arrive(key, now));
+      const until = this.#until(key, agent, item.delay, now) ?? now;
       if (!this.#ended.has(key) && now < until)
         return { current: item.id, status: 'waiting', until, outcomes };
       return 'succeeded';
     }
-    if (!isWait(item)) return this.#begin(agent, item, outcomes);
+    if (!isWait(item))
+      return this.#gate(agent, item, outcomes, now) ?? this.#begin(agent, item, outcomes);
     const results = item.waitFor.map((target) => this.#resultOf(target, agents, round));
     // A stop wins over everything, a time limit too: what it waits for will never be done.
     if (results.includes('stopped')) return { current: item.id, status: 'stopped', outcomes };
     if (results.every((result) => result !== undefined))
       return results.includes('failed') ? 'failed' : 'succeeded';
     // Arrival counts for a limit added while it waits, too.
-    const arrived = this.#arrive(key, now);
-    const until = item.timeout && deadline(item.timeout, arrived);
+    this.#arrive(key, now);
+    const until = item.timeout && this.#until(key, agent, item.timeout, now, true);
     if (this.#ended.has(key) || (until !== undefined && now >= until)) return 'timedOut';
     return {
       current: item.id,
@@ -424,7 +477,11 @@ export class RunStore {
     if (typeof held !== 'boolean') return held;
     if (!held) return 'skipped';
     const step = item.then.find((s) => outcomes[s.id] === undefined);
-    if (step) return this.#begin(node.id, step, outcomes);
+    if (step) {
+      return (
+        this.#gate(node.id, step, outcomes, this.#io.now()) ?? this.#begin(node.id, step, outcomes)
+      );
+    }
     const last = item.then.at(-1);
     return (last && outcomes[last.id]) ?? 'succeeded';
   }
@@ -489,6 +546,7 @@ export class RunStore {
         Reflect.deleteProperty(outcomes, item.id);
         this.#arrived.delete(at);
         this.#ended.delete(at);
+        this.#due.delete(at);
       }
       state = { ...state, round: state.round + 1 };
       rounds[repeat.id] = state;
@@ -527,6 +585,118 @@ export class RunStore {
     const arrived = this.#arrived.get(key) ?? now;
     this.#arrived.set(key, arrived);
     return arrived;
+  }
+
+  /**
+   * When a hold's time comes (a delay's, or a wait's time limit: `limit`; by agent and item, `key`),
+   * counted from when the agent reached it. A usage window's reset is the one its backend's reading
+   * said then, kept: the next window's reset, read meanwhile, does not hold it again. A window
+   * never read is no time to wait for: a delay ends at once, and the user is told so; a time limit
+   * is no limit.
+   */
+  #until(key: string, agent: string, time: Time, now: number, limit = false): number | undefined {
+    const arrived = this.#arrive(key, now);
+    if (!isUsageReset(time)) return deadline(time, arrived);
+    const at = JSON.stringify(time);
+    const due = this.#due.get(key);
+    if (due?.time === at) return due.at;
+    const window = this.#readingOf(time.backend)?.windows[time.resets];
+    const until =
+      limit && window === undefined
+        ? undefined
+        : deadline(time, arrived, () => window?.resetsAt ?? undefined);
+    this.#due.set(key, { time: at, at: until });
+    const node = this.#agents().find((n) => n.id === agent);
+    if (!limit && window === undefined && node) {
+      this.#after(0, () => {
+        this.#io.tell(node, unread(time.backend, time.resets));
+      });
+    }
+    return until;
+  }
+
+  /** A backend's latest usage reading (RunIO.usage), if it has one. */
+  #readingOf(backend: UsageBackend): UsageReading | undefined {
+    return this.#io.usage?.().readings.find((reading) => reading.backend === backend);
+  }
+
+  /**
+   * Whether the usage rule of the backend an agent spends (usage/usage.ts usageBackendOf: not an
+   * Agent SDK agent's) holds it before a task it would start now: its latest reading over the rule's
+   * share of its window, and the user not having said to go on until that window resets. Warn me
+   * tells the user (once a window, in this agent's session) and holds nothing; pause and ask me
+   * asks them; wait for the reset (the rule's, or the user's answer) holds it until the window
+   * resets (or asks, without a reset time to wait for).
+   */
+  #gate(
+    agent: string,
+    task: QueueStep | QueueMessage,
+    outcomes: Record<string, Outcome>,
+    now: number,
+  ): AgentRun | undefined {
+    const node = this.#agents().find((n) => n.id === agent);
+    const backend = node && usageBackendOf(node.data);
+    const rule = backend && this.#io.usage?.().rules[backend];
+    if (!node || !backend || !rule) return undefined;
+    const window = windowNow(this.#readingOf(backend), rule.window, now);
+    if (!window || window.usedPercent <= rule.percent) return undefined;
+    const hold: UsageHold = {
+      backend,
+      window: rule.window,
+      percent: rule.percent,
+      used: window.usedPercent,
+      resetsAt: window.resetsAt,
+    };
+    const decided = this.#usageDecided.get(JSON.stringify([backend, rule.window]));
+    const choice = decided && now < decided.until ? decided.choice : undefined;
+    if (choice === 'goOn') return undefined;
+    const action = choice === 'wait' ? 'waitForReset' : rule.action;
+    if (action === 'warn') {
+      const warned = JSON.stringify([backend, rule.window, window.resetsAt]);
+      if (!this.#warned.has(warned)) {
+        this.#warned.add(warned);
+        this.#after(0, () => {
+          this.#io.tell(node, warningText(hold, now));
+        });
+      }
+      return undefined;
+    }
+    if (action === 'waitForReset' && hold.resetsAt !== null) {
+      return { current: task.id, status: 'waiting', until: hold.resetsAt, outcomes, usage: hold };
+    }
+    return { current: task.id, status: 'asking', outcomes, usage: hold };
+  }
+
+  /**
+   * The user's answer where a usage rule asks (asks.ts): go on, or wait for the reset (for every
+   * agent on that backend, until the window resets), or stop this queue there: the whole if-then
+   * or repeat the held task is in.
+   */
+  #answerUsage(node: GraphNode, hold: UsageHold, item: string, answer: Answer): void {
+    if (!('choice' in answer)) return;
+    if (answer.choice === 'goOn' || (answer.choice === 'wait' && hold.resetsAt !== null)) {
+      this.#decideUsage(hold, answer.choice);
+    } else if (answer.choice === 'stop') {
+      const queue = node.data.queue ?? [];
+      const top = queue.find(
+        (q) =>
+          q.id === item ||
+          (isIf(q) && q.then.some((s) => s.id === item)) ||
+          (isRepeat(q) && q.repeat.some((r) => r.id === item)),
+      );
+      this.#record(node.id, top?.id ?? item, 'stopped');
+    } else {
+      return;
+    }
+    this.#settle(true);
+  }
+
+  /** Keeps what the user decided where a usage rule held agents, until the window resets. */
+  #decideUsage(hold: UsageHold, choice: 'goOn' | 'wait'): void {
+    this.#usageDecided.set(JSON.stringify([hold.backend, hold.window]), {
+      choice,
+      until: hold.resetsAt ?? Infinity,
+    });
   }
 
   /**
@@ -607,6 +777,16 @@ export class RunStore {
         if (isConnected(node)) return this.#ask(node, key, condition.text, at);
         held = this.#io.chance() < HOLDS;
         break;
+      case 'usageAbove': {
+        // Its backend's latest reading, simulated agent or not: no chance about it.
+        const window = windowNow(
+          this.#readingOf(condition.backend),
+          condition.window,
+          this.#io.now(),
+        );
+        held = window !== undefined && window.usedPercent > condition.percent;
+        break;
+      }
     }
     this.#held.set(key, held);
     return held;
@@ -868,6 +1048,9 @@ export class RunStore {
     this.#arrived.clear();
     this.#ended.clear();
     this.#past.clear();
+    this.#due.clear();
+    this.#usageDecided.clear();
+    this.#warned.clear();
   }
 
   #set(run: Run): void {

@@ -11,6 +11,12 @@
 //
 // Prompts: "ask …" asks for permission first (1 or Enter: yes), "slow …" works until Escape,
 // anything else is answered at once.
+//
+// With a file .fake-claude-usage.json in the folder (its usage limits, as Claude Code's status line
+// input has them: { "five_hour": { "used_percentage", "resets_at" }, ... }), it runs the status
+// line its --settings give once it is ready and after each reply, as Claude Code does (`/bin/sh -c`,
+// its input on stdin), and shows and logs what that printed.
+import { spawn } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -78,6 +84,36 @@ async function hook(name, fields = {}) {
   }).catch(() => undefined);
 }
 
+let statusText = '';
+
+/** Runs the status line from --settings, as Claude Code does, if usage limits are given. */
+function statusLine() {
+  const usage = path.join(process.cwd(), '.fake-claude-usage.json');
+  const settings = arg('--settings');
+  if (!settings || !existsSync(usage)) return Promise.resolve();
+  const command = JSON.parse(readFileSync(settings, 'utf8')).statusLine?.command;
+  if (typeof command !== 'string') return Promise.resolve();
+  const input = {
+    session_id: sessionId,
+    cwd: process.cwd(),
+    model: { id: 'claude-haiku-4-5', display_name: 'Haiku 4.5' },
+    rate_limits: JSON.parse(readFileSync(usage, 'utf8')),
+  };
+  return new Promise((resolve) => {
+    const child = spawn('/bin/sh', ['-c', command], { cwd: process.cwd(), env: process.env });
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => (output += chunk));
+    child.on('close', (code) => {
+      statusText = output.trim();
+      log({ event: 'statusline', output, code });
+      draw();
+      resolve();
+    });
+    child.stdin.end(`${JSON.stringify(input)}\n`);
+  });
+}
+
 function draw() {
   if (trusting) {
     out(
@@ -92,7 +128,8 @@ function draw() {
       lines.map((line) => `${line}\r\n`).join('') +
       `${'─'.repeat(60)}\r\n` +
       box.map((line, i) => `${i === 0 ? '❯ ' : '  '}${line}`).join('\r\n') +
-      `\r\n${'─'.repeat(60)}\r\n  ${state === 'working' ? '✻ Working… (esc to interrupt)' : '? for shortcuts'}`,
+      `\r\n${'─'.repeat(60)}\r\n  ${state === 'working' ? '✻ Working… (esc to interrupt)' : '? for shortcuts'}` +
+      (statusText === '' ? '' : `\r\n  ${statusText}`),
   );
 }
 
@@ -130,6 +167,7 @@ async function finish() {
   if (state !== 'working') return;
   become('done');
   draw();
+  await statusLine();
 }
 
 function key(data) {
@@ -139,6 +177,7 @@ function key(data) {
     if (state === 'starting' && !trusting) {
       become('idle');
       draw();
+      void statusLine();
     }
     return;
   }

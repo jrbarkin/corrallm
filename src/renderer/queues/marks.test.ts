@@ -43,6 +43,38 @@ describe('queueMarks', () => {
     expect(marks('b', 'w')['data-mark']).toBe('wait');
   });
 
+  it('marks a task a usage rule holds: why, and what the user can decide there', () => {
+    const usage = {
+      backend: 'Claude',
+      window: 'fiveHour',
+      percent: 80,
+      used: 84,
+      resetsAt: 7_200_000,
+    } as const;
+    const asking = marksOf({ current: 'build', status: 'asking', outcomes: {}, usage });
+    expect(asking('a', 'build')).toMatchObject({
+      'data-run': 'asking',
+      'data-decide': '',
+      'data-usage': 'Claude has used 84% of its 5-hour window (over 80%)',
+      'data-usage-backend': 'Claude',
+      'data-usage-reset': '7200000',
+    });
+    expect(asking('a', 'ok')['data-usage']).toBeUndefined();
+    const waiting = marksOf({
+      current: 'build',
+      status: 'waiting',
+      until: 7_200_000,
+      outcomes: {},
+      usage: { ...usage, resetsAt: 7_200_000 },
+    });
+    expect(waiting('a', 'build')).toMatchObject({
+      'data-run': 'waiting',
+      'data-until': '7200000',
+      'data-decide': undefined,
+      'data-usage': 'Claude has used 84% of its 5-hour window (over 80%): waiting for it to reset',
+    });
+  });
+
   it('leaves a decision to the run alone: not while its agent asks permission, nor once stopped', () => {
     // A permission prompt in a task, or in the turn that makes the changes asked for at the OK.
     const task = marksOf({ current: 'build', status: 'running', outcomes: {} }, { asking: ['a'] });

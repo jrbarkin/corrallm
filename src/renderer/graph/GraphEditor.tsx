@@ -30,6 +30,10 @@ import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
+import { UsageStore } from '../usage/store';
+import type { UsageSource } from '../usage/store';
+import { UsageGauges } from '../usage/UsageGauge';
+import { backendsOf } from '../usage/usage';
 import { NO_TERMINAL } from '../terminal/backend';
 import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
@@ -141,20 +145,22 @@ export interface CanvasFiles {
 }
 
 /**
- * The editor, with (given `files`) a bar to open and save canvases as `.corral` files, and (given
+ * The editor, with (given `files`) a bar to open and save canvases as `.corral` files, (given
  * `sessionBackend`, and `terminalBackend` for their terminals) agents connected to the real CLI
- * through the main process.
+ * through the main process, and (given `usageSource`) the usage readings and rules main keeps.
  */
 export function GraphEditor({
   initialGraph = EMPTY_GRAPH,
   files,
   sessionBackend,
   terminalBackend = NO_TERMINAL,
+  usageSource,
 }: {
   initialGraph?: Graph;
   files?: CanvasFiles;
   sessionBackend?: SessionBackend;
   terminalBackend?: TerminalBackend;
+  usageSource?: UsageSource;
 }) {
   return (
     <ReactFlowProvider>
@@ -163,6 +169,7 @@ export function GraphEditor({
         files={files}
         sessionBackend={sessionBackend}
         terminalBackend={terminalBackend}
+        usageSource={usageSource}
       />
     </ReactFlowProvider>
   );
@@ -178,13 +185,18 @@ function Editor({
   files,
   sessionBackend,
   terminalBackend,
+  usageSource,
 }: {
   initialGraph: Graph;
   files: CanvasFiles | undefined;
   sessionBackend: SessionBackend | undefined;
   terminalBackend: TerminalBackend;
+  usageSource: UsageSource | undefined;
 }) {
   const [graph, setRawGraph] = useState(initialGraph);
+  /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
+  const [usageStore] = useState(() => new UsageStore(usageSource));
+  const usage = useSyncExternalStore(usageStore.subscribe, usageStore.snapshot);
   /** Every agent's session, playing on while its view is closed: scripted, or connected. */
   const [sessionStore] = useState(() => new SessionStore(sessionBackend));
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
@@ -217,6 +229,7 @@ function Editor({
         // The real clock, read when asked: delays and time limits are real, even simulated.
         now: () => Date.now(),
         chance: Math.random,
+        usage: () => usageStore.snapshot(),
       }),
   );
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
@@ -256,6 +269,33 @@ function Editor({
       runStore.reset();
     },
     [runStore],
+  );
+  // Usage rules are checked again with each reading.
+  useEffect(() => {
+    runStore.usageChanged();
+  }, [usage, runStore]);
+  useEffect(
+    () => () => {
+      usageStore.dispose();
+    },
+    [usageStore],
+  );
+  /** A usage gauge for each backend the agents use, with its rule and Simulate usage…. */
+  const backends = useMemo(
+    () => backendsOf(graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data] : []))),
+    [graph.nodes],
+  );
+  const gauges = (
+    <UsageGauges
+      backends={backends}
+      usage={usage}
+      onRule={(backend, rule) => {
+        usageStore.setRule(backend, rule);
+      }}
+      onSimulate={(backend, windows) => {
+        usageStore.simulate(backend, windows);
+      }}
+    />
   );
   /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
   const [saved, setSaved] = useState(() => ({
@@ -892,9 +932,11 @@ function Editor({
                 onDismiss={() => {
                   setProblem(undefined);
                 }}
+                extra={gauges}
               />
             </Panel>
           )}
+          {!commands && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
           {commands && graph.nodes.length === 0 && (
             <Panel position="top-center" className="graph-panel graph-start">
               <button
@@ -1016,6 +1058,7 @@ function Editor({
             sessions={sessions}
             run={run}
             edits={edits}
+            gauges={gauges}
             onRun={() => {
               runStore.start();
             }}

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 
 import type { Session } from '../agent/session';
 import { AGENT_ACTIONS, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
@@ -13,6 +13,7 @@ import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
 import type { Run } from '../run/runner';
+import { holdText } from '../usage/usage';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
 import { queueMarks, taskKey as at } from './marks';
@@ -61,6 +62,7 @@ export function QueuesView({
   sessions,
   run,
   edits,
+  gauges,
   focus,
   backLabel,
   onRun,
@@ -72,6 +74,8 @@ export function QueuesView({
   sessions: Readonly<Record<string, Session>>;
   run: Run;
   edits: QueueEdits;
+  /** The usage gauges, in the header (UsageGauge.tsx). */
+  gauges?: ReactNode;
   focus?: string;
   /** Where Back goes: "Canvas", or the agent it was opened from. */
   backLabel: string;
@@ -92,7 +96,13 @@ export function QueuesView({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (event.target instanceof Element && event.target.closest('.search-picker')) return;
+      // A dropdown, or a usage gauge's panel, closes itself first.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]')
+      ) {
+        return;
+      }
       event.stopPropagation();
       if (choosing) setChoosing(undefined);
       else onClose();
@@ -238,6 +248,7 @@ export function QueuesView({
           <span className="queues-run-status" role="status">
             {runStatus}
           </span>
+          {gauges}
           <p className="queues-legend">
             <span className="queues-key" data-mark="wait">
               waits for
@@ -472,9 +483,11 @@ function LaneCells({
             title={
               needsYou === 'answer'
                 ? `${name(id)} asks permission: open it to answer`
-                : held && isRepeat(held)
-                  ? `${name(id)}'s repeat is out of rounds`
-                  : `${name(id)} waits for your OK`
+                : agentRun?.usage
+                  ? `${name(id)}: ${holdText(agentRun.usage)}`
+                  : held && isRepeat(held)
+                    ? `${name(id)}'s repeat is out of rounds`
+                    : `${name(id)} waits for your OK`
             }
             onClick={() => {
               if (needsYou === 'answer') {
