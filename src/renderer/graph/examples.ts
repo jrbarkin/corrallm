@@ -1,8 +1,12 @@
 import crossCheck from './examples/cross-check.corral?raw';
 import fanOut from './examples/fan-out.corral?raw';
+import headToHead from './examples/head-to-head.corral?raw';
 import featureCrew from './examples/feature-crew.corral?raw';
 import releaseChecks from './examples/release-checks.corral?raw';
 import reviewLoop from './examples/review-loop.corral?raw';
+import reviewPanel from './examples/review-panel.corral?raw';
+import specFirst from './examples/spec-first.corral?raw';
+import tddRelay from './examples/tdd-relay.corral?raw';
 import teamLead from './examples/team-lead.corral?raw';
 import type { TemplateField } from './templates';
 
@@ -19,6 +23,61 @@ export interface Example {
 }
 
 export const EXAMPLES: readonly Example[] = [
+  {
+    name: 'TDD relay',
+    description:
+      'Codex writes the tests, Claude makes them pass, Codex refactors, with the tests run at every hand-off. After claudex.',
+    text: tddRelay,
+    fields: [
+      {
+        key: 'feature',
+        label: 'What should they build?',
+        example:
+          'A calculate_discount(price, percent) function in src/pricing.py that rejects percentages outside 0 to 100.',
+      },
+      { key: 'framework', label: 'Which test framework?', example: 'pytest' },
+    ],
+  },
+  {
+    name: 'Head to head',
+    description:
+      'Claude and Codex build the same thing in their own worktrees; a judge scores them blind, gives each feedback, and merges the winner. After claudex-compete.',
+    text: headToHead,
+    fields: [
+      {
+        key: 'task',
+        label: 'What should they build?',
+        example:
+          'A settings page with a profile form, a light and dark theme switch, and a danger zone for deleting the account.',
+      },
+    ],
+  },
+  {
+    name: 'Spec first',
+    description:
+      'A planner writes the spec and the plan before any code; a builder works the plan test-first; a reviewer checks the result against the spec.',
+    text: specFirst,
+    fields: [
+      {
+        key: 'feature',
+        label: 'What should be built?',
+        example: 'Let people export their invoices as CSV from the billing page.',
+      },
+    ],
+  },
+  {
+    name: 'Review panel',
+    description:
+      'One agent builds; three review the change at once, for bugs, security and tests; a lead decides what must be fixed first.',
+    text: reviewPanel,
+    fields: [
+      {
+        key: 'feature',
+        label: 'What should be built?',
+        example: 'Password reset by email, with a link that expires after an hour.',
+      },
+    ],
+  },
   {
     name: 'Feature crew',
     description:

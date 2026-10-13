@@ -1,0 +1,121 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "tester",
+      "kind": "agent",
+      "label": "Tester",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "write-tests",
+          "message": "Write {{framework}} tests for this, and nothing else: don't implement it.\n\n{{feature}}\n\nPut them where this project keeps its tests, named the way the others are."
+        },
+        {
+          "id": "red",
+          "action": "exec_command"
+        },
+        {
+          "id": "red-check",
+          "if": {
+            "kind": "succeeded"
+          },
+          "then": [
+            {
+              "id": "make-red",
+              "message": "The new tests pass before anything is implemented, so they don't test anything new. Make them fail until the feature exists."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "implementer",
+      "kind": "agent",
+      "label": "Implementer",
+      "position": {
+        "x": 0,
+        "y": 220
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "tests-ready",
+          "waitFor": [
+            {
+              "agent": "tester",
+              "item": "red-check"
+            }
+          ]
+        },
+        {
+          "id": "implement",
+          "message": "Tests were just written for this. Find them, read them, and write the code that makes them all pass, without changing what they test.\n\n{{feature}}"
+        },
+        {
+          "id": "green",
+          "action": "Bash"
+        },
+        {
+          "id": "still-red",
+          "if": {
+            "kind": "failed"
+          },
+          "then": [
+            {
+              "id": "fix",
+              "message": "Some tests still fail. Fix the code, not the tests, and run them again."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "refactorer",
+      "kind": "agent",
+      "label": "Refactorer",
+      "position": {
+        "x": 0,
+        "y": 440
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "implemented",
+          "waitFor": [
+            {
+              "agent": "implementer"
+            }
+          ]
+        },
+        {
+          "id": "refactor",
+          "message": "Code was just written to pass the tests for this. Refactor it for clarity, naming and types, without touching the tests.\n\n{{feature}}"
+        },
+        {
+          "id": "still-green",
+          "action": "exec_command"
+        },
+        {
+          "id": "broke",
+          "if": {
+            "kind": "failed"
+          },
+          "then": [
+            {
+              "id": "hand-back",
+              "message": "The refactor broke tests. Find what changed, and make them pass again.",
+              "target": "implementer"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": []
+}

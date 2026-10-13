@@ -947,7 +947,7 @@ test('opens each example from the gallery, drawing its agents and the work betwe
   ]) {
     const gallery = page.getByRole('dialog', { name: 'Templates' });
     if ((await gallery.count()) === 0)
-      await page.getByRole('button', { name: 'Examples…' }).click();
+      await page.getByRole('button', { name: 'Templates…' }).click();
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
     await expect(gallery).toHaveCount(0);
     await expect(nodes().nth(1), name).toBeVisible();

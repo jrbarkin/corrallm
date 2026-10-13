@@ -685,9 +685,34 @@ describe('GraphEditor', () => {
       expect(document.title).toBe('Untitled — corrallm');
       // Not empty now: the file bar still has them.
       expect(screen.queryByRole('button', { name: 'Start from a template…' })).toBeNull();
-      fireEvent.click(button('Examples…'));
+      fireEvent.click(button('Templates…'));
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it("fills in a template's blanks before it opens", () => {
+      const { nodes, node } = setup(undefined, fakeFiles());
+      fireEvent.click(button('Start from a template…'));
+      const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
+      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      // Each blank starts from the template's own example; Back returns to the templates.
+      const framework = gallery.getByRole('textbox', { name: 'Which test framework?' });
+      expect((framework as HTMLTextAreaElement).value).toBe('pytest');
+      fireEvent.change(framework, { target: { value: 'Vitest' } });
+      fireEvent.change(gallery.getByRole('textbox', { name: 'What should they build?' }), {
+        target: { value: 'A slugify(text) helper in src/text.ts.' },
+      });
+      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(nodes().map((n) => n.textContent)).toEqual(['Tester', 'Implementer', 'Refactorer']);
+      fireEvent.doubleClick(node('tester'));
+      const message = within(screen.getByRole('dialog', { name: 'Tester' })).getAllByRole(
+        'textbox',
+        { name: 'Message to the agent' },
+      )[0] as HTMLTextAreaElement;
+      expect(message.value).toBe(
+        "Write Vitest tests for this, and nothing else: don't implement it.\n\nA slugify(text) helper in src/text.ts.\n\nPut them where this project keeps its tests, named the way the others are.",
+      );
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {

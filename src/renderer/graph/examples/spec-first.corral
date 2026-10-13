@@ -1,0 +1,98 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "planner",
+      "kind": "agent",
+      "label": "Planner",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "spec",
+          "message": "Before any code, write a spec for this to SPEC.md: the problem, what people can do, what's out of scope, and how we'll know it works. Ask me whatever the code can't answer.\n\n{{feature}}"
+        },
+        {
+          "id": "plan",
+          "message": "Turn SPEC.md into PLAN.md: small tasks in order, each naming the files it touches and the test that proves it's done."
+        }
+      ]
+    },
+    {
+      "id": "builder",
+      "kind": "agent",
+      "label": "Builder",
+      "position": {
+        "x": 0,
+        "y": 220
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "planned",
+          "waitFor": [
+            {
+              "agent": "planner",
+              "item": "plan"
+            }
+          ]
+        },
+        {
+          "id": "build",
+          "message": "Work through PLAN.md one task at a time: write the task's test, make it pass, then tick the task off. If the plan turns out to be wrong, stop and say why."
+        },
+        {
+          "id": "tests",
+          "action": "exec_command"
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "kind": "agent",
+      "label": "Reviewer",
+      "position": {
+        "x": 0,
+        "y": 440
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "built",
+          "waitFor": [
+            {
+              "agent": "builder"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "action": "/code-review"
+        },
+        {
+          "id": "verify",
+          "message": "Check the work against SPEC.md: every requirement met and tested, and nothing built that the spec leaves out. List anything missing or wrong."
+        },
+        {
+          "id": "gaps",
+          "if": {
+            "kind": "freeText",
+            "text": "something in the spec is missing or wrong"
+          },
+          "then": [
+            {
+              "id": "send-back",
+              "message": "The review found gaps against SPEC.md. Fix them, then run the tests.",
+              "target": "builder"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": []
+}

@@ -1,0 +1,151 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "builder",
+      "kind": "agent",
+      "label": "Builder",
+      "position": {
+        "x": 360,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "build",
+          "message": "Build this, with tests:\n\n{{feature}}"
+        },
+        {
+          "id": "tests",
+          "action": "Bash"
+        }
+      ]
+    },
+    {
+      "id": "code",
+      "kind": "agent",
+      "label": "Code reviewer",
+      "position": {
+        "x": 0,
+        "y": 240
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "built",
+          "waitFor": [
+            {
+              "agent": "builder"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "action": "/review"
+        },
+        {
+          "id": "write-up",
+          "message": "Write what you found to .review/code.md, most serious first."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "kind": "agent",
+      "label": "Security reviewer",
+      "position": {
+        "x": 360,
+        "y": 240
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "built",
+          "waitFor": [
+            {
+              "agent": "builder"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "action": "/security-review"
+        },
+        {
+          "id": "write-up",
+          "message": "Write what you found to .review/security.md, most serious first."
+        }
+      ]
+    },
+    {
+      "id": "tests-review",
+      "kind": "agent",
+      "label": "Test reviewer",
+      "position": {
+        "x": 720,
+        "y": 240
+      },
+      "agent": "Gemini",
+      "queue": [
+        {
+          "id": "built",
+          "waitFor": [
+            {
+              "agent": "builder"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "message": "Review the tests for this change: do they cover the edge cases, and would they fail if the code were wrong? Write what you found to .review/tests.md, most serious first."
+        }
+      ]
+    },
+    {
+      "id": "lead",
+      "kind": "agent",
+      "label": "Lead",
+      "position": {
+        "x": 360,
+        "y": 480
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "reviewed",
+          "waitFor": [
+            {
+              "agent": "code"
+            },
+            {
+              "agent": "security"
+            },
+            {
+              "agent": "tests-review"
+            }
+          ]
+        },
+        {
+          "id": "decide",
+          "message": "Read the three reviews in .review/ and decide what must be fixed before this ships, and what can wait."
+        },
+        {
+          "id": "must-fix",
+          "if": {
+            "kind": "freeText",
+            "text": "something must be fixed before it ships"
+          },
+          "then": [
+            {
+              "id": "send-back",
+              "message": "Fix what the reviews in .review/ say must be fixed before this ships, then run the tests.",
+              "target": "builder"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": []
+}

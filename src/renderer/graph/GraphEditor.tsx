@@ -199,7 +199,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const [discarding, setDiscarding] = useState<{ run: () => void }>();
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
-  /** Whether the examples gallery is open. */
+  /** Whether the templates gallery is open. */
   const [gallery, setGallery] = useState(false);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();

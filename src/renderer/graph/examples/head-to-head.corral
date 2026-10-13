@@ -1,0 +1,119 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "claude",
+      "kind": "agent",
+      "label": "Claude",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "worktree",
+          "action": "EnterWorktree"
+        },
+        {
+          "id": "round-1",
+          "message": "You're competing with another agent to build the best version of this. Work on a branch named compete/claude and commit when you're done.\n\n{{task}}"
+        },
+        {
+          "id": "scored",
+          "waitFor": [
+            {
+              "agent": "judge",
+              "item": "verdict-1"
+            }
+          ]
+        },
+        {
+          "id": "round-2",
+          "message": "The judge's notes on your version are in .compete/feedback-claude.md in the main checkout (`git worktree list` shows where it is). Improve your version, then commit."
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "kind": "agent",
+      "label": "Codex",
+      "position": {
+        "x": 400,
+        "y": 0
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "worktree",
+          "action": "/worktree"
+        },
+        {
+          "id": "round-1",
+          "message": "You're competing with another agent to build the best version of this. Work on a branch named compete/codex and commit when you're done.\n\n{{task}}"
+        },
+        {
+          "id": "scored",
+          "waitFor": [
+            {
+              "agent": "judge",
+              "item": "verdict-1"
+            }
+          ]
+        },
+        {
+          "id": "round-2",
+          "message": "The judge's notes on your version are in .compete/feedback-codex.md in the main checkout (`git worktree list` shows where it is). Improve your version, then commit."
+        }
+      ]
+    },
+    {
+      "id": "judge",
+      "kind": "agent",
+      "label": "Judge",
+      "position": {
+        "x": 200,
+        "y": 260
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "built-1",
+          "waitFor": [
+            {
+              "agent": "claude",
+              "item": "round-1"
+            },
+            {
+              "agent": "codex",
+              "item": "round-1"
+            }
+          ]
+        },
+        {
+          "id": "verdict-1",
+          "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md."
+        },
+        {
+          "id": "built-2",
+          "waitFor": [
+            {
+              "agent": "claude",
+              "item": "round-2"
+            },
+            {
+              "agent": "codex",
+              "item": "round-2"
+            }
+          ]
+        },
+        {
+          "id": "verdict-2",
+          "message": "Both have improved their versions. Score them again the same way, blind. The higher total over both rounds wins: merge the winner's branch, and say why it won."
+        }
+      ]
+    }
+  ],
+  "links": []
+}
