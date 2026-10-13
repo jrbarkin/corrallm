@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import type { RefObject } from 'react';
 
 import type { Session } from '../agent/session';
-import { AGENT_ACTIONS, DEFAULT_AGENT } from '../graph/agents';
+import { AGENT_ACTIONS, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -390,6 +390,7 @@ function LaneCells({
   const { agent: node } = lane;
   const id = node.id;
   const agent = node.data.agent ?? DEFAULT_AGENT;
+  const connection = connectionOf(node.data);
   const items = lane.cells.map((cell) => cell.item);
   const { dragging, handle } = useSortable(
     items,
@@ -458,6 +459,11 @@ function LaneCells({
         >
           {name(id)}
         </button>
+        {connection !== 'simulated' && (
+          <span className="queues-connection" title={CONNECTION_INFO[connection].description}>
+            {CONNECTION_INFO[connection].short}
+          </span>
+        )}
         {needsYou && (
           <button
             type="button"

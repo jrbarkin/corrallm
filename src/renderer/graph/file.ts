@@ -1,6 +1,8 @@
 import type { Edge } from '@xyflow/react';
 
-import { AgentType } from './agents';
+import type { Connection } from '../../shared/session';
+import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
+import type { AgentConnection } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
@@ -25,20 +27,22 @@ import type {
  *
  *   { "format": "corrallm", "version": 1,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
- *                 "parent"?, "agent"?, "color"?, "queue"? }],
+ *                 "parent"?, "agent"?, "connection"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
- * A node's position is relative to its parent's, as React Flow keeps it. Queue items are as
- * queue.ts has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one,
- * is "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" },
- * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An
- * OK is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
+ * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
+ * how it runs, if not simulated ("terminal" or "sdk": agents.ts); where it runs (the project
+ * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
+ * has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
+ * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
+ * whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An OK
+ * is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
  * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
  * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
- * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in its repeats included, since waits
- * name them. A link's dots are the ones it was drawn between ("top" or "bottom"). Where the queues'
- * run is, and what the user decided in it, is never saved.
+ * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in
+ * its repeats included, since waits name them. A link's dots are the ones it was drawn between
+ * ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
 const VERSION = 1;
@@ -53,6 +57,7 @@ interface FileNode {
   position: { x: number; y: number };
   parent?: string;
   agent?: AgentType;
+  connection?: Connection;
   color?: number;
   queue?: QueueItem[];
 }
@@ -65,7 +70,7 @@ interface FileLink {
 /** The canvas as the text of a `.corral` file. */
 export function toFile(graph: Graph): string {
   const nodes = graph.nodes.map((n): FileNode => {
-    const { label, agent, color, queue } = n.data;
+    const { label, agent, connection, color, queue } = n.data;
     return {
       id: n.id,
       kind: n.type === 'frame' ? 'group' : 'agent',
@@ -73,6 +78,7 @@ export function toFile(graph: Graph): string {
       position: { x: n.position.x, y: n.position.y },
       ...(n.parentId === undefined ? {} : { parent: n.parentId }),
       ...(agent === undefined ? {} : { agent }),
+      ...(connection === undefined ? {} : { connection }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     };
@@ -162,6 +168,7 @@ function toGraphNode({
   position,
   parent,
   agent,
+  connection,
   color,
   queue,
 }: FileNode): GraphNode {
@@ -173,6 +180,7 @@ function toGraphNode({
     data: {
       label,
       ...(agent === undefined ? {} : { agent }),
+      ...(connection === undefined ? {} : { connection }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     },
@@ -194,6 +202,18 @@ function readNode(value: unknown, where: string): FileNode {
     if (found === undefined) throw new Error(`${at} must be one of: ${agents.join(', ')}`);
     return found;
   });
+  const connection = optional(node.connection, `${where}.connection`, (v, at) => {
+    if (kind === 'group') throw new Error(`${at}: a group has no connection`);
+    const all: readonly AgentConnection[] = ['simulated', 'terminal', 'sdk'];
+    const found = all.find((c) => c === v);
+    if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
+    const type = agent ?? DEFAULT_AGENT;
+    if (!AGENT_CONNECTIONS[type].includes(found)) {
+      throw new Error(`${at}: ${type} agents can only be simulated`);
+    }
+    // Simulated is the default, kept as no connection at all.
+    return found === 'simulated' ? undefined : found;
+  });
   const color = optional(node.color, `${where}.color`, (v, at) => {
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= GROUP_COLORS) {
       throw new Error(`${at} must be a whole number from 0 to ${String(GROUP_COLORS - 1)}`);
@@ -214,6 +234,7 @@ function readNode(value: unknown, where: string): FileNode {
     },
     ...(node.parent === undefined ? {} : { parent: name(node.parent, `${where}.parent`) }),
     ...(agent === undefined ? {} : { agent }),
+    ...(connection === undefined ? {} : { connection }),
     ...(color === undefined ? {} : { color }),
     ...(queue === undefined ? {} : { queue }),
   };

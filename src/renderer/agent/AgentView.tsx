@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
-import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
+import type { ProjectFolder } from '../../shared/ipc';
+import {
+  AGENT_ACTIONS,
+  AGENT_CLI,
+  AGENT_CONNECTIONS,
+  AgentType,
+  agentLabel,
+  CONNECTION_INFO,
+  DEFAULT_AGENT,
+} from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -12,6 +22,8 @@ import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
 import type { HeldAsk } from '../run/asks';
 import { SearchPicker } from '../search/SearchPicker';
+import type { TerminalBackend } from '../terminal/backend';
+import { TerminalPane } from '../terminal/TerminalPane';
 import { Composer } from './Composer';
 import { queueLinks } from './links';
 import { animate, morph, settle, slide } from './motion';
@@ -21,13 +33,17 @@ import { Rail } from './Rail';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
-import type { Answer, Session } from './session';
+import type { Answer, PlanAnswer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
 
 /** What the view does to its agent's session (sessions.ts). */
 export interface SessionControls extends ComposerControls {
+  /** Starts the session (again), as when the view opens: a connected one resumes. */
+  open: () => void;
   answer: (permissionId: string, answer: Answer) => void;
+  answerQuestion: (promptId: string, index: number, answer: string) => void;
+  answerPlan: (promptId: string, answer: PlanAnswer) => void;
 }
 
 /**
@@ -44,6 +60,11 @@ export interface SessionControls extends ComposerControls {
  * Spawning or switching minimizes the panel into the top of the stack, where its card appears; the
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
+ * The agent chip sets its type and how it runs (`connection`): simulated, or connected to the real
+ * CLI. A session connected through the Agent SDK shows in the same transcript and composer, fed by
+ * the main process (connected.ts); one in a Terminal shows the CLI's own terminal instead
+ * (TerminalPane.tsx), where the user works with Claude Code as in any terminal.
+ *
  * While the queues' run holds the agent for the user (`ask`, at an OK or a repeat out of rounds),
  * a bar above the composer asks, with its choices; what is sent from the composer then is the
  * answer in the user's words (the changes to make, or what to try next), not a message of its own.
@@ -57,6 +78,9 @@ export function AgentView({
   onNewAgent,
   onSwitch,
   onRename,
+  connection,
+  project,
+  terminal,
   onAgent,
   onAnswer,
   onSimulateQuestion,
@@ -85,7 +109,14 @@ export function AgentView({
   /** Shows agent `id` from the stack in its place, growing from `from`. */
   onSwitch: (id: string, from: DOMRect) => void;
   onRename: (label: string) => void;
-  onAgent: (agent: AgentType) => void;
+  /** How it runs: simulated, or connected to the real CLI. */
+  connection: AgentConnection;
+  /** The folder the canvas's agents work in, if one was chosen. */
+  project: ProjectFolder | null;
+  /** Where a Terminal agent's terminal comes from (the main process). */
+  terminal: TerminalBackend;
+  /** Sets its type and how it runs. */
+  onAgent: (agent: AgentType, connection: AgentConnection) => void;
   onAnswer: (questionId: string, answer: string) => void;
   /** A stand-in for an agent asking, until agents are connected. */
   onSimulateQuestion: () => void;
@@ -305,7 +336,7 @@ export function AgentView({
               >
                 All queues
               </button>
-              <AgentChip agent={agent} onChange={onAgent} />
+              <AgentChip agent={agent} connection={connection} onChange={onAgent} />
             </header>
             <div ref={body} className="agent-body">
               <aside className="agent-side" data-column="own" aria-label="Questions and queue">
@@ -363,54 +394,87 @@ export function AgentView({
                   }}
                 />
               )}
-              <section className="agent-session" aria-label="Session">
-                <Transcript
+              {connection === 'terminal' ? (
+                <TerminalPane
+                  agentId={node.id}
+                  backend={terminal}
                   session={session}
-                  agentName={name}
-                  onAnswer={(permissionId, answer) => {
-                    controls.answer(permissionId, answer);
-                    // The prompt's buttons are gone: the keyboard goes back to the composer.
-                    composer.current?.focus();
-                  }}
-                />
-                <Composer
-                  agentName={name}
-                  agent={agent}
-                  session={session}
-                  controls={
-                    ask?.reply
-                      ? {
-                          ...controls,
-                          send: (text) => {
-                            own.onDecide(ask.item.id, { reply: text });
-                          },
-                        }
-                      : controls
-                  }
-                  field={composer}
-                  {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
+                  note={sessionNote(agent, connection, project)}
+                  onStart={controls.open}
+                  onUnqueue={controls.unqueue}
                   above={
-                    <>
-                      {ask && (
-                        <AskBar
-                          ask={ask}
-                          onChoose={(choice) => {
-                            own.onDecide(ask.item.id, { choice });
-                          }}
-                        />
-                      )}
-                      <QueueAddMenu
-                        node={node}
-                        nodes={nodes}
-                        actions={AGENT_ACTIONS[agent]}
-                        label="Queue something"
-                        onAdd={own.onAdd}
-                        onChooseStep={chooseStep}
-                      />
-                    </>
+                    <QueueAddMenu
+                      node={node}
+                      nodes={nodes}
+                      actions={AGENT_ACTIONS[agent]}
+                      label="Queue something"
+                      onAdd={own.onAdd}
+                      onChooseStep={chooseStep}
+                    />
                   }
                 />
-              </section>
+              ) : (
+                <section className="agent-session" aria-label="Session">
+                  <Transcript
+                    session={session}
+                    agentName={name}
+                    note={sessionNote(agent, connection, project)}
+                    answers={{
+                      // The prompt's buttons are gone: the keyboard goes back to the composer.
+                      onAnswer: (permissionId, answer) => {
+                        controls.answer(permissionId, answer);
+                        composer.current?.focus();
+                      },
+                      onAnswerQuestion: (promptId, index, answer) => {
+                        controls.answerQuestion(promptId, index, answer);
+                        composer.current?.focus();
+                      },
+                      onAnswerPlan: (promptId, answer) => {
+                        controls.answerPlan(promptId, answer);
+                        composer.current?.focus();
+                      },
+                    }}
+                  />
+                  <Composer
+                    agentName={name}
+                    agent={agent}
+                    connected={connection !== 'simulated'}
+                    session={session}
+                    controls={
+                      ask?.reply
+                        ? {
+                            ...controls,
+                            send: (text) => {
+                              own.onDecide(ask.item.id, { reply: text });
+                            },
+                          }
+                        : controls
+                    }
+                    field={composer}
+                    {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
+                    above={
+                      <>
+                        {ask && (
+                          <AskBar
+                            ask={ask}
+                            onChoose={(choice) => {
+                              own.onDecide(ask.item.id, { choice });
+                            }}
+                          />
+                        )}
+                        <QueueAddMenu
+                          node={node}
+                          nodes={nodes}
+                          actions={AGENT_ACTIONS[agent]}
+                          label="Queue something"
+                          onAdd={own.onAdd}
+                          onChooseStep={chooseStep}
+                        />
+                      </>
+                    }
+                  />
+                </section>
+              )}
               {peerNode && <QueueLinks container={body} links={links} />}
             </div>
           </div>
@@ -472,36 +536,74 @@ function AskBar({ ask, onChoose }: { ask: HeldAsk; onChoose: (choice: string) =>
   );
 }
 
-/** The agent's type: a colour-coded chip that opens a dropdown of the agent types. */
+/** What the empty transcript says about how the session runs, and what it needs. */
+function sessionNote(
+  agent: AgentType,
+  connection: AgentConnection,
+  project: ProjectFolder | null,
+): string {
+  const cli = AGENT_CLI[agent];
+  if (connection === 'simulated') {
+    return AGENT_CONNECTIONS[agent].length > 1
+      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (Terminal or Agent SDK) to run it.`
+      : `This session is simulated: corrallm isn't connected to ${cli} yet.`;
+  }
+  const how = connection === 'terminal' ? 'in a terminal' : 'through the Agent SDK';
+  return project === null
+    ? `Choose a project folder for this canvas (top left of the canvas) to run ${cli} in it, ${how}.`
+    : `${cli} works in ${project.name}, ${how}.`;
+}
+
+/** Every agent type with each way it runs, as the agent chip offers them. */
+const CHOICES = Object.values(AgentType).flatMap((agent) =>
+  AGENT_CONNECTIONS[agent].map((connection) => ({ agent, connection })),
+);
+
+/**
+ * The agent's type and how it runs: a colour-coded chip ("Claude · Terminal") that opens a dropdown
+ * of the agent types, each with the ways it can run.
+ */
 function AgentChip({
   agent,
+  connection,
   onChange,
 }: {
   agent: AgentType;
-  onChange: (agent: AgentType) => void;
+  connection: AgentConnection;
+  onChange: (agent: AgentType, connection: AgentConnection) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const label = agentLabel(agent, connection);
   return (
     <div className="graph-agent-chip">
       <button
         type="button"
         data-agent={agent}
-        aria-label={`Agent: ${agent}`}
+        data-connection={connection}
+        aria-label={`Agent: ${label}`}
         aria-expanded={open}
+        title={
+          AGENT_CONNECTIONS[agent].length > 1 ? CONNECTION_INFO[connection].description : undefined
+        }
         onClick={() => {
           setOpen(!open);
         }}
       >
-        {agent}
+        {label}
       </button>
       {open && (
         <SearchPicker
           label="Agent"
-          options={Object.values(AgentType)}
-          optionLabel={(type) => type}
-          optionKey={(type) => type}
-          onPick={(type) => {
-            onChange(type);
+          options={CHOICES}
+          optionLabel={(choice) => agentLabel(choice.agent, choice.connection)}
+          optionDetail={(choice) =>
+            AGENT_CONNECTIONS[choice.agent].length > 1
+              ? CONNECTION_INFO[choice.connection].description
+              : undefined
+          }
+          optionKey={(choice) => `${choice.agent}/${choice.connection}`}
+          onPick={(choice) => {
+            onChange(choice.agent, choice.connection);
             setOpen(false);
           }}
           onCancel={() => {

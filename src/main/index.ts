@@ -4,10 +4,17 @@ import { app, BrowserWindow, session } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
+import { canvasFile } from './canvas';
 import { PROD_CSP } from './csp';
-import { registerIpcHandlers } from './ipc';
+import { ProjectFiles } from './files';
+import { registerIpcHandlers, sendEvent } from './ipc';
+import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
+import { ProjectFolders } from './project';
 import { hardenSession, installNavigationGuards } from './security';
+import { createConnectors } from './sessions/connectors';
+import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
+import { SessionManager } from './sessions/manager';
 import { originKey } from './url-policy';
 import { createMainWindow } from './window';
 
@@ -45,9 +52,10 @@ function main(): void {
     return;
   }
 
-  // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden. Never in packaged
-  // builds.
+  // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden, and connected
+  // sessions with a fake connector instead of Claude Code. Never in packaged builds.
   const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';
+  const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
   // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
   if (hidden && process.platform === 'darwin') app.setActivationPolicy('accessory');
 
@@ -77,7 +85,45 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      registerIpcHandlers(trustedOrigin);
+      // What main remembers of canvas files, their project folders, and their agents' sessions.
+      const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
+      const projects = new ProjectFolders(memory, canvasFile);
+      let environment: Promise<Record<string, string>> | undefined;
+      // Resolved once, when the first session starts.
+      const agentsEnvironment = () =>
+        (environment ??= fakeSessions
+          ? Promise.resolve(agentEnvironment(process.env))
+          : loginShellEnvironment().then(agentEnvironment));
+      const sessions = new SessionManager({
+        connectors: createConnectors({
+          fake: fakeSessions,
+          clientApp: `${app.getName()}/${app.getVersion()}`,
+        }),
+        environment: agentsEnvironment,
+        projectOf: (contents) => projects.of(contents),
+        canvasOf: canvasFile,
+        memory,
+        emit: (contents, agentId, connection, event) => {
+          sendEvent(contents, 'session:event', agentId, connection, event);
+        },
+        terminal: (contents, agentId, event) => {
+          sendEvent(contents, 'terminal:event', agentId, event);
+        },
+      });
+      const files = new ProjectFiles({ environment: agentsEnvironment });
+      registerIpcHandlers(trustedOrigin, { projects, files, sessions });
+
+      // Every agent's process ends before the app does, and what main remembers is written.
+      let quitting = false;
+      app.on('before-quit', (event) => {
+        if (quitting) return;
+        quitting = true;
+        event.preventDefault();
+        void Promise.all([sessions.closeEverything(), memory.flush()]).finally(() => {
+          app.quit();
+        });
+      });
+
       await openMainWindow();
 
       // macOS: re-create a window when the dock icon is clicked and none are open.

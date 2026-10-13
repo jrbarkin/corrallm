@@ -687,6 +687,10 @@ input.graph-label {
   content: attr(data-agent);
 }
 
+.graph-agent[data-connection]::after {
+  content: attr(data-agent) ' · ' attr(data-connection);
+}
+
 .graph-agent-chip {
   position: relative;
 }
@@ -1071,6 +1075,41 @@ input.graph-label {
 .graph-file-discard button:hover,
 .graph-file-problem button:hover {
   border-color: color-mix(in srgb, CanvasText 20%, transparent);
+}
+
+/* The folder the canvas's agents work in, under the file's commands. */
+.graph-file-project {
+  max-width: 320px;
+  padding: 4px 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.graph-file-project::before {
+  flex: none;
+  width: 13px;
+  height: 10px;
+  background: currentColor;
+  content: '';
+  clip-path: polygon(0 0, 42% 0, 54% 20%, 100% 20%, 100% 100%, 0 100%);
+  opacity: 0.6;
+}
+
+.graph-file-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-file-project:hover {
+  border-color: color-mix(in srgb, CanvasText 40%, transparent);
+}
+
+.graph-file-project:not([data-chosen]) {
+  color: var(--graph-accent, #2563eb);
+  font-weight: 600;
 }
 
 .graph-file-discard,

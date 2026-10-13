@@ -11,7 +11,7 @@ Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting 
 
 As models change, the workflows that work best change with them. corrallm is where you build, mix and run them.
 
-> **Status:** early. Agent sessions and runs are simulated for now; corrallm doesn't drive the real CLIs yet.
+> **Status:** early. A Claude agent can run Claude Code itself, with your own `claude`, its login and settings, in the canvas's project folder, connected one of two ways: in a terminal in its agent view (all of Claude Code, while corrallm types the queue's messages in and follows each turn), or through the Agent SDK (a real Claude Code session shown in corrallm's own transcript and composer). Other agents' sessions, and agents left Simulated, are scripted.
 
 ## Development
 

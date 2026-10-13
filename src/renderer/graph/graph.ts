@@ -1,7 +1,8 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
-import { DEFAULT_AGENT } from './agents';
-import type { AgentType } from './agents';
+import type { Connection } from '../../shared/session';
+import { AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
+import type { AgentConnection, AgentType } from './agents';
 import {
   isApproval,
   isDelay,
@@ -34,13 +35,15 @@ import { sameTime } from './time';
  */
 export type NodeKind = 'agent' | 'frame';
 /**
- * `agent`: the coding agent an item runs (frames have none). `color`: a group's colour, an index
- * into the GROUP_COLORS palette (GraphEditor.css).
+ * `agent`: the coding agent an item runs (frames have none), and `connection`, how it runs when not
+ * simulated (agents.ts). `color`: a group's colour, an index into the GROUP_COLORS palette
+ * (GraphEditor.css).
  */
 export type GraphNode = Node<
   {
     label: string;
     agent?: AgentType;
+    connection?: Connection;
     queue?: QueueItem[];
     questions?: Question[];
     color?: number;
@@ -184,7 +187,11 @@ export function spawnAgent(
       id,
       type: 'agent',
       position: { x: spot.x - origin.x, y: spot.y - origin.y },
-      data: { label: nextLabel(nodes, 'Agent'), ...newAgent(id, source.data.agent) },
+      data: {
+        label: nextLabel(nodes, 'Agent'),
+        ...newAgent(id, source.data.agent),
+        ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
+      },
       selected: true,
     },
     group?.id,
@@ -219,13 +226,40 @@ export function renameNode(graph: Graph, id: string, label: string): Graph {
   };
 }
 
-/** Sets the coding agent a node runs. Groups (frames) have none. */
+/**
+ * Sets the coding agent a node runs, dropping a connection its new type does not offer. Groups
+ * (frames) have none.
+ */
 export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
   const node = graph.nodes.find((n) => n.id === id);
   if (node?.type !== 'agent' || node.data.agent === agent) return graph;
+  const { connection, ...data } = node.data;
+  const kept = connection !== undefined && AGENT_CONNECTIONS[agent].includes(connection);
   return {
     ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, agent } } : n)),
+    nodes: graph.nodes.map((n) =>
+      n === node ? { ...n, data: { ...data, agent, ...(kept ? { connection } : {}) } } : n,
+    ),
+  };
+}
+
+/** Sets how an agent runs, if its type offers that: simulated (the default) or connected. */
+export function setConnection(graph: Graph, id: string, connection: AgentConnection): Graph {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (
+    node?.type !== 'agent' ||
+    !AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection) ||
+    (node.data.connection ?? 'simulated') === connection
+  ) {
+    return graph;
+  }
+  const data = { ...node.data };
+  delete data.connection;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n === node ? { ...n, data: connection === 'simulated' ? data : { ...data, connection } } : n,
+    ),
   };
 }
 

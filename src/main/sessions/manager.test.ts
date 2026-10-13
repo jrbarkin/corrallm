@@ -1,0 +1,373 @@
+import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { Connection, SessionEvent, SessionOptions } from '../../shared/session';
+import type { TerminalEvent } from '../../shared/terminal';
+import { CanvasMemory } from '../memory';
+import type { Connector, LiveSession, SessionHost } from './connector';
+import { unavailable } from './connector';
+import { FakeConnector } from './fake';
+import { SessionManager } from './manager';
+
+/** A stand-in for a renderer's web contents: the manager keys sessions by it, and hears it go. */
+const renderer = () => new EventEmitter() as unknown as Electron.WebContents;
+
+const OPTIONS: SessionOptions = { connection: 'sdk', model: null, mode: 'manual' };
+
+let dir: string;
+let memory: CanvasMemory;
+let fake: FakeConnector;
+let terminal: FakeConnector;
+/** Each renderer's project folder and canvas file, as project.ts and canvas.ts would know them. */
+let projects: Map<Electron.WebContents, string>;
+let canvases: Map<Electron.WebContents, string>;
+/** What each renderer heard: agent, connection and event. */
+let heard: Map<Electron.WebContents, [string, Connection, SessionEvent][]>;
+/** What each renderer's terminal views heard: agent and event. */
+let shown: Map<Electron.WebContents, [string, TerminalEvent][]>;
+let environment: () => Promise<Record<string, string>>;
+
+function manager(connectors: Partial<Record<Connection, Connector>> = {}) {
+  return new SessionManager({
+    connectors: { sdk: fake, terminal, ...connectors },
+    environment: () => environment(),
+    projectOf: (contents) => projects.get(contents),
+    canvasOf: (contents) => canvases.get(contents),
+    memory,
+    emit: (contents, agentId, connection, event) => {
+      const list = heard.get(contents) ?? [];
+      list.push([agentId, connection, event]);
+      heard.set(contents, list);
+    },
+    terminal: (contents, agentId, event) => {
+      const list = shown.get(contents) ?? [];
+      list.push([agentId, event]);
+      shown.set(contents, list);
+    },
+  });
+}
+
+/** What `contents` heard, as event types (with the agent), for a quick look. */
+const types = (contents: Electron.WebContents) =>
+  (heard.get(contents) ?? []).map(([agent, , event]) => `${agent}:${event.type}`);
+
+/** A renderer with the canvas file `file` (if any), its agents working in /work/app. */
+function window(file?: string) {
+  const contents = renderer();
+  projects.set(contents, '/work/app');
+  if (file !== undefined) canvases.set(contents, file);
+  return contents;
+}
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
+  memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+  fake = new FakeConnector();
+  terminal = new FakeConnector();
+  projects = new Map();
+  canvases = new Map();
+  heard = new Map();
+  shown = new Map();
+  environment = () => Promise.resolve({ PATH: '/usr/bin' });
+});
+afterEach(async () => {
+  await memory.flush();
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe('SessionManager', () => {
+  it('starts a session in the canvas’s project folder; its events go to the renderer that started it', async () => {
+    const sessions = manager();
+    const one = window();
+    const other = window();
+    await sessions.start(one, 'a', { ...OPTIONS, model: 'fast', mode: 'acceptEdits' });
+    expect(fake.started).toEqual([
+      {
+        agentId: 'a',
+        cwd: '/work/app',
+        env: { PATH: '/usr/bin' },
+        model: 'fast',
+        mode: 'acceptEdits',
+        resume: null,
+      },
+    ]);
+    expect(heard.get(one)?.[0]).toEqual([
+      'a',
+      'sdk',
+      { type: 'started', model: 'fast', mode: 'acceptEdits', models: expect.any(Array) as unknown },
+    ]);
+
+    await sessions.send(one, 'a', { id: 'm1', text: 'Hello' });
+    await vi.waitFor(() => {
+      expect(types(one).at(-1)).toBe('a:end');
+    });
+    expect(types(one)).toContain('a:user');
+    expect(heard.has(other)).toBe(false);
+  });
+
+  it('refuses to start without a project folder, and runs no CLI', async () => {
+    const sessions = manager();
+    await expect(sessions.start(renderer(), 'a', OPTIONS)).rejects.toThrow(
+      /Choose a project folder/,
+    );
+    expect(fake.started).toEqual([]);
+  });
+
+  it('says why a connection cannot start, and forgets the attempt', async () => {
+    const sessions = manager({ terminal: unavailable('Claude in a terminal') });
+    const contents = window();
+    await expect(
+      sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' }),
+    ).rejects.toThrow("corrallm can't run Claude in a terminal yet.");
+    await expect(sessions.send(contents, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
+      /not running/,
+    );
+  });
+
+  it('starts an agent once; another connection takes over, resuming the same session', async () => {
+    const sessions = manager();
+    const contents = window();
+    await Promise.all([
+      sessions.start(contents, 'a', OPTIONS),
+      sessions.start(contents, 'a', OPTIONS),
+    ]);
+    expect(fake.started).toHaveLength(1);
+
+    await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+    expect(fake.started[0]?.resume).toBeNull();
+    expect(terminal.started[0]?.resume).toBe(fake.ids[0]);
+    expect(fake.ids).toHaveLength(1);
+  });
+
+  it('remembers each agent’s session with the canvas’s file, and resumes it after a restart', async () => {
+    const before = manager();
+    const contents = window('/work/team.corral');
+    await before.start(contents, 'a', OPTIONS);
+    await before.closeEverything();
+    const { sessions: ids } = await memory.get('/work/team.corral');
+    expect(Object.keys(ids)).toEqual(['a']);
+
+    // The app starts again, and the canvas opens.
+    const after = manager();
+    const reopened = window('/work/team.corral');
+    await after.canvasOpened(reopened);
+    await after.start(reopened, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBe(ids.a);
+    // Another agent starts afresh.
+    await after.start(reopened, 'b', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBeNull();
+  });
+
+  it('remembers the sessions of a canvas first saved after they started', async () => {
+    const sessions = manager();
+    const contents = window();
+    await sessions.start(contents, 'a', OPTIONS);
+    canvases.set(contents, '/work/saved.corral');
+    await sessions.canvasSaved(contents);
+    expect(Object.keys((await memory.get('/work/saved.corral')).sessions)).toEqual(['a']);
+  });
+
+  it('passes the user’s requests on to the session, and rejects them for an agent without one', async () => {
+    const live = {
+      send: vi.fn<LiveSession['send']>().mockResolvedValue(undefined),
+      answer: vi.fn<LiveSession['answer']>().mockResolvedValue(undefined),
+      interrupt: vi.fn<LiveSession['interrupt']>().mockResolvedValue(undefined),
+      setMode: vi.fn<LiveSession['setMode']>().mockResolvedValue(undefined),
+      setModel: vi.fn<LiveSession['setModel']>().mockResolvedValue(undefined),
+      close: vi.fn<LiveSession['close']>().mockResolvedValue(undefined),
+    };
+    const sessions = manager({ sdk: { start: () => Promise.resolve(live) } });
+    const contents = window();
+    await expect(sessions.interrupt(contents, 'a')).rejects.toThrow(/not running/);
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.send(contents, 'a', { id: 'm', text: 'Hi' });
+    await sessions.answer(contents, 'a', 'p', { kind: 'permission', answer: 'once' });
+    await sessions.interrupt(contents, 'a');
+    await sessions.setMode(contents, 'a', 'plan');
+    await sessions.setModel(contents, 'a', 'opus');
+    expect(live.send).toHaveBeenCalledWith({ id: 'm', text: 'Hi' });
+    expect(live.answer).toHaveBeenCalledWith('p', { kind: 'permission', answer: 'once' });
+    expect(live.interrupt).toHaveBeenCalled();
+    expect(live.setMode).toHaveBeenCalledWith('plan');
+    expect(live.setModel).toHaveBeenCalledWith('opus');
+    await sessions.close(contents, 'a');
+    expect(live.close).toHaveBeenCalled();
+    await expect(sessions.send(contents, 'a', { id: 'n', text: 'Again' })).rejects.toThrow(
+      /not running/,
+    );
+  });
+
+  it('ends a renderer’s sessions when its canvas changes, telling it', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.canvasForgotten(contents);
+    expect(types(contents).at(-1)).toBe('a:closed');
+    await expect(sessions.interrupt(contents, 'a')).rejects.toThrow(/not running/);
+  });
+
+  it('forgets the sessions when the project folder changes: they start afresh in the new one', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    projects.set(contents, '/work/other');
+    await sessions.projectChanged(contents);
+    expect(types(contents).at(-1)).toBe('a:closed');
+    expect((await memory.get('/work/team.corral')).sessions).toEqual({});
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)).toMatchObject({ cwd: '/work/other', resume: null });
+  });
+
+  it('forgets a session that stops by itself, and drops what a replaced session says', async () => {
+    let host: SessionHost | undefined;
+    const live: LiveSession = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const sessions = manager({
+      sdk: {
+        start: (_spec, given) => {
+          host = given;
+          return Promise.resolve(live);
+        },
+      },
+    });
+    const contents = window();
+    await sessions.start(contents, 'a', OPTIONS);
+    const first = host;
+    first?.emit({ type: 'closed', error: 'It crashed' });
+    expect(types(contents)).toEqual(['a:closed']);
+    await expect(sessions.send(contents, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
+      /not running/,
+    );
+
+    // Started again: the first session's late words are not heard.
+    await sessions.start(contents, 'a', OPTIONS);
+    first?.emit({ type: 'notice', id: 'n', level: 'info', text: 'Late' });
+    expect(types(contents)).toEqual(['a:closed']);
+  });
+
+  it('ends a renderer’s sessions when it goes, and every session when the app quits', async () => {
+    const closed: string[] = [];
+    const connector: Connector = {
+      start: (spec) =>
+        Promise.resolve({
+          send: () => Promise.resolve(),
+          answer: () => Promise.resolve(),
+          interrupt: () => Promise.resolve(),
+          setMode: () => Promise.resolve(),
+          setModel: () => Promise.resolve(),
+          close: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            closed.push(spec.agentId);
+          },
+        }),
+    };
+    const sessions = manager({ sdk: connector });
+    const gone = window();
+    const staying = window();
+    await sessions.start(gone, 'a', OPTIONS);
+    await sessions.start(staying, 'b', OPTIONS);
+    await sessions.start(staying, 'c', OPTIONS);
+    (gone as unknown as EventEmitter).emit('destroyed');
+    await vi.waitFor(() => {
+      expect(closed).toEqual(['a']);
+    });
+    await sessions.closeEverything();
+    expect(closed.sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  describe('terminal views', () => {
+    /** A Terminal session faked: its screen says which run it is, and records what it is told. */
+    function terminals() {
+      const runs: { input: string[]; sizes: number[][]; shown: number }[] = [];
+      const connector: Connector = {
+        start: () => {
+          const run = { input: [] as string[], sizes: [] as number[][], shown: 0 };
+          runs.push(run);
+          const screen = `run ${String(runs.length)}`;
+          return Promise.resolve({
+            send: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            interrupt: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+            terminal: {
+              show: (view) => {
+                run.shown += 1;
+                view({ type: 'screen', data: screen, cols: 80, rows: 24 });
+                return () => {
+                  run.shown -= 1;
+                };
+              },
+              input: (data) => run.input.push(data),
+              resize: (cols, rows) => run.sizes.push([cols, rows]),
+            },
+          });
+        },
+      };
+      return { runs, connector };
+    }
+    const TERMINAL: SessionOptions = { ...OPTIONS, connection: 'terminal' };
+    const screens = (contents: Electron.WebContents) =>
+      (shown.get(contents) ?? []).map(([agent, event]) =>
+        event.type === 'screen' ? `${agent}:${event.data}` : `${agent}:${event.type}`,
+      );
+
+    it('shows an agent’s terminal in its view: the session running, and each one started after', async () => {
+      const { runs, connector } = terminals();
+      const sessions = manager({ terminal: connector });
+      const contents = window();
+      // The view opens before the session starts: it is shown once it runs.
+      sessions.attachTerminal(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      await vi.waitFor(() => {
+        expect(screens(contents)).toEqual(['a:run 1']);
+      });
+      // Opened again: shown afresh, once.
+      sessions.attachTerminal(contents, 'a');
+      await vi.waitFor(() => {
+        expect(screens(contents)).toEqual(['a:run 1', 'a:run 1']);
+      });
+      expect(runs[0]?.shown).toBe(1);
+
+      // Another run of it (after it stopped, and the next message started it again).
+      await sessions.close(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      await vi.waitFor(() => {
+        expect(screens(contents).at(-1)).toBe('a:run 2');
+      });
+
+      sessions.detachTerminal(contents, 'a');
+      expect(runs[1]?.shown).toBe(0);
+      await sessions.close(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      expect(screens(contents)).toHaveLength(3);
+    });
+
+    it('passes keystrokes and sizes to the running session’s terminal, and to nothing without one', async () => {
+      const { runs, connector } = terminals();
+      const sessions = manager({ terminal: connector });
+      const contents = window();
+      await sessions.inputTerminal(contents, 'a', 'lost');
+      await sessions.start(contents, 'a', TERMINAL);
+      await sessions.inputTerminal(contents, 'a', 'hi\r');
+      await sessions.resizeTerminal(contents, 'a', 120, 40);
+      expect(runs[0]).toMatchObject({ input: ['hi\r'], sizes: [[120, 40]] });
+      // An SDK session has no terminal.
+      await sessions.start(contents, 'b', OPTIONS);
+      sessions.attachTerminal(contents, 'b');
+      await sessions.inputTerminal(contents, 'b', 'x');
+      expect(screens(contents)).toEqual([]);
+    });
+  });
+});

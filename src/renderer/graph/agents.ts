@@ -1,3 +1,5 @@
+import type { Connection } from '../../shared/session';
+
 /** The coding agent a node runs. */
 export const AgentType = {
   Claude: 'Claude',
@@ -10,6 +12,76 @@ export type AgentType = (typeof AgentType)[keyof typeof AgentType];
 
 /** The type a new node starts with. */
 export const DEFAULT_AGENT: AgentType = AgentType.Claude;
+
+/** The CLI each agent type is. */
+export const AGENT_CLI: Record<AgentType, string> = {
+  Claude: 'Claude Code',
+  Codex: 'Codex CLI',
+  Qwen: 'Qwen Code',
+  Gemini: 'Gemini CLI',
+};
+
+/**
+ * How an agent's session runs: simulated (scripted in corrallm, nothing really runs), or
+ * connected to the real CLI, in a terminal or through the Agent SDK (src/shared/session.ts).
+ */
+export type AgentConnection = 'simulated' | Connection;
+
+/** The ways each agent type can run, the default first: Claude can be connected; others not yet. */
+export const AGENT_CONNECTIONS: Record<AgentType, readonly AgentConnection[]> = {
+  Claude: ['simulated', 'terminal', 'sdk'],
+  Codex: ['simulated'],
+  Qwen: ['simulated'],
+  Gemini: ['simulated'],
+};
+
+/** How each connection is named (`short`: on an agent's card) and explained. */
+export const CONNECTION_INFO: Record<
+  AgentConnection,
+  { label: string; short: string; description: string }
+> = {
+  simulated: {
+    label: 'Simulated',
+    short: 'Simulated',
+    description: 'A scripted session: nothing really runs',
+  },
+  terminal: {
+    label: 'Terminal',
+    short: 'Terminal',
+    description: 'Claude Code itself, in a terminal in its view',
+  },
+  sdk: {
+    label: 'Agent SDK',
+    short: 'SDK',
+    description: 'Claude Code through the Agent SDK, in corrallm’s transcript',
+  },
+};
+
+/** How an agent runs: its connection if its type offers it, otherwise simulated. */
+export function connectionOf(data: {
+  agent?: AgentType;
+  connection?: Connection;
+}): AgentConnection {
+  const { connection } = data;
+  return connection !== undefined &&
+    AGENT_CONNECTIONS[data.agent ?? DEFAULT_AGENT].includes(connection)
+    ? connection
+    : 'simulated';
+}
+
+/**
+ * An agent type with how it runs, as the agent chip names it ("Claude · Terminal"); a type that
+ * can only be simulated is named alone. `short`: as its card names it, where simulated goes unsaid.
+ */
+export function agentLabel(
+  agent: AgentType,
+  connection: AgentConnection,
+  { short = false }: { short?: boolean } = {},
+): string {
+  if (AGENT_CONNECTIONS[agent].length === 1 || (short && connection === 'simulated')) return agent;
+  const info = CONNECTION_INFO[connection];
+  return `${agent} · ${short ? info.short : info.label}`;
+}
 
 /** Something an agent can be asked to do: a built-in tool or command, named as its docs name it. */
 export interface AgentAction {

@@ -37,6 +37,8 @@
     "node-pty": "1.2.0-beta.14"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
+    "@anthropic-ai/sdk": "^0.133.0",
     "@dagrejs/dagre": "^3.1.1",
     "@electron-forge/cli": "^8.0.1",
     "@electron-forge/maker-deb": "^8.0.1",
@@ -57,6 +59,13 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/addon-unicode11": "0.9.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/headless": "6.0.0",
+    "@xterm/xterm": "6.0.0",
     "@xyflow/react": "^12.12.0",
     "electron": "44.7.0",
     "electron-squirrel-startup": "^1.0.1",

@@ -74,6 +74,11 @@ export async function saveCanvas(
   return path.basename(file);
 }
 
+/** The file the renderer's canvas was opened from or last saved to, if any. */
+export function canvasFile(contents: WebContents): string | undefined {
+  return files.get(contents);
+}
+
 /** Forgets the canvas's file: its next save asks where. */
 export function forgetCanvas(contents: WebContents): void {
   files.delete(contents);

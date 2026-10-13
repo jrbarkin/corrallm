@@ -35,6 +35,7 @@ import {
   setAgent,
   setApproval,
   setCondition,
+  setConnection,
   setRepeat,
   setTime,
   setWaitFor,
@@ -285,6 +286,14 @@ describe('spawnAgent', () => {
     expect(get(linked, 'n').parentId).toBe('F');
     expect(abs(linked, 'n')).toEqual({ x: abs(g, 'a').x, y: abs(g, 'a').y + 100 });
     expectValid(linked);
+  });
+
+  it('runs the new agent as the agent runs: connected or simulated', () => {
+    const g = graphOf([agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal' } })]);
+    expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data.connection).toBe('terminal');
+    expect(
+      get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data,
+    ).not.toHaveProperty('connection');
   });
 
   it('spawns only from an agent', () => {
@@ -582,6 +591,31 @@ describe('setAgent', () => {
     expect(get(qwen, 'a').data.agent).toBe(AgentType.Qwen);
     expect(setAgent(qwen, 'a', AgentType.Qwen)).toBe(qwen);
     expect(setAgent(g, 'F', AgentType.Qwen)).toBe(g);
+  });
+
+  it('drops a connection the new type does not offer', () => {
+    const g = graphOf([agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal' } })]);
+    expect(get(setAgent(g, 'a', AgentType.Codex), 'a').data).toEqual({
+      label: 'a',
+      agent: AgentType.Codex,
+    });
+  });
+});
+
+describe('setConnection', () => {
+  it('connects a Claude agent, or makes it simulated again; groups and other types stay as they are', () => {
+    const g = graphOf([
+      agentNode('a', 0, 0),
+      agentNode('b', 0, 100, { data: { label: 'b', agent: AgentType.Gemini } }),
+      frame('F', 0, 200, 200, 200),
+    ]);
+    const sdk = setConnection(g, 'a', 'sdk');
+    expect(get(sdk, 'a').data.connection).toBe('sdk');
+    expect(setConnection(sdk, 'a', 'sdk')).toBe(sdk);
+    // Simulated is the default: it leaves no trace.
+    expect(get(setConnection(sdk, 'a', 'simulated'), 'a').data).toEqual({ label: 'a' });
+    expect(setConnection(g, 'b', 'terminal')).toBe(g);
+    expect(setConnection(g, 'F', 'terminal')).toBe(g);
   });
 });
 

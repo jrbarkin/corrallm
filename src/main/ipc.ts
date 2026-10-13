@@ -2,9 +2,24 @@ import { app, ipcMain } from 'electron';
 import type { WebContents } from 'electron';
 
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
-import type { IpcArgs, IpcChannel, IpcResult } from '../shared/ipc';
+import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
+import { MAX_FILE_MATCHES } from '../shared/session';
 import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
+import type { ProjectFiles } from './files';
+import type { ProjectFolders } from './project';
 import { isTrustedSender } from './security';
+import {
+  parseAgentArgs,
+  parseAnswerArgs,
+  parseFilesArgs,
+  parseModeArgs,
+  parseModelArgs,
+  parseSendArgs,
+  parseStartArgs,
+  parseTerminalInputArgs,
+  parseTerminalResizeArgs,
+} from './sessions/args';
+import type { SessionManager } from './sessions/manager';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends IpcChannel> = (args: unknown[]) => IpcArgs<C>;
@@ -16,6 +31,30 @@ export type IpcHandler<C extends IpcChannel> = (
   caller: IpcCaller,
   ...args: IpcArgs<C>
 ) => IpcResult<C> | Promise<IpcResult<C>>;
+
+/** What the handlers act on besides canvas files: project folders, their files, and sessions. */
+export interface IpcServices {
+  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
+  files: Pick<ProjectFiles, 'find'>;
+  sessions: Pick<
+    SessionManager,
+    | 'start'
+    | 'send'
+    | 'answer'
+    | 'interrupt'
+    | 'setMode'
+    | 'setModel'
+    | 'close'
+    | 'canvasOpened'
+    | 'canvasForgotten'
+    | 'canvasSaved'
+    | 'projectChanged'
+    | 'attachTerminal'
+    | 'detachTerminal'
+    | 'inputTerminal'
+    | 'resizeTerminal'
+  >;
+}
 
 /**
  * Returns a typed `handle()` bound to the renderer's origin. Before any handler runs, every
@@ -37,6 +76,15 @@ export function createIpcHandle(trustedOrigin: string) {
       return handler({ contents: event.sender }, ...parseArgs(rawArgs));
     });
   };
+}
+
+/** Sends an event to a renderer, if it is still there. Only main sends events. */
+export function sendEvent<E extends IpcEvent>(
+  contents: WebContents,
+  event: E,
+  ...args: IpcEventArgs<E>
+): void {
+  if (!contents.isDestroyed()) contents.send(event, ...args);
 }
 
 /** `ArgsParser` for channels that take no arguments. */
@@ -70,21 +118,135 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
   return [text, choose];
 }
 
-const handlers: HandlerTable = {
-  'app:ping': { parseArgs: noArgs, handler: getVersionString },
-  'canvas:open': { parseArgs: noArgs, handler: ({ contents }) => openCanvas(contents) },
-  'canvas:save': {
-    parseArgs: parseSaveArgs,
-    handler: ({ contents }, text, choose) => saveCanvas(contents, text, choose),
-  },
-  'canvas:forget': {
-    parseArgs: noArgs,
-    handler: ({ contents }) => {
-      forgetCanvas(contents);
-      return null;
+function createHandlers({ projects, files, sessions }: IpcServices): HandlerTable {
+  return {
+    'app:ping': { parseArgs: noArgs, handler: getVersionString },
+    'canvas:open': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        const file = await openCanvas(contents);
+        if (file === null) return null;
+        // Another canvas: the old one's sessions end, and the new one's folder comes back.
+        await sessions.canvasOpened(contents);
+        const project = await projects.restore(contents);
+        return project ? { ...file, project } : file;
+      },
     },
-  },
-};
+    'canvas:save': {
+      parseArgs: parseSaveArgs,
+      handler: async ({ contents }, text, choose) => {
+        const name = await saveCanvas(contents, text, choose);
+        if (name !== null) {
+          await projects.remember(contents);
+          await sessions.canvasSaved(contents);
+        }
+        return name;
+      },
+    },
+    'canvas:forget': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        forgetCanvas(contents);
+        projects.forget(contents);
+        await sessions.canvasForgotten(contents);
+        return null;
+      },
+    },
+    'project:choose': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        const before = projects.of(contents);
+        const chosen = await projects.choose(contents);
+        if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
+        return chosen;
+      },
+    },
+    'project:files': {
+      parseArgs: parseFilesArgs,
+      handler: async ({ contents }, query) => {
+        const folder = projects.of(contents);
+        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
+      },
+    },
+    'session:start': {
+      parseArgs: parseStartArgs,
+      handler: async ({ contents }, agentId, options) => {
+        await sessions.start(contents, agentId, options);
+        return null;
+      },
+    },
+    'session:send': {
+      parseArgs: parseSendArgs,
+      handler: async ({ contents }, agentId, message) => {
+        await sessions.send(contents, agentId, message);
+        return null;
+      },
+    },
+    'session:answer': {
+      parseArgs: parseAnswerArgs,
+      handler: async ({ contents }, agentId, promptId, answer) => {
+        await sessions.answer(contents, agentId, promptId, answer);
+        return null;
+      },
+    },
+    'session:interrupt': {
+      parseArgs: parseAgentArgs,
+      handler: async ({ contents }, agentId) => {
+        await sessions.interrupt(contents, agentId);
+        return null;
+      },
+    },
+    'session:mode': {
+      parseArgs: parseModeArgs,
+      handler: async ({ contents }, agentId, mode) => {
+        await sessions.setMode(contents, agentId, mode);
+        return null;
+      },
+    },
+    'session:model': {
+      parseArgs: parseModelArgs,
+      handler: async ({ contents }, agentId, model) => {
+        await sessions.setModel(contents, agentId, model);
+        return null;
+      },
+    },
+    'session:close': {
+      parseArgs: parseAgentArgs,
+      handler: async ({ contents }, agentId) => {
+        await sessions.close(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:attach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.attachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:detach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.detachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:input': {
+      parseArgs: parseTerminalInputArgs,
+      handler: async ({ contents }, agentId, data) => {
+        await sessions.inputTerminal(contents, agentId, data);
+        return null;
+      },
+    },
+    'terminal:resize': {
+      parseArgs: parseTerminalResizeArgs,
+      handler: async ({ contents }, agentId, cols, rows) => {
+        await sessions.resizeTerminal(contents, agentId, cols, rows);
+        return null;
+      },
+    },
+  };
+}
 
 // Generic so each channel's parser and handler types stay linked while iterating the table.
 function register<C extends IpcChannel>(
@@ -96,8 +258,9 @@ function register<C extends IpcChannel>(
 }
 
 /** Registers every channel in the IPC contract. Call once, after the app is ready. */
-export function registerIpcHandlers(trustedOrigin: string): void {
+export function registerIpcHandlers(trustedOrigin: string, services: IpcServices): void {
   const handle = createIpcHandle(trustedOrigin);
+  const handlers = createHandlers(services);
   for (const channel of Object.keys(handlers) as IpcChannel[]) {
     register(handle, channel, handlers[channel]);
   }
