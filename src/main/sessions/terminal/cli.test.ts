@@ -33,11 +33,14 @@ class TitledCli implements TerminalCli<CodexMode> {
     model: 'Use /model in its terminal.',
     login: 'Log in in its terminal.',
   };
+  /** Its prompt shows only when drawn: its title does not cover its pickers. */
+  readonly waitsForPrompt = true;
   /** Where its hooks post, once prepared. */
   hooks: HookRegistration | undefined;
   /** Whether the turn it works on ended with a Stop hook (else it failed, when it goes Ready). */
   #stopped = false;
   #ran = false;
+  #starting = false;
 
   newId(): null {
     return null;
@@ -56,7 +59,12 @@ class TitledCli implements TerminalCli<CodexMode> {
     return screen.includes('No saved session found');
   }
 
+  holds(): boolean {
+    return this.#starting;
+  }
+
   title(text: string): ProgramStatus | undefined {
+    this.#starting = text.endsWith('Starting');
     if (text.includes('Action Required')) return { state: 'blocked', kind: 'permission' };
     if (text.includes('Working')) {
       this.#ran = true;
@@ -91,8 +99,8 @@ class TitledCli implements TerminalCli<CodexMode> {
     const line = screen
       .text()
       .split('\n')
-      .find((row) => row.startsWith('› '));
-    return line?.slice(2).trim();
+      .find((row) => row.startsWith('›'));
+    return line?.slice(1).trim();
   }
 
   keystrokes(text: string): string[] {
@@ -112,13 +120,24 @@ class FakeTitled implements Pty {
   readonly #exit = new Set<(exit: { exitCode: number }) => void>();
   #draft = '';
   #asking = false;
+  /** A picker is open (as Codex's /model): its prompt is not drawn. */
+  picking = false;
+  /** Its servers are starting: a prompt submitted waits for them. */
+  #starting = false;
+  #held: string | undefined;
   exited = false;
   readonly args: readonly string[];
   readonly options: PtyOptions;
   readonly url: () => string;
   readonly id: string;
 
-  constructor(args: readonly string[], options: PtyOptions, url: () => string, id: string) {
+  constructor(
+    args: readonly string[],
+    options: PtyOptions,
+    url: () => string,
+    id: string,
+    starting = 0,
+  ) {
     this.args = args;
     this.options = options;
     this.url = url;
@@ -132,6 +151,17 @@ class FakeTitled implements Pty {
       }
       this.print(title('Ready'));
       this.#draw();
+      if (starting > 0) {
+        this.#starting = true;
+        this.print(title('⠋ Starting'));
+        setTimeout(() => {
+          this.#starting = false;
+          const held = this.#held;
+          this.#held = undefined;
+          if (held === undefined) this.print(title('Ready'));
+          else void this.#run(held);
+        }, starting);
+      }
     }, 1);
   }
 
@@ -163,6 +193,8 @@ class FakeTitled implements Pty {
 
   write(data: string): void {
     this.written.push(data);
+    // A picker takes what is typed while it is open.
+    if (this.picking) return;
     if (data.startsWith(PASTE_START)) {
       this.#draft += data.slice(PASTE_START.length, -PASTE_END.length);
     } else if (data === 'y' && this.#asking) {
@@ -182,7 +214,14 @@ class FakeTitled implements Pty {
   }
 
   #draw(): void {
-    this.print(`\x1b[H\x1b[2J Titled (fake)\r\n\r\n› ${this.#draft}\r\n`);
+    const prompt = this.picking ? '  Select a model' : `› ${this.#draft}`;
+    this.print(`\x1b[H\x1b[2J Titled (fake)\r\n\r\n${prompt}\r\n`);
+  }
+
+  /** Closes its picker (as Escape would). */
+  closePicker(): void {
+    this.picking = false;
+    this.#draw();
   }
 
   async #submit(): Promise<void> {
@@ -190,6 +229,11 @@ class FakeTitled implements Pty {
     if (prompt === '') return;
     this.#draft = '';
     this.#draw();
+    if (this.#starting) this.#held = prompt;
+    else await this.#run(prompt);
+  }
+
+  async #run(prompt: string): Promise<void> {
     this.print(title('⠋ Working'));
     await this.hook('UserPromptSubmit', { prompt });
     if (prompt.startsWith('ask')) {
@@ -243,7 +287,11 @@ const SPEC: SessionSpec<CodexMode> = {
   resume: null,
 };
 
-async function start(spec: Partial<SessionSpec<CodexMode>> = {}, id = 'thread-1') {
+async function start(
+  spec: Partial<SessionSpec<CodexMode>> = {},
+  id = 'thread-1',
+  { starting = 0 }: { starting?: number } = {},
+) {
   const cli = new TitledCli();
   const session = new TerminalSession<CodexMode>(
     { ...SPEC, ...spec },
@@ -252,7 +300,7 @@ async function start(spec: Partial<SessionSpec<CodexMode>> = {}, id = 'thread-1'
       executable: '/bin/titled',
       cli,
       spawn: (_file, args, options) => {
-        const run = new FakeTitled(args, options, () => cli.hooks?.url ?? '', id);
+        const run = new FakeTitled(args, options, () => cli.hooks?.url ?? '', id, starting);
         runs.push(run);
         return Promise.resolve(run);
       },
@@ -339,6 +387,33 @@ describe('a Terminal session of another CLI', () => {
     });
     expect(seen()).toContain('notice:It stopped without finishing.');
     expect(last('end')).toMatchObject({ failed: true });
+  });
+
+  it('waits for a message it holds while it starts, however long that takes', async () => {
+    // Longer than the CLI may take to take a message (twice `confirm`).
+    const session = await start({}, 'thread-1', { starting: 1300 });
+    await session.send({ id: 'm1', text: 'Hello' });
+    await until(() => {
+      expect(last('end')).toBeDefined();
+    });
+    expect(seen().slice(1)).toEqual(['user:Hello', 'status:working', 'text:Done', 'end:done']);
+  });
+
+  it('types only into its prompt as drawn, though its title says it is ready', async () => {
+    const session = await start();
+    const run = runs[0];
+    if (!run) throw new Error('not started');
+    run.picking = true;
+    run.print(' ');
+    await session.send({ id: 'm1', text: 'Hello' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(run.written.some((data) => data.includes('Hello'))).toBe(false);
+    // Once the picker closes, the message goes in.
+    run.closePicker();
+    await until(() => {
+      expect(last('end')).toMatchObject({ interrupted: false, failed: false });
+    });
+    expect(run.written).toContain(`${PASTE_START}Hello${PASTE_END}`);
   });
 
   it('starts afresh when the session it resumes is gone, in its own words', async () => {

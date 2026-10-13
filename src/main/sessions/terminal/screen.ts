@@ -47,6 +47,8 @@ export interface ScreenOptions {
 export class Screen {
   readonly #terminal: Terminal;
   readonly #serialize = new SerializeAddon();
+  /** Whether the cursor shows (DECTCEM): a CLI shows it where it takes typing. */
+  #cursorShown = true;
 
   constructor({ cols, rows, reply, status, title, answersQueries }: ScreenOptions) {
     this.#terminal = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
@@ -67,6 +69,16 @@ export class Screen {
       if ((params[0] ?? 0) === 0 && answersQueries()) reply(DEVICE_ATTRIBUTES);
       return true;
     });
+    // Noted, then left to the terminal (false: its own handler runs too).
+    for (const [final, shown] of [
+      ['h', true],
+      ['l', false],
+    ] as const) {
+      this.#terminal.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
+        if (params.includes(25)) this.#cursorShown = shown;
+        return false;
+      });
+    }
   }
 
   get cols(): number {
@@ -119,10 +131,18 @@ export class Screen {
     return lines.join('\n').trim();
   }
 
-  /** The rows in view: the active buffer, and where its view starts and ends (for a CLI's reading). */
-  view(): { buffer: IBuffer; top: number; bottom: number } {
+  /**
+   * The rows in view, for a CLI's reading: the active buffer, where its view starts and ends, and
+   * whether its cursor shows.
+   */
+  view(): { buffer: IBuffer; top: number; bottom: number; cursorShown: boolean } {
     const buffer = this.#terminal.buffer.active;
-    return { buffer, top: buffer.viewportY, bottom: buffer.viewportY + this.#terminal.rows };
+    return {
+      buffer,
+      top: buffer.viewportY,
+      bottom: buffer.viewportY + this.#terminal.rows,
+      cursorShown: this.#cursorShown,
+    };
   }
 
   /**
