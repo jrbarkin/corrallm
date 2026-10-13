@@ -38,8 +38,11 @@ let events: SessionEvent[];
 let remembered: string[];
 let sessions: LiveSession[];
 let readings: [UsageBackend, UsageWindows][];
+/** While set, the fake pty starts only once it resolves. */
+let spawning: Promise<void> | undefined;
 
 beforeEach(async () => {
+  spawning = undefined;
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
   runs = [];
   fake = {};
@@ -62,22 +65,34 @@ const SPEC: SessionSpec = {
   resume: null,
 };
 
-async function start(spec: Partial<SessionSpec> = {}) {
-  const connector = new TerminalConnector({
-    spawn: (file, args, options) => {
+/** A connector running the fake CLI (with the options `fake` has when it starts). */
+function connector() {
+  return new TerminalConnector({
+    spawn: async (file, args, options) => {
+      await spawning;
       const run = new FakeClaude(file, args, options, fake);
       runs.push(run);
-      return Promise.resolve(run);
+      return run;
     },
     findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
     tmp: dir,
     timing: TIMING,
     usage: (backend, windows) => readings.push([backend, windows]),
   });
-  const session = await connector.start(
+}
+
+/**
+ * Starts a session: with a connector of its own, unless `using` (sessions of one connector share
+ * its folders' first runs), its events in `sink`.
+ */
+async function start(
+  spec: Partial<SessionSpec> = {},
+  { using = connector(), sink = events }: { using?: TerminalConnector; sink?: SessionEvent[] } = {},
+) {
+  const session = await using.start(
     { ...SPEC, ...spec },
     {
-      emit: (event) => events.push(event),
+      emit: (event) => sink.push(event),
       remember: (id) => remembered.push(id),
     },
   );
@@ -503,13 +518,29 @@ describe('a Terminal session', () => {
     ]);
   });
 
-  it('waits on the user while a dialog (folder trust) keeps the prompt from showing', async () => {
+  it('lists Claude Code’s folder trust dialog as asking the user, though no turn goes on', async () => {
     fake.trust = true;
     const session = await start();
-    await session.send({ id: 'm1', text: 'Hello' });
     await until(() => {
-      expect(seen()).toContain('status:waiting');
+      expect(last('asking')?.asks).toEqual([{ kind: 'trust', id: expect.any(String) as unknown }]);
     });
+    // The user trusts the folder, in the terminal: it asks nothing more.
+    session.terminal?.input('\r');
+    await until(() => {
+      expect(last('asking')?.asks).toEqual([]);
+    });
+    // Nothing ran: no turn, so no status.
+    expect(seen()).toEqual(['started', 'asking:trust', 'asking:']);
+  });
+
+  it('waits on the user at once while the folder trust dialog keeps the prompt from showing', async () => {
+    fake.trust = true;
+    const session = await start();
+    await until(() => {
+      expect(seen()).toContain('asking:trust');
+    });
+    await session.send({ id: 'm1', text: 'Hello' });
+    expect(seen()).toContain('status:waiting');
     expect(claude().prompts).toEqual([]);
     // The user trusts the folder, in the terminal.
     session.terminal?.input('\r');
@@ -518,14 +549,111 @@ describe('a Terminal session', () => {
     });
     expect(claude().prompts).toEqual(['Hello']);
     expect(seen(1)).toEqual([
+      'asking:trust',
       'user:Hello',
-      'status:working',
-      // Its prompt has not shown for a while.
       'status:waiting',
+      'asking:',
       'status:working',
       'text:Done: Hello',
       'end:done',
     ]);
+  });
+
+  it('starts one Claude Code first in a folder, and the others once it is trusted there', async () => {
+    fake.trust = true;
+    const using = connector();
+    const first: SessionEvent[] = [];
+    const second: SessionEvent[] = [];
+    const a = await start({ agentId: 'a' }, { using, sink: first });
+    const b = await start({ agentId: 'b' }, { using, sink: second });
+    // Only the first runs, and asks whether to trust the folder.
+    expect(runs).toHaveLength(1);
+    await until(() => {
+      expect(first.findLast((event) => event.type === 'asking')).toMatchObject({
+        asks: [{ kind: 'trust' }],
+      });
+    });
+    // The other's view says why it waits.
+    const shown: TerminalEvent[] = [];
+    b.terminal?.show((event) => shown.push(event));
+    await until(() => {
+      expect(shown[0]?.type === 'screen' && shown[0].data).toContain(
+        'Another agent’s Claude Code is starting in this folder first.',
+      );
+    });
+    // A message for it waits too, on the other agent's dialog, not on the user here.
+    await b.send({ id: 'm1', text: 'Hello from b' });
+    await new Promise((resolve) => setTimeout(resolve, TIMING.startup + 30));
+    expect(second.map((event) => event.type)).toEqual(['started', 'user', 'status']);
+    expect(second.at(-1)).toEqual({ type: 'status', status: 'working' });
+
+    // Trusted in the first one's terminal: the other starts, asks nothing, and takes its message.
+    fake.trust = false;
+    a.terminal?.input('\r');
+    await until(() => {
+      expect(runs).toHaveLength(2);
+    });
+    await until(() => {
+      expect(second.findLast((event) => event.type === 'end')).toBeDefined();
+    });
+    expect(runs[1]?.prompts).toEqual(['Hello from b']);
+    expect(second.filter((event) => event.type === 'asking')).toEqual([]);
+    // Its view starts afresh, from the new process's screen.
+    const fresh = shown.findLastIndex((event) => event.type === 'screen');
+    expect(fresh).toBeGreaterThan(0);
+    expect(
+      shown
+        .slice(fresh)
+        .some((event) => event.type === 'output' && event.data.includes('Claude Code (fake)')),
+    ).toBe(true);
+    // Later ones start at once.
+    await start({ agentId: 'c' }, { using, sink: [] });
+    expect(runs).toHaveLength(3);
+  });
+
+  it('ends the CLI of a session closed as it starts, once the folder is trusted', async () => {
+    fake.trust = true;
+    const using = connector();
+    const a = await start({ agentId: 'a' }, { using, sink: [] });
+    const b = await start({ agentId: 'b' }, { using, sink: [] });
+    let spawned: () => void = () => undefined;
+    spawning = new Promise((resolve) => {
+      spawned = resolve;
+    });
+    fake.trust = false;
+    a.terminal?.input('\r');
+    // b's CLI is on its way when b closes.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await b.close();
+    spawned();
+    await until(() => {
+      expect(runs).toHaveLength(2);
+    });
+    await until(() => {
+      expect(runs[1]?.exited).toBe(true);
+    });
+  });
+
+  it('starts the next one waiting when the first exits at its trust dialog; never one that closed', async () => {
+    fake.trust = true;
+    const using = connector();
+    const second: SessionEvent[] = [];
+    await start({ agentId: 'a' }, { using, sink: [] });
+    const b = await start({ agentId: 'b' }, { using, sink: [] });
+    await start({ agentId: 'c' }, { using, sink: second });
+    await b.close();
+    // The user picked "No, exit": the next one waiting starts, and asks in its turn.
+    claude().exit(1);
+    await until(() => {
+      expect(runs).toHaveLength(2);
+    });
+    await until(() => {
+      expect(second.findLast((event) => event.type === 'asking')).toMatchObject({
+        asks: [{ kind: 'trust' }],
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(runs).toHaveLength(2);
   });
 
   it('says why a turn failed, once, and ends it failed', async () => {

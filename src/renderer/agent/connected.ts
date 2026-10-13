@@ -2,6 +2,7 @@ import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
   Connection,
   FilesRewind,
+  InstalledClis,
   McpChange,
   McpServer,
   PastSession,
@@ -21,6 +22,8 @@ import type { Entry, Refusal, Session } from './session';
 /** What a connected session asks of the main process: window.api's session functions. */
 export interface SessionBackend {
   start(agentId: string, options: SessionOptions): Promise<null>;
+  /** Which CLIs the user has (main finds them as its connections would run them). */
+  installed(): Promise<InstalledClis>;
   send(agentId: string, message: UserMessage): Promise<null>;
   answer(agentId: string, promptId: string, answer: SessionAnswer): Promise<null>;
   interrupt(agentId: string): Promise<null>;
@@ -58,6 +61,7 @@ export const NO_BACKEND: SessionBackend = (() => {
     Promise.reject(new Error('Connected sessions run only in the corrallm app.'));
   return {
     start: refuse,
+    installed: () => Promise.resolve({ claude: false, codex: false }),
     send: refuse,
     answer: refuse,
     interrupt: refuse,

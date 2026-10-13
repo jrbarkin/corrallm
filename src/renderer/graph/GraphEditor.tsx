@@ -20,7 +20,9 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { TERMINAL_CONNECTIONS } from '../../shared/session';
+import type { InstalledClis } from '../../shared/session';
 import { AgentView } from '../agent/AgentView';
+import { NO_BACKEND } from '../agent/connected';
 import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
 import type { AskedInSession } from '../agent/session';
@@ -82,7 +84,7 @@ import { EXAMPLES } from './examples';
 import type { Example } from './examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from './file';
-import { fillTemplate, withAgents } from './templates';
+import { fillTemplate, withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
@@ -178,9 +180,12 @@ export function GraphEditor({
   );
 }
 
-/** A template as a canvas: its blanks filled in, and its agents given their types. */
-function fromTemplate(example: Example, { values, agents }: TemplateChoices): Graph {
-  return withAgents(fillTemplate(fromFile(example.text), values), agents);
+/** A template as a canvas: its blanks filled in, its agents given their types and connections. */
+function fromTemplate(example: Example, { values, agents, connections }: TemplateChoices): Graph {
+  return withConnections(
+    withAgents(fillTemplate(fromFile(example.text), values), agents),
+    connections,
+  );
 }
 
 function Editor({
@@ -321,6 +326,21 @@ function Editor({
   const [project, setProject] = useState<ProjectFolder | null>(null);
   /** Whether the templates gallery is open. */
   const [gallery, setGallery] = useState(false);
+  /** Which CLIs the user has, asked of main as the gallery opens: its agents' default connections. */
+  const [installed, setInstalled] = useState<InstalledClis>();
+  useEffect(() => {
+    if (!gallery) return;
+    let open = true;
+    (sessionBackend ?? NO_BACKEND).installed().then(
+      (found) => {
+        if (open) setInstalled(found);
+      },
+      () => undefined,
+    );
+    return () => {
+      open = false;
+    };
+  }, [gallery, sessionBackend]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
   /** Whether the graph is laid out automatically (and nodes cannot be dragged). */
@@ -631,16 +651,18 @@ function Editor({
   };
 
   // Each node shows its group's colour, and an agent with a question for the user (or one the run
-  // holds for the user, at an OK) glows, through classes React Flow puts on it (GraphEditor.css).
+  // holds for the user, at an OK; or what its CLI asks in its terminal, such as whether to trust
+  // the folder as it starts) glows, through classes React Flow puts on it (GraphEditor.css).
   // Screen readers hear an agent's type with its label.
   const nodes = useMemo(() => {
     const colors = groupColors(graph.nodes);
     return graph.nodes.map((n) => {
       const color = colors.get(n.id);
       const status = sessions[n.id]?.status ?? 'idle';
-      // Waiting on a permission answer is asking too.
+      // Waiting on a permission answer is asking too, as is what its CLI asks in its terminal.
       const asking =
         status === 'waiting' ||
+        (sessions[n.id]?.asking?.length ?? 0) > 0 ||
         (run.running && run.agents[n.id]?.status === 'asking') ||
         (n.data.questions?.some((q) => q.answer === undefined) ?? false);
       const classes = [
@@ -1136,6 +1158,7 @@ function Editor({
           <ExampleGallery
             examples={EXAMPLES}
             canInsert={graph.nodes.length > 0}
+            installed={installed}
             onPick={(example, choices, use) => {
               setGallery(false);
               if (use === 'new') {

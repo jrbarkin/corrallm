@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { findExecutable } from './executables';
+import { canRun, findExecutable } from './executables';
 
 /*
  * The `claude` executable both Claude connections run: Terminal runs it in a pty, and the Agent
@@ -12,9 +12,10 @@ import { findExecutable } from './executables';
 const EXECUTABLE = process.platform === 'win32' ? 'claude.exe' : 'claude';
 
 /**
- * Where `claude` is: the path in CORRALLM_CLAUDE_PATH if the user set one, else the native
- * installer's (~/.local/bin), else the first on the agents' PATH (`env`, the login shell's).
- * Undefined if none can run.
+ * Where `claude` is: the path in CORRALLM_CLAUDE_PATH if the user set one (then only that one:
+ * tests point it at a fake, and must never find the user's own), else the native installer's
+ * (~/.local/bin), else the first on the agents' PATH (`env`, the login shell's). Undefined if none
+ * can run.
  */
 export async function findClaude(
   env: Readonly<Record<string, string>>,
@@ -23,10 +24,8 @@ export async function findClaude(
     override = process.env.CORRALLM_CLAUDE_PATH,
   }: { home?: string; override?: string | undefined } = {},
 ): Promise<string | undefined> {
-  return findExecutable(EXECUTABLE, env, [
-    ...(override ? [override] : []),
-    path.join(home, '.local', 'bin', EXECUTABLE),
-  ]);
+  if (override) return (await canRun(override)) ? override : undefined;
+  return findExecutable(EXECUTABLE, env, [path.join(home, '.local', 'bin', EXECUTABLE)]);
 }
 
 /** Where `claude` is (see `findClaude`); rejects, saying how to install it, if there is none. */

@@ -43,7 +43,8 @@
         },
         {
           "id": "review",
-          "action": "/review"
+          "action": "/review",
+          "instruction": "Review the uncommitted changes Builder just made, for bugs."
         },
         {
           "id": "write-up",

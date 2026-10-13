@@ -4,7 +4,7 @@ import type { TerminalAsk } from '../../shared/session';
 import { Markdown } from '../agent/Markdown';
 import type { AskChoice, HeldAsk } from '../run/asks';
 import type { Answer } from '../run/runner';
-import { DEFAULT_AGENT } from './agents';
+import { AGENT_CLI, DEFAULT_AGENT } from './agents';
 import type { AgentType } from './agents';
 
 /** Who asks, labelled on a card: a button that opens that agent. */
@@ -221,8 +221,9 @@ export function QuestionCard({
 /**
  * What a Terminal agent's Claude Code asks the user in its terminal, shown (never answered) here,
  * as Claude Code shows it: a permission (the tool, what it acts on), its questions (each with its
- * header, and its answers with what they mean), a plan to approve, or what it waits for, in its
- * own words. The user answers in the terminal: Open terminal opens the agent's view.
+ * header, and its answers with what they mean), a plan to approve, whether to trust the folder
+ * (as it first runs there), or what it waits for, in its own words. The user answers in the
+ * terminal: Open terminal opens the agent's view.
  */
 export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker }) {
   const body = () => {
@@ -268,6 +269,12 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
             )}
           </>
         );
+      case 'trust':
+        return (
+          <p className="graph-question-text">
+            {AGENT_CLI[agent.type]} asks whether you trust this folder before it works in it.
+          </p>
+        );
       case 'other':
         return <p className="graph-question-text">{ask.text}</p>;
     }
@@ -290,7 +297,11 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
       </button>
       {body()}
       <div className="graph-question-terminal">
-        <span>Answer it in the terminal.</span>
+        <span>
+          {ask.kind === 'trust'
+            ? 'Trust this folder in the terminal.'
+            : 'Answer it in the terminal.'}
+        </span>
         <button type="button" onClick={agent.onOpen}>
           Open terminal
         </button>

@@ -12,6 +12,7 @@ import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
 import type { TerminalCli, TerminalSignal } from './cli';
+import type { FirstRunTurn } from './first-run';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
 import { Screen } from './screen';
@@ -39,6 +40,12 @@ import { ENTER } from './typing';
  * hooks may tell what it is about to ask (Claude Code's: what a permission prompt is for, its
  * questions and a plan to approve, just before it shows them); its reports say when it waits on
  * the user (and, in a word, for what), and when it goes on (the user answered, in the terminal).
+ * Its folder trust dialog (Claude Code's, the first time it runs in a folder) is read from its
+ * screen, turn or not: nothing else tells it.
+ *
+ * A CLI that may ask whether to trust the folder starts in its turn (first-run.ts): while another
+ * session's CLI in the folder has yet to get past its first-run dialogs, this one waits to start
+ * (held), its view saying why, so that the user is asked once, not once per agent.
  */
 
 /** How long things take, in ms. */
@@ -145,6 +152,11 @@ export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
    * main's readings.
    */
   usage?: (windows: UsageWindows) => void;
+  /**
+   * Its turn to start its CLI in the folder (first-run.ts), for a CLI that may ask whether to trust
+   * it: told once the CLI is past its first-run dialogs, or gone before.
+   */
+  firstRun?: FirstRunTurn;
 }
 
 export class TerminalSession<M extends SessionMode = PermissionMode> implements LiveSession<M> {
@@ -193,6 +205,15 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #notified: { id: string; text: string } | undefined;
   /** The asks last listed (JSON): only a change is sent. */
   #listed = '[]';
+  /** The folder trust dialog its CLI shows now, as it is listed; undefined while none shows. */
+  #trust: TerminalAsk | undefined;
+  /**
+   * Whether its CLI got past its first-run dialogs (it reported its state, a hook posted, or its
+   * prompt showed): it no longer asks whether to trust the folder.
+   */
+  #passed = false;
+  /** Whether it waits for its turn to start its CLI (another session in the folder is first). */
+  #held = false;
 
   #link: Link | undefined;
   /** Output for the view, collecting. */
@@ -246,7 +267,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       );
       this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-terminal-'));
       await this.#cli.prepare(this.#settingsDir, this.#registration);
-      await this.#start();
+      const turn = this.#deps.firstRun?.ready;
+      if (turn === undefined) await this.#start();
+      else this.#hold(turn);
     } catch (error) {
       await this.#cleanUp();
       throw error;
@@ -325,6 +348,49 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     await this.#cleanUp();
   }
 
+  /**
+   * Waits for its turn to start its CLI: another session in the folder started first, and has yet
+   * to get past its first-run dialogs (the folder trust dialog). Meanwhile its screen says so;
+   * then the CLI starts on a fresh screen, unless the session was closed.
+   */
+  #hold(turn: Promise<void>): void {
+    this.#held = true;
+    const { name } = this.#cli;
+    // In short lines, which no terminal wraps.
+    this.#output(
+      [
+        '',
+        `  Waiting to start ${name}.`,
+        '',
+        `  Another agent’s ${name} is starting in this folder first. If it asks`,
+        '  whether you trust the folder, answer it in that agent’s terminal (it is',
+        `  in Needs you, on the canvas), and ${name} starts here.`,
+        '',
+      ].join('\r\n'),
+    );
+    void turn.then(async () => {
+      if (this.#closing || this.#cleaned) return;
+      this.#held = false;
+      this.#screen.dispose();
+      this.#screen = this.#newScreen();
+      if (this.#link) this.#reshow(this.#link);
+      try {
+        await this.#start();
+      } catch (error) {
+        this.#exited = true;
+        this.#clearTimers();
+        this.#deliver({ type: 'exit', code: null });
+        this.#host.emit({
+          type: 'closed',
+          error: error instanceof Error ? error.message : `${name} could not start.`,
+        });
+        await this.#cleanUp();
+        return;
+      }
+      if (!this.#gone()) this.#check();
+    });
+  }
+
   /** Runs the CLI in a new pseudo-terminal, on a fresh screen (shown to the view, if any). */
   async #start(): Promise<void> {
     const { model, mode, cwd } = this.#spec;
@@ -341,6 +407,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       env: this.#deps.env(this.#registration?.token ?? ''),
       ...this.#size,
     });
+    if (this.#closing) {
+      // Closed while it started (as one that waited for its turn): its CLI goes too.
+      pty.kill();
+      return;
+    }
     this.#pty = pty;
     this.#spawned = Date.now();
     this.#exit = new Promise((resolve) => {
@@ -425,7 +496,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         }, this.#deps.timing.batch);
       }
     }
-    if (this.#pending.length > 0 || this.#turn) this.#check();
+    if (this.#pending.length > 0 || this.#turn || !this.#passed) this.#check();
   }
 
   #flush(): void {
@@ -491,6 +562,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * its turns; its tasks' are left out.
    */
   #status(report: ProgramStatus): void {
+    this.#pass();
     this.#block(report);
     if (report.id !== undefined || report.state === 'clear') return;
     this.#reporting = true;
@@ -664,10 +736,17 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (!turn || this.#exited) return;
     let status: 'working' | 'waiting' = 'working';
     if (this.#state === 'blocked') status = 'waiting';
-    else if (this.#pending.length > 0 && !this.#typing && !this.#awaiting && !this.#ready()) {
+    else if (
+      !this.#held &&
+      this.#pending.length > 0 &&
+      !this.#typing &&
+      !this.#awaiting &&
+      !this.#ready()
+    ) {
       const draft = this.#cli.draft(this.#screen);
       // The user's draft is in the way; or something (a dialog) keeps the prompt from showing.
       if (draft !== undefined && draft !== '') status = 'waiting';
+      else if (this.#trust) status = 'waiting';
       else if (!busy(this.#state) && Date.now() - this.#spawned >= this.#deps.timing.startup) {
         status = 'waiting';
       }
@@ -691,6 +770,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       void this.#screen.settled().then(() => {
         this.#checking = undefined;
         if (this.#exited || this.#closing) return;
+        this.#firstRunDialogs();
         this.#pump();
         this.#updateStatus();
       });
@@ -701,6 +781,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   #hook(event: HookEvent): void {
     if (this.#exited || this.#closing) return;
+    this.#pass();
     for (const signal of this.#cli.hook(event)) this.#signal(signal);
   }
 
@@ -765,6 +846,35 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
   }
 
+  // ---- Its first-run dialogs.
+
+  /**
+   * Reads, until its CLI is past them, whether its screen shows its folder trust dialog (listed as
+   * asked) or its prompt (it is past them).
+   */
+  #firstRunDialogs(): void {
+    if (this.#passed || !this.#pty) return;
+    if (this.#cli.draft(this.#screen) !== undefined) {
+      this.#pass();
+      return;
+    }
+    const shown = this.#cli.trusting?.(this.#screen) ?? false;
+    if (shown === (this.#trust !== undefined)) return;
+    this.#trust = shown ? { kind: 'trust', id: randomUUID() } : undefined;
+    this.#list();
+  }
+
+  /** Its CLI is past its first-run dialogs: the folder is trusted, and the others may start. */
+  #pass(): void {
+    if (this.#passed || this.#held) return;
+    this.#passed = true;
+    this.#deps.firstRun?.passed();
+    if (this.#trust) {
+      this.#trust = undefined;
+      this.#list();
+    }
+  }
+
   // ---- What it asks the user, in its terminal.
 
   /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
@@ -802,6 +912,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** Nothing is asked any more: the CLI is going. */
   #forgetAsks(): void {
+    this.#trust = undefined;
     this.#blocks.clear();
     this.#asks = [];
     this.#notified = undefined;
@@ -816,6 +927,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    */
   #asking(): TerminalAsk[] {
     if (this.#exited) return [];
+    // Its folder trust dialog comes before anything else.
+    if (this.#trust) return [this.#trust];
     const notified: TerminalAsk[] = this.#notified ? [{ kind: 'other', ...this.#notified }] : [];
     if (!this.#reporting && this.#blocks.size === 0) {
       return this.#asks.length > 0 ? this.#asks.map(({ ask }) => ask) : notified;
@@ -896,6 +1009,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   async #cleanUp(): Promise<void> {
     if (this.#cleaned) return;
     this.#cleaned = true;
+    // Gone: if it was first in the folder and never got past its first-run dialogs, the next goes.
+    this.#deps.firstRun?.done();
     this.#registration?.release();
     if (this.#settingsDir !== undefined) {
       await rm(this.#settingsDir, { recursive: true, force: true }).catch(() => undefined);

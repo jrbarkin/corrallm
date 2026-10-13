@@ -43,6 +43,17 @@ describe('findCodex', () => {
     );
   });
 
+  it('finds only the path the user set, when it set one: never another codex', async () => {
+    await install(path.join('home', '.local', 'bin'));
+    await install('bin');
+    expect(
+      await findCodex(
+        { PATH: path.join(dir, 'bin') },
+        { home: path.join(dir, 'home'), override: path.join(dir, 'none', 'codex') },
+      ),
+    ).toBeUndefined();
+  });
+
   it('runs the native Codex that npm installed on Windows, not its .cmd launcher', async () => {
     // npm's global folder: the launcher, and the platform's package with its binary.
     await install('npm', 'codex.cmd', '@node codex.js %*\r\n');

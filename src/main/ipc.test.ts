@@ -82,6 +82,11 @@ function fakeServices() {
         .fn<IpcServices['sessions']['dropOnTerminal']>()
         .mockResolvedValue(undefined),
     },
+    clis: {
+      installed: vi
+        .fn<IpcServices['clis']['installed']>()
+        .mockResolvedValue({ claude: true, codex: false }),
+    },
     usage: {
       state: vi.fn<IpcServices['usage']['state']>().mockReturnValue({ readings: [], rules: {} }),
       setRule: vi.fn<IpcServices['usage']['setRule']>(),
@@ -626,6 +631,13 @@ describe('link:open handler', () => {
   ])('rejects %s', (_label, args, message) => {
     expect(() => invoke('link:open', args)).toThrow(message);
     expect(services.links.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('session:clis', () => {
+  it('says which CLIs the user has, and takes no arguments', async () => {
+    await expect(invoke('session:clis', [])).resolves.toEqual({ claude: true, codex: false });
+    expect(() => invoke('session:clis', ['claude'])).toThrow(/no arguments/);
   });
 });
 

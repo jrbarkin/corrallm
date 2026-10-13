@@ -20,14 +20,14 @@ export const MIN_CODEX_VERSION = '0.160.0';
 
 export interface FindCodexOptions {
   home?: string;
-  /** A path the user set (CORRALLM_CODEX_PATH), tried first. */
+  /** A path the user set (CORRALLM_CODEX_PATH): the only one tried, if set. */
   override?: string | undefined;
   platform?: NodeJS.Platform;
 }
 
 /**
- * Where `codex` is: the path in CORRALLM_CODEX_PATH if the user set one, else the standalone
- * installer's (~/.local/bin, a link into ~/.codex/packages), else the first on the agents' PATH
+ * Where `codex` is: the path in CORRALLM_CODEX_PATH if the user set one (then only that one: tests
+ * point it at a fake, and must never find the user's own), else the standalone installer's (~/.local/bin, a link into ~/.codex/packages), else the first on the agents' PATH
  * (`env`, the login shell's: Homebrew's, npm's). On Windows, npm installs a `codex.cmd` launcher,
  * which cannot run without a shell: the native `codex.exe` it would start is run instead.
  * Undefined if none can run.
@@ -40,9 +40,9 @@ export async function findCodex(
     platform = process.platform,
   }: FindCodexOptions = {},
 ): Promise<string | undefined> {
+  if (override) return (await canRun(override)) ? override : undefined;
   const executable = platform === 'win32' ? 'codex.exe' : 'codex';
   const found = await findExecutable(executable, env, [
-    ...(override ? [override] : []),
     path.join(home, '.local', 'bin', executable),
   ]);
   if (found !== undefined || platform !== 'win32') return found;

@@ -41,6 +41,7 @@ const api: AppApi = {
   chooseProject: () => invoke(API_CHANNELS.chooseProject),
   findProjectFiles: (query) => invoke(API_CHANNELS.findProjectFiles, query),
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
+  installedClis: () => invoke(API_CHANNELS.installedClis),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),

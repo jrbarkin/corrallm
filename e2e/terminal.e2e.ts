@@ -189,13 +189,15 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   const [start] = await logged();
   expect(start).toMatchObject({ cwd: realpathSync(folder), term: 'xterm-256color' });
 
-  // It asks whether to trust the folder, answered in the terminal.
+  // It asks whether to trust the folder: it needs the user, though nothing runs yet. Answered in
+  // the terminal.
   await claudeReady();
-  await expect(status(view)).toHaveText('Idle');
+  await expect(status(view)).toHaveText('Trust this folder in the terminal');
   await typeIn(terminal, 'ArrowDown', 'Enter');
   await expect
     .poll(async () => (await logged()).some((entry) => entry.event === 'trusted'))
     .toBe(true);
+  await expect(status(view)).toHaveText('Idle');
 
   // A prompt typed in the terminal: corrallm sees it work, and its turn end.
   await typeIn(terminal, 'hello there', 'Enter');
@@ -240,6 +242,56 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
   await expect(needsYou).toHaveCount(0);
+});
+
+test('a template’s Claude agents run in their terminals, asked once whether to trust the folder', async () => {
+  await writeFile(path.join(folder, '.fake-claude-untrusted'), '');
+  // The user has Claude Code (here, the fake): a template's Claude agents run in a Terminal.
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
+  const gallery = page.getByRole('dialog', { name: 'Templates' });
+  await gallery.getByRole('button', { name: /^Independent cross-check/ }).click();
+  for (const role of ['Builder', 'Checker']) {
+    await expect(gallery.getByRole('combobox', { name: `How ${role} runs` })).toHaveValue(
+      'terminal',
+    );
+  }
+  await gallery.getByRole('button', { name: 'Create canvas' }).click();
+  await expect(page.locator('.react-flow__node[data-id="builder"]')).toHaveAttribute(
+    'aria-label',
+    'Builder, Claude · Terminal',
+  );
+  await chooseProject();
+  // Their Claude Codes start only when needed.
+  await page.waitForTimeout(300);
+  expect(await starts()).toEqual([]);
+
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const queues = page.getByRole('dialog', { name: 'All queues' });
+  await queues.getByRole('button', { name: 'Run' }).click();
+  // One starts first, and asks whether to trust the folder; the other waits for it.
+  await expect.poll(starts).toHaveLength(1);
+  await expect(queues.getByRole('status')).toContainText('1 needs you');
+  await page.waitForTimeout(500);
+  expect(await starts()).toHaveLength(1);
+  await queues.getByRole('button', { name: 'Back' }).click();
+  const asked = page
+    .getByRole('complementary', { name: 'Needs you' })
+    .getByRole('group', { name: / asks, in its terminal$/ });
+  await expect(asked).toHaveCount(1);
+  await expect(asked).toContainText('Trust this folder in the terminal.');
+  await asked.getByRole('button', { name: 'Open terminal' }).click();
+  const view = page.getByRole('dialog', { name: /^(Builder|Checker)$/ });
+  await expect(status(view)).toHaveText('Trust this folder in the terminal');
+  const terminal = view.locator('.agent-terminal');
+  await expect(terminal).toHaveAttribute('data-state', 'live');
+  await typeIn(terminal, 'ArrowDown', 'Enter');
+
+  // Trusted: the other starts and asks nothing, and the run goes on to the end.
+  await expect.poll(starts).toHaveLength(2);
+  await view.getByRole('button', { name: 'All queues' }).click();
+  await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 30_000 });
+  expect((await logged()).filter((entry) => entry.event === 'trusted')).toHaveLength(1);
+  expect(await starts()).toHaveLength(2);
 });
 
 test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {

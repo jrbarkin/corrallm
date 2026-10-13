@@ -45,6 +45,8 @@ const NEEDS_YOU = new Set([
 /** At most this much of a notification is listed. */
 const MAX_ASK_TEXT = 2000;
 const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
+/** Its folder trust dialog's choice to go on. */
+const TRUST_DIALOG = 'Yes, I trust this folder';
 
 export interface ClaudeCodeOptions {
   /** The project folder it works in: its asks show the files in it relative to it. */
@@ -209,6 +211,14 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
 
   draft(screen: Screen): string | undefined {
     return screen.draft();
+  }
+
+  /**
+   * Its folder trust dialog ("Quick safety check: Is this a project you created or one you
+   * trust?", as 2.1.296 asks), whose default is "No, exit".
+   */
+  trusting(screen: Screen): boolean {
+    return screen.text().includes(TRUST_DIALOG);
   }
 
   keystrokes(text: string): string[] {

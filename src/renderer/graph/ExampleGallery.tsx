@@ -1,40 +1,65 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { AgentType, DEFAULT_AGENT } from './agents';
+import type { InstalledClis } from '../../shared/session';
+import {
+  AGENT_CONNECTIONS,
+  AgentType,
+  CONNECTION_INFO,
+  DEFAULT_AGENT,
+  defaultConnection,
+} from './agents';
+import type { AgentConnection } from './agents';
 import type { Example } from './examples';
 import { fromFile } from './file';
 
 /** How a template is used: as a new canvas, or inserted into this one as a group. */
 export type TemplateUse = 'new' | 'insert';
 
-/** What a template is used with: its blanks filled in, and each agent's type (undefined: open). */
+/**
+ * What a template is used with: its blanks filled in, each agent's type (undefined: open), and how
+ * each agent runs.
+ */
 export interface TemplateChoices {
   values: Readonly<Record<string, string>>;
   agents: Readonly<Record<string, AgentType | undefined>>;
+  connections: Readonly<Record<string, AgentConnection>>;
 }
+
+/** What the user chose for a template so far: how an agent runs only where they chose it. */
+type Chosen = Omit<TemplateChoices, 'connections'> & {
+  connections: Readonly<Record<string, AgentConnection | undefined>>;
+};
 
 /**
  * The templates gallery: a card for each template (its name, what it does, a dot for each of its
  * agents, in its type's colour, or hollow where the template leaves the agent open). Picking one
  * shows what it asks: its blanks, each starting from the template's own example, and each agent's
- * type, which the user may change or leave to the default agent. Then it opens as a new canvas, or
- * (`canInsert`, when the canvas has something on it) is inserted into this one as a group. Escape
- * steps back from that, then closes the gallery, as do the close button and a click outside.
+ * type, which the user may change or leave to the default agent, and how it runs: in a Terminal
+ * where the user has its CLI (`installed`, as main found them), else simulated, unless the user
+ * picks another way its type runs. Then it opens as a new canvas, or (`canInsert`, when the canvas
+ * has something on it) is inserted into this one as a group. Escape steps back from that, then
+ * closes the gallery, as do the close button and a click outside.
  */
 export function ExampleGallery({
   examples,
   canInsert,
+  installed,
   onPick,
   onClose,
 }: {
   examples: readonly Example[];
   canInsert: boolean;
+  /** Which CLIs the user has; undefined while main has not said. */
+  installed?: InstalledClis | undefined;
   onPick: (example: Example, choices: TemplateChoices, use: TemplateUse) => void;
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   /** The template picked, and what it is to be used with so far. */
-  const [chosen, setChosen] = useState<{ example: Example } & TemplateChoices>();
+  const [chosen, setChosen] = useState<{ example: Example } & Chosen>();
+  /** How an agent of the template picked runs: as chosen, or its type's default. */
+  const connectionOf = (id: string): AgentConnection =>
+    chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT, installed);
   useEffect(() => {
     panel.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -63,13 +88,17 @@ export function ExampleGallery({
   const use = (how: TemplateUse) => {
     if (!chosen) return;
     const { example, values, agents } = chosen;
-    onPick(example, { values, agents }, how);
+    const connections = Object.fromEntries(
+      (agentsOf.get(example) ?? []).map((role) => [role.id, connectionOf(role.id)]),
+    );
+    onPick(example, { values, agents, connections }, how);
   };
   const pick = (example: Example) => {
     setChosen({
       example,
       values: Object.fromEntries((example.fields ?? []).map((f) => [f.key, f.example])),
       agents: Object.fromEntries((agentsOf.get(example) ?? []).map((a) => [a.id, a.agent])),
+      connections: {},
     });
   };
 
@@ -139,7 +168,12 @@ export function ExampleGallery({
                     value={chosen.agents[role.id] ?? ''}
                     onChange={(event) => {
                       const type = Object.values(AgentType).find((t) => t === event.target.value);
-                      setChosen({ ...chosen, agents: { ...chosen.agents, [role.id]: type } });
+                      // Another type runs as that type does, unless chosen again.
+                      setChosen({
+                        ...chosen,
+                        agents: { ...chosen.agents, [role.id]: type },
+                        connections: { ...chosen.connections, [role.id]: undefined },
+                      });
                     }}
                   >
                     <option value="">Default ({DEFAULT_AGENT})</option>
@@ -149,6 +183,17 @@ export function ExampleGallery({
                       </option>
                     ))}
                   </select>
+                  <ConnectionSelect
+                    role={role.label}
+                    agent={chosen.agents[role.id] ?? DEFAULT_AGENT}
+                    value={connectionOf(role.id)}
+                    onChange={(connection) => {
+                      setChosen({
+                        ...chosen,
+                        connections: { ...chosen.connections, [role.id]: connection },
+                      });
+                    }}
+                  />
                 </label>
               ))}
             </fieldset>
@@ -207,5 +252,41 @@ export function ExampleGallery({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * How a template's agent runs: the ways its type runs (Terminal first; Simulated last), each
+ * explained in its title. A type that can only be simulated says so, and offers nothing else.
+ */
+function ConnectionSelect({
+  role,
+  agent,
+  value,
+  onChange,
+}: {
+  role: string;
+  agent: AgentType;
+  value: AgentConnection;
+  onChange: (connection: AgentConnection) => void;
+}) {
+  const ways = AGENT_CONNECTIONS[agent];
+  return (
+    <select
+      aria-label={`How ${role} runs`}
+      value={value}
+      disabled={ways.length === 1}
+      title={CONNECTION_INFO[value].description}
+      onChange={(event) => {
+        const way = ways.find((connection) => connection === event.target.value);
+        if (way !== undefined) onChange(way);
+      }}
+    >
+      {ways.map((connection) => (
+        <option key={connection} value={connection} title={CONNECTION_INFO[connection].description}>
+          {CONNECTION_INFO[connection].label}
+        </option>
+      ))}
+    </select>
   );
 }

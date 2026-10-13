@@ -22,6 +22,7 @@ const files: CanvasFiles = {
 /** Connected agents' sessions run in the main process (src/main/sessions/). */
 const sessionBackend: SessionBackend = {
   start: (agentId, options) => window.api.startSession(agentId, options),
+  installed: () => window.api.installedClis(),
   send: (agentId, message) => window.api.sendToSession(agentId, message),
   answer: (agentId, promptId, answer) => window.api.answerSession(agentId, promptId, answer),
   interrupt: (agentId) => window.api.interruptSession(agentId),

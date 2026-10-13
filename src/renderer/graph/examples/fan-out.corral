@@ -52,7 +52,8 @@
       "queue": [
         {
           "id": "search",
-          "action": "WebSearch"
+          "action": "WebSearch",
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-1.md, with a link to each source."
         },
         {
           "id": "report",
@@ -74,7 +75,8 @@
       "queue": [
         {
           "id": "search",
-          "action": "web_search"
+          "action": "web_search",
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-2.md, with a link to each source."
         },
         {
           "id": "report",
@@ -96,7 +98,8 @@
       "queue": [
         {
           "id": "search",
-          "action": "google_web_search"
+          "action": "google_web_search",
+          "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-3.md, with a link to each source."
         },
         {
           "id": "report",

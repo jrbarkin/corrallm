@@ -34,7 +34,8 @@
         },
         {
           "id": "research",
-          "action": "Workflow"
+          "action": "Workflow",
+          "instruction": "Have subagents look into it from every side (what to limit, the limits to set, how clients are told they hit one), and write what they find to RESEARCH.md."
         },
         {
           "id": "done",

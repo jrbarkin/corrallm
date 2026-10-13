@@ -47,6 +47,20 @@ describe.each(EXAMPLES)('the $name example', (example) => {
     }
   });
 
+  it('says what each tool step is to do, and what Codex’s /review looks at', () => {
+    // A tool alone ("Use the WebSearch tool for this step") leaves the agent to guess what for;
+    // Codex's /review without instructions asks, in its terminal, what to review.
+    const vague = (item: QueueItem): string[] => {
+      if (isIf(item)) return item.then.flatMap(vague);
+      if (isRepeat(item)) return item.repeat.flatMap(vague);
+      if (!('action' in item) || (item.instruction ?? '').trim() !== '') return [];
+      return item.action.startsWith('/') && item.action !== '/review' ? [] : [item.action];
+    };
+    expect(
+      [...agents.values()].flatMap((agent) => (agent.data.queue ?? []).flatMap(vague)),
+    ).toEqual([]);
+  });
+
   it('asks for each of its blanks, and has no field it does not use', () => {
     expect(placeholdersOf(graph).sort()).toEqual((example.fields ?? []).map((f) => f.key).sort());
   });

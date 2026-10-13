@@ -1,6 +1,7 @@
 import type {
   Connection,
   FilesRewind,
+  InstalledClis,
   McpChange,
   McpServer,
   PastSession,
@@ -64,6 +65,11 @@ export interface IpcContract {
    * it could not start. Starting it again with the same connection does nothing.
    */
   'session:start': { args: [agentId: string, options: SessionOptions]; result: null };
+  /**
+   * Which CLIs the user has (`claude`, `codex`), found as connected agents would run them: a
+   * template's agents run in a Terminal for those by default.
+   */
+  'session:clis': { args: []; result: InstalledClis };
   /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
   'session:send': { args: [agentId: string, message: UserMessage]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
@@ -209,6 +215,7 @@ export interface InvokeApi {
   chooseProject(): Promise<IpcResult<'project:choose'>>;
   findProjectFiles(...args: IpcArgs<'project:files'>): Promise<IpcResult<'project:files'>>;
   startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
+  installedClis(): Promise<IpcResult<'session:clis'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
@@ -256,6 +263,7 @@ export const API_CHANNELS = {
   chooseProject: 'project:choose',
   findProjectFiles: 'project:files',
   startSession: 'session:start',
+  installedClis: 'session:clis',
   sendToSession: 'session:send',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',
