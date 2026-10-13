@@ -1,13 +1,13 @@
-import { AGENT_ACTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
-import type { AgentType } from './agents';
+import { AGENT_ACTIONS, AGENT_CONNECTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
+import type { AgentConnection, AgentType } from './agents';
 import type { Graph } from './graph';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
 import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
 
 /**
- * A blank in a template, written `{{key}}` in its agents' names, messages, conditions (a repeat's
- * too) and OKs: what the
- * gallery asks for (`label`) before it opens the canvas, starting from the template's own example.
+ * A blank in a template, written `{{key}}` in its agents' names, messages, steps' instructions,
+ * conditions (a repeat's too) and OKs: what the gallery asks for (`label`) before it opens the
+ * canvas, starting from the template's own example.
  */
 export interface TemplateField {
   key: string;
@@ -32,7 +32,7 @@ function textsOf(graph: Graph): string[] {
             ? [...item.repeat.flatMap(ofItem), ...ofCondition(item.until)]
             : isMessage(item)
               ? [item.message]
-              : [];
+              : [item.instruction ?? ''];
   return graph.nodes.flatMap((n) => [n.data.label, ...(n.data.queue ?? []).flatMap(ofItem)]);
 }
 
@@ -49,7 +49,11 @@ export function fillTemplate(graph: Graph, values: Readonly<Record<string, strin
   const fillCondition = <C extends Condition | Until>(condition: C): C =>
     'text' in condition ? { ...condition, text: fill(condition.text) } : condition;
   const fillStep = <T extends RepeatedItem>(step: T): T =>
-    isMessage(step) ? { ...step, message: fill(step.message) } : step;
+    isMessage(step)
+      ? { ...step, message: fill(step.message) }
+      : 'action' in step && step.instruction !== undefined
+        ? { ...step, instruction: fill(step.instruction) }
+        : step;
   const fillItem = (item: QueueItem): QueueItem =>
     isWait(item) || isDelay(item)
       ? item
@@ -107,6 +111,28 @@ export function withAgents(
       const data = { ...node.data, ...(queue ? { queue } : {}) };
       if (type === undefined) delete data.agent;
       else data.agent = type;
+      return { ...node, data };
+    }),
+  };
+}
+
+/**
+ * A template's agents run as chosen (`connections`, by agent id): connected, or simulated. A way
+ * its type cannot run leaves the agent as it was; agents not in `connections` keep theirs.
+ */
+export function withConnections(
+  graph: Graph,
+  connections: Readonly<Record<string, AgentConnection>>,
+): Graph {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const connection = connections[node.id];
+      if (node.type !== 'agent' || connection === undefined) return node;
+      if (!AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection)) return node;
+      const data = { ...node.data };
+      if (connection === 'simulated') delete data.connection;
+      else data.connection = connection;
       return { ...node, data };
     }),
   };

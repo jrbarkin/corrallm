@@ -1429,10 +1429,14 @@ input.graph-label {
   color: white;
 }
 
-/* A template's agents: each with its type, or the default; a hollow dot where it is left open. */
+/*
+ * A template's agents: each with its type, or the default (a hollow dot where it is left open),
+ * and how it runs. Their rows share the fieldset's columns, so their pickers line up.
+ */
 .graph-template-agents {
   display: grid;
-  gap: 8px;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px 10px;
   margin: 0;
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
@@ -1446,8 +1450,8 @@ input.graph-label {
 
 .graph-template-agent {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
 }
 

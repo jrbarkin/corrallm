@@ -2,11 +2,18 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasFile } from '../../shared/ipc';
+import { fakeBackend } from '../test-backend';
 import { fromFile, toFile } from './file';
 import { GraphEditor } from './GraphEditor';
 import type { CanvasFiles } from './GraphEditor';
 import { PADDING } from './graph';
 import type { Graph, GraphNode } from './graph';
+
+// jsdom cannot draw xterm.js: a fake terminal stands in for a Terminal agent's (test-screen.ts).
+vi.mock('../terminal/screen', async () => {
+  const { fakeScreens } = await import('../terminal/test-screen');
+  return { createScreen: fakeScreens.create };
+});
 
 const agentNode = (
   id: string,
@@ -1418,6 +1425,69 @@ describe('GraphEditor', () => {
         'Claude',
         'Codex',
       ]);
+    });
+
+    it('runs a template’s agents as chosen: in a Terminal by default where the user has the CLI', async () => {
+      const sessions = fakeBackend();
+      sessions.backend.installed.mockResolvedValue({ claude: true, codex: false });
+      const { container } = render(
+        <GraphEditor files={fakeFiles()} sessionBackend={sessions.backend} />,
+      );
+      fireEvent.click(button('Start from a template…'));
+      const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
+      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      const how = (role: string) =>
+        gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
+      const options = (role: string) => [...how(role).options].map((o) => o.textContent);
+      // The user has Claude Code: its roles run in a Terminal. Not Codex: simulated, until chosen.
+      await waitFor(() => {
+        expect(how('Implementer').value).toBe('terminal');
+      });
+      expect(options('Implementer')).toEqual(['Terminal', 'Agent SDK', 'Simulated']);
+      expect(how('Tester').value).toBe('simulated');
+      expect(options('Tester')).toEqual(['Terminal', 'App Server', 'Simulated']);
+      // Another type runs as that type does by default.
+      fireEvent.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
+        target: { value: 'Claude' },
+      });
+      expect(how('Tester').value).toBe('terminal');
+      fireEvent.change(how('Refactorer'), { target: { value: 'app-server' } });
+      // A type that can only be simulated says so.
+      fireEvent.change(gallery.getByRole('combobox', { name: "Implementer's agent" }), {
+        target: { value: 'Gemini' },
+      });
+      expect(how('Implementer').value).toBe('simulated');
+      expect(how('Implementer').disabled).toBe(true);
+      fireEvent.change(gallery.getByRole('combobox', { name: "Implementer's agent" }), {
+        target: { value: 'Claude' },
+      });
+
+      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+      const cards = () =>
+        [...container.querySelectorAll('.react-flow__node')].map((n) =>
+          n.getAttribute('aria-label'),
+        );
+      expect(cards()).toEqual([
+        'Tester, Claude · Terminal',
+        'Implementer, Claude · Terminal',
+        'Refactorer, Codex · App Server',
+      ]);
+      // Nothing starts until an agent is opened, or sent a message.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(sessions.backend.start).not.toHaveBeenCalled();
+      const implementer = container.querySelector('.react-flow__node[data-id="implementer"]');
+      if (!implementer) throw new Error('no Implementer');
+      fireEvent.doubleClick(implementer);
+      await waitFor(() => {
+        expect(sessions.backend.start).toHaveBeenCalledTimes(1);
+      });
+      expect(sessions.backend.start).toHaveBeenCalledWith('implementer', {
+        connection: 'terminal',
+        model: null,
+        mode: null,
+      });
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {

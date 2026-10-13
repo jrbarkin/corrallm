@@ -1,9 +1,11 @@
+import { realpath } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 
 import type { UsageBackend, UsageWindows } from '../../../shared/usage';
 import { claudeFlags, requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
+import { FirstRuns } from './first-run';
 import { HOOK_TOKEN, HookServer } from './hooks';
 import { spawnPty } from './pty';
 import type { SpawnPty } from './pty';
@@ -14,7 +16,8 @@ import type { TerminalTiming } from './session';
  * The Terminal connection: a Claude agent runs Claude Code's own interactive CLI (the user's
  * `claude`, with their login, settings, hooks and MCP servers) in a pseudo-terminal, in the
  * canvas's project folder, and its agent view shows that terminal (session.ts, with Claude Code's
- * TerminalCli: claude-code.ts).
+ * TerminalCli: claude-code.ts). Claude Code asks whether to trust a folder the first time it runs
+ * there: its sessions in a folder take turns to start until one is past that (first-run.ts).
  */
 
 /** Variables a terminal sets for the programs in it. */
@@ -70,6 +73,8 @@ export class TerminalConnector implements Connector {
   readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
+  /** Which session starts first in each folder, until the folder is trusted. */
+  readonly #firstRuns = new FirstRuns();
 
   constructor({
     spawn = spawnPty,
@@ -96,6 +101,8 @@ export class TerminalConnector implements Connector {
       spec.effort != null && (await this.#flags(claude, spec.env)).has('--effort')
         ? spec.effort
         : null;
+    // Claude Code trusts a folder by its real path.
+    const folder = await realpath(spec.cwd).catch(() => spec.cwd);
     const session = new TerminalSession(spec, host, {
       executable: claude,
       cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home, env: spec.env, effort }),
@@ -105,6 +112,7 @@ export class TerminalConnector implements Connector {
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
       usage: (windows) => this.#usage?.('Claude', windows),
+      firstRun: this.#firstRuns.take(folder),
     });
     await session.launch();
     return session;

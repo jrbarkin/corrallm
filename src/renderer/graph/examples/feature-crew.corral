@@ -14,7 +14,8 @@
       "queue": [
         {
           "id": "research",
-          "action": "/deep-research"
+          "action": "/deep-research",
+          "instruction": "How should a public API be rate-limited: the limits to set, and how clients are told they hit one?"
         },
         {
           "id": "notes",

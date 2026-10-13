@@ -4,6 +4,7 @@ import type { WebContents } from 'electron';
 import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
 import { MAX_FILE_MATCHES } from '../shared/session';
+import type { InstalledClis } from '../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../shared/usage';
 import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
 import type { ProjectFiles } from './files';
@@ -44,8 +45,8 @@ export type IpcHandler<C extends IpcChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on besides canvas files: project folders, their files, links to open, and
- * sessions.
+ * What the handlers act on besides canvas files: project folders, their files, links to open,
+ * sessions, the CLIs the user has, and usage.
  */
 export interface IpcServices {
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
@@ -79,6 +80,8 @@ export interface IpcServices {
     | 'resizeTerminal'
     | 'dropOnTerminal'
   >;
+  /** Which CLIs the user has (sessions/installed.ts). */
+  clis: { installed: () => Promise<InstalledClis> };
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
 
@@ -169,7 +172,14 @@ export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
   return [parseBackend(backend), windows === null ? null : parseWindows(windows, Date.now())];
 }
 
-function createHandlers({ projects, files, links, sessions, usage }: IpcServices): HandlerTable {
+function createHandlers({
+  projects,
+  files,
+  links,
+  sessions,
+  clis,
+  usage,
+}: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'canvas:open': {
@@ -226,6 +236,7 @@ function createHandlers({ projects, files, links, sessions, usage }: IpcServices
         return null;
       },
     },
+    'session:clis': { parseArgs: noArgs, handler: () => clis.installed() },
     'session:send': {
       parseArgs: parseSendArgs,
       handler: async ({ contents }, agentId, message) => {

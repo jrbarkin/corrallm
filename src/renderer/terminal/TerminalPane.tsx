@@ -17,6 +17,8 @@ const STATUS: Record<Session['status'], string> = {
   working: 'Working',
   waiting: 'Needs you, in the terminal',
 };
+/** What it says while the CLI asks whether to trust the folder, in a turn or not. */
+const TRUST = 'Trust this folder in the terminal';
 
 /**
  * A Terminal agent's session: its CLI's own terminal (Claude Code's or Codex's: it runs in the main
@@ -27,6 +29,8 @@ const STATUS: Record<Session['status'], string> = {
  * not take a message typed in: what the transcript would show), what the session is doing (as
  * corrallm follows it), the messages queued for it (corrallm types each into the terminal once the
  * CLI is ready), and the queue's ⊕; on a Mac, whether Option works as Meta in it (keyboard.ts).
+ * While the CLI asks whether to trust the folder (its first run there), the bar says it needs the
+ * user, turn or not.
  * Over it, while no CLI runs: why, and a button to start it again (resuming its session). Files
  * dropped on it are pasted into it as their paths, quoted, as a terminal does (main reads the
  * paths: link.ts). A link Cmd-clicked in the terminal goes to main, which asks before opening it.
@@ -125,6 +129,7 @@ export function TerminalPane({
   );
   /** The warning the user dismissed, by id. */
   const [dismissed, setDismissed] = useState<string>();
+  const trusting = session.asking?.some((asked) => asked.kind === 'trust') ?? false;
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
       <div
@@ -207,8 +212,12 @@ export function TerminalPane({
         )}
         <div className="agent-terminal-row">
           {above}
-          <span className="agent-terminal-status" data-status={session.status} role="status">
-            {STATUS[session.status]}
+          <span
+            className="agent-terminal-status"
+            data-status={trusting ? 'waiting' : session.status}
+            role="status"
+          >
+            {trusting ? TRUST : STATUS[session.status]}
           </span>
           <span className="agent-terminal-note">{note}</span>
           {isMac() && (

@@ -94,6 +94,12 @@ export interface TerminalCli<M extends SessionMode> {
   /** Its window title changed (OSC 0 or 2): the state it says, if it says one. */
   title?(title: string): ProgramStatus | undefined;
   /**
+   * Whether its screen shows its folder trust dialog (Claude Code's, the first time it runs in a
+   * folder): it waits on the user there, before it reports anything or runs a hook. Codex is told
+   * the folder is trusted on its command line, and never asks.
+   */
+  trusting?(screen: Screen): boolean;
+  /**
    * Whether it is still getting ready (Codex starting its MCP servers): it holds a message sent
    * meanwhile until then, so the message is waited for rather than given up on.
    */

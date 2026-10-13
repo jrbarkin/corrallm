@@ -230,6 +230,34 @@ describe('a Terminal agent', () => {
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
+  it('needs the user while Claude Code asks whether to trust the folder: in its bar, on its card and in Needs you', async () => {
+    const { card, view, session } = await open();
+    // Started fresh, no turn going on: its folder trust dialog, whose default is "No, exit".
+    session(
+      { type: 'started', model: null, mode: 'manual', models: [] },
+      { type: 'asking', asks: [{ kind: 'trust', id: 't' }] },
+    );
+    /** What its bar says the session is doing. */
+    const status = () =>
+      screen.getByRole('dialog', { name: 'a' }).querySelector('.agent-terminal-status');
+    expect(status()?.textContent).toBe('Trust this folder in the terminal');
+    expect(status()?.getAttribute('data-status')).toBe('waiting');
+    expect(card().classList.contains('asking')).toBe(true);
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await settle();
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
+    expect(asked.textContent).toBe(
+      'aClaude Code asks whether you trust this folder before it works in it.Trust this folder in the terminal.Open terminal',
+    );
+    fireEvent.click(within(asked).getByRole('button', { name: 'Open terminal' }));
+    await settle();
+    // Trusted there: it no longer needs the user.
+    session({ type: 'asking', asks: [] });
+    expect(status()?.textContent).toBe('Idle');
+    expect(card().classList.contains('asking')).toBe(false);
+  });
+
   it('shows Codex’s own terminal for a Codex agent, and follows its turns there and on the canvas', async () => {
     const { sessions, terminals, card, view, session } = await open({
       data: { agent: 'Codex', connection: 'codex-terminal' },

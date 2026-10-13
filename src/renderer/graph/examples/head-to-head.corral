@@ -14,7 +14,8 @@
       "queue": [
         {
           "id": "worktree",
-          "action": "EnterWorktree"
+          "action": "EnterWorktree",
+          "instruction": "Work in a new worktree of your own, named compete-claude, from here on."
         },
         {
           "id": "rounds",

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_ACTIONS, EQUIVALENT_ACTIONS } from './agents';
+import { AGENT_ACTIONS, defaultConnection, EQUIVALENT_ACTIONS } from './agents';
 import type { AgentType } from './agents';
 import type { Graph } from './graph';
-import { fillTemplate, placeholdersOf, withAgents } from './templates';
+import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
 
 const template: Graph = {
   nodes: [
@@ -23,13 +23,13 @@ const template: Graph = {
               { id: 'fix', message: 'Make the tests for {{feature}} fail first.', target: 'x' },
             ],
           },
-          { id: 'run', action: 'exec_command' },
+          { id: 'run', action: 'exec_command', instruction: 'Run the tests for {{feature}}.' },
           { id: 'ok', approve: 'the tests for {{feature}}' },
           {
             id: 'loop',
             repeat: [
               { id: 'green', message: 'Make the {{framework}} tests pass.' },
-              { id: 'check', action: 'exec_command' },
+              { id: 'check', action: 'exec_command', instruction: 'Run {{framework}}.' },
             ],
             until: { kind: 'outputContains', text: '{{marker}}' },
             rounds: 3,
@@ -57,7 +57,7 @@ describe('templates', () => {
     expect(placeholdersOf(asking)).toEqual(['file']);
   });
 
-  it("fills every placeholder in agents' names, messages, conditions and OKs, leaving others", () => {
+  it("fills every placeholder in agents' names, messages, steps' instructions, conditions and OKs, leaving others", () => {
     const filled = fillTemplate(template, {
       feature: 'rate limiting',
       language: 'Go',
@@ -73,13 +73,13 @@ describe('templates', () => {
         if: { kind: 'freeText', text: 'a test for rate limiting passes already' },
         then: [{ id: 'fix', message: 'Make the tests for rate limiting fail first.', target: 'x' }],
       },
-      { id: 'run', action: 'exec_command' },
+      { id: 'run', action: 'exec_command', instruction: 'Run the tests for rate limiting.' },
       { id: 'ok', approve: 'the tests for rate limiting' },
       {
         id: 'loop',
         repeat: [
           { id: 'green', message: 'Make the go test tests pass.' },
-          { id: 'check', action: 'exec_command' },
+          { id: 'check', action: 'exec_command', instruction: 'Run go test.' },
         ],
         until: { kind: 'outputContains', text: 'PASS' },
         rounds: 3,
@@ -176,5 +176,50 @@ describe('withAgents', () => {
         expect(AGENT_ACTIONS[type as AgentType].map((a) => a.name)).toContain(action);
       }
     }
+  });
+});
+
+describe('withConnections', () => {
+  const crew: Graph = {
+    nodes: [
+      { id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A', agent: 'Claude' } },
+      {
+        id: 'b',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: { label: 'B', agent: 'Codex', connection: 'app-server' },
+      },
+      { id: 'c', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'C' } },
+      { id: 'd', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'D', agent: 'Gemini' } },
+    ],
+    edges: [],
+  };
+
+  it('runs each agent as chosen, if its type runs that way; others keep theirs', () => {
+    const run = withConnections(crew, {
+      a: 'terminal',
+      b: 'simulated',
+      c: 'terminal',
+      d: 'codex-terminal',
+    });
+    expect(run.nodes.map((n) => n.data.connection)).toEqual([
+      'terminal',
+      undefined,
+      // An agent left to the default agent (Claude) runs as Claude does.
+      'terminal',
+      // Gemini can only be simulated.
+      undefined,
+    ]);
+    expect(withConnections(crew, { a: 'sdk' }).nodes[1]?.data.connection).toBe('app-server');
+  });
+
+  it('runs an agent in a Terminal by default where the user has its CLI, else simulated', () => {
+    const has = { claude: true, codex: false };
+    expect(defaultConnection('Claude', has)).toBe('terminal');
+    expect(defaultConnection('Codex', has)).toBe('simulated');
+    expect(defaultConnection('Codex', { claude: false, codex: true })).toBe('codex-terminal');
+    expect(defaultConnection('Gemini', { claude: true, codex: true })).toBe('simulated');
+    // Not known yet (main has not said): simulated.
+    expect(defaultConnection('Claude', undefined)).toBe('simulated');
   });
 });

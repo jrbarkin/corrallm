@@ -17,6 +17,7 @@ import { hardenSession, installNavigationGuards } from './security';
 import { planConsent, Settings } from './settings';
 import { createConnectors, createOptions } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
+import { installedClis } from './sessions/installed';
 import { SessionManager } from './sessions/manager';
 import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
@@ -155,7 +156,9 @@ function main(): void {
         },
         openExternal: (url) => shell.openExternal(url),
       });
-      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions, usage });
+      // Which CLIs the user has, for the templates' agents.
+      const clis = { installed: async () => installedClis(await agentsEnvironment()) };
+      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions, clis, usage });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;

@@ -900,7 +900,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   // Run: the task each agent is on pulses; the Reviewer is held at its wait.
   await view.getByRole('button', { name: 'Run', exact: true }).click();
   const research = view
-    .getByRole('group', { name: 'Researcher: /deep-research' })
+    .getByRole('group', { name: /^Researcher: \/deep-research “/ })
     .locator('[data-run]');
   await expect(research).toHaveAttribute('data-run', 'running');
   expect(await research.evaluate((row) => getComputedStyle(row).animationName)).toContain(
@@ -1120,7 +1120,8 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   expect(await panel.evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth])).toEqual([
     0, 0,
   ]);
-  await page.keyboard.type('codex');
+  // (Simulated: a connected one would start its CLI.)
+  await page.keyboard.type('codex simulated');
   await page.keyboard.press('Enter');
   await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Codex');
   expect(await tagColor('Agent 1')).not.toBe(claude);

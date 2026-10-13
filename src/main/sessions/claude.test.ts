@@ -42,6 +42,14 @@ describe('findClaude', () => {
     expect(await findClaude(env, { home: dir, override: chosen })).toBe(chosen);
   });
 
+  it('finds only the path the user set, when it set one: never another claude', async () => {
+    await install(path.join('home', '.local', 'bin'));
+    await install('bin');
+    const env = { PATH: path.join(dir, 'bin') };
+    const home = path.join(dir, 'home');
+    expect(await findClaude(env, { home, override: path.join(dir, 'none', exe) })).toBeUndefined();
+  });
+
   it.skipIf(process.platform === 'win32')('skips a claude that cannot run', async () => {
     await install('bin', false);
     expect(

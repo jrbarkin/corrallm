@@ -1,4 +1,5 @@
-import type { Connection } from '../../shared/session';
+import { CONNECTION_CLI } from '../../shared/session';
+import type { Connection, InstalledClis } from '../../shared/session';
 
 /** The coding agent a node runs. */
 export const AgentType = {
@@ -75,6 +76,19 @@ export const CONNECTION_INFO: Record<
     description: 'Codex through its app server, in corrallm’s transcript',
   },
 };
+
+/**
+ * How an agent of `agent`'s type runs unless told otherwise, as a template's agents do: in a
+ * Terminal (its first connection, which works with any login) where the user has its CLI
+ * (`installed`, as main found them; undefined while not known), otherwise simulated.
+ */
+export function defaultConnection(
+  agent: AgentType,
+  installed: InstalledClis | undefined,
+): AgentConnection {
+  const [first = 'simulated'] = AGENT_CONNECTIONS[agent];
+  return first !== 'simulated' && installed?.[CONNECTION_CLI[first]] === true ? first : 'simulated';
+}
 
 /** The ways an agent type can be connected, as a sentence names them ("Terminal or Agent SDK"). */
 export function connectionNames(agent: AgentType): string {

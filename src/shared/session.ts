@@ -12,6 +12,9 @@
 export const CLIS = ['claude', 'codex'] as const;
 export type Cli = (typeof CLIS)[number];
 
+/** Which CLIs the user has: whether corrallm finds each, as its connections would run it. */
+export type InstalledClis = Readonly<Record<Cli, boolean>>;
+
 /**
  * How an agent can be connected, besides simulated: each names what runs its session. Claude Code
  * in a terminal ('terminal') or through the Agent SDK ('sdk'); Codex in a terminal
@@ -334,13 +337,16 @@ export interface AskedQuestion {
 /**
  * What a session's CLI asks the user in its own terminal (a Terminal session's), as corrallm lists
  * it outside the terminal: a permission (the tool, and what it acts on), its questions, a plan to
- * approve, or anything else it waits on, in its own words. corrallm never answers it: the user
- * does, in the terminal.
+ * approve, whether to trust the project folder (asked in or out of a turn, as the CLI starts), or
+ * anything else it waits on, in its own words. corrallm never answers it: the user does, in the
+ * terminal.
  */
 export type TerminalAsk =
   | { kind: 'permission'; id: string; tool: string; summary: string }
   | { kind: 'question'; id: string; questions: AskedQuestion[] }
   | { kind: 'plan'; id: string; plan: string }
+  /** Whether to trust the project folder: its CLI's dialog the first time it runs there. */
+  | { kind: 'trust'; id: string }
   | { kind: 'other'; id: string; text: string };
 
 /**

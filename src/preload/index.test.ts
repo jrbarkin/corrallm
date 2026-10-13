@@ -169,6 +169,13 @@ describe('preload', () => {
     expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
   });
 
+  it('asks main which CLIs the user has', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue({ claude: true, codex: true });
+    await expect(api.installedClis()).resolves.toEqual({ claude: true, codex: true });
+    expect(invoke).toHaveBeenLastCalledWith('session:clis');
+  });
+
   it('invokes the usage channels with their arguments', async () => {
     const api = await exposed();
     invoke.mockResolvedValue({ readings: [], rules: {} });
