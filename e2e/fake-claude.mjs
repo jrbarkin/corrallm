@@ -11,6 +11,9 @@
 //
 // Prompts: "ask …" asks for permission first (1 or Enter: yes), "slow …" works until Escape,
 // anything else is answered at once.
+//
+// `claude auth status --json` reports a Claude subscription login (claude.ai), unless the
+// environment has an API key, as the real one does; it logs nothing.
 import {
   appendFileSync,
   existsSync,
@@ -26,6 +29,18 @@ const arg = (flag) => {
   const at = args.indexOf(flag);
   return at === -1 ? undefined : args[at + 1];
 };
+if (args[0] === 'auth' && args[1] === 'status') {
+  const status = process.env.ANTHROPIC_API_KEY
+    ? { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+    : {
+        loggedIn: true,
+        authMethod: 'claude.ai',
+        apiProvider: 'firstParty',
+        subscriptionType: 'max',
+      };
+  process.stdout.write(`${JSON.stringify(status)}\n`);
+  process.exit(0);
+}
 const home = path.join(process.cwd(), '.fake-claude');
 mkdirSync(home, { recursive: true });
 const log = (entry) => appendFileSync(path.join(home, 'log.jsonl'), `${JSON.stringify(entry)}\n`);

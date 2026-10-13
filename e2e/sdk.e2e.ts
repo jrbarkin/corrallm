@@ -23,7 +23,10 @@ let problems: string[];
 
 test.beforeEach(async () => {
   await chmod(FAKE_CLAUDE, 0o755);
-  ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_CLAUDE_PATH: FAKE_CLAUDE } }));
+  // An API key (the fake's: it reaches only the fake), which the Agent SDK connection needs.
+  ({ app, close: closeApp } = await launchApp({
+    env: { CORRALLM_CLAUDE_PATH: FAKE_CLAUDE, ANTHROPIC_API_KEY: 'sk-ant-fake' },
+  }));
   page = await app.firstWindow();
   problems = [];
   page.on('console', (message) => {

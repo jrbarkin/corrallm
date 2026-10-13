@@ -59,7 +59,7 @@ export function scriptedTurn(
   const codex = agent === AgentType.Codex;
   const note =
     agent === AgentType.Claude
-      ? '_This is a scripted session, so nothing here really ran: connect Claude Code from the agent chip (Terminal or Agent SDK) to run it._'
+      ? '_This is a scripted session, so nothing here really ran: connect Claude Code from the agent chip (Terminal, or Agent SDK with an API key) to run it._'
       : `_This is a scripted session: corrallm isn't connected to ${agent} yet, so nothing here really ran._`;
 
   /** A tool call that runs for `ms`, then shows `detail`. */

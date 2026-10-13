@@ -423,6 +423,23 @@
   background: color-mix(in srgb, #dc2626 9%, transparent);
 }
 
+/* The connection a notice offers instead (Terminal, for an Agent SDK agent on a subscription). */
+.agent-notice-switch {
+  display: block;
+  margin-top: 8px;
+  padding: 3px 12px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: var(--graph-accent, #2563eb);
+  color: Canvas;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-notice-switch:hover {
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 82%, black);
+}
+
 .agent-end[data-failed] {
   color: #dc2626;
   opacity: 0.85;

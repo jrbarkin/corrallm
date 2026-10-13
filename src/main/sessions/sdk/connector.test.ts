@@ -18,6 +18,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionEvent } from '../../../shared/session';
 import type { SessionHost, SessionSpec } from '../connector';
 import { SdkConnector } from './connector';
+import { SUBSCRIPTION_LOGIN } from './login';
+import type { AuthStatus } from './login';
 import { recorded, recordedHistory, recordedMessages } from './recorded';
 import type { Fixture } from './recorded';
 
@@ -104,12 +106,17 @@ const SPEC: SessionSpec = {
 /** Lets the session read what the fake CLI said. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** How the CLI says it is logged in, unless a test says otherwise: with an API key. */
+const API_KEY: AuthStatus = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' };
+
 function connector({
   history = [],
   prepare,
+  login = () => Promise.resolve(API_KEY),
 }: {
   history?: SessionMessage[];
   prepare?: (query: FakeQuery, call: number) => void;
+  login?: () => Promise<AuthStatus>;
 } = {}) {
   const queries: FakeQuery[] = [];
   const events: SessionEvent[] = [];
@@ -119,6 +126,7 @@ function connector({
     remember: (id) => remembered.push(id),
   };
   const getSessionMessages = vi.fn(() => Promise.resolve(history));
+  const authStatus = vi.fn(login);
   const sdk = new SdkConnector({
     clientApp: 'corrallm/0.1.0',
     query: ((params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
@@ -129,6 +137,7 @@ function connector({
     }) as unknown as typeof sdkQuery,
     getSessionMessages,
     findClaude: () => Promise.resolve('/home/user/.local/bin/claude'),
+    authStatus,
     home: '/home/user',
   });
   const query = () => {
@@ -136,7 +145,7 @@ function connector({
     if (!last) throw new Error('no query');
     return last;
   };
-  return { sdk, host, events, remembered, queries, query, getSessionMessages };
+  return { sdk, host, events, remembered, queries, query, getSessionMessages, authStatus };
 }
 
 /** A recorded turn's messages, from the message that started it to its result. */
@@ -170,6 +179,50 @@ describe('SdkConnector', () => {
     // The CLI's default model, and a new conversation.
     expect(options).not.toHaveProperty('model');
     expect(options).not.toHaveProperty('resume');
+  });
+
+  it('asks the CLI how it is logged in first, in the project folder with the agents’ environment', async () => {
+    const { sdk, host, authStatus } = connector();
+    await sdk.start(SPEC, host);
+    expect(authStatus).toHaveBeenCalledWith('/home/user/.local/bin/claude', {
+      cwd: '/home/user/shop',
+      env: SPEC.env,
+    });
+  });
+
+  it('does not start on a Claude subscription login: it says why, and offers Terminal', async () => {
+    const { sdk, host, events, queries } = connector({
+      login: () =>
+        Promise.resolve({
+          loggedIn: true,
+          authMethod: 'claude.ai',
+          apiProvider: 'firstParty',
+          subscriptionType: 'max',
+        }),
+    });
+    await expect(sdk.start(SPEC, host)).rejects.toThrow(SUBSCRIPTION_LOGIN);
+    expect(queries).toEqual([]);
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        id: expect.any(String) as unknown,
+        level: 'error',
+        text: SUBSCRIPTION_LOGIN,
+        switchTo: 'terminal',
+      },
+    ]);
+    expect(SUBSCRIPTION_LOGIN).toMatch(/Anthropic doesn't allow other products/);
+  });
+
+  it('does not start when it cannot tell how the CLI is logged in', async () => {
+    const { sdk, host, events, queries } = connector({
+      login: () => Promise.reject(new Error('error: unknown command auth')),
+    });
+    await expect(sdk.start(SPEC, host)).rejects.toThrow(
+      /couldn't check how Claude Code is logged in \(error: unknown command auth\)/,
+    );
+    expect(queries).toEqual([]);
+    expect(events).toMatchObject([{ type: 'notice', level: 'error', switchTo: 'terminal' }]);
   });
 
   it('says it started, with the models and slash commands the CLI offers', async () => {

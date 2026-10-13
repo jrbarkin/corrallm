@@ -1,5 +1,6 @@
 import type {
   AskedQuestion,
+  Connection,
   DiffLine,
   MessageImage,
   ModelChoice,
@@ -93,8 +94,17 @@ export type Entry =
   /** Plan mode's plan (Markdown), to approve or not. */
   | { id: string; kind: 'plan'; plan: string; answer?: PlanAnswer; withdrawn?: boolean }
   | { id: string; kind: 'todos'; items: Todo[] }
-  /** What the session tells the user: compaction, a usage limit, a login problem. */
-  | { id: string; kind: 'notice'; level: 'info' | 'warning' | 'error'; text: string }
+  /**
+   * What the session tells the user: compaction, a usage limit, a login problem. `switchTo`: the
+   * connection the agent can switch to, to get past it (offered with the notice).
+   */
+  | {
+      id: string;
+      kind: 'notice';
+      level: 'info' | 'warning' | 'error';
+      text: string;
+      switchTo?: Connection;
+    }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 

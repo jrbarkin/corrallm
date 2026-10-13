@@ -263,9 +263,9 @@ export class ConnectedDriver implements SessionDriver {
         io.dispatch({ type: 'withdraw', id: event.id });
         return;
       case 'notice':
-        io.dispatch({
-          type: 'add',
-          entry: { id: event.id, kind: 'notice', level: event.level, text: event.text },
+        this.#notice(event.level, event.text, {
+          id: event.id,
+          ...(event.switchTo === undefined ? {} : { switchTo: event.switchTo }),
         });
         return;
       case 'usage':
@@ -333,13 +333,26 @@ export class ConnectedDriver implements SessionDriver {
     }
   }
 
-  /** Tells the user something, unless it is what the transcript last said. */
-  #notice(level: 'info' | 'warning' | 'error', text: string): void {
+  /**
+   * Tells the user something, unless it is what the transcript last said (as when a session that
+   * cannot start says why, and its start fails saying the same).
+   */
+  #notice(
+    level: 'info' | 'warning' | 'error',
+    text: string,
+    { id = this.#io.newId(), switchTo }: { id?: string; switchTo?: Connection } = {},
+  ): void {
     const last = this.#io.session().entries.at(-1);
     if (last?.kind === 'notice' && last.level === level && last.text === text) return;
     this.#io.dispatch({
       type: 'add',
-      entry: { id: this.#io.newId(), kind: 'notice', level, text },
+      entry: {
+        id,
+        kind: 'notice',
+        level,
+        text,
+        ...(switchTo === undefined ? {} : { switchTo }),
+      },
     });
   }
 

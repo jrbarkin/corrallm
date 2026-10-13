@@ -5,9 +5,16 @@
 // `echo hello` with Bash, and "edit" edits notes.txt, each asking first in the default (Manual)
 // and plan modes; "slow" streams slowly enough to interrupt.
 //
+// `claude auth status --json` says how it is logged in, as the real one would: with a cloud
+// provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
+// the project's settings; otherwise with a Claude subscription (claude.ai), as on the machine it
+// was recorded on. The project's settings (.claude/settings.json, then settings.local.json) also
+// give its default mode, and can disable bypassing permissions.
+//
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
@@ -15,6 +22,59 @@ const option = (name) => {
   const at = args.indexOf(name);
   return at < 0 ? undefined : args[at + 1];
 };
+
+/** The project's settings, as far as the fake reads them. */
+function projectSettings() {
+  const read = (name) => {
+    try {
+      return JSON.parse(readFileSync(`${process.cwd()}/.claude/${name}`, 'utf8'));
+    } catch {
+      return {};
+    }
+  };
+  const [shared, local] = [read('settings.json'), read('settings.local.json')];
+  return {
+    ...shared,
+    ...local,
+    permissions: { ...(shared.permissions ?? {}), ...(local.permissions ?? {}) },
+  };
+}
+
+if (args[0] === 'auth' && args[1] === 'status') {
+  const env = process.env;
+  const provider = env.CLAUDE_CODE_USE_BEDROCK
+    ? 'bedrock'
+    : env.CLAUDE_CODE_USE_VERTEX
+      ? 'vertex'
+      : env.CLAUDE_CODE_USE_FOUNDRY
+        ? 'foundry'
+        : 'firstParty';
+  const status =
+    provider !== 'firstParty'
+      ? { loggedIn: true, authMethod: 'third_party', apiProvider: provider }
+      : env.ANTHROPIC_API_KEY
+        ? {
+            loggedIn: true,
+            authMethod: 'api_key',
+            apiProvider: provider,
+            apiKeySource: 'ANTHROPIC_API_KEY',
+          }
+        : projectSettings().apiKeyHelper !== undefined
+          ? {
+              loggedIn: true,
+              authMethod: 'api_key_helper',
+              apiProvider: provider,
+              apiKeySource: 'apiKeyHelper',
+            }
+          : {
+              loggedIn: true,
+              authMethod: 'claude.ai',
+              apiProvider: provider,
+              subscriptionType: 'max',
+            };
+  process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+  process.exit(0);
+}
 
 const sessionId = option('--resume') ?? option('--session-id') ?? randomUUID();
 let mode = option('--permission-mode') ?? 'default';

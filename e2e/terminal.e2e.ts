@@ -222,6 +222,28 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   expect(await starts()).toHaveLength(1);
 });
 
+test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {
+  await chooseProject();
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
+  const refusal = view.getByRole('log', { name: 'Transcript' }).getByRole('alert');
+  await expect(refusal).toContainText(
+    "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other products to use through the Agent SDK",
+  );
+
+  await refusal.getByRole('button', { name: 'Switch to Terminal' }).click();
+  await expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
+  await expect(view.locator('.agent-terminal')).toHaveAttribute('data-state', 'live');
+  await claudeReady();
+  // Claude Code ran only in the terminal: the Agent SDK never started it.
+  expect(await starts()).toHaveLength(1);
+});
+
 test('the queues’ Run types its message into the terminal, and hears its turn end', async () => {
   await canvasFile([{ id: 'docs', message: 'Write the docs\nand the changelog' }]);
   await chooseProject();

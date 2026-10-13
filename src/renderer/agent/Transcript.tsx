@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
-import type { PlanMode } from '../../shared/session';
+import type { Connection, PlanMode } from '../../shared/session';
+import { CONNECTION_INFO } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Markdown } from './Markdown';
 import { MODES, sessionQuestions } from './session';
@@ -24,6 +25,8 @@ export interface TranscriptAnswers {
   onAnswer: (permissionId: string, answer: Answer) => void;
   onAnswerQuestion: (promptId: string, index: number, answer: string) => void;
   onAnswerPlan: (promptId: string, answer: PlanAnswer) => void;
+  /** Switches the agent to another connection, as a notice offers (Terminal, for a login). */
+  onSwitch?: (connection: Connection) => void;
 }
 
 /**
@@ -170,7 +173,9 @@ function EntryView({
           </ul>
         </div>
       );
-    case 'notice':
+    case 'notice': {
+      const { switchTo } = entry;
+      const { onSwitch } = answers;
       return (
         <p
           className="agent-notice"
@@ -178,8 +183,20 @@ function EntryView({
           role={entry.level === 'error' ? 'alert' : 'note'}
         >
           {entry.text}
+          {switchTo !== undefined && onSwitch && (
+            <button
+              type="button"
+              className="agent-notice-switch"
+              onClick={() => {
+                onSwitch(switchTo);
+              }}
+            >
+              Switch to {CONNECTION_INFO[switchTo].label}
+            </button>
+          )}
         </p>
       );
+    }
     case 'end':
       return (
         <p className="agent-end" data-failed={entry.failed === true ? '' : undefined}>

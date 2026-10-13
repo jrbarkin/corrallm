@@ -178,8 +178,18 @@ export type SessionEvent =
   | { type: 'plan'; id: string; plan: string }
   /** A prompt no longer waits for the user: its turn was interrupted, or it was answered elsewhere. */
   | { type: 'withdrawn'; id: string }
-  /** Something to tell the user: compaction, a retry, a usage limit and when it resets, a login problem. */
-  | { type: 'notice'; id: string; level: 'info' | 'warning' | 'error'; text: string }
+  /**
+   * Something to tell the user: compaction, a retry, a usage limit and when it resets, a login
+   * problem. `switchTo`: the connection the agent can switch to, to get past it (Terminal, for an
+   * Agent SDK session on a Claude subscription login).
+   */
+  | {
+      type: 'notice';
+      id: string;
+      level: 'info' | 'warning' | 'error';
+      text: string;
+      switchTo?: Connection;
+    }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'mode'; mode: PermissionMode }
   | { type: 'model'; model: string }

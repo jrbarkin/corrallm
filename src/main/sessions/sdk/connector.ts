@@ -13,6 +13,12 @@ import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { historyEvents } from './history';
 import { Inbox } from './inbox';
+import {
+  authStatus as askAuthStatus,
+  onSubscription,
+  SUBSCRIPTION_LOGIN,
+  uncheckedLogin,
+} from './login';
 import { Prompts } from './prompts';
 import { SdkSession, Stderr, stopped } from './session';
 import type { Places } from './tools';
@@ -24,6 +30,10 @@ import { sdkMode, Translator } from './translate';
  * user's own `claude` (claude.ts), so that the session has their login, version and settings, as
  * Claude Code in a terminal would: the claude_code system prompt, the user's, project's and local
  * settings (CLAUDE.md, hooks, skills, commands, MCP servers), in the project folder.
+ *
+ * It starts only with an API key or a cloud provider (login.ts): Anthropic doesn't allow other
+ * products to use a Claude subscription login through the Agent SDK. With one, it says so and
+ * offers Terminal, which runs Claude Code itself, instead.
  */
 
 export interface SdkConnectorDeps {
@@ -34,6 +44,8 @@ export interface SdkConnectorDeps {
   getSessionMessages?: typeof readHistory;
   /** Where `claude` is, for the agents' environment. */
   findClaude?: (env: Readonly<Record<string, string>>) => Promise<string>;
+  /** How that `claude` is logged in (`claude auth status`; a fake in tests). */
+  authStatus?: typeof askAuthStatus;
   home?: string;
 }
 
@@ -48,13 +60,15 @@ export class SdkConnector implements Connector {
     query = startQuery,
     getSessionMessages = readHistory,
     findClaude = requireClaude,
+    authStatus = askAuthStatus,
     home = homedir(),
   }: SdkConnectorDeps) {
-    this.#deps = { clientApp, query, getSessionMessages, findClaude, home };
+    this.#deps = { clientApp, query, getSessionMessages, findClaude, authStatus, home };
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#deps.findClaude(spec.env);
+    await this.#checkLogin(claude, spec, host);
     if (spec.resume === null) return this.#open(spec, host, claude, null);
     try {
       return await this.#open(spec, host, claude, spec.resume);
@@ -74,6 +88,29 @@ export class SdkConnector implements Connector {
       });
       return session;
     }
+  }
+
+  /**
+   * Refuses to start (saying why, and offering Terminal) unless `claude` has an API key or a cloud
+   * provider: never on a Claude subscription login, nor when how it is logged in can't be told.
+   */
+  async #checkLogin(claude: string, spec: SessionSpec, host: SessionHost): Promise<void> {
+    let refusal: string | undefined;
+    try {
+      const status = await this.#deps.authStatus(claude, { cwd: spec.cwd, env: spec.env });
+      if (onSubscription(status, spec.env)) refusal = SUBSCRIPTION_LOGIN;
+    } catch (error) {
+      refusal = uncheckedLogin(error instanceof Error ? error.message : String(error));
+    }
+    if (refusal === undefined) return;
+    host.emit({
+      type: 'notice',
+      id: randomUUID(),
+      level: 'error',
+      text: refusal,
+      switchTo: 'terminal',
+    });
+    throw new Error(refusal);
   }
 
   async #open(

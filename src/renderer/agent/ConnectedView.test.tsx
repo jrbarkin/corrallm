@@ -1,10 +1,16 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../shared/session';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { fakeBackend } from '../test-backend';
+
+// jsdom cannot draw xterm.js: a fake terminal stands in, for an agent switched to Terminal.
+vi.mock('../terminal/screen', async () => {
+  const { fakeScreens } = await import('../terminal/test-screen');
+  return { createScreen: fakeScreens.create };
+});
 
 const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id,
@@ -19,9 +25,16 @@ const settle = () =>
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-/** The editor, with agent `a` (as `data` says) opened in its view, and main faked. */
-async function open(data: Partial<GraphNode['data']> = {}) {
+/**
+ * The editor, with agent `a` (as `data` says) opened in its view, and main faked (`prepare` sets
+ * the fake up before the view opens).
+ */
+async function open(
+  data: Partial<GraphNode['data']> = {},
+  prepare?: (fake: ReturnType<typeof fakeBackend>) => void,
+) {
   const fake = fakeBackend();
+  prepare?.(fake);
   const graph: Graph = { nodes: [agent('a', data)], edges: [] };
   const { container } = render(<GraphEditor initialGraph={graph} sessionBackend={fake.backend} />);
   const card = () => {
@@ -84,6 +97,56 @@ describe('a connected agent', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Codex' }));
     expect(card().getAttribute('aria-label')).toBe('a, Codex');
     expect(backend.close).toHaveBeenCalledWith('a');
+  });
+
+  it('does not run through the Agent SDK on a Claude subscription: it says why, and switches to Terminal', async () => {
+    const why =
+      "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow " +
+      'other products to use through the Agent SDK: run this agent in Terminal, or give Claude ' +
+      'Code an API key or a cloud provider.';
+    const { backend, view, transcript, card } = await open({ connection: 'sdk' }, (fake) => {
+      // As main does: it says why, then the start fails saying the same.
+      fake.backend.start.mockImplementation((_agent, options) => {
+        if (options.connection !== 'sdk') return Promise.resolve(null);
+        fake.emit('a', 'sdk', {
+          type: 'notice',
+          id: 'login',
+          level: 'error',
+          text: why,
+          switchTo: 'terminal',
+        });
+        return Promise.reject(
+          new Error(`Error invoking remote method 'session:start': Error: ${why}`),
+        );
+      });
+    });
+    expect(transcript.getAllByRole('alert').map((alert) => alert.textContent)).toEqual([
+      `${why}Switch to Terminal`,
+    ]);
+
+    fireEvent.click(transcript.getByRole('button', { name: 'Switch to Terminal' }));
+    expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
+      'Agent: Claude · Terminal',
+    );
+    expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
+    await settle();
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    // Its terminal starts: the Agent SDK's refusal is not taken for the terminal's own problem.
+    expect(view.getByText('Starting Claude Code…')).toBeTruthy();
+  });
+
+  it('offers Terminal first in its agent chip, and says the Agent SDK needs an API key', async () => {
+    const { view } = await open();
+    fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
+    const options = view.getAllByRole('option').map((option) => option.textContent);
+    expect(options.slice(0, 3)).toEqual([
+      expect.stringMatching(/^Claude · Terminal.*works with your Claude login/),
+      expect.stringMatching(/^Claude · Agent SDK.*needs an API key or a cloud provider/),
+      expect.stringMatching(/^Claude · Simulated/),
+    ]);
   });
 
   it('says what it needs to run: a project folder', async () => {

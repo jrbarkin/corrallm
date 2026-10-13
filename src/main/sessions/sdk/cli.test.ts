@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionEvent } from '../../../shared/session';
 import type { LiveSession, SessionHost } from '../connector';
 import { SdkConnector } from './connector';
+import { SUBSCRIPTION_LOGIN } from './login';
 
 /*
  * The connector through the real Agent SDK, which runs a fake `claude` (fake-claude.mjs) that
@@ -29,19 +30,32 @@ afterEach(async () => {
   await rm(folder, { recursive: true, force: true });
 });
 
-/** Starts a session on the fake CLI; resolves with it and what it said. */
-async function start(mode: 'manual' | 'acceptEdits' = 'manual') {
-  const events: SessionEvent[] = [];
+/** What says how the CLI logs in, in this process's environment: left out of the agents'. */
+const LOGINS =
+  /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_USE_\w+)$/;
+
+/**
+ * Starts a session on the fake CLI, with an API key unless `login` gives the agents' environment
+ * something else; resolves with it and what it said (in `events`).
+ */
+async function start(
+  mode: 'manual' | 'acceptEdits' = 'manual',
+  login: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-test' },
+  events: SessionEvent[] = [],
+) {
   const remembered: string[] = [];
   const host: SessionHost = {
     emit: (event) => events.push(event),
     remember: (id) => remembered.push(id),
   };
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
+  const env = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined && !LOGINS.test(entry[0]),
+      ),
     ),
-  );
+    ...login,
+  };
   const connector = new SdkConnector({
     clientApp: 'corrallm/test',
     findClaude: () => Promise.resolve(FAKE),
@@ -108,5 +122,30 @@ describe('SdkConnector through the Agent SDK', () => {
     await session.interrupt();
     const ended = await waitFor(events, (e) => e.type === 'end');
     expect(ended).toMatchObject({ messages: [id], interrupted: true, failed: false });
+  });
+
+  it('does not start the session on a Claude subscription login, and says why', async () => {
+    const events: SessionEvent[] = [];
+    await expect(start('manual', {}, events)).rejects.toThrow(SUBSCRIPTION_LOGIN);
+    expect(session).toBeUndefined();
+    expect(events).toMatchObject([
+      { type: 'notice', level: 'error', text: SUBSCRIPTION_LOGIN, switchTo: 'terminal' },
+    ]);
+  });
+
+  it('starts with an apiKeyHelper in the project’s settings, or a cloud provider', async () => {
+    await mkdir(path.join(folder, '.claude'));
+    await writeFile(
+      path.join(folder, '.claude', 'settings.local.json'),
+      JSON.stringify({ apiKeyHelper: 'echo key' }),
+    );
+    const { events } = await start('manual', {});
+    expect(events[0]).toMatchObject({ type: 'started' });
+    await session?.close();
+    session = undefined;
+
+    await rm(path.join(folder, '.claude'), { recursive: true });
+    const bedrock = await start('manual', { CLAUDE_CODE_USE_BEDROCK: '1' });
+    expect(bedrock.events[0]).toMatchObject({ type: 'started' });
   });
 });

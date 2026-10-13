@@ -452,6 +452,9 @@ export function AgentView({
                         controls.answerPlan(promptId, answer);
                         composer.current?.focus();
                       },
+                      onSwitch: (to) => {
+                        onAgent(agent, to);
+                      },
                     }}
                   />
                   <Composer
@@ -618,7 +621,7 @@ function sessionNote(
   const cli = AGENT_CLI[agent];
   if (connection === 'simulated') {
     return AGENT_CONNECTIONS[agent].length > 1
-      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (Terminal or Agent SDK) to run it.`
+      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (Terminal, or Agent SDK with an API key) to run it.`
       : `This session is simulated: corrallm isn't connected to ${cli} yet.`;
   }
   const how = connection === 'terminal' ? 'in a terminal' : 'through the Agent SDK';

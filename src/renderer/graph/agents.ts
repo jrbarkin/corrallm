@@ -27,9 +27,15 @@ export const AGENT_CLI: Record<AgentType, string> = {
  */
 export type AgentConnection = 'simulated' | Connection;
 
-/** The ways each agent type can run, the default first: Claude can be connected; others not yet. */
+/**
+ * The ways each agent type can run, in the order the agent chip offers them: Claude can be
+ * connected (others not yet), in a Terminal first, since that works with any login, a Claude
+ * subscription included; through the Agent SDK only with an API key or a cloud provider (Anthropic
+ * doesn't allow other products to use subscription logins through it). An agent is simulated
+ * until it is connected.
+ */
 export const AGENT_CONNECTIONS: Record<AgentType, readonly AgentConnection[]> = {
-  Claude: ['simulated', 'terminal', 'sdk'],
+  Claude: ['terminal', 'sdk', 'simulated'],
   Codex: ['simulated'],
   Qwen: ['simulated'],
   Gemini: ['simulated'],
@@ -48,12 +54,13 @@ export const CONNECTION_INFO: Record<
   terminal: {
     label: 'Terminal',
     short: 'Terminal',
-    description: 'Claude Code itself, in a terminal in its view',
+    description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
   },
   sdk: {
     label: 'Agent SDK',
     short: 'SDK',
-    description: 'Claude Code through the Agent SDK, in corrallm’s transcript',
+    description:
+      'Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider',
   },
 };
 

@@ -78,9 +78,12 @@ export function TerminalPane({
     };
   }, [agentId, backend, screens]);
 
-  /** Why the CLI does not run: the last thing that went wrong, if anything did. */
+  /**
+   * Why the CLI does not run: the last thing that went wrong, if anything did (not why another
+   * connection could not run, which offered this one).
+   */
   const problem = session.entries.findLast(
-    (entry) => entry.kind === 'notice' && entry.level === 'error',
+    (entry) => entry.kind === 'notice' && entry.level === 'error' && entry.switchTo === undefined,
   );
   const warning = session.entries.findLast(
     (entry) => entry.kind === 'notice' && entry.level === 'warning',
