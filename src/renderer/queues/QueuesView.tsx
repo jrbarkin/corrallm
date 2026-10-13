@@ -1,24 +1,23 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
-import { threadTitle } from '../agent/session';
 import type { Session } from '../agent/session';
 import { AGENT_ACTIONS, DEFAULT_AGENT } from '../graph/agents';
+import { editsOf } from '../graph/edits';
+import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
-import { ifText, itemLabel } from '../graph/labels';
-import { chooseTarget, isIf, isWait } from '../graph/queue';
-import type { QueueItem, WaitTarget } from '../graph/queue';
-import { QueueAddMenu, QueueRow } from '../graph/QueueEditor';
-import type { RowMarks, StepChoice } from '../graph/QueueEditor';
+import { itemLabel, taskLabel } from '../graph/labels';
+import { chooseTarget, isWait } from '../graph/queue';
+import type { WaitTarget } from '../graph/queue';
+import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
+import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
-import type { QueueEdits } from '../graph/WorkDetail';
-import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
+import { queueMarks, taskKey as at } from './marks';
 import { piecePaths, piecesIn, ribbonsOf } from './ribbons';
 import type { Span } from './ribbons';
-import '../run/run.css';
 import './QueuesView.css';
 
 /** How wide the gap between two lanes is, where ribbons join their tasks. */
@@ -38,9 +37,10 @@ interface Choosing {
  * viewer joins the blocks that differ; hatching shows where an agent waits, and waits in a loop
  * are stuck. Pointing at a task or a ribbon shows its links over the rest.
  *
- * Each lane is its agent's queue, edited in place as in the agent's own view (QueueEditor.tsx):
- * a wait's step is picked by clicking it in its agent's lane. Run plays every queue (run/runner.ts):
- * the task each agent is on pulses, a wait it is held at breathes, and what it has done is ticked.
+ * Each lane is its agent's queue, the same queue as everywhere (QueueEditor.tsx's rows, edited
+ * in place): a wait's step is picked by clicking it in its agent's lane. Run plays every queue
+ * (run/runner.ts): the task each agent is on pulses, a wait it is held at breathes, and what it
+ * has done is ticked.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
  * or a click outside closes it; an agent's name opens that agent.
@@ -150,7 +150,17 @@ export function QueuesView({
     lanes.flatMap(({ agent: { id } }) => (sessions[id]?.status === 'waiting' ? [id] : [])),
   );
   /** Every task's marks: where it is measured, how links mark it, and where the run is. */
-  const marks = markings(layout, run, asking, activeEnds);
+  const marks = queueMarks(layout, run, asking, activeEnds);
+  /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
+  const waitChosen = choosing
+    ? nodes
+        .find((n) => n.id === choosing.owner)
+        ?.data.queue?.find((q) => q.id === choosing.choice.waitId)
+    : undefined;
+  const choosingTarget =
+    choosing && waitChosen && isWait(waitChosen)
+      ? waitChosen.waitFor[choosing.choice.index]?.item
+      : undefined;
   /** Sets the target being picked to a step of its agent, or (undefined) all of its work. */
   const pick = (item: string | undefined) => {
     if (!choosing) return;
@@ -266,7 +276,11 @@ export function QueuesView({
                   onChoose={(choice) => {
                     setChoosing({ owner: lane.agent.id, choice });
                   }}
-                  picking={choosing?.choice.agent === lane.agent.id ? pick : undefined}
+                  picking={
+                    choosing?.choice.agent === lane.agent.id
+                      ? { name: name(lane.agent.id), current: choosingTarget, onPick: pick }
+                      : undefined
+                  }
                   onOpenAgent={onOpenAgent}
                 />
                 {i < lanes.length - 1 && (
@@ -345,7 +359,7 @@ function LaneCells({
   edits: QueueEdits;
   choosing: Choosing | undefined;
   onChoose: (choice: StepChoice) => void;
-  picking: ((item: string | undefined) => void) | undefined;
+  picking: Picking | undefined;
   onOpenAgent: (agentId: string) => void;
 }) {
   const { agent: node } = lane;
@@ -376,29 +390,9 @@ function LaneCells({
     nodes,
     agent,
     actions: AGENT_ACTIONS[agent],
-    onAdd: (entry: Parameters<QueueEdits['add']>[1], into?: string) => {
-      edits.add(id, entry, into);
-    },
-    onRemove: (itemId: string) => {
-      edits.remove(id, itemId);
-    },
-    onMove: (itemId: string, index: number) => {
-      edits.move(id, itemId, index);
-    },
-    onRetarget: (itemId: string, target: string | undefined) => {
-      edits.retarget(id, itemId, target);
-    },
-    onEditMessage: (itemId: string, message: string) => {
-      edits.editMessage(id, itemId, message);
-    },
-    onCondition: (ifId: string, condition: Parameters<QueueEdits['setCondition']>[2]) => {
-      edits.setCondition(id, ifId, condition);
-    },
-    onWaitFor: (waitId: string, targets: WaitTarget[]) => {
-      edits.setWaitFor(id, waitId, targets);
-    },
+    ...editsOf(edits, id),
     onChooseStep: onChoose,
-    marks: (itemId: string) => marks(id, itemId),
+    marks: (itemId: string | null) => marks(id, itemId),
   };
   return (
     <>
@@ -460,7 +454,7 @@ function LaneCells({
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
           role="group"
-          aria-label={`${name(id)}: ${describe(item, nodes, name)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
+          aria-label={`${name(id)}: ${taskLabel(nodes, item)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
           data-lane={id}
           style={{ gridColumn: column, gridRow: row + 2 }}
         >
@@ -473,31 +467,29 @@ function LaneCells({
               : {})}
           />
           {picking && (
-            <button
-              type="button"
-              className="queues-pick"
-              aria-label={`Wait for ${name(id)}: ${itemLabel(item)}`}
-              onClick={() => {
-                picking(item.id);
+            <PickTask
+              label={`Wait for ${picking.name}: ${itemLabel(item)}`}
+              pressed={picking.current === item.id}
+              onPick={() => {
+                picking.onPick(item.id);
               }}
             />
           )}
         </div>
       ))}
       <div className="queues-end-cell" style={{ gridColumn: column, gridRow: lane.end + 2 }}>
-        <div className="queues-end" data-end {...marks(id, null)}>
-          End
-          {picking && (
-            <button
-              type="button"
-              className="queues-pick"
-              aria-label={`Wait for all of ${name(id)}'s work`}
-              onClick={() => {
-                picking(undefined);
-              }}
-            />
-          )}
-        </div>
+        <QueueEnd
+          marks={marks(id, null)}
+          pick={
+            picking && {
+              label: `Wait for all of ${picking.name}'s work`,
+              pressed: picking.current === undefined,
+              onPick: () => {
+                picking.onPick(undefined);
+              },
+            }
+          }
+        />
         <QueueAddMenu
           node={node}
           nodes={nodes}
@@ -512,11 +504,6 @@ function LaneCells({
       </div>
     </>
   );
-}
-
-/** A task's key, for its measured span and its links: its agent's lane and its id (null: the end). */
-function at(lane: string, item: string | null): string {
-  return JSON.stringify([lane, item]);
 }
 
 /** The tasks a link joins (work handed on joins a lane, not a task, at its other end). */
@@ -543,70 +530,4 @@ function flowingWaits({ links }: Lanes, run: Run): Set<string> {
       return done ? [] : [link.key];
     }),
   );
-}
-
-/**
- * Every task's marks, by lane and id (null: the lane's end): `data-at` (where it is measured),
- * `data-mark` (a wait, stuck, or work handed on), `data-waited-for`, `data-active` (a link of what
- * the pointer is on ends there), and `data-run` (the run is on it, held at it, waits on the user
- * for it as its agent (in `asking`) asks permission, or how it went).
- */
-function markings(
-  { lanes, links, isStuck }: Lanes,
-  run: Run,
-  asking: ReadonlySet<string>,
-  activeEnds: ReadonlySet<string>,
-): (lane: string, item: string | null) => RowMarks {
-  const handed = new Set(
-    links.flatMap((l) => (l.kind === 'handoff' ? [at(l.from.lane, l.from.item)] : [])),
-  );
-  const waitedFor = new Set(
-    links.flatMap((l) => (l.kind === 'wait' ? [at(l.from.lane, l.from.item)] : [])),
-  );
-  const waits = new Set(
-    lanes.flatMap((lane) =>
-      lane.cells.flatMap(({ item }) => (isWait(item) ? [at(lane.agent.id, item.id)] : [])),
-    ),
-  );
-  return (lane, item) => {
-    const key = at(lane, item);
-    const state = taskState(run, lane, item);
-    const mark =
-      item !== null && waits.has(key)
-        ? isStuck(lane, item)
-          ? 'stuck'
-          : 'wait'
-        : handed.has(key)
-          ? 'handoff'
-          : undefined;
-    return {
-      'data-at': key,
-      'data-mark': mark,
-      'data-waited-for': waitedFor.has(key) ? '' : undefined,
-      'data-active': activeEnds.has(key) ? '' : undefined,
-      'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
-    };
-  };
-}
-
-/** How an item reads, for its lane's name for it. */
-function describe(
-  item: QueueItem,
-  nodes: readonly GraphNode[],
-  name: (id: string) => string,
-): string {
-  if (isWait(item)) {
-    const targets = item.waitFor.map(({ agent, item: step }) => {
-      if (step === undefined) return name(agent);
-      const found = nodes.find((n) => n.id === agent)?.data.queue?.find((q) => q.id === step);
-      return `${name(agent)}: ${found ? itemLabel(found) : 'a removed step'}`;
-    });
-    return `Wait for ${targets.join(' and ')}`;
-  }
-  if (isIf(item)) return `If ${ifText(item.if)}`;
-  const what =
-    'message' in item
-      ? `Message ${item.message.trim() === '' ? '(empty)' : `“${threadTitle(item.message, 32)}”`}`
-      : item.action;
-  return item.target === undefined ? what : `${what} → ${name(item.target)}`;
 }

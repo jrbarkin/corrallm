@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { AGENT_ACTIONS, AgentType, DEFAULT_AGENT } from '../graph/agents';
+import { editsOf } from '../graph/edits';
+import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
 import { chooseTarget, isWait } from '../graph/queue';
-import type { Condition, WaitTarget } from '../graph/queue';
+import type { WaitTarget } from '../graph/queue';
 import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
-import type { QueueEntry, RowMarks, StepChoice } from '../graph/QueueEditor';
+import type { RowMarks, StepChoice } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
 import { Composer } from './Composer';
 import { queueLinks } from './links';
@@ -16,7 +18,6 @@ import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
 import type { Answer, Session } from './session';
 import { Transcript } from './Transcript';
-import '../run/run.css';
 import './AgentView.css';
 
 /** What the view does to its agent's session (sessions.ts). */
@@ -42,15 +43,9 @@ export function AgentView({
   onAgent,
   onAnswer,
   onSimulateQuestion,
-  onAdd,
-  onRemove,
-  onMove,
-  onRetarget,
-  onEditMessage,
-  onCondition,
-  onWaitFor,
+  edits,
+  marks,
   onShowQueues,
-  runMarks,
   session,
   controls,
   onClose,
@@ -65,18 +60,12 @@ export function AgentView({
   onAnswer: (questionId: string, answer: string) => void;
   /** A stand-in for an agent asking, until agents are connected. */
   onSimulateQuestion: () => void;
-  /** `into`: the id of the if-then to add a step to. */
-  onAdd: (entry: QueueEntry, into?: string) => void;
-  onRemove: (itemId: string) => void;
-  onMove: (itemId: string, index: number) => void;
-  onRetarget: (itemId: string, target: string | undefined) => void;
-  onEditMessage: (itemId: string, message: string) => void;
-  onCondition: (ifId: string, condition: Condition) => void;
-  onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
+  /** What changes its queue, and the queue shown beside it. */
+  edits: QueueEdits;
+  /** How each agent's tasks are marked: links, and where the queues' run is (queues/marks.ts). */
+  marks: (agent: string, item: string | null) => RowMarks;
   /** Shows every agent's queue, side by side (QueuesView.tsx). */
   onShowQueues: () => void;
-  /** Where the queues' run is with each of its tasks (run/runner.ts), to mark them. */
-  runMarks?: (itemId: string) => RowMarks;
   session: Session;
   controls: SessionControls;
   onClose: () => void;
@@ -149,6 +138,8 @@ export function AgentView({
     };
   }, [close, working, stop, choosing, peer]);
 
+  /** Its own queue's edits. */
+  const own = editsOf(edits, node.id);
   const peerNode = nodes.find((n) => n.id === peer && n.type === 'agent');
   const links = useMemo(() => (peerNode ? queueLinks(node, peerNode) : []), [node, peerNode]);
   const waiting = node.data.queue?.find((item) => item.id === choosing?.waitId);
@@ -159,7 +150,7 @@ export function AgentView({
     if (!choosing || !waiting || !isWait(waiting)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choosing.agent } : { agent: choosing.agent, item };
-    onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
+    own.onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
     setChoosing(undefined);
   };
 
@@ -252,7 +243,7 @@ export function AgentView({
                     nodes={nodes}
                     actions={AGENT_ACTIONS[agent]}
                     label="Queue something"
-                    onAdd={onAdd}
+                    onAdd={own.onAdd}
                     onChooseStep={chooseStep}
                   />
                 }
@@ -293,26 +284,18 @@ export function AgentView({
                 nodes={nodes}
                 agent={agent}
                 actions={AGENT_ACTIONS[agent]}
-                onAdd={onAdd}
-                onRemove={onRemove}
-                onMove={onMove}
-                onRetarget={onRetarget}
-                onEditMessage={onEditMessage}
-                onCondition={onCondition}
-                onWaitFor={onWaitFor}
+                {...own}
                 onChooseStep={chooseStep}
                 {...(choosing ? { choosing } : {})}
-                {...(runMarks ? { marks: runMarks } : {})}
+                marks={(item) => marks(node.id, item)}
               />
-              {peerNode && (
-                <p className="agent-queue-end" data-end>
-                  End of {name}&apos;s queue
-                </p>
-              )}
             </aside>
             {peerNode && (
               <PeerQueue
                 node={peerNode}
+                nodes={nodes}
+                edits={edits}
+                marks={marks}
                 picking={chosen ? { item: chosen.item } : undefined}
                 onPick={pick}
                 onClose={() => {

@@ -2,21 +2,11 @@ import { useEffect, useRef } from 'react';
 
 import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
-import type { Condition, WaitTarget } from './queue';
+import { editsOf } from './edits';
+import type { QueueEdits } from './edits';
 import { QueueEditor } from './QueueEditor';
-import type { QueueEntry } from './QueueEditor';
+import type { RowMarks } from './QueueEditor';
 import { isWorkBetween } from './work';
-
-/** What a panel does to the queue of agent `owner`: QueueEditor's changes, by agent. */
-export interface QueueEdits {
-  add: (owner: string, entry: QueueEntry, into?: string) => void;
-  remove: (owner: string, itemId: string) => void;
-  move: (owner: string, itemId: string, index: number) => void;
-  retarget: (owner: string, itemId: string, target: string | undefined) => void;
-  editMessage: (owner: string, itemId: string, message: string) => void;
-  setCondition: (owner: string, ifId: string, condition: Condition) => void;
-  setWaitFor: (owner: string, waitId: string, targets: WaitTarget[]) => void;
-}
 
 /**
  * The work from one agent for another (an edge from `from` to `to`, see work.ts): the steps and
@@ -29,6 +19,7 @@ export function WorkDetail({
   to,
   nodes,
   edits,
+  marks,
   onClose,
 }: {
   from: string;
@@ -36,6 +27,8 @@ export function WorkDetail({
   /** Every node of the graph: the two agents, and what their steps can act on. */
   nodes: readonly GraphNode[];
   edits: QueueEdits;
+  /** How each agent's tasks are marked (queues/marks.ts). */
+  marks: (agent: string, item: string | null) => RowMarks;
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -69,27 +62,8 @@ export function WorkDetail({
           actions={AGENT_ACTIONS[agent]}
           only={(item) => isWorkBetween(item, owner.id, from, to)}
           add={add}
-          onAdd={(entry, into) => {
-            edits.add(owner.id, entry, into);
-          }}
-          onRemove={(itemId) => {
-            edits.remove(owner.id, itemId);
-          }}
-          onMove={(itemId, index) => {
-            edits.move(owner.id, itemId, index);
-          }}
-          onRetarget={(itemId, agentId) => {
-            edits.retarget(owner.id, itemId, agentId);
-          }}
-          onEditMessage={(itemId, message) => {
-            edits.editMessage(owner.id, itemId, message);
-          }}
-          onCondition={(ifId, condition) => {
-            edits.setCondition(owner.id, ifId, condition);
-          }}
-          onWaitFor={(waitId, targets) => {
-            edits.setWaitFor(owner.id, waitId, targets);
-          }}
+          {...editsOf(edits, owner.id)}
+          marks={(item) => marks(owner.id, item)}
         />
       </section>
     );

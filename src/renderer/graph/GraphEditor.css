@@ -1143,3 +1143,119 @@ input.graph-label {
   background: color-mix(in srgb, CanvasText 12%, transparent);
   opacity: 1;
 }
+
+/*
+ * Every queue looks the same wherever it shows (an agent's own, the one beside it, the work
+ * between two agents, All queues): cards at rest, each with its handle to drag it by; what else
+ * edits a task (remove, the agent it is aimed at when that is its own, a wait's +, an if-then's
+ * ⊕) shows on the task pointed at, or with the keyboard in it.
+ */
+:root {
+  --queue-wait: #3b82f6;
+  --queue-handoff: #22a35a;
+  --queue-stuck: #e5484d;
+}
+
+[data-mark='wait'] {
+  --mark: var(--queue-wait);
+}
+
+[data-mark='handoff'] {
+  --mark: var(--queue-handoff);
+}
+
+[data-mark='stuck'] {
+  --mark: var(--queue-stuck);
+}
+
+.graph-queue-row:not(:hover, :focus-within)
+  > :is(.graph-queue-remove, .graph-queue-target[data-own], .graph-queue-target[data-more]),
+.graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
+  opacity: 0;
+}
+
+.graph-queue-message:not(:hover, :focus-within) textarea {
+  border-color: transparent;
+}
+
+.graph-queue-if {
+  background: Canvas;
+}
+
+/* Tasks linked to other queues take their link's colour: a wait, work handed on, what is waited for. */
+:where(.graph-queue-row, .graph-queue-if)[data-mark] {
+  border-color: color-mix(in srgb, var(--mark) 60%, transparent);
+  background-color: color-mix(in srgb, var(--mark) 8%, Canvas);
+}
+
+:where(.graph-queue-row):is([data-mark='wait'], [data-mark='stuck']) {
+  border-style: dashed;
+}
+
+:where(.graph-queue-row)[data-mark='stuck'] {
+  color: var(--queue-stuck);
+}
+
+:where(.graph-queue-row, .graph-queue-if)[data-waited-for]:not([data-mark]) {
+  border-color: color-mix(in srgb, var(--queue-wait) 55%, transparent);
+  background-color: color-mix(in srgb, var(--queue-wait) 5%, Canvas);
+}
+
+/* A queue's end: what a wait for all of its agent's work waits for; its ⊕ below. */
+.graph-queue-end {
+  position: relative;
+  margin-top: 10px;
+  padding: 3px 2px 0;
+  border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
+  color: color-mix(in srgb, CanvasText 50%, transparent);
+  font-size: 11px;
+}
+
+.graph-queue-end[data-waited-for] {
+  border-top: 2px solid var(--queue-wait);
+  color: var(--queue-wait);
+}
+
+.graph-queue-end[data-run='reached'] {
+  border-top-color: var(--queue-handoff);
+  color: var(--queue-handoff);
+}
+
+.graph-queue-end[data-run='reached']::after {
+  content: ' ✓';
+}
+
+.graph-queue-end + .graph-queue-add {
+  margin-top: 8px;
+}
+
+.graph-queue-end + .graph-queue-add > .graph-queue-plus {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+}
+
+/* While a wait's target is picked from a queue: each task, and its end, is a button that picks. */
+.graph-queue > li {
+  position: relative;
+}
+
+.graph-queue-pick {
+  position: absolute;
+  z-index: 3;
+  inset: -3px;
+  border: 2px dashed var(--queue-wait);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--queue-wait) 6%, transparent);
+  cursor: pointer;
+}
+
+.graph-queue-end .graph-queue-pick {
+  inset: -6px -3px -3px;
+  border-radius: 6px;
+}
+
+.graph-queue-pick:is(:hover, :focus-visible, [aria-pressed='true']) {
+  border-style: solid;
+  background: color-mix(in srgb, var(--queue-wait) 16%, transparent);
+}

@@ -54,11 +54,11 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      sessions.ts keeps every agent's session (useSyncExternalStore) so turns play on
                      while the canvas is shown.
 src/renderer/queues/ Every agent's queue side by side, task by task, laid out like a diff viewer
-                     (QueuesView.tsx), from the canvas or an agent: each lane is its queue, edited in
-                     place with the queue's own rows (QueueRow, QueueEditor.tsx). lanes.ts aligns rows
-                     so a wait sits below what it waits for, links waits and work handed over, and
-                     finds waits stuck in a loop; ribbons.ts shapes the ribbons in the gaps between
-                     lanes that join linked tasks (from where the view measures them).
+                     (QueuesView.tsx), from the canvas or an agent. lanes.ts aligns rows so a wait
+                     sits below what it waits for, links waits and work handed over, and finds waits
+                     stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that
+                     join linked tasks (from where the view measures them); marks.ts marks tasks
+                     (links, the run) wherever a queue is shown.
 src/renderer/run/    Running the queues, simulated until agents are connected (runner.ts, a store like
                      sessions.ts): each agent works through its queue, messages go to its session,
                      waits hold until their target is done. run.css marks where the run is on a
@@ -70,6 +70,8 @@ e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Lau
                 launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in.
 build/          Packaging resources (macOS entitlements, patched rpm spec template).
 ```
+
+Queues: there is one queue component, QueueEditor.tsx. Every queue the app shows (an agent's own, the one shown beside it to pick from, the work panel between two agents, the lanes of All queues) is built from its rows (`QueueRow`), its end (`QueueEnd`) and its picking (`PickTask`), styled once in GraphEditor.css (cards at rest; what edits a task shows on the one pointed at; the drag handle always shows). Bind edits to an agent with `editsOf` (graph/edits.ts), word tasks with labels.ts, and mark them with `queueMarks` (queues/marks.ts) rather than adding another copy.
 
 TypeScript: `tsconfig.json` is solution-style and references `tsconfig.node.json` (main, preload, shared), `tsconfig.web.json` (renderer, shared) and `tsconfig.tooling.json` (config files, e2e). All extend `tsconfig.base.json` (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`). Every new `.ts` file must fall under one of these `include`s, or type-aware lint fails with "not found by the project service".
 

@@ -23,7 +23,9 @@ import { AgentView } from '../agent/AgentView';
 import { NEW_SESSION } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
 import { QueuesView } from '../queues/QueuesView';
-import { RunStore, taskState } from '../run/runner';
+import { lanesOf } from '../queues/lanes';
+import { queueMarks } from '../queues/marks';
+import { RunStore } from '../run/runner';
 import { GraphActionsContext } from './actions';
 import { DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -73,7 +75,7 @@ import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
 import { workEdges } from './work';
 import { WorkDetail } from './WorkDetail';
-import type { QueueEdits } from './WorkDetail';
+import type { QueueEdits } from './edits';
 import './GraphEditor.css';
 
 const nodeTypes = { agent: AgentNodeView, frame: GroupNodeView } satisfies NodeTypes;
@@ -165,6 +167,16 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       }),
   );
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
+  /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
+  const layout = useMemo(() => lanesOf(graph.nodes), [graph.nodes]);
+  const marks = useMemo(() => {
+    const asking = new Set(
+      Object.entries(sessions).flatMap(([id, session]) =>
+        session.status === 'waiting' ? [id] : [],
+      ),
+    );
+    return queueMarks(layout, run, asking);
+  }, [layout, run, sessions]);
   // The run reads the queues as they are edited.
   useEffect(() => {
     runStore.update(graph.nodes);
@@ -748,31 +760,11 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
               const question = { ...sample, id: crypto.randomUUID() };
               setGraph((g) => askUser(g, openedNode.id, question));
             }}
-            onAdd={(entry, into) => {
-              edits.add(openedNode.id, entry, into);
-            }}
-            onRemove={(itemId) => {
-              edits.remove(openedNode.id, itemId);
-            }}
-            onMove={(itemId, index) => {
-              edits.move(openedNode.id, itemId, index);
-            }}
-            onRetarget={(itemId, target) => {
-              edits.retarget(openedNode.id, itemId, target);
-            }}
-            onEditMessage={(itemId, message) => {
-              edits.editMessage(openedNode.id, itemId, message);
-            }}
-            onCondition={(ifId, condition) => {
-              edits.setCondition(openedNode.id, ifId, condition);
-            }}
-            onWaitFor={(waitId, targets) => {
-              edits.setWaitFor(openedNode.id, waitId, targets);
-            }}
+            edits={edits}
+            marks={marks}
             onShowQueues={() => {
               setQueues({ from: openedNode.id });
             }}
-            runMarks={(itemId) => ({ 'data-run': taskState(run, openedNode.id, itemId) })}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
               send: (text) => {
@@ -804,6 +796,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             to={work.to}
             nodes={graph.nodes}
             edits={edits}
+            marks={marks}
             onClose={closeWork}
           />
         )}

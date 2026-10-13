@@ -4,7 +4,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import { SearchPicker } from '../search/SearchPicker';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
-import { ifText, itemLabel } from './labels';
+import { agentName, andList, ifText, itemLabel, waitTargetLabel } from './labels';
 import { CONDITIONS, isIf, isMessage, isWait, sameTarget } from './queue';
 import type {
   Condition,
@@ -17,6 +17,7 @@ import type {
 } from './queue';
 import { SortableList } from './SortableList';
 import type { HandleProps } from './SortableList';
+import '../run/run.css';
 
 const EMPTY: readonly QueueItem[] = [];
 
@@ -41,8 +42,24 @@ interface Target {
 const nameOf = (node: GraphNode | undefined) =>
   node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
 
-/** Data attributes a row carries: what QueuesView marks its tasks with (links, the run). */
+/** Data attributes a row carries: how links mark its task, and where the queues' run is with it. */
 export type RowMarks = Readonly<Record<`data-${string}`, string | undefined>>;
+
+/** A button over a task (or a queue's end) that picks it, as what a wait waits for. */
+export interface Pick {
+  label: string;
+  /** Whether it is what the wait waits for now. */
+  pressed: boolean;
+  onPick: () => void;
+}
+
+/** A queue whose items are picked from, as what a wait waits for: `current`, undefined for all. */
+export interface Picking {
+  /** Its agent's name. */
+  name: string;
+  current: string | undefined;
+  onPick: (item: string | undefined) => void;
+}
 
 /** What QueueEditor and QueueRow edit, and with what. */
 interface QueueProps {
@@ -67,8 +84,8 @@ interface QueueProps {
   onChooseStep?: (choice: StepChoice) => void;
   /** The wait target being picked, to show which. */
   choosing?: Omit<StepChoice, 'agent'>;
-  /** Marks for the row of each item and if-then step, by id. */
-  marks?: (itemId: string) => RowMarks;
+  /** Marks for the row of each item and if-then step, by id, and (null) the queue's end. */
+  marks?: (itemId: string | null) => RowMarks;
 }
 
 /**
@@ -81,8 +98,14 @@ interface QueueProps {
 export function QueueEditor({
   only,
   add = 'anything',
+  addLabel = 'Add to queue',
+  picking,
   ...props
 }: QueueProps & {
+  /** The name of the ⊕ that adds anything. */
+  addLabel?: string;
+  /** While a wait's target is picked from this queue: each item, and its end, picks. */
+  picking?: Picking | undefined;
   /** Shows only the items for which this holds (an if-then whole, with all of its steps). */
   only?: (item: QueueItem) => boolean;
   /**
@@ -109,12 +132,37 @@ export function QueueEditor({
           className="graph-queue"
           onMove={moveShown}
           renderItem={(item, handle) => (
-            <ItemRow item={item} handle={handle} context={context} props={props} />
+            <>
+              <ItemRow item={item} handle={handle} context={context} props={props} />
+              {picking && (
+                <PickTask
+                  label={`Wait for ${picking.name}: ${itemLabel(item)}`}
+                  pressed={picking.current === item.id}
+                  onPick={() => {
+                    picking.onPick(item.id);
+                  }}
+                />
+              )}
+            </>
           )}
         />
       )}
       {add === 'anything' && (
-        <AddMenu label="Add to queue" withIf context={context} onAdd={onAdd} />
+        <>
+          <QueueEnd
+            marks={props.marks?.(null)}
+            pick={
+              picking && {
+                label: `Wait for all of ${picking.name}'s work`,
+                pressed: picking.current === undefined,
+                onPick: () => {
+                  picking.onPick(undefined);
+                },
+              }
+            }
+          />
+          <AddMenu label={addLabel} withIf context={context} onAdd={onAdd} />
+        </>
       )}
       {typeof add === 'object' && (
         <AddMenu
@@ -125,6 +173,38 @@ export function QueueEditor({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The end of a queue: what a wait for all of its agent's work waits for. With `pick`, a button
+ * over it picks that.
+ */
+export function QueueEnd({
+  marks,
+  pick,
+}: {
+  marks?: RowMarks | undefined;
+  pick?: Pick | undefined;
+}) {
+  return (
+    <div className="graph-queue-end" data-end {...marks}>
+      End
+      {pick && <PickTask {...pick} />}
+    </div>
+  );
+}
+
+/** A button over a task, or a queue's end, that picks it as what a wait waits for. */
+export function PickTask({ label, pressed, onPick }: Pick) {
+  return (
+    <button
+      type="button"
+      className="graph-queue-pick"
+      aria-label={label}
+      aria-pressed={pressed}
+      onClick={onPick}
+    />
   );
 }
 
@@ -192,13 +272,8 @@ function contextOf({
   marks,
 }: QueueProps): Context {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
-  const name = (id: string | undefined) =>
-    id === undefined ? 'this agent' : nameOf(nodes.find((n) => n.id === id));
-  const targetLabel = ({ agent: waited, item }: WaitTarget) => {
-    if (item === undefined) return name(waited);
-    const found = nodes.find((n) => n.id === waited)?.data.queue?.find((q) => q.id === item);
-    return `${name(waited)}: ${found ? itemLabel(found) : 'a removed step'}`;
-  };
+  const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
+  const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
   const describe = (item: QueueItem) =>
     isWait(item)
       ? `Wait for ${andList(item.waitFor.map(targetLabel))}`
@@ -246,13 +321,6 @@ interface Context extends AddContext {
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   choosing?: Omit<StepChoice, 'agent'>;
   marks: (itemId: string) => RowMarks;
-}
-
-/** "a", "a and b", "a, b and c". */
-function andList(names: readonly string[]): string {
-  return names.length < 2
-    ? names.join('')
-    : `${names.slice(0, -1).join(', ')} and ${String(names.at(-1))}`;
 }
 
 /**
@@ -618,6 +686,7 @@ function WaitRow({
           type="button"
           className="graph-queue-target"
           aria-label="Wait for something else"
+          data-more
           title="Wait for another agent or step too"
           aria-expanded={adding}
           onClick={() => {

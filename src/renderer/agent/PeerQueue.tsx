@@ -1,24 +1,35 @@
+import { AGENT_ACTIONS, DEFAULT_AGENT } from '../graph/agents';
+import { editsOf } from '../graph/edits';
+import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
-import { itemLabel } from '../graph/labels';
+import { QueueEditor } from '../graph/QueueEditor';
+import type { RowMarks } from '../graph/QueueEditor';
 
 /**
  * Another agent's queue, beside the open agent's (AgentView), to see how they wait on each other
- * (QueueLinks.tsx). While a wait's target is being picked (`picking`: what it is now, `undefined`
- * for all of the agent's work), each of its items, and all of its work, is a button that picks it.
+ * (QueueLinks.tsx): the same queue, edited the same way, as everywhere else (QueueEditor). While a
+ * wait's target is picked from it (`picking`: what it is now, `undefined` for all of the agent's
+ * work), each of its items, and its end, picks.
  */
 export function PeerQueue({
   node,
+  nodes,
+  edits,
+  marks,
   picking,
   onPick,
   onClose,
 }: {
   node: GraphNode;
+  nodes: readonly GraphNode[];
+  edits: QueueEdits;
+  marks: (agent: string, item: string | null) => RowMarks;
   picking: { item: string | undefined } | undefined;
   onPick: (item: string | undefined) => void;
   onClose: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
-  const queue = node.data.queue ?? [];
+  const agent = node.data.agent ?? DEFAULT_AGENT;
   return (
     <aside className="agent-side agent-peer" data-column="peer" aria-label={`${name}'s queue`}>
       <header className="agent-peer-header">
@@ -31,45 +42,20 @@ export function PeerQueue({
         />
       </header>
       {picking && (
-        <>
-          <p className="agent-peer-hint">Pick what to wait for:</p>
-          <button
-            type="button"
-            className="agent-peer-all"
-            aria-label={`Wait for all of ${name}'s work`}
-            aria-pressed={picking.item === undefined}
-            onClick={() => {
-              onPick(undefined);
-            }}
-          >
-            All of {name}&apos;s work
-          </button>
-        </>
+        <p className="agent-peer-hint">
+          Pick what to wait for: one of its tasks, or its end for all of its work.
+        </p>
       )}
-      <ol className="graph-queue agent-peer-queue">
-        {queue.map((item) => (
-          <li key={item.id} data-item={item.id}>
-            {picking ? (
-              <button
-                type="button"
-                className="graph-queue-row agent-peer-item"
-                aria-label={`Wait for ${name}: ${itemLabel(item)}`}
-                aria-pressed={picking.item === item.id}
-                onClick={() => {
-                  onPick(item.id);
-                }}
-              >
-                {itemLabel(item)}
-              </button>
-            ) : (
-              <div className="graph-queue-row agent-peer-item">{itemLabel(item)}</div>
-            )}
-          </li>
-        ))}
-      </ol>
-      <p className="agent-queue-end" data-end>
-        End of {name}&apos;s queue
-      </p>
+      <QueueEditor
+        node={node}
+        nodes={nodes}
+        agent={agent}
+        actions={AGENT_ACTIONS[agent]}
+        {...editsOf(edits, node.id)}
+        marks={(item) => marks(node.id, item)}
+        addLabel={`Add to ${name}'s queue`}
+        picking={picking && { name, current: picking.item, onPick }}
+      />
     </aside>
   );
 }

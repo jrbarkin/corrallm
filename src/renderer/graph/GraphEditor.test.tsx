@@ -514,12 +514,24 @@ describe('GraphEditor', () => {
 
     // b waits for all of a's work until a step of a's, in its queue beside b's, is picked.
     expect(view.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
+    // a's queue, as editable there as anywhere, picks: one of its tasks, or its end.
     const beside = within(view.getByRole('complementary', { name: "a's queue" }));
-    expect(beside.getAllByRole('button', { name: /^Wait for / }).map((b) => b.textContent)).toEqual(
-      ["All of a's work", 'Workflow', '“Write up what you found”'],
-    );
+    expect(
+      beside
+        .getAllByRole('button', { name: /^Wait for / })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'Wait for a: Workflow',
+      'Wait for a: “Write up what you found”',
+      "Wait for all of a's work",
+    ]);
+    expect(beside.getByRole('button', { name: 'Remove Workflow' })).toBeTruthy();
     fireEvent.click(beside.getByRole('button', { name: 'Wait for a: Workflow' }));
-    expect(view.getByRole('button', { name: 'Move Wait for a: Workflow' })).toBeTruthy();
+    const wait = view.getByRole('button', { name: 'Move Wait for a: Workflow' });
+    // Marked as tasks are wherever a queue shows: the wait, and the step it waits for.
+    expect(wait.closest('[data-mark]')?.getAttribute('data-mark')).toBe('wait');
+    const step = beside.getByRole('button', { name: 'Move Workflow' }).closest('.graph-queue-row');
+    expect(step?.hasAttribute('data-waited-for')).toBe(true);
     // The two queues stay side by side, the wait linked to the step it waits for.
     expect(beside.queryByRole('button', { name: /^Wait for / })).toBeNull();
     expect(links()).toHaveLength(1);

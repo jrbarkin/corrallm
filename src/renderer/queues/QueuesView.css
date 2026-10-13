@@ -3,9 +3,9 @@
  * place), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
  */
 .queues-view {
-  --queues-wait: #3b82f6;
-  --queues-handoff: #22a35a;
-  --queues-stuck: #e5484d;
+  --queues-wait: var(--queue-wait);
+  --queues-handoff: var(--queue-handoff);
+  --queues-stuck: var(--queue-stuck);
   --queues-held: color-mix(in srgb, CanvasText 45%, Canvas);
   --queues-asking: #f59e0b;
 
@@ -20,18 +20,6 @@
   box-shadow: 0 24px 64px color-mix(in srgb, black 25%, transparent);
   color: CanvasText;
   font-size: 14px;
-}
-
-.queues-view [data-mark='wait'] {
-  --mark: var(--queues-wait);
-}
-
-.queues-view [data-mark='handoff'] {
-  --mark: var(--queues-handoff);
-}
-
-.queues-view [data-mark='stuck'] {
-  --mark: var(--queues-stuck);
 }
 
 .queues-title {
@@ -252,116 +240,17 @@
   background: color-mix(in srgb, var(--queues-asking) 28%, Canvas);
 }
 
-/*
- * At rest, a lane's tasks read as cards: what edits a task (its handle, remove, the agent it is
- * aimed at when that is its own) shows on the task pointed at, or with the keyboard in it.
- */
-.queues-cell
-  .graph-queue-row:not(:hover, :focus-within)
-  > :is(
-    .graph-queue-handle,
-    .graph-queue-remove,
-    .graph-queue-target[data-own],
-    .graph-queue-target[aria-label='Wait for something else']
-  ),
-.queues-cell .graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
-  opacity: 0;
-}
-
-.queues-cell .graph-queue-message:not(:hover, :focus-within) textarea {
-  border-color: transparent;
-}
-
-.queues-cell .graph-queue-if > .graph-queue-add {
-  margin-top: 4px;
-}
-
-.queues-cell .graph-queue-plus,
-.queues-end-cell .graph-queue-plus {
-  width: 24px;
-  height: 24px;
-  font-size: 15px;
-}
-
-.queues-end-cell .graph-queue-plus:not(:hover, :focus-visible, [aria-expanded='true']) {
-  opacity: 0.5;
-}
-
-/* Tasks: the queue's own rows; an if-then on the lane's colour like the rest. */
-.queues-cell .graph-queue-if {
-  background: Canvas;
-}
-
+/* Tasks: every queue's own cards (GraphEditor.css); a lane's end sits at the top of its row. */
 .queues-cell.dragging :is(.graph-queue-row, .graph-queue-if) {
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
 
-/* Tasks a ribbon joins take its colour: a wait, work handed on, and what a wait waits for. */
-.queues-grid :is(.graph-queue-row, .graph-queue-if)[data-mark] {
-  border-color: color-mix(in srgb, var(--mark) 60%, transparent);
-  background-color: color-mix(in srgb, var(--mark) 8%, Canvas);
+.queues-end-cell .graph-queue-end {
+  margin-top: 0;
 }
 
-.queues-grid .graph-queue-row:is([data-mark='wait'], [data-mark='stuck']) {
-  border-style: dashed;
-}
-
-.queues-grid .graph-queue-row[data-mark='stuck'] {
-  color: var(--queues-stuck);
-}
-
-.queues-grid :is(.graph-queue-row, .graph-queue-if)[data-waited-for]:not([data-mark]) {
-  border-color: color-mix(in srgb, var(--queues-wait) 55%, transparent);
-  background-color: color-mix(in srgb, var(--queues-wait) 5%, Canvas);
-}
-
-/* A lane's end (what a wait for all of its agent's work waits for), and its ⊕. */
-.queues-end {
-  position: relative;
-  padding: 3px 2px 0;
-  border-top: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
-  color: color-mix(in srgb, CanvasText 50%, transparent);
-  font-size: 11px;
-}
-
-.queues-end[data-waited-for] {
-  border-top: 2px solid var(--queues-wait);
-  color: var(--queues-wait);
-}
-
-.queues-end[data-run='reached'] {
-  border-top-color: var(--queues-handoff);
-  color: var(--queues-handoff);
-}
-
-.queues-end[data-run='reached']::after {
-  content: ' ✓';
-}
-
-.queues-end-cell .graph-queue-add {
-  margin-top: 8px;
-}
-
-/* While a wait's step is picked: every task of the lane it is picked in, and its end, picks. */
-.queues-pick {
-  position: absolute;
-  z-index: 3;
-  inset: -3px;
-  border: 2px dashed var(--queues-wait);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--queues-wait) 6%, transparent);
-  cursor: pointer;
-}
-
-.queues-end .queues-pick {
-  inset: -6px -3px -3px;
-  border-radius: 6px;
-}
-
-.queues-pick:hover,
-.queues-pick:focus-visible {
-  border-style: solid;
-  background: color-mix(in srgb, var(--queues-wait) 16%, transparent);
+.queues-end-cell .graph-queue-plus:not(:hover, :focus-visible, [aria-expanded='true']) {
+  opacity: 0.5;
 }
 
 /* Where an agent has nothing to do, waiting: its stripes run while the run holds it there. */
