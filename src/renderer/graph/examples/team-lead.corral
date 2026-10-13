@@ -18,17 +18,12 @@
         },
         {
           "id": "approved",
-          "if": {
-            "kind": "freeText",
-            "text": "I approve the plan"
-          },
-          "then": [
-            {
-              "id": "brief",
-              "message": "Carry out PLAN.md with your team.",
-              "target": "lead"
-            }
-          ]
+          "approve": "the plan in PLAN.md"
+        },
+        {
+          "id": "brief",
+          "message": "Carry out PLAN.md with your team.",
+          "target": "lead"
         }
       ]
     },
@@ -43,6 +38,15 @@
       "agent": "Claude",
       "color": 1,
       "queue": [
+        {
+          "id": "go",
+          "waitFor": [
+            {
+              "agent": "planner",
+              "item": "brief"
+            }
+          ]
+        },
         {
           "id": "split",
           "message": "Share PLAN.md out between your team, and check their work."

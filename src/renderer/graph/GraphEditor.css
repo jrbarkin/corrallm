@@ -339,13 +339,18 @@ input.graph-label {
 }
 
 .graph-queue > li.dragging > .graph-queue-row,
-.graph-queue > li.dragging > .graph-queue-if {
+.graph-queue > li.dragging > .graph-queue-if,
+.graph-queue > li.dragging > .graph-queue-repeat {
   z-index: 1;
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
 }
 
-/* A step whose action the agent does not have (its type changed since it was queued). */
-.graph-queue-row.unavailable .graph-queue-action {
+/*
+ * A step whose action the agent does not have (its type changed since it was queued), or an
+ * if-then's condition that cannot hold where it sits (its title says why).
+ */
+.graph-queue-row.unavailable .graph-queue-action,
+.graph-queue-target[data-unavailable] {
   opacity: 0.55;
   text-decoration: line-through;
 }
@@ -378,15 +383,24 @@ input.graph-label {
   resize: none;
 }
 
-/* An if-then: its row, then its own steps, indented, with their own ⊕. */
-.graph-queue-if {
+/*
+ * An if-then: its row, then its own steps, indented, with their own ⊕. A repeat likewise, its
+ * border solid and tinted: its steps run again, round after round.
+ */
+.graph-queue-if,
+.graph-queue-repeat {
   position: relative;
   padding: 0 0 10px;
   border: 1px dashed color-mix(in srgb, CanvasText 25%, transparent);
   border-radius: 12px;
 }
 
-.graph-queue-if > .graph-queue-row {
+.graph-queue-repeat {
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+  background: Canvas;
+}
+
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-row {
   border: 0;
   background: transparent;
 }
@@ -396,14 +410,65 @@ input.graph-label {
   margin: 4px 10px 0 28px;
 }
 
-.graph-queue-if > .graph-queue-add {
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-add {
   margin-top: 10px;
 }
 
-.graph-queue-if > .graph-queue-add > .graph-queue-plus {
+:is(.graph-queue-if, .graph-queue-repeat) > .graph-queue-add > .graph-queue-plus {
   width: 26px;
   height: 26px;
   font-size: 16px;
+}
+
+/* A repeat's header: its chips, and under them how to decide once it is out of rounds. */
+.graph-queue-repeat-head {
+  flex-wrap: wrap;
+}
+
+.graph-queue-repeat-head > .graph-queue-target {
+  white-space: nowrap;
+}
+
+/* What a repeat runs each round: a thin rail down its left, ending in ↺. */
+.graph-queue-rounds {
+  position: relative;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 1.5px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+}
+
+.graph-queue-rounds::after {
+  position: absolute;
+  bottom: -15px;
+  left: -6px;
+  color: color-mix(in srgb, var(--graph-accent, #2563eb) 60%, transparent);
+  content: '↺';
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Who goes round with a repeat, muted, at its foot. */
+.graph-queue-repeat-foot {
+  margin: 18px 14px 0 28px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+/* While the run is in a repeat: which round, in a pill on its top edge; once over, how many. */
+.graph-queue-repeat[data-round]::before {
+  position: absolute;
+  z-index: 1;
+  top: -9px;
+  right: 16px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 35%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: var(--graph-accent, #2563eb);
+  content: attr(data-round);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .graph-queue-handle {
@@ -708,7 +773,7 @@ input.graph-label {
   content: '?' attr(data-count);
 }
 
-/* The floating list of questions agents are waiting on. */
+/* The floating list of what needs the user: what the run holds for them, then agents' questions. */
 .graph-questions {
   box-sizing: border-box;
   width: 300px;
@@ -761,6 +826,13 @@ input.graph-label {
 
 .graph-question-text {
   margin: 0;
+}
+
+/* What an ask comes after: "After “Write the spec…”". */
+.graph-question-detail {
+  margin: -2px 0 0;
+  font-size: 12px;
+  opacity: 0.6;
 }
 
 .graph-question-options,
@@ -1197,9 +1269,113 @@ input.graph-label {
   background: transparent;
 }
 
-/* A wait: a chip for each agent it waits for, with a button that takes it off. */
-.graph-queue-wait {
+/*
+ * A wait: a chip for each agent it waits for, with a button that takes it off, and its time limit.
+ * A delay: how long it waits, in a chip.
+ */
+.graph-queue-wait,
+.graph-queue-delay {
   flex-wrap: wrap;
+}
+
+/*
+ * An OK: what the user checks, in a chip. Under it, on lines of their own: the changes last asked
+ * for there, and while the run holds the queue there for the user, how to decide (never hidden).
+ */
+.graph-queue-ok {
+  flex-wrap: wrap;
+}
+
+.graph-queue-ok-asked,
+.graph-queue-decide {
+  /* Under the keyword: past the handle (14px) and the gap after it (8px). */
+  flex: 1 1 calc(100% - 22px);
+  order: 1;
+  min-width: 0;
+  margin-left: 22px;
+}
+
+.graph-queue-ok-asked {
+  overflow: hidden;
+  font-size: 12px;
+  opacity: 0.65;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-queue-decide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-queue-decide > button {
+  padding: 1px 9px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.graph-queue-decide > button:hover,
+.graph-queue-decide > button[aria-expanded='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+/* The answer most expected (Approve): filled. */
+.graph-queue-decide > button[data-primary],
+.graph-question-options button[data-primary] {
+  border-color: var(--queue-handoff);
+  background: var(--queue-handoff);
+  color: white;
+}
+
+.graph-queue-decide > button[data-primary]:hover,
+.graph-question-options button[data-primary]:hover {
+  border-color: color-mix(in srgb, var(--queue-handoff) 80%, black);
+  background: color-mix(in srgb, var(--queue-handoff) 80%, black);
+  color: white;
+}
+
+/* Times read as one: "9:00 AM", "at most 30 minutes". */
+:is(.graph-queue-wait, .graph-queue-delay) > .graph-queue-target {
+  white-space: nowrap;
+}
+
+/* A wait without a time limit offers one, faintly, beside its +. */
+.graph-queue-limit {
+  border-style: dashed;
+  color: color-mix(in srgb, CanvasText 60%, transparent);
+}
+
+/* While the run holds the agent at a delay or a time limit: how long is left. */
+.graph-queue-left {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* Go on now: ends the hold the run has the agent at (a delay, a wait). */
+.graph-queue-goon {
+  padding: 1px 8px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 10%, Canvas);
+  color: var(--graph-accent, #2563eb);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.graph-queue-goon:hover {
+  background: var(--graph-accent, #2563eb);
+  color: white;
 }
 
 .graph-queue-waited {
@@ -1237,13 +1413,16 @@ input.graph-label {
 /*
  * Every queue looks the same wherever it shows (an agent's own, the one beside it, the work
  * between two agents, All queues): cards at rest, each with its handle to drag it by; what else
- * edits a task (remove, the agent it is aimed at when that is its own, a wait's +, an if-then's
- * ⊕) shows on the task pointed at, or with the keyboard in it.
+ * edits a task (remove, the agent it is aimed at when that is its own, a wait's + and its
+ * "at most…", an if-then's or a repeat's ⊕) or acts on the run (Go on now) shows on the task
+ * pointed at, or with the keyboard in it. What the run waits for the user to decide (an OK's, a
+ * repeat's out of rounds) always shows.
  */
 :root {
   --queue-wait: #3b82f6;
   --queue-handoff: #22a35a;
   --queue-stuck: #e5484d;
+  --queue-ok: #f59e0b;
 }
 
 [data-mark='wait'] {
@@ -1258,9 +1437,18 @@ input.graph-label {
   --mark: var(--queue-stuck);
 }
 
+[data-mark='ok'] {
+  --mark: var(--queue-ok);
+}
+
 .graph-queue-row:not(:hover, :focus-within)
-  > :is(.graph-queue-remove, .graph-queue-target[data-own], .graph-queue-target[data-more]),
-.graph-queue-if:not(:hover, :focus-within) > .graph-queue-add {
+  > :is(
+    .graph-queue-remove,
+    .graph-queue-target[data-own],
+    .graph-queue-target[data-more],
+    .graph-queue-goon
+  ),
+:is(.graph-queue-if, .graph-queue-repeat):not(:hover, :focus-within) > .graph-queue-add {
   opacity: 0;
 }
 
@@ -1272,13 +1460,16 @@ input.graph-label {
   background: Canvas;
 }
 
-/* Tasks linked to other queues take their link's colour: a wait, work handed on, what is waited for. */
-:where(.graph-queue-row, .graph-queue-if)[data-mark] {
+/*
+ * Tasks linked to other queues take their link's colour: a wait, work handed on, what is waited
+ * for. An OK, which holds its queue like a wait, is amber.
+ */
+:where(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-mark] {
   border-color: color-mix(in srgb, var(--mark) 60%, transparent);
   background-color: color-mix(in srgb, var(--mark) 8%, Canvas);
 }
 
-:where(.graph-queue-row):is([data-mark='wait'], [data-mark='stuck']) {
+:where(.graph-queue-row):is([data-mark='wait'], [data-mark='stuck'], [data-mark='ok']) {
   border-style: dashed;
 }
 
@@ -1286,7 +1477,7 @@ input.graph-label {
   color: var(--queue-stuck);
 }
 
-:where(.graph-queue-row, .graph-queue-if)[data-waited-for]:not([data-mark]) {
+:where(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-waited-for]:not([data-mark]) {
   border-color: color-mix(in srgb, var(--queue-wait) 55%, transparent);
   background-color: color-mix(in srgb, var(--queue-wait) 5%, Canvas);
 }

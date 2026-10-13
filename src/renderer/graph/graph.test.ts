@@ -33,7 +33,10 @@ import {
   retarget,
   selectOnly,
   setAgent,
+  setApproval,
   setCondition,
+  setRepeat,
+  setTime,
   setWaitFor,
   size,
   spawnAgent,
@@ -375,6 +378,44 @@ describe('queues', () => {
     expect(editMessage(waiting, 'a', 'w1', 'x')).toBe(waiting);
   });
 
+  it("sets a delay's time, and sets and clears a wait's time limit", () => {
+    const delay = { id: 'd1', delay: { seconds: 600 } };
+    const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
+    const timed = addToQueue(addToQueue(queued, 'a', delay), 'a', wait);
+    const item = (graph: Graph, id: string) => queueOf(graph).find((q) => q.id === id);
+
+    const longer = setTime(timed, 'a', 'd1', { at: '09:00' });
+    expect(item(longer, 'd1')).toEqual({ id: 'd1', delay: { at: '09:00' } });
+    // A delay always has a time.
+    expect(setTime(timed, 'a', 'd1', undefined)).toBe(timed);
+    expect(setTime(timed, 'a', 'd1', { seconds: 600 })).toBe(timed);
+
+    const limited = setTime(timed, 'a', 'w1', { seconds: 1800 });
+    expect(item(limited, 'w1')).toEqual({ ...wait, timeout: { seconds: 1800 } });
+    expect(setTime(limited, 'a', 'w1', { seconds: 1800 })).toBe(limited);
+    expect(item(setTime(limited, 'a', 'w1', undefined), 'w1')).toEqual(wait);
+    expect(setTime(timed, 'a', 'w1', undefined)).toBe(timed);
+    // Only delays and waits have times; delays are left alone by what changes steps.
+    expect(setTime(timed, 'a', 'q1', { seconds: 60 })).toBe(timed);
+    expect(retarget(timed, 'a', 'd1', 'b')).toBe(timed);
+    expect(editMessage(timed, 'a', 'd1', 'x')).toBe(timed);
+  });
+
+  it('holds OKs, whose words can be changed, and which nothing else changes', () => {
+    const ok = { id: 'ok1', approve: 'the spec' };
+    const asked = addToQueue(queued, 'a', ok);
+    expect(queueOf(asked).at(-1)).toEqual(ok);
+    const plan = setApproval(asked, 'a', 'ok1', 'the plan in PLAN.md');
+    expect(queueOf(plan).at(-1)).toEqual({ id: 'ok1', approve: 'the plan in PLAN.md' });
+    expect(queueOf(setApproval(asked, 'a', 'ok1', '')).at(-1)).toEqual({ id: 'ok1', approve: '' });
+    // The same words, or an item that is not an OK, change nothing.
+    expect(setApproval(asked, 'a', 'ok1', 'the spec')).toBe(asked);
+    expect(setApproval(asked, 'a', 'q1', 'the spec')).toBe(asked);
+    expect(retarget(asked, 'a', 'ok1', 'b')).toBe(asked);
+    expect(editMessage(asked, 'a', 'ok1', 'x')).toBe(asked);
+    expect(setTime(asked, 'a', 'ok1', { seconds: 60 })).toBe(asked);
+  });
+
   describe('if-then', () => {
     const block = { id: 'if1', if: { kind: 'failed' as const }, then: [] };
     const withIf = addToQueue(queued, 'a', block);
@@ -385,11 +426,13 @@ describe('queues', () => {
       return found && 'then' in found ? found.then.map((q) => q.id) : undefined;
     };
 
-    it('adds steps inside an if-then, not to the queue; never a wait', () => {
+    it('adds steps inside an if-then, not to the queue; never a wait, a delay or an OK', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
       expect(addToQueue(withIf, 'a', { id: 'w', waitFor: [{ agent: 'b' }] }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'd', delay: { seconds: 60 } }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'ok', approve: '' }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {
@@ -412,6 +455,94 @@ describe('queues', () => {
         if: { kind: 'outputContains', text: 'PASS' },
       });
       expect(setCondition(filled, 'a', 'q1', { kind: 'failed' })).toBe(filled);
+    });
+  });
+
+  describe('repeat', () => {
+    const loop = {
+      id: 'r1',
+      repeat: [],
+      until: { kind: 'succeeded' as const },
+      rounds: 3,
+      otherwise: 'ask' as const,
+    };
+    const withRepeat = addToQueue(queued, 'a', loop);
+    const fix = { id: 'fix', message: 'Make the tests pass' };
+    const tests = { id: 'tests', action: 'Bash' };
+    const wait = { id: 'w', waitFor: [{ agent: 'b' }] };
+    const pause = { id: 'p', delay: { seconds: 60 } };
+    const filled = [fix, tests, wait, pause].reduce(
+      (graph, item) => addToQueue(graph, 'a', item, 'r1'),
+      withRepeat,
+    );
+    const repeatOf = (graph: Graph) => {
+      const found = queueOf(graph).find((q) => q.id === 'r1');
+      return found && 'repeat' in found ? found : undefined;
+    };
+    const inner = (graph: Graph) => repeatOf(graph)?.repeat ?? [];
+
+    it('adds steps, messages, waits and delays inside a repeat; never an if-then, repeat or OK', () => {
+      expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'r1']);
+      expect(inner(filled)).toEqual([fix, tests, wait, pause]);
+      const ifThen = { id: 'if', if: { kind: 'failed' as const }, then: [] };
+      expect(addToQueue(withRepeat, 'a', ifThen, 'r1')).toBe(withRepeat);
+      expect(addToQueue(withRepeat, 'a', { ...loop, id: 'r2' }, 'r1')).toBe(withRepeat);
+      expect(addToQueue(withRepeat, 'a', { id: 'ok', approve: '' }, 'r1')).toBe(withRepeat);
+      // Nor does an if-then hold a repeat.
+      const withIf = addToQueue(withRepeat, 'a', ifThen);
+      expect(addToQueue(withIf, 'a', { ...loop, id: 'r2' }, 'if')).toBe(withIf);
+    });
+
+    it('removes, moves, retargets and edits what is inside it, and changes its waits and delays', () => {
+      const ids = (graph: Graph) => inner(graph).map((q) => q.id);
+      expect(ids(removeFromQueue(filled, 'a', 'tests'))).toEqual(['fix', 'w', 'p']);
+      expect(ids(moveInQueue(filled, 'a', 'p', 0))).toEqual(['p', 'fix', 'tests', 'w']);
+      expect(moveInQueue(filled, 'a', 'fix', 0)).toBe(filled);
+      expect(inner(retarget(filled, 'a', 'tests', 'b'))[1]).toEqual({ ...tests, target: 'b' });
+      expect(inner(editMessage(filled, 'a', 'fix', 'Fix it'))[0]).toEqual({
+        ...fix,
+        message: 'Fix it',
+      });
+      expect(inner(setWaitFor(filled, 'a', 'w', [{ agent: 'b', item: 's' }]))[2]).toEqual({
+        id: 'w',
+        waitFor: [{ agent: 'b', item: 's' }],
+      });
+      expect(inner(setTime(filled, 'a', 'w', { seconds: 30 }))[2]).toEqual({
+        ...wait,
+        timeout: { seconds: 30 },
+      });
+      expect(inner(setTime(filled, 'a', 'p', { at: '09:00' }))[3]).toEqual({
+        id: 'p',
+        delay: { at: '09:00' },
+      });
+      // What changes nothing gives back the same graph.
+      expect(editMessage(filled, 'a', 'fix', fix.message)).toBe(filled);
+      expect(retarget(filled, 'a', 'w', 'b')).toBe(filled);
+      // The repeat itself moves and goes like any item, what it holds with it.
+      expect(order(moveInQueue(filled, 'a', 'r1', 0))).toEqual(['r1', 'q1', 'q2', 'q3']);
+      expect(order(removeFromQueue(filled, 'a', 'r1'))).toEqual(['q1', 'q2', 'q3']);
+    });
+
+    it('changes when it stops, how many rounds it runs at most (1 to 20), and then what', () => {
+      const until = { kind: 'outputContains' as const, text: 'APPROVED' };
+      expect(repeatOf(setRepeat(filled, 'a', 'r1', { until, rounds: 5 }))).toMatchObject({
+        until,
+        rounds: 5,
+        otherwise: 'ask',
+      });
+      expect(repeatOf(setRepeat(filled, 'a', 'r1', { otherwise: 'goOn' }))?.otherwise).toBe('goOn');
+      expect(repeatOf(setRepeat(filled, 'a', 'r1', { rounds: 0 }))?.rounds).toBe(1);
+      expect(repeatOf(setRepeat(filled, 'a', 'r1', { rounds: 99 }))?.rounds).toBe(20);
+      expect(repeatOf(setRepeat(filled, 'a', 'r1', { rounds: 2.6 }))?.rounds).toBe(3);
+      // Nothing new, or no repeat by that id: the same graph.
+      expect(setRepeat(filled, 'a', 'r1', { rounds: 3, until: { kind: 'succeeded' } })).toBe(
+        filled,
+      );
+      expect(setRepeat(filled, 'a', 'q1', { rounds: 5 })).toBe(filled);
+      // Its keys stay in the order the file writes them.
+      expect(
+        Object.keys(repeatOf(setRepeat(filled, 'a', 'r1', { otherwise: 'goOn' })) ?? {}),
+      ).toEqual(['id', 'repeat', 'until', 'rounds', 'otherwise']);
     });
   });
 });

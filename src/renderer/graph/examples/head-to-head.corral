@@ -17,21 +17,29 @@
           "action": "EnterWorktree"
         },
         {
-          "id": "round-1",
-          "message": "You're competing with another agent to build the best version of this. Work on a branch named compete/claude and commit when you're done.\n\n{{task}}"
-        },
-        {
-          "id": "scored",
-          "waitFor": [
+          "id": "rounds",
+          "repeat": [
             {
-              "agent": "judge",
-              "item": "verdict-1"
+              "id": "build",
+              "message": "You're competing with another agent to build the best version of this, on a branch named compete/claude: commit when you're done. If the judge has left notes in .compete/feedback-claude.md in the main checkout (`git worktree list` shows where it is), improve your version from them.\n\n{{task}}"
+            },
+            {
+              "id": "scored",
+              "waitFor": [
+                {
+                  "agent": "judge",
+                  "item": "judge"
+                }
+              ]
             }
-          ]
-        },
-        {
-          "id": "round-2",
-          "message": "The judge's notes on your version are in .compete/feedback-claude.md in the main checkout (`git worktree list` shows where it is). Improve your version, then commit."
+          ],
+          "until": {
+            "kind": "repeatEnds",
+            "agent": "judge",
+            "item": "judging"
+          },
+          "rounds": 2,
+          "otherwise": "goOn"
         }
       ]
     },
@@ -50,21 +58,29 @@
           "action": "/worktree"
         },
         {
-          "id": "round-1",
-          "message": "You're competing with another agent to build the best version of this. Work on a branch named compete/codex and commit when you're done.\n\n{{task}}"
-        },
-        {
-          "id": "scored",
-          "waitFor": [
+          "id": "rounds",
+          "repeat": [
             {
-              "agent": "judge",
-              "item": "verdict-1"
+              "id": "build",
+              "message": "You're competing with another agent to build the best version of this, on a branch named compete/codex: commit when you're done. If the judge has left notes in .compete/feedback-codex.md in the main checkout (`git worktree list` shows where it is), improve your version from them.\n\n{{task}}"
+            },
+            {
+              "id": "scored",
+              "waitFor": [
+                {
+                  "agent": "judge",
+                  "item": "judge"
+                }
+              ]
             }
-          ]
-        },
-        {
-          "id": "round-2",
-          "message": "The judge's notes on your version are in .compete/feedback-codex.md in the main checkout (`git worktree list` shows where it is). Improve your version, then commit."
+          ],
+          "until": {
+            "kind": "repeatEnds",
+            "agent": "judge",
+            "item": "judging"
+          },
+          "rounds": 2,
+          "otherwise": "goOn"
         }
       ]
     },
@@ -79,38 +95,36 @@
       "agent": "Claude",
       "queue": [
         {
-          "id": "built-1",
-          "waitFor": [
+          "id": "judging",
+          "repeat": [
             {
-              "agent": "claude",
-              "item": "round-1"
+              "id": "built",
+              "waitFor": [
+                {
+                  "agent": "claude",
+                  "item": "build"
+                },
+                {
+                  "agent": "codex",
+                  "item": "build"
+                }
+              ]
             },
             {
-              "agent": "codex",
-              "item": "round-1"
+              "id": "judge",
+              "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md. If one version is clearly better, say WINNER."
             }
-          ]
+          ],
+          "until": {
+            "kind": "outputContains",
+            "text": "WINNER"
+          },
+          "rounds": 2,
+          "otherwise": "goOn"
         },
         {
-          "id": "verdict-1",
-          "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md."
-        },
-        {
-          "id": "built-2",
-          "waitFor": [
-            {
-              "agent": "claude",
-              "item": "round-2"
-            },
-            {
-              "agent": "codex",
-              "item": "round-2"
-            }
-          ]
-        },
-        {
-          "id": "verdict-2",
-          "message": "Both have improved their versions. Score them again the same way, blind. The higher total over both rounds wins: merge the winner's branch, and say why it won."
+          "id": "merge",
+          "message": "Merge the winner's branch (without a clear winner, the one with the higher total over the rounds), and say why it won."
         }
       ]
     }

@@ -16,6 +16,10 @@
           "message": "Before any code, write a spec for this to SPEC.md: the problem, what people can do, what's out of scope, and how we'll know it works. Ask me whatever the code can't answer.\n\n{{feature}}"
         },
         {
+          "id": "spec-ok",
+          "approve": "the spec in SPEC.md"
+        },
+        {
           "id": "plan",
           "message": "Turn SPEC.md into PLAN.md: small tasks in order, each naming the files it touches and the test that proves it's done."
         }

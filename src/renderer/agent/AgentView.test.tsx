@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
+import type { QueueItem, QueueRepeat } from '../graph/queue';
 
 const agent = (id: string, extra: Partial<GraphNode> = {}): GraphNode => ({
   id,
@@ -155,6 +156,219 @@ describe('the agent view', () => {
     play();
     expect(transcript.queryByRole('group', { name: 'Edit file: src/index.ts' })).toBeNull();
     expect(transcript.getByRole('group', { name: 'Bash command: npm test' })).toBeTruthy();
+  });
+
+  it('asks for your OK above the composer while the run holds it, where what you send asks for changes', () => {
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  { id: 'ok', approve: 'the spec in SPEC.md' },
+                  { id: 'next', action: 'Read' },
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const view = shown('a');
+    const session = within(view.getByRole('region', { name: 'Session' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const row = () =>
+      side
+        .getByRole('button', { name: 'Move Your OK on the spec in SPEC.md' })
+        .closest<HTMLElement>('[data-run]');
+    const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+    const bar = () => session.queryByRole('group', { name: 'Needs you' });
+
+    expect(row()?.dataset.run).toBe('asking');
+    const asks = within(bar() ?? document.body);
+    expect(
+      asks.getByText(
+        'Waits for your OK on the spec in SPEC.md: write below what should change, or',
+      ),
+    ).toBeTruthy();
+    expect(asks.getAllByRole('button').map((b) => b.textContent)).toEqual(['Approve', 'Stop here']);
+    expect(composer.placeholder).toBe('What should change?');
+
+    // What is sent from the composer is the changes asked for: the agent works on them.
+    fireEvent.change(composer, { target: { value: 'Cover the empty state too' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(row()?.dataset.run).toBe('running');
+    expect(bar()).toBeNull();
+    expect(composer.placeholder).toBe('Queue a message for a…');
+    const transcript = within(view.getByRole('log', { name: 'Transcript' }));
+    expect(transcript.getByText('Cover the empty state too')).toBeTruthy();
+
+    // Once its turn ends (here, interrupted), it asks again.
+    fireEvent.keyDown(composer, { key: 'Escape' });
+    expect(row()?.dataset.run).toBe('asking');
+    expect(row()?.querySelector('.graph-queue-ok-asked')?.textContent).toBe(
+      'You asked: “Cover the empty state too”',
+    );
+    fireEvent.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
+    expect(row()?.dataset.run).toBe('succeeded');
+    expect(bar()).toBeNull();
+    expect(
+      side
+        .getByRole('button', { name: 'Move Read' })
+        .closest('[data-run]')
+        ?.getAttribute('data-run'),
+    ).toBe('running');
+  });
+
+  it('asks above the composer when a repeat is out of rounds, where what you send is what to try next', () => {
+    // An empty message is skipped: no round ends with its last step succeeding.
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  {
+                    id: 'loop',
+                    repeat: [{ id: 'note', message: '' }],
+                    until: { kind: 'succeeded' },
+                    rounds: 1,
+                    otherwise: 'ask',
+                  },
+                  { id: 'next', action: 'Read' },
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    play(10);
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const view = shown('a');
+    const session = within(view.getByRole('region', { name: 'Session' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const card = () =>
+      side
+        .getByRole('button', { name: 'Move Repeat until its last step succeeds' })
+        .closest<HTMLElement>('.graph-queue-repeat');
+    const composer = session.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message a' });
+    const bar = () => within(session.getByRole('group', { name: 'Needs you' }));
+
+    expect(card()?.dataset.run).toBe('asking');
+    expect(
+      bar().getByText(
+        '1 round done, and still not: its last step succeeds. What should it try next? Write it below, or',
+      ),
+    ).toBeTruthy();
+    expect(
+      bar()
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['One more round', 'Go on']);
+    expect(composer.placeholder).toBe('What should it try next?');
+
+    // Sent from the composer: it goes to the agent, and one more round runs.
+    fireEvent.change(composer, { target: { value: 'Try a smaller fix' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    const transcript = within(view.getByRole('log', { name: 'Transcript' }));
+    expect(transcript.getByText('Try a smaller fix')).toBeTruthy();
+    play(10);
+    expect(card()?.dataset.round).toBe('Round 2 of 2');
+    expect(bar().getByText(/^2 rounds done/)).toBeTruthy();
+
+    fireEvent.click(bar().getByRole('button', { name: 'Go on' }));
+    expect(card()?.dataset.run).toBe('failed');
+    expect(card()?.dataset.round).toBe('2 rounds');
+    expect(session.queryByRole('group', { name: 'Needs you' })).toBeNull();
+    expect(
+      side
+        .getByRole('button', { name: 'Move Read' })
+        .closest('[data-run]')
+        ?.getAttribute('data-run'),
+    ).toBe('running');
+  });
+
+  it("picks a step inside the other agent's repeat, beside, for a wait inside its own repeat", () => {
+    const round = (id: string, repeat: QueueItem[]): QueueItem => ({
+      id,
+      repeat: repeat as QueueRepeat['repeat'],
+      until: { kind: 'succeeded' },
+      rounds: 3,
+      otherwise: 'ask',
+    });
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  round('work', [
+                    { id: 'implement', action: 'Edit' },
+                    { id: 'reviewed', waitFor: [{ agent: 'r' }] },
+                  ]),
+                ],
+              },
+            }),
+            agent('r', {
+              position: { x: 0, y: 100 },
+              data: {
+                label: 'Reviewer',
+                queue: [
+                  round('reviewing', [
+                    { id: 'ready', waitFor: [{ agent: 'a', item: 'implement' }] },
+                    { id: 'review', action: 'Read' },
+                  ]),
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    const card = document.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('no agent');
+    fireEvent.doubleClick(card);
+    const view = shown('a');
+    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: Reviewer' }));
+    const beside = within(view.getByRole('complementary', { name: "Reviewer's queue" }));
+    // Each item inside its repeat picks; its header, the whole repeat.
+    expect(
+      beside
+        .getAllByRole('button', { name: /^Wait for (Reviewer|all)/ })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'Wait for Reviewer: its repeat',
+      'Wait for Reviewer: its wait',
+      'Wait for Reviewer: Read',
+      "Wait for all of Reviewer's work",
+    ]);
+    fireEvent.click(beside.getByRole('button', { name: 'Wait for Reviewer: Read' }));
+    expect(
+      view.getByRole('button', { name: 'Change what it waits for: Reviewer: Read' }),
+    ).toBeTruthy();
+    // The two waits in the repeats are linked across the queues, each to what it waits for.
+    expect(
+      [...screen.getByRole('dialog', { name: 'a' }).querySelectorAll('[data-link]')].map((l) =>
+        l.getAttribute('data-link'),
+      ),
+    ).toEqual(['reviewed>review', 'ready>implement']);
   });
 
   describe('its rail', () => {

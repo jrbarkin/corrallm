@@ -56,6 +56,34 @@ describe('workEdges', () => {
       { from: 'b', to: 'a', count: 1, conditional: false },
     ]);
   });
+
+  it('counts the waits and work handed on inside a repeat, as work that happens', () => {
+    const b = agent('b', [
+      {
+        id: 'loop',
+        repeat: [
+          { id: 'ready', waitFor: [{ agent: 'a', item: 'build' }] },
+          { id: 'review', message: 'Review it', target: 'a' },
+          { id: 'pause', delay: { seconds: 60 } },
+        ],
+        until: { kind: 'outputContains', text: 'APPROVED' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+    ]);
+    const a = agent('a', [{ id: 'build', action: 'Edit' }]);
+    expect(workEdges([a, b])).toEqual([
+      { from: 'a', to: 'b', count: 1, conditional: false },
+      { from: 'b', to: 'a', count: 1, conditional: false },
+    ]);
+    const [loop] = b.data.queue ?? [];
+    if (!loop) throw new Error('no repeat');
+    expect([isWorkBetween(loop, 'b', 'a', 'b'), isWorkBetween(loop, 'b', 'b', 'a')]).toEqual([
+      true,
+      true,
+    ]);
+    expect(isWorkBetween(loop, 'b', 'b', 'c')).toBe(false);
+  });
 });
 
 describe('isWorkBetween', () => {
@@ -65,15 +93,24 @@ describe('isWorkBetween', () => {
     const waiting: QueueItem = { id: 'w', waitFor: [{ agent: 'b', item: 's' }] };
     const message: QueueItem = { id: 'm', message: 'Hello' };
     const sent: QueueItem = { id: 'n', message: 'Over to you', target: 'b' };
+    const ok: QueueItem = { id: 'ok', approve: 'the plan' };
     const between = (item: QueueItem, from: string, to: string) =>
       isWorkBetween(item, 'a', from, to);
-    // In a's queue: work for b makes a -> b; waiting for b makes b -> a.
-    const items = [step, holding, waiting, message, sent];
-    expect(items.map((item) => between(item, 'a', 'b'))).toEqual([true, true, false, false, true]);
+    // In a's queue: work for b makes a -> b; waiting for b makes b -> a. An OK is no work.
+    const items = [step, holding, waiting, message, sent, ok];
+    expect(items.map((item) => between(item, 'a', 'b'))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+    ]);
     expect(items.map((item) => between(item, 'b', 'a'))).toEqual([
       false,
       false,
       true,
+      false,
       false,
       false,
     ]);

@@ -117,6 +117,96 @@ describe('fromFile', () => {
     expect(toFile(loaded)).toBe(toFile(graph));
   });
 
+  it('reads back delays, time limits on waits, and the condition that a wait ran out of time', () => {
+    const timed: QueueItem[] = [
+      { id: 'cool-off', delay: { seconds: 600 } },
+      { id: 'morning', delay: { at: '09:00' } },
+      { id: 'built', waitFor: [{ agent: 'b' }], timeout: { seconds: 1800 } },
+      { id: 'by-six', waitFor: [{ agent: 'b', item: 'x' }], timeout: { at: '18:00' } },
+      {
+        id: 'late',
+        if: { kind: 'timedOut' },
+        then: [{ id: 'nudge', message: 'Wrap up and commit what you have.', target: 'b' }],
+      },
+    ];
+    const withTimes: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: timed } } : n,
+      ),
+    };
+    const text = toFile(withTimes);
+    expect(text).toContain('"delay": {\n');
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(timed);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
+  it('reads back OKs, on what they name or (no words) on the work before them', () => {
+    const asked: QueueItem[] = [
+      { id: 'spec', message: 'Write SPEC.md' },
+      { id: 'spec-ok', approve: 'the spec in SPEC.md' },
+      { id: 'ok', approve: '' },
+    ];
+    const withOks: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: asked } } : n,
+      ),
+    };
+    const text = toFile(withOks);
+    expect(text).toContain(
+      '{\n          "id": "spec-ok",\n          "approve": "the spec in SPEC.md"\n',
+    );
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(asked);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
+  it('reads back repeats, keys in the order the app writes them; older files read as before', () => {
+    const looped: QueueItem[] = [
+      { id: 'tests-ready', waitFor: [{ agent: 'b' }] },
+      {
+        id: 'green-loop',
+        repeat: [
+          { id: 'implement', message: 'Make the tests pass' },
+          { id: 'green', action: 'Bash' },
+          { id: 'reviewed', waitFor: [{ agent: 'b', item: 'review' }], timeout: { seconds: 600 } },
+          { id: 'cool-off', delay: { seconds: 60 } },
+        ],
+        until: { kind: 'succeeded' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+      {
+        id: 'follow',
+        repeat: [],
+        until: { kind: 'repeatEnds', agent: 'b', item: 'reviewing' },
+        rounds: 1,
+        otherwise: 'goOn',
+      },
+      {
+        id: 'judged',
+        repeat: [{ id: 'judge', message: 'Judge' }],
+        until: { kind: 'outputContains', text: 'WINNER' },
+        rounds: 20,
+        otherwise: 'goOn',
+      },
+    ];
+    const withRepeats: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: looped } } : n,
+      ),
+    };
+    const text = toFile(withRepeats);
+    expect(text).toMatch(
+      /\{\n {10}"id": "green-loop",\n {10}"repeat": \[[^]*\],\n {10}"until": \{\n {12}"kind": "succeeded"\n {10}\},\n {10}"rounds": 3,\n {10}"otherwise": "ask"\n/,
+    );
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(looped);
+    expect(toFile(fromFile(text))).toBe(text);
+    // A file from before repeats reads just as it did.
+    expect(fromFile(JSON.stringify(saved)).nodes[1]?.data.queue).toEqual(queue);
+  });
+
   it('reads a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
@@ -171,7 +261,7 @@ describe('fromFile', () => {
       'a broken condition',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'i', if: { kind: 'maybe' }, then: [] }] }),
-      /nodes\[1\]\.queue\[0\]\.if/,
+      /^nodes\[1\]\.queue\[0\]\.if\.kind must be one of: succeeded, failed, outputContains, timedOut, freeText$/,
     ],
     [
       'a wait inside an if-then',
@@ -184,6 +274,73 @@ describe('fromFile', () => {
       /nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a wait/,
     ],
     [
+      'a delay of no time',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 0 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be a whole number from 1 to 604800$/,
+    ],
+    [
+      'a delay of part of a second',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 1.5 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be a whole number from 1 to 604800$/,
+    ],
+    [
+      'a delay longer than a week',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { seconds: 604801 } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.seconds must be/,
+    ],
+    [
+      'a time of day without its leading zero',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { at: '9:00' } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.at must be a time like "09:00"$/,
+    ],
+    [
+      'a time of day past the end of the day',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'd', delay: { at: '24:00' } }] }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.at must be a time like "09:00"$/,
+    ],
+    [
+      'a time that is both a length and a time of day',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'd', delay: { seconds: 60, at: '09:00' } }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.delay must have seconds or at$/,
+    ],
+    [
+      'a time limit that is neither',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'w', waitFor: [{ agent: 'b' }], timeout: {} }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.timeout must have seconds or at$/,
+    ],
+    [
+      'a delay inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'd', delay: { seconds: 60 } }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a delay$/,
+    ],
+    [
+      'an OK whose words are not text',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'ok', approve: true }] }),
+      /^nodes\[1\]\.queue\[0\]\.approve must be text$/,
+    ],
+    [
+      'an OK without words',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'ok', approve: null }] }),
+      /^nodes\[1\]\.queue\[0\]\.approve must be text$/,
+    ],
+    [
+      'an OK inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'ok', approve: '' }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold an OK$/,
+    ],
+    [
       'a wait for nobody',
       (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: [] }] }),
       /nodes\[1\]\.queue\[0\]\.waitFor must name at least one agent/,
@@ -192,6 +349,155 @@ describe('fromFile', () => {
       'a wait for a step without its agent',
       (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: [{ item: 's' }] }] }),
       /nodes\[1\]\.queue\[0\]\.waitFor\[0\]\.agent must be non-empty text/,
+    ],
+    [
+      'a repeat of no rounds',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'r', repeat: [], until: { kind: 'succeeded' }, rounds: 0, otherwise: 'ask' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.rounds must be a whole number from 1 to 20$/,
+    ],
+    [
+      'a repeat of too many rounds',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'r', repeat: [], until: { kind: 'succeeded' }, rounds: 21, otherwise: 'ask' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.rounds must be a whole number from 1 to 20$/,
+    ],
+    [
+      'a repeat of part of a round',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'r', repeat: [], until: { kind: 'succeeded' }, rounds: 2.5, otherwise: 'ask' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.rounds must be a whole number from 1 to 20$/,
+    ],
+    [
+      'a repeat that does something unknown after its last round',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'r', repeat: [], until: { kind: 'succeeded' }, rounds: 3, otherwise: 'retry' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.otherwise must be "ask" or "goOn"$/,
+    ],
+    [
+      'a repeat until a wait runs out of time',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'r', repeat: [], until: { kind: 'timedOut' }, rounds: 3, otherwise: 'ask' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.until\.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds$/,
+    ],
+    [
+      'a repeat that follows nobody',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [],
+              until: { kind: 'repeatEnds', agent: 'b' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.until\.item must be non-empty text$/,
+    ],
+    [
+      'an if-then inside a repeat',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [{ id: 'i', if: { kind: 'failed' }, then: [] }],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.repeat\[0\]: a repeat cannot hold an if-then$/,
+    ],
+    [
+      'a repeat inside a repeat',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [
+                { id: 'r2', repeat: [], until: { kind: 'failed' }, rounds: 3, otherwise: 'ask' },
+              ],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.repeat\[0\]: a repeat cannot hold a repeat$/,
+    ],
+    [
+      'an OK inside a repeat',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [{ id: 'ok', approve: '' }],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.repeat\[0\]: a repeat cannot hold an OK$/,
+    ],
+    [
+      'a repeat inside an if-then',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'i',
+              if: { kind: 'failed' },
+              then: [
+                { id: 'r', repeat: [], until: { kind: 'succeeded' }, rounds: 3, otherwise: 'ask' },
+              ],
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]: an if-then cannot hold a repeat$/,
+    ],
+    [
+      'an id inside a repeat that its queue already uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'x', action: 'Read' },
+            {
+              id: 'r',
+              repeat: [{ id: 'x', message: 'Again' }],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.repeat\[0\]\.id: "x" is used twice in this queue$/,
     ],
     [
       'a link to a missing agent',

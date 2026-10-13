@@ -40,6 +40,15 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      groups are type 'frame'. Pure graph operations in graph.ts; the canvas in
                      GraphEditor.tsx (node views in nodes.tsx); an agent's queue (QueueEditor.tsx, queue.ts,
                      SortableList.tsx and sortable.ts) and questions (Questions.tsx), shown in its agent view; agent types and their actions (sourced catalogs) in agents.ts;
+                     Questions.tsx's AskCard also shows what the run holds for the user, in the
+                     canvas's Needs you sidebar (above agents' own questions);
+                     times (a delay's, a wait's time limit: one Time model in queue.ts) read from
+                     what is typed, worded and turned into deadlines in time.ts; a repeat
+                     (QueueRepeat: steps, messages, waits and delays run in rounds until a
+                     condition holds, at most `rounds`, then ask or go on; or, `until` a
+                     RepeatEnds, going round with another agent's repeat) is one item holding
+                     others: findItem (queue.ts) finds an item at any depth, and graph.ts's
+                     operations reach inside through mapItems;
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
                      the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
@@ -67,12 +76,29 @@ src/renderer/queues/ Every agent's queue side by side, task by task, laid out li
                      sits below what it waits for, links waits and work handed over, and finds waits
                      stuck in a loop; ribbons.ts shapes the ribbons in the gaps between lanes that
                      join linked tasks (from where the view measures them); marks.ts marks tasks
-                     (links, the run) wherever a queue is shown.
+                     (links, the run, a repeat's round) wherever a queue is shown. A repeat is one
+                     cell spanning the rows of what it holds (Cell.span, Cell.inner): the cell, its
+                     card and its list are CSS subgrids of the lanes' rows, so each item sits in
+                     its own row, level with the other lanes.
 src/renderer/run/    Running the queues, simulated until agents are connected (runner.ts, a store like
                      sessions.ts): each agent works through its queue, messages go to its session,
-                     waits hold until their target is done. run.css marks where the run is on a
+                     waits hold until their target is done or their time limit passes, delays until
+                     their time comes, OKs until the user decides (RunStore.decide: approve, ask for
+                     changes, which go to the agent's session before it asks again, or stop, which
+                     stops whatever waits on it). A repeat runs in rounds (AgentRun.rounds), its
+                     condition decided once per round of the round's last task that ran; out of
+                     rounds it fails and goes on, or asks (decide: one more round, what to try
+                     next, or go on). A wait in a repeat for a step in another repeat waits for
+                     that round of it (#resultOf); one outside waits for the repeat to end. A
+                     repeat that follows another holds at the end of each round until its leader
+                     goes round, and ends with it (#follow). Delays and limits are the run's own, on the real
+                     clock (RunIO.now, one alarm re-checked at least once a minute); Go on now
+                     (RunStore.goOn) ends a hold early. asks.ts derives what each hold for the user
+                     asks (never stored), shown on its row, All queues' lane head, the Needs you
+                     sidebar and above the agent's composer. run.css marks where the run is on a
                      queue's rows, wherever they are shown.
-src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
+src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown
+                     (its `typed` lists options read from what was typed, such as times, first).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts). No Node,
                 Electron or DOM imports here.
 e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Launch the app with

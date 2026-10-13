@@ -13,13 +13,29 @@
       "agent": "Claude",
       "queue": [
         {
-          "id": "brief",
-          "message": "Implement the feature described in ISSUE.md, with tests."
-        },
-        {
-          "id": "handoff",
-          "message": "Review my change: look for bugs and missing tests.",
-          "target": "reviewer"
+          "id": "work",
+          "repeat": [
+            {
+              "id": "implement",
+              "message": "Implement the feature described in ISSUE.md, with tests. If REVIEW.md is there, fix what it asks for first."
+            },
+            {
+              "id": "reviewed",
+              "waitFor": [
+                {
+                  "agent": "reviewer",
+                  "item": "review"
+                }
+              ]
+            }
+          ],
+          "until": {
+            "kind": "repeatEnds",
+            "agent": "reviewer",
+            "item": "reviewing"
+          },
+          "rounds": 3,
+          "otherwise": "goOn"
         }
       ]
     },
@@ -34,30 +50,28 @@
       "agent": "Codex",
       "queue": [
         {
-          "id": "ready",
-          "waitFor": [
+          "id": "reviewing",
+          "repeat": [
             {
-              "agent": "coder"
+              "id": "ready",
+              "waitFor": [
+                {
+                  "agent": "coder",
+                  "item": "implement"
+                }
+              ]
+            },
+            {
+              "id": "review",
+              "message": "Review the change: look for bugs and missing tests. If nothing must change, say APPROVED; otherwise write what must change to REVIEW.md."
             }
-          ]
-        },
-        {
-          "id": "review",
-          "action": "/review"
-        },
-        {
-          "id": "changes",
-          "if": {
-            "kind": "freeText",
-            "text": "the review asks for changes"
+          ],
+          "until": {
+            "kind": "outputContains",
+            "text": "APPROVED"
           },
-          "then": [
-            {
-              "id": "back",
-              "message": "Fix what the review found, then hand the change back.",
-              "target": "coder"
-            }
-          ]
+          "rounds": 3,
+          "otherwise": "ask"
         }
       ]
     }

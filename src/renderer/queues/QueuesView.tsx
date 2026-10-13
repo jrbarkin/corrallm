@@ -7,7 +7,7 @@ import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
 import { itemLabel, taskLabel } from '../graph/labels';
-import { chooseTarget, isWait } from '../graph/queue';
+import { chooseTarget, findItem, isRepeat, isWait } from '../graph/queue';
 import type { WaitTarget } from '../graph/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
@@ -22,6 +22,12 @@ import './QueuesView.css';
 
 /** How wide the gap between two lanes is, where ribbons join their tasks. */
 const GAP = 64;
+
+/**
+ * What the run waits on the user for, in a lane: to decide at the hold its agent is at (an OK), or
+ * to answer its agent, which asks permission.
+ */
+type Needs = 'decide' | 'answer';
 
 /** A wait whose target (in `choice`) is being picked: the agent whose queue it is in, `owner`. */
 interface Choosing {
@@ -39,8 +45,13 @@ interface Choosing {
  *
  * Each lane is its agent's queue, the same queue as everywhere (QueueEditor.tsx's rows, edited
  * in place): a wait's step is picked by clicking it in its agent's lane. Run plays every queue
- * (run/runner.ts): the task each agent is on pulses, a wait it is held at breathes, and what it
- * has done is ticked.
+ * (run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
+ * (counting down to its time, with Go on now on hover), and what it has done is ticked. A wait
+ * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
+ * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
+ * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
+ * stops whatever waits on it. A repeat is one card in its lane, over the rows of what it holds,
+ * each in its row: its round shows in a pill, and once out of rounds it asks, as an OK does.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
  * or a click outside closes it; an agent's name opens that agent.
@@ -153,9 +164,8 @@ export function QueuesView({
   const marks = queueMarks(layout, run, asking, activeEnds);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
-    ? nodes
-        .find((n) => n.id === choosing.owner)
-        ?.data.queue?.find((q) => q.id === choosing.choice.waitId)
+    ? findItem(nodes.find((n) => n.id === choosing.owner)?.data.queue ?? [], choosing.choice.waitId)
+        ?.item
     : undefined;
   const choosingTarget =
     choosing && waitChosen && isWait(waitChosen)
@@ -166,25 +176,36 @@ export function QueuesView({
     if (!choosing) return;
     const { owner, choice } = choosing;
     setChoosing(undefined);
-    const wait = nodes.find((n) => n.id === owner)?.data.queue?.find((q) => q.id === choice.waitId);
+    const wait = findItem(nodes.find((n) => n.id === owner)?.data.queue ?? [], choice.waitId)?.item;
     if (!wait || !isWait(wait)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choice.agent } : { agent: choice.agent, item };
     edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
   };
 
-  /** Whether the run waits on the user for an agent: it is on a task, and asks permission. */
-  const needsYou = (id: string) =>
-    run.running && run.agents[id]?.status === 'running' && asking.has(id);
+  /**
+   * What the run waits on the user for, for an agent: to decide at the hold it is at (an OK, or a
+   * repeat out of rounds), or to answer its agent, which asks permission in a task.
+   */
+  const needsYou = (id: string): Needs | undefined => {
+    const status = run.running ? run.agents[id]?.status : undefined;
+    return status === 'asking'
+      ? 'decide'
+      : status === 'running' && asking.has(id)
+        ? 'answer'
+        : undefined;
+  };
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
-  const needed = count((id) => needsYou(id));
+  const needed = count((id) => needsYou(id) !== undefined);
+  const stopped = count((_, status) => status === 'stopped');
   const runStatus = run.running
     ? [
         `${String(count((id, status) => status === 'running' && !needsYou(id)))} working`,
         `${String(count((_, status) => status === 'waiting'))} waiting`,
         ...(needed > 0 ? [`${String(needed)} need${needed === 1 ? 's' : ''} you`] : []),
+        ...(stopped > 0 ? [`${String(stopped)} stopped`] : []),
       ].join(' · ')
     : agents.length === 0
       ? ''
@@ -226,6 +247,9 @@ export function QueuesView({
             </span>
             <span className="queues-key" data-mark="stuck">
               stuck
+            </span>
+            <span className="queues-key" data-mark="ok">
+              your OK
             </span>
           </p>
         </header>
@@ -297,6 +321,7 @@ export function QueuesView({
                             data-link={piece.key}
                             data-kind={piece.kind}
                             data-mark={piece.stuck ? 'stuck' : piece.kind}
+                            data-timed={piece.timed ? '' : undefined}
                             data-active={active.has(piece.key) ? '' : undefined}
                             data-flow={flowing.has(piece.key) ? '' : undefined}
                           >
@@ -351,8 +376,8 @@ function LaneCells({
   /** Its session's status. */
   status: Session['status'];
   run: Run;
-  /** The run waits on the user: the agent asks permission. */
-  needsYou: boolean;
+  /** The run waits on the user: to decide at its hold, or to answer its agent. */
+  needsYou: Needs | undefined;
   focused: boolean;
   isStuck: Lanes['isStuck'];
   marks: (lane: string, item: string | null) => RowMarks;
@@ -379,7 +404,8 @@ function LaneCells({
   const agentRun = run.agents[id];
   /** Where the agent has nothing to do until what it waits for is done. */
   const idle = lane.cells.flatMap(({ row }, n) => {
-    const after = n === 0 ? 0 : (lane.cells[n - 1]?.row ?? 0) + 1;
+    const previous = lane.cells[n - 1];
+    const after = previous ? previous.row + previous.span : 0;
     const before = lane.cells[n];
     const held =
       run.running && agentRun?.status === 'waiting' && agentRun.current === before?.item.id;
@@ -394,6 +420,11 @@ function LaneCells({
     onChooseStep: onChoose,
     marks: (itemId: string | null) => marks(id, itemId),
   };
+  /** The item the run holds the agent at, if any. */
+  const held =
+    agentRun?.current === undefined
+      ? undefined
+      : findItem(node.data.queue ?? [], agentRun.current)?.item;
   return (
     <>
       <div
@@ -410,7 +441,8 @@ function LaneCells({
         data-run={
           needsYou
             ? 'asking'
-            : agentRun && (run.running || agentRun.status === 'done')
+            : agentRun &&
+                (run.running || agentRun.status === 'done' || agentRun.status === 'stopped')
               ? agentRun.status
               : undefined
         }
@@ -430,10 +462,25 @@ function LaneCells({
           <button
             type="button"
             className="queues-needs"
-            aria-label={`Answer ${name(id)}`}
-            title={`${name(id)} asks permission: open it to answer`}
+            aria-label={needsYou === 'decide' ? `Decide for ${name(id)}` : `Answer ${name(id)}`}
+            title={
+              needsYou === 'answer'
+                ? `${name(id)} asks permission: open it to answer`
+                : held && isRepeat(held)
+                  ? `${name(id)}'s repeat is out of rounds`
+                  : `${name(id)} waits for your OK`
+            }
             onClick={() => {
-              onOpenAgent(id);
+              if (needsYou === 'answer') {
+                onOpenAgent(id);
+                return;
+              }
+              // The held row, brought into view, with its decision bar's first button focused.
+              const held = [
+                ...(grid.current?.querySelectorAll<HTMLElement>('[data-at]') ?? []),
+              ].find((row) => row.dataset.at === at(id, agentRun?.current ?? null));
+              held?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+              held?.querySelector<HTMLElement>('.graph-queue-decide button')?.focus();
             }}
           >
             Needs you
@@ -449,14 +496,16 @@ function LaneCells({
           style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
         />
       ))}
-      {lane.cells.map(({ item, row }, index) => (
+      {lane.cells.map(({ item, row, span, inner }, index) => (
         <div
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
           role="group"
           aria-label={`${name(id)}: ${taskLabel(nodes, item)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
           data-lane={id}
-          style={{ gridColumn: column, gridRow: row + 2 }}
+          // A repeat's cell is a subgrid of the rows it spans: each item it holds in its own.
+          data-repeat={inner ? '' : undefined}
+          style={{ gridColumn: column, gridRow: `${String(row + 2)} / span ${String(span)}` }}
         >
           <QueueRow
             item={item}
@@ -465,8 +514,18 @@ function LaneCells({
             {...(choosing?.owner === id
               ? { choosing: { waitId: choosing.choice.waitId, index: choosing.choice.index } }
               : {})}
+            {...(inner
+              ? {
+                  rowOf: (itemId: string) => {
+                    const cell = inner.find((c) => c.item.id === itemId);
+                    return cell && cell.row - row;
+                  },
+                  // Each item in a repeat picks, and its header the repeat.
+                  picking,
+                }
+              : {})}
           />
-          {picking && (
+          {picking && !inner && (
             <PickTask
               label={`Wait for ${picking.name}: ${itemLabel(item)}`}
               pressed={picking.current === item.id}

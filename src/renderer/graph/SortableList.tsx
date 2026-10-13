@@ -6,18 +6,23 @@ import type { HandleProps } from './sortable';
 
 export type { HandleProps } from './sortable';
 
-/** A list whose rows are reordered from a handle (useSortable). */
+/**
+ * A list whose rows are reordered from a handle (useSortable). With `rowOf`, each row sits in that
+ * row of the list's grid (a subgrid of All queues' rows).
+ */
 export function SortableList<T extends { id: string }>({
   items,
   className,
   label,
   onMove,
+  rowOf,
   renderItem,
 }: {
   items: readonly T[];
   className: string;
   label?: string;
   onMove: (itemId: string, index: number) => void;
+  rowOf?: (item: T) => number | undefined;
   renderItem: (item: T, handle: HandleProps) => ReactNode;
 }) {
   const list = useRef<HTMLOListElement>(null);
@@ -32,6 +37,7 @@ export function SortableList<T extends { id: string }>({
           className={item.id === dragging ? 'dragging' : undefined}
           // Where an item is, for what points at it (the links between queues, QueueLinks.tsx).
           data-item={item.id}
+          {...(rowOf ? { style: { gridRow: rowOf(item) } } : {})}
         >
           {renderItem(item, handle(item, index))}
         </li>

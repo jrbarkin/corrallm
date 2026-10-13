@@ -1,11 +1,12 @@
 import { AGENT_ACTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
 import type { AgentType } from './agents';
 import type { Graph } from './graph';
-import { isIf, isMessage, isWait } from './queue';
-import type { Condition, QueueItem, QueueMessage, QueueStep } from './queue';
+import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
+import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
 
 /**
- * A blank in a template, written `{{key}}` in its agents' names, messages and conditions: what the
+ * A blank in a template, written `{{key}}` in its agents' names, messages, conditions (a repeat's
+ * too) and OKs: what the
  * gallery asks for (`label`) before it opens the canvas, starting from the template's own example.
  */
 export interface TemplateField {
@@ -18,15 +19,20 @@ const PLACEHOLDER = /\{\{(\w+)\}\}/g;
 
 /** Every piece of text in a canvas that a placeholder may be in. */
 function textsOf(graph: Graph): string[] {
-  const ofCondition = (condition: Condition) => ('text' in condition ? [condition.text] : []);
+  const ofCondition = (condition: Condition | Until) =>
+    'text' in condition ? [condition.text] : [];
   const ofItem = (item: QueueItem): string[] =>
-    isWait(item)
+    isWait(item) || isDelay(item)
       ? []
-      : isIf(item)
-        ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
-        : isMessage(item)
-          ? [item.message]
-          : [];
+      : isApproval(item)
+        ? [item.approve]
+        : isIf(item)
+          ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
+          : isRepeat(item)
+            ? [...item.repeat.flatMap(ofItem), ...ofCondition(item.until)]
+            : isMessage(item)
+              ? [item.message]
+              : [];
   return graph.nodes.flatMap((n) => [n.data.label, ...(n.data.queue ?? []).flatMap(ofItem)]);
 }
 
@@ -40,16 +46,20 @@ export function placeholdersOf(graph: Graph): string[] {
 export function fillTemplate(graph: Graph, values: Readonly<Record<string, string>>): Graph {
   const fill = (text: string) =>
     text.replace(PLACEHOLDER, (whole, key: string) => values[key] ?? whole);
-  const fillCondition = (condition: Condition): Condition =>
+  const fillCondition = <C extends Condition | Until>(condition: C): C =>
     'text' in condition ? { ...condition, text: fill(condition.text) } : condition;
-  const fillStep = <T extends QueueStep | QueueMessage>(step: T): T =>
+  const fillStep = <T extends RepeatedItem>(step: T): T =>
     isMessage(step) ? { ...step, message: fill(step.message) } : step;
   const fillItem = (item: QueueItem): QueueItem =>
-    isWait(item)
+    isWait(item) || isDelay(item)
       ? item
-      : isIf(item)
-        ? { ...item, if: fillCondition(item.if), then: item.then.map(fillStep) }
-        : fillStep(item);
+      : isApproval(item)
+        ? { ...item, approve: fill(item.approve) }
+        : isIf(item)
+          ? { ...item, if: fillCondition(item.if), then: item.then.map(fillStep) }
+          : isRepeat(item)
+            ? { ...item, repeat: item.repeat.map(fillStep), until: fillCondition(item.until) }
+            : fillStep(item);
   return {
     ...graph,
     nodes: graph.nodes.map((node) => ({
@@ -81,16 +91,18 @@ export function withAgents(
       const type = types[node.id];
       const now = type ?? DEFAULT_AGENT;
       const has = new Set(AGENT_ACTIONS[now].map((a) => a.name));
-      const translate = <T extends QueueStep | QueueMessage>(step: T): T =>
-        isMessage(step) || has.has(step.action)
+      const translate = <T extends RepeatedItem>(step: T): T =>
+        isWait(step) || isDelay(step) || isMessage(step) || has.has(step.action)
           ? step
           : { ...step, action: equivalentAction(step.action, was, now) ?? step.action };
       const queue = node.data.queue?.map((item): QueueItem =>
-        isWait(item)
+        isApproval(item)
           ? item
           : isIf(item)
             ? { ...item, then: item.then.map(translate) }
-            : translate(item),
+            : isRepeat(item)
+              ? { ...item, repeat: item.repeat.map(translate) }
+              : translate(item),
       );
       const data = { ...node.data, ...(queue ? { queue } : {}) };
       if (type === undefined) delete data.agent;

@@ -98,6 +98,29 @@ describe('SearchPicker', () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
+  it('lists options read from what was typed first, as they are, and no option twice', () => {
+    const onPick = vi.fn<(color: string) => void>();
+    render(
+      <SearchPicker
+        label="Color"
+        options={colors}
+        optionLabel={(color) => color}
+        optionKey={(color) => color.toLowerCase()}
+        typed={(query) => (query.startsWith('#') ? [`Hex ${query}`, 'Green'] : [])}
+        onPick={onPick}
+        onCancel={vi.fn()}
+      />,
+    );
+    const field = screen.getByRole('combobox', { name: 'Color' });
+    const shown = () => screen.queryAllByRole('option').map((o) => o.textContent);
+    expect(shown()).toEqual(colors);
+    // Neither typed option matches what was typed, yet both are listed; Green only once.
+    fireEvent.change(field, { target: { value: '#0f0' } });
+    expect(shown()).toEqual(['Hex #0f0', 'Green']);
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onPick).toHaveBeenCalledWith('Hex #0f0');
+  });
+
   it('can start from a query, to change what was typed before', () => {
     render(
       <SearchPicker

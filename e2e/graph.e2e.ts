@@ -910,6 +910,192 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   await view.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
+test('limits a wait, counts it down while it holds, and goes on from it now', async () => {
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Templates' })
+    .getByRole('button', { name: /^Feature crew/ })
+    .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+
+  // A time limit is offered on the wait pointed at, beside its +.
+  const wait = view.getByRole('group', { name: 'Reviewer: Wait for Builder' });
+  const limit = wait.getByRole('button', { name: 'Add a time limit' });
+  await expect(limit).toHaveCSS('opacity', '0');
+  await wait.hover();
+  await expect(limit).toHaveCSS('opacity', '1');
+  await limit.click();
+  const field = view.getByRole('combobox', { name: 'Go on anyway after…' });
+  await field.fill('1 minute');
+  await field.press('Enter');
+  const limited = view.getByRole('group', {
+    name: 'Reviewer: Wait for Builder, at most 1 minute',
+  });
+  await expect(
+    limited.getByRole('button', { name: 'Change the time limit: at most 1 minute' }),
+  ).toBeVisible();
+  // Its ribbon's edges are dashed: it may go on without what it waits for.
+  const edges = view.locator('g[data-kind="wait"][data-timed] .queues-ribbon-edges');
+  await expect(edges).toHaveCount(1);
+  expect(await edges.evaluate((path) => getComputedStyle(path).strokeDasharray)).not.toBe('none');
+
+  // Run: the Builder is busy, so the Reviewer is held, counting down.
+  await view.getByRole('button', { name: 'Run', exact: true }).click();
+  const row = limited.locator('[data-run]');
+  await expect(row).toHaveAttribute('data-run', 'waiting');
+  const timer = limited.getByRole('timer');
+  await expect(timer).toHaveText(/^0:\d\d left$/);
+  const first = (await timer.textContent()) ?? '';
+  await expect(timer).not.toHaveText(first);
+
+  // Go on now, shown on the held wait pointed at, ends it as if its time had run out.
+  const goOn = limited.getByRole('button', {
+    name: 'Go on now: Wait for Builder, at most 1 minute',
+  });
+  await page.mouse.move(0, 0);
+  await expect(goOn).toHaveCSS('opacity', '0');
+  await limited.hover();
+  await expect(goOn).toHaveCSS('opacity', '1');
+  await goOn.click();
+  await expect(row).toHaveAttribute('data-run', 'timedOut');
+  const badge = await row.evaluate((element) => {
+    const after = getComputedStyle(element, '::after');
+    return { content: after.content, background: after.backgroundColor };
+  });
+  expect(badge).toEqual({ content: '"!"', background: 'rgb(245, 158, 11)' });
+  await expect(timer).toHaveCount(0);
+  await expect(
+    view.getByRole('group', { name: 'Reviewer: /code-review' }).locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'running');
+  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+});
+
+test('holds a queue for your OK, pulsing amber with its decision shown, until approved', async () => {
+  const agent = await addAgentAt('Agent 1', 400, 300);
+  await agent.dblclick();
+  const panel = page.getByRole('dialog', { name: 'Agent 1' });
+  // Its queue: a step, your OK on it, and another step (no empty message to start).
+  await panel.getByRole('button', { name: 'Remove Message' }).click();
+  const field = panel.getByRole('combobox');
+  const add = async (choice: string, then: string | null) => {
+    await panel.getByRole('button', { name: 'Add to queue' }).click();
+    await field.fill(choice);
+    await field.press('Enter');
+    if (then !== null) await field.fill(then);
+    await field.press('Enter');
+  };
+  await add('Read', null); // on this agent
+  await add('ok', 'the notes');
+  await add('Grep', null);
+  expect(
+    await panel
+      .getByRole('button', { name: /^Move / })
+      .evaluateAll((handles) => handles.map((handle) => handle.getAttribute('aria-label'))),
+  ).toEqual(['Move Read', 'Move Your OK on the notes', 'Move Grep']);
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+  await view.getByRole('button', { name: 'Run', exact: true }).click();
+  const ok = view.getByRole('group', { name: 'Agent 1: Your OK on the notes' });
+  const row = ok.locator('[data-run]');
+  // Once the step before it is done, the OK holds the queue: it pulses amber.
+  await expect(row).toHaveAttribute('data-run', 'asking', { timeout: 10_000 });
+  expect(await row.evaluate((element) => getComputedStyle(element).animationName)).toContain(
+    'run-pulse',
+  );
+  await expect(view.getByRole('button', { name: 'Decide for Agent 1' })).toBeVisible();
+
+  // Its decision shows without pointing at it: Approve filled green, beside its other answers.
+  await page.mouse.move(0, 0);
+  const approve = ok.getByRole('button', { name: 'Approve' });
+  await expect(approve).toBeVisible();
+  await expect(approve).toHaveCSS('opacity', '1');
+  await expect(approve).toHaveCSS('background-color', 'rgb(34, 163, 90)');
+  await expect(ok.locator('.graph-queue-decide button')).toHaveText([
+    'Approve',
+    'Ask for changes…',
+    'Stop here',
+  ]);
+
+  // Approve ticks it, and the next step runs.
+  await approve.click();
+  await expect(row).toHaveAttribute('data-run', 'succeeded');
+  expect(await row.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('"✓"');
+  await expect(approve).toHaveCount(0);
+  await expect(
+    view.getByRole('group', { name: 'Agent 1: Grep' }).locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'running');
+  await view.getByRole('button', { name: 'Stop', exact: true }).click();
+});
+
+test('lines repeats up across lanes, round by round, with ribbons between the steps inside them', async () => {
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Templates' })
+    .getByRole('button', { name: /^Head to head/ })
+    .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+  const task = (lane: string, item: string) => view.locator(`[data-at='["${lane}","${item}"]']`);
+
+  // Each competitor's repeat goes round with the judge's: the two sit side by side, level.
+  const follows = (lane: string) =>
+    view.getByRole('group', { name: `${lane}: Repeat until Judge's repeat ends` });
+  const [claude, codex] = [await box(follows('Claude')), await box(follows('Codex'))];
+  expect(Math.abs(claude.y - codex.y)).toBeLessThanOrEqual(1);
+  expect(codex.x).toBeGreaterThan(claude.x + claude.width);
+  const judging = view.getByRole('group', {
+    name: 'Judge: Repeat until the output contains “WINNER” (up to 2 rounds)',
+  });
+  await expect(judging).toBeVisible();
+
+  // The judge's wait inside its repeat comes after each build inside theirs, a ribbon joining
+  // them from the side of one repeat to the side of the other, level with each.
+  const build = await box(task('codex', 'build'));
+  const built = await box(task('judge', 'built'));
+  expect(built.y).toBeGreaterThanOrEqual(build.y + build.height);
+  const ribbon = await box(view.locator('g[data-link="judge:built>codex:build"] .queues-ribbon'));
+  expect(Math.abs(ribbon.x - (codex.x + codex.width))).toBeLessThanOrEqual(1);
+  expect(Math.abs(ribbon.x + ribbon.width - (await box(judging)).x)).toBeLessThanOrEqual(1);
+  expect(ribbon.y).toBeGreaterThanOrEqual(build.y);
+  expect(ribbon.y).toBeLessThan(build.y + build.height);
+  expect(ribbon.y + ribbon.height).toBeGreaterThan(built.y);
+  expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(built.y + built.height);
+  await expect(view.locator('g[data-link="judge:built>claude:build"]')).toHaveCount(2);
+  // Rows run through the repeats: Codex's wait inside its repeat is level with the judge's merge.
+  const scored = await box(task('codex', 'scored'));
+  const merge = await box(task('judge', 'merge'));
+  expect(Math.abs(scored.y - merge.y)).toBeLessThanOrEqual(1);
+  // Nothing waits in a loop.
+  await expect(view.locator('[data-at][data-mark="stuck"], g[data-mark="stuck"]')).toHaveCount(0);
+
+  // A lane's ⊕ adds a repeat, and the repeat's own ⊕ a step inside it.
+  await view.getByRole('button', { name: "Add to Judge's queue" }).click();
+  const field = view.getByRole('combobox');
+  await field.fill('repeat');
+  await field.press('Enter');
+  await expect(field).toHaveAttribute('aria-label', 'Repeat until…');
+  await field.press('Enter');
+  const added = view.getByRole('group', {
+    name: 'Judge: Repeat until its last step succeeds (up to 3 rounds)',
+  });
+  await added.hover();
+  await added.getByRole('button', { name: 'Add to Repeat until its last step succeeds' }).click();
+  await field.fill('Read');
+  await field.press('Enter');
+  await field.press('Enter');
+  const header = await box(added.locator('.graph-queue-repeat-head'));
+  const read = await box(added.getByRole('button', { name: 'Move Read', exact: true }));
+  expect(read.y).toBeGreaterThan(header.y + header.height);
+  const card = await box(added);
+  expect(read.y + read.height).toBeLessThan(card.y + card.height);
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);
@@ -944,7 +1130,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
-  const sidebar = page.getByRole('complementary', { name: 'Questions from agents' });
+  const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
   await sidebar.getByRole('button', { name: 'Fix them first' }).click();
   await expect(sidebar).toHaveCount(0);

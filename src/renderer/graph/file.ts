@@ -3,8 +3,20 @@ import type { Edge } from '@xyflow/react';
 import { AgentType } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { sameTarget } from './queue';
-import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait, WaitTarget } from './queue';
+import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
+import type {
+  Condition,
+  QueueDelay,
+  QueueItem,
+  QueueMessage,
+  QueueRepeat,
+  QueueStep,
+  QueueWait,
+  RepeatedItem,
+  Time,
+  Until,
+  WaitTarget,
+} from './queue';
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
@@ -17,13 +29,22 @@ import type { Condition, QueueItem, QueueMessage, QueueStep, QueueWait, WaitTarg
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. Queue items are as
- * queue.ts has them; a wait's targets are { "agent", "item"? }. A link's dots are the ones it was
- * drawn between ("top" or "bottom").
+ * queue.ts has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one,
+ * is "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" },
+ * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An
+ * OK is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
+ * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
+ * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
+ * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
+ * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in its repeats included, since waits
+ * name them. A link's dots are the ones it was drawn between ("top" or "bottom"). Where the queues'
+ * run is, and what the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
 const VERSION = 1;
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
 const DOTS = ['top', 'bottom'];
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 interface FileNode {
   id: string;
@@ -181,7 +202,7 @@ function readNode(value: unknown, where: string): FileNode {
   });
   const queue = optional(node.queue, `${where}.queue`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no queue`);
-    return items(v, at, readItem);
+    return readQueue(v, at);
   });
   return {
     id,
@@ -198,9 +219,35 @@ function readNode(value: unknown, where: string): FileNode {
   };
 }
 
+/**
+ * A queue: its items, with ids unique across it, the items in its repeats included (waits name
+ * them).
+ */
+function readQueue(value: unknown, where: string): QueueItem[] {
+  const queue = items(value, where, readItem);
+  const ids = new Set(queue.map((item) => item.id));
+  for (const [i, item] of queue.entries()) {
+    if (!isRepeat(item)) continue;
+    for (const [j, inner] of item.repeat.entries()) {
+      if (ids.has(inner.id)) {
+        throw new Error(
+          `${where}[${String(i)}].repeat[${String(j)}].id: "${inner.id}" is used twice in this queue`,
+        );
+      }
+      ids.add(inner.id);
+    }
+  }
+  return queue;
+}
+
 function readItem(value: unknown, where: string): QueueItem {
   const item = record(value, where);
   if ('waitFor' in item) return readWait(item, where);
+  if ('delay' in item) return readDelay(item, where);
+  if ('approve' in item) {
+    return { id: name(item.id, `${where}.id`), approve: text(item.approve, `${where}.approve`) };
+  }
+  if ('repeat' in item) return readRepeat(item, where);
   if ('if' in item) {
     return {
       id: name(item.id, `${where}.id`),
@@ -216,6 +263,9 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const item = record(value, where);
   if ('if' in item) throw new Error(`${where}: an if-then cannot hold another if-then`);
   if ('waitFor' in item) throw new Error(`${where}: an if-then cannot hold a wait`);
+  if ('delay' in item) throw new Error(`${where}: an if-then cannot hold a delay`);
+  if ('approve' in item) throw new Error(`${where}: an if-then cannot hold an OK`);
+  if ('repeat' in item) throw new Error(`${where}: an if-then cannot hold a repeat`);
   const id = name(item.id, `${where}.id`);
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };
@@ -223,13 +273,70 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   return { id, action: name(item.action, `${where}.action`), ...aimed };
 }
 
+function readRepeat(item: Record<string, unknown>, where: string): QueueRepeat {
+  const id = name(item.id, `${where}.id`);
+  const repeat = items(item.repeat, `${where}.repeat`, readRepeated);
+  const until = readUntil(item.until, `${where}.until`);
+  const { rounds, otherwise } = item;
+  if (
+    typeof rounds !== 'number' ||
+    !Number.isInteger(rounds) ||
+    rounds < 1 ||
+    rounds > MAX_ROUNDS
+  ) {
+    throw new Error(`${where}.rounds must be a whole number from 1 to ${String(MAX_ROUNDS)}`);
+  }
+  if (otherwise !== 'ask' && otherwise !== 'goOn') {
+    throw new Error(`${where}.otherwise must be "ask" or "goOn"`);
+  }
+  return { id, repeat, until, rounds, otherwise };
+}
+
+/** What a repeat holds: a step, a message, a wait or a delay. */
+function readRepeated(value: unknown, where: string): RepeatedItem {
+  const item = record(value, where);
+  if ('if' in item) throw new Error(`${where}: a repeat cannot hold an if-then`);
+  if ('repeat' in item) throw new Error(`${where}: a repeat cannot hold a repeat`);
+  if ('approve' in item) throw new Error(`${where}: a repeat cannot hold an OK`);
+  if ('waitFor' in item) return readWait(item, where);
+  if ('delay' in item) return readDelay(item, where);
+  return readStep(value, where);
+}
+
 function readWait(item: Record<string, unknown>, where: string): QueueWait {
   const waitFor = list(item.waitFor, `${where}.waitFor`, readTarget);
   if (waitFor.length === 0) throw new Error(`${where}.waitFor must name at least one agent`);
+  const timeout = optional(item.timeout, `${where}.timeout`, readTime);
   return {
     id: name(item.id, `${where}.id`),
     waitFor: waitFor.filter((target, i) => waitFor.findIndex((t) => sameTarget(t, target)) === i),
+    ...(timeout === undefined ? {} : { timeout }),
   };
+}
+
+function readDelay(item: Record<string, unknown>, where: string): QueueDelay {
+  return { id: name(item.id, `${where}.id`), delay: readTime(item.delay, `${where}.delay`) };
+}
+
+/** `{ "seconds" }` (a whole number from 1 to MAX_SECONDS), or `{ "at": "HH:MM" }`. */
+function readTime(value: unknown, where: string): Time {
+  const time = record(value, where);
+  if ('seconds' in time === 'at' in time) throw new Error(`${where} must have seconds or at`);
+  if ('at' in time) {
+    if (typeof time.at !== 'string' || !CLOCK.test(time.at))
+      throw new Error(`${where}.at must be a time like "09:00"`);
+    return { at: time.at };
+  }
+  const { seconds } = time;
+  if (
+    typeof seconds !== 'number' ||
+    !Number.isInteger(seconds) ||
+    seconds < 1 ||
+    seconds > MAX_SECONDS
+  ) {
+    throw new Error(`${where}.seconds must be a whole number from 1 to ${String(MAX_SECONDS)}`);
+  }
+  return { seconds };
 }
 
 /** `{ "agent", "item"? }`, or (as older files have it) just an agent's id. */
@@ -245,12 +352,42 @@ function readCondition(value: unknown, where: string): Condition {
   switch (condition.kind) {
     case 'succeeded':
     case 'failed':
+    case 'timedOut':
       return { kind: condition.kind };
     case 'outputContains':
     case 'freeText':
       return { kind: condition.kind, text: text(condition.text, `${where}.text`) };
     default:
-      throw new Error(`${where}.kind must be one of: succeeded, failed, outputContains, freeText`);
+      throw new Error(
+        `${where}.kind must be one of: succeeded, failed, outputContains, timedOut, freeText`,
+      );
+  }
+}
+
+/**
+ * When a repeat stops: a condition (any but timedOut), or another agent's repeat to go round with,
+ * `{ "kind": "repeatEnds", "agent", "item" }` (not checked against the canvas, like what a wait
+ * waits for).
+ */
+function readUntil(value: unknown, where: string): Until {
+  const until = record(value, where);
+  switch (until.kind) {
+    case 'succeeded':
+    case 'failed':
+      return { kind: until.kind };
+    case 'outputContains':
+    case 'freeText':
+      return { kind: until.kind, text: text(until.text, `${where}.text`) };
+    case 'repeatEnds':
+      return {
+        kind: 'repeatEnds',
+        agent: name(until.agent, `${where}.agent`),
+        item: name(until.item, `${where}.item`),
+      };
+    default:
+      throw new Error(
+        `${where}.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds`,
+      );
   }
 }
 
@@ -273,7 +410,7 @@ function readLink(value: unknown, where: string): FileLink {
   return { agents: pair(link.agents, `${where}.agents`, name), ...(dots ? { dots } : {}) };
 }
 
-/** A queue or an if-then's steps: items with ids unique among them. */
+/** A queue, an if-then's steps or what a repeat holds: items with ids unique among them. */
 function items<T extends { id: string }>(
   value: unknown,
   where: string,

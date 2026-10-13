@@ -41,6 +41,7 @@ function setup(initial: Graph = graph) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('the queues view', () => {
@@ -195,5 +196,233 @@ describe('the queues view', () => {
     expect(view.getByRole('status').textContent).toBe('0 working · 0 waiting · 1 needs you');
     fireEvent.click(view.getByRole('button', { name: 'Answer a' }));
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+  });
+
+  it('counts down a delay the run holds a lane at, and goes on from it when told', () => {
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [
+          { id: 'pause', delay: { seconds: 60 } },
+          { id: 'next', action: 'Read' },
+        ]),
+      ],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    const pause = view.getByRole('group', { name: 'a: Wait 1 minute' });
+    const run = (name: string) =>
+      view.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(run('a: Wait 1 minute')).toBe('waiting');
+    const timer = within(pause).getByRole('timer');
+    expect(timer.textContent).toBe('1:00 left');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(timer.textContent).toBe('0:59 left');
+    expect(view.getByRole('status').textContent).toBe('0 working · 1 waiting');
+
+    fireEvent.click(within(pause).getByRole('button', { name: 'Go on now: Wait 1 minute' }));
+    expect(run('a: Wait 1 minute')).toBe('succeeded');
+    expect(run('a: Read')).toBe('running');
+    expect(within(pause).queryByRole('timer')).toBeNull();
+    expect(within(pause).queryByRole('button', { name: /^Go on now/ })).toBeNull();
+  });
+
+  it('goes on without what a wait waits for once its time limit passes, its ribbon dashed', () => {
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [{ id: 'slow', message: 'Take your time' }]),
+        agent('b', 100, [
+          { id: 'w', waitFor: [{ agent: 'a' }], timeout: { seconds: 2 } },
+          { id: 'next', action: 'Read' },
+        ]),
+      ],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    const name = 'b: Wait for a, at most 2 seconds';
+    const run = (task: string) =>
+      view.getByRole('group', { name: task }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(queues().querySelector('g[data-kind="wait"]')?.hasAttribute('data-timed')).toBe(true);
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    expect(run(name)).toBe('waiting');
+    expect(within(view.getByRole('group', { name })).getByRole('timer').textContent).toBe(
+      '0:02 left',
+    );
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(run(name)).toBe('timedOut');
+    expect(run('a: Message “Take your time”')).toBe('running');
+    expect(run('b: Read')).toBe('running');
+  });
+
+  describe('your OK', () => {
+    /** a checks something, then holds for your OK on it; b waits for that OK. */
+    const asking: Graph = {
+      nodes: [
+        agent('a', 0, [
+          { id: 'spec', action: 'Read' },
+          { id: 'ok', approve: 'the spec in SPEC.md' },
+          { id: 'plan', action: 'Edit' },
+        ]),
+        agent('b', 100, [
+          { id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] },
+          { id: 'build', action: 'Bash' },
+        ]),
+      ],
+      edges: [],
+    };
+    const OK = 'a: Your OK on the spec in SPEC.md';
+
+    /** Runs `asking` in All queues until a holds for your OK. */
+    function held() {
+      const { queues } = setup(asking);
+      fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+      const view = within(queues());
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.click(view.getByRole('button', { name: 'Run' }));
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      const row = (name: string) => {
+        const found = view.getByRole('group', { name }).querySelector<HTMLElement>('[data-at]');
+        if (!found) throw new Error(`no row for ${name}`);
+        return found;
+      };
+      return { queues, view, row, ok: within(view.getByRole('group', { name: OK })) };
+    }
+
+    it('holds for your OK, which the lane head finds, and goes on once you approve', () => {
+      const { queues, view, row, ok } = held();
+      expect(row(OK).dataset.run).toBe('asking');
+      expect(row(OK).dataset.mark).toBe('ok');
+      expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('waiting');
+      expect(view.getByRole('status').textContent).toBe('0 working · 1 waiting · 1 needs you');
+      expect(queues().querySelector('.queues-head[data-lane="a"]')?.getAttribute('data-run')).toBe(
+        'asking',
+      );
+      expect(queues().querySelector('.queues-key[data-mark="ok"]')?.textContent).toBe('your OK');
+
+      // Its lane head says the run needs you, and takes you to the decision.
+      const pill = view.getByRole('button', { name: 'Decide for a' });
+      expect(pill.title).toBe('a waits for your OK');
+      fireEvent.click(pill);
+      const approve = ok.getByRole('button', { name: 'Approve' });
+      expect(document.activeElement).toBe(approve);
+      expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
+
+      fireEvent.click(approve);
+      expect(row(OK).dataset.run).toBe('succeeded');
+      expect(ok.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(row('a: Edit').dataset.run).toBe('running');
+      expect(row('b: Bash').dataset.run).toBe('running');
+      expect(view.queryByRole('button', { name: 'Decide for a' })).toBeNull();
+    });
+
+    it('asks the agent for changes in your words, at the OK', () => {
+      const { view, row, ok } = held();
+      fireEvent.click(ok.getByRole('button', { name: 'Ask for changes…' }));
+      const note = ok.getByRole('textbox', { name: 'What should change?' });
+      fireEvent.change(note, { target: { value: 'Cover the empty state too' } });
+      fireEvent.keyDown(note, { key: 'Enter' });
+      // The agent works on them, at the OK.
+      expect(row(OK).dataset.run).toBe('running');
+      expect(row(OK).querySelector('.graph-queue-ok-asked')?.textContent).toBe(
+        'You asked: “Cover the empty state too”',
+      );
+      expect(ok.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(view.getByRole('status').textContent).toBe('1 working · 1 waiting');
+      // Its session has them, as your message.
+      fireEvent.click(view.getByRole('button', { name: 'Open a' }));
+      const transcript = within(
+        within(screen.getByRole('dialog', { name: 'a' })).getByRole('log', { name: 'Transcript' }),
+      );
+      expect(transcript.getByText('Cover the empty state too')).toBeTruthy();
+    });
+
+    it('stops the queue at the OK, and the wait for it', () => {
+      const { queues, view, row, ok } = held();
+      const stop = ok.getByRole('button', { name: 'Stop here' });
+      expect(stop.title).toBe('Stop this queue here, and whatever waits on it');
+      fireEvent.click(stop);
+      expect(row(OK).dataset.run).toBe('stopped');
+      expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('stopped');
+      expect(row('a: Edit').dataset.run).toBeUndefined();
+      expect(view.getByRole('status').textContent).toBe('Stopped');
+      expect(queues().querySelector('.queues-head[data-lane="a"]')?.getAttribute('data-run')).toBe(
+        'stopped',
+      );
+    });
+  });
+
+  it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', () => {
+    // Steps succeed, and the output never contains it (the run's chance is Math.random).
+    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [
+          {
+            id: 'loop',
+            repeat: [{ id: 'build', action: 'Read' }],
+            until: { kind: 'outputContains', text: 'APPROVED' },
+            rounds: 1,
+            otherwise: 'ask',
+          },
+          { id: 'next', action: 'Grep' },
+        ]),
+      ],
+      edges: [],
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    const name = 'a: Repeat until the output contains “APPROVED” (up to 1 round)';
+    // In the view open now: it is closed and opened again.
+    const card = () => {
+      const found = within(queues())
+        .getByRole('group', { name })
+        .querySelector<HTMLElement>('[data-at]');
+      if (!found) throw new Error('no repeat');
+      return found;
+    };
+    const step = () => card().querySelector<HTMLElement>('[data-at="[\\"a\\",\\"build\\"]"]');
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    expect(card().dataset.round).toBe('Round 1 of 1');
+    expect(step()?.dataset.run).toBe('running');
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    // Out of rounds: it asks, as an OK does.
+    expect(card().dataset.run).toBe('asking');
+    expect(view.getByRole('status').textContent).toBe('0 working · 0 waiting · 1 needs you');
+    const pill = view.getByRole('button', { name: 'Decide for a' });
+    expect(pill.title).toBe("a's repeat is out of rounds");
+    expect(
+      [...card().querySelectorAll('.graph-queue-decide > button')].map((b) => b.textContent),
+    ).toEqual(['One more round', 'Try this…', 'Go on']);
+
+    // The canvas's Needs you sidebar asks too: one more round runs another.
+    fireEvent.click(view.getByRole('button', { name: 'Back' }));
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(
+      sidebar.getByText('1 round done, and still not: the output contains “APPROVED”.'),
+    ).toBeTruthy();
+    fireEvent.click(sidebar.getByRole('button', { name: 'One more round' }));
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    expect(card().dataset.round).toBe('Round 2 of 2');
+    expect(step()?.dataset.run).toBe('running');
+    expect(card().dataset.run).toBeUndefined();
   });
 });

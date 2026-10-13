@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasFile } from '../../shared/ipc';
 import { fromFile, toFile } from './file';
@@ -56,6 +56,10 @@ const actions = (id: string) => {
   if (!toolbar) throw new Error(`no actions for ${id}`);
   return within(toolbar);
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('GraphEditor', () => {
   it('adds a node on double-click on the empty canvas', () => {
@@ -221,6 +225,415 @@ describe('GraphEditor', () => {
     expect(panel.getByRole('button', { name: 'Move If a test is flaky' })).toBeTruthy();
   });
 
+  it('queues a delay, picked by typing how long, and changes it from its chip', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    // Typing "wait" finds both ways to wait.
+    fireEvent.change(field(), { target: { value: 'wait' } });
+    expect(options().slice(0, 2)).toEqual(['Wait for…', 'Wait a while…']);
+    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    expect(field().getAttribute('aria-label')).toBe('Wait how long?');
+    expect(field().placeholder).toBe('10 minutes, 1 hour, until 9:00…');
+    expect(options()).toEqual([
+      '5 minutes',
+      '10 minutes',
+      '30 minutes',
+      '1 hour',
+      '4 hours',
+      'Until 9:00 AM',
+    ]);
+    // What is typed is read as the times it can mean, listed first.
+    fireEvent.change(field(), { target: { value: '15' } });
+    expect(options()).toEqual(['15 minutes', '15 hours', '15 seconds', 'Until 3:00 PM']);
+    fireEvent.click(panel.getByRole('option', { name: '15 minutes' }));
+    expect(panel.getByRole('button', { name: 'Move Wait 15 minutes' })).toBeTruthy();
+
+    // Its chip reopens the picker with its time typed in, to change it.
+    const chip = () => panel.getByRole('button', { name: /^Change how long it waits: / });
+    expect(chip().textContent).toBe('15 minutes');
+    fireEvent.click(chip());
+    expect(field().value).toBe('15 minutes');
+    fireEvent.change(field(), { target: { value: '1h30' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(chip().getAttribute('aria-label')).toBe('Change how long it waits: 1 hour 30 minutes');
+    expect(panel.getByRole('button', { name: 'Move Wait 1 hour 30 minutes' })).toBeTruthy();
+  });
+
+  it("gives a wait a time limit from its 'at most…' chip, and takes it off again", () => {
+    const queue = [{ id: 'w', waitFor: [{ agent: 'a' }] }];
+    const { node } = setup({
+      nodes: [agentNode('a', 0, 0), agentNode('b', 0, 100, { data: { label: 'b', queue } })],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('b'));
+    const panel = within(screen.getByRole('dialog', { name: 'b' }));
+    const add = panel.getByRole('button', { name: 'Add a time limit' });
+    expect([add.textContent, add.title, add.hasAttribute('data-more')]).toEqual([
+      'at most…',
+      'Go on anyway if it is not done in time',
+      true,
+    ]);
+    fireEvent.click(add);
+    expect(panel.getByRole('combobox').getAttribute('aria-label')).toBe('Go on anyway after…');
+    fireEvent.click(panel.getByRole('option', { name: '30 minutes' }));
+    const limit = panel.getByRole('button', { name: 'Change the time limit: at most 30 minutes' });
+    expect(limit.textContent).toBe('at most 30 minutes');
+    expect(panel.getByRole('button', { name: 'Move Wait for a, at most 30 minutes' })).toBeTruthy();
+    expect(panel.queryByRole('button', { name: 'Add a time limit' })).toBeNull();
+
+    // Its chip offers to take it off first.
+    fireEvent.click(limit);
+    expect(panel.getAllByRole('option')[0]?.textContent).toBe('No time limit');
+    fireEvent.click(panel.getByRole('option', { name: 'No time limit' }));
+    expect(panel.getByRole('button', { name: 'Move Wait for a' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Add a time limit' })).toBeTruthy();
+  });
+
+  it('checks whether a wait ran out of time, striking the condition out where no wait is before it', () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, { data: { label: 'a', queue: [{ id: 'm', message: 'Build it' }] } }),
+        agentNode('b', 0, 100, {
+          data: {
+            label: 'b',
+            queue: [
+              { id: 'w', waitFor: [{ agent: 'a' }], timeout: { seconds: 60 } },
+              { id: 'd', delay: { seconds: 60 } },
+              { id: 'late', if: { kind: 'timedOut' }, then: [] },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'the previous step succeeded',
+      'the previous step failed',
+      'the output contains…',
+      'the wait ran out of time',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'the wait ran out of time' }));
+    // After a message, there is no wait to run out of time.
+    const chip = panel.getByRole('button', {
+      name: 'Change the condition: the wait ran out of time',
+    });
+    expect(chip.hasAttribute('data-unavailable')).toBe(true);
+    expect(chip.title).toBe('No wait right before this If');
+
+    // After a wait, it can hold: a delay between the two is passed over.
+    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+    fireEvent.doubleClick(node('b'));
+    const other = within(screen.getByRole('dialog', { name: 'b' }));
+    const fits = other.getByRole('button', {
+      name: 'Change the condition: the wait ran out of time',
+    });
+    expect(fits.hasAttribute('data-unavailable')).toBe(false);
+    expect(fits.title).toBe('');
+  });
+
+  it('queues your OK on the work before it, or on what you name, and changes it from its chip', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    // Typing "wait", "ok" or "approve" finds it.
+    plus();
+    fireEvent.change(field(), { target: { value: 'wait' } });
+    expect(options().slice(0, 3)).toEqual(['Wait for…', 'Wait a while…', 'Wait for your OK…']);
+    for (const typed of ['ok', 'approve']) {
+      fireEvent.change(field(), { target: { value: typed } });
+      expect(options()[0]).toBe('Wait for your OK…');
+    }
+    const choice = panel.getByRole('option', { name: /^Wait for your OK…/ });
+    expect(choice.textContent).toBe(
+      'Wait for your OK… Hold here until you approve, ask for changes, or stop',
+    );
+    fireEvent.click(choice);
+    expect(field().getAttribute('aria-label')).toBe('Your OK on…');
+    expect(field().placeholder).toBe('What you check, e.g. the spec in SPEC.md…');
+    expect(options()).toEqual(['The work before it']);
+    fireEvent.click(panel.getByRole('option', { name: 'The work before it' }));
+    expect(panel.getByRole('button', { name: 'Move Your OK on the work before it' })).toBeTruthy();
+
+    // Or on what you name, in your own words.
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^Wait for your OK…/ }));
+    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md' } });
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '“the spec in SPEC.md” In your own words',
+    ]);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const chip = () => panel.getByRole('button', { name: /^Change what you OK: the spec/ });
+    expect(chip().getAttribute('aria-label')).toBe('Change what you OK: the spec in SPEC.md');
+    expect(chip().textContent).toBe('the spec in SPEC.md');
+    expect(chip().closest('.graph-queue-row')?.getAttribute('data-mark')).toBe('ok');
+
+    // Its chip reopens the picker with its words in the field.
+    fireEvent.click(chip());
+    expect(field().value).toBe('the spec in SPEC.md');
+    fireEvent.change(field(), { target: { value: 'the spec in SPEC.md and its tests' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(chip().textContent).toBe('the spec in SPEC.md and its tests');
+
+    // An if-then holds steps and messages, not OKs.
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'the previous step failed' }));
+    plus('Add to If the previous step failed');
+    expect(options()).not.toContain('Wait for your OK…');
+    expect(options()).toContain('Message');
+  });
+
+  it('repeats steps until a condition holds, a few rounds at most, changed from its chips', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    // Offered right after If… then; "repeat", "loop" or "round" finds it.
+    plus();
+    expect(options().slice(0, 6)).toEqual([
+      'If… then',
+      'Repeat until…',
+      'Wait for…',
+      'Wait a while…',
+      'Wait for your OK…',
+      'Message',
+    ]);
+    for (const typed of ['repeat', 'loop', 'round']) {
+      fireEvent.change(field(), { target: { value: typed } });
+      expect(options()[0]).toBe('Repeat until…');
+    }
+    const choice = panel.getByRole('option', { name: /^Repeat until…/ });
+    expect(choice.textContent).toBe(
+      'Repeat until… Loop: run steps again until a condition holds, a few rounds at most',
+    );
+    fireEvent.click(choice);
+    expect(field().getAttribute('aria-label')).toBe('Repeat until…');
+    expect(field().placeholder).toBe('Pick when to stop, or describe it…');
+    expect(options()).toEqual([
+      'its last step succeeds',
+      'its last step fails',
+      'the output contains…',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'the output contains…' }));
+    const text = panel.getByRole('textbox', { name: 'Text to look for' });
+    fireEvent.change(text, { target: { value: 'Converged' } });
+    fireEvent.keyDown(text, { key: 'Enter' });
+
+    // A card: when it stops, up to 3 rounds, then ask me; each a chip.
+    expect(
+      panel.getByRole('button', { name: 'Move Repeat until the output contains “Converged”' }),
+    ).toBeTruthy();
+    const until = panel.getByRole('button', {
+      name: 'Change when it stops: the output contains “Converged”',
+    });
+    expect(until.textContent).toBe('the output contains “Converged”');
+    const rounds = () => panel.getByRole('button', { name: /^Change how many rounds: / });
+    const then = () =>
+      panel.getByRole('button', { name: /^Change what happens after the last round: / });
+    expect([rounds().textContent, then().textContent]).toEqual(['up to 3 rounds', 'then ask me']);
+
+    // Typing 5 finds 5 rounds; Go on carries on with the queue.
+    fireEvent.click(rounds());
+    expect(field().getAttribute('aria-label')).toBe('How many rounds at most?');
+    expect(options()).toHaveLength(20);
+    fireEvent.change(field(), { target: { value: '5' } });
+    expect(options()[0]).toBe('5 rounds');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(rounds().getAttribute('aria-label')).toBe('Change how many rounds: up to 5 rounds');
+    fireEvent.click(then());
+    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Ask me Stop and ask: one more round, or go on',
+      'Go on Carry on with the queue; an If after it sees that it failed',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: /^Go on/ }));
+    expect(then().getAttribute('aria-label')).toBe(
+      'Change what happens after the last round: then go on',
+    );
+    expect(then().textContent).toBe('then go on');
+
+    // Its own ⊕ adds what it runs each round: waits, delays, messages and actions; no if-thens.
+    plus('Add to Repeat until the output contains “Converged”');
+    expect(options().slice(0, 4)).toEqual(['Wait for…', 'Wait a while…', 'Message', 'Read']);
+    expect(options()).not.toContain('If… then');
+    expect(options()).not.toContain('Repeat until…');
+    expect(options()).not.toContain('Wait for your OK…');
+    fireEvent.click(panel.getByRole('option', { name: /^Message/ }));
+    const note = panel.getByRole('textbox', { name: 'New message to the agent' });
+    fireEvent.change(note, { target: { value: 'Tune the model' } });
+    fireEvent.keyDown(note, { key: 'Enter' });
+    const inner = panel.getByRole('list', { name: 'Each round: the output contains “Converged”' });
+    expect(
+      within(inner)
+        .getAllByRole('button', { name: /^Move / })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual(['Move Message']);
+
+    // Its condition, in your own words, is changed starting from them.
+    fireEvent.click(until);
+    fireEvent.change(field(), { target: { value: 'the loss stops falling' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const words = panel.getByRole('button', { name: /^Change when it stops: / });
+    expect(words.textContent).toBe('the loss stops falling');
+    fireEvent.click(words);
+    expect(field().value).toBe('the loss stops falling');
+  });
+
+  it("goes round with another agent's repeat, and waits for a step inside one, round by round", () => {
+    const judging = {
+      id: 'judging',
+      repeat: [{ id: 'judge', message: 'Judge both versions' }],
+      until: { kind: 'outputContains' as const, text: 'WINNER' },
+      rounds: 2,
+      otherwise: 'goOn' as const,
+    };
+    const { node } = setup({
+      nodes: [
+        agentNode('j', 0, 0, { data: { label: 'Judge', queue: [judging] } }),
+        agentNode('c', 0, 100, { data: { label: 'Claude', queue: [] } }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('c'));
+    const panel = within(screen.getByRole('dialog', { name: 'Claude' }));
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^Repeat until…/ }));
+    // Another agent's repeat, after the conditions: go round with it.
+    const leader = panel.getByRole('option', { name: /^Judge's repeat ends/ });
+    expect(leader.textContent).toBe(
+      "Judge's repeat ends Go round with it: as many rounds as Judge's repeat",
+    );
+    fireEvent.click(leader);
+    // It runs as many rounds as the judge's: its own are not shown.
+    expect(
+      panel.getByRole('button', { name: "Change when it stops: Judge's repeat ends" }),
+    ).toBeTruthy();
+    expect(panel.queryByRole('button', { name: /^Change how many rounds/ })).toBeNull();
+    expect(panel.queryByRole('button', { name: /^Change what happens after/ })).toBeNull();
+
+    // A wait inside it, for a step inside the judge's repeat, picked in the judge's queue beside.
+    plus("Add to Repeat until Judge's repeat ends");
+    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'Judge' }));
+    const beside = within(panel.getByRole('complementary', { name: "Judge's queue" }));
+    fireEvent.click(beside.getByRole('button', { name: 'Wait for Judge: “Judge both versions”' }));
+    expect(
+      panel.getByRole('button', { name: 'Move Wait for Judge: “Judge both versions”' }),
+    ).toBeTruthy();
+
+    // The judge's repeat names who goes round with it.
+    expect(beside.getByText('Claude goes round with it')).toBeTruthy();
+    // Its own waits are offered the steps inside Claude's repeat: each round inside a repeat, and
+    // once that repeat is over outside one.
+    const choices = () => beside.getAllByRole('option').map((o) => o.textContent);
+    fireEvent.click(
+      beside.getByRole('button', { name: 'Add to Repeat until the output contains “WINNER”' }),
+    );
+    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    expect(choices()).toEqual([
+      'Claude All of its work',
+      'Claude: its repeat All of its rounds',
+      'Claude: its wait This step, each round',
+    ]);
+    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+    fireEvent.click(beside.getByRole('button', { name: "Add to Judge's queue" }));
+    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    expect(choices().at(-1)).toBe('Claude: its wait This step, once its repeat is over');
+    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+
+    // Claude's repeat goes round with the judge's, so it is not offered back to the judge.
+    fireEvent.click(beside.getByRole('button', { name: /^Change when it stops/ }));
+    expect(beside.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
+      'its last step succeeds',
+      'its last step fails',
+      'the output contains…',
+    ]);
+  });
+
+  it('asks for your OK on the canvas while the run holds an agent at one', () => {
+    const queue = (approve: string) => [
+      { id: 'spec', action: 'Read' },
+      { id: 'ok', approve },
+      { id: 'next', action: 'Grep' },
+    ];
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, { data: { label: 'Planner', queue: queue('the spec in SPEC.md') } }),
+        agentNode('b', 0, 100, { data: { label: 'Builder', queue: queue('') } }),
+        agentNode('c', 0, 200, { data: { label: 'Tester', queue: queue('the tests') } }),
+      ],
+      edges: [],
+    });
+    const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+
+    // The sidebar asks for each, in graph order, after the work it is on.
+    const list = within(sidebar() ?? document.body);
+    expect(list.getByRole('heading').textContent).toBe('Needs you 3');
+    const card = (agent: string) => {
+      const chip = list.getByRole('button', { name: `Open ${agent}` });
+      const found = chip.closest<HTMLElement>('.graph-question');
+      if (!found) throw new Error(`no card for ${agent}`);
+      return within(found);
+    };
+    expect(card('Planner').getByText('Your OK on the spec in SPEC.md?')).toBeTruthy();
+    expect(card('Planner').getByText('After Read')).toBeTruthy();
+    expect(card('Builder').getByText('Your OK on the work before it?')).toBeTruthy();
+
+    // Approve, Stop here and Ask for changes act on the run; each card then leaves.
+    fireEvent.click(card('Planner').getByRole('button', { name: 'Approve' }));
+    fireEvent.click(card('Builder').getByRole('button', { name: 'Stop here' }));
+    const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
+    fireEvent.change(reply, { target: { value: 'Test the empty state' } });
+    fireEvent.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
+    expect(sidebar()).toBeNull();
+    expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    // The Tester works on the changes asked for, in its session.
+    expect(node('c').classList.contains('working')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    const run = (name: string) =>
+      queues.getByRole('group', { name }).querySelector('[data-run]')?.getAttribute('data-run');
+    expect(run('Planner: Your OK on the spec in SPEC.md')).toBe('succeeded');
+    expect(run('Planner: Grep')).toBe('running');
+    expect(run('Builder: Your OK on the work before it')).toBe('stopped');
+    expect(run('Tester: Your OK on the tests')).toBe('running');
+  });
+
   it("offers a Claude agent Claude Code's own tools, Workflow included", () => {
     const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
     fireEvent.doubleClick(node('a'));
@@ -259,7 +672,7 @@ describe('GraphEditor', () => {
       ],
       edges: [],
     });
-    const sidebar = () => screen.queryByRole('complementary', { name: 'Questions from agents' });
+    const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
     expect(node('a').classList.contains('asking')).toBe(true);
     expect(node('b').classList.contains('asking')).toBe(false);
     expect(node('a').querySelector('.graph-question-count')?.getAttribute('data-count')).toBe('1');

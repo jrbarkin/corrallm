@@ -54,24 +54,22 @@
           ]
         },
         {
-          "id": "implement",
-          "message": "Tests were just written for this. Find them, read them, and write the code that makes them all pass, without changing what they test.\n\n{{feature}}"
-        },
-        {
-          "id": "green",
-          "action": "Bash"
-        },
-        {
-          "id": "still-red",
-          "if": {
-            "kind": "failed"
-          },
-          "then": [
+          "id": "green-loop",
+          "repeat": [
             {
-              "id": "fix",
-              "message": "Some tests still fail. Fix the code, not the tests, and run them again."
+              "id": "implement",
+              "message": "Tests were just written for this. Find them, read them, and make them all pass: fix the code, not the tests.\n\n{{feature}}"
+            },
+            {
+              "id": "green",
+              "action": "Bash"
             }
-          ]
+          ],
+          "until": {
+            "kind": "succeeded"
+          },
+          "rounds": 3,
+          "otherwise": "ask"
         }
       ]
     },

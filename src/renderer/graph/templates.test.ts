@@ -24,6 +24,17 @@ const template: Graph = {
             ],
           },
           { id: 'run', action: 'exec_command' },
+          { id: 'ok', approve: 'the tests for {{feature}}' },
+          {
+            id: 'loop',
+            repeat: [
+              { id: 'green', message: 'Make the {{framework}} tests pass.' },
+              { id: 'check', action: 'exec_command' },
+            ],
+            until: { kind: 'outputContains', text: '{{marker}}' },
+            rounds: 3,
+            otherwise: 'ask',
+          },
         ],
       },
     },
@@ -33,11 +44,26 @@ const template: Graph = {
 
 describe('templates', () => {
   it('lists the placeholders a canvas uses, in the order they first appear', () => {
-    expect(placeholdersOf(template)).toEqual(['language', 'feature']);
+    // Inside repeats too: their messages, and the text they stop on.
+    expect(placeholdersOf(template)).toEqual(['language', 'feature', 'framework', 'marker']);
+    // An OK's words are text that may have a blank in it.
+    const asking: Graph = {
+      nodes: template.nodes.map((n) => ({
+        ...n,
+        data: { label: 'Planner', queue: [{ id: 'ok', approve: 'the plan in {{file}}' }] },
+      })),
+      edges: [],
+    };
+    expect(placeholdersOf(asking)).toEqual(['file']);
   });
 
-  it("fills every placeholder in agents' names, messages and conditions, leaving others", () => {
-    const filled = fillTemplate(template, { feature: 'rate limiting', language: 'Go' });
+  it("fills every placeholder in agents' names, messages, conditions and OKs, leaving others", () => {
+    const filled = fillTemplate(template, {
+      feature: 'rate limiting',
+      language: 'Go',
+      framework: 'go test',
+      marker: 'PASS',
+    });
     const [tester] = filled.nodes;
     expect(tester?.data.label).toBe('Go tester');
     expect(tester?.data.queue).toEqual([
@@ -48,6 +74,17 @@ describe('templates', () => {
         then: [{ id: 'fix', message: 'Make the tests for rate limiting fail first.', target: 'x' }],
       },
       { id: 'run', action: 'exec_command' },
+      { id: 'ok', approve: 'the tests for rate limiting' },
+      {
+        id: 'loop',
+        repeat: [
+          { id: 'green', message: 'Make the go test tests pass.' },
+          { id: 'check', action: 'exec_command' },
+        ],
+        until: { kind: 'outputContains', text: 'PASS' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
     ]);
     // Placeholders without a value stay as they are.
     expect(fillTemplate(template, { feature: 'search' }).nodes[0]?.data.label).toBe(
@@ -74,6 +111,17 @@ describe('withAgents', () => {
               if: { kind: 'failed' },
               then: [{ id: 'patch', action: 'apply_patch' }],
             },
+            { id: 'ok', approve: '' },
+            {
+              id: 'loop',
+              repeat: [
+                { id: 'green', action: 'exec_command' },
+                { id: 'w', waitFor: [{ agent: 'any' }] },
+              ],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
           ],
         },
       },
@@ -95,6 +143,18 @@ describe('withAgents', () => {
       { id: 'run', action: 'Bash' },
       { id: 'diff', action: '/diff' },
       { id: 'red', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
+      { id: 'ok', approve: '' },
+      // Inside a repeat too.
+      {
+        id: 'loop',
+        repeat: [
+          { id: 'green', action: 'Bash' },
+          { id: 'w', waitFor: [{ agent: 'any' }] },
+        ],
+        until: { kind: 'succeeded' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
     ]);
     expect(any?.data).toEqual({
       label: 'Any',

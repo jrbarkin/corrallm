@@ -26,7 +26,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
     description:
-      'Codex writes the tests, Claude makes them pass, Codex refactors, with the tests run at every hand-off. After claudex.',
+      'Codex writes the tests; Claude works and runs them until they pass, asking you after three rounds; Codex refactors, with the tests run at every hand-off. After claudex.',
     text: tddRelay,
     fields: [
       {
@@ -41,7 +41,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Head to head',
     description:
-      'Claude and Codex build the same thing in their own worktrees; a judge scores them blind, gives each feedback, and merges the winner. After claudex-compete.',
+      'Claude and Codex build the same thing in their own worktrees, round after round; a judge scores them blind and gives each feedback, ends early when one is clearly better, and merges the winner. After claudex-compete.',
     text: headToHead,
     fields: [
       {
@@ -55,7 +55,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Spec first',
     description:
-      'A planner writes the spec and the plan before any code; a builder works the plan test-first; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.',
+      'A planner writes the spec before any code, and the plan once you approve the spec; a builder works the plan test-first; a reviewer checks the result against the spec. Any agents: pick one for each role, or leave it to the default.',
     text: specFirst,
     fields: [
       {
@@ -93,7 +93,7 @@ export const EXAMPLES: readonly Example[] = [
   {
     name: 'Review loop',
     description:
-      'A coder hands its change to a reviewer, who sends it back when the review asks for changes.',
+      'A coder implements the issue and a reviewer reviews it, round after round, until the reviewer approves; after three rounds, it asks you.',
     text: reviewLoop,
   },
   {

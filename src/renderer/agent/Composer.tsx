@@ -34,6 +34,7 @@ export function Composer({
   session,
   controls,
   field,
+  placeholder,
   above,
 }: {
   agentName: string;
@@ -42,7 +43,9 @@ export function Composer({
   controls: ComposerControls;
   /** Its text box, which the view focuses again after the user answers a prompt. */
   field: RefObject<HTMLTextAreaElement | null>;
-  /** What sits right above the text box (the queue's ⊕). */
+  /** What its empty box says, when what is sent there is not a message of its own. */
+  placeholder?: string;
+  /** What sits right above the text box (the queue's ⊕, and what the run asks of the user). */
   above?: ReactNode;
 }) {
   const [draft, setDraft] = useState('');
@@ -88,7 +91,9 @@ export function Composer({
           autoFocus
           rows={1}
           aria-label={`Message ${agentName}`}
-          placeholder={working ? `Queue a message for ${agentName}…` : `Message ${agentName}…`}
+          placeholder={
+            placeholder ?? (working ? `Queue a message for ${agentName}…` : `Message ${agentName}…`)
+          }
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value);
