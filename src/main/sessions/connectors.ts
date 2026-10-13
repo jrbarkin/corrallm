@@ -2,11 +2,12 @@ import type { Connection } from '../../shared/session';
 import type { Connector } from './connector';
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
+import { TerminalConnector } from './terminal/connector';
 
 /**
- * The connector for each connection (see connector.ts). The Agent SDK and terminal connectors
- * take the place of these placeholders, each from its own folder (sessions/sdk/, sessions/terminal/).
- * With `fake`, every connection runs the fake connector instead (e2e tests, unpackaged builds only).
+ * The connector for each connection (see connector.ts), each from its own folder (sessions/sdk/,
+ * sessions/terminal/); the Agent SDK's is a placeholder until it lands. With `fake`, every
+ * connection runs the fake connector instead (e2e tests, unpackaged builds only).
  */
 export function createConnectors({ fake }: { fake: boolean }): Record<Connection, Connector> {
   if (fake) {
@@ -15,7 +16,7 @@ export function createConnectors({ fake }: { fake: boolean }): Record<Connection
     return { terminal: connector, sdk: connector };
   }
   return {
-    terminal: unavailable('Claude Code in a terminal'),
+    terminal: new TerminalConnector(),
     sdk: unavailable('Claude Code through the Agent SDK'),
   };
 }

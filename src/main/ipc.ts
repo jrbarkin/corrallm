@@ -13,6 +13,8 @@ import {
   parseModelArgs,
   parseSendArgs,
   parseStartArgs,
+  parseTerminalInputArgs,
+  parseTerminalResizeArgs,
 } from './sessions/args';
 import type { SessionManager } from './sessions/manager';
 
@@ -43,6 +45,10 @@ export interface IpcServices {
     | 'canvasForgotten'
     | 'canvasSaved'
     | 'projectChanged'
+    | 'attachTerminal'
+    | 'detachTerminal'
+    | 'inputTerminal'
+    | 'resizeTerminal'
   >;
 }
 
@@ -197,6 +203,34 @@ function createHandlers({ projects, sessions }: IpcServices): HandlerTable {
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
         await sessions.close(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:attach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.attachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:detach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.detachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:input': {
+      parseArgs: parseTerminalInputArgs,
+      handler: async ({ contents }, agentId, data) => {
+        await sessions.inputTerminal(contents, agentId, data);
+        return null;
+      },
+    },
+    'terminal:resize': {
+      parseArgs: parseTerminalResizeArgs,
+      handler: async ({ contents }, agentId, cols, rows) => {
+        await sessions.resizeTerminal(contents, agentId, cols, rows);
         return null;
       },
     },

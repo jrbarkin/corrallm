@@ -8,6 +8,7 @@ import type {
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
+import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 
@@ -35,6 +36,8 @@ export interface SessionManagerDeps {
     connection: Connection,
     event: SessionEvent,
   ) => void;
+  /** Sends a terminal event to the renderer whose view shows the agent's terminal. */
+  terminal?: (contents: WebContents, agentId: string, event: TerminalEvent) => void;
 }
 
 /** An agent's session, as the manager keeps it. */
@@ -59,6 +62,11 @@ export class SessionManager {
   readonly #ids = new WeakMap<WebContents, Map<string, string>>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
+  /**
+   * The agents whose terminal each renderer's view shows (attachTerminal), and what stops the
+   * running session's screen being shown there (undefined while none runs).
+   */
+  readonly #views = new Map<WebContents, Map<string, (() => void) | undefined>>();
 
   constructor(deps: SessionManagerDeps) {
     this.#deps = deps;
@@ -87,6 +95,8 @@ export class SessionManager {
       if (agents.get(agentId) === agent) agents.delete(agentId);
       throw error;
     }
+    // A view waiting to show the agent's terminal shows this session's.
+    this.#show(contents, agentId, agent);
   }
 
   async send(contents: WebContents, agentId: string, message: UserMessage): Promise<void> {
@@ -112,6 +122,41 @@ export class SessionManager {
 
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
+  }
+
+  /**
+   * Shows an agent's terminal in the renderer's view (terminal:event): the screen of the session
+   * that runs, if any, and of each one that starts until the view is detached.
+   */
+  attachTerminal(contents: WebContents, agentId: string): void {
+    this.#watch(contents);
+    const views = this.#viewsOf(contents);
+    views.get(agentId)?.();
+    views.set(agentId, undefined);
+    const agent = this.#agents.get(contents)?.get(agentId);
+    if (agent) this.#show(contents, agentId, agent);
+  }
+
+  /** The renderer's view no longer shows the agent's terminal. */
+  detachTerminal(contents: WebContents, agentId: string): void {
+    const views = this.#views.get(contents);
+    views?.get(agentId)?.();
+    views?.delete(agentId);
+  }
+
+  /** Keystrokes typed in an agent's terminal view, for its session's terminal, if it runs. */
+  async inputTerminal(contents: WebContents, agentId: string, data: string): Promise<void> {
+    (await this.#running(contents, agentId))?.terminal?.input(data);
+  }
+
+  /** An agent's terminal view was resized: so is its session's terminal, if it runs. */
+  async resizeTerminal(
+    contents: WebContents,
+    agentId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    (await this.#running(contents, agentId))?.terminal?.resize(cols, rows);
   }
 
   /** Ends an agent's session, if it runs. Its id is kept: starting it again resumes it. */
@@ -190,6 +235,42 @@ export class SessionManager {
     }));
   }
 
+  /** Shows the agent's session's screen in the renderer's view, if it has a view and a screen. */
+  #show(contents: WebContents, agentId: string, agent: Agent): void {
+    void agent.session.then(
+      (session) => {
+        const views = this.#views.get(contents);
+        const screen = session.terminal;
+        if (!screen || !views?.has(agentId) || this.#agents.get(contents)?.get(agentId) !== agent) {
+          return;
+        }
+        views.get(agentId)?.();
+        views.set(
+          agentId,
+          screen.show((event) => {
+            this.#deps.terminal?.(contents, agentId, event);
+          }),
+        );
+      },
+      () => undefined,
+    );
+  }
+
+  /** The agent's session, if it runs (or starts) and does start. */
+  async #running(contents: WebContents, agentId: string): Promise<LiveSession | undefined> {
+    const agent = this.#agents.get(contents)?.get(agentId);
+    return agent?.session.catch(() => undefined);
+  }
+
+  #viewsOf(contents: WebContents): Map<string, (() => void) | undefined> {
+    let views = this.#views.get(contents);
+    if (!views) {
+      views = new Map();
+      this.#views.set(contents, views);
+    }
+    return views;
+  }
+
   async #session(contents: WebContents, agentId: string): Promise<LiveSession> {
     const agent = this.#agents.get(contents)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
@@ -243,11 +324,13 @@ export class SessionManager {
     if (this.#watched.has(contents)) return;
     this.#watched.add(contents);
     contents.once('destroyed', () => {
+      this.#views.delete(contents);
       void this.#endAll(contents, false).then(() => {
         this.#agents.delete(contents);
       });
     });
     contents.on('did-navigate', () => {
+      this.#views.delete(contents);
       void this.#endAll(contents, false);
     });
   }

@@ -21,6 +21,8 @@ import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
 import { SearchPicker } from '../search/SearchPicker';
+import type { TerminalBackend } from '../terminal/backend';
+import { TerminalPane } from '../terminal/TerminalPane';
 import { Composer } from './Composer';
 import { queueLinks } from './links';
 import { animate, morph, settle, slide } from './motion';
@@ -36,6 +38,8 @@ import './AgentView.css';
 
 /** What the view does to its agent's session (sessions.ts). */
 export interface SessionControls extends ComposerControls {
+  /** Starts the session (again), as when the view opens: a connected one resumes. */
+  open: () => void;
   answer: (permissionId: string, answer: Answer) => void;
   answerQuestion: (promptId: string, index: number, answer: string) => void;
   answerPlan: (promptId: string, answer: PlanAnswer) => void;
@@ -56,8 +60,9 @@ export interface SessionControls extends ComposerControls {
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
  * The agent chip sets its type and how it runs (`connection`): simulated, or connected to the real
- * CLI. A connected session shows in the same transcript and composer, fed by the main process
- * (connected.ts). (The Terminal connection's view will show the CLI's own terminal here instead.)
+ * CLI. A session connected through the Agent SDK shows in the same transcript and composer, fed by
+ * the main process (connected.ts); one in a Terminal shows the CLI's own terminal instead
+ * (TerminalPane.tsx), where the user works with Claude Code as in any terminal.
  */
 export function AgentView({
   node,
@@ -70,6 +75,7 @@ export function AgentView({
   onRename,
   connection,
   project,
+  terminal,
   onAgent,
   onAnswer,
   onSimulateQuestion,
@@ -101,6 +107,8 @@ export function AgentView({
   connection: AgentConnection;
   /** The folder the canvas's agents work in, if one was chosen. */
   project: ProjectFolder | null;
+  /** Where a Terminal agent's terminal comes from (the main process). */
+  terminal: TerminalBackend;
   /** Sets its type and how it runs. */
   onAgent: (agent: AgentType, connection: AgentConnection) => void;
   onAnswer: (questionId: string, answer: string) => void;
@@ -379,34 +387,14 @@ export function AgentView({
                   }}
                 />
               )}
-              <section className="agent-session" aria-label="Session">
-                <Transcript
+              {connection === 'terminal' ? (
+                <TerminalPane
+                  agentId={node.id}
+                  backend={terminal}
                   session={session}
-                  agentName={name}
                   note={sessionNote(agent, connection, project)}
-                  answers={{
-                    // The prompt's buttons are gone: the keyboard goes back to the composer.
-                    onAnswer: (permissionId, answer) => {
-                      controls.answer(permissionId, answer);
-                      composer.current?.focus();
-                    },
-                    onAnswerQuestion: (promptId, index, answer) => {
-                      controls.answerQuestion(promptId, index, answer);
-                      composer.current?.focus();
-                    },
-                    onAnswerPlan: (promptId, answer) => {
-                      controls.answerPlan(promptId, answer);
-                      composer.current?.focus();
-                    },
-                  }}
-                />
-                <Composer
-                  agentName={name}
-                  agent={agent}
-                  connected={connection !== 'simulated'}
-                  session={session}
-                  controls={controls}
-                  field={composer}
+                  onStart={controls.open}
+                  onUnqueue={controls.unqueue}
                   above={
                     <QueueAddMenu
                       node={node}
@@ -418,7 +406,48 @@ export function AgentView({
                     />
                   }
                 />
-              </section>
+              ) : (
+                <section className="agent-session" aria-label="Session">
+                  <Transcript
+                    session={session}
+                    agentName={name}
+                    note={sessionNote(agent, connection, project)}
+                    answers={{
+                      // The prompt's buttons are gone: the keyboard goes back to the composer.
+                      onAnswer: (permissionId, answer) => {
+                        controls.answer(permissionId, answer);
+                        composer.current?.focus();
+                      },
+                      onAnswerQuestion: (promptId, index, answer) => {
+                        controls.answerQuestion(promptId, index, answer);
+                        composer.current?.focus();
+                      },
+                      onAnswerPlan: (promptId, answer) => {
+                        controls.answerPlan(promptId, answer);
+                        composer.current?.focus();
+                      },
+                    }}
+                  />
+                  <Composer
+                    agentName={name}
+                    agent={agent}
+                    connected={connection !== 'simulated'}
+                    session={session}
+                    controls={controls}
+                    field={composer}
+                    above={
+                      <QueueAddMenu
+                        node={node}
+                        nodes={nodes}
+                        actions={AGENT_ACTIONS[agent]}
+                        label="Queue something"
+                        onAdd={own.onAdd}
+                        onChooseStep={chooseStep}
+                      />
+                    }
+                  />
+                </section>
+              )}
               {peerNode && <QueueLinks container={body} links={links} />}
             </div>
           </div>

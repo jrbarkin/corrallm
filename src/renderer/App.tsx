@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { SessionBackend } from './agent/connected';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
+import type { TerminalBackend } from './terminal/backend';
 
 /**
  * Canvases are opened and saved by the main process (src/main/canvas.ts), which also keeps the
@@ -25,6 +26,15 @@ const sessionBackend: SessionBackend = {
   setModel: (agentId, model) => window.api.setSessionModel(agentId, model),
   close: (agentId) => window.api.closeSession(agentId),
   onEvent: (listener) => window.api.onSessionEvent(listener),
+};
+
+/** Terminal agents' terminals run in the main process (src/main/sessions/terminal/). */
+const terminalBackend: TerminalBackend = {
+  attach: (agentId) => window.api.attachTerminal(agentId),
+  detach: (agentId) => window.api.detachTerminal(agentId),
+  write: (agentId, data) => window.api.writeTerminal(agentId, data),
+  resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
+  onEvent: (listener) => window.api.onTerminalEvent(listener),
 };
 
 type PingState =
@@ -63,7 +73,11 @@ export function App() {
           {ping.status === 'error' && `Ping failed: ${ping.message}`}
         </p>
       </header>
-      <GraphEditor files={files} sessionBackend={sessionBackend} />
+      <GraphEditor
+        files={files}
+        sessionBackend={sessionBackend}
+        terminalBackend={terminalBackend}
+      />
     </main>
   );
 }

@@ -86,4 +86,32 @@ describe('preload', () => {
     stop();
     expect(removeListener).toHaveBeenCalledWith('session:event', receive);
   });
+
+  it('invokes the terminal channels with their arguments', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(null);
+    await api.attachTerminal('a');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:attach', 'a');
+    await api.writeTerminal('a', 'ls\r');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:input', 'a', 'ls\r');
+    await api.resizeTerminal('a', 120, 40);
+    expect(invoke).toHaveBeenLastCalledWith('terminal:resize', 'a', 120, 40);
+    await api.detachTerminal('a');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:detach', 'a');
+  });
+
+  it('passes terminal events on without Electron’s event object, until told to stop', async () => {
+    const api = await exposed();
+    const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();
+    const stop = api.onTerminalEvent(heard);
+    const [channel, receive] = on.mock.calls[0] ?? [];
+    expect(channel).toBe('terminal:event');
+    if (!receive) throw new Error('not listening');
+
+    receive({ sender: 'the ipcRenderer event' }, 'a', { type: 'output', data: 'hi' });
+    expect(heard).toHaveBeenCalledWith('a', { type: 'output', data: 'hi' });
+
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
+  });
 });

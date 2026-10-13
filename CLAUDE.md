@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels, with a project folder their agents work in; and node-pty installed but used only by the packaged-build self-test. A Claude agent runs Simulated (a scripted session) or connected to the real `claude` CLI, in a Terminal or through the Agent SDK: the connection layer is built (see Connected sessions), but its two connectors are placeholders until their builds land.
+corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React + TypeScript). It will become an agent orchestrator that spawns and manages the Claude Code and Codex CLIs as child processes. Today it has a canvas of agents in the renderer (`src/renderer/graph/`), each opening into a Claude Code-style session (`src/renderer/agent/`); canvases saved as `.corral` files over the `canvas:*` IPC channels, with a project folder their agents work in. A Claude agent runs Simulated (a scripted session) or connected to the real `claude` CLI, in a Terminal or through the Agent SDK (see Connected sessions): a Terminal agent runs Claude Code's own interactive CLI in a node-pty pseudo-terminal, shown in its agent view with xterm.js; the Agent SDK connector is a placeholder until its build lands.
 
 ## Commands
 
@@ -19,13 +19,15 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` (note `pnpm dev` overwrites it). Headless Linux: `xvfb-run -a pnpm test:e2e`.
+- `CORRALLM_CLAUDE_PATH=/path/to/claude` makes connected agents run that `claude` instead of the user's own (the e2e tests point it at `e2e/fake-claude.mjs`).
 - Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). It loads node-pty, spawns a shell that exits, and exits 0 on success. CI runs this on all three OSes.
 
 ## Testing
 
 - Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
 - The test suite is the regression guard, not ad-hoc review. Keep tests robust and meaningful: assert behaviour users or callers rely on, not incidental details. Prefer unit tests for logic, and add Playwright e2e only for what needs the real app (pointer interactions, CSP, packaging).
-- Tests never run the real Claude. Main's session tests use the fake connector (`src/main/sessions/fake.ts`), renderer tests a fake backend (`src/renderer/test-backend.ts`), and e2e runs the app with `CORRALLM_FAKE_SESSIONS=1` (`launchApp({ env })`; honoured only by unpackaged builds), which gives every connection the fake connector. A connector's own tests drive a fake `claude` that prints the CLI's real formats.
+- Tests never run the real Claude. Main's session tests use the fake connector (`src/main/sessions/fake.ts`), renderer tests a fake backend (`src/renderer/test-backend.ts`), and e2e runs the app with `CORRALLM_FAKE_SESSIONS=1` (`launchApp({ env })`; honoured only by unpackaged builds), which gives every connection the fake connector. A connector's own tests drive a fake `claude` that prints the CLI's real formats: the Terminal connector's unit tests run `sessions/terminal/fake-claude.ts` behind a fake pty, and `e2e/terminal.e2e.ts` runs the real connector with `CORRALLM_CLAUDE_PATH` pointing at `e2e/fake-claude.mjs` in a real pty (it logs what it gets in the project folder, since the terminal draws its text on a canvas).
+- jsdom cannot draw xterm.js: renderer tests that show a Terminal agent mock `src/renderer/terminal/screen.ts` with `fakeScreens` (`src/renderer/terminal/test-screen.ts`), which also fakes main's terminals (`fakeTerminals`).
 - Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
 
 ## Layout
@@ -38,10 +40,17 @@ src/main/       Main process (Node). index.ts is the entry; security.ts, app-pro
                 canvas's project folder (picked in a folder dialog); memory.ts remembers, per
                 canvas file, in the app's user data, its folder and its agents' session ids.
 src/main/sessions/  Connected sessions (see Connected sessions): connector.ts is the interface a
-                connection implements, manager.ts runs every session for the session:* channels,
-                connectors.ts picks each connection's connector, fake.ts is the fake for tests,
-                args.ts validates the channels' arguments, environment.ts and claude.ts resolve
-                the agents' environment (the login shell's) and the `claude` executable.
+                connection implements, manager.ts runs every session for the session:* channels
+                (and shows Terminal sessions' screens for the terminal:* channels), connectors.ts
+                picks each connection's connector, fake.ts is the fake for tests, args.ts validates
+                the channels' arguments, environment.ts and claude.ts resolve the agents'
+                environment (the login shell's) and the `claude` executable.
+src/main/sessions/terminal/  The Terminal connection: connector.ts starts a TerminalSession
+                (session.ts: the CLI in a node-pty pty (pty.ts), its turns, typing the queue's
+                messages in (typing.ts)), screen.ts keeps a headless xterm.js copy of its screen
+                (snapshots for views, the prompt's draft, Program Status reports: status.ts),
+                hooks.ts runs the local server its Claude Code hooks post to. fake-claude.ts fakes
+                the CLI for its tests.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api.
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
@@ -84,9 +93,13 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      done when the turn ends, other steps are simulated, waits hold until their
                      target is done. run.css marks where the run is on a
                      queue's rows, wherever they are shown.
+src/renderer/terminal/ A Terminal agent's session in its agent view (TerminalPane.tsx): the CLI's own
+                     terminal (xterm.js, screen.ts), linked to main's (link.ts, backend.ts), with a bar
+                     of what the session does, its queued messages and the queue's ⊕.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown.
-src/shared/     Types shared by all processes, including the IPC contract (ipc.ts) and the
-                connected-session protocol (session.ts). No Node, Electron or DOM imports here.
+src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the
+                connected-session protocol (session.ts) and what a terminal view is shown
+                (terminal.ts). No Node, Electron or DOM imports here.
 e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Launch the app with
                 launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in.
 build/          Packaging resources (macOS entitlements, patched rpm spec template).
@@ -105,14 +118,14 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/p
 - Never enable `nodeIntegration`, and never disable `contextIsolation`, `sandbox` or `webSecurity`. No `<webview>`.
 - The preload exposes one typed function per IPC channel through `contextBridge`. Never expose `ipcRenderer`, a generic `invoke`/`send`, or Electron event objects to the renderer.
 - All IPC goes through the contract in `src/shared/ipc.ts` and the `handle()` wrapper in `src/main/ipc.ts`, which validates the sender frame (top-level frame of our own origin) and parses arguments. Never call `ipcMain.handle`/`ipcMain.on` directly.
-- Production renderer is served from `app://main_window/` by `src/main/app-protocol.ts` (not `file://`, not `loadFile`). The CSP is a response header from `src/main/csp.ts`: never add `'unsafe-inline'` or `'unsafe-eval'` to `PROD_CSP`. Dev-only relaxations go in `DEV_CSP`.
+- Production renderer is served from `app://main_window/` by `src/main/app-protocol.ts` (not `file://`, not `loadFile`). The CSP is a response header from `src/main/csp.ts`: never add `'unsafe-inline'` or `'unsafe-eval'` to `PROD_CSP`. Dev-only relaxations go in `DEV_CSP`. The only inline styles allowed are the two exact ones xterm.js writes for its scrollbar, by hash (`TERMINAL_STYLES`); xterm.js draws only with its WebGL renderer, loaded before the terminal opens (its DOM renderer's inline styles are blocked).
 - Dev vs production is decided by `MAIN_WINDOW_VITE_DEV_SERVER_URL` (defined only under `pnpm dev`), not `app.isPackaged`. e2e runs the production build unpackaged.
 - Navigation and redirects away from the app origin, and renderer-created windows, are blocked (`security.ts`). External links open in the default browser only if `allowedExternalUrl` accepts them (https + `EXTERNAL_URL_ALLOWLIST` in `url-policy.ts`); always open the normalized URL it returns.
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. CI asserts this.
 - Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork` or `spawn`), and Playwright cannot drive the packaged app.
 - Credentials only come from environment variables (see `.env.example`). Never commit `.env` or key files; `pnpm dev` strips the signing variables before launching the app. Agents use the `claude` CLI's own login; corrallm never reads, stores or passes credentials.
-- Agents run only in the project folder the user picked in main's folder dialog (`project.ts`): that choice is the trust gate (SDK sessions skip Claude Code's own trust dialog). The renderer never passes a path, a command line, an environment or a session id to resume: main resolves `claude` (`sessions/claude.ts`), the environment and the folder, and remembers session ids itself. Connectors use an agent's id only to route events, never in a path or a command line. Every session's process is closed before the app quits.
+- Agents run only in the project folder the user picked in main's folder dialog (`project.ts`): that choice is the trust gate (SDK sessions skip Claude Code's own trust dialog). The renderer never passes a path, a command line, an environment or a session id to resume: main resolves `claude` (`sessions/claude.ts`), the environment and the folder, and remembers session ids itself. Connectors use an agent's id only to route events, never in a path or a command line. Every session's process is closed before the app quits. A Terminal view sends only keystrokes and its size; its CLI's hooks post to a server on 127.0.0.1 that needs the session's own token (from its environment), and corrallm only listens to them (it never answers with a decision).
 
 ## Adding an IPC channel
 
@@ -133,13 +146,16 @@ A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `termi
 - The renderer (`connected.ts`) starts an agent's session when its view opens or a message is sent (`session:start`: connection, model, mode), sends one message at a time (it keeps its own editable queue; the runner hears each turn's end through `SessionStore.send`'s `onDone`), passes on answers to prompts, interrupts, mode and model changes, and closes the session when the agent goes or runs another way. Session events from main are routed to the agent's driver only if they come from its current connection.
 - Main (`sessions/manager.ts`) starts the session with the connection's `Connector` in the canvas's project folder (it refuses without one), with the agents' environment (the user's login shell's, cleaned of what corrallm was started from: `environment.ts`), resuming the agent's last session id (remembered per canvas file in `memory.ts`, so sessions survive a restart; the same id is resumed whichever connection the agent switches to). Opening or forgetting a canvas, choosing another project folder (which forgets the ids), a renderer that goes or reloads, and quitting (`before-quit` in index.ts) close sessions.
 - A connector emits `SessionEvent`s through its `SessionHost`: `started` (model, mode, the models it offers, which the composer's model picker lists), then per turn: `user` (with the renderer's message id, or a new one for a message typed in a terminal), `status` (working, or waiting on the user) and entries by id (`text`/`thinking` stream in, `tool`/`todos` replace; `parent` nests a subagent's entries), prompts (`permission` with what "always" allows, `question` for AskUserQuestion, `plan` for ExitPlanMode; `withdrawn` when no longer asked), `notice` (compaction, retries, usage limits with their reset time, login problems), `usage`, `mode`, `model`, and exactly one `end` naming the messages it answered (interrupted, or failed). `status` is never sent outside a turn: only `end` makes a session idle. `closed` if the session stops by itself; it calls `remember(sessionId)` whenever its CLI's session id is known or changes (as after /clear).
-- To build a connection: write its `Connector` in its own folder (`src/main/sessions/sdk/`, `src/main/sessions/terminal/`), find the CLI with `requireClaude(spec.env)`, and register it in `connectors.ts`. Its tests drive a fake `claude`; the manager, IPC, renderer and UI need no change unless the protocol grows (then extend `session.ts`'s types, `connected.ts`'s `receive`, and their tests). The Terminal connection also adds its terminal channels and view (the agent view shows the CLI's own terminal in place of the transcript and composer).
+- To build a connection: write its `Connector` in its own folder (`src/main/sessions/sdk/`, `src/main/sessions/terminal/`), find the CLI with `requireClaude(spec.env)`, and register it in `connectors.ts`. Its tests drive a fake `claude`; the manager, IPC, renderer and UI need no change unless the protocol grows (then extend `session.ts`'s types, `connected.ts`'s `receive`, and their tests).
+- The Terminal connection (`sessions/terminal/`) runs Claude Code's own interactive CLI, so the user has all of Claude Code in the agent view (`TerminalPane.tsx` in place of the transcript and composer): its prompts, modes, models, slash commands and dialogs are answered there. It is started with `--settings` (a file in the temp folder: corrallm's HTTP hooks, merged with the user's), `--session-id` (new) or `--resume` (one with no transcript starts afresh under the same id), and `--model`/`--permission-mode` only when corrallm chose them (Manual is left to the user's own default). corrallm follows it to orchestrate it: Claude Code's Program Status reports (OSC 7501, answered and read in main's copy of the screen) say when it works, waits on the user, is done, was interrupted (idle) or failed; its hooks (`hooks.ts`) tell the session id (it changes with /clear), prompts typed in the terminal, the last reply, failures, mode and model. A message corrallm sends is typed in (a few characters at a time, Ctrl+J for line breaks, then Enter: never a paste, which Claude Code collapses and treats as untrusted) once the prompt is ready: Claude Code idle or done, and nothing the user typed in it. Meanwhile, a dialog (the folder trust prompt) or the user's draft makes the turn wait on the user. A turn ends once Claude Code has taken every message sent in it and stopped working; one the user started in the terminal is a turn too. Answers, modes and models are refused over the session channels: they belong to the terminal.
+- Terminal views: `terminal:attach` asks main to show an agent's terminal; main sends `terminal:event`s (`src/shared/terminal.ts`): the screen as it is (a snapshot of its headless copy, now or once the session starts, and again for each new process), then the CLI's output, then its exit. The view (`link.ts`) writes the snapshot from scratch, drops what its terminal answers while doing so, then passes keystrokes (`terminal:input`) and its size (`terminal:resize`) on. The pty lives in main: closing the view (`terminal:detach`) leaves the session running. While no view is shown, main's copy answers the terminal queries a pty needs answered (DA1, which Windows' ConPTY waits on).
 
 ## Native modules
 
 - Forge's Vite plugin packages only `.vite/`. `package.json` `dependencies` therefore holds only native modules that ship unbundled; everything Vite bundles (React, electron-squirrel-startup, …) belongs in `devDependencies`.
 - To add one (e.g. `better-sqlite3`): add it to `dependencies`; add it to `external` in `vite.main.config.mts`; add it to `NATIVE_MODULES` in `forge.config.mts` (runtime files, build-only deps); extend `asar.unpack` so its binaries are real files; keep it in `rebuildConfig.ignoreModules` if it ships Node-API prebuilds; approve its install script in `pnpm-workspace.yaml` `allowBuilds` only if it needs one. Then load and exercise it in `runNativeSelfTest` (`src/main/native-selftest.ts`) so the packaged self-test and CI cover it.
 - node-pty is pinned to `1.2.0-beta.14` exactly: 1.1.0 ships a non-executable macOS `spawn-helper` and no Linux prebuilds; beta.15 has a Windows regression (microsoft/node-pty#955).
+- node-pty runs Terminal agents (`sessions/terminal/pty.ts`, loaded only when one starts) and the packaged self-test.
 - node-pty on Windows: pass `useConptyDll: true` (its default `kill()` path uses `child_process.fork`, which the RunAsNode fuse breaks). The bundled ConPTY sends a DA1 query (`ESC[c`) at startup and holds output for about 3 s until answered: attach the pty to xterm.js (which answers) or, for headless consumers, reply `\x1b[?1;2c` when the query appears. Kill or await every pty before the app quits (teardown crashes, node-pty #904/#951).
 - Unit tests must never import native modules or the real `electron` module: `vi.mock('electron', ...)` (importing it downloads the Electron binary).
 

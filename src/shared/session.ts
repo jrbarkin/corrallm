@@ -100,7 +100,9 @@ export interface SessionUsage {
  * What happened in a connected session.
  *
  * A turn starts with the user's message ('user': one the renderer sent, echoed with its id, or one
- * typed straight into a terminal) and ends with exactly one 'end', naming the messages it answered.
+ * typed straight into a terminal, told as soon as it is known) and ends with exactly one 'end',
+ * naming the messages it answered (none, for a turn the CLI started by itself, as when a background
+ * task reports back).
  * In between the session is working, or waiting on the user while a prompt ('permission',
  * 'question', 'plan') is open. Entries are by id: the first event with an id adds the entry, later
  * ones stream more text into it ('text', 'thinking') or replace it ('tool', 'todos'). `parent` is

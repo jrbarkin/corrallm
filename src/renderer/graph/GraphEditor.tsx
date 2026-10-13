@@ -29,6 +29,8 @@ import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import { RunStore } from '../run/runner';
+import { NO_TERMINAL } from '../terminal/backend';
+import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
 import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
 import type { GraphActions } from './actions';
@@ -136,20 +138,28 @@ export interface CanvasFiles {
 
 /**
  * The editor, with (given `files`) a bar to open and save canvases as `.corral` files, and (given
- * `sessionBackend`) agents connected to the real CLI through the main process.
+ * `sessionBackend`, and `terminalBackend` for their terminals) agents connected to the real CLI
+ * through the main process.
  */
 export function GraphEditor({
   initialGraph = EMPTY_GRAPH,
   files,
   sessionBackend,
+  terminalBackend = NO_TERMINAL,
 }: {
   initialGraph?: Graph;
   files?: CanvasFiles;
   sessionBackend?: SessionBackend;
+  terminalBackend?: TerminalBackend;
 }) {
   return (
     <ReactFlowProvider>
-      <Editor initialGraph={initialGraph} files={files} sessionBackend={sessionBackend} />
+      <Editor
+        initialGraph={initialGraph}
+        files={files}
+        sessionBackend={sessionBackend}
+        terminalBackend={terminalBackend}
+      />
     </ReactFlowProvider>
   );
 }
@@ -163,10 +173,12 @@ function Editor({
   initialGraph,
   files,
   sessionBackend,
+  terminalBackend,
 }: {
   initialGraph: Graph;
   files: CanvasFiles | undefined;
   sessionBackend: SessionBackend | undefined;
+  terminalBackend: TerminalBackend;
 }) {
   const [graph, setRawGraph] = useState(initialGraph);
   /** Every agent's session, playing on while its view is closed: scripted, or connected. */
@@ -884,6 +896,7 @@ function Editor({
             }}
             connection={connectionOf(openedNode.data)}
             project={project}
+            terminal={terminalBackend}
             onAgent={(agent, connection) => {
               setGraph((g) =>
                 setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
@@ -906,6 +919,9 @@ function Editor({
             }}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
+              open: () => {
+                sessionStore.open(openedNode.id);
+              },
               send: (text) => {
                 sessionStore.send(openedNode.id, openedNode.data.agent ?? DEFAULT_AGENT, text);
               },

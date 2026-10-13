@@ -101,6 +101,9 @@ function main(): void {
         emit: (contents, agentId, connection, event) => {
           sendEvent(contents, 'session:event', agentId, connection, event);
         },
+        terminal: (contents, agentId, event) => {
+          sendEvent(contents, 'terminal:event', agentId, event);
+        },
       });
       registerIpcHandlers(trustedOrigin, { projects, sessions });
 
