@@ -251,17 +251,27 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
   await page.keyboard.type('agent sdk');
   await page.keyboard.press('Enter');
   await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
-  const refusal = view.getByRole('log', { name: 'Transcript' }).getByRole('alert');
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  const refusal = transcript.getByRole('alert');
   await expect(refusal).toContainText(
     "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other products to use through the Agent SDK",
   );
+  // A message sent meanwhile never reaches Claude: it is kept, queued, not a turn that failed.
+  await view.getByRole('textbox', { name: 'Message Agent 1' }).fill('Fix the login bug');
+  await page.keyboard.press('Enter');
+  await expect(view.getByRole('list', { name: 'Queued messages' })).toContainText(
+    'Fix the login bug',
+  );
+  await expect(refusal).toHaveCount(1);
+  await expect(transcript.getByText('Fix the login bug')).toHaveCount(0);
 
   await refusal.getByRole('button', { name: 'Switch to Terminal' }).click();
   await expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
   await expect(view.locator('.agent-terminal')).toHaveAttribute('data-state', 'live');
   await claudeReady();
-  // Claude Code ran only in the terminal: the Agent SDK never started it.
+  // Claude Code ran only in the terminal: the Agent SDK never started it. What was kept goes there.
   expect(await starts()).toHaveLength(1);
+  await expect.poll(prompts).toEqual(['Fix the login bug']);
 
   // Its chip's menu opens over the terminal, and takes the pointer there.
   await view.getByRole('button', { name: 'Agent: Claude · Terminal' }).click();

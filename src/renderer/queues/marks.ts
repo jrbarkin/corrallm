@@ -17,7 +17,7 @@ export function taskKey(lane: string, item: string | null): string {
  * user for it as its agent (in `asking`) asks permission, or how it went), `data-until` (while the
  * run holds the agent at it, a delay or a wait with a time limit: when its time comes, in epoch
  * ms), `data-decide` (the run holds the agent there for the user to decide: its decision bar
- * shows), at an OK, `data-asked` (the last changes asked for there, this run) with
+ * shows; not for a session that would not start), at an OK, `data-asked` (the last changes asked for there, this run) with
  * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
  * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
  */
@@ -77,7 +77,8 @@ export function queueMarks(
       // A permission prompt in the task asks the user too; but only the run's own hold decides.
       'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
       'data-until': until === undefined ? undefined : String(until),
-      'data-decide': held && at.status === 'asking' ? '' : undefined,
+      // A session that would not start is decided where it says why (asks.ts), not on the row.
+      'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
       'data-round':

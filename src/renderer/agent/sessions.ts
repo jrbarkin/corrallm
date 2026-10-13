@@ -21,6 +21,7 @@ import type {
   MessageImage,
   Mode,
   PlanAnswer,
+  Refusal,
   Session,
   SessionAction,
 } from './session';
@@ -39,7 +40,10 @@ interface Driving {
  * (scripted.ts), or connected to a session in the main process (connected.ts, through
  * `backend`). A message sent while an agent works is queued, and sent once the turn ends,
  * interrupted or not. Whoever sends a message can hear when the turn it starts ends, and what the
- * agent replied in it, and can take the message back (the queues' run, run/runner.ts).
+ * agent replied in it, and can take the message back (the queues' run, run/runner.ts). A session
+ * that would not start (an Agent SDK agent on a Claude subscription) keeps its messages queued,
+ * unsent, and says so to whoever sent them, until the agent runs another way (or the session
+ * starts after all).
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
@@ -50,8 +54,13 @@ export class SessionStore {
   readonly #connections = new Map<string, AgentConnection>();
   /** Each agent's type, as it was last sent a message: what its scripted turns are like. */
   readonly #types = new Map<string, AgentType>();
-  /** Who to tell when the turn a queued message starts ends, by the queued message's id. */
+  /**
+   * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
+   * (queued or not) until then.
+   */
   readonly #onDone = new Map<string, (interrupted: boolean, reply: string) => void>();
+  /** Who to tell when a message's session would not start (it stays queued), by its id. */
+  readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
@@ -110,10 +119,13 @@ export class SessionStore {
 
   /**
    * Sends the user's message (with the images pasted into it): a new turn, or queued while one is
-   * going on. `onDone` hears when that turn ends (`interrupted` too if the message is taken off the
-   * queue before it is sent, or the turn failed), with what the agent replied in it (turnReply).
-   * Returns a function that takes the message back: off the queue while it waits there, or
-   * interrupting its turn while that goes on (and nothing once it has ended).
+   * going on (or while messages kept from a session that would not start wait: they go first, and
+   * the session is tried again). `onDone` hears when that turn ends (`interrupted` too if the
+   * message is taken off the queue before it is sent, or the turn failed), with what the agent
+   * replied in it (turnReply). `onRefused` hears each time the session would not start while the
+   * message waits to go (kept, queued). Returns a function that takes the message back: off the
+   * queue while it waits there, or interrupting its turn while that goes on (and nothing once it
+   * has ended).
    */
   send(
     agentId: string,
@@ -121,20 +133,23 @@ export class SessionStore {
     text: string,
     onDone?: (interrupted: boolean, reply: string) => void,
     images?: MessageImage[],
+    onRefused?: (refusal: Refusal) => void,
   ): () => void {
     this.#types.set(agentId, agent);
-    let id: string;
-    if (this.of(agentId).status === 'idle') {
-      id = this.#start(agentId, agent, { text, images }, onDone);
+    const id = crypto.randomUUID();
+    if (onDone) this.#onDone.set(id, onDone);
+    if (onRefused) this.#onRefused.set(id, onRefused);
+    const session = this.of(agentId);
+    if (session.status === 'idle' && session.queued.length === 0) {
+      this.#start(agentId, agent, { text, images }, id);
     } else {
-      id = crypto.randomUUID();
-      if (onDone) this.#onDone.set(id, onDone);
       this.#dispatch(agentId, {
         type: 'queue',
         id,
         text,
         ...(images === undefined || images.length === 0 ? {} : { images }),
       });
+      this.#idle(agentId);
     }
     return () => {
       if (this.of(agentId).queued.some((queued) => queued.id === id)) this.unqueue(agentId, id);
@@ -272,9 +287,7 @@ export class SessionStore {
 
   unqueue(agentId: string, queuedId: string): void {
     this.#dispatch(agentId, { type: 'unqueue', id: queuedId });
-    const onDone = this.#onDone.get(queuedId);
-    this.#onDone.delete(queuedId);
-    onDone?.(true, '');
+    this.#heard(queuedId)?.(true, '');
   }
 
   /** The user chose a mode for the agent: its session switches to it, or starts in it. */
@@ -305,6 +318,7 @@ export class SessionStore {
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
     for (const onDone of this.#onDone.values()) onDone(true, '');
     this.#onDone.clear();
+    this.#onRefused.clear();
     this.#turns.clear();
     this.#onceIn.clear();
     this.#unsubscribe?.();
@@ -313,23 +327,40 @@ export class SessionStore {
     this.#notify();
   }
 
-  /** Starts a turn with a message (as `id`: a queued message keeps its own); returns its id. */
+  /** Starts a turn with message `id` (a queued message keeps its own). */
   #start(
     agentId: string,
     agent: AgentType,
     { text, images }: { text: string; images: MessageImage[] | undefined },
-    onDone?: (interrupted: boolean, reply: string) => void,
-    id: string = crypto.randomUUID(),
-  ): string {
+    id: string,
+  ): void {
     const pasted = images === undefined || images.length === 0 ? {} : { images };
     this.#turns.set(agentId, id);
     this.#dispatch(agentId, { type: 'start', entry: { id, kind: 'user', text, ...pasted } });
     this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) => {
       // The next queued message may have started already.
       if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
-      onDone?.(interrupted, turnReply(this.of(agentId), id));
+      this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id));
     });
-    return id;
+  }
+
+  /** Who hears when message `id`'s turn ends, now that it does: forgotten, as it ends once. */
+  #heard(id: string): ((interrupted: boolean, reply: string) => void) | undefined {
+    const onDone = this.#onDone.get(id);
+    this.#onDone.delete(id);
+    this.#onRefused.delete(id);
+    return onDone;
+  }
+
+  /**
+   * The agent's session would not start, so message `id`'s turn never went: it goes back to the
+   * head of the queue, and whoever sent a message still queued hears why (none can go until the
+   * agent runs another way, or the session starts after all).
+   */
+  #refused(agentId: string, id: string, refusal: Refusal): void {
+    this.#dispatch(agentId, { type: 'refuse', id });
+    if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
+    for (const queued of this.of(agentId).queued) this.#onRefused.get(queued.id)?.(refusal);
   }
 
   /** The session is idle: its next queued message, if any, starts. */
@@ -337,14 +368,11 @@ export class SessionStore {
     const session = this.of(agentId);
     const [next] = session.queued;
     if (!next || session.status !== 'idle') return;
-    const onDone = this.#onDone.get(next.id);
-    this.#onDone.delete(next.id);
     this.#dispatch(agentId, { type: 'unqueue', id: next.id });
     this.#start(
       agentId,
       this.#types.get(agentId) ?? DEFAULT_AGENT,
       { text: next.text, images: next.images },
-      onDone,
       next.id,
     );
   }
@@ -381,6 +409,9 @@ export class SessionStore {
       idle: () => {
         if (current() && !driving.closing) this.#idle(agentId);
       },
+      refused: (id, refusal) => {
+        if (current() && !driving.closing) this.#refused(agentId, id, refusal);
+      },
       newId: () => crypto.randomUUID(),
       now: () => Date.now(),
       later: (run, ms) => {
@@ -415,11 +446,7 @@ export class SessionStore {
   #forget(agentId: string): void {
     this.#letGo(agentId);
     this.#onceIn.delete(agentId);
-    for (const { id } of this.of(agentId).queued) {
-      const onDone = this.#onDone.get(id);
-      this.#onDone.delete(id);
-      onDone?.(true, '');
-    }
+    for (const { id } of this.of(agentId).queued) this.#heard(id)?.(true, '');
     this.#turns.delete(agentId);
     this.#sessions = Object.fromEntries(
       Object.entries(this.#sessions).filter(([id]) => id !== agentId),

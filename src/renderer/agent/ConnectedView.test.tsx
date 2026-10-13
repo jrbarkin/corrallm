@@ -68,6 +68,29 @@ async function open(
   return { ...fake, container, card, view, composer, send, transcript, emit, openLink };
 }
 
+/** Why main refuses to start an Agent SDK session on a Claude subscription. */
+const SUBSCRIPTION =
+  "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other " +
+  'products to use through the Agent SDK: run this agent in Terminal, or give Claude Code an API ' +
+  'key or a cloud provider.';
+
+/** Main, on a Claude subscription: an Agent SDK session says why it won't start, then fails to. */
+function refuseSdk(fake: ReturnType<typeof fakeBackend>) {
+  fake.backend.start.mockImplementation((_agent, options) => {
+    if (options.connection !== 'sdk') return Promise.resolve(null);
+    fake.emit('a', 'sdk', {
+      type: 'notice',
+      id: crypto.randomUUID(),
+      level: 'error',
+      text: SUBSCRIPTION,
+      switchTo: 'terminal',
+    });
+    return Promise.reject(
+      new Error(`Error invoking remote method 'session:start': Error: ${SUBSCRIPTION}`),
+    );
+  });
+}
+
 const MODELS = [
   { value: 'opus', label: 'Opus', description: 'The most capable' },
   { value: 'haiku', label: 'Haiku', description: 'The fastest' },
@@ -107,28 +130,9 @@ describe('a connected agent', () => {
   });
 
   it('does not run through the Agent SDK on a Claude subscription: it says why, and switches to Terminal', async () => {
-    const why =
-      "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow " +
-      'other products to use through the Agent SDK: run this agent in Terminal, or give Claude ' +
-      'Code an API key or a cloud provider.';
-    const { backend, view, transcript, card } = await open({ connection: 'sdk' }, (fake) => {
-      // As main does: it says why, then the start fails saying the same.
-      fake.backend.start.mockImplementation((_agent, options) => {
-        if (options.connection !== 'sdk') return Promise.resolve(null);
-        fake.emit('a', 'sdk', {
-          type: 'notice',
-          id: 'login',
-          level: 'error',
-          text: why,
-          switchTo: 'terminal',
-        });
-        return Promise.reject(
-          new Error(`Error invoking remote method 'session:start': Error: ${why}`),
-        );
-      });
-    });
+    const { backend, view, transcript, card } = await open({ connection: 'sdk' }, refuseSdk);
     expect(transcript.getAllByRole('alert').map((alert) => alert.textContent)).toEqual([
-      `${why}Switch to Terminal`,
+      `${SUBSCRIPTION}Switch to Terminal`,
     ]);
 
     fireEvent.click(transcript.getByRole('button', { name: 'Switch to Terminal' }));
@@ -143,6 +147,71 @@ describe('a connected agent', () => {
     );
     // Its terminal starts: the Agent SDK's refusal is not taken for the terminal's own problem.
     expect(view.getByText('Starting Claude Code…')).toBeTruthy();
+  });
+
+  it('keeps a message it could not send queued, not as a turn that failed', async () => {
+    const { backend, view, transcript, send } = await open({ connection: 'sdk' }, refuseSdk);
+    await send('Fix the login bug');
+    expect(backend.send).not.toHaveBeenCalled();
+    const queued = within(view.getByRole('list', { name: 'Queued messages' }));
+    expect(queued.getByText('Fix the login bug')).toBeTruthy();
+    // Never sent: no message in the transcript to rewind to, no failed turn, the refusal said once.
+    expect(transcript.queryByText('Fix the login bug')).toBeNull();
+    expect(transcript.queryByText(/^Failed after/)).toBeNull();
+    expect(transcript.queryAllByRole('button', { name: 'Rewind to here' })).toHaveLength(0);
+    expect(transcript.getAllByRole('alert')).toHaveLength(1);
+    expect(view.getByRole('button', { name: 'Send' })).toBeTruthy();
+
+    // Once it runs in Terminal, what was kept goes there.
+    fireEvent.click(transcript.getByRole('button', { name: 'Switch to Terminal' }));
+    await settle();
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: 'Fix the login bug',
+    });
+  });
+
+  it('holds the run for you when it would not start, until you switch it to Terminal', async () => {
+    const { backend, view } = await open(
+      { connection: 'sdk', queue: [{ id: 'tests', action: 'Bash' }] },
+      refuseSdk,
+    );
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await settle();
+    // Not a failed step, nor done: it needs you, and says why.
+    const head = () =>
+      within(queues.getByRole('button', { name: 'Open a' }).parentElement ?? document.body);
+    expect(queues.getByRole('button', { name: 'Open a' }).parentElement?.dataset.run).toBe(
+      'asking',
+    );
+    expect(queues.getByText(/1 needs you/)).toBeTruthy();
+    expect(head().getByText(SUBSCRIPTION)).toBeTruthy();
+    expect(head().getByRole('button', { name: 'Switch to Terminal' })).toBeTruthy();
+
+    // Above its composer, what waits (its transcript says why).
+    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
+    const bar = within(view.getByRole('group', { name: 'Needs you' }));
+    expect(bar.getByText('Bash waits until a can start:')).toBeTruthy();
+    expect(bar.getByRole('button', { name: 'Switch to Terminal' })).toBeTruthy();
+
+    // The canvas's Needs you lists it too, with what waits.
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(sidebar.getByText(SUBSCRIPTION)).toBeTruthy();
+    expect(sidebar.getByText('Bash waits until a can start')).toBeTruthy();
+    fireEvent.click(sidebar.getByRole('button', { name: 'Switch to Terminal' }));
+    await settle();
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: 'Use the Bash tool for this step (run shell commands).',
+    });
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
   it('offers Terminal first in its agent chip, and says the Agent SDK needs an API key', async () => {

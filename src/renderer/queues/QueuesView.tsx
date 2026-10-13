@@ -12,6 +12,8 @@ import type { WaitTarget } from '../graph/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
+import { heldAsks } from '../run/asks';
+import type { HeldAsk } from '../run/asks';
 import type { Run } from '../run/runner';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
@@ -24,10 +26,10 @@ import './QueuesView.css';
 const GAP = 64;
 
 /**
- * What the run waits on the user for, in a lane: to decide at the hold its agent is at (an OK), or
- * to answer its agent, which asks permission.
+ * What the run waits on the user for, in a lane: to decide at the hold its agent is at (an OK), to
+ * answer its agent, which asks permission, or to switch an agent whose session would not start.
  */
-type Needs = 'decide' | 'answer';
+type Needs = 'decide' | 'answer' | 'switch';
 
 /** A wait whose target (in `choice`) is being picked: the agent whose queue it is in, `owner`. */
 interface Choosing {
@@ -50,7 +52,8 @@ interface Choosing {
  * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
  * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
  * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
- * stops whatever waits on it. A repeat is one card in its lane, over the rows of what it holds,
+ * stops whatever waits on it. Where a session would not start, the lane's head says why, and
+ * offers to switch the agent (asks.ts). A repeat is one card in its lane, over the rows of what it holds,
  * each in its row: its round shows in a pill, and once out of rounds it asks, as an OK does.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back
@@ -190,11 +193,15 @@ export function QueuesView({
   const needsYou = (id: string): Needs | undefined => {
     const status = run.running ? run.agents[id]?.status : undefined;
     return status === 'asking'
-      ? 'decide'
+      ? run.agents[id]?.refused
+        ? 'switch'
+        : 'decide'
       : status === 'running' && asking.has(id)
         ? 'answer'
         : undefined;
   };
+  /** What the run holds for the user: a session that would not start says so in its lane's head. */
+  const asks = useMemo(() => heldAsks(nodes, run), [nodes, run]);
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
@@ -292,6 +299,7 @@ export function QueuesView({
                   status={sessions[lane.agent.id]?.status ?? 'idle'}
                   run={run}
                   needsYou={needsYou(lane.agent.id)}
+                  ask={asks.find((ask) => ask.agent.id === lane.agent.id)}
                   focused={lane.agent.id === focus}
                   isStuck={isStuck}
                   marks={marks}
@@ -359,6 +367,7 @@ function LaneCells({
   status,
   run,
   needsYou,
+  ask,
   focused,
   isStuck,
   marks,
@@ -376,8 +385,10 @@ function LaneCells({
   /** Its session's status. */
   status: Session['status'];
   run: Run;
-  /** The run waits on the user: to decide at its hold, or to answer its agent. */
+  /** The run waits on the user: to decide at its hold, to answer its agent, or to switch one. */
   needsYou: Needs | undefined;
+  /** What the run holds the agent for, if it does. */
+  ask: HeldAsk | undefined;
   focused: boolean;
   isStuck: Lanes['isStuck'];
   marks: (lane: string, item: string | null) => RowMarks;
@@ -464,7 +475,24 @@ function LaneCells({
             {CONNECTION_INFO[connection].short}
           </span>
         )}
-        {needsYou && (
+        {needsYou === 'switch' && ask?.refusal && (
+          <div className="queues-refused" role="group" aria-label={`${name(id)} needs you`}>
+            <p title={ask.text}>{ask.text}</p>
+            {ask.choices.map((choice) => (
+              <button
+                key={choice.key}
+                type="button"
+                data-primary={choice.primary ? '' : undefined}
+                onClick={() => {
+                  edits.decide(id, ask.item.id, { choice: choice.key });
+                }}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {needsYou !== undefined && needsYou !== 'switch' && (
           <button
             type="button"
             className="queues-needs"

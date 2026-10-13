@@ -191,12 +191,13 @@ function Editor({
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   /**
    * Every agent's queue, run: messages go to the agents' sessions, and so do connected agents'
-   * steps and questions; a simulated agent's steps are simulated.
+   * steps and questions; a simulated agent's steps are simulated. An agent whose session would not
+   * start is switched to the connection the user chose for it there.
    */
   const [runStore] = useState(
     () =>
       new RunStore({
-        send: (agent, text, done, images) =>
+        send: (agent, text, done, images, refused) =>
           sessionStore.send(
             agent.id,
             agent.data.agent ?? DEFAULT_AGENT,
@@ -205,9 +206,14 @@ function Editor({
               done({ failed, reply });
             },
             images && [...images],
+            refused,
           ),
         tell: (agent, text) => {
           sessionStore.notice(agent.id, 'warning', text);
+        },
+        connect: (agent, connection) => {
+          // How an agent runs changes nothing laid out.
+          setRawGraph((g) => setConnection(g, agent.id, connection));
         },
         later: (run, ms) => {
           const timer = setTimeout(run, ms);

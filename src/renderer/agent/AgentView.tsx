@@ -653,6 +653,8 @@ export function AgentView({
                         {ask && (
                           <AskBar
                             ask={ask}
+                            // Its transcript says why its own session would not start.
+                            said={ask.refusal?.agent === node.id}
                             {...(ask.reply && connection !== 'simulated'
                               ? { hint: COMMAND_HINT }
                               : {})}
@@ -713,7 +715,9 @@ const waitsFor = (text: string) =>
  * what is written below answers it (its reply), and its choices. At an OK: "Waits for your OK on
  * the spec: write below what should change, or [Approve] [Stop here]". Otherwise, its question:
  * "3 rounds done, and still not: its last step succeeds. What should it try next? Write it below,
- * or [One more round] [Go on]".
+ * or [One more round] [Go on]". Where a session would not start, what waits, and why (unless
+ * the transcript below says why: `said`): "Bash waits until Shop can start: Claude Code is logged
+ * in with your Claude subscription…: [Switch to Terminal]".
  *
  * With `onReply`, where there is no composer below (a Terminal agent's bar), the reply has a box
  * of its own after the choices: "Waits for your OK on the spec: [Approve] [Stop here] [What should
@@ -721,11 +725,14 @@ const waitsFor = (text: string) =>
  */
 function AskBar({
   ask,
+  said = false,
   hint,
   onChoose,
   onReply,
 }: {
   ask: HeldAsk;
+  /** Whether the transcript shown with it already says why a session would not start. */
+  said?: boolean;
   hint?: string;
   onChoose: (choice: string) => void;
   /** Takes the reply typed in the bar's own box (trimmed, never empty). */
@@ -734,9 +741,11 @@ function AskBar({
   const [draft, setDraft] = useState('');
   const reply = onReply === undefined ? ask.reply?.label : undefined;
   const below = reply?.replace(/\?$/, '');
-  const text = isApproval(ask.item)
-    ? `${waitsFor(ask.text)}${below === undefined ? ':' : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}`
-    : `${ask.text}${reply === undefined ? '' : ` ${reply} Write it below, or`}`;
+  const text = ask.refusal
+    ? `${ask.detail ?? ''}:${said ? '' : ` ${ask.text}`}`
+    : isApproval(ask.item)
+      ? `${waitsFor(ask.text)}${below === undefined ? ':' : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}`
+      : `${ask.text}${reply === undefined ? '' : ` ${reply} Write it below, or`}`;
   const send = () => {
     const typed = draft.trim();
     if (typed === '' || !onReply) return;

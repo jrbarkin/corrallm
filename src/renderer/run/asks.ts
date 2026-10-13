@@ -1,12 +1,15 @@
+import type { Connection } from '../../shared/session';
+import { CONNECTION_INFO } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
-import { itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
+import { agentName, itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
 import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
 import type { Run } from './runner';
 
 /*
- * What each hold for the user asks (an OK, a repeat out of rounds), derived from the graph and the
- * run, never stored: an edit or a Stop needs nothing withdrawn. One ask shows in four places (a
+ * What each hold for the user asks (an OK, a repeat out of rounds, a session that would not
+ * start), derived from the graph and the run, never stored: an edit or a Stop needs nothing
+ * withdrawn. One ask shows in four places (a
  * queue's row, All queues' lane head, the canvas's Needs you sidebar, the bar above an agent's
  * composer or, for a Terminal agent, under its terminal), each answering through RunStore.decide.
  */
@@ -58,16 +61,23 @@ export function answersOf(item: QueueItem): Answers | undefined {
 export interface HeldAsk extends Answers {
   agent: GraphNode;
   item: QueueItem;
-  /** The question: "Your OK on the spec in SPEC.md?". */
+  /** The question: "Your OK on the spec in SPEC.md?"; or why a session would not start. */
   text: string;
-  /** What it comes after: "After “Write the spec…”". */
+  /** What it comes after: "After “Write the spec…”"; or what waits for a session to start. */
   detail?: string;
+  /**
+   * Held because a session would not start: whose (this agent's, or one it handed a message to),
+   * and the connection Switch (`{ choice: 'switch' }`) runs it with.
+   */
+  refusal?: { agent: string; switchTo: Connection };
 }
 
 /**
  * Every hold a running run has for the user, in graph order. An OK asks `Your OK on <what>?`,
  * after the work before it (pauses passed over), if there is any. A repeat out of rounds says how
- * many it ran, and what still does not hold.
+ * many it ran, and what still does not hold. A task whose session would not start says why, and
+ * what waits, and offers to switch that session's agent: "Switch to Terminal" ("Switch Reviewer
+ * to Terminal" for an agent it handed a message to).
  */
 export function heldAsks(nodes: readonly GraphNode[], run: Run): HeldAsk[] {
   if (!run.running) return [];
@@ -76,6 +86,27 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run): HeldAsk[] {
     if (agent.type !== 'agent' || at?.status !== 'asking' || at.current === undefined) return [];
     const queue = agent.data.queue ?? [];
     const item = findItem(queue, at.current)?.item;
+    if (item && at.refused) {
+      const { agent: to, text, switchTo } = at.refused;
+      const name = agentName(nodes, to);
+      const how = CONNECTION_INFO[switchTo].label;
+      return [
+        {
+          agent,
+          item,
+          text,
+          detail: `${taskLabel(nodes, item)} waits until ${name} can start`,
+          choices: [
+            {
+              key: 'switch',
+              label: to === agent.id ? `Switch to ${how}` : `Switch ${name} to ${how}`,
+              primary: true,
+            },
+          ],
+          refusal: { agent: to, switchTo },
+        },
+      ];
+    }
     const answers = item && answersOf(item);
     if (!item || !answers) return [];
     if (isRepeat(item)) {

@@ -83,8 +83,12 @@ export interface SessionQuestion extends AskedQuestion {
  * Prompts (permission, question, plan) are `withdrawn` when the session stops waiting for them.
  */
 export type Entry =
-  /** The user's message, with the images pasted into it. */
-  | { id: string; kind: 'user'; text: string; images?: MessageImage[] }
+  /**
+   * The user's message, with the images pasted into it. `reached`: a connected session's CLI has
+   * it (main said so, by its id, or it is from the session's history): what a rewind can go back
+   * to.
+   */
+  | { id: string; kind: 'user'; text: string; images?: MessageImage[]; reached?: true }
   | { id: string; kind: 'text'; text: string; parent?: string }
   | { id: string; kind: 'thinking'; text: string; seconds: number; parent?: string }
   | {
@@ -148,6 +152,15 @@ export type Entry =
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
   | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
 
+/**
+ * Why a connected session would not start, as it said (a notice offering another connection), and
+ * the connection that would: a message sent to it is kept, queued, until the agent runs that way.
+ */
+export interface Refusal {
+  text: string;
+  switchTo: Connection;
+}
+
 /** An entry the user answers while the turn waits. */
 export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' | 'elicitation' }>;
 
@@ -187,14 +200,17 @@ export interface Session {
 }
 
 /**
- * The user's messages a rewind can go back to, oldest first: those of the conversation now, since
- * the last /clear (what came before it is another conversation, as in Claude Code).
+ * The user's messages a rewind can go back to, oldest first: those the CLI has (`reached`), of the
+ * conversation now, since the last /clear (what came before it is another conversation, as in
+ * Claude Code).
  */
 export function rewindPoints(entries: readonly Entry[]): { id: string; text: string }[] {
   const cleared = entries.findLastIndex((entry) => entry.kind === 'cleared');
   return entries
     .slice(cleared + 1)
-    .flatMap((entry) => (entry.kind === 'user' ? [{ id: entry.id, text: entry.text }] : []));
+    .flatMap((entry) =>
+      entry.kind === 'user' && entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
+    );
 }
 
 /**
@@ -241,6 +257,11 @@ export type SessionAction =
   | { type: 'end'; id: string; seconds: number; interrupted: boolean; failed?: boolean }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
+  /**
+   * The session would not start (it said why), so the turn of the user's message `id` never went:
+   * the message leaves the transcript for the head of the queue, unsent, and the session is idle.
+   */
+  | { type: 'refuse'; id: string }
   /** The mode or model: `chosen` when the user chose it, rather than the session saying so. */
   | { type: 'mode'; mode: Mode; chosen?: boolean }
   | { type: 'model'; model: string; chosen?: boolean }
@@ -392,6 +413,23 @@ export function reduce(session: Session, action: SessionAction): Session {
     }
     case 'unqueue':
       return { ...session, queued: session.queued.filter((q) => q.id !== action.id) };
+    case 'refuse': {
+      const message = session.entries.find((entry) => entry.id === action.id);
+      if (message?.kind !== 'user') return session;
+      const entries = session.entries.filter((entry) => entry !== message);
+      // Said once: the session says why again each time it would not start.
+      const [before, last] = entries.slice(-2);
+      if (before?.kind === 'notice' && last?.kind === 'notice' && sameNotice(before, last)) {
+        entries.pop();
+      }
+      const { id, text, images } = message;
+      return {
+        ...session,
+        entries,
+        status: 'idle',
+        queued: [{ id, text, ...(images === undefined ? {} : { images }) }, ...session.queued],
+      };
+    }
     case 'mode':
       return {
         ...session,
@@ -438,6 +476,14 @@ export function reduce(session: Session, action: SessionAction): Session {
       return next;
     }
   }
+}
+
+/** Whether two notices say the same thing, the same way. */
+function sameNotice(
+  a: Extract<Entry, { kind: 'notice' }>,
+  b: Extract<Entry, { kind: 'notice' }>,
+): boolean {
+  return a.level === b.level && a.text === b.text && a.switchTo === b.switchTo;
 }
 
 /**

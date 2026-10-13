@@ -260,6 +260,45 @@
   background: color-mix(in srgb, var(--queues-asking) 28%, Canvas);
 }
 
+/* Why the agent's session would not start, on a line of its own, and the switch that gets past it. */
+.queues-head:has(.queues-refused) {
+  flex-wrap: wrap;
+}
+
+.queues-refused {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--queues-asking);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--queues-asking) 10%, Canvas);
+  font-size: 12px;
+}
+
+.queues-refused p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.queues-head .queues-refused button {
+  padding: 2px 10px;
+  border: 1px solid var(--queues-asking);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--queues-asking) 22%, Canvas);
+  font-size: 12px;
+}
+
+.queues-head .queues-refused button:hover {
+  color: inherit;
+  background: color-mix(in srgb, var(--queues-asking) 36%, Canvas);
+}
+
 /* Tasks: every queue's own cards (GraphEditor.css); a lane's end sits at the top of its row. */
 .queues-cell.dragging :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat) {
   box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);

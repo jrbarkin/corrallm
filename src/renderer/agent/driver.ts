@@ -1,13 +1,14 @@
 import type { EffortLevel, MessageImage, SessionAnswer } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
-import type { Mode, Session, SessionAction } from './session';
+import type { Mode, Refusal, Session, SessionAction } from './session';
 
 /*
  * What drives an agent's session. The store (sessions.ts) keeps every session and what is queued,
  * and decides when a turn starts; a driver plays each turn onto the session through `dispatch`:
  * the scripted driver (scripted.ts) for a simulated agent, the connected driver (connected.ts) for
  * one that runs the real CLI in the main process. Whatever drives a turn, it ends with an 'end'
- * action, then `idle()`, then the turn's `done`.
+ * action, then `idle()`, then the turn's `done`; unless its session would not start, when the
+ * driver tells `refused` instead, and the turn never was.
  */
 
 /**
@@ -47,6 +48,11 @@ export interface DriverIO {
   session: () => Session;
   /** The session is idle again: the store starts the next queued message, if any. */
   idle: () => void;
+  /**
+   * The session would not start (it said why: `refusal`), so the turn of message `id` never went:
+   * the store keeps the message, queued, for when the agent runs another way.
+   */
+  refused: (id: string, refusal: Refusal) => void;
   newId: () => string;
   now: () => number;
   /** Runs `run` in `ms`; returns a function that cancels it. */

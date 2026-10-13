@@ -1,5 +1,6 @@
-import type { MessageImage } from '../../shared/session';
+import type { Connection, MessageImage } from '../../shared/session';
 import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { agentName } from '../graph/labels';
 import {
@@ -52,10 +53,18 @@ export interface AgentRun {
   current?: string;
   /**
    * running: doing its task (or, at an OK, the changes the user asked for). waiting: held by the
-   * run, at a wait or a delay. asking: held for the user, at an OK or a repeat out of rounds.
-   * stopped: stopped at an OK, or at a wait for what was stopped. done: past the end of its queue.
+   * run, at a wait or a delay. asking: held for the user, at an OK or a repeat out of rounds, or
+   * at a task whose session would not start (`refused`). stopped: stopped at an OK, or at a wait
+   * for what was stopped. done: past the end of its queue.
    */
   status: 'running' | 'waiting' | 'asking' | 'stopped' | 'done';
+  /**
+   * While it asks because the session its task went to would not start (an Agent SDK agent on a
+   * Claude subscription): that session's agent (this one, or the one a message was handed to),
+   * how it ran then, why it would not start, and the connection to switch it to. The message waits
+   * in that session's queue, sent once the agent runs another way; then this one works again.
+   */
+  refused?: { agent: string; connection: AgentConnection; text: string; switchTo: Connection };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /**
@@ -84,6 +93,12 @@ export interface Run {
  */
 export type Answer = { choice: string } | { reply: string; images?: readonly MessageImage[] };
 
+/** Why an agent's session would not start, as it said, and the connection that would. */
+export interface Refusal {
+  text: string;
+  switchTo: Connection;
+}
+
 /**
  * How a turn the run started in an agent's session ended: whether it failed (or was interrupted,
  * or taken off the session's queue), and what the agent replied in it (its text, '' if none).
@@ -97,17 +112,22 @@ export interface TurnEnd {
 export interface RunIO {
   /**
    * Sends a message (with images, if any) to an agent's session; `done` once the turn it starts
-   * ends. Returns a function that takes it back: off the session's queue while it waits there, or
-   * interrupting its turn while that goes on.
+   * ends. `refused`, later, each time the session would not start while the message waits to go
+   * (kept in its queue, sent once the agent runs another way). Returns a function that takes it
+   * back: off the session's queue while it waits there, or interrupting its turn while that goes
+   * on.
    */
   send: (
     agent: GraphNode,
     text: string,
     done: (turn: TurnEnd) => void,
     images?: readonly MessageImage[],
+    refused?: (refusal: Refusal) => void,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: GraphNode, text: string) => void;
+  /** Runs an agent another way: the connection the user chose for it, as its session would not start. */
+  connect: (agent: GraphNode, connection: Connection) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
@@ -159,7 +179,10 @@ const IDLE: Run = { running: false, agents: {} };
  * that repeat to end. A repeat that follows another goes round with it, and ends with it. Rounds,
  * like delays, are the run's: the agent is only sent each round's messages. Queues are read as
  * they run (`update` gives it the graph as it changes), so edits take effect at once. Stop takes
- * back what the run sent that is still going (RunIO.send).
+ * back what the run sent that is still going (RunIO.send). A task whose session would not start
+ * (an Agent SDK agent on a Claude subscription) neither fails nor goes on: its agent asks the user
+ * to switch that agent to another connection (`decide`), and works again once it runs another way,
+ * its session sending what it kept.
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -250,12 +273,22 @@ export class RunStore {
    * neither, nothing is asked) to the agent's session, and once that turn ends, it asks again. At a
    * repeat out of rounds: `{ choice: 'more' }` runs one more round; `{ choice: 'goOn' }` ends it as
    * failed, and its queue goes on; `{ reply }` sends what to try next to the agent (not waited
-   * for), then runs one more round. Only while the run holds that agent at that item for the user,
-   * so a second click, a stale card or an answer after Stop does nothing.
+   * for), then runs one more round. Where its task's session would not start: `{ choice: 'switch' }`
+   * switches that session's agent to the connection it offered (RunIO.connect). Only while the
+   * run holds that agent at that item for the user, so a second click, a stale card or an answer
+   * after Stop does nothing.
    */
   decide(agent: string, item: string, answer: Answer): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || at?.status !== 'asking' || at.current !== item) return;
+    if (at.refused) {
+      const { refused } = at;
+      const to = this.#agents().find((n) => n.id === refused.agent);
+      if (to && 'choice' in answer && answer.choice === 'switch') {
+        this.#io.connect(to, refused.switchTo);
+      }
+      return;
+    }
     const node = this.#agents().find((n) => n.id === agent);
     const held = node && findItem(node.data.queue ?? [], item)?.item;
     if (!node || !held) return;
@@ -275,10 +308,13 @@ export class RunStore {
     this.#settle(true);
   }
 
-  /** The graph as it is now: a run goes on with new work, and past waits for what is gone. */
+  /**
+   * The graph as it is now: a run goes on with new work, and past waits for what is gone; an
+   * agent whose session would not start, once it runs another way.
+   */
   update(nodes: readonly GraphNode[]): void {
     this.#nodes = nodes;
-    if (this.#run.running) this.#settle(false);
+    if (this.#run.running) this.#settle(this.#unrefuse());
   }
 
   #agents(): GraphNode[] {
@@ -625,13 +661,16 @@ export class RunStore {
   ): AgentRun {
     const token = {};
     this.#busy.set(node.id, token);
-    this.#send(node, conditionQuestion(condition), ({ failed, reply }) => {
-      if (this.#busy.get(node.id) !== token) return;
-      this.#busy.delete(node.id);
-      const yes = failed ? undefined : yesOrNo(reply);
-      if (yes === undefined) this.#io.tell(node, failed ? UNANSWERED : UNCLEAR);
-      this.#held.set(key, yes ?? false);
-      this.#settle(true);
+    this.#send(node, conditionQuestion(condition), {
+      holder: { agent: node.id, token },
+      ended: ({ failed, reply }) => {
+        if (this.#busy.get(node.id) !== token) return;
+        this.#busy.delete(node.id);
+        const yes = failed ? undefined : yesOrNo(reply);
+        if (yes === undefined) this.#io.tell(node, failed ? UNANSWERED : UNCLEAR);
+        this.#held.set(key, yes ?? false);
+        this.#settle(true);
+      },
     });
     return { current, status: 'running', outcomes };
   }
@@ -698,9 +737,10 @@ export class RunStore {
       finish(failed ? 'failed' : 'succeeded', reply);
     };
     const node = this.#agents().find((n) => n.id === agent);
+    const holder = { agent, token };
     if (!isMessage(task)) {
       if (node && isConnected(node)) {
-        this.#send(node, this.#stepMessage(node, task), ended);
+        this.#send(node, this.#stepMessage(node, task), { ended, holder });
       } else {
         const [least, most] = STEP_MS;
         const ms = least + (hash(task.id) % (most - least));
@@ -715,7 +755,7 @@ export class RunStore {
     } else {
       const own = task.target === undefined || task.target === agent;
       const to = own ? node : this.#agents().find((n) => n.id === task.target);
-      if (to) this.#send(to, task.message, ended);
+      if (to) this.#send(to, task.message, { ended, holder });
       // Handed to an agent that is gone: nothing to wait for.
       else
         this.#after(0, () => {
@@ -740,13 +780,21 @@ export class RunStore {
 
   /**
    * Sends a message to an agent's session for the run (RunIO.send); `ended` hears how its turn
-   * ended. Until then, Stop (#cancel) takes it back.
+   * ended. Until then, Stop (#cancel) takes it back. If that session would not start, the agent
+   * busy with the task it is for (`holder`, while its token is) asks the user (#refused).
    */
   #send(
     to: GraphNode,
     text: string,
-    ended?: (turn: TurnEnd) => void,
-    images?: readonly MessageImage[],
+    {
+      ended,
+      images,
+      holder,
+    }: {
+      ended?: (turn: TurnEnd) => void;
+      images?: readonly MessageImage[] | undefined;
+      holder?: { agent: string; token: object };
+    } = {},
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
     const sent = { over: false };
@@ -759,8 +807,51 @@ export class RunStore {
         ended?.(turn);
       },
       images,
+      holder &&
+        ((refusal) => {
+          this.#refused(holder, to, refusal);
+        }),
     );
     if (!sent.over) this.#sent.set(sent, withdraw);
+  }
+
+  /**
+   * The session a task's message went to would not start: the agent busy with that task (if it
+   * still is) asks the user, saying why, until that session's agent runs another way.
+   */
+  #refused(
+    { agent, token }: { agent: string; token: object },
+    to: GraphNode,
+    { text, switchTo }: Refusal,
+  ): void {
+    const at = this.#run.agents[agent];
+    if (!this.#run.running || this.#busy.get(agent) !== token || !at) return;
+    const refused = { agent: to.id, connection: connectionOf(to.data), text, switchTo };
+    this.#set({
+      ...this.#run,
+      agents: { ...this.#run.agents, [agent]: { ...at, status: 'asking', refused } },
+    });
+  }
+
+  /**
+   * Agents held because a session would not start work again once its agent runs another way
+   * (or is gone): its session sends what it kept. Whether any did.
+   */
+  #unrefuse(): boolean {
+    let changed = false;
+    const agents = { ...this.#run.agents };
+    for (const [id, at] of Object.entries(agents)) {
+      const { refused } = at;
+      if (!refused) continue;
+      const to = this.#agents().find((n) => n.id === refused.agent);
+      if (to && connectionOf(to.data) === refused.connection) continue;
+      const running: AgentRun = { ...at, status: 'running' };
+      delete running.refused;
+      agents[id] = running;
+      changed = true;
+    }
+    if (changed) this.#run = { ...this.#run, agents };
+    return changed;
   }
 
   /**
@@ -773,7 +864,7 @@ export class RunStore {
       const note = answer.reply.trim();
       const images = answer.images ?? [];
       if (note === '' && images.length === 0) return;
-      this.#send(node, note, undefined, images.length === 0 ? undefined : images);
+      this.#send(node, note, { images: images.length === 0 ? undefined : images });
     } else if (answer.choice === 'goOn') {
       this.#record(node.id, repeat.id, 'failed');
       this.#settle(true);
@@ -806,16 +897,15 @@ export class RunStore {
     const changes = { ...at.changes, [ok]: [...(at.changes?.[ok] ?? []), asked] };
     const run: AgentRun = { ...at, status: 'running', changes };
     this.#set({ ...this.#run, agents: { ...this.#run.agents, [node.id]: run } });
-    this.#send(
-      node,
-      note,
-      () => {
+    this.#send(node, note, {
+      holder: { agent: node.id, token },
+      ended: () => {
         if (this.#busy.get(node.id) !== token) return;
         this.#busy.delete(node.id);
         this.#settle(true);
       },
-      images.length === 0 ? undefined : images,
-    );
+      images: images.length === 0 ? undefined : images,
+    });
   }
 
   #finish(agent: string, task: string, token: object, outcome: Outcome, reply: string): void {

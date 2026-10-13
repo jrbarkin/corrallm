@@ -16,7 +16,7 @@ import type {
 import { ipcErrorMessage } from '../ipc-error';
 import type { DriverIO, SessionDriver, Turn } from './driver';
 import { NEW_SESSION, reduce } from './session';
-import type { Entry, Session } from './session';
+import type { Entry, Refusal, Session } from './session';
 
 /** What a connected session asks of the main process: window.api's session functions. */
 export interface SessionBackend {
@@ -89,7 +89,9 @@ interface SentTurn {
  * through the Agent SDK; src/main/sessions/). It starts the session when first needed, sends each
  * turn's message, and plays the events main sends back (src/shared/session.ts) onto the session:
  * entries, prompts, status, mode and model, usage, and each turn's end. Mode and model changes,
- * answers and interrupts go to main.
+ * answers and interrupts go to main. A session that would not start says why (a notice offering
+ * another connection) before its start fails: the turn that started it never was, and the store
+ * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's.
  */
 export class ConnectedDriver implements SessionDriver {
   readonly connection: Connection;
@@ -101,6 +103,11 @@ export class ConnectedDriver implements SessionDriver {
   readonly #turns = new Map<string, SentTurn>();
   /** When each thinking entry began, by id: how long it thought. */
   readonly #thinking = new Map<string, number>();
+  /**
+   * Why the session would not start, if it said so as it was last started (a notice offering
+   * another connection, before its start failed saying the same).
+   */
+  #refusal: Refusal | undefined;
   #closed = false;
 
   constructor(agentId: string, connection: Connection, backend: SessionBackend, io: DriverIO) {
@@ -111,9 +118,15 @@ export class ConnectedDriver implements SessionDriver {
   }
 
   open(): void {
-    this.#run().catch((error: unknown) => {
-      this.#notice('error', ipcErrorMessage(error));
-    });
+    this.#run().then(
+      () => {
+        // What it kept, queued, while it would not start goes now that it runs.
+        this.#io.idle();
+      },
+      (error: unknown) => {
+        this.#notice('error', ipcErrorMessage(error));
+      },
+    );
   }
 
   start(turn: Turn, done: (interrupted: boolean) => void): void {
@@ -133,6 +146,13 @@ export class ConnectedDriver implements SessionDriver {
       })
       .catch((error: unknown) => {
         if (!this.#turns.has(turn.id)) return;
+        const refusal = sent.sent ? undefined : this.#refusal;
+        if (refusal) {
+          // It never went, and the session said why: the store keeps it for another way to run.
+          this.#turns.delete(turn.id);
+          this.#io.refused(turn.id, refusal);
+          return;
+        }
         this.#notice('error', ipcErrorMessage(error));
         this.#end([turn.id], { interrupted: false, failed: true });
       });
@@ -229,11 +249,23 @@ export class ConnectedDriver implements SessionDriver {
         if (entries.length > 0) io.dispatch({ type: 'restore', entries });
         return;
       }
-      case 'user':
-        if (!find(event.id)) {
-          io.dispatch({ type: 'start', entry: { id: event.id, kind: 'user', text: event.text } });
+      case 'user': {
+        // The CLI has it: a message sent from here, now on its way, or one it told of itself.
+        const known = find(event.id);
+        if (!known) {
+          io.dispatch({
+            type: 'start',
+            entry: { id: event.id, kind: 'user', text: event.text, reached: true },
+          });
+        } else if (known.kind === 'user' && known.reached !== true) {
+          io.dispatch({
+            type: 'update',
+            id: event.id,
+            update: (entry) => (entry.kind === 'user' ? { ...entry, reached: true } : entry),
+          });
         }
         return;
+      }
       case 'status':
         io.dispatch({ type: 'status', status: event.status });
         return;
@@ -345,6 +377,9 @@ export class ConnectedDriver implements SessionDriver {
         io.dispatch({ type: 'withdraw', id: event.id });
         return;
       case 'notice':
+        if (event.switchTo !== undefined) {
+          this.#refusal = { text: event.text, switchTo: event.switchTo };
+        }
         this.#notice(event.level, event.text, {
           id: event.id,
           ...(event.switchTo === undefined ? {} : { switchTo: event.switchTo }),
@@ -387,6 +422,7 @@ export class ConnectedDriver implements SessionDriver {
     if (!this.#running) {
       const { chosen = {}, models } = this.#io.session();
       const model = models?.some((m) => m.value === chosen.model) ? chosen.model : undefined;
+      this.#refusal = undefined;
       const running = this.#backend
         .start(this.#agentId, {
           connection: this.connection,
@@ -486,6 +522,7 @@ function replay(events: readonly SessionEvent[], agentId: string, connection: Co
     },
     session: () => session,
     idle: () => undefined,
+    refused: () => undefined,
     newId: () => crypto.randomUUID(),
     now: () => 0,
     later: () => () => undefined,

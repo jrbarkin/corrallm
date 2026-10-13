@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../shared/session';
 import { fakeBackend } from '../test-backend';
+import { rewindPoints } from './session';
 import { SessionStore } from './sessions';
 
 /** Lets pending promises (IPC replies) settle. */
@@ -198,6 +199,7 @@ describe('a connected session', () => {
       id: 'typed',
       kind: 'user',
       text: 'Hello from the terminal',
+      reached: true,
     });
     emit('a', 'sdk', end(['typed']));
     emit('a', 'sdk', { type: 'status', status: 'working' });
@@ -637,6 +639,111 @@ describe('a connected session’s MCP servers', () => {
       action: 'accept',
       values: { repo: 'acme/shop' },
     });
+  });
+});
+
+describe('a connected session that would not start', () => {
+  const why =
+    "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other " +
+    'products to use through the Agent SDK: run this agent in Terminal, or give Claude Code an ' +
+    'API key or a cloud provider.';
+
+  /** A store whose agent `a` runs through the Agent SDK, which main refuses to start, as it does. */
+  function refused() {
+    const fake = connected();
+    fake.backend.start.mockImplementation((_agent, options) => {
+      if (options.connection !== 'sdk') return Promise.resolve(null);
+      fake.emit('a', 'sdk', {
+        type: 'notice',
+        id: crypto.randomUUID(),
+        level: 'error',
+        text: why,
+        switchTo: 'terminal',
+      });
+      return Promise.reject(
+        new Error(`Error invoking remote method 'session:start': Error: ${why}`),
+      );
+    });
+    return fake;
+  }
+
+  it('keeps the message, queued, says why once, and tells whoever sent it', async () => {
+    const { store, backend } = refused();
+    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+    const held = vi.fn<(refusal: { text: string; switchTo: string }) => void>();
+    store.send('a', 'Claude', 'Fix the bug', done, undefined, held);
+    await settle();
+    expect(held).toHaveBeenCalledExactlyOnceWith({ text: why, switchTo: 'terminal' });
+    expect(done).not.toHaveBeenCalled();
+    expect(backend.send).not.toHaveBeenCalled();
+    // Never sent: not a turn of the transcript (nor its end, failed), but a message still to send.
+    const session = store.of('a');
+    expect(session.status).toBe('idle');
+    expect(session.entries).toEqual([
+      {
+        id: expect.any(String) as unknown,
+        kind: 'notice',
+        level: 'error',
+        text: why,
+        switchTo: 'terminal',
+      },
+    ]);
+    expect(session.queued.map((q) => q.text)).toEqual(['Fix the bug']);
+
+    // Another message tries the session again, and waits behind the first; the refusal is said once.
+    store.send('a', 'Claude', 'And the tests');
+    await settle();
+    expect(backend.start).toHaveBeenCalledTimes(2);
+    expect(store.of('a').queued.map((q) => q.text)).toEqual(['Fix the bug', 'And the tests']);
+    expect(store.of('a').entries.map((e) => e.kind)).toEqual(['notice']);
+  });
+
+  it('sends what it kept once the agent runs another way, and whoever sent it hears the turn end', async () => {
+    const { store, backend, emit } = refused();
+    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+    store.send('a', 'Claude', 'Fix the bug', done);
+    await settle();
+    const [kept] = store.of('a').queued;
+
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    await settle();
+    expect(backend.start).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ connection: 'terminal' }),
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: kept?.id,
+      text: 'Fix the bug',
+    });
+    expect(store.of('a').queued).toEqual([]);
+    emit(
+      'a',
+      'terminal',
+      { type: 'user', id: kept?.id ?? '', text: 'Fix the bug' },
+      { type: 'text', id: 'x', text: 'Fixed.' },
+      end([kept?.id ?? '']),
+    );
+    expect(done).toHaveBeenCalledExactlyOnceWith(false, 'Fixed.');
+  });
+
+  it('takes a kept message back off the queue', async () => {
+    const { store } = refused();
+    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+    const takeBack = store.send('a', 'Claude', 'Fix the bug', done);
+    await settle();
+    takeBack();
+    expect(store.of('a').queued).toEqual([]);
+    expect(done).toHaveBeenCalledExactlyOnceWith(true, '');
+  });
+
+  it('marks the messages the CLI has, which a rewind can go back to', async () => {
+    const { store, emit, sent } = connected();
+    store.send('a', 'Claude', 'Edit the notes');
+    await settle();
+    // Not yet: main has not said it went to the CLI.
+    expect(rewindPoints(store.of('a').entries)).toEqual([]);
+    emit('a', 'sdk', { type: 'user', id: sent(), text: 'Edit the notes' }, end([sent()]));
+    expect(rewindPoints(store.of('a').entries)).toEqual([{ id: sent(), text: 'Edit the notes' }]);
   });
 });
 

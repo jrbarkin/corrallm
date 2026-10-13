@@ -4,7 +4,7 @@ import type { Connection, MessageImage } from '../../shared/session';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { RunStore } from './runner';
-import type { TurnEnd } from './runner';
+import type { Refusal, TurnEnd } from './runner';
 
 const agent = (id: string, queue: QueueItem[] = [], label = id): GraphNode => ({
   id,
@@ -43,16 +43,20 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     text: string;
     images?: readonly MessageImage[];
     done?: (turn: TurnEnd) => void;
+    refused?: (refusal: Refusal) => void;
     withdrawn: boolean;
   }[] = [];
   const told: [string, string][] = [];
+  /** The connections the run switched agents to, as the user chose. */
+  const connects: [string, Connection][] = [];
   const store = new RunStore({
-    send: (to, text, done, images) => {
+    send: (to, text, done, images, refused) => {
       const message: (typeof sent)[number] = {
         agent: to.id,
         text,
         ...(images ? { images } : {}),
         done,
+        ...(refused ? { refused } : {}),
         withdrawn: false,
       };
       sent.push(message);
@@ -62,6 +66,9 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     },
     tell: (to, text) => {
       told.push([to.id, text]);
+    },
+    connect: (to, connection) => {
+      connects.push([to.id, connection]);
     },
     later: (run, ms) => {
       const timer = { run, at: clock + ms };
@@ -115,6 +122,7 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     store,
     sent,
     told,
+    connects,
     tick,
     advance,
     reply,
@@ -1228,6 +1236,75 @@ describe('RunStore', () => {
       store.start();
       expect(sent.filter((s) => !s.withdrawn && s.done)).toHaveLength(2);
       expect(where()).toEqual({ a: 'running tests', b: 'running hand' });
+    });
+
+    describe('whose session would not start', () => {
+      const why =
+        "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow " +
+        'other products to use through the Agent SDK: run this agent in Terminal, or give ' +
+        'Claude Code an API key or a cloud provider.';
+
+      it('holds the agent for you, not failed, and goes on once it runs another way', () => {
+        const a = connected('a', [
+          { id: 'tests', action: 'Bash' },
+          { id: 'next', message: 'Carry on' },
+        ]);
+        const { store, sent, where, connects, reply, edit } = setup([a], never);
+        store.start();
+        sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
+        expect(where()).toEqual({ a: 'asking tests' });
+        expect(store.snapshot().running).toBe(true);
+        expect(store.snapshot().agents.a?.refused).toEqual({
+          agent: 'a',
+          connection: 'sdk',
+          text: why,
+          switchTo: 'terminal',
+        });
+        // Only switching answers it.
+        store.decide('a', 'tests', { choice: 'approve' });
+        store.decide('a', 'tests', { reply: 'Go on' });
+        expect(where()).toEqual({ a: 'asking tests' });
+        expect(connects).toEqual([]);
+        store.decide('a', 'tests', { choice: 'switch' });
+        expect(connects).toEqual([['a', 'terminal']]);
+
+        // Its session sends the message it kept once the agent runs in Terminal: the run waits
+        // for that turn to end, as for any other.
+        edit([{ ...a, data: { ...a.data, connection: 'terminal' } }]);
+        expect(where()).toEqual({ a: 'running tests' });
+        expect(store.snapshot().agents.a?.refused).toBeUndefined();
+        reply('a');
+        expect(store.snapshot().agents.a?.outcomes).toEqual({ tests: 'succeeded' });
+        expect(sent.at(-1)?.text).toBe('Carry on');
+      });
+
+      it('holds the agent that handed it the message, and switches the one that would not start', () => {
+        const a = connected('a', []);
+        const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }], 'Builder');
+        const { store, sent, where, connects } = setup([a, b], never);
+        store.start();
+        sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
+        expect(where()).toEqual({ a: 'done', b: 'asking hand' });
+        expect(store.snapshot().agents.b?.refused).toMatchObject({ agent: 'a' });
+        store.decide('b', 'hand', { choice: 'switch' });
+        expect(connects).toEqual([['a', 'terminal']]);
+      });
+
+      it('takes the message back on Stop, and hears no refusal from a run before', () => {
+        const a = connected('a', [{ id: 'tests', action: 'Bash' }]);
+        const { store, sent, where, connects } = setup([a], never);
+        store.start();
+        const first = sent[0];
+        first?.refused?.({ text: why, switchTo: 'terminal' });
+        store.stop();
+        expect(first?.withdrawn).toBe(true);
+        store.decide('a', 'tests', { choice: 'switch' });
+        expect(connects).toEqual([]);
+
+        store.start();
+        first?.refused?.({ text: why, switchTo: 'terminal' });
+        expect(where()).toEqual({ a: 'running tests' });
+      });
     });
 
     it('sends the images pasted with the changes asked for at an OK, or with what to try next', () => {

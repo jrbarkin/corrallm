@@ -88,6 +88,56 @@ describe('a repeat out of rounds', () => {
   });
 });
 
+describe('a session that would not start', () => {
+  const why =
+    "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other " +
+    'products to use through the Agent SDK: run this agent in Terminal, or give Claude Code an API ' +
+    'key or a cloud provider.';
+  const coder = agent('c', 'Coder', [
+    { id: 'tests', action: 'Bash' },
+    { id: 'hand', message: 'Review it', target: 'r' },
+  ]);
+  const reviewer = agent('r', 'Reviewer', []);
+
+  it('says why, and offers to switch the agent, with what waits', () => {
+    const run: Run = {
+      running: true,
+      agents: {
+        c: {
+          ...at('tests', 'asking'),
+          refused: { agent: 'c', connection: 'sdk', text: why, switchTo: 'terminal' },
+        },
+      },
+    };
+    const [ask] = heldAsks([coder, reviewer], run);
+    expect([ask?.item.id, ask?.text, ask?.detail]).toEqual([
+      'tests',
+      why,
+      'Bash waits until Coder can start',
+    ]);
+    expect(ask?.choices).toEqual([{ key: 'switch', label: 'Switch to Terminal', primary: true }]);
+    expect(ask?.reply).toBeUndefined();
+    expect(ask?.refusal).toEqual({ agent: 'c', switchTo: 'terminal' });
+  });
+
+  it('names the agent to switch when it is another one, sent a message', () => {
+    const run: Run = {
+      running: true,
+      agents: {
+        c: {
+          ...at('hand', 'asking'),
+          refused: { agent: 'r', connection: 'sdk', text: why, switchTo: 'terminal' },
+        },
+      },
+    };
+    const [ask] = heldAsks([coder, reviewer], run);
+    expect(ask?.detail).toBe('Message “Review it” → Reviewer waits until Reviewer can start');
+    expect(ask?.choices).toEqual([
+      { key: 'switch', label: 'Switch Reviewer to Terminal', primary: true },
+    ]);
+  });
+});
+
 describe('answersOf', () => {
   it('answers an OK with Approve, Stop here, or the changes to make', () => {
     expect(answersOf({ id: 'ok', approve: '' })).toEqual({
