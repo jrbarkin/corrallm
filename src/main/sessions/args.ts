@@ -1,6 +1,9 @@
 import type { IpcArgs } from '../../shared/ipc';
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
 import {
+  CLI_MODES,
+  CODEX_MODES,
+  CONNECTION_CLI,
   CONNECTIONS,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
@@ -15,10 +18,11 @@ import {
   PLAN_MODES,
 } from '../../shared/session';
 import type {
+  Cli,
   MessageImage,
-  PermissionMode,
   PlanAnswer,
   SessionAnswer,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
@@ -36,13 +40,22 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
     'model',
     'mode',
   ]);
+  const connected = oneOf(connection, CONNECTIONS, 'connection');
   const parsed: SessionOptions = {
-    connection: oneOf(connection, CONNECTIONS, 'connection'),
+    connection: connected,
     model: model === null ? null : parseModel(model),
-    mode: parseMode(mode),
+    // One of its CLI's modes.
+    mode: oneOf(
+      mode,
+      CLI_MODES[CONNECTION_CLI[connected]],
+      `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
+    ),
   };
   return [parseId(agentId, 'agent'), parsed];
 }
+
+/** How messages name each CLI. */
+const CLI_NAMES: Record<Cli, string> = { claude: 'Claude Code', codex: 'Codex' };
 
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
@@ -185,8 +198,9 @@ function parsePlanAnswer(value: unknown): PlanAnswer {
   return { approve: false, feedback };
 }
 
-function parseMode(value: unknown): PermissionMode {
-  return oneOf(value, PERMISSION_MODES, 'mode');
+/** Any CLI's mode: the manager checks it is one of the running session's CLI. */
+function parseMode(value: unknown): SessionMode {
+  return oneOf<SessionMode>(value, [...PERMISSION_MODES, ...CODEX_MODES], 'mode');
 }
 
 function parseModel(value: unknown): string {

@@ -1,8 +1,9 @@
+import { CONNECTION_CLI, modeFor } from '../../shared/session';
 import type {
   Connection,
-  PermissionMode,
   SessionAnswer,
   SessionEvent,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
@@ -17,7 +18,7 @@ export interface SessionBackend {
   send(agentId: string, message: UserMessage): Promise<null>;
   answer(agentId: string, promptId: string, answer: SessionAnswer): Promise<null>;
   interrupt(agentId: string): Promise<null>;
-  setMode(agentId: string, mode: PermissionMode): Promise<null>;
+  setMode(agentId: string, mode: SessionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
@@ -53,8 +54,8 @@ interface SentTurn {
 }
 
 /**
- * Drives a connected agent's session: one the main process runs (Claude Code in a terminal, or
- * through the Agent SDK; src/main/sessions/). It starts the session when first needed, sends each
+ * Drives a connected agent's session: one the main process runs (Claude Code or Codex, in a
+ * terminal or through a structured interface; src/main/sessions/). It starts the session when first needed, sends each
  * turn's message, and plays the events main sends back (src/shared/session.ts) onto the session:
  * entries, prompts, status, mode and model, usage, and each turn's end. Mode and model changes,
  * answers and interrupts go to main.
@@ -126,7 +127,7 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.interrupt(agentId));
   }
 
-  setMode(mode: PermissionMode): void {
+  setMode(mode: SessionMode): void {
     // Not started yet: it starts in the session's mode.
     this.#tell((agentId) => this.#backend.setMode(agentId, mode));
   }
@@ -303,7 +304,8 @@ export class ConnectedDriver implements SessionDriver {
           connection: this.connection,
           // A model it offered before; otherwise the CLI's default.
           model: models?.some((m) => m.value === model) ? model : null,
-          mode,
+          // One of its CLI's modes (the session may have been another CLI's before).
+          mode: modeFor(CONNECTION_CLI[this.connection], mode),
         })
         .then(() => undefined);
       running.catch(() => {

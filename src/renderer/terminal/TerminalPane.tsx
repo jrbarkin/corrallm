@@ -17,16 +17,17 @@ const STATUS: Record<Session['status'], string> = {
 };
 
 /**
- * A Terminal agent's session: Claude Code's own terminal (its CLI runs in the main process, and
- * this shows it: link.ts), in place of the transcript and composer, so that everything Claude Code
- * does works here as it does in a terminal. Under it, a bar with what the queues' run asks of the
- * user (`ask`: their OK, or a repeat out of rounds), what the session is doing (as corrallm follows
- * it), the messages queued for it (corrallm types each into the terminal once Claude Code is
- * ready), and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again
- * (resuming its session).
+ * A Terminal agent's session: its CLI's own terminal (Claude Code's or Codex's: it runs in the main
+ * process, and this shows it: link.ts), in place of the transcript and composer, so that
+ * everything the CLI does works here as it does in a terminal. Under it, a bar with what the
+ * queues' run asks of the user (`ask`: their OK, or a repeat out of rounds), what the session is
+ * doing (as corrallm follows it), the messages queued for it (corrallm types each into the terminal
+ * once the CLI is ready), and the queue's ⊕. Over it, while no CLI runs: why, and a button to
+ * start it again (resuming its session).
  */
 export function TerminalPane({
   agentId,
+  cli = 'Claude Code',
   backend,
   session,
   note,
@@ -37,6 +38,8 @@ export function TerminalPane({
   screens = createScreen,
 }: {
   agentId: string;
+  /** The CLI it runs, as messages name it ("Claude Code"). */
+  cli?: string;
   backend: TerminalBackend;
   session: Session;
   /** How the session runs, and where (or what it needs to). */
@@ -83,13 +86,13 @@ export function TerminalPane({
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
       <div className="agent-terminal" data-state={state.kind}>
-        <div ref={host} className="agent-terminal-screen" aria-label="Claude Code’s terminal" />
+        <div ref={host} className="agent-terminal-screen" aria-label={`${cli}’s terminal`} />
         {state.kind !== 'live' && (
           <div className="agent-terminal-overlay" role="status">
             {state.kind === 'exited' ? (
               <>
                 <p>
-                  Claude Code exited
+                  {cli} exited
                   {state.code !== null && state.code !== 0 ? ` (code ${String(state.code)})` : ''}.
                 </p>
                 <button type="button" onClick={onStart}>
@@ -98,14 +101,14 @@ export function TerminalPane({
               </>
             ) : problem?.kind === 'notice' ? (
               <>
-                <p>Claude Code isn’t running.</p>
+                <p>{cli} isn’t running.</p>
                 <p className="agent-terminal-why">{problem.text}</p>
                 <button type="button" onClick={onStart}>
                   Try again
                 </button>
               </>
             ) : (
-              <p>Starting Claude Code…</p>
+              <p>Starting {cli}…</p>
             )}
           </div>
         )}

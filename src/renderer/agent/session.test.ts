@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { answersOf, NEW_SESSION, pendingSessionQuestions, reduce, threadTitle } from './session';
+import { AgentType } from '../graph/agents';
+import {
+  answersOf,
+  modeOf,
+  modesOf,
+  NEW_SESSION,
+  pendingSessionQuestions,
+  reduce,
+  threadTitle,
+} from './session';
 import type { Entry, Session } from './session';
 
 const tool = (id: string, status: 'running' | 'done' = 'running'): Entry => ({
@@ -18,6 +27,31 @@ describe('threadTitle', () => {
     expect(threadTitle('Add rate limiting to the public API and document every endpoint')).toBe(
       'Add rate limiting to the public API…',
     );
+  });
+});
+
+describe('modes', () => {
+  it('offers a Codex agent Codex’s modes, and other agents Claude Code’s', () => {
+    expect(modesOf(AgentType.Codex).map((m) => m.mode)).toEqual([
+      'read-only',
+      'auto',
+      'full-access',
+      'plan',
+    ]);
+    expect(modesOf(AgentType.Claude).map((m) => m.mode)).toEqual([
+      'manual',
+      'acceptEdits',
+      'plan',
+      'bypassPermissions',
+      'auto',
+    ]);
+  });
+
+  it('shows a mode its agent has, or else the one it starts in', () => {
+    expect(modeOf(AgentType.Codex, 'full-access').label).toBe('Full access');
+    expect(modeOf(AgentType.Codex, 'acceptEdits').label).toBe('Default');
+    expect(modeOf(AgentType.Claude, 'read-only').label).toBe('Manual');
+    expect(modeOf(AgentType.Claude, 'plan').label).toBe('Plan');
   });
 });
 

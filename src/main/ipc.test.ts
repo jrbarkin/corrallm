@@ -220,6 +220,16 @@ describe('session:* handlers', () => {
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
   });
 
+  it('start Codex sessions in Codex’s modes, and switch to them', async () => {
+    const sender = {};
+    const options = { connection: 'app-server', model: 'gpt-6-luna', mode: 'full-access' };
+    await invoke('session:start', ['a', options], sender);
+    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    await invoke('session:start', ['b', { ...options, connection: 'codex-terminal' }], sender);
+    await invoke('session:mode', ['a', 'read-only'], sender);
+    expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'read-only');
+  });
+
   const start = { connection: 'terminal', model: null, mode: 'manual' };
   it.each([
     ['session:start', 'no options', ['a'], /Expected an agent and how to start/],
@@ -233,6 +243,13 @@ describe('session:* handlers', () => {
       /connection/,
     ],
     ['session:start', 'an unknown mode', ['a', { ...start, mode: 'yolo' }], /mode/],
+    [
+      'session:start',
+      'a mode of another CLI',
+      ['a', { ...start, connection: 'app-server', mode: 'acceptEdits' }],
+      /mode of Codex/,
+    ],
+    ['session:start', 'a Codex mode for Claude', ['a', { ...start, mode: 'read-only' }], /mode/],
     ['session:start', 'a model with spaces', ['a', { ...start, model: 'rm -rf /' }], /model/],
     ['session:start', 'a path to resume', ['a', { ...start, resume: '/etc/passwd' }], /options/],
     ['session:send', 'a message without text', ['a', { id: 'm' }], /text/],

@@ -1,16 +1,38 @@
 /*
- * Connected sessions: an agent's session run by the main process (Claude Code in a terminal, or
- * through the Agent SDK), what the renderer asks of it, and what main tells it back. Main's
- * connectors (src/main/sessions/) turn their CLI's own output into these events; the renderer's
- * connected driver (src/renderer/agent/connected.ts) plays them onto the session its view shows
- * (src/renderer/agent/session.ts).
+ * Connected sessions: an agent's session run by the main process (Claude Code or Codex, in a
+ * terminal or through a structured interface), what the renderer asks of it, and what main tells
+ * it back. Main's connectors (src/main/sessions/) turn their CLI's own output into these events;
+ * the renderer's connected driver (src/renderer/agent/connected.ts) plays them onto the session its
+ * view shows (src/renderer/agent/session.ts).
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 
-/** How a Claude agent can be connected, besides simulated: the CLI in a terminal, or the Agent SDK. */
-export const CONNECTIONS = ['terminal', 'sdk'] as const;
+/** The CLIs agents can be connected to: Claude Code and Codex. */
+export const CLIS = ['claude', 'codex'] as const;
+export type Cli = (typeof CLIS)[number];
+
+/**
+ * How an agent can be connected, besides simulated: each names what runs its session. Claude Code
+ * in a terminal ('terminal') or through the Agent SDK ('sdk'); Codex in a terminal
+ * ('codex-terminal') or through its app server ('app-server', JSON-RPC over stdio).
+ */
+export const CONNECTIONS = ['terminal', 'sdk', 'codex-terminal', 'app-server'] as const;
 export type Connection = (typeof CONNECTIONS)[number];
+
+/** The CLI each connection runs. */
+export const CONNECTION_CLI: Readonly<Record<Connection, Cli>> = {
+  terminal: 'claude',
+  sdk: 'claude',
+  'codex-terminal': 'codex',
+  'app-server': 'codex',
+};
+
+/**
+ * The connections whose view is their CLI's own terminal (src/shared/terminal.ts), rather than
+ * corrallm's transcript and composer.
+ */
+export const TERMINAL_CONNECTIONS: readonly Connection[] = ['terminal', 'codex-terminal'];
 
 /**
  * Claude Code's permission modes, by its settings' names, in the order Shift+Tab cycles them.
@@ -24,6 +46,50 @@ export const PERMISSION_MODES = [
   'auto',
 ] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/**
+ * Codex's modes: its permission presets (what its /permissions offers, by their ids in its source,
+ * codex-rs/utils/approval-presets), then plan mode. 'read-only': a read-only sandbox, asking before
+ * anything more; 'auto' (Codex's Default): edits and commands in a sandbox of the project folder,
+ * asking before leaving it; 'full-access': no sandbox and never asking; 'plan': Codex's plan
+ * collaboration mode, which explores and proposes a plan before changing anything (with Default's
+ * permissions).
+ */
+export const CODEX_MODES = ['read-only', 'auto', 'full-access', 'plan'] as const;
+export type CodexMode = (typeof CODEX_MODES)[number];
+
+/** A session's mode: one of its CLI's. */
+export type SessionMode = PermissionMode | CodexMode;
+
+/** Each CLI's modes. */
+export const CLI_MODES: {
+  readonly claude: readonly PermissionMode[];
+  readonly codex: readonly CodexMode[];
+} = {
+  claude: PERMISSION_MODES,
+  codex: CODEX_MODES,
+};
+
+/** The mode each CLI starts in unless told otherwise: Claude Code's Manual, Codex's Default. */
+export const DEFAULT_MODES: { readonly claude: PermissionMode; readonly codex: CodexMode } = {
+  claude: 'manual',
+  codex: 'auto',
+};
+
+/** Whether `mode` is one of Claude Code's permission modes. */
+export function isPermissionMode(mode: SessionMode): mode is PermissionMode {
+  return (PERMISSION_MODES as readonly SessionMode[]).includes(mode);
+}
+
+/** Whether `mode` is one of `cli`'s modes. */
+export function isModeOf(cli: Cli, mode: SessionMode): boolean {
+  return (CLI_MODES[cli] as readonly SessionMode[]).includes(mode);
+}
+
+/** `mode` if it is one of `cli`'s, else the mode `cli` starts in. */
+export function modeFor(cli: Cli, mode: SessionMode): SessionMode {
+  return isModeOf(cli, mode) ? mode : DEFAULT_MODES[cli];
+}
 
 export type ToolStatus = 'running' | 'done' | 'failed' | 'interrupted';
 
@@ -54,7 +120,8 @@ export interface SessionOptions {
   connection: Connection;
   /** The model to start with (a value its models gave before), or null for the CLI's default. */
   model: string | null;
-  mode: PermissionMode;
+  /** One of its connection's CLI's modes. */
+  mode: SessionMode;
 }
 
 /** The kinds of image the user can paste into a message (those Claude reads). */
@@ -99,7 +166,10 @@ export interface AskedQuestion {
   multiple: boolean;
 }
 
-/** The modes a plan can be carried out in once approved, as Claude Code offers them. */
+/**
+ * The modes a plan can be carried out in once approved, as Claude Code offers them. Codex carries
+ * out a plan in its Default mode ('auto').
+ */
 export const PLAN_MODES = ['auto', 'acceptEdits', 'manual'] as const;
 export type PlanMode = (typeof PLAN_MODES)[number];
 
@@ -120,6 +190,21 @@ export interface SessionUsage {
   /** Tokens in its context window now, and the window's size. */
   contextTokens: number | null;
   contextWindow: number | null;
+  /**
+   * How much of each of the user's plan's usage limits is used (Codex's rate-limit windows: the
+   * 5-hour one, the weekly one), where the CLI says.
+   */
+  limits?: UsageLimit[];
+}
+
+/** A usage limit of the user's plan: a window of time, how much of it is used, when it resets. */
+export interface UsageLimit {
+  /** What it is called ("5h", "weekly"). */
+  name: string;
+  /** How much of it is used, from 0 to 100. */
+  usedPercent: number;
+  /** When it resets (milliseconds since the epoch), if the CLI said. */
+  resetsAt: number | null;
 }
 
 /**
@@ -136,7 +221,7 @@ export interface SessionUsage {
  */
 export type SessionEvent =
   /** The session runs (started, or resumed): its model and mode, and the models it offers. */
-  | { type: 'started'; model: string | null; mode: PermissionMode; models: ModelChoice[] }
+  | { type: 'started'; model: string | null; mode: SessionMode; models: ModelChoice[] }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }
   /**
@@ -181,7 +266,7 @@ export type SessionEvent =
   /** Something to tell the user: compaction, a retry, a usage limit and when it resets, a login problem. */
   | { type: 'notice'; id: string; level: 'info' | 'warning' | 'error'; text: string }
   | { type: 'usage'; usage: SessionUsage }
-  | { type: 'mode'; mode: PermissionMode }
+  | { type: 'mode'; mode: SessionMode }
   | { type: 'model'; model: string }
   /** The turn ended: interrupted by the user, or failed (an API error, a usage limit). */
   | { type: 'end'; messages: string[]; seconds: number; interrupted: boolean; failed: boolean }

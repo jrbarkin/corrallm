@@ -1,5 +1,6 @@
 import type { Edge } from '@xyflow/react';
 
+import { CONNECTIONS } from '../../shared/session';
 import type { Connection } from '../../shared/session';
 import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
@@ -31,7 +32,8 @@ import type {
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
- * how it runs, if not simulated ("terminal" or "sdk": agents.ts); where it runs (the project
+ * how it runs, if not simulated (a Claude agent's "terminal" or "sdk", a Codex agent's
+ * "codex-terminal" or "app-server": agents.ts); where it runs (the project
  * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
  * has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
  * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
@@ -204,12 +206,14 @@ function readNode(value: unknown, where: string): FileNode {
   });
   const connection = optional(node.connection, `${where}.connection`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
-    const all: readonly AgentConnection[] = ['simulated', 'terminal', 'sdk'];
+    const all: readonly AgentConnection[] = ['simulated', ...CONNECTIONS];
     const found = all.find((c) => c === v);
     if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
     const type = agent ?? DEFAULT_AGENT;
-    if (!AGENT_CONNECTIONS[type].includes(found)) {
-      throw new Error(`${at}: ${type} agents can only be simulated`);
+    const offered = AGENT_CONNECTIONS[type];
+    if (!offered.includes(found)) {
+      const ways = `${offered.slice(0, -1).join(', ')}${offered.length > 1 ? ' or ' : ''}${offered.at(-1) ?? ''}`;
+      throw new Error(`${at}: ${type} agents run only ${ways}`);
     }
     // Simulated is the default, kept as no connection at all.
     return found === 'simulated' ? undefined : found;

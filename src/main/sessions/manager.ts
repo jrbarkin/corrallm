@@ -1,15 +1,17 @@
 import type { WebContents } from 'electron';
 
+import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
+  Cli,
   Connection,
-  PermissionMode,
   SessionAnswer,
   SessionEvent,
+  SessionMode,
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
-import type { CanvasMemory } from '../memory';
+import type { CanvasMemory, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 
 const NO_PROJECT =
@@ -19,8 +21,11 @@ const NOT_RUNNING = 'This agent’s session is not running.';
 const CLOSE_MS = 5000;
 
 export interface SessionManagerDeps {
-  /** What starts each connection's sessions (connectors.ts). */
-  connectors: Readonly<Record<Connection, Connector>>;
+  /**
+   * What starts each connection's sessions (connectors.ts); a connection without one cannot run
+   * (tests give only those they use).
+   */
+  connectors: Readonly<Partial<Record<Connection, Connector<SessionMode>>>>;
   /** The environment agents run in: the user's login shell's, cleaned (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
   /** The folder a renderer's canvas's agents work in, if one was chosen (project.ts). */
@@ -44,22 +49,26 @@ export interface SessionManagerDeps {
 interface Agent {
   connection: Connection;
   /** Resolves with the session once it runs; rejects if it could not start. */
-  session: Promise<LiveSession>;
+  session: Promise<LiveSession<SessionMode>>;
 }
+
+/** Where each CLI's session ids are remembered with a canvas file (memory.ts). */
+const REMEMBERED: Record<Cli, 'sessions' | 'threads'> = { claude: 'sessions', codex: 'threads' };
 
 /**
  * Every connected session, by the renderer whose canvas it belongs to and the agent's id. It
  * starts an agent's session with its connection's connector (connector.ts), in the canvas's
  * project folder, resuming the agent's last session, and passes the renderer's requests on to it.
  * It remembers each agent's session id with the canvas's file (memory.ts), so that sessions survive
- * a restart. A canvas opened or forgotten, a new project folder, a renderer that goes, and the app
+ * a restart: one per CLI (Claude Code's session, Codex's thread), which each of its connections
+ * resumes. A canvas opened or forgotten, a new project folder, a renderer that goes, and the app
  * quitting all end sessions.
  */
 export class SessionManager {
   readonly #deps: SessionManagerDeps;
   readonly #agents = new Map<WebContents, Map<string, Agent>>();
-  /** Each renderer's agents' session ids: what starting an agent again resumes. */
-  readonly #ids = new WeakMap<WebContents, Map<string, string>>();
+  /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
+  readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
   /**
@@ -79,6 +88,9 @@ export class SessionManager {
     if (running?.connection === options.connection) {
       await running.session;
       return;
+    }
+    if (!isModeOf(CONNECTION_CLI[options.connection], options.mode)) {
+      throw new TypeError(`${options.mode} is not a mode of ${options.connection} sessions`);
     }
     if (running) await this.#end(contents, agentId, running, false);
     const cwd = this.#deps.projectOf(contents);
@@ -116,7 +128,12 @@ export class SessionManager {
     await (await this.#session(contents, agentId)).interrupt();
   }
 
-  async setMode(contents: WebContents, agentId: string, mode: PermissionMode): Promise<void> {
+  /** Switches the agent's session's mode: one of its CLI's modes. */
+  async setMode(contents: WebContents, agentId: string, mode: SessionMode): Promise<void> {
+    const agent = this.#agents.get(contents)?.get(agentId);
+    if (agent && !isModeOf(CONNECTION_CLI[agent.connection], mode)) {
+      throw new TypeError(`${mode} is not a mode of ${agent.connection} sessions`);
+    }
     await (await this.#session(contents, agentId)).setMode(mode);
   }
 
@@ -169,28 +186,36 @@ export class SessionManager {
   async canvasOpened(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
     const file = this.#deps.canvasOf(contents);
-    const { sessions } = file === undefined ? { sessions: {} } : await this.#deps.memory.get(file);
-    this.#ids.set(contents, new Map(Object.entries(sessions)));
+    const remembered = file === undefined ? undefined : await this.#deps.memory.get(file);
+    this.#ids.set(contents, {
+      claude: new Map(Object.entries(remembered?.sessions ?? {})),
+      codex: new Map(Object.entries(remembered?.threads ?? {})),
+    });
   }
 
   /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
   async canvasForgotten(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
-    this.#ids.set(contents, new Map());
+    this.#ids.set(contents, noIds());
   }
 
   /** The canvas was saved (maybe to a new file): the file remembers its agents' sessions. */
   async canvasSaved(contents: WebContents): Promise<void> {
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
-    const sessions = Object.fromEntries(this.#idsOf(contents));
-    await this.#deps.memory.update(file, (remembered) => ({ ...remembered, sessions }));
+    const ids = this.#idsOf(contents);
+    await this.#deps.memory.update(file, (remembered) => {
+      const next: Remembered = { ...remembered, sessions: Object.fromEntries(ids.claude) };
+      if (ids.codex.size > 0) next.threads = Object.fromEntries(ids.codex);
+      else delete next.threads;
+      return next;
+    });
   }
 
   /** The canvas has a new project folder: its sessions end and are forgotten, to start afresh there. */
   async projectChanged(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
-    this.#ids.set(contents, new Map());
+    this.#ids.set(contents, noIds());
     await this.canvasSaved(contents);
   }
 
@@ -205,8 +230,11 @@ export class SessionManager {
     cwd: string,
     { connection, model, mode }: SessionOptions,
     current: () => boolean,
-  ): Promise<LiveSession> {
-    const resume = this.#idsOf(contents).get(agentId) ?? null;
+  ): Promise<LiveSession<SessionMode>> {
+    const connector = this.#deps.connectors[connection];
+    if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
+    const cli = CONNECTION_CLI[connection];
+    const resume = this.#idsOf(contents)[cli].get(agentId) ?? null;
     const env = await this.#deps.environment();
     // A session replaced (by another connection, or after it closed) is no longer heard.
     const host: SessionHost = {
@@ -216,22 +244,25 @@ export class SessionManager {
         this.#deps.emit(contents, agentId, connection, event);
       },
       remember: (sessionId) => {
-        if (current()) void this.#remember(contents, agentId, sessionId);
+        if (current()) void this.#remember(contents, cli, agentId, sessionId);
       },
     };
-    return this.#deps.connectors[connection].start(
-      { agentId, cwd, env, model, mode, resume },
-      host,
-    );
+    return connector.start({ agentId, cwd, env, model, mode, resume }, host);
   }
 
-  async #remember(contents: WebContents, agentId: string, sessionId: string): Promise<void> {
-    this.#idsOf(contents).set(agentId, sessionId);
+  async #remember(
+    contents: WebContents,
+    cli: Cli,
+    agentId: string,
+    sessionId: string,
+  ): Promise<void> {
+    this.#idsOf(contents)[cli].set(agentId, sessionId);
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
-    await this.#deps.memory.update(file, (remembered) => ({
+    const field = REMEMBERED[cli];
+    await this.#deps.memory.update(file, (remembered): Remembered => ({
       ...remembered,
-      sessions: { ...remembered.sessions, [agentId]: sessionId },
+      [field]: { ...remembered[field], [agentId]: sessionId },
     }));
   }
 
@@ -257,7 +288,10 @@ export class SessionManager {
   }
 
   /** The agent's session, if it runs (or starts) and does start. */
-  async #running(contents: WebContents, agentId: string): Promise<LiveSession | undefined> {
+  async #running(
+    contents: WebContents,
+    agentId: string,
+  ): Promise<LiveSession<SessionMode> | undefined> {
     const agent = this.#agents.get(contents)?.get(agentId);
     return agent?.session.catch(() => undefined);
   }
@@ -271,7 +305,7 @@ export class SessionManager {
     return views;
   }
 
-  async #session(contents: WebContents, agentId: string): Promise<LiveSession> {
+  async #session(contents: WebContents, agentId: string): Promise<LiveSession<SessionMode>> {
     const agent = this.#agents.get(contents)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
     return agent.session;
@@ -282,7 +316,7 @@ export class SessionManager {
     const agents = this.#agents.get(contents);
     if (agents?.get(agentId) === agent) agents.delete(agentId);
     if (tell) this.#deps.emit(contents, agentId, agent.connection, { type: 'closed' });
-    let session: LiveSession;
+    let session: LiveSession<SessionMode>;
     try {
       session = await agent.session;
     } catch {
@@ -310,10 +344,10 @@ export class SessionManager {
     return agents;
   }
 
-  #idsOf(contents: WebContents): Map<string, string> {
+  #idsOf(contents: WebContents): Record<Cli, Map<string, string>> {
     let ids = this.#ids.get(contents);
     if (!ids) {
-      ids = new Map();
+      ids = noIds();
       this.#ids.set(contents, ids);
     }
     return ids;
@@ -334,4 +368,9 @@ export class SessionManager {
       void this.#endAll(contents, false);
     });
   }
+}
+
+/** No session ids, for any CLI. */
+function noIds(): Record<Cli, Map<string, string>> {
+  return { claude: new Map(), codex: new Map() };
 }

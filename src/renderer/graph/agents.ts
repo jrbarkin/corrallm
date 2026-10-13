@@ -23,14 +23,18 @@ export const AGENT_CLI: Record<AgentType, string> = {
 
 /**
  * How an agent's session runs: simulated (scripted in corrallm, nothing really runs), or
- * connected to the real CLI, in a terminal or through the Agent SDK (src/shared/session.ts).
+ * connected to the real CLI (src/shared/session.ts): Claude Code in a terminal or through the
+ * Agent SDK, Codex in a terminal or through its app server.
  */
 export type AgentConnection = 'simulated' | Connection;
 
-/** The ways each agent type can run, the default first: Claude can be connected; others not yet. */
+/**
+ * The ways each agent type can run, the default first: Claude and Codex can be connected; others
+ * not yet.
+ */
 export const AGENT_CONNECTIONS: Record<AgentType, readonly AgentConnection[]> = {
   Claude: ['simulated', 'terminal', 'sdk'],
-  Codex: ['simulated'],
+  Codex: ['simulated', 'codex-terminal', 'app-server'],
   Qwen: ['simulated'],
   Gemini: ['simulated'],
 };
@@ -55,7 +59,27 @@ export const CONNECTION_INFO: Record<
     short: 'SDK',
     description: 'Claude Code through the Agent SDK, in corrallm’s transcript',
   },
+  'codex-terminal': {
+    label: 'Terminal',
+    short: 'Terminal',
+    description: 'Codex itself, in a terminal in its view',
+  },
+  'app-server': {
+    label: 'App Server',
+    short: 'App Server',
+    description: 'Codex through its app server, in corrallm’s transcript',
+  },
 };
+
+/** The ways an agent type can be connected, as a sentence names them ("Terminal or Agent SDK"). */
+export function connectionNames(agent: AgentType): string {
+  const names = AGENT_CONNECTIONS[agent]
+    .filter((connection) => connection !== 'simulated')
+    .map((connection) => CONNECTION_INFO[connection].label);
+  return names.length <= 1
+    ? (names[0] ?? '')
+    : `${names.slice(0, -1).join(', ')} or ${names.at(-1) ?? ''}`;
+}
 
 /** How an agent runs: its connection if its type offers it, otherwise simulated. */
 export function connectionOf(data: {

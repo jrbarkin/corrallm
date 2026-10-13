@@ -5,6 +5,8 @@ export interface Remembered {
   project?: string;
   /** The id of each agent's Claude Code session, by agent id: resumed when the agent starts. */
   sessions: Readonly<Record<string, string>>;
+  /** The id of each agent's Codex thread (Codex's sessions), by agent id, likewise. */
+  threads?: Readonly<Record<string, string>>;
 }
 
 const NOTHING: Remembered = { sessions: {} };
@@ -17,7 +19,8 @@ const VERSION = 1;
  * app's user data. The canvas file itself only holds what the canvas means (src/renderer/graph/
  * file.ts), so it can be shared: where it runs on this machine is kept here.
  *
- *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id } } } }
+ *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id },
+ *                                                     "threads"?: { "<agent>": id } } } }
  *
  * Updates are applied one at a time, in order, and written whole (beside it, then moved over it).
  */
@@ -91,17 +94,24 @@ function parse(text: string): Map<string, Remembered> {
   if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     if (!isRecord(value)) continue;
-    const { project, sessions } = value;
+    const { project, sessions, threads } = value;
     if (project !== undefined && typeof project !== 'string') continue;
-    const ids = Object.entries(isRecord(sessions) ? sessions : {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    );
     canvases.set(canvas, {
       ...(project === undefined ? {} : { project }),
-      sessions: Object.fromEntries(ids),
+      sessions: ids(sessions),
+      ...(isRecord(threads) ? { threads: ids(threads) } : {}),
     });
   }
   return canvases;
+}
+
+/** The ids in a record of them, by agent; values that are not ids are left out. */
+function ids(value: unknown): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(isRecord(value) ? value : {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

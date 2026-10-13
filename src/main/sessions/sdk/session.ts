@@ -8,6 +8,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { isPermissionMode } from '../../../shared/session';
 import type {
   PermissionMode,
   PlanMode,
@@ -239,7 +240,7 @@ export class SdkSession implements LiveSession {
       this.#host.emit({ type: 'commands', commands: SdkSession.commands(message.commands) });
     }
     for (const event of this.#translator.translate(message)) {
-      if (event.type === 'mode') this.#mode = event.mode;
+      if (event.type === 'mode' && isPermissionMode(event.mode)) this.#mode = event.mode;
       this.#host.emit(event);
     }
     if (

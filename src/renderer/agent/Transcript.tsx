@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import type { PlanMode } from '../../shared/session';
+import { AgentType } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Markdown } from './Markdown';
-import { MODES, sessionQuestions } from './session';
+import { modeOf, sessionQuestions } from './session';
 import type { Answer, Entry, PlanAnswer, Session } from './session';
 
 /** The tools that run commands, and those that edit files, across the agents (agents.ts). */
@@ -31,16 +32,19 @@ export interface TranscriptAnswers {
  * (one line each, opening onto a diff or output; a subagent's indented under it), prompts
  * (permission, the agent's questions, a plan to approve), to-do lists, notices, and how long each
  * turn took. It keeps to the bottom while new entries arrive, unless scrolled up. `note`: what the
- * empty transcript says about how the session runs.
+ * empty transcript says about how the session runs. `agent`: the agent's type, whose CLI's words
+ * its prompts use.
  */
 export function Transcript({
   session,
   agentName,
+  agent = AgentType.Claude,
   note,
   answers,
 }: {
   session: Session;
   agentName: string;
+  agent?: AgentType;
   note: string;
   answers: TranscriptAnswers;
 }) {
@@ -70,7 +74,15 @@ export function Transcript({
         </div>
       )}
       {session.entries.map((entry) => {
-        const view = <EntryView key={entry.id} entry={entry} session={session} answers={answers} />;
+        const view = (
+          <EntryView
+            key={entry.id}
+            entry={entry}
+            agent={agent}
+            session={session}
+            answers={answers}
+          />
+        );
         const parent = 'parent' in entry ? entry.parent : undefined;
         return parent === undefined ? (
           view
@@ -93,10 +105,12 @@ export function Transcript({
 
 function EntryView({
   entry,
+  agent,
   session,
   answers,
 }: {
   entry: Entry;
+  agent: AgentType;
   session: Session;
   answers: TranscriptAnswers;
 }) {
@@ -157,7 +171,7 @@ function EntryView({
         </div>
       );
     case 'plan':
-      return <Plan entry={entry} onAnswer={answers.onAnswerPlan} />;
+      return <Plan agent={agent} entry={entry} onAnswer={answers.onAnswerPlan} />;
     case 'todos':
       return (
         <div className="agent-todos" role="group" aria-label="To-dos">
@@ -318,21 +332,30 @@ function Permission({
   );
 }
 
-/** How a plan can be carried out once approved, as Claude Code offers it. */
-const PLAN_CHOICES: readonly [PlanMode, string][] = [
-  ['auto', 'Yes, and use auto mode'],
-  ['acceptEdits', 'Yes, and auto-accept edits'],
-  ['manual', 'Yes, and manually approve edits'],
-];
+/**
+ * How a plan can be carried out once approved, as each CLI offers it: Claude Code in a mode of the
+ * user's choice, Codex in its Default mode.
+ */
+const PLAN_CHOICES: Readonly<Record<'Claude' | 'Codex', readonly [PlanMode, string][]>> = {
+  Claude: [
+    ['auto', 'Yes, and use auto mode'],
+    ['acceptEdits', 'Yes, and auto-accept edits'],
+    ['manual', 'Yes, and manually approve edits'],
+  ],
+  Codex: [['auto', 'Yes, implement this plan']],
+};
 
 /** Plan mode's plan: approve it (and the mode to carry it out in), or say what to change. */
 function Plan({
   entry,
+  agent,
   onAnswer,
 }: {
   entry: Extract<Entry, { kind: 'plan' }>;
+  agent: AgentType;
   onAnswer: (promptId: string, answer: PlanAnswer) => void;
 }) {
+  const codex = agent === AgentType.Codex;
   const [feedback, setFeedback] = useState('');
   const { answer } = entry;
   const open = answer === undefined && entry.withdrawn !== true;
@@ -345,7 +368,7 @@ function Plan({
       {open ? (
         <>
           <div className="agent-permission-choices">
-            {PLAN_CHOICES.map(([mode, text]) => (
+            {PLAN_CHOICES[codex ? 'Codex' : 'Claude'].map(([mode, text]) => (
               <button
                 key={mode}
                 type="button"
@@ -360,7 +383,7 @@ function Plan({
           <div className="graph-question-reply">
             <input
               aria-label="What to change"
-              placeholder="No, keep planning: tell Claude what to change"
+              placeholder={`No, keep planning: tell ${codex ? 'Codex' : 'Claude'} what to change`}
               value={feedback}
               onChange={(event) => {
                 setFeedback(event.target.value);
@@ -384,7 +407,7 @@ function Plan({
           {answer === undefined
             ? 'Not answered'
             : answer.approve
-              ? `Approved: carrying it out in ${MODES.find((m) => m.mode === answer.mode)?.label ?? answer.mode}`
+              ? `Approved: carrying it out in ${modeOf(agent, answer.mode).label}`
               : `Kept planning${answer.feedback === '' ? '' : `: ${answer.feedback}`}`}
         </p>
       )}

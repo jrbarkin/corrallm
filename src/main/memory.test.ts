@@ -32,6 +32,19 @@ describe('CanvasMemory', () => {
     expect(await readdir(dir)).toEqual(['canvases.json']);
   });
 
+  it('remembers agents’ Codex threads apart from their Claude Code sessions', async () => {
+    const memory = new CanvasMemory(file);
+    await memory.update('/work/team.corral', (m) => ({
+      ...m,
+      sessions: { a: 'claude-a' },
+      threads: { a: 'codex-a' },
+    }));
+    expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
+      sessions: { a: 'claude-a' },
+      threads: { a: 'codex-a' },
+    });
+  });
+
   it('applies updates made together in order, losing none', async () => {
     const memory = new CanvasMemory(file);
     await Promise.all(

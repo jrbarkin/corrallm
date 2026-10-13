@@ -6,7 +6,7 @@ import type { ImageType } from '../../shared/session';
 import { AgentType } from '../graph/agents';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
-import { MODES } from './session';
+import { modeOf, modesOf } from './session';
 import type { MessageImage, Mode, ModelChoice, Session, SessionUsage } from './session';
 
 /** What the composer does to its agent's session (sessions.ts). */
@@ -101,7 +101,8 @@ export function Composer({
       ? DEFAULT_MODEL
       : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
   const model = models.find((m) => m.value === session.model) ?? models[0];
-  const mode = MODES.find((m) => m.mode === session.mode) ?? MODES[0];
+  const modes = modesOf(agent);
+  const mode = modeOf(agent, session.mode);
 
   const at: Completing | undefined = connected ? completing(draft, caret) : undefined;
   const mention = at?.kind === 'file' ? at.query : undefined;
@@ -346,8 +347,8 @@ export function Composer({
               submit();
             } else if (event.key === 'Tab' && event.shiftKey) {
               event.preventDefault();
-              const at = MODES.findIndex((m) => m.mode === session.mode);
-              const next = MODES[(at + 1) % MODES.length];
+              const at = modes.indexOf(mode);
+              const next = modes[(at + 1) % modes.length];
               if (next) controls.setMode(next.mode);
             } else if (event.key === 'Escape' && (working || draft !== '' || images.length > 0)) {
               // Otherwise Esc goes on to close the view.
@@ -363,12 +364,12 @@ export function Composer({
         <div className="agent-input-bar">
           <ChoiceMenu
             label="Mode"
-            value={mode?.label ?? ''}
-            title={`${mode?.description ?? ''} (Shift+Tab to switch)`}
-            choices={MODES.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
-            chosen={session.mode}
+            value={mode.label}
+            title={`${mode.description} (Shift+Tab to switch)`}
+            choices={modes.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
+            chosen={mode.mode}
             onChoose={(key) => {
-              const picked = MODES.find((m) => m.mode === key);
+              const picked = modes.find((m) => m.mode === key);
               if (picked) controls.setMode(picked.mode);
               field.current?.focus();
             }}
@@ -415,9 +416,12 @@ export function Composer({
   );
 }
 
-/** What a connected session has used: its cost so far, and how full its context is. */
+/**
+ * What a connected session has used: its cost so far, how full its context is, and how much of
+ * each of the user's plan's usage limits is used (with when each resets, in its title).
+ */
 function Usage({ usage }: { usage: SessionUsage }) {
-  const { costUsd, contextTokens, contextWindow } = usage;
+  const { costUsd, contextTokens, contextWindow, limits = [] } = usage;
   const context =
     contextTokens !== null && contextWindow !== null && contextWindow > 0
       ? Math.round((contextTokens / contextWindow) * 100)
@@ -425,6 +429,7 @@ function Usage({ usage }: { usage: SessionUsage }) {
   const parts = [
     ...(costUsd === null ? [] : [`$${costUsd.toFixed(2)}`]),
     ...(context === null ? [] : [`${String(context)}% context`]),
+    ...limits.map((limit) => `${limit.name} ${String(Math.round(limit.usedPercent))}%`),
   ];
   if (parts.length === 0) return null;
   return (
@@ -435,11 +440,26 @@ function Usage({ usage }: { usage: SessionUsage }) {
         ...(context === null
           ? []
           : [`${String(contextTokens)} of ${String(contextWindow)} tokens of context used`]),
+        ...limits.map(
+          (limit) =>
+            `${String(Math.round(limit.usedPercent))}% of your ${limit.name} limit used` +
+            (limit.resetsAt === null ? '' : `; it resets ${resetTime(limit.resetsAt)}`),
+        ),
       ].join('. ')}
     >
       {parts.join(' · ')}
     </span>
   );
+}
+
+/** When a usage limit resets, as a date and time ("Oct 12, 3:04 PM"). */
+function resetTime(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 /** A button showing a choice ("Mode: Manual"), opening a menu of the others. */

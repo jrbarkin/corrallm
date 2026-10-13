@@ -39,10 +39,10 @@ async function open(data: Partial<GraphNode['data']> = {}) {
     await settle();
   };
   const transcript = within(view.getByRole('log', { name: 'Transcript' }));
-  /** Main says `events` happened in a's session. */
+  /** Main says `events` happened in a's session (connected as `data` says, or through the SDK). */
   const emit = (...events: SessionEvent[]) => {
     act(() => {
-      fake.emit('a', 'sdk', ...events);
+      fake.emit('a', data.connection ?? 'sdk', ...events);
     });
   };
   return { ...fake, container, card, view, composer, send, transcript, emit };
@@ -52,6 +52,95 @@ const MODELS = [
   { value: 'opus', label: 'Opus', description: 'The most capable' },
   { value: 'haiku', label: 'Haiku', description: 'The fastest' },
 ];
+
+describe('a connected Codex agent', () => {
+  it('runs in a terminal or through its app server, as its chip says', async () => {
+    const { backend, card, view } = await open({ agent: 'Codex' });
+    const chip = () => view.getByRole('button', { name: /^Agent: / });
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Codex · Simulated');
+    fireEvent.click(chip());
+    expect(view.getByRole('option', { name: /^Codex · Terminal/ }).textContent).toMatch(
+      /Codex itself, in a terminal/,
+    );
+    fireEvent.click(view.getByRole('option', { name: /^Codex · App Server/ }));
+    expect(card().getAttribute('aria-label')).toBe('a, Codex · App Server');
+    await settle();
+    // In Codex's default mode.
+    expect(backend.start).toHaveBeenCalledWith('a', {
+      connection: 'app-server',
+      model: null,
+      mode: 'auto',
+    });
+  });
+
+  it('switches between Codex’s modes, and shows its plan’s usage limits', async () => {
+    const { backend, view, composer, emit } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    emit({ type: 'started', model: null, mode: 'auto', models: [] });
+    const mode = () => view.getByRole('button', { name: /^Mode: / });
+    expect(mode().getAttribute('aria-label')).toBe('Mode: Default');
+    fireEvent.click(mode());
+    const menu = within(view.getByRole('menu', { name: 'Mode' }));
+    expect(menu.getAllByRole('menuitemradio').map((item) => item.firstChild?.textContent)).toEqual([
+      'Read only',
+      'Default',
+      'Full access',
+      'Plan',
+    ]);
+    fireEvent.click(menu.getByRole('menuitemradio', { name: /^Read only/ }));
+    await settle();
+    expect(backend.setMode).toHaveBeenLastCalledWith('a', 'read-only');
+    // Shift+Tab goes on to the next.
+    fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+    await settle();
+    expect(backend.setMode).toHaveBeenLastCalledWith('a', 'auto');
+
+    const resets = new Date(2026, 9, 12, 15, 4).getTime();
+    emit({
+      type: 'usage',
+      usage: {
+        costUsd: null,
+        contextTokens: 10_000,
+        contextWindow: 200_000,
+        limits: [
+          { name: '5h', usedPercent: 12, resetsAt: resets },
+          { name: 'weekly', usedPercent: 3, resetsAt: null },
+        ],
+      },
+    });
+    const usage = view.getByText('5% context · 5h 12% · weekly 3%');
+    expect(usage.getAttribute('title')).toMatch(/12% of your 5h limit used; it resets .*3:04/);
+  });
+
+  it('asks to implement its plan, as Codex does, carried out in its Default mode', async () => {
+    const { backend, send, sent, emit, transcript } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    await send('Plan the change');
+    emit(
+      { type: 'user', id: sent(), text: 'Plan the change' },
+      { type: 'plan', id: 'p', plan: '1. Read it\n2. Change it' },
+    );
+    const plan = within(transcript.getByRole('group', { name: 'Plan' }));
+    expect(plan.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Yes, implement this plan',
+      'Keep planning',
+    ]);
+    expect(plan.getByRole('textbox', { name: 'What to change' }).getAttribute('placeholder')).toBe(
+      'No, keep planning: tell Codex what to change',
+    );
+    fireEvent.click(plan.getByRole('button', { name: 'Yes, implement this plan' }));
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'p', {
+      kind: 'plan',
+      answer: { approve: true, mode: 'auto' },
+    });
+    expect(plan.getByText('Approved: carrying it out in Default')).toBeTruthy();
+  });
+});
 
 describe('a connected agent', () => {
   it('is connected from its agent chip: shown on its card, its chip and its lane in All queues', async () => {
@@ -79,9 +168,9 @@ describe('a connected agent', () => {
     expect(queues.getByText('SDK').getAttribute('title')).toMatch(/Agent SDK/);
     fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
 
-    // Another type of agent is simulated: the session closes.
+    // Another type of agent, simulated: the session closes.
     fireEvent.click(chip());
-    fireEvent.click(screen.getByRole('option', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('option', { name: /^Codex · Simulated/ }));
     expect(card().getAttribute('aria-label')).toBe('a, Codex');
     expect(backend.close).toHaveBeenCalledWith('a');
   });

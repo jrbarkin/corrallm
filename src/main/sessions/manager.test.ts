@@ -162,6 +162,58 @@ describe('SessionManager', () => {
     expect(fake.started.at(-1)?.resume).toBeNull();
   });
 
+  it('keeps an agent’s Codex thread apart from its Claude Code session, each resumed in turn', async () => {
+    const codex = new FakeConnector();
+    const sessions = manager({ 'app-server': codex, 'codex-terminal': codex });
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    // A Claude Code session's id means nothing to Codex: its thread starts afresh.
+    await sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'auto' });
+    expect(codex.started[0]).toMatchObject({ resume: null, mode: 'auto' });
+    // Codex in a terminal resumes the same thread; Claude Code its own session.
+    await sessions.start(contents, 'a', {
+      connection: 'codex-terminal',
+      model: null,
+      mode: 'auto',
+    });
+    expect(codex.started[1]?.resume).toBe(codex.ids[0]);
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started[1]?.resume).toBe(fake.ids[0]);
+    await sessions.closeEverything();
+    await memory.flush();
+    expect(await memory.get('/work/team.corral')).toEqual({
+      sessions: { a: fake.ids[0] },
+      threads: { a: codex.ids[0] },
+    });
+
+    // After a restart, each is resumed by its own CLI.
+    const after = manager({ 'app-server': codex });
+    const reopened = window('/work/team.corral');
+    await after.canvasOpened(reopened);
+    await after.start(reopened, 'a', { connection: 'app-server', model: null, mode: 'plan' });
+    expect(codex.started.at(-1)?.resume).toBe(codex.ids[0]);
+  });
+
+  it('starts and switches a session only in modes of its CLI', async () => {
+    const codex = new FakeConnector();
+    const sessions = manager({ 'app-server': codex });
+    const contents = window();
+    await expect(
+      sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'manual' }),
+    ).rejects.toThrow(/mode/);
+    await sessions.start(contents, 'a', { connection: 'app-server', model: null, mode: 'auto' });
+    await sessions.setMode(contents, 'a', 'full-access');
+    expect(types(contents)).toContain('a:mode');
+    await expect(sessions.setMode(contents, 'a', 'acceptEdits')).rejects.toThrow(/mode/);
+  });
+
+  it('says a connection corrallm cannot run', async () => {
+    const sessions = manager();
+    await expect(
+      sessions.start(window(), 'a', { connection: 'app-server', model: null, mode: 'auto' }),
+    ).rejects.toThrow(/can't run/);
+  });
+
   it('remembers the sessions of a canvas first saved after they started', async () => {
     const sessions = manager();
     const contents = window();

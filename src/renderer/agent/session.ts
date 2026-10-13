@@ -1,16 +1,20 @@
+import { DEFAULT_MODES } from '../../shared/session';
 import type {
   AskedQuestion,
+  CodexMode,
   DiffLine,
   MessageImage,
   ModelChoice,
   PermissionMode,
   PlanAnswer,
+  SessionMode,
   SessionUsage,
   SlashCommand,
   Todo,
   ToolDetail,
   ToolStatus,
 } from '../../shared/session';
+import { AgentType } from '../graph/agents';
 import type { Question } from '../graph/queue';
 
 export type {
@@ -33,11 +37,21 @@ export type {
  * real CLI (connected.ts).
  */
 
-/** When the agent asks before acting: Claude Code's permission modes (its settings' names). */
-export type Mode = PermissionMode;
+/**
+ * When the agent asks before acting: its CLI's modes (Claude Code's permission modes, by its
+ * settings' names; Codex's permission presets and plan mode).
+ */
+export type Mode = SessionMode;
 
-/** The modes as Claude Code's desktop app names them, in the order Shift+Tab cycles them. */
-export const MODES: readonly { mode: Mode; label: string; description: string }[] = [
+/** A mode as the composer shows it. */
+export interface ModeInfo {
+  mode: Mode;
+  label: string;
+  description: string;
+}
+
+/** Claude Code's modes as its desktop app names them, in the order Shift+Tab cycles them. */
+export const MODES: readonly (ModeInfo & { mode: PermissionMode })[] = [
   { mode: 'manual', label: 'Manual', description: 'Asks before editing files or running commands' },
   {
     mode: 'acceptEdits',
@@ -48,6 +62,40 @@ export const MODES: readonly { mode: Mode; label: string; description: string }[
   { mode: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks' },
   { mode: 'auto', label: 'Auto', description: 'Decides for itself what needs your approval' },
 ];
+
+/** Codex's modes, as its /permissions names its presets, then plan mode; Default first in use. */
+export const CODEX_MODES: readonly (ModeInfo & { mode: CodexMode })[] = [
+  {
+    mode: 'read-only',
+    label: 'Read only',
+    description: 'Reads and runs read-only commands; asks before editing',
+  },
+  {
+    mode: 'auto',
+    label: 'Default',
+    description: 'Edits and runs commands in the project folder; asks before going outside it',
+  },
+  {
+    mode: 'full-access',
+    label: 'Full access',
+    description: 'Edits and runs anything, with network access; never asks',
+  },
+  { mode: 'plan', label: 'Plan', description: 'Explores and proposes a plan; changes nothing' },
+];
+
+/** The modes an agent offers: a Codex agent Codex's, the others Claude Code's. */
+export function modesOf(agent: AgentType): readonly ModeInfo[] {
+  return agent === AgentType.Codex ? CODEX_MODES : MODES;
+}
+
+/** How an agent shows `mode`: as the mode, if it has it, else as the mode it starts in. */
+export function modeOf(agent: AgentType, mode: Mode): ModeInfo {
+  const modes = modesOf(agent);
+  const fallback = agent === AgentType.Codex ? DEFAULT_MODES.codex : DEFAULT_MODES.claude;
+  const shown = modes.find((m) => m.mode === mode) ?? modes.find((m) => m.mode === fallback);
+  if (!shown) throw new Error(`${agent} has no ${fallback} mode`);
+  return shown;
+}
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';

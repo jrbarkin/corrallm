@@ -404,7 +404,7 @@ describe('the agent view', () => {
       expect(card.classList.contains('group-color-3')).toBe(true);
       expect(card.classList.contains('selected')).toBe(true);
       expect(container.querySelectorAll('.react-flow__edge')).toHaveLength(0);
-      expect(next.getByRole('button', { name: 'Agent: Codex' })).toBeTruthy();
+      expect(next.getByRole('button', { name: 'Agent: Codex · Simulated' })).toBeTruthy();
       // a waits on top of the stack, still working.
       expect(stacked()).toEqual(['Switch to a']);
       expect(next.getByRole('button', { name: 'Switch to a' }).dataset.status).toBe('working');

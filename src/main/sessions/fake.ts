@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ModelChoice, PermissionMode, SessionAnswer, UserMessage } from '../../shared/session';
+import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 
 /** The models a fake session offers. */
@@ -10,16 +10,18 @@ export const FAKE_MODELS: ModelChoice[] = [
 ];
 
 /**
- * A connector that runs no CLI, for tests. Each turn echoes the message, thinks, and runs a
- * command, asking first in Manual mode; a message starting "/question" asks the user a question
- * instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes and models, and remembers a made-up session id.
+ * A connector that runs no CLI, for tests, standing in for any connection (Claude Code's or
+ * Codex's). Each turn echoes the message, thinks, and runs a command, asking first in the modes
+ * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
+ * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes
+ * and models, and remembers a made-up session id.
  *
  * The manager's tests use it, and so do the e2e tests (CORRALLM_FAKE_SESSIONS=1, honoured only by
  * unpackaged builds), to drive the whole path from the renderer through IPC and back.
  */
-export class FakeConnector implements Connector {
+export class FakeConnector implements Connector<SessionMode> {
   /** Every session it started, as it was started, and the id each one remembered. */
-  readonly started: SessionSpec[] = [];
+  readonly started: SessionSpec<SessionMode>[] = [];
   readonly ids: string[] = [];
   readonly #pause: number;
 
@@ -28,7 +30,7 @@ export class FakeConnector implements Connector {
     this.#pause = pause;
   }
 
-  start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
+  start(spec: SessionSpec<SessionMode>, host: SessionHost): Promise<LiveSession<SessionMode>> {
     this.started.push(spec);
     const id = spec.resume ?? randomUUID();
     this.ids.push(id);
@@ -56,14 +58,17 @@ interface Turn {
   prompt: string | undefined;
 }
 
-class FakeSession implements LiveSession {
-  #mode: PermissionMode;
+/** The modes in which a fake session asks before running its command. */
+const ASKING: readonly SessionMode[] = ['manual', 'plan', 'read-only'];
+
+class FakeSession implements LiveSession<SessionMode> {
+  #mode: SessionMode;
   readonly #host: SessionHost;
   readonly #pause: number;
   #turn: Turn | undefined;
   #turns = 0;
 
-  constructor(mode: PermissionMode, host: SessionHost, pause: number) {
+  constructor(mode: SessionMode, host: SessionHost, pause: number) {
     this.#mode = mode;
     this.#host = host;
     this.#pause = pause;
@@ -94,7 +99,7 @@ class FakeSession implements LiveSession {
     return Promise.resolve();
   }
 
-  setMode(mode: PermissionMode): Promise<void> {
+  setMode(mode: SessionMode): Promise<void> {
     this.#mode = mode;
     this.#host.emit({ type: 'mode', mode });
     return Promise.resolve();
@@ -182,7 +187,7 @@ class FakeSession implements LiveSession {
       const command = { tool: 'Bash', summary: 'echo hello' };
       turn.tool = tool;
       emit({ type: 'tool', id: tool, ...command, status: 'running' });
-      if (this.#mode === 'manual' || this.#mode === 'plan') {
+      if (ASKING.includes(this.#mode)) {
         const answer = await ask(`${id}/permission`, () => {
           emit({
             type: 'permission',

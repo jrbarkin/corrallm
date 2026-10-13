@@ -1,0 +1,86 @@
+{"t": 4, "kind": "argv", "data": ["resume", "01a13450-a090-78e2-aba2-01792d6d732d", "--no-daemon", "-C", "/work/smoke/p2", "-c", "projects={\"/work/smoke/p2\"={trust_level=\"trusted\"}}", "-c", "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65046/hook\"}]}]", "-c", "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65046/hook\"}]}]", "-c", "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65046/hook\"}]}]", "-c", "hooks.Stop=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65046/hook\"}]}]", "-c", "hooks.Interrupt=[{hooks=[{type=\"command\",command=\"curl -s -o /dev/null -X POST -H \\\"Authorization: Bearer $CORRALLM_HOOK_TOKEN\\\" -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:65046/hook\",timeout=1}]}]", "-c", "hooks.state={\"/<session-flags>/config.toml:session_start:0:0\"={trusted_hash=\"sha256:a8d6f28f3d33da8828525d8b0c21cd3a181470715d28eb17e82e4d9929780b45\"},\"/<session-flags>/config.toml:user_prompt_submit:0:0\"={trusted_hash=\"sha256:8f495bd7b6bc2f0d5020483221319e629f0760f506443a6974b389e420735b99\"},\"/<session-flags>/config.toml:permission_request:0:0\"={trusted_hash=\"sha256:a35338d356cb1d40d188879f273022511f77eb79461fb46ea2adcdd5f4ed86ed\"},\"/<session-flags>/config.toml:stop:0:0\"={trusted_hash=\"sha256:a0fab4e8b66aa29c802d96b234f1202464960b8f1fa57ef990885e16c1fd9753\"},\"/<session-flags>/config.toml:interrupt:0:0\"={trusted_hash=\"sha256:66334b46e4410a662dd9a1e608fc8a25e201a1562611755ead1876edcad1329f\"}}", "-c", "tui.terminal_title=[\"activity\",\"run-state\"]", "-c", "check_for_update_on_startup=false", "-c", "tui.auto_recap=false", "-m", "gpt-6-luna", "-c", "model_reasoning_effort=\"low\"", "-s", "read-only", "-a", "on-request"]}
+{"t": 26, "kind": "out", "data": "\u001b[?2004h"}
+{"t": 26, "kind": "out", "data": "\u001b[>4;0m\u001b[>5u\u001b[?1004h\u001b[6n\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[?u\u001b[c"}
+{"t": 27, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[?1049h"}
+{"t": 27, "kind": "out", "data": "\u001b[>4;0m\u001b[>5u\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l\u001b[1;1H\u001b[J"}
+{"t": 27, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 27, "kind": "out", "data": "\u001b[26;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[27;27H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[28;2H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[2;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.160.1)\u001b[3;6Hloading\u001b[4;1H  Resuming session…\u001b[26;1H\u001b[22m\u001b[39;48;2;55;55;57m \u001b[27;1H\u001b[1m›\u001b[22m \u001b[2mAsk Codex to do anything\u001b[28;1H\u001b[22m \u001b[30;3H\u001b[1m\u001b[38;2;228;228;231;49m?\u001b[22m\u001b[38;2;148;148;151;49m for shortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[1;1H\u001b[0 q\u001b[1;1H \u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l\u001b[?2026l"}
+{"t": 27, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 27, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 28, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 28, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 28, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 28, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 30, "kind": "out", "data": "\u001b[3;6H\u001b[2m/private/tmp/claude-501/-Users-someone-Repos-corrallm/…/scratchpad/codex-smoke/p2\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 30, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 31, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 31, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 37, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 65, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 65, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 65, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 85, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 392, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 393, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 393, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 397, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 397, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 397, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 400, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 400, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 402, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 403, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 406, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 406, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 413, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 423, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 503, "kind": "out", "data": "\u001b]0;Ready\u0007"}
+{"t": 503, "kind": "title", "data": "Ready"}
+{"t": 504, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 506, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 507, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 507, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 518, "kind": "note", "data": "ready: true"}
+{"t": 567, "kind": "out", "data": "\u001b]0;⠋ Starting\u0007"}
+{"t": 567, "kind": "title", "data": "⠋ Starting"}
+{"t": 569, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[1;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[2;22H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[3;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[4;2H\u001b[0m\u001b[49m\u001b[K\u001b[9;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[10;55H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[11;2H\u001b[0m\u001b[48;2;64;64;66m\u001b[K\u001b[1;1H \u001b[2;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mSay hi in one word.\u001b[3;1H \u001b[4;1H\u001b[39;49m \u001b[5;1H\u001b[2m• \u001b[22mHi\u001b[7;1H\u001b[2m  Worked for 4s • 10:11 PM                                                                          \u001b[9;1H\u001b[22m\u001b[39;48;2;64;64;66m \u001b[10;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mCreate a file named bye.txt containing the word bye.\u001b[11;1H \u001b[13;1H\u001b[2m\u001b[39;49m• \u001b[22mI’ll\u001b[13;8Hcreate\u001b[13;15H\u001b[38;2;166;227;161;49mbye.txt\u001b[13;23H\u001b[39;49min\u001b[13;26Hthe\u001b[13;30Hworkspace\u001b[13;40Hwith\u001b[13;45Hexactly\u001b[13;53H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[15;1H\u001b[1m\u001b[38;5;2;49m•\u001b[15;3H\u001b[39;49mRan\u001b[15;7H\u001b[22m\u001b[38;2;137;180;250;49mpwd\u001b[16;1H\u001b[2m\u001b[39;49m  └ /private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-000000000000/scra…\u001b[17;1H    + 1 line (ctrl+t to expand)                                            "}
+{"t": 570, "kind": "out", "data": "                         \u001b[19;1H\u001b[22m\u001b[1m\u001b[38;5;2;49m•\u001b[19;3H\u001b[39;49mRan\u001b[19;7H\u001b[22m\u001b[38;2;137;180;250;49mprintf\u001b[38;2;205;214;244;49m \u001b[38;2;166;227;161;49m'bye'\u001b[38;2;205;214;244;49m \u001b[38;2;148;226;213;49m>\u001b[38;2;205;214;244;49m bye.txt\u001b[20;1H\u001b[2m\u001b[39;49m  └ (no output)\u001b[22;1H• \u001b[22mCreated\u001b[22;11H\u001b[38;2;166;227;161;49mbye.txt\u001b[22;19H\u001b[39;49mwith\u001b[22;24Hthe\u001b[22;28Hword\u001b[22;33H\u001b[38;2;166;227;161;49mbye\u001b[39;49m.\u001b[24;1H\u001b[2m  Worked for 15s • 10:11 PM                                                                         \u001b[29;3H\u001b[22m\u001b[38;2;246;226;183;49mGPT-6-Luna low\u001b[38;2;148;148;151;49m · \u001b[38;2;171;223;167;49m/private/tmp/claude-501/-Users-someone-Repos-corrallm/00000000-0000-0000-0000-00…\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 570, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 570, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 577, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 677, "kind": "out", "data": "\u001b]0;⠙ Starting\u0007"}
+{"t": 677, "kind": "title", "data": "⠙ Starting"}
+{"t": 680, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 680, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 779, "kind": "out", "data": "\u001b]0;⠹ Starting\u0007"}
+{"t": 779, "kind": "title", "data": "⠹ Starting"}
+{"t": 780, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 878, "kind": "out", "data": "\u001b]0;⠸ Starting\u0007"}
+{"t": 878, "kind": "title", "data": "⠸ Starting"}
+{"t": 879, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 980, "kind": "out", "data": "\u001b]0;⠼ Starting\u0007"}
+{"t": 980, "kind": "title", "data": "⠼ Starting"}
+{"t": 990, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h"}
+{"t": 990, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 1002, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1094, "kind": "out", "data": "\u001b]0;⠴ Starting\u0007"}
+{"t": 1094, "kind": "title", "data": "⠴ Starting"}
+{"t": 1179, "kind": "out", "data": "\u001b]0;⠦ Starting\u0007"}
+{"t": 1180, "kind": "title", "data": "⠦ Starting"}
+{"t": 1181, "kind": "out", "data": "\u001b]0;Ready\u0007\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 1181, "kind": "title", "data": "Ready"}
+{"t": 1189, "kind": "out", "data": "\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[27;3H\u001b[?25h\u001b[?2026l"}
+{"t": 4520, "kind": "in", "data": "/quit"}
+{"t": 4523, "kind": "out", "data": "\u001b[?2026h\u001b[?25l"}
+{"t": 4524, "kind": "out", "data": "\u001b[27;8H\u001b[0m\u001b[48;2;55;55;57m\u001b[K\u001b[30;2H\u001b[0m\u001b[49m\u001b[K\u001b[25;1H\u001b[1m\u001b[38;2;0;0;46;48;2;99;168;248m› /quit  \u001b[22mexit Codex\u001b[1m                                                                                 \u001b[27;3H\u001b[22m\u001b[39;48;2;55;55;57m/quit\u001b[39m\u001b[49m\u001b[0m\u001b[27;8H\u001b[?25h\u001b[?2026l"}
+{"t": 4827, "kind": "out", "data": "\u001b[?2026h\u001b[?25l\u001b[25;2H\u001b[0m\u001b[49m\u001b[K\u001b[25;1H \u001b[27;1H\u001b[2m\u001b[39;48;2;55;55;57m›\u001b[27;3HShutting down...\u001b[39m\u001b[49m\u001b[0m"}
+{"t": 4828, "kind": "out", "data": "\u001b[?2026l"}
+{"t": 4835, "kind": "out", "data": "\u001b[1;1H\u001b[J"}
+{"t": 4835, "kind": "out", "data": "\u001b]0;\u0007"}
+{"t": 4835, "kind": "title", "data": ""}
+{"t": 4835, "kind": "out", "data": "\u001b[?1006l\u001b[?1015l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[<1u\u001b[?1007l\u001b[?1049l\u001b[<1u\u001b[<u\u001b[>4;0m\u001b[?2004l\u001b[?1004l\u001b[0 q\u001b[?25h"}
+{"t": 4835, "kind": "out", "data": "\u001b[0 q\u001b[?25h"}
+{"t": 5175, "kind": "out", "data": "Token usage: total=12,672 input=12,489 (+ 56,320 cached) output=183\r\nTo continue this session, run:\r\n  \u001b[36mcodex resume 01a13450-a090-78e2-aba2-01792d6d732d\u001b[39m\r\nOr run \u001b[36mcodex resume\u001b[39m and select \u001b[36mSay hi\u001b[39m.\r\n"}
+{"t": 5191, "kind": "exit", "data": {"exitCode": 0, "signal": 0}}
