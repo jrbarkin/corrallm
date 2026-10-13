@@ -1,6 +1,6 @@
 import { Graph as Layered, layout } from '@dagrejs/dagre';
 import type { EdgeLabel, GraphLabel, NodeLabel } from '@dagrejs/dagre';
-import { autosize, PADDING, size, topInset } from './graph';
+import { autosize, NODE_GAP, PADDING, RANK_GAP, size, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { workEdges } from './work';
 
@@ -9,10 +9,6 @@ interface Flow {
   source: string;
   target: string;
 }
-
-/** Space between neighbouring nodes in a row, and between rows. */
-const NODE_GAP = 40;
-const RANK_GAP = 60;
 
 /**
  * Lays the graph out top to bottom along its edges and the work its queues give (dagre's layered

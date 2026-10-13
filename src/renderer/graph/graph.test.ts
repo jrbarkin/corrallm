@@ -36,6 +36,7 @@ import {
   setCondition,
   setWaitFor,
   size,
+  spawnAgent,
   ungroupSelection,
 } from './graph';
 import type { Graph, GraphNode } from './graph';
@@ -221,6 +222,72 @@ describe('addAgent', () => {
     expect(abs(result, 'x')).toEqual(abs(g, 'x'));
     expect(abs(result, 'F').x).toBeLessThan(100);
     expectValid(result);
+  });
+});
+
+describe('spawnAgent', () => {
+  /** Where the next card along a row goes: one card and the gap between neighbours further. */
+  const NEXT = CARD_SIZE.width + 40;
+
+  it('puts a peer beside the agent, in its row: of its type, selected, and not linked to it', () => {
+    const codex = { label: 'a', agent: AgentType.Codex };
+    const g = graphOf([selected(agentNode('a', 0, 0, { data: codex }))]);
+    const result = spawnAgent(g, 'a', 'n', 'peer');
+    expect(get(result, 'n')).toMatchObject({
+      position: { x: 140, y: 0 },
+      data: { label: 'Agent 1', agent: AgentType.Codex, queue: [{ id: 'n/message', message: '' }] },
+    });
+    expect(selectedIds(result)).toEqual(['n']);
+    expect(result.edges).toEqual([]);
+    // The next one lines up to its right.
+    expect(get(spawnAgent(result, 'a', 'm', 'peer'), 'm').position).toEqual({
+      x: 140 + NEXT,
+      y: 0,
+    });
+  });
+
+  it('puts a linked agent below the agent, linked to it, in a row of the ones linked before', () => {
+    const g = graphOf([agentNode('a', 0, 0)]);
+    const one = spawnAgent(g, 'a', 'n', 'linked');
+    expect(get(one, 'n').position).toEqual({ x: 0, y: 100 });
+    // Linked as drawing from the agent's bottom dot to the new one's top dot would.
+    expect(one.edges).toEqual([
+      { id: 'a->n', source: 'a', target: 'n', sourceHandle: 'bottom', targetHandle: 'top' },
+    ]);
+    const two = spawnAgent(one, 'a', 'm', 'linked');
+    expect(get(two, 'm').position).toEqual({ x: NEXT, y: 100 });
+    expect(two.edges.map((e) => e.id)).toEqual(['a->n', 'a->m']);
+  });
+
+  it('steps past every card and group in the way, but not past what is clear of its row', () => {
+    const g = graphOf([
+      agentNode('a', 0, 0),
+      agentNode('b', 150, 20), // overlaps the first spot
+      frame('F', 280, -100, 200, 150), // overlaps the spot past b
+      agentNode('c', 520, 100), // below the row, clear of it
+    ]);
+    expect(abs(spawnAgent(g, 'a', 'n', 'peer'), 'n')).toEqual({ x: 520, y: 0 });
+  });
+
+  it("stays in the agent's group, which grows to fit it, moving nothing else", () => {
+    const g = graphOf(autosize([frame('F', 100, 100, 0, 0), inside('F', agentNode('a', 20, 52))]));
+    const peer = spawnAgent(g, 'a', 'n', 'peer');
+    expect(get(peer, 'n').parentId).toBe('F');
+    expect(abs(peer, 'n')).toEqual({ x: abs(g, 'a').x + 140, y: abs(g, 'a').y });
+    expect(get(peer, 'F').width).toBeGreaterThan(get(g, 'F').width ?? 0);
+    expect(absAll(peer, ['F', 'a'])).toEqual(absAll(g, ['F', 'a']));
+    expectValid(peer);
+
+    const linked = spawnAgent(g, 'a', 'n', 'linked');
+    expect(get(linked, 'n').parentId).toBe('F');
+    expect(abs(linked, 'n')).toEqual({ x: abs(g, 'a').x, y: abs(g, 'a').y + 100 });
+    expectValid(linked);
+  });
+
+  it('spawns only from an agent', () => {
+    const g = graphOf([frame('F', 0, 0, 200, 100)]);
+    expect(spawnAgent(g, 'F', 'n', 'peer')).toBe(g);
+    expect(spawnAgent(g, 'missing', 'n', 'linked')).toBe(g);
   });
 });
 

@@ -56,6 +56,7 @@ import {
   setAgent,
   setCondition,
   setWaitFor,
+  spawnAgent,
   ungroupSelection,
 } from './graph';
 import type { Graph } from './graph';
@@ -213,8 +214,22 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   /** Whether the graph is laid out automatically (and nodes cannot be dragged). */
   const [arranging, setArranging] = useState(false);
   const [editing, setEditing] = useState<string>();
-  /** The node opened in a panel by a double-click, if any. */
-  const [opened, setOpened] = useState<string>();
+  /**
+   * The agents opened in the agent view, by a double-click (or from a list of them) or from its
+   * rail: the first is shown, and the rest wait in the rail's stack, most recent first. `from` is
+   * where the one shown grew from when it came from the rail.
+   */
+  const [opened, setOpened] = useState<{
+    ids: readonly string[];
+    from?: { id: string; rect: DOMRect };
+  }>({ ids: [] });
+  /** Those still on the canvas (agents deleted meanwhile drop out), the one shown first. */
+  const openedIds = useMemo(() => {
+    const agents = new Set(graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.id] : [])));
+    return opened.ids.filter((id) => agents.has(id));
+  }, [opened.ids, graph.nodes]);
+  /** The agent shown in the agent view, if any. */
+  const front = openedIds[0];
   /** The work between two agents opened in a panel, if any. */
   const [work, setWork] = useState<{ from: string; to: string }>();
   /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
@@ -224,7 +239,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const wrapper = useRef<HTMLDivElement>(null);
   /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
   const modal =
-    opened !== undefined ||
+    front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
     discarding !== undefined ||
@@ -250,15 +265,16 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   );
   const openedCard = useCallback(
     () =>
-      opened === undefined
+      front === undefined
         ? undefined
-        : nodeElement(opened)?.querySelector('.graph-card')?.getBoundingClientRect(),
-    [opened, nodeElement],
+        : nodeElement(front)?.querySelector('.graph-card')?.getBoundingClientRect(),
+    [front, nodeElement],
   );
+  /** Closes the agent view, stack and all; the agent shown has the keyboard on the canvas. */
   const closeOpened = useCallback(() => {
-    if (opened !== undefined) nodeElement(opened)?.focus();
-    setOpened(undefined);
-  }, [opened, nodeElement]);
+    if (front !== undefined) nodeElement(front)?.focus();
+    setOpened({ ids: [] });
+  }, [front, nodeElement]);
 
   // Also dismisses React Flow's selection rectangle, which would keep covering the old selection.
   const apply = useCallback(
@@ -357,7 +373,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
       setSaved({ name, text: toFile(next) });
       setArranging(false);
       setEditing(undefined);
-      setOpened(undefined);
+      setOpened({ ids: [] });
       setWork(undefined);
       setDrawn(undefined);
       setProblem(undefined);
@@ -541,7 +557,21 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
   const selectedIds = graph.nodes.filter((n) => n.selected).map((n) => n.id);
   const nameOf = (id: string) =>
     (graph.nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
-  const openedNode = graph.nodes.find((n) => n.id === opened);
+  const openedNode = graph.nodes.find((n) => n.id === front);
+  /** The other agents opened from the agent view's rail, as its stack shows them. */
+  const stack = openedIds.slice(1).flatMap((id) => {
+    const n = graph.nodes.find((other) => other.id === id);
+    return n
+      ? [
+          {
+            id,
+            name: n.data.label || 'Unnamed agent',
+            agent: n.data.agent ?? DEFAULT_AGENT,
+            status: sessions[id]?.status ?? 'idle',
+          },
+        ]
+      : [];
+  });
   const canGroup = groupMembers(graph.nodes).length > 0;
 
   return (
@@ -607,7 +637,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
               setEditing(node.id);
             } else {
               setEditing(undefined);
-              setOpened(node.id);
+              setOpened({ ids: [node.id] });
             }
           }}
           zoomOnDoubleClick={false}
@@ -695,7 +725,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
                 }}
                 onOpen={(agentId) => {
                   apply((g) => selectOnly(g, agentId));
-                  setOpened(agentId);
+                  setOpened({ ids: [agentId] });
                 }}
               />
             </Panel>
@@ -758,6 +788,20 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             node={openedNode}
             nodes={graph.nodes}
             origin={openedCard}
+            from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
+            stack={stack}
+            onNewAgent={(relation, from) => {
+              const id = crypto.randomUUID();
+              apply((g) => spawnAgent(g, openedNode.id, id, relation));
+              setOpened(({ ids }) => ({ ids: [id, ...ids], from: { id, rect: from } }));
+            }}
+            onSwitch={(id, from) => {
+              apply((g) => selectOnly(g, id));
+              setOpened(({ ids }) => ({
+                ids: [id, ...ids.filter((other) => other !== id)],
+                from: { id, rect: from },
+              }));
+            }}
             onRename={(label) => {
               setGraph((g) => renameNode(g, openedNode.id, label));
             }}
@@ -831,7 +875,7 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
             onOpenAgent={(id) => {
               setQueues(undefined);
               apply((g) => selectOnly(g, id));
-              setOpened(id);
+              setOpened({ ids: [id] });
             }}
             onClose={closeQueues}
           />
