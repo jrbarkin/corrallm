@@ -79,6 +79,16 @@ export interface TerminalCli<M extends SessionMode> {
   resumeFailed(screen: string): boolean;
   /** Its window title changed (OSC 0 or 2): the state it says, if it says one. */
   title?(title: string): ProgramStatus | undefined;
+  /**
+   * Whether it is still getting ready (Codex starting its MCP servers): it holds a message sent
+   * meanwhile until then, so the message is waited for rather than given up on.
+   */
+  holds?(): boolean;
+  /**
+   * Whether a message is typed only into its prompt as drawn (`draft` is ''), even while it
+   * reports being ready: what it reports does not cover all its dialogs (as Codex's pickers).
+   */
+  readonly waitsForPrompt?: boolean;
   /** What a hook event it posted means. The event is untrusted JSON: read, never acted on beyond. */
   hook(event: HookEvent): TerminalSignal<M>[];
   /**

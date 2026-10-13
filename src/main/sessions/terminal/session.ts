@@ -485,8 +485,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #ready(): boolean {
     const draft = this.#cli.draft(this.#screen);
     if (draft !== undefined && draft !== '') return false;
-    // Without reports (an older Claude Code), its prompt on screen says it is ready.
-    return this.#reporting ? !busy(this.#state) : draft === '';
+    // Without reports (an older Claude Code), its prompt on screen says it is ready; a CLI whose
+    // reports leave out some dialogs (Codex's) needs its prompt on screen as well.
+    if (!this.#reporting) return draft === '';
+    return !busy(this.#state) && (draft === '' || !this.#cli.waitsForPrompt);
   }
 
   /** Types the next message, if one waits and the prompt is ready (read once the screen settles). */
@@ -529,7 +531,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /**
    * Waits for the CLI to take the message (to say it works on it). If it is still in the prompt,
    * Enter again, once; then it was not sent. If it left the prompt but nothing started (a command
-   * that runs at once, as /clear), it is done with once it has stayed quiet a while.
+   * that runs at once, as /clear), it is done with once it has stayed quiet a while, unless the
+   * CLI holds it until it is ready.
    */
   #confirm(tries: number): void {
     this.#confirming = this.#later(() => {
@@ -540,6 +543,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         const stuck = draft !== undefined && draft !== '';
         if (tries === 0) {
           if (stuck) this.#write(ENTER);
+          this.#confirm(1);
+          return;
+        }
+        // Sent, and held until the CLI is ready (its MCP servers start): it will take it then.
+        if (!stuck && this.#cli.holds?.()) {
           this.#confirm(1);
           return;
         }

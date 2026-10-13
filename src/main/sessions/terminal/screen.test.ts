@@ -112,6 +112,22 @@ describe('Screen', () => {
     other.dispose();
   });
 
+  it('says whether the cursor shows, as a CLI shows it where it takes typing', async () => {
+    const { screen: made } = screen();
+    expect(made.view().cursorShown).toBe(true);
+    // A frame drawn with the cursor hidden, then shown again in the prompt.
+    made.write('\x1b[?2026h\x1b[?25lOne moment\x1b[3;3H');
+    await made.settled();
+    expect(made.view().cursorShown).toBe(false);
+    made.write('\x1b[?25h\x1b[?2026l');
+    await made.settled();
+    expect(made.view().cursorShown).toBe(true);
+    // Other modes set alongside it leave it be.
+    made.write('\x1b[?1049;25l\x1b[?1004h');
+    await made.settled();
+    expect(made.view().cursorShown).toBe(false);
+  });
+
   it('takes a new size', () => {
     const { screen: made } = screen();
     made.resize(120, 40);
