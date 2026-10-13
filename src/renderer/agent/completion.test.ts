@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { complete, completing, matchCommands } from './completion';
+import { complete, completing, isCommand, matchCommands } from './completion';
 
 describe('completing', () => {
   it('completes a slash command typed at the start of the message', () => {
@@ -60,5 +60,24 @@ describe('complete', () => {
     const folder = completing('@sr', 3);
     if (!folder) throw new Error('nothing to complete');
     expect(complete('@sr', folder, 'src/')).toEqual({ text: '@src/', caret: 5 });
+  });
+});
+
+describe('isCommand', () => {
+  it('tells a slash command from a message that starts with a slash', () => {
+    const offered = [
+      { name: 'compact', description: '', argumentHint: '<instructions>' },
+      { name: 'plugin:review', description: '', argumentHint: '' },
+    ];
+    expect(isCommand('/compact', offered)).toBe(true);
+    expect(isCommand('/compact keep the API notes', offered)).toBe(true);
+    expect(isCommand('/plugin:review', offered)).toBe(true);
+    // A name the session does not offer, or a path, is not one.
+    expect(isCommand('/nope', offered)).toBe(false);
+    expect(isCommand('/src/app is broken', offered)).toBe(false);
+    expect(isCommand('Run /compact', offered)).toBe(false);
+    // Before the session has said what it offers: any name.
+    expect(isCommand('/compact', undefined)).toBe(true);
+    expect(isCommand('/src/app is broken', undefined)).toBe(false);
   });
 });

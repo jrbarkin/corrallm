@@ -25,6 +25,7 @@ import { SearchPicker } from '../search/SearchPicker';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
 import { Composer } from './Composer';
+import { isCommand } from './completion';
 import { queueLinks } from './links';
 import { animate, morph, settle, slide } from './motion';
 import { PeerQueue } from './PeerQueue';
@@ -67,9 +68,11 @@ export interface SessionControls extends ComposerControls {
  *
  * While the queues' run holds the agent for the user (`ask`, at an OK or a repeat out of rounds),
  * a bar above the composer asks, with its choices; what is sent from the composer then is the
- * answer in the user's words (the changes to make, or what to try next), not a message of its own.
- * A Terminal agent has no composer: the bar, under its terminal, has a box of its own for that.
- * Either way, that answer goes to the agent's session as a message (RunStore.decide).
+ * answer in the user's words (the changes to make, or what to try next, with the images pasted
+ * into it), not a message of its own; a slash command sent to a connected session still runs as
+ * a command, as the bar says. A Terminal agent has no composer: the bar, under its terminal, has
+ * a box of its own for the answer. Either way, that answer goes to the agent's session as a
+ * message (RunStore.decide).
  */
 export function AgentView({
   node,
@@ -460,8 +463,15 @@ export function AgentView({
                       ask?.reply
                         ? {
                             ...controls,
-                            send: (text) => {
-                              own.onDecide(ask.item.id, { reply: text });
+                            send: (text, images) => {
+                              if (connection !== 'simulated' && isCommand(text, session.commands)) {
+                                controls.send(text, images);
+                                return;
+                              }
+                              own.onDecide(ask.item.id, {
+                                reply: text,
+                                ...(images === undefined || images.length === 0 ? {} : { images }),
+                              });
                             },
                           }
                         : controls
@@ -473,6 +483,9 @@ export function AgentView({
                         {ask && (
                           <AskBar
                             ask={ask}
+                            {...(ask.reply && connection !== 'simulated'
+                              ? { hint: COMMAND_HINT }
+                              : {})}
                             onChoose={(choice) => {
                               own.onDecide(ask.item.id, { choice });
                             }}
@@ -515,6 +528,9 @@ export function AgentView({
   );
 }
 
+/** What the bar says a slash command typed below does while it asks: it runs, as a command. */
+const COMMAND_HINT = 'A /command typed below runs as a command, not as your answer.';
+
 /** "Your OK on the spec?" as the bar says it: "Waits for your OK on the spec". */
 const waitsFor = (text: string) =>
   `Waits for ${text.charAt(0).toLowerCase()}${text.slice(1).replace(/\?$/, '')}`;
@@ -528,14 +544,16 @@ const waitsFor = (text: string) =>
  *
  * With `onReply`, where there is no composer below (a Terminal agent's bar), the reply has a box
  * of its own after the choices: "Waits for your OK on the spec: [Approve] [Stop here] [What should
- * change?] [Ask for changes]".
+ * change?] [Ask for changes]". `hint`, on a line of its own: what else typing below does.
  */
 function AskBar({
   ask,
+  hint,
   onChoose,
   onReply,
 }: {
   ask: HeldAsk;
+  hint?: string;
   onChoose: (choice: string) => void;
   /** Takes the reply typed in the bar's own box (trimmed, never empty). */
   onReply?: (text: string) => void;
@@ -586,6 +604,7 @@ function AskBar({
           </button>
         </span>
       )}
+      {hint !== undefined && <span className="agent-ok-hint">{hint}</span>}
     </div>
   );
 }

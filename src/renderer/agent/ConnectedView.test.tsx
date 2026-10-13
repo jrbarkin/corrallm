@@ -229,7 +229,89 @@ describe('a connected agent', () => {
     expect(row()?.dataset.run).toBe('asking');
     fireEvent.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
     expect(row()?.dataset.run).toBe('succeeded');
-    expect(composer.placeholder).toBe('Message a…');
+    // The step after it is Claude Code's to do, in its session.
+    await settle();
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: sent(),
+      text: 'Use the Read tool for this step (read files).',
+    });
+    expect(composer.placeholder).toBe('Queue a message for a…');
+  });
+
+  it('takes images pasted with the changes asked for, and runs a slash command typed then', async () => {
+    const { backend, view, composer, send, emit, sent } = await open({
+      connection: 'sdk',
+      queue: [{ id: 'ok', approve: 'the layout' }],
+    });
+    emit({
+      type: 'commands',
+      commands: [{ name: 'compact', description: 'Summarize', argumentHint: '<instructions>' }],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const row = () =>
+      side
+        .getByRole('button', { name: 'Move Your OK on the layout' })
+        .closest<HTMLElement>('[data-run]');
+    const bar = within(view.getByRole('group', { name: 'Needs you' }));
+    expect(
+      bar.getByText('A /command typed below runs as a command, not as your answer.'),
+    ).toBeTruthy();
+
+    // A slash command goes to Claude Code as a command: the OK still asks.
+    await send('/compact keep the layout notes');
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: sent(),
+      text: '/compact keep the layout notes',
+    });
+    expect(row()?.dataset.run).toBe('asking');
+    emit({ type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false });
+
+    // What is sent otherwise is the changes, with the images pasted into them.
+    const png = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(composer, { clipboardData: { files: [png], getData: () => '' } });
+    await view.findByRole('img', { name: 'Image 1' });
+    await send('Match this');
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: sent(),
+      text: 'Match this',
+      images: [{ mediaType: 'image/png', data: 'iVBORw==' }],
+    });
+    expect(row()?.dataset.run).toBe('running');
+    expect(row()?.dataset.asked).toBe('Match this [Image]');
+  });
+
+  it('asks it, in its transcript, whether a condition in your words holds, and says when unclear', async () => {
+    const { backend, view, emit, sent, transcript } = await open({
+      connection: 'sdk',
+      queue: [
+        { id: 'flaky', if: { kind: 'freeText', text: 'a test is flaky' }, then: [] },
+        { id: 'next', message: 'Carry on' },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await settle();
+    const question =
+      'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.';
+    expect(backend.send).toHaveBeenLastCalledWith('a', { id: sent(), text: question });
+    expect(transcript.getByText(question)).toBeTruthy();
+    emit(
+      { type: 'user', id: sent(), text: question },
+      { type: 'text', id: 'm:0', text: 'Hard to say: one test timed out once.' },
+      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+    );
+    expect(
+      transcript.getByText('corrallm took that as no: the answer wasn’t a clear yes or no.'),
+    ).toBeTruthy();
+    // Taken as no: the queue goes on past the If.
+    await settle();
+    expect(backend.send).toHaveBeenLastCalledWith('a', { id: sent(), text: 'Carry on' });
   });
 
   it('lists what the run asks and what its session asks in the canvas’s Needs you sidebar', async () => {

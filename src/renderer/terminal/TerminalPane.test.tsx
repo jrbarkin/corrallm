@@ -197,6 +197,50 @@ describe('a Terminal agent', () => {
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
   });
 
+  it('runs its queue’s steps and conditions in Claude Code, saying in its bar when an answer was unclear', async () => {
+    const { view, session, sessions } = await open({
+      queue: [
+        { id: 'tests', action: 'Bash' },
+        {
+          id: 'green',
+          if: { kind: 'outputContains', text: '0 failed' },
+          then: [{ id: 'tag', message: 'Tag it' }],
+        },
+        { id: 'flaky', if: { kind: 'freeText', text: 'a test is flaky' }, then: [] },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await settle();
+    /** Main types the last message in, and Claude Code answers it (its Stop hook's last reply). */
+    const answer = async (text: string, reply: string) => {
+      const sent = sessions.sent();
+      expect(sessions.backend.send).toHaveBeenLastCalledWith('a', { id: sent, text });
+      session(
+        { type: 'user', id: sent, text },
+        { type: 'status', status: 'working' },
+        { type: 'text', id: `${sent}/reply`, text: reply },
+        { type: 'end', messages: [sent], seconds: 4, interrupted: false, failed: false },
+      );
+      await settle();
+    };
+    await answer('Use the Bash tool for this step (run shell commands).', 'Ran them: 0 failed.');
+    await answer('Tag it', 'Tagged v1.2.');
+    await answer(
+      'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.',
+      'Hard to say.',
+    );
+    const terminalSession = within(view.getByRole('region', { name: 'Session' }));
+    const warning = terminalSession.getByRole('note');
+    expect(warning.textContent).toBe(
+      'corrallm took that as no: the answer wasn’t a clear yes or no.',
+    );
+    fireEvent.click(within(warning).getByRole('button', { name: 'Dismiss' }));
+    expect(terminalSession.queryByRole('note')).toBeNull();
+  });
+
   it('asks for your OK in the bar under its terminal: Approve, Stop here, or changes typed in', async () => {
     const { view, session, sessions } = await open({
       queue: [

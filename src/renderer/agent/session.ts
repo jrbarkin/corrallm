@@ -290,6 +290,25 @@ export function reduce(session: Session, action: SessionAction): Session {
   }
 }
 
+/**
+ * What the agent replied in the turn the user's message `id` started: the text of its replies
+ * (not its subagents'), from that message to the turn's end, a paragraph each. '' if it said
+ * nothing, or the message is not in the transcript.
+ */
+export function turnReply(session: Session, id: string): string {
+  const start = session.entries.findIndex((entry) => entry.id === id);
+  if (start === -1) return '';
+  const end = session.entries.findIndex((entry, i) => i > start && entry.kind === 'end');
+  return session.entries
+    .slice(start + 1, end === -1 ? undefined : end)
+    .flatMap((entry) =>
+      entry.kind === 'text' && entry.parent === undefined && entry.text.trim() !== ''
+        ? [entry.text.trim()]
+        : [],
+    )
+    .join('\n\n');
+}
+
 /** A question asked in a session, as corrallm's question cards show it (graph/Questions.tsx). */
 export interface AskedInSession {
   /** The question prompt it is in, and where in it. */

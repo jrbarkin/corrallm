@@ -20,7 +20,8 @@ export interface QueueMessage {
 
 /**
  * What an if-then checks before it runs its steps: one of `CONDITIONS`, or (`freeText`) a condition
- * in the user's own words, passed to the agent to judge.
+ * in the user's own words, for the agent to judge (a connected agent is asked, yes or no, in its
+ * session: run/turns.ts). The output it looks in is what the agent replied in the checked task.
  */
 export type Condition =
   | { kind: 'succeeded' }

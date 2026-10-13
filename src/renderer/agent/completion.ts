@@ -63,3 +63,14 @@ export function complete(
     caret: start + inserted.length + (!folder && spaced ? 1 : 0),
   };
 }
+
+/**
+ * Whether a message runs a slash command: "/name" at its start (then a space or its end), naming
+ * one the session offers (`commands`; any name, before it has said which). A path such as
+ * "/src/app" is not one.
+ */
+export function isCommand(text: string, commands: readonly SlashCommand[] | undefined): boolean {
+  const name = /^\/([^\s/]+)(?:\s|$)/.exec(text)?.[1];
+  if (name === undefined) return false;
+  return commands === undefined || commands.some((command) => command.name === name);
+}

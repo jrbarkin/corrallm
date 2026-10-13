@@ -114,15 +114,30 @@ src/renderer/queues/ Every agent's queue side by side, task by task, laid out li
                      card and its list are CSS subgrids of the lanes' rows, so each item sits in
                      its own row, level with the other lanes.
 src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): each agent works
-                     through its queue, messages go to its session (scripted or connected) and are
-                     done when the turn ends, other steps are simulated; waits hold until their
-                     target is done or their time limit passes, delays until their time comes, OKs
-                     until the user decides (RunStore.decide: approve, ask for changes, which go to
-                     the agent's session, as a message like any other, before it asks again, or
-                     stop, which stops whatever waits on it). A repeat runs in rounds
-                     (AgentRun.rounds), its condition decided once per round of the round's last
-                     task that ran; out of rounds it fails and goes on, or asks (decide: one more
-                     round, what to try next, or go on). A wait in a repeat for a step in another
+                     through its queue. A message goes to its session (scripted or connected), or,
+                     aimed at another agent, to that one's, and is done when that turn ends (failed
+                     if it failed or was interrupted). A connected agent's steps go to its session
+                     too (turns.ts words them: a slash command as it is, a tool as a short
+                     instruction to use it), done when their turn ends; a simulated agent's steps
+                     take a timer and may fail. A connected agent's conditions are real (never
+                     chance): "the output contains" is matched, exactly, against what it replied in
+                     the checked task's turn (RunIO.send's `done`: SessionStore's turnReply, its
+                     top-level text; for a Terminal agent, the Stop hook's last reply), and one in
+                     the user's words is asked of it in its own session, yes or no ("corrallm asks:
+                     …"; an unclear or missing answer is no, said in its session by RunIO.tell, a
+                     warning notice a Terminal agent's bar shows too); a simulated agent's are by
+                     chance. Stop (and Run again) takes back what the run sent that is still going
+                     (RunIO.send returns it: SessionStore.send's take-back, off the session's queue
+                     or interrupting its turn), and no longer hears those turns end. Waits hold
+                     until their target is done or their time limit passes, delays until their
+                     time comes, OKs until the user decides (RunStore.decide: approve, ask for
+                     changes, which go to the agent's session, as a message like any other with
+                     the images pasted into it, before it asks again, or stop, which stops whatever
+                     waits on it; while it asks, a slash command typed in a connected agent's
+                     composer runs as a command instead, as its ask bar says). A repeat runs in
+                     rounds (AgentRun.rounds), its condition decided once per round of the round's
+                     last task that ran; out of rounds it fails and goes on, or asks (decide: one
+                     more round, what to try next, or go on). A wait in a repeat for a step in another
                      repeat waits for that round of it (#resultOf); one outside waits for the repeat
                      to end. A repeat that follows another holds at the end of each round until its
                      leader goes round, and ends with it (#follow). Delays and limits are the run's
@@ -134,8 +149,8 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      where the run is on a queue's rows, wherever they are shown.
 src/renderer/terminal/ A Terminal agent's session in its agent view (TerminalPane.tsx): the CLI's own
                      terminal (xterm.js, screen.ts), linked to main's (link.ts, backend.ts), with a bar
-                     of what the run asks of the user, what the session does, its queued messages
-                     and the queue's ⊕.
+                     of what the run asks of the user, the session's last warning (until dismissed),
+                     what the session does, its queued messages and the queue's ⊕.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown
                      (its `typed` lists options read from what was typed, such as times, first).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the
@@ -184,7 +199,7 @@ Main-to-renderer events: declare the event in `IpcEvents` in `src/shared/ipc.ts`
 
 A Claude agent's connection (`AgentConnection` in agents.ts: `simulated`, `terminal`, `sdk`; saved in `.corral` files when not simulated) decides what drives its session. Simulated sessions are scripted in the renderer. Connected ones run in main, over the `session:*` channels and the `session:event` event, in the protocol of `src/shared/session.ts`:
 
-- The renderer (`connected.ts`) starts an agent's session when its view opens or a message is sent (`session:start`: connection, model, mode), sends one message at a time (it keeps its own editable queue; the runner hears each turn's end through `SessionStore.send`'s `onDone`), passes on answers to prompts, interrupts, mode and model changes, and closes the session when the agent goes or runs another way. Session events from main are routed to the agent's driver only if they come from its current connection.
+- The renderer (`connected.ts`) starts an agent's session when its view opens or a message is sent (`session:start`: connection, model, mode), sends one message at a time (it keeps its own editable queue; the runner hears each turn's end through `SessionStore.send`'s `onDone`, with what the agent replied in it, and takes a message back with the function `send` returns: off the queue, or interrupting its turn), passes on answers to prompts, interrupts, mode and model changes, and closes the session when the agent goes or runs another way. Session events from main are routed to the agent's driver only if they come from its current connection.
 - Main (`sessions/manager.ts`) starts the session with the connection's `Connector` in the canvas's project folder (it refuses without one), with the agents' environment (the user's login shell's, cleaned of what corrallm was started from: `environment.ts`), resuming the agent's last session id (remembered per canvas file in `memory.ts`, so sessions survive a restart; the same id is resumed whichever connection the agent switches to). Opening or forgetting a canvas, choosing another project folder (which forgets the ids), a renderer that goes or reloads, and quitting (`before-quit` in index.ts) close sessions.
 - A connector emits `SessionEvent`s through its `SessionHost`: `started` (model, mode, the models it offers, which the composer's model picker lists), then per turn: `user` (with the renderer's message id, or a new one for a message typed in a terminal), `status` (working, or waiting on the user) and entries by id (`text`/`thinking` stream in, `tool`/`todos` replace; `parent` nests a subagent's entries), prompts (`permission` with what "always" allows, `question` for AskUserQuestion, `plan` for ExitPlanMode; `withdrawn` when no longer asked), `notice` (compaction, retries, usage limits with their reset time, login problems), `usage`, `mode`, `model`, and exactly one `end` naming the messages it answered (interrupted, or failed). `status` is never sent outside a turn: only `end` makes a session idle. `closed` if the session stops by itself; it calls `remember(sessionId)` whenever its CLI's session id is known or changes (as after /clear).
 - To build a connection: write its `Connector` in its own folder (`src/main/sessions/sdk/`, `src/main/sessions/terminal/`), find the CLI with `requireClaude(spec.env)`, and register it in `connectors.ts`. Its tests drive a fake `claude`; the manager, IPC, renderer and UI need no change unless the protocol grows (then extend `session.ts`'s types, `connected.ts`'s `receive`, and their tests).

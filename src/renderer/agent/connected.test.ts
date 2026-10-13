@@ -91,7 +91,58 @@ describe('a connected session', () => {
     expect(entries[4]).toMatchObject({ parent: 'agent-1' });
     expect(entries[5]).toMatchObject({ items: [{ status: 'done' }] });
     expect(entries[6]).toMatchObject({ kind: 'end', seconds: 3, interrupted: false });
-    expect(done).toHaveBeenCalledWith(false);
+    // Whoever sent it hears what the agent replied in the turn.
+    expect(done).toHaveBeenCalledWith(false, 'I’ll fix it.');
+  });
+
+  it('tells whoever sent a message what the agent replied in its turn, not its subagents', async () => {
+    const { store, emit, sent } = connected();
+    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+    store.send('a', 'Claude', 'Is it fixed?', done);
+    await settle();
+    const id = sent();
+    emit(
+      'a',
+      'sdk',
+      { type: 'user', id, text: 'Is it fixed?' },
+      { type: 'text', id: 'x', text: 'Let me run the tests.' },
+      { type: 'tool', id: 'agent-1', tool: 'Agent', summary: 'Run them', status: 'running' },
+      { type: 'text', id: 'sub', text: 'All green.', parent: 'agent-1' },
+      { type: 'text', id: 'y', text: 'Yes: all 12 pass.' },
+    );
+    // A message typed while it worked waits for the turn after.
+    store.send('a', 'Claude', 'Thanks');
+    emit('a', 'sdk', end([id]));
+    expect(done).toHaveBeenCalledWith(false, 'Let me run the tests.\n\nYes: all 12 pass.');
+  });
+
+  it('takes a message back: off the queue while it waits there, or interrupting its turn', async () => {
+    const { store, backend, emit, sent } = connected();
+    const first = vi.fn<(interrupted: boolean, reply: string) => void>();
+    const second = vi.fn<(interrupted: boolean, reply: string) => void>();
+    const third = vi.fn<(interrupted: boolean, reply: string) => void>();
+    const takeFirst = store.send('a', 'Claude', 'First', first);
+    const takeSecond = store.send('a', 'Claude', 'Second', second);
+    const takeThird = store.send('a', 'Claude', 'Third', third);
+    await settle();
+    takeThird();
+    expect(store.of('a').queued.map((q) => q.text)).toEqual(['Second']);
+    expect(third).toHaveBeenCalledWith(true, '');
+    expect(backend.interrupt).not.toHaveBeenCalled();
+
+    // Once its turn has ended, there is nothing to take back.
+    emit('a', 'sdk', end([sent()]));
+    takeFirst();
+    await settle();
+    expect(backend.interrupt).not.toHaveBeenCalled();
+    // A queued message that has started since: its turn is interrupted.
+    expect(backend.send.mock.calls.at(-1)?.[1].text).toBe('Second');
+    takeSecond();
+    await settle();
+    expect(backend.interrupt).toHaveBeenCalledWith('a');
+    emit('a', 'sdk', end([sent()], { interrupted: true }));
+    expect(first).toHaveBeenCalledWith(false, '');
+    expect(second).toHaveBeenCalledWith(true, '');
   });
 
   it('queues messages sent while it works, and sends each once the turn before has ended', async () => {
@@ -196,7 +247,7 @@ describe('a connected session', () => {
     );
     store.send('a', 'Claude', 'Never mind', done);
     store.stop('a');
-    expect(done).toHaveBeenCalledWith(true);
+    expect(done).toHaveBeenCalledWith(true, '');
     expect(store.of('a').status).toBe('idle');
     started?.();
     await settle();
@@ -232,7 +283,7 @@ describe('a connected session', () => {
     const done = vi.fn<(interrupted: boolean) => void>();
     store.send('a', 'Claude', 'Go', done);
     await settle();
-    expect(done).toHaveBeenCalledWith(true);
+    expect(done).toHaveBeenCalledWith(true, '');
     const { entries, status } = store.of('a');
     expect(status).toBe('idle');
     expect(entries.slice(1)).toMatchObject([
@@ -260,7 +311,7 @@ describe('a connected session', () => {
     store.send('a', 'Claude', 'Go', done);
     await settle();
     emit('a', 'sdk', { type: 'closed', error: 'Claude Code exited (code 1)' });
-    expect(done).toHaveBeenCalledWith(true);
+    expect(done).toHaveBeenCalledWith(true, '');
     expect(store.of('a').entries.slice(1)).toMatchObject([
       { kind: 'notice', level: 'error', text: 'Claude Code exited (code 1)' },
       { kind: 'end', failed: true },
@@ -288,7 +339,7 @@ describe('a connected session', () => {
     await settle();
     store.sync([{ id: 'a', connection: 'simulated' }]);
     expect(backend.close).toHaveBeenCalledWith('a');
-    expect(done).toHaveBeenCalledWith(true);
+    expect(done).toHaveBeenCalledWith(true, '');
     // The queued message goes on, to the scripted session.
     expect(store.of('a').queued).toEqual([]);
     expect(

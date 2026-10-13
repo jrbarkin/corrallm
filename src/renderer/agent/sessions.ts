@@ -4,7 +4,7 @@ import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
-import { answersOf, NEW_SESSION, reduce } from './session';
+import { answersOf, NEW_SESSION, reduce, turnReply } from './session';
 import type { Answer, MessageImage, Mode, PlanAnswer, Session, SessionAction } from './session';
 
 /** An agent's driver, how it runs, and whether it is being let go. */
@@ -20,8 +20,8 @@ interface Driving {
  * agent's session is driven by a driver (driver.ts) as the agent runs: scripted when simulated
  * (scripted.ts), or connected to a session in the main process (connected.ts, through
  * `backend`). A message sent while an agent works is queued, and sent once the turn ends,
- * interrupted or not. Whoever sends a message can hear when the turn it starts ends (the queues'
- * run, run/runner.ts).
+ * interrupted or not. Whoever sends a message can hear when the turn it starts ends, and what the
+ * agent replied in it, and can take the message back (the queues' run, run/runner.ts).
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
@@ -33,7 +33,9 @@ export class SessionStore {
   /** Each agent's type, as it was last sent a message: what its scripted turns are like. */
   readonly #types = new Map<string, AgentType>();
   /** Who to tell when the turn a queued message starts ends, by the queued message's id. */
-  readonly #onDone = new Map<string, (interrupted: boolean) => void>();
+  readonly #onDone = new Map<string, (interrupted: boolean, reply: string) => void>();
+  /** The message whose turn each agent's session is on, by agent id. */
+  readonly #turns = new Map<string, string>();
   #unsubscribe: (() => void) | undefined;
 
   constructor(backend: SessionBackend = NO_BACKEND) {
@@ -81,27 +83,42 @@ export class SessionStore {
   /**
    * Sends the user's message (with the images pasted into it): a new turn, or queued while one is
    * going on. `onDone` hears when that turn ends (`interrupted` too if the message is taken off the
-   * queue before it is sent, or the turn failed).
+   * queue before it is sent, or the turn failed), with what the agent replied in it (turnReply).
+   * Returns a function that takes the message back: off the queue while it waits there, or
+   * interrupting its turn while that goes on (and nothing once it has ended).
    */
   send(
     agentId: string,
     agent: AgentType,
     text: string,
-    onDone?: (interrupted: boolean) => void,
+    onDone?: (interrupted: boolean, reply: string) => void,
     images?: MessageImage[],
-  ): void {
+  ): () => void {
     this.#types.set(agentId, agent);
+    let id: string;
     if (this.of(agentId).status === 'idle') {
-      this.#start(agentId, agent, { text, images }, onDone);
-      return;
+      id = this.#start(agentId, agent, { text, images }, onDone);
+    } else {
+      id = crypto.randomUUID();
+      if (onDone) this.#onDone.set(id, onDone);
+      this.#dispatch(agentId, {
+        type: 'queue',
+        id,
+        text,
+        ...(images === undefined || images.length === 0 ? {} : { images }),
+      });
     }
-    const id = crypto.randomUUID();
-    if (onDone) this.#onDone.set(id, onDone);
+    return () => {
+      if (this.of(agentId).queued.some((queued) => queued.id === id)) this.unqueue(agentId, id);
+      else if (this.#turns.get(agentId) === id) this.stop(agentId);
+    };
+  }
+
+  /** Tells the user something in the agent's session (a notice in its transcript). */
+  notice(agentId: string, level: 'info' | 'warning' | 'error', text: string): void {
     this.#dispatch(agentId, {
-      type: 'queue',
-      id,
-      text,
-      ...(images === undefined || images.length === 0 ? {} : { images }),
+      type: 'add',
+      entry: { id: crypto.randomUUID(), kind: 'notice', level, text },
     });
   }
 
@@ -138,7 +155,7 @@ export class SessionStore {
     this.#dispatch(agentId, { type: 'unqueue', id: queuedId });
     const onDone = this.#onDone.get(queuedId);
     this.#onDone.delete(queuedId);
-    onDone?.(true);
+    onDone?.(true, '');
   }
 
   setMode(agentId: string, mode: Mode): void {
@@ -154,26 +171,32 @@ export class SessionStore {
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
   reset(): void {
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
-    for (const onDone of this.#onDone.values()) onDone(true);
+    for (const onDone of this.#onDone.values()) onDone(true, '');
     this.#onDone.clear();
+    this.#turns.clear();
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#sessions = {};
     this.#notify();
   }
 
+  /** Starts a turn with a message (as `id`: a queued message keeps its own); returns its id. */
   #start(
     agentId: string,
     agent: AgentType,
     { text, images }: { text: string; images: MessageImage[] | undefined },
-    onDone?: (interrupted: boolean) => void,
-  ): void {
-    const id = crypto.randomUUID();
+    onDone?: (interrupted: boolean, reply: string) => void,
+    id: string = crypto.randomUUID(),
+  ): string {
     const pasted = images === undefined || images.length === 0 ? {} : { images };
+    this.#turns.set(agentId, id);
     this.#dispatch(agentId, { type: 'start', entry: { id, kind: 'user', text, ...pasted } });
-    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) =>
-      onDone?.(interrupted),
-    );
+    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) => {
+      // The next queued message may have started already.
+      if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
+      onDone?.(interrupted, turnReply(this.of(agentId), id));
+    });
+    return id;
   }
 
   /** The session is idle: its next queued message, if any, starts. */
@@ -189,6 +212,7 @@ export class SessionStore {
       this.#types.get(agentId) ?? DEFAULT_AGENT,
       { text: next.text, images: next.images },
       onDone,
+      next.id,
     );
   }
 
@@ -260,8 +284,9 @@ export class SessionStore {
     for (const { id } of this.of(agentId).queued) {
       const onDone = this.#onDone.get(id);
       this.#onDone.delete(id);
-      onDone?.(true);
+      onDone?.(true, '');
     }
+    this.#turns.delete(agentId);
     this.#sessions = Object.fromEntries(
       Object.entries(this.#sessions).filter(([id]) => id !== agentId),
     );

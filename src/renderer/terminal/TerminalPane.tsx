@@ -20,10 +20,12 @@ const STATUS: Record<Session['status'], string> = {
  * A Terminal agent's session: Claude Code's own terminal (its CLI runs in the main process, and
  * this shows it: link.ts), in place of the transcript and composer, so that everything Claude Code
  * does works here as it does in a terminal. Under it, a bar with what the queues' run asks of the
- * user (`ask`: their OK, or a repeat out of rounds), what the session is doing (as corrallm follows
- * it), the messages queued for it (corrallm types each into the terminal once Claude Code is
- * ready), and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again
- * (resuming its session).
+ * user (`ask`: their OK, or a repeat out of rounds), the last warning the session gave until it is
+ * dismissed (corrallm took an answer to its question as no, or Claude Code did not take a message
+ * typed in: what the transcript would show), what the session is doing (as corrallm follows it),
+ * the messages queued for it (corrallm types each into the terminal once Claude Code is ready),
+ * and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again (resuming its
+ * session).
  */
 export function TerminalPane({
   agentId,
@@ -80,6 +82,11 @@ export function TerminalPane({
   const problem = session.entries.findLast(
     (entry) => entry.kind === 'notice' && entry.level === 'error',
   );
+  const warning = session.entries.findLast(
+    (entry) => entry.kind === 'notice' && entry.level === 'warning',
+  );
+  /** The warning the user dismissed, by id. */
+  const [dismissed, setDismissed] = useState<string>();
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
       <div className="agent-terminal" data-state={state.kind}>
@@ -112,6 +119,19 @@ export function TerminalPane({
       </div>
       <div className="agent-terminal-bar">
         {ask}
+        {warning?.kind === 'notice' && warning.id !== dismissed && (
+          <p className="agent-terminal-warning" role="note">
+            {warning.text}
+            <button
+              type="button"
+              aria-label="Dismiss"
+              title="Dismiss"
+              onClick={() => {
+                setDismissed(warning.id);
+              }}
+            />
+          </p>
+        )}
         {session.queued.length > 0 && (
           <ul className="agent-queued" aria-label="Queued messages">
             {session.queued.map((queued) => (

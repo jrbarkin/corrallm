@@ -1,32 +1,67 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Connection, MessageImage } from '../../shared/session';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { RunStore } from './runner';
+import type { TurnEnd } from './runner';
 
-const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
+const agent = (id: string, queue: QueueItem[] = [], label = id): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, queue },
+  data: { label, queue },
 });
+
+/** An agent connected to the real CLI (in tests, its sessions are the test's). */
+const connected = (id: string, queue: QueueItem[] = [], connection: Connection = 'sdk') => {
+  const node = agent(id, queue);
+  return { ...node, data: { ...node.data, connection } };
+};
+
+/** The chance a run must never take: a connected agent's run decides nothing by chance. */
+const never = () => {
+  throw new Error('took a chance for a connected agent');
+};
 
 const MINUTE = 60_000;
 
 /**
  * A run over `nodes`, with time and sessions under the test's control: `tick()` fires every timer
  * set (steps finish) without moving the clock, `advance(ms)` moves the clock, firing the timers
- * due on the way, and `reply(agent)` ends the turn of the oldest message sent to that agent.
+ * due on the way, and `reply(agent)` ends the turn of the oldest message sent to that agent, as it
+ * went (`failed`) with what the agent replied (`text`). A message the run took back is marked
+ * `withdrawn`; what the run told the user in an agent's session is `told`.
  */
 function setup(initial: GraphNode[], chance = () => 0.9) {
   let clock = 0;
   let timers: { run: () => void; at: number }[] = [];
   /** How long each timer set was for. */
   const armed: number[] = [];
-  const sent: { agent: string; text: string; done?: (failed: boolean) => void }[] = [];
+  const sent: {
+    agent: string;
+    text: string;
+    images?: readonly MessageImage[];
+    done?: (turn: TurnEnd) => void;
+    withdrawn: boolean;
+  }[] = [];
+  const told: [string, string][] = [];
   const store = new RunStore({
-    send: (to, text, done) => {
-      sent.push({ agent: to.id, text, ...(done ? { done } : {}) });
+    send: (to, text, done, images) => {
+      const message: (typeof sent)[number] = {
+        agent: to.id,
+        text,
+        ...(images ? { images } : {}),
+        done,
+        withdrawn: false,
+      };
+      sent.push(message);
+      return () => {
+        message.withdrawn = true;
+      };
+    },
+    tell: (to, text) => {
+      told.push([to.id, text]);
     },
     later: (run, ms) => {
       const timer = { run, at: clock + ms };
@@ -61,12 +96,12 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     }
     clock = until;
   };
-  const reply = (to: string, failed = false) => {
+  const reply = (to: string, failed = false, text = '') => {
     const turn = sent.find((s) => s.agent === to && s.done);
     if (!turn?.done) throw new Error(`no turn for ${to}`);
     const { done } = turn;
     delete turn.done;
-    done(failed);
+    done({ failed, reply: text });
   };
   /** Each agent's task (or `done`), and whether it runs it or waits. */
   const where = () =>
@@ -79,6 +114,7 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
   return {
     store,
     sent,
+    told,
     tick,
     advance,
     reply,
@@ -123,15 +159,31 @@ describe('RunStore', () => {
     expect(store.snapshot().running).toBe(false);
   });
 
-  it('hands a message aimed at another agent to that agent’s session', () => {
-    const a = agent('a', [{ id: 'hand', message: 'Over to you', target: 'b' }]);
+  it('hands a message aimed at another agent to its session, done once that agent’s turn on it ends', () => {
+    const a = agent('a', [
+      { id: 'hand', message: 'Over to you', target: 'b' },
+      { id: 'again', message: 'And this', target: 'b' },
+      { id: 'gone', message: 'Anyone there?', target: 'removed' },
+    ]);
     const b = agent('b');
-    const { store, tick, where, sent } = setup([a, b]);
+    const { store, tick, advance, reply, where, sent } = setup([a, b]);
     store.start();
     expect(sent.map((s) => [s.agent, s.text])).toEqual([['b', 'Over to you']]);
     expect(where()).toEqual({ a: 'running hand', b: 'done' });
+    // Not after a moment: when the turn it starts in b's session ends, however it ends.
+    advance(MINUTE);
+    expect(where()).toEqual({ a: 'running hand', b: 'done' });
+    reply('b');
+    expect(where()).toEqual({ a: 'running again', b: 'done' });
+    reply('b', true);
+    expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+      hand: 'succeeded',
+      again: 'failed',
+    });
+    // Handed to an agent that is gone: nothing waits on it.
     tick();
     expect(where()).toEqual({ a: 'done', b: 'done' });
+    expect(sent).toHaveLength(2);
   });
 
   it('runs an if-then’s steps only when its condition holds of the step before', () => {
@@ -536,9 +588,10 @@ describe('RunStore', () => {
       store.decide('a', 'one', { choice: 'stop' });
       expect(where()).toEqual({ a: 'asking two' });
 
-      // The run's Stop: a changes turn under way plays on in its session, but is not waited for.
+      // The run's Stop takes back the changes turn under way, and does not hear it end.
       store.decide('a', 'two', { reply: 'Smaller steps' });
       store.stop();
+      expect(sent.map((s) => [s.text, s.withdrawn])).toEqual([['Smaller steps', true]]);
       reply('a');
       store.decide('a', 'two', { choice: 'approve' });
       expect(store.snapshot().running).toBe(false);
@@ -731,7 +784,7 @@ describe('RunStore', () => {
         reply('a');
         expect(where()).toEqual({ a: 'asking loop' });
 
-        // What to try next goes to the agent before the extra round's message.
+        // What to try next goes to the agent before the extra round's message (its turn first).
         store.decide('a', 'loop', { reply: '  Try smaller steps ' });
         expect(where()).toEqual({ a: 'running build' });
         expect(sent.map((s) => s.text)).toEqual([
@@ -741,6 +794,8 @@ describe('RunStore', () => {
           'Build it',
         ]);
         expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 3, more: 2 } });
+        reply('a');
+        expect(where()).toEqual({ a: 'running build' });
         reply('a');
 
         // An empty reply, an OK's answer, or another item: nothing.
@@ -954,6 +1009,258 @@ describe('RunStore', () => {
           expect(store.snapshot().agents.follow?.outcomes.following).toBe('succeeded');
         });
       });
+    });
+  });
+
+  describe('connected agents', () => {
+    const png: MessageImage = { mediaType: 'image/png', data: 'iVBORw==' };
+
+    it('sends their steps to their sessions: a command as it is, a tool as an instruction', () => {
+      const a = connected('a', [
+        { id: 'review', action: '/code-review' },
+        { id: 'tests', action: 'Bash' },
+        { id: 'look', action: 'Read', target: 'b' },
+      ]);
+      const t = connected('t', [{ id: 'tree', action: 'EnterWorktree' }], 'terminal');
+      const { store, reply, where, sent, pending } = setup(
+        [a, agent('b', [], 'Builder'), t],
+        never,
+      );
+      store.start();
+      expect(where()).toEqual({ a: 'running review', b: 'done', t: 'running tree' });
+      // Nothing simulated: no step is timed.
+      expect(pending()).toBe(0);
+      reply('a');
+      reply('a', true);
+      expect(sent.map((s) => [s.agent, s.text])).toEqual([
+        ['a', '/code-review'],
+        ['t', 'Use the EnterWorktree tool for this step (work in an isolated git worktree).'],
+        ['a', 'Use the Bash tool for this step (run shell commands).'],
+        [
+          'a',
+          'Use the Read tool for this step (read files), on the work of Builder (another agent).',
+        ],
+      ]);
+      // How each went is how its turn ended: a failed or interrupted turn failed the step.
+      reply('a');
+      reply('t', true);
+      expect(where()).toEqual({ a: 'done', b: 'done', t: 'done' });
+      expect(store.snapshot().agents.a?.outcomes).toEqual({
+        review: 'succeeded',
+        tests: 'failed',
+        look: 'succeeded',
+      });
+      expect(store.snapshot().agents.t?.outcomes).toEqual({ tree: 'failed' });
+    });
+
+    it('judges “the output contains” by what the checked turn replied', () => {
+      const a = connected('a', [
+        { id: 'tests', action: 'Bash' },
+        {
+          id: 'green',
+          if: { kind: 'outputContains', text: '0 failed' },
+          then: [{ id: 'tag', message: 'Tag the release' }],
+        },
+        // Checks the If before it: what its last step replied.
+        {
+          id: 'red',
+          if: { kind: 'outputContains', text: 'failing' },
+          then: [{ id: 'fix', message: 'Fix them', target: 'b' }],
+        },
+        // Checks a message handed to b: what b replied.
+        {
+          id: 'fixed',
+          if: { kind: 'outputContains', text: 'all pass' },
+          then: [{ id: 'retag', message: 'Tag it again' }],
+        },
+        { id: 'none', if: { kind: 'outputContains', text: 'all pass' }, then: [] },
+      ]);
+      const { store, reply, where, sent } = setup([a, agent('b')], never);
+      store.start();
+      reply('a', false, 'Ran 12 tests: 0 failed.');
+      expect(where()).toEqual({ a: 'running tag', b: 'done' });
+      reply('a', false, 'Tagged v1.2, but 2 tests are failing on CI.');
+      expect(where()).toEqual({ a: 'running fix', b: 'done' });
+      reply('b', false, 'Fixed: they all pass now.');
+      expect(where()).toEqual({ a: 'running retag', b: 'done' });
+      // A turn that says nothing has no output to find it in.
+      reply('a');
+      expect(where()).toEqual({ a: 'done', b: 'done' });
+      expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+        green: 'succeeded',
+        red: 'succeeded',
+        fixed: 'succeeded',
+        none: 'skipped',
+      });
+      expect(sent.map((s) => s.text).at(-1)).toBe('Tag it again');
+    });
+
+    it('repeats until a round’s output contains it', () => {
+      const a = connected('a', [
+        {
+          id: 'loop',
+          repeat: [{ id: 'build', message: 'Build it' }],
+          until: { kind: 'outputContains', text: 'APPROVED' },
+          rounds: 3,
+          otherwise: 'ask',
+        },
+      ]);
+      const { store, reply, where } = setup([a], never);
+      store.start();
+      // As written: "not approved" is not it.
+      reply('a', false, 'Built. Not approved yet.');
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+      reply('a', false, 'Built. **APPROVED**: ship it.');
+      expect(where()).toEqual({ a: 'done' });
+      expect(store.snapshot().agents.a?.outcomes.loop).toBe('succeeded');
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+    });
+
+    it('asks the agent itself, in its session, whether a condition in your words holds', () => {
+      const a = connected('a', [
+        { id: 'tests', action: 'Bash' },
+        {
+          id: 'flaky',
+          if: { kind: 'freeText', text: 'a test is flaky' },
+          then: [{ id: 'fix', message: 'Fix the flaky test' }],
+        },
+        {
+          id: 'green',
+          if: { kind: 'freeText', text: 'the build is green' },
+          then: [{ id: 'ship', message: 'Ship it' }],
+        },
+        {
+          id: 'docs',
+          if: { kind: 'freeText', text: 'the docs are done' },
+          then: [{ id: 'publish', message: 'Publish them' }],
+        },
+        {
+          id: 'news',
+          if: { kind: 'freeText', text: 'there is news' },
+          then: [{ id: 'post', message: 'Post it' }],
+        },
+      ]);
+      const { store, reply, where, sent, told } = setup([a], never);
+      store.start();
+      reply('a');
+      // After the step it checks, a plain question, then its turn's answer decides.
+      expect(where()).toEqual({ a: 'running flaky' });
+      expect(sent.at(-1)?.text).toBe(
+        'corrallm asks: is this true now? “a test is flaky” Start your answer with yes or no.',
+      );
+      reply('a', false, '**Yes**: `auth.test.ts` fails one run in five.');
+      expect(where()).toEqual({ a: 'running fix' });
+      reply('a');
+      reply('a', false, 'No. Two checks are red.');
+      expect(where()).toEqual({ a: 'running docs' });
+      expect(told).toEqual([]);
+      // Neither yes nor no: no, and the run says so in its session.
+      reply('a', false, 'Mostly: the API page is missing.');
+      expect(told).toEqual([
+        ['a', 'corrallm took that as no: the answer wasn’t a clear yes or no.'],
+      ]);
+      // A question its turn never answered (interrupted, failed) is no as well.
+      reply('a', true);
+      expect(told.at(-1)).toEqual(['a', 'corrallm took that as no: the question wasn’t answered.']);
+      expect(where()).toEqual({ a: 'done' });
+      expect(store.snapshot().agents.a?.outcomes).toMatchObject({
+        flaky: 'succeeded',
+        green: 'skipped',
+        docs: 'skipped',
+        news: 'skipped',
+      });
+      expect(sent.map((s) => s.text)).not.toContain('Ship it');
+    });
+
+    it('asks at the end of each round whether a repeat’s condition in your words holds', () => {
+      const a = connected('a', [
+        {
+          id: 'loop',
+          repeat: [{ id: 'polish', message: 'Polish the copy' }],
+          until: { kind: 'freeText', text: 'the copy reads well' },
+          rounds: 3,
+          otherwise: 'goOn',
+        },
+        { id: 'next', message: 'Publish it' },
+      ]);
+      const { store, reply, where, sent } = setup([a], never);
+      store.start();
+      reply('a');
+      expect(where()).toEqual({ a: 'running loop' });
+      reply('a', false, 'No: the intro is still long.');
+      expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
+      reply('a');
+      reply('a', false, 'Let me reread it.\n\nYes, it reads well now.');
+      expect(where()).toEqual({ a: 'running next' });
+      expect(store.snapshot().agents.a?.outcomes.loop).toBe('succeeded');
+      expect(sent.map((s) => s.text)).toEqual([
+        'Polish the copy',
+        'corrallm asks: is this true now? “the copy reads well” Start your answer with yes or no.',
+        'Polish the copy',
+        'corrallm asks: is this true now? “the copy reads well” Start your answer with yes or no.',
+        'Publish it',
+      ]);
+    });
+
+    it('takes back on Stop what it sent and is still going, and does not hear it end', () => {
+      const a = connected('a', [
+        { id: 'tests', action: 'Bash' },
+        { id: 'next', action: 'Read' },
+      ]);
+      const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }]);
+      const { store, reply, where, sent } = setup([a, b], never);
+      store.start();
+      reply('a');
+      expect(where()).toEqual({ a: 'running next', b: 'running hand' });
+      store.stop();
+      expect(sent.map((s) => [s.agent, s.text, s.withdrawn])).toEqual([
+        ['a', 'Use the Bash tool for this step (run shell commands).', false],
+        ['a', 'Review it', true],
+        ['a', 'Use the Read tool for this step (read files).', true],
+      ]);
+      // The interrupted turns end later: nothing moves.
+      reply('a', true);
+      reply('a', true);
+      expect(store.snapshot().running).toBe(false);
+      expect(where()).toEqual({ a: 'running next', b: 'running hand' });
+
+      // Run again: from the top, the earlier run's ends unheard.
+      store.start();
+      expect(sent.filter((s) => !s.withdrawn && s.done)).toHaveLength(2);
+      expect(where()).toEqual({ a: 'running tests', b: 'running hand' });
+    });
+
+    it('sends the images pasted with the changes asked for at an OK, or with what to try next', () => {
+      const a = connected('a', [
+        { id: 'build', action: 'Edit' },
+        { id: 'ok', approve: 'the layout' },
+        {
+          id: 'loop',
+          repeat: [{ id: 'try', message: 'Make it match' }],
+          until: { kind: 'outputContains', text: 'MATCHES' },
+          rounds: 1,
+          otherwise: 'ask',
+        },
+      ]);
+      const { store, reply, where, sent } = setup([a], never);
+      store.start();
+      reply('a');
+      store.decide('a', 'ok', { reply: ' Match this ', images: [png] });
+      expect(sent.at(-1)).toMatchObject({ agent: 'a', text: 'Match this', images: [png] });
+      reply('a');
+      // Images alone are changes too.
+      store.decide('a', 'ok', { reply: '', images: [png, png] });
+      expect(sent.at(-1)).toMatchObject({ text: '', images: [png, png] });
+      expect(store.snapshot().agents.a?.changes).toEqual({
+        ok: ['Match this [Image]', '[2 images]'],
+      });
+      reply('a');
+      store.decide('a', 'ok', { choice: 'approve' });
+      reply('a', false, 'Close, but not yet.');
+      expect(where()).toEqual({ a: 'asking loop' });
+      store.decide('a', 'loop', { reply: 'Like this', images: [png] });
+      expect(sent.at(-2)).toMatchObject({ text: 'Like this', images: [png] });
+      expect(sent.at(-1)?.text).toBe('Make it match');
     });
   });
 });

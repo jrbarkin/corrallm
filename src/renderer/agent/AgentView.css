@@ -731,6 +731,13 @@
   color: inherit;
 }
 
+/* What else typing below does while it asks (a slash command runs): a quieter line of its own. */
+.agent-ok-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 /* Where there is no composer below (a Terminal agent's bar): the reply's own box, and its button. */
 .agent-ok-reply {
   display: inline-flex;

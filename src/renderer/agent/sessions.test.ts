@@ -31,6 +31,19 @@ describe('SessionStore', () => {
     expect(heard.at(-1)).toBe('Fourth (interrupted)');
   });
 
+  it('tells the user what the run says, in the agent’s session', () => {
+    const store = new SessionStore();
+    store.notice('a', 'warning', 'corrallm took that as no: the answer wasn’t a clear yes or no.');
+    expect(store.of('a').entries).toMatchObject([
+      {
+        kind: 'notice',
+        level: 'warning',
+        text: 'corrallm took that as no: the answer wasn’t a clear yes or no.',
+      },
+    ]);
+    expect(store.of('a').status).toBe('idle');
+  });
+
   it('sends a message sent as a turn ends after the ones already queued', () => {
     vi.useFakeTimers();
     const store = new SessionStore();

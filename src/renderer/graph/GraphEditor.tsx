@@ -188,12 +188,25 @@ function Editor({
   /** Every agent's session, playing on while its view is closed: scripted, or connected. */
   const [sessionStore] = useState(() => new SessionStore(sessionBackend));
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
-  /** Every agent's queue, run: messages go to the agents' sessions; other steps are simulated. */
+  /**
+   * Every agent's queue, run: messages go to the agents' sessions, and so do connected agents'
+   * steps and questions; a simulated agent's steps are simulated.
+   */
   const [runStore] = useState(
     () =>
       new RunStore({
-        send: (agent, text, done) => {
-          sessionStore.send(agent.id, agent.data.agent ?? DEFAULT_AGENT, text, done);
+        send: (agent, text, done, images) =>
+          sessionStore.send(
+            agent.id,
+            agent.data.agent ?? DEFAULT_AGENT,
+            text,
+            (failed, reply) => {
+              done({ failed, reply });
+            },
+            images && [...images],
+          ),
+        tell: (agent, text) => {
+          sessionStore.notice(agent.id, 'warning', text);
         },
         later: (run, ms) => {
           const timer = setTimeout(run, ms);

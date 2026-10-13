@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -123,4 +123,89 @@ test('runs a connected agent in the project folder, answering its prompts throug
   // Its session too: opened again, the agent resumes the one it had.
   await agent.dblclick();
   await expect(view.getByRole('note')).toHaveText(/^Resumed [0-9a-f-]{36}$/);
+});
+
+test('runs a connected agent’s queue for real: a step, an If on its output, and Stop', async () => {
+  // A canvas whose agent is connected, its queue ready to run.
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  const canvas = path.join(dir, 'release.corral');
+  const queue = [
+    { id: 'tests', action: 'Bash' },
+    {
+      id: 'ran',
+      if: { kind: 'outputContains', text: 'Bash tool' },
+      then: [{ id: 'wrap', message: 'Wrap up the tests' }],
+    },
+    {
+      id: 'never',
+      if: { kind: 'outputContains', text: 'NOT SAID' },
+      then: [{ id: 'skip', message: 'Never sent' }],
+    },
+    // The fake asks a question here, and waits for the answer.
+    { id: 'ask', message: '/question Tag it?' },
+  ];
+  await writeFile(
+    canvas,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 1,
+      nodes: [
+        {
+          id: 'releaser',
+          kind: 'agent',
+          label: 'Releaser',
+          position: { x: 0, y: 0 },
+          agent: 'Claude',
+          connection: 'sdk',
+          queue,
+        },
+      ],
+      links: [],
+    }),
+  );
+  await answerDialogs(folder, canvas);
+  await page.getByRole('button', { name: 'Open…' }).click();
+  await expect(page.getByText('release.corral')).toBeVisible();
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
+
+  // Its session runs; in Accept edits, the fake runs its command without asking.
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Releaser' });
+  await expect(view.getByRole('button', { name: 'Model: Default' })).toBeVisible();
+  await view.getByRole('button', { name: 'Mode: Manual' }).click();
+  await view.getByRole('menuitemradio', { name: /^Accept edits/ }).click();
+
+  await view.getByRole('button', { name: 'All queues' }).click();
+  const queues = page.getByRole('dialog', { name: 'All queues' });
+  await queues.getByRole('button', { name: 'Run', exact: true }).click();
+  await queues.getByRole('button', { name: 'Open Releaser' }).click();
+
+  // The step goes to Claude Code as an instruction; its reply has what the first If looks for,
+  // so its message is sent; the second If's is not.
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  await expect(
+    transcript.getByText('Use the Bash tool for this step (run shell commands).', { exact: true }),
+  ).toBeVisible();
+  await expect(transcript.getByText('You said: Wrap up the tests')).toBeVisible();
+  const question = transcript.getByRole('group', { name: 'Questions for you' });
+  await expect(question.getByText('Shall I go on?')).toBeVisible();
+  await expect(transcript.getByText(/Never sent/)).toHaveCount(0);
+
+  // Stop interrupts the turn the run started: the question is no longer asked.
+  await view.getByRole('button', { name: 'All queues' }).click();
+  const asking = queues.getByRole('group', { name: 'Releaser: Message “/question Tag it?”' });
+  await expect(asking.locator('[data-run]')).toHaveAttribute('data-run', 'asking');
+  await queues.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(queues.getByRole('button', { name: 'Run', exact: true })).toBeVisible();
+  await expect(asking.locator('[data-run]')).toHaveAttribute('data-run', 'stopped');
+  await expect(
+    queues
+      .getByRole('group', { name: 'Releaser: If the output contains "NOT SAID"' })
+      .locator('[data-run]'),
+  ).toHaveAttribute('data-run', 'skipped');
+  await queues.getByRole('button', { name: 'Open Releaser' }).click();
+  await expect(transcript.getByText(/^Interrupted · \d+s$/)).toBeVisible();
+  await expect(question.getByText('Not answered: Shall I go on?')).toBeVisible();
 });

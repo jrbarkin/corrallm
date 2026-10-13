@@ -1,4 +1,7 @@
+import type { MessageImage } from '../../shared/session';
+import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
+import { agentName } from '../graph/labels';
 import {
   findItem,
   isApproval,
@@ -23,6 +26,7 @@ import type {
   WaitTarget,
 } from '../graph/queue';
 import { deadline } from '../graph/time';
+import { conditionQuestion, replyContains, stepMessage, yesOrNo } from './turns';
 
 /**
  * How a task went. skipped: an if-then whose condition did not hold (or cannot, where it sits), an
@@ -76,52 +80,86 @@ export interface Run {
 
 /**
  * What the user answers at a hold that waits for them: one of its choices (by key, as asks.ts
- * offers them), or a reply in their words.
+ * offers them), or a reply in their words, with the images they pasted into it.
  */
-export type Answer = { choice: string } | { reply: string };
+export type Answer = { choice: string } | { reply: string; images?: readonly MessageImage[] };
+
+/**
+ * How a turn the run started in an agent's session ended: whether it failed (or was interrupted,
+ * or taken off the session's queue), and what the agent replied in it (its text, '' if none).
+ */
+export interface TurnEnd {
+  failed: boolean;
+  reply: string;
+}
 
 /** What a run needs from its surroundings. */
 export interface RunIO {
-  /** Sends a message to an agent's session; `done` once the turn it starts ends. */
-  send: (agent: GraphNode, text: string, done?: (failed: boolean) => void) => void;
+  /**
+   * Sends a message (with images, if any) to an agent's session; `done` once the turn it starts
+   * ends. Returns a function that takes it back: off the session's queue while it waits there, or
+   * interrupting its turn while that goes on.
+   */
+  send: (
+    agent: GraphNode,
+    text: string,
+    done: (turn: TurnEnd) => void,
+    images?: readonly MessageImage[],
+  ) => () => void;
+  /** Tells the user something about the run, in an agent's session (a notice there). */
+  tell: (agent: GraphNode, text: string) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
   now: () => number;
-  /** A random number from 0 up to 1: whether a step fails, or an agent judges a condition holds. */
+  /**
+   * A random number from 0 up to 1, for a simulated agent: whether a step fails, or whether a
+   * condition holds that only a real agent could judge. Never taken for a connected agent.
+   */
   chance: () => number;
 }
 
-/** How long a step takes, at least and at most; and handing a message to another agent. */
+/** How long a simulated agent's step takes, at least and at most. */
 const STEP_MS = [1500, 3500] as const;
-const HANDOFF_MS = 700;
 /**
  * The longest the run sleeps before it looks at the clock again while a delay or a time limit
  * holds an agent: a timer can fire late (a sleeping laptop) and the clock can be changed.
  */
 const ALARM_MS = 60_000;
-/** How likely a step is to fail, and an agent to judge a condition in its own words to hold. */
+/**
+ * How likely a simulated agent's step is to fail, and a condition only a real agent could judge
+ * (its output, or the user's own words) to hold.
+ */
 const FAILS = 0.25;
 const HOLDS = 0.5;
+
+/** What the run says when it takes a connected agent's answer to its question as no. */
+const UNCLEAR = 'corrallm took that as no: the answer wasn’t a clear yes or no.';
+const UNANSWERED = 'corrallm took that as no: the question wasn’t answered.';
 
 const IDLE: Run = { running: false, agents: {} };
 
 /**
- * Runs every agent's queue, simulated until agents are connected (like their sessions): each
- * agent works through its queue in order. A step takes a few seconds and may fail; a message to
- * the agent goes to its session (sessions.ts) and is done when the turn it starts ends; a message
- * to another agent is handed to that agent's session. A wait holds until what it waits for is
- * done (a step, or all of an agent's work), or its time limit passes; a delay holds until its time
- * has come; an if-then runs its steps only if its condition holds of the task before it. Delays
- * and time limits are the run's own, on the real clock (`now`): no agent is asked to wait. An OK
- * holds until the user decides (`decide`): the queue goes on, the agent makes the changes asked
- * for and it asks again, or the queue stops there, and with it whatever waits on it. A repeat
- * runs what it holds in rounds, until its condition holds of a round's last task that ran, at
- * most its rounds; then it goes on having failed, or asks the user for one more round. A wait in a
- * repeat for a step in another repeat waits for it in the same round; a wait outside one, for that
- * repeat to end. A repeat that follows another goes round with it, and ends with it. Rounds, like
- * delays, are the run's: the agent is only sent each round's messages. Queues are read as they run
- * (`update` gives it the graph as it changes), so edits take effect at once.
+ * Runs every agent's queue: each agent works through its queue in order. A message goes to the
+ * agent's session (sessions.ts), or, aimed at another agent, to that agent's, and is done when the
+ * turn it starts ends (failed, if that turn failed or was interrupted). A connected agent's step
+ * goes to its session too (turns.ts words it: a slash command as it is, a tool as an instruction
+ * to use it), done when its turn ends; a simulated agent's step takes a few seconds and may fail.
+ * A wait holds until what it waits for is done (a step, or all of an agent's work), or its time
+ * limit passes; a delay holds until its time has come; an if-then runs its steps only if its
+ * condition holds of the task before it. A connected agent's conditions are its own: whether the
+ * output contains something is read from what it replied in that task's turn, and a condition in
+ * the user's words is asked of it, in its session, yes or no; a simulated agent's are by chance.
+ * Delays and time limits are the run's own, on the real clock (`now`): no agent is asked to wait.
+ * An OK holds until the user decides (`decide`): the queue goes on, the agent makes the changes
+ * asked for and it asks again, or the queue stops there, and with it whatever waits on it. A
+ * repeat runs what it holds in rounds, until its condition holds of a round's last task that ran,
+ * at most its rounds; then it goes on having failed, or asks the user for one more round. A wait
+ * in a repeat for a step in another repeat waits for it in the same round; a wait outside one, for
+ * that repeat to end. A repeat that follows another goes round with it, and ends with it. Rounds,
+ * like delays, are the run's: the agent is only sent each round's messages. Queues are read as
+ * they run (`update` gives it the graph as it changes), so edits take effect at once. Stop takes
+ * back what the run sent that is still going (RunIO.send).
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -132,6 +170,10 @@ export class RunStore {
   readonly #timers = new Set<() => void>();
   /** The task each busy agent is doing, by a token that is this run's alone. */
   readonly #busy = new Map<string, object>();
+  /** What takes back each message the run sent whose turn has not ended yet. */
+  readonly #sent = new Map<object, () => void>();
+  /** What each agent replied in the turn of each task it finished (by agent and task). */
+  readonly #replies = new Map<string, string>();
   /**
    * Whether each if-then's condition held, once decided (by agent and if-then); and each repeat's,
    * at the end of each round (by agent, repeat and round).
@@ -168,7 +210,10 @@ export class RunStore {
     this.#settle(true);
   }
 
-  /** Stops where the queues are: no task goes on, and none starts. */
+  /**
+   * Stops where the queues are: no task goes on, and none starts. What the run sent to sessions
+   * is taken back (off their queues, or their turns interrupted).
+   */
   stop(): void {
     this.#cancel();
     this.#set({ ...this.#run, running: false });
@@ -201,12 +246,12 @@ export class RunStore {
    * Answers the hold an agent is at for the user (`item`). At an OK: `{ choice: 'approve' }`, its
    * queue goes on, and so do waits for it; `{ choice: 'stop' }`, its queue stops there, and with it
    * every wait for it, for what comes after it, or for all of its agent's work; `{ reply }`, the
-   * changes the user asks for, sent as they are (trimmed; empty, nothing is asked) to the agent's
-   * session, and once that turn ends, it asks again. At a repeat out of rounds: `{ choice: 'more' }`
-   * runs one more round; `{ choice: 'goOn' }` ends it as failed, and its queue goes on; `{ reply }`
-   * sends what to try next to the agent (not waited for), then runs one more round. Only while the
-   * run holds that agent at that item for the user, so a second click, a stale card or an answer
-   * after Stop does nothing.
+   * changes the user asks for, sent as they are (trimmed, with the images pasted into them; with
+   * neither, nothing is asked) to the agent's session, and once that turn ends, it asks again. At a
+   * repeat out of rounds: `{ choice: 'more' }` runs one more round; `{ choice: 'goOn' }` ends it as
+   * failed, and its queue goes on; `{ reply }` sends what to try next to the agent (not waited
+   * for), then runs one more round. Only while the run holds that agent at that item for the user,
+   * so a second click, a stale card or an answer after Stop does nothing.
    */
   decide(agent: string, item: string, answer: Answer): void {
     const at = this.#run.agents[agent];
@@ -220,7 +265,7 @@ export class RunStore {
     }
     if (!isApproval(held)) return;
     if ('reply' in answer) {
-      this.#askForChanges(node, at, item, answer.reply.trim());
+      this.#askForChanges(node, at, item, answer.reply.trim(), answer.images ?? []);
       return;
     }
     const outcome =
@@ -360,7 +405,8 @@ export class RunStore {
 
   /**
    * An if-then the queue reached (at `index`): its next step to run, or how it went. Its condition
-   * is decided once, of the task before it, and is skipped where it cannot hold.
+   * is decided once, of the task before it (the agent busy with it while it is asked), and is
+   * skipped where it cannot hold.
    */
   #ifThen(
     node: GraphNode,
@@ -370,11 +416,12 @@ export class RunStore {
   ): AgentRun | Outcome {
     const queue = node.data.queue ?? [];
     const key = JSON.stringify([node.id, item.id]);
-    const held =
-      this.#held.get(key) ??
-      (unfit(queue, index) === undefined &&
-        this.#holds(item.if, lastRan(queue.slice(0, index), outcomes)));
-    this.#held.set(key, held);
+    if (unfit(queue, index) !== undefined && !this.#held.has(key)) this.#held.set(key, false);
+    const held = this.#judge(node, key, item.if, lastRan(queue.slice(0, index), outcomes), {
+      current: item.id,
+      outcomes,
+    });
+    if (typeof held !== 'boolean') return held;
     if (!held) return 'skipped';
     const step = item.then.find((s) => outcomes[s.id] === undefined);
     if (step) return this.#begin(node.id, step, outcomes);
@@ -386,10 +433,11 @@ export class RunStore {
    * A repeat the queue reached (`before`: the items above it): where it is in its round now, or
    * once it is over, how it went. Each round runs what it holds in order, as a queue runs; at its
    * end, the condition is decided (once) of the round's last task that ran (or the last before the
-   * repeat, if none did). If it holds, the repeat succeeded; if not, the next round starts, afresh,
-   * while rounds are left (`rounds`, and those the user added); then it fails and goes on, or asks
-   * the user. A repeat that follows another instead goes round when that one does (#follow), and
-   * ends with it. Rounds that end at once run on here, no further than the rounds left.
+   * repeat, if none did; the agent busy with it while it is asked). If it holds, the repeat
+   * succeeded; if not, the next round starts, afresh, while rounds are left (`rounds`, and those
+   * the user added); then it fails and goes on, or asks the user. A repeat that follows another
+   * instead goes round when that one does (#follow), and ends with it. Rounds that end at once run
+   * on here, no further than the rounds left.
    */
   #rounds(
     node: GraphNode,
@@ -416,10 +464,14 @@ export class RunStore {
         if (followed !== undefined) return followed;
       } else {
         const key = JSON.stringify([node.id, repeat.id, state.round]);
-        const held =
-          this.#held.get(key) ??
-          this.#holds(until, lastRan(repeat.repeat, outcomes) ?? lastRan(before, outcomes));
-        this.#held.set(key, held);
+        const held = this.#judge(
+          node,
+          key,
+          until,
+          lastRan(repeat.repeat, outcomes) ?? lastRan(before, outcomes),
+          { current: repeat.id, outcomes },
+        );
+        if (typeof held !== 'boolean') return held;
         if (held) return 'succeeded';
         if (state.round >= repeat.rounds + (state.more ?? 0)) {
           return repeat.otherwise === 'goOn'
@@ -497,7 +549,8 @@ export class RunStore {
     if (target.item === undefined) {
       if (stopped) return 'stopped';
       if (run?.status !== 'done') return undefined;
-      return lastRan(node.data.queue ?? [], run.outcomes) ?? 'succeeded';
+      const last = lastRan(node.data.queue ?? [], run.outcomes);
+      return (last && run.outcomes[last.id]) ?? 'succeeded';
     }
     const found = findItem(node.data.queue ?? [], target.item);
     if (!found) return 'succeeded';
@@ -517,18 +570,86 @@ export class RunStore {
     return outcome;
   }
 
-  #holds(condition: Condition, previous: Outcome | undefined): boolean {
+  /**
+   * Whether a condition holds of the task `checked` (undefined: none ran) in an agent's queue,
+   * decided once (by `key`). Of how that task went; or, for a simulated agent, by chance where only
+   * a real one could judge; or, for a connected one, whether the output contains it is read from
+   * what it replied in that task's turn, and a condition in the user's words is asked of it, in its
+   * session (while it is, it is busy `at` its If or repeat: an AgentRun).
+   */
+  #judge(
+    node: GraphNode,
+    key: string,
+    condition: Condition,
+    checked: QueueItem | undefined,
+    at: { current: string; outcomes: Record<string, Outcome> },
+  ): boolean | AgentRun {
+    const known = this.#held.get(key);
+    if (known !== undefined) return known;
+    const previous = checked && at.outcomes[checked.id];
+    let held: boolean;
     switch (condition.kind) {
       case 'succeeded':
-        return previous === 'succeeded';
+        held = previous === 'succeeded';
+        break;
       case 'failed':
-        return previous === 'failed';
+        held = previous === 'failed';
+        break;
       case 'timedOut':
-        return previous === 'timedOut';
+        held = previous === 'timedOut';
+        break;
       case 'outputContains':
+        held = isConnected(node)
+          ? replyContains(this.#replyOf(node.id, checked, at.outcomes), condition.text)
+          : this.#io.chance() < HOLDS;
+        break;
       case 'freeText':
-        return this.#io.chance() < HOLDS;
+        if (isConnected(node)) return this.#ask(node, key, condition.text, at);
+        held = this.#io.chance() < HOLDS;
+        break;
     }
+    this.#held.set(key, held);
+    return held;
+  }
+
+  /**
+   * Asks a connected agent, in its session, whether a condition in the user's words holds: it is
+   * busy (at its If or repeat) until its turn ends. Its answer decides (by `key`): yes, it holds;
+   * no, or no clear answer (which it says), it does not.
+   */
+  #ask(
+    node: GraphNode,
+    key: string,
+    condition: string,
+    { current, outcomes }: { current: string; outcomes: Record<string, Outcome> },
+  ): AgentRun {
+    const token = {};
+    this.#busy.set(node.id, token);
+    this.#send(node, conditionQuestion(condition), ({ failed, reply }) => {
+      if (this.#busy.get(node.id) !== token) return;
+      this.#busy.delete(node.id);
+      const yes = failed ? undefined : yesOrNo(reply);
+      if (yes === undefined) this.#io.tell(node, failed ? UNANSWERED : UNCLEAR);
+      this.#held.set(key, yes ?? false);
+      this.#settle(true);
+    });
+    return { current, status: 'running', outcomes };
+  }
+
+  /**
+   * What an agent replied in the turn of a task it finished: a step's or a message's (a message
+   * handed to another agent: what that agent replied); an if-then's or a repeat's, that of its
+   * last task that ran. '' for anything else (a wait), or nothing.
+   */
+  #replyOf(
+    agent: string,
+    item: QueueItem | undefined,
+    outcomes: Readonly<Record<string, Outcome>>,
+  ): string {
+    if (!item) return '';
+    if (isIf(item)) return this.#replyOf(agent, lastRan(item.then, outcomes), outcomes);
+    if (isRepeat(item)) return this.#replyOf(agent, lastRan(item.repeat, outcomes), outcomes);
+    return this.#replies.get(JSON.stringify([agent, item.id])) ?? '';
   }
 
   /**
@@ -558,7 +679,11 @@ export class RunStore {
     this.#alarm = { at: next, cancel };
   }
 
-  /** Starts a task: the agent is busy with it until it finishes. */
+  /**
+   * Starts a task: the agent is busy with it until it finishes. A message, or a connected agent's
+   * step, finishes when the turn it starts ends (a message aimed at another agent, that agent's
+   * turn); a simulated agent's step, after a while.
+   */
   #begin(
     agent: string,
     task: QueueStep | QueueMessage,
@@ -566,46 +691,89 @@ export class RunStore {
   ): AgentRun {
     const token = {};
     this.#busy.set(agent, token);
-    const finish = (outcome: Outcome) => {
-      this.#finish(agent, task.id, token, outcome);
+    const finish = (outcome: Outcome, reply = '') => {
+      this.#finish(agent, task.id, token, outcome, reply);
     };
-    const own = task.target === undefined || task.target === agent;
+    const ended = ({ failed, reply }: TurnEnd) => {
+      finish(failed ? 'failed' : 'succeeded', reply);
+    };
+    const node = this.#agents().find((n) => n.id === agent);
     if (!isMessage(task)) {
-      const [least, most] = STEP_MS;
-      const ms = least + (hash(task.id) % (most - least));
-      this.#after(ms, () => {
-        finish(this.#io.chance() < FAILS ? 'failed' : 'succeeded');
-      });
+      if (node && isConnected(node)) {
+        this.#send(node, this.#stepMessage(node, task), ended);
+      } else {
+        const [least, most] = STEP_MS;
+        const ms = least + (hash(task.id) % (most - least));
+        this.#after(ms, () => {
+          finish(this.#io.chance() < FAILS ? 'failed' : 'succeeded');
+        });
+      }
     } else if (task.message.trim() === '') {
       this.#after(0, () => {
         finish('skipped');
       });
     } else {
-      const to = this.#agents().find((n) => n.id === (own ? agent : task.target));
-      if (to && own) {
-        this.#io.send(to, task.message, (failed) => {
-          finish(failed ? 'failed' : 'succeeded');
-        });
-      } else {
-        if (to) this.#io.send(to, task.message);
-        this.#after(HANDOFF_MS, () => {
+      const own = task.target === undefined || task.target === agent;
+      const to = own ? node : this.#agents().find((n) => n.id === task.target);
+      if (to) this.#send(to, task.message, ended);
+      // Handed to an agent that is gone: nothing to wait for.
+      else
+        this.#after(0, () => {
           finish('succeeded');
         });
-      }
     }
     return { current: task.id, status: 'running', outcomes };
   }
 
   /**
+   * What a connected agent's step asks of it (turns.ts): its action, as its type names it, and the
+   * agent it acts on if that is another one still there.
+   */
+  #stepMessage(node: GraphNode, step: QueueStep): string {
+    const actions = AGENT_ACTIONS[node.data.agent ?? DEFAULT_AGENT];
+    const other =
+      step.target !== undefined && step.target !== node.id
+        ? this.#agents().find((n) => n.id === step.target)
+        : undefined;
+    return stepMessage(step.action, actions, other && agentName(this.#nodes, other.id));
+  }
+
+  /**
+   * Sends a message to an agent's session for the run (RunIO.send); `ended` hears how its turn
+   * ended. Until then, Stop (#cancel) takes it back.
+   */
+  #send(
+    to: GraphNode,
+    text: string,
+    ended?: (turn: TurnEnd) => void,
+    images?: readonly MessageImage[],
+  ): void {
+    // Its turn may end at once (a session that cannot start): then there is nothing to take back.
+    const sent = { over: false };
+    const withdraw = this.#io.send(
+      to,
+      text,
+      (turn) => {
+        sent.over = true;
+        this.#sent.delete(sent);
+        ended?.(turn);
+      },
+      images,
+    );
+    if (!sent.over) this.#sent.set(sent, withdraw);
+  }
+
+  /**
    * Answers a repeat out of rounds: one more round (`more`), first sending the agent what to try
-   * next (`reply`, not waited for: its session runs it before the round's first message); or go on
-   * (`goOn`), the repeat failed.
+   * next (`reply`, with the images pasted into it; not waited for: its session runs it before the
+   * round's first message); or go on (`goOn`), the repeat failed.
    */
   #decideRounds(node: GraphNode, at: AgentRun, repeat: QueueRepeat, answer: Answer): void {
     if ('reply' in answer) {
       const note = answer.reply.trim();
-      if (note === '') return;
-      this.#io.send(node, note);
+      const images = answer.images ?? [];
+      if (note === '' && images.length === 0) return;
+      this.#send(node, note, undefined, images.length === 0 ? undefined : images);
     } else if (answer.choice === 'goOn') {
       this.#record(node.id, repeat.id, 'failed');
       this.#settle(true);
@@ -620,26 +788,40 @@ export class RunStore {
   }
 
   /**
-   * Sends the changes the user asked for at an OK to the queue's own agent, as a turn of its
-   * session: it works on them at the OK, and once the turn ends (however it ends) the OK asks again.
+   * Sends the changes the user asked for at an OK (`note`, and the images pasted into it) to the
+   * queue's own agent, as a turn of its session: it works on them at the OK, and once the turn
+   * ends (however it ends) the OK asks again.
    */
-  #askForChanges(node: GraphNode, at: AgentRun, ok: string, note: string): void {
-    if (note === '') return;
+  #askForChanges(
+    node: GraphNode,
+    at: AgentRun,
+    ok: string,
+    note: string,
+    images: readonly MessageImage[],
+  ): void {
+    if (note === '' && images.length === 0) return;
     const token = {};
     this.#busy.set(node.id, token);
-    const changes = { ...at.changes, [ok]: [...(at.changes?.[ok] ?? []), note] };
+    const asked = [note, imagesText(images)].filter((part) => part !== '').join(' ');
+    const changes = { ...at.changes, [ok]: [...(at.changes?.[ok] ?? []), asked] };
     const run: AgentRun = { ...at, status: 'running', changes };
     this.#set({ ...this.#run, agents: { ...this.#run.agents, [node.id]: run } });
-    this.#io.send(node, note, () => {
-      if (this.#busy.get(node.id) !== token) return;
-      this.#busy.delete(node.id);
-      this.#settle(true);
-    });
+    this.#send(
+      node,
+      note,
+      () => {
+        if (this.#busy.get(node.id) !== token) return;
+        this.#busy.delete(node.id);
+        this.#settle(true);
+      },
+      images.length === 0 ? undefined : images,
+    );
   }
 
-  #finish(agent: string, task: string, token: object, outcome: Outcome): void {
+  #finish(agent: string, task: string, token: object, outcome: Outcome, reply: string): void {
     if (this.#busy.get(agent) !== token) return;
     this.#busy.delete(agent);
+    this.#replies.set(JSON.stringify([agent, task]), reply);
     this.#record(agent, task, outcome);
     this.#settle(true);
   }
@@ -660,12 +842,20 @@ export class RunStore {
     this.#timers.add(cancel);
   }
 
+  /**
+   * Cancels what the run has going: its timers, and what it sent to sessions, taken back (off
+   * their queues, or their turns interrupted). No agent is busy any more, so how those turns end
+   * is not heard.
+   */
   #cancel(): void {
     for (const cancel of this.#timers) cancel();
     this.#timers.clear();
     this.#busy.clear();
     this.#alarm?.cancel();
     this.#alarm = undefined;
+    const sent = [...this.#sent.values()];
+    this.#sent.clear();
+    for (const withdraw of sent) withdraw();
   }
 
   /**
@@ -674,6 +864,7 @@ export class RunStore {
    */
   #forget(): void {
     this.#held.clear();
+    this.#replies.clear();
     this.#arrived.clear();
     this.#ended.clear();
     this.#past.clear();
@@ -699,20 +890,30 @@ export function taskState(run: Run, agent: string, item: string | null): string 
 }
 
 /**
- * The outcome of the last of `items` that ran: what an if-then checks, what a repeat's condition
- * is decided of at the end of a round, and how a wait for all of an agent's work went. Items not
- * done yet, skipped ones, and pauses (delays and OKs, which only hold the queue: queue.ts isPause)
- * are passed over.
+ * The last of `items` that ran: what an if-then checks, what a repeat's condition is decided of
+ * at the end of a round, and, by how it went, how a wait for all of an agent's work went. Items
+ * not done yet, skipped ones, and pauses (delays and OKs, which only hold the queue: queue.ts
+ * isPause) are passed over.
  */
 function lastRan(
   items: readonly QueueItem[],
   outcomes: Readonly<Record<string, Outcome>>,
-): Outcome | undefined {
-  for (const item of items.toReversed()) {
+): QueueItem | undefined {
+  return items.findLast((item) => {
     const outcome = outcomes[item.id];
-    if (outcome !== undefined && outcome !== 'skipped' && !isPause(item)) return outcome;
-  }
-  return undefined;
+    return outcome !== undefined && outcome !== 'skipped' && !isPause(item);
+  });
+}
+
+/** Whether an agent runs the real CLI (connected), rather than a simulated session. */
+function isConnected(node: GraphNode): boolean {
+  return connectionOf(node.data) !== 'simulated';
+}
+
+/** Images sent with changes asked for, as the run records them: "[Image]", "[2 images]". */
+function imagesText(images: readonly MessageImage[]): string {
+  if (images.length === 0) return '';
+  return images.length === 1 ? '[Image]' : `[${String(images.length)} images]`;
 }
 
 /** A number from a string, the same each time: steps take their own, steady time. */
