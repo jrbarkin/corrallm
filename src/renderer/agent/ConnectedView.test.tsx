@@ -688,3 +688,71 @@ describe('an Agent SDK agent continued in Terminal', () => {
     expect(backend.send).not.toHaveBeenCalled();
   });
 });
+
+describe('an Agent SDK agent’s /resume', () => {
+  const HOUR = 3_600_000;
+
+  it('lists the project folder’s other conversations, and opens the one picked in this agent', async () => {
+    const now = Date.now();
+    const { backend, send, view, transcript, emit, sent, composer } = await open(
+      { connection: 'sdk' },
+      (fake) => {
+        fake.backend.sessions.mockResolvedValue([
+          { id: 'own', title: 'This conversation', modified: now, current: true },
+          {
+            id: 'k2',
+            title: 'Add a cart',
+            modified: now - 2 * HOUR - 60_000,
+            bytes: 24_000,
+            branch: 'main',
+            current: false,
+          },
+          {
+            id: 'k1',
+            title: 'Fix the login bug',
+            modified: now - 3 * 24 * HOUR - 60_000,
+            bytes: 1_200_000,
+            current: false,
+          },
+        ]);
+      },
+    );
+    await send('Hello');
+    emit({ type: 'user', id: sent(), text: 'Hello' });
+    await send('/resume');
+    // Not sent: the view picks a conversation.
+    expect(backend.send).toHaveBeenCalledOnce();
+    expect(backend.sessions).toHaveBeenCalledWith('a');
+    const picker = within(view.getByRole('listbox', { name: 'Resume a conversation' }));
+    expect(picker.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Add a cart 2 hours ago · 24 KB · main',
+      'Fix the login bug 3 days ago · 1.2 MB',
+    ]);
+
+    fireEvent.click(picker.getByRole('option', { name: /^Add a cart/ }));
+    await settle();
+    expect(backend.resume).toHaveBeenCalledWith('a', 'k2');
+    expect(transcript.queryByText('Hello')).toBeNull();
+    expect(backend.start).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole('listbox', { name: 'Resume a conversation' })).toBeNull();
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it('says when there is no other conversation, and why one could not be listed', async () => {
+    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+      fake.backend.sessions.mockResolvedValueOnce([
+        { id: 'own', title: 'This conversation', modified: 1, current: true },
+      ]);
+    });
+    await send('/resume');
+    expect(view.getByText('No other conversations in this project folder yet.')).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Close' }));
+    expect(view.queryByText(/No other conversations/)).toBeNull();
+
+    backend.sessions.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'session:list': Error: Choose a project folder"),
+    );
+    await send('/resume');
+    expect(view.getByRole('alert').textContent).toBe('Choose a project folder');
+  });
+});

@@ -29,6 +29,9 @@ import type {
  * throws. Nothing the renderer sent is passed on as it came.
  */
 
+/** What a Claude Code session id looks like: a uuid, or at least nothing that names a path. */
+const SESSION_ID = /^[\w-]{1,200}$/;
+
 export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
   const { connection, model, mode } = record(options, 'the session options', [
@@ -130,6 +133,15 @@ export function parseTerminalResizeArgs(args: unknown[]): IpcArgs<'terminal:resi
     count(cols, MAX_TERMINAL_COLS),
     count(rows, MAX_TERMINAL_ROWS),
   ];
+}
+
+/** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */
+export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
+  const [agentId, sessionId] = expect(args, 2, 'an agent and a conversation');
+  if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) {
+    throw new TypeError("Expected the conversation's id");
+  }
+  return [parseId(agentId, 'agent'), sessionId];
 }
 
 export function parseModeArgs(args: unknown[]): IpcArgs<'session:mode'> {

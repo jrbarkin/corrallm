@@ -23,9 +23,16 @@ let problems: string[];
 
 test.beforeEach(async () => {
   await chmod(FAKE_CLAUDE, 0o755);
-  // An API key (the fake's: it reaches only the fake), which the Agent SDK connection needs.
+  dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sdk-'));
+  // An API key (the fake's: it reaches only the fake), which the Agent SDK connection needs; and
+  // a Claude config folder of the test's own, where the fake keeps its conversations' transcripts
+  // and main's Agent SDK reads them.
   ({ app, close: closeApp } = await launchApp({
-    env: { CORRALLM_CLAUDE_PATH: FAKE_CLAUDE, ANTHROPIC_API_KEY: 'sk-ant-fake' },
+    env: {
+      CORRALLM_CLAUDE_PATH: FAKE_CLAUDE,
+      ANTHROPIC_API_KEY: 'sk-ant-fake',
+      CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
+    },
   }));
   page = await app.firstWindow();
   problems = [];
@@ -38,7 +45,6 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   await page.waitForLoadState('load');
-  dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sdk-'));
 });
 
 test.afterEach(async () => {
@@ -154,4 +160,53 @@ test('opens a link in a reply in the browser once main has asked, and not again 
   await expect.poll(async () => (await seen()).opened).toHaveLength(2);
   expect((await seen()).asked).toHaveLength(1);
   await expect(view).toBeVisible();
+});
+
+test('opens another conversation of the project folder in an agent with /resume', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, folder);
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  const connect = async (name: string) => {
+    const view = page.getByRole('dialog', { name });
+    await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+    await page.keyboard.type('agent sdk');
+    await page.keyboard.press('Enter');
+    await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
+    return view;
+  };
+
+  // Agent 1 has a conversation.
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 300, y: 300 } });
+  await page.locator('.react-flow__node').first().dblclick();
+  const first = await connect('Agent 1');
+  await first.getByRole('textbox', { name: 'Message Agent 1' }).fill('Remember the shop');
+  await first.getByRole('textbox', { name: 'Message Agent 1' }).press('Enter');
+  await expect(first.getByText('You said: Remember the shop')).toBeVisible();
+  await expect(first.getByText(/^Worked for \d+s$/)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(first).toHaveCount(0);
+
+  // Agent 2 opens it.
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 420 } });
+  await page.locator('.react-flow__node').nth(1).dblclick();
+  const second = await connect('Agent 2');
+  const composer = second.getByRole('textbox', { name: 'Message Agent 2' });
+  await composer.fill('/resume');
+  await composer.press('Enter');
+  const picker = second.getByRole('listbox', { name: 'Resume a conversation' });
+  await expect(picker.getByRole('option')).toHaveText([/^Remember the shop just now/]);
+  await picker.getByRole('option').click();
+  const transcript = second.getByRole('log', { name: 'Transcript' });
+  await expect(transcript.getByText('Remember the shop', { exact: true })).toBeVisible();
+  await expect(transcript.getByText('You said: Remember the shop')).toBeVisible();
+
+  // It goes on from there.
+  await composer.fill('And the cart');
+  await composer.press('Enter');
+  await expect(transcript.getByText('You said: And the cart')).toBeVisible();
 });

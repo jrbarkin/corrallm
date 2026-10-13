@@ -11,10 +11,15 @@
 // was recorded on. The project's settings (.claude/settings.json, then settings.local.json) also
 // give its default mode, and can disable bypassing permissions.
 //
+// With CLAUDE_CONFIG_DIR set (never otherwise, so that it never writes into the user's own
+// ~/.claude), it keeps each conversation's transcript there, as the CLI does: the user's messages
+// and its replies, chained by parentUuid, under projects/<the folder's path, dashed>/<id>.jsonl, so
+// that the Agent SDK's listSessions, getSessionMessages and forkSession read them.
+//
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
@@ -80,6 +85,45 @@ const sessionId = option('--resume') ?? option('--session-id') ?? randomUUID();
 let mode = option('--permission-mode') ?? projectSettings().permissions.defaultMode ?? 'default';
 let model = option('--model') ?? 'claude-opus-5-5';
 let cost = 0;
+
+/** Where it keeps the conversation's transcript, if anywhere. */
+const transcript = process.env.CLAUDE_CONFIG_DIR
+  ? `${process.env.CLAUDE_CONFIG_DIR}/projects/${process.cwd().replace(/[^a-zA-Z0-9]/g, '-')}/${sessionId}.jsonl`
+  : undefined;
+/** The last entry of the transcript: what the next one follows. */
+let leaf = (() => {
+  if (!transcript) return null;
+  try {
+    const entries = readFileSync(transcript, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    return entries.findLast((entry) => typeof entry.uuid === 'string')?.uuid ?? null;
+  } catch {
+    return null;
+  }
+})();
+
+/** Keeps a user or assistant message (`uuid`, `message`) in the transcript, after the last. */
+function keep(type, uuid, message) {
+  if (!transcript) return;
+  mkdirSync(transcript.slice(0, transcript.lastIndexOf('/')), { recursive: true });
+  const entry = {
+    parentUuid: leaf,
+    isSidechain: false,
+    type,
+    message,
+    uuid,
+    timestamp: new Date().toISOString(),
+    userType: 'external',
+    entrypoint: 'sdk-ts',
+    cwd: process.cwd(),
+    sessionId,
+    version: '2.1.296',
+  };
+  appendFileSync(transcript, `${JSON.stringify(entry)}\n`);
+  leaf = uuid;
+}
 /** The turn going on, if any: whether it was interrupted. */
 let turn;
 /** Requests the fake made of the SDK (can_use_tool), waiting for its answer. */
@@ -109,8 +153,12 @@ const COMMANDS = [
   { name: 'context', description: 'Show current context usage', argumentHint: '', builtin: true },
 ];
 
+/** Says a message to the SDK; its replies and tool results are kept in the transcript too. */
 const say = (message) => {
   process.stdout.write(`${JSON.stringify({ session_id: sessionId, ...message })}\n`);
+  if (message.type === 'assistant' || message.type === 'user') {
+    keep(message.type, message.uuid, message.message);
+  }
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -204,6 +252,7 @@ async function play(message) {
   const current = { interrupted: false };
   turn = current;
   const started = Date.now();
+  keep('user', uuid, message.message);
   const stamp = { user_message_uuid: uuid, user_message_uuids: [uuid] };
   say({
     type: 'system',

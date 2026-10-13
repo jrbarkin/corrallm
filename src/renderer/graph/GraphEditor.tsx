@@ -987,6 +987,8 @@ function Editor({
                 );
               },
               findFiles: (query) => sessionStore.findFiles(query),
+              pastSessions: () => sessionStore.pastSessions(openedNode.id),
+              resume: (sessionId) => sessionStore.resume(openedNode.id, sessionId),
               answer: (permissionId, answer) => {
                 sessionStore.answer(openedNode.id, permissionId, answer);
               },

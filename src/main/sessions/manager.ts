@@ -2,6 +2,7 @@ import type { WebContents } from 'electron';
 
 import type {
   Connection,
+  PastSession,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -11,10 +12,12 @@ import type {
 import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory, Chosen, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
+import type { KeptConversation } from './sdk/conversations';
 
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
 const NOT_RUNNING = 'This agent’s session is not running.';
+const NOT_LISTED = 'That is not one of this project folder’s conversations.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -23,6 +26,8 @@ export interface SessionManagerDeps {
   connectors: Readonly<Record<Connection, Connector>>;
   /** The environment agents run in: the user's login shell's, cleaned (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
+  /** The conversations Claude Code kept for a folder (sdk/conversations.ts), for /resume. */
+  conversations?: { list(folder: string): Promise<KeptConversation[]> };
   /** The folder a renderer's canvas's agents work in, if one was chosen (project.ts). */
   projectOf: (contents: WebContents) => string | undefined;
   /** The file a renderer's canvas was opened from or saved to, if any (canvas.ts). */
@@ -66,6 +71,8 @@ export class SessionManager {
   readonly #chosen = new WeakMap<WebContents, Map<string, Chosen>>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
+  /** The conversations each renderer was last listed (session:list): the only ones it may open. */
+  readonly #listed = new WeakMap<WebContents, { folder: string; ids: Set<string> }>();
   /**
    * The agents whose terminal each renderer's view shows (attachTerminal), and what stops the
    * running session's screen being shown there (undefined while none runs).
@@ -138,6 +145,33 @@ export class SessionManager {
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
     await this.#choose(contents, agentId, { model });
+  }
+
+  /**
+   * The conversations Claude Code kept for the canvas's project folder, most recent first, saying
+   * which is the agent's own (the one it runs, or would resume). They are the only ones the
+   * renderer may then open (`resumeSession`).
+   */
+  async listSessions(contents: WebContents, agentId: string): Promise<PastSession[]> {
+    const folder = this.#deps.projectOf(contents);
+    if (folder === undefined) throw new Error(NO_PROJECT);
+    const listed = (await this.#deps.conversations?.list(folder)) ?? [];
+    this.#listed.set(contents, { folder, ids: new Set(listed.map((kept) => kept.id)) });
+    const own = this.#idsOf(contents).get(agentId);
+    return listed.map((kept) => ({ ...kept, current: kept.id === own }));
+  }
+
+  /**
+   * Makes a conversation the agent's own (/resume): one listed for the canvas's project folder,
+   * never another. The agent's session ends; it resumes that conversation when it starts again.
+   */
+  async resumeSession(contents: WebContents, agentId: string, sessionId: string): Promise<void> {
+    const listed = this.#listed.get(contents);
+    if (!listed || listed.folder !== this.#deps.projectOf(contents) || !listed.ids.has(sessionId)) {
+      throw new Error(NOT_LISTED);
+    }
+    await this.close(contents, agentId);
+    await this.#remember(contents, agentId, sessionId);
   }
 
   /**

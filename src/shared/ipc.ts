@@ -1,5 +1,6 @@
 import type {
   Connection,
+  PastSession,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -73,6 +74,16 @@ export interface IpcContract {
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
   /**
+   * The conversations Claude Code kept for the canvas's project folder, most recent first, as
+   * /resume lists them, saying which is the agent's own. Rejects without a project folder.
+   */
+  'session:list': { args: [agentId: string]; result: PastSession[] };
+  /**
+   * Makes a conversation main listed (session:list) for the canvas's project folder the agent's
+   * own: its session ends, and resumes that one when it starts again. Rejects any other id.
+   */
+  'session:resume': { args: [agentId: string, sessionId: string]; result: null };
+  /**
    * Shows an agent's terminal (a Terminal session's) in the renderer's view: main sends
    * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
    * again for each session after, until the view detaches.
@@ -143,6 +154,8 @@ export interface InvokeApi {
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
+  listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
+  resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
@@ -174,6 +187,8 @@ export const API_CHANNELS = {
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
   closeSession: 'session:close',
+  listSessions: 'session:list',
+  resumeSession: 'session:resume',
   attachTerminal: 'terminal:attach',
   detachTerminal: 'terminal:detach',
   writeTerminal: 'terminal:input',

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SlashCommand } from '../../shared/session';
-import { completedCommands, terminalCommand } from './commands';
+import { completedCommands, terminalCommand, viewCommand } from './commands';
 
 const command = (name: string, description = ''): SlashCommand => ({
   name,
@@ -36,6 +36,15 @@ describe('terminalCommand', () => {
   });
 });
 
+describe('viewCommand', () => {
+  it('finds the commands the agent view answers itself', () => {
+    expect(viewCommand('/resume')).toBe('resume');
+    expect(viewCommand(' /resume  ')).toBe('resume');
+    expect(viewCommand('/compact')).toBeUndefined();
+    expect(viewCommand('resume it')).toBeUndefined();
+  });
+});
+
 describe('completedCommands', () => {
   it('completes the session’s commands, then those that run in Terminal, saying so', () => {
     const all = completedCommands(OFFERED);
@@ -44,5 +53,7 @@ describe('completedCommands', () => {
     expect(permissions?.description).toMatch(/^In Terminal · /);
     // The session's own /config is offered, not another.
     expect(all.filter((c) => c.name === 'config')).toEqual([command('config')]);
+    // And the view's own, right after the session's.
+    expect(all[OFFERED.length]).toEqual(command('resume', 'Resume a previous conversation'));
   });
 });

@@ -3,9 +3,17 @@ import type { SlashCommand } from '../../shared/session';
 /*
  * The slash commands an Agent SDK agent's composer knows besides its session's own. Claude Code
  * has commands that open a screen of its own (/permissions, /login, /hooks…): the Agent SDK runs
- * none of them, so the composer offers to continue the conversation in Terminal, where Claude Code
- * itself runs, instead of sending them.
+ * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker); for the
+ * others it offers to continue the conversation in Terminal, where Claude Code itself runs,
+ * instead of sending them.
  */
+
+/** The commands the agent view answers itself, as Claude Code describes them. */
+export const VIEW_COMMANDS = [
+  { name: 'resume', description: 'Resume a previous conversation', argumentHint: '' },
+] as const satisfies readonly SlashCommand[];
+
+export type ViewCommand = (typeof VIEW_COMMANDS)[number]['name'];
 
 /** A command that runs only in Claude Code's terminal. */
 interface TerminalCommand extends SlashCommand {
@@ -48,6 +56,12 @@ function parse(text: string): { name: string; args: string } | undefined {
   return name === undefined ? undefined : { name, args: match?.[2]?.trim() ?? '' };
 }
 
+/** The view's own command a message runs, if it runs one ("/resume"). */
+export function viewCommand(text: string): ViewCommand | undefined {
+  const typed = parse(text);
+  return VIEW_COMMANDS.find((c) => c.name === typed?.name)?.name;
+}
+
 /**
  * The command a message runs, if it runs only in Claude Code's terminal: one of TERMINAL_COMMANDS
  * that the session (`offered`: its own commands) does not run itself.
@@ -67,14 +81,16 @@ export function terminalCommand(
 }
 
 /**
- * What an Agent SDK agent's composer completes: its session's commands, then those that run in
- * Terminal (worded so), unless the session offers one of that name.
+ * What an Agent SDK agent's composer completes: its session's commands, the view's own, then those
+ * that run in Terminal (worded so), unless the session offers one of that name.
  */
 export function completedCommands(offered: readonly SlashCommand[] | undefined): SlashCommand[] {
-  const own = offered ?? [];
+  const views = new Set<string>(VIEW_COMMANDS.map((c) => c.name));
+  const own = (offered ?? []).filter((c) => !views.has(c.name));
   const names = new Set(own.map((c) => c.name));
   return [
     ...own,
+    ...VIEW_COMMANDS,
     ...TERMINAL_COMMANDS.filter((c) => !names.has(c.name)).map(
       ({ name, description, argumentHint }) => ({
         name,

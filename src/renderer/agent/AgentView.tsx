@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 
 import type { ProjectFolder } from '../../shared/ipc';
+import type { PastSession } from '../../shared/session';
 import {
   AGENT_ACTIONS,
   AGENT_CLI,
@@ -24,7 +25,8 @@ import type { HeldAsk } from '../run/asks';
 import { SearchPicker } from '../search/SearchPicker';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
-import { completedCommands, terminalCommand } from './commands';
+import { completedCommands, terminalCommand, viewCommand } from './commands';
+import type { ViewCommand } from './commands';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
@@ -32,6 +34,7 @@ import { animate, morph, settle, slide } from './motion';
 import { PeerQueue } from './PeerQueue';
 import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
+import { ResumePicker } from './ResumePicker';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { threadTitle } from './session';
@@ -46,6 +49,10 @@ export interface SessionControls extends ComposerControls {
   answer: (permissionId: string, answer: Answer) => void;
   answerQuestion: (promptId: string, index: number, answer: string) => void;
   answerPlan: (promptId: string, answer: PlanAnswer) => void;
+  /** The conversations Claude Code kept for the project folder (/resume). */
+  pastSessions: () => Promise<PastSession[]>;
+  /** Opens one of them in the agent, in place of its own. */
+  resume: (sessionId: string) => Promise<void>;
 }
 
 /**
@@ -78,7 +85,9 @@ export interface SessionControls extends ComposerControls {
  * An Agent SDK agent can continue its conversation in Terminal, where Claude Code itself runs (the
  * connections share its session): from its agent chip, or where a command only Claude Code's
  * terminal runs is typed (/permissions, /login…: commands.ts), which is offered there instead of
- * being sent, and runs there once the agent has switched.
+ * being sent, and runs there once the agent has switched. The view answers some commands itself
+ * for an Agent SDK agent (commands.ts' VIEW_COMMANDS), in a panel above the composer: /resume
+ * picks another conversation of the project folder to open in its place (ResumePicker.tsx).
  */
 export function AgentView({
   node,
@@ -252,6 +261,13 @@ export function AgentView({
   const [choosing, setChoosing] = useState<StepChoice>();
   /** A command typed that only Claude Code's terminal runs, while Terminal is offered for it. */
   const [offer, setOffer] = useState<string>();
+  /** The view's own command whose panel is open above the composer (/resume). */
+  const [opened, setOpened] = useState<ViewCommand>();
+  /** Closes that panel, and gives the keyboard back to the composer. */
+  const closeOpened = () => {
+    setOpened(undefined);
+    composer.current?.focus();
+  };
   const chooseStep = useCallback((choice: StepChoice) => {
     setPeer(choice.agent);
     setChoosing(choice);
@@ -308,6 +324,11 @@ export function AgentView({
    * while the run asks (`ask.reply`), the answer, unless it is a command the session runs.
    */
   const send = (text: string, images?: MessageImage[]) => {
+    const answered = connection === 'sdk' ? viewCommand(text) : undefined;
+    if (answered !== undefined) {
+      setOpened(answered);
+      return;
+    }
     if (connection === 'sdk' && terminalCommand(text, session.commands)) {
       setOffer(text.trim());
       return;
@@ -506,6 +527,13 @@ export function AgentView({
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={
                       <>
+                        {opened === 'resume' && (
+                          <ResumePicker
+                            list={controls.pastSessions}
+                            onPick={(picked) => controls.resume(picked.id)}
+                            onClose={closeOpened}
+                          />
+                        )}
                         {offer !== undefined && (
                           <TerminalOffer
                             command={offer}

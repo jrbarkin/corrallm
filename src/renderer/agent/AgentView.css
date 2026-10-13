@@ -1339,3 +1339,13 @@
   background: color-mix(in srgb, CanvasText 5%, transparent);
   font-weight: 600;
 }
+
+/* /resume's picker: the search field and its list, as wide as the composer. */
+.agent-resume .search-picker {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionEvent } from '../../../shared/session';
 import type { LiveSession, SessionHost } from '../connector';
 import { SdkConnector } from './connector';
+import { Conversations } from './conversations';
 import { SUBSCRIPTION_LOGIN } from './login';
 
 /*
@@ -18,16 +19,24 @@ import { SUBSCRIPTION_LOGIN } from './login';
 const FAKE = path.join(import.meta.dirname, 'fake-claude.mjs');
 
 let folder: string;
+/** Where the fake keeps its transcripts, and the Agent SDK reads them: never the user's ~/.claude. */
+let config: string;
 let session: LiveSession | undefined;
+const configBefore = process.env.CLAUDE_CONFIG_DIR;
 
 beforeEach(async () => {
   folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sdk-'));
+  config = await mkdtemp(path.join(tmpdir(), 'corrallm-config-'));
+  process.env.CLAUDE_CONFIG_DIR = config;
 });
 
 afterEach(async () => {
   await session?.close();
   session = undefined;
+  if (configBefore === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = configBefore;
   await rm(folder, { recursive: true, force: true });
+  await rm(config, { recursive: true, force: true });
 });
 
 /** What says how the CLI logs in, in this process's environment: left out of the agents'. */
@@ -42,6 +51,7 @@ async function start(
   mode: 'manual' | 'acceptEdits' | null = 'manual',
   login: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-test' },
   events: SessionEvent[] = [],
+  resume: string | null = null,
 ) {
   const remembered: string[] = [];
   const host: SessionHost = {
@@ -55,13 +65,14 @@ async function start(
       ),
     ),
     ...login,
+    CLAUDE_CONFIG_DIR: config,
   };
   const connector = new SdkConnector({
     clientApp: 'corrallm/test',
     findClaude: () => Promise.resolve(FAKE),
   });
   session = await connector.start(
-    { agentId: 'a', cwd: folder, env, model: null, mode, resume: null },
+    { agentId: 'a', cwd: folder, env, model: null, mode, resume },
     host,
   );
   return { session, events, remembered };
@@ -152,6 +163,27 @@ describe('SdkConnector through the Agent SDK', () => {
     });
     await expect(session.setMode('bypassPermissions')).rejects.toThrow(/disabled by settings/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
+  it('keeps its conversations where the Agent SDK lists them, and resumes one with its history', async () => {
+    const first = await start();
+    const id = '00000000-0000-4000-8000-00000000000d';
+    await first.session.send({ id, text: 'Remember the shop' });
+    await waitFor(first.events, (e) => e.type === 'end');
+    await first.session.close();
+    session = undefined;
+    const [kept] = first.remembered;
+
+    await expect(new Conversations().list(folder)).resolves.toEqual([
+      expect.objectContaining({ id: kept, title: 'Remember the shop' }),
+    ]);
+    const again = await start('manual', undefined, [], kept ?? null);
+    const history = again.events.find((e) => e.type === 'history');
+    if (history?.type !== 'history') throw new Error('no history');
+    expect(history.events).toContainEqual({ type: 'user', id, text: 'Remember the shop' });
+    expect(history.events).toContainEqual(
+      expect.objectContaining({ type: 'text', text: 'You said: Remember the shop' }),
+    );
   });
 
   it('does not start the session on a Claude subscription login, and says why', async () => {

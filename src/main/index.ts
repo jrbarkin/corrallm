@@ -17,6 +17,7 @@ import { hardenSession, installNavigationGuards } from './security';
 import { createConnectors } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { SessionManager } from './sessions/manager';
+import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
 import { createMainWindow } from './window';
 
@@ -102,6 +103,8 @@ function main(): void {
           clientApp: `${app.getName()}/${app.getVersion()}`,
         }),
         environment: agentsEnvironment,
+        // The conversations Claude Code kept, whichever connection ran them.
+        conversations: new Conversations(),
         projectOf: (contents) => projects.of(contents),
         canvasOf: canvasFile,
         memory,

@@ -53,6 +53,8 @@ function fakeServices() {
       setMode: vi.fn<IpcServices['sessions']['setMode']>().mockResolvedValue(undefined),
       setModel: vi.fn<IpcServices['sessions']['setModel']>().mockResolvedValue(undefined),
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
+      listSessions: vi.fn<IpcServices['sessions']['listSessions']>().mockResolvedValue([]),
+      resumeSession: vi.fn<IpcServices['sessions']['resumeSession']>().mockResolvedValue(undefined),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
         .fn<IpcServices['sessions']['canvasForgotten']>()
@@ -244,6 +246,15 @@ describe('session:* handlers', () => {
     expect(services.sessions.setModel).toHaveBeenCalledWith(sender, 'a', 'claude-haiku-5-5[1m]');
     await invoke('session:close', ['a'], sender);
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
+    await invoke('session:list', ['a'], sender);
+    expect(services.sessions.listSessions).toHaveBeenCalledWith(sender, 'a');
+    // Which conversations it may open is main's to say (it listed them): the id goes on.
+    await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
+    expect(services.sessions.resumeSession).toHaveBeenCalledWith(
+      sender,
+      'a',
+      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+    );
   });
 
   const start = { connection: 'terminal', model: null, mode: 'manual' };
@@ -364,6 +375,10 @@ describe('session:* handlers', () => {
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
+    ['session:list', 'no agent', [], /an agent/],
+    ['session:resume', 'no conversation', ['a'], /an agent and a conversation/],
+    ['session:resume', 'a path', ['a', '../../etc/passwd'], /conversation's id/],
+    ['session:resume', 'an id too long', ['a', 'a'.repeat(MAX_ID_LENGTH + 1)], /conversation's id/],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

@@ -1,5 +1,6 @@
 import type {
   Connection,
+  PastSession,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -22,6 +23,10 @@ export interface SessionBackend {
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
+  /** The conversations Claude Code kept for the project folder (/resume), the agent's marked. */
+  sessions(agentId: string): Promise<PastSession[]>;
+  /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
+  resume(agentId: string, sessionId: string): Promise<null>;
   /** Listens for what sessions do; returns a function that stops listening. */
   onEvent(
     listener: (agentId: string, connection: Connection, event: SessionEvent) => void,
@@ -41,6 +46,8 @@ export const NO_BACKEND: SessionBackend = (() => {
     setModel: refuse,
     close: refuse,
     files: () => Promise.resolve([]),
+    sessions: refuse,
+    resume: refuse,
     onEvent: () => () => undefined,
   };
 })();

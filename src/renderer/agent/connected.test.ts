@@ -520,3 +520,52 @@ describe('a connected session continued in Terminal', () => {
     expect(backend.send).toHaveBeenCalledOnce();
   });
 });
+
+describe('a connected session opened on another conversation (/resume)', () => {
+  it('lists the project folder’s conversations from main', async () => {
+    const { store, backend } = connected();
+    const past = [{ id: 'k1', title: 'Fix the login bug', modified: 1000, current: false }];
+    backend.sessions.mockResolvedValueOnce(past);
+    await expect(store.pastSessions('a')).resolves.toEqual(past);
+    expect(backend.sessions).toHaveBeenCalledWith('a');
+  });
+
+  it('lets its session go, empties the transcript, and starts again on that conversation', async () => {
+    const { store, backend, emit, sent } = connected();
+    store.setMode('a', 'plan');
+    store.send('a', 'Claude', 'Old question');
+    await settle();
+    emit('a', 'sdk', { type: 'user', id: sent(), text: 'Old question' });
+    emit('a', 'sdk', {
+      type: 'usage',
+      usage: { costUsd: 1, contextTokens: 10, contextWindow: 100 },
+    });
+
+    await store.resume('a', 'k1');
+    expect(backend.resume).toHaveBeenCalledWith('a', 'k1');
+    expect(backend.close).toHaveBeenCalledWith('a');
+    expect(store.of('a')).toMatchObject({ entries: [], status: 'idle', mode: 'plan' });
+    expect(store.of('a').usage).toBeUndefined();
+    expect(backend.start).toHaveBeenCalledTimes(2);
+    // Its history fills the transcript.
+    emit('a', 'sdk', {
+      type: 'history',
+      events: [
+        { type: 'user', id: 'k1-u', text: 'Earlier' },
+        { type: 'end', messages: ['k1-u'], seconds: 2, interrupted: false, failed: false },
+      ],
+    });
+    expect(store.of('a').entries.map((e) => e.kind)).toEqual(['user', 'end']);
+    await settle();
+  });
+
+  it('keeps its session and transcript when main will not open that conversation', async () => {
+    const { store, backend, emit } = connected();
+    store.open('a');
+    emit('a', 'sdk', { type: 'notice', id: 'n', level: 'info', text: 'Still here' });
+    backend.resume.mockRejectedValueOnce(new Error('Not listed'));
+    await expect(store.resume('a', 'elsewhere')).rejects.toThrow('Not listed');
+    expect(backend.close).not.toHaveBeenCalled();
+    expect(store.of('a').entries).toHaveLength(1);
+  });
+});

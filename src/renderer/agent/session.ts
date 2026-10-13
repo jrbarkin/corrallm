@@ -203,7 +203,12 @@ export type SessionAction =
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
   /** What a resumed session did before: entries put ahead of the transcript's. */
-  | { type: 'restore'; entries: Entry[] };
+  | { type: 'restore'; entries: Entry[] }
+  /**
+   * Another conversation takes the transcript's place (/resume), or this one rewound: the
+   * transcript empties, and what it used with it; what the user chose stays.
+   */
+  | { type: 'clear' };
 
 /** Whether a prompt still waits for the user. */
 export function isOpen(entry: Entry): entry is Prompt {
@@ -334,6 +339,11 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, commands: action.commands };
     case 'restore':
       return { ...session, entries: [...action.entries, ...session.entries] };
+    case 'clear': {
+      const next: Session = { ...session, entries: [], status: 'idle' };
+      delete next.usage;
+      return next;
+    }
   }
 }
 

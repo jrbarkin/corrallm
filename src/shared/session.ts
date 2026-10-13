@@ -99,6 +99,25 @@ export interface SlashCommand {
   argumentHint: string;
 }
 
+/**
+ * A conversation Claude Code kept for the project folder (its transcript), as /resume lists it.
+ * Both connections keep theirs there: an agent can open any of them.
+ */
+export interface PastSession {
+  /** Its session id: main opens it only if main listed it for this folder. */
+  id: string;
+  /** What it is called: the title it was given (/rename), its summary, or its first message. */
+  title: string;
+  /** When it last changed, in ms since the epoch. */
+  modified: number;
+  /** How large its transcript is, in bytes, when known. */
+  bytes?: number;
+  /** The git branch it ended on, when known. */
+  branch?: string;
+  /** Whether it is the agent's own: the one it runs, or would resume. */
+  current: boolean;
+}
+
 /** A question the agent asks the user (Claude Code's AskUserQuestion), with answers to pick from. */
 export interface AskedQuestion {
   /** A short name for it, as a chip shows it. */

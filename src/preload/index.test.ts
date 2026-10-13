@@ -78,6 +78,14 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
     await api.closeSession('a');
     expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
+    await api.listSessions('a');
+    expect(invoke).toHaveBeenLastCalledWith('session:list', 'a');
+    await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
+    expect(invoke).toHaveBeenLastCalledWith(
+      'session:resume',
+      'a',
+      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+    );
   });
 
   it('passes session events on without Electron’s event object, until told to stop', async () => {

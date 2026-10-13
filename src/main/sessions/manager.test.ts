@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 import type { Connection, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
@@ -12,6 +13,7 @@ import type { Connector, LiveSession, SessionHost } from './connector';
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { SessionManager } from './manager';
+import type { SessionManagerDeps } from './manager';
 
 /** A stand-in for a renderer's web contents: the manager keys sessions by it, and hears it go. */
 const renderer = () => new EventEmitter() as unknown as Electron.WebContents;
@@ -30,11 +32,14 @@ let heard: Map<Electron.WebContents, [string, Connection, SessionEvent][]>;
 /** What each renderer's terminal views heard: agent and event. */
 let shown: Map<Electron.WebContents, [string, TerminalEvent][]>;
 let environment: () => Promise<Record<string, string>>;
+/** The conversations Claude Code kept for each folder, as the Agent SDK lists them. */
+let listKept: Mock<NonNullable<SessionManagerDeps['conversations']>['list']>;
 
 function manager(connectors: Partial<Record<Connection, Connector>> = {}) {
   return new SessionManager({
     connectors: { sdk: fake, terminal, ...connectors },
     environment: () => environment(),
+    conversations: { list: listKept },
     projectOf: (contents) => projects.get(contents),
     canvasOf: (contents) => canvases.get(contents),
     memory,
@@ -73,6 +78,12 @@ beforeEach(async () => {
   heard = new Map();
   shown = new Map();
   environment = () => Promise.resolve({ PATH: '/usr/bin' });
+  listKept = vi.fn(() =>
+    Promise.resolve([
+      { id: 'kept-2', title: 'Add a cart', modified: 2000 },
+      { id: 'kept-1', title: 'Fix the login bug', modified: 1000 },
+    ]),
+  );
 });
 afterEach(async () => {
   await memory.flush();
@@ -424,5 +435,61 @@ describe('SessionManager', () => {
       await sessions.inputTerminal(contents, 'b', 'x');
       expect(screens(contents)).toEqual([]);
     });
+  });
+});
+
+describe('SessionManager and kept conversations', () => {
+  it('lists the project folder’s conversations for /resume, saying which is the agent’s own', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    const own = fake.ids[0] ?? '';
+    listKept.mockResolvedValue([
+      { id: own, title: 'This one', modified: 3000 },
+      { id: 'kept-1', title: 'Fix the login bug', modified: 1000 },
+    ]);
+    await expect(sessions.listSessions(contents, 'a')).resolves.toEqual([
+      { id: own, title: 'This one', modified: 3000, current: true },
+      { id: 'kept-1', title: 'Fix the login bug', modified: 1000, current: false },
+    ]);
+    expect(listKept).toHaveBeenCalledWith('/work/app');
+    // Without a project folder there is nothing to list.
+    await expect(sessions.listSessions(renderer(), 'a')).rejects.toThrow(/Choose a project folder/);
+  });
+
+  it('opens a conversation it listed in an agent: its session ends, and resumes that one', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.listSessions(contents, 'a');
+    await sessions.resumeSession(contents, 'a', 'kept-1');
+    await expect(sessions.send(contents, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
+      /not running/,
+    );
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBe('kept-1');
+    // And after a restart.
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).sessions).toEqual({ a: 'kept-1' });
+  });
+
+  it('opens no conversation it did not list for this folder', async () => {
+    const sessions = manager();
+    const contents = window();
+    // Never listed.
+    await expect(sessions.resumeSession(contents, 'a', 'kept-1')).rejects.toThrow(
+      /not one of this project folder’s conversations/,
+    );
+    await sessions.listSessions(contents, 'a');
+    await expect(sessions.resumeSession(contents, 'a', 'elsewhere')).rejects.toThrow(
+      /not one of this project folder’s conversations/,
+    );
+    // Listed for another folder.
+    projects.set(contents, '/work/other');
+    await expect(sessions.resumeSession(contents, 'a', 'kept-1')).rejects.toThrow(
+      /not one of this project folder’s conversations/,
+    );
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import type { PastSession } from '../../shared/session';
 import { DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
 import { ConnectedDriver, NO_BACKEND } from './connected';
@@ -147,6 +148,26 @@ export class SessionStore {
   /** The files and folders of the canvas's project folder that match `query`, for an @-mention. */
   findFiles(query: string): Promise<string[]> {
     return this.#backend.files(query);
+  }
+
+  /** The conversations Claude Code kept for the project folder, for /resume. */
+  pastSessions(agentId: string): Promise<PastSession[]> {
+    return this.#backend.sessions(agentId);
+  }
+
+  /**
+   * Opens another conversation in the agent (/resume), one main listed: main makes it the agent's
+   * own, ending its session; its driver goes (a turn going on ends, interrupted), the transcript
+   * empties, and the session starts again resuming that conversation, whose history fills the
+   * transcript. If main refuses, nothing changes.
+   */
+  async resume(agentId: string, sessionId: string): Promise<void> {
+    await this.#backend.resume(agentId, sessionId);
+    this.#letGo(agentId);
+    this.#dispatch(agentId, { type: 'clear' });
+    this.#driver(agentId).open();
+    // What was queued goes on, to that conversation.
+    this.#idle(agentId);
   }
 
   /** Answers a permission prompt. */

@@ -15,6 +15,7 @@ import {
   parseFilesArgs,
   parseModeArgs,
   parseModelArgs,
+  parseResumeArgs,
   parseSendArgs,
   parseStartArgs,
   parseTerminalInputArgs,
@@ -50,6 +51,8 @@ export interface IpcServices {
     | 'setMode'
     | 'setModel'
     | 'close'
+    | 'listSessions'
+    | 'resumeSession'
     | 'canvasOpened'
     | 'canvasForgotten'
     | 'canvasSaved'
@@ -230,6 +233,17 @@ function createHandlers({ projects, files, links, sessions }: IpcServices): Hand
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
         await sessions.close(contents, agentId);
+        return null;
+      },
+    },
+    'session:list': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => sessions.listSessions(contents, agentId),
+    },
+    'session:resume': {
+      parseArgs: parseResumeArgs,
+      handler: async ({ contents }, agentId, sessionId) => {
+        await sessions.resumeSession(contents, agentId, sessionId);
         return null;
       },
     },

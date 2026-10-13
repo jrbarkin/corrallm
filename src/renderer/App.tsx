@@ -28,6 +28,8 @@ const sessionBackend: SessionBackend = {
   setModel: (agentId, model) => window.api.setSessionModel(agentId, model),
   close: (agentId) => window.api.closeSession(agentId),
   files: (query) => window.api.findProjectFiles(query),
+  sessions: (agentId) => window.api.listSessions(agentId),
+  resume: (agentId, sessionId) => window.api.resumeSession(agentId, sessionId),
   onEvent: (listener) => window.api.onSessionEvent(listener),
 };
 
