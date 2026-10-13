@@ -19,6 +19,7 @@ import {
   MAX_IMAGES,
   MAX_MESSAGE_LENGTH,
 } from '../shared/session';
+import { MAX_TERMINAL_INPUT } from '../shared/terminal';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
 
@@ -56,6 +57,12 @@ function fakeServices() {
       canvasSaved: vi.fn<IpcServices['sessions']['canvasSaved']>().mockResolvedValue(undefined),
       projectChanged: vi
         .fn<IpcServices['sessions']['projectChanged']>()
+        .mockResolvedValue(undefined),
+      attachTerminal: vi.fn<IpcServices['sessions']['attachTerminal']>(),
+      detachTerminal: vi.fn<IpcServices['sessions']['detachTerminal']>(),
+      inputTerminal: vi.fn<IpcServices['sessions']['inputTerminal']>().mockResolvedValue(undefined),
+      resizeTerminal: vi
+        .fn<IpcServices['sessions']['resizeTerminal']>()
         .mockResolvedValue(undefined),
     },
   };
@@ -331,6 +338,43 @@ describe('session:* handlers', () => {
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
+  ])('%s rejects %s', (channel, _label, args, message) => {
+    expect(() => invoke(channel, args)).toThrow(message);
+    expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+  });
+});
+
+describe('terminal:* handlers', () => {
+  it('pass checked arguments on, for the renderer that sent them', async () => {
+    const sender = {};
+    await invoke('terminal:attach', ['a'], sender);
+    expect(services.sessions.attachTerminal).toHaveBeenCalledWith(sender, 'a');
+    // Keystrokes are keys: control characters included.
+    await invoke('terminal:input', ['a', '\x1b[Z\x03'], sender);
+    expect(services.sessions.inputTerminal).toHaveBeenCalledWith(sender, 'a', '\x1b[Z\x03');
+    await invoke('terminal:resize', ['a', 120, 40], sender);
+    expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(sender, 'a', 120, 40);
+    await invoke('terminal:detach', ['a'], sender);
+    expect(services.sessions.detachTerminal).toHaveBeenCalledWith(sender, 'a');
+  });
+
+  it.each([
+    ['terminal:attach', 'no agent', [], /an agent/],
+    ['terminal:attach', 'an agent id that is not text', [{}], /agent's id/],
+    ['terminal:input', 'nothing typed', ['a', ''], /what was typed/],
+    ['terminal:input', 'keys that are not text', ['a', [13]], /what was typed/],
+    [
+      'terminal:input',
+      'too much at once',
+      ['a', 'x'.repeat(MAX_TERMINAL_INPUT + 1)],
+      /what was typed/,
+    ],
+    ['terminal:resize', 'no size', ['a'], /an agent and a size/],
+    ['terminal:resize', 'a fractional size', ['a', 80.5, 24], /terminal size/],
+    ['terminal:resize', 'no rows', ['a', 80, 0], /terminal size/],
+    ['terminal:resize', 'a size too large', ['a', 100_000, 24], /terminal size/],
+    ['terminal:resize', 'a size that is not a number', ['a', '80', 24], /terminal size/],
+    ['terminal:detach', 'an extra argument', ['a', 'b'], /an agent/],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

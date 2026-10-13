@@ -15,16 +15,19 @@ import { agentElectronExecutable } from './agent-electron';
  * packaged app and keeps state such as a page zoom set with ⌘+, which would shrink the canvas
  * under the coordinate-based tests. `close()` quits the app and deletes the profile. `env` adds
  * to the app's environment (CORRALLM_FAKE_SESSIONS=1: connected agents run a fake, not Claude).
+ * `profile`: a profile of the test's own instead, kept when the app quits (to launch it again, as
+ * after a restart); the test deletes it.
  */
 export async function launchApp({
   env: extra = {},
-}: { env?: Record<string, string> } = {}): Promise<{
+  profile: given,
+}: { env?: Record<string, string>; profile?: string } = {}): Promise<{
   app: ElectronApplication;
   close: () => Promise<void>;
 }> {
-  const profile = mkdtempSync(path.join(tmpdir(), 'corrallm-e2e-'));
+  const profile = given ?? mkdtempSync(path.join(tmpdir(), 'corrallm-e2e-'));
   const remove = () => {
-    rmSync(profile, { recursive: true, force: true });
+    if (given === undefined) rmSync(profile, { recursive: true, force: true });
   };
   let app: ElectronApplication;
   try {

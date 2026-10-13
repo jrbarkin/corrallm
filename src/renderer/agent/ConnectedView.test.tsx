@@ -87,7 +87,7 @@ describe('a connected agent', () => {
   });
 
   it('says what it needs to run: a project folder', async () => {
-    const { transcript } = await open({ connection: 'terminal' });
+    const { transcript } = await open({ connection: 'sdk' });
     expect(transcript.getByText(/Choose a project folder for this canvas/)).toBeTruthy();
   });
 

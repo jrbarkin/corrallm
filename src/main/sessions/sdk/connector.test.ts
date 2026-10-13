@@ -470,22 +470,47 @@ describe('SdkConnector', () => {
     const { sdk, host, queries, events } = connector({
       prepare: (query, call) => {
         if (call === 0) {
+          query.options.stderr?.('Error: the session’s transcript could not be read\n');
           query.initialization = Promise.reject(
-            new Error('No conversation found with session ID: gone'),
+            new Error('Claude Code process exited with code 1'),
           );
         }
       },
     });
-    await sdk.start({ ...SPEC, resume: 'gone' }, host);
-    expect(queries.map((q) => q.options.resume)).toEqual(['gone', undefined]);
+    await sdk.start({ ...SPEC, resume: 'broken' }, host);
+    expect(queries.map((q) => q.options.resume)).toEqual(['broken', undefined]);
     expect(queries[0]?.close).toHaveBeenCalled();
     expect(events).toContainEqual(
       expect.objectContaining({
         type: 'notice',
         level: 'warning',
-        text: expect.stringMatching(/could not be resumed.*No conversation found/) as unknown,
+        text: expect.stringMatching(/could not be resumed.*could not be read/) as unknown,
       }),
     );
+  });
+
+  it('starts a new conversation quietly when the id it resumes has none', async () => {
+    // As the CLI says for an id with no transcript: one a Terminal session of the same agent was
+    // given before its first message (the agent's id is shared between its connections).
+    const { sdk, host, queries, events } = connector({
+      prepare: (query, call) => {
+        if (call === 0) {
+          query.initialization = Promise.reject(
+            new Error(
+              'Claude Code returned an error result: No conversation found with session ID: 5c1f0e7a-1b2c-4d3e-8f90-123456789abc',
+            ),
+          );
+        }
+      },
+    });
+    await sdk.start({ ...SPEC, resume: '5c1f0e7a-1b2c-4d3e-8f90-123456789abc' }, host);
+    expect(queries.map((q) => q.options.resume)).toEqual([
+      '5c1f0e7a-1b2c-4d3e-8f90-123456789abc',
+      undefined,
+    ]);
+    expect(queries[0]?.close).toHaveBeenCalled();
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+    expect(events[0]?.type).toBe('started');
   });
 
   it('says why it could not start, with what the CLI said', async () => {

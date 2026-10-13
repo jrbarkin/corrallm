@@ -1,8 +1,8 @@
 import type { Connection } from '../../shared/session';
 import type { Connector } from './connector';
-import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { SdkConnector } from './sdk/connector';
+import { TerminalConnector } from './terminal/connector';
 
 /**
  * The connector for each connection (see connector.ts), each from its own folder (sessions/sdk/,
@@ -22,7 +22,7 @@ export function createConnectors({
     return { terminal: connector, sdk: connector };
   }
   return {
-    terminal: unavailable('Claude Code in a terminal'),
+    terminal: new TerminalConnector(),
     sdk: new SdkConnector({ clientApp }),
   };
 }

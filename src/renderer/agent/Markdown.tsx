@@ -4,7 +4,7 @@ import { parseInline, parseMarkdown } from './blocks';
 import type { Block, Inline } from './blocks';
 
 /**
- * Markdown as agents write it in replies (markdown.ts): paragraphs, headings, code blocks, quotes,
+ * Markdown as agents write it in replies (read by blocks.ts): paragraphs, headings, code blocks, quotes,
  * lists, tables, rules; and inline code, bold, italic, struck-out text and links. Links open in
  * the browser only where the app allows it (security.ts).
  */

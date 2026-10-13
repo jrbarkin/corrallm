@@ -37,6 +37,9 @@ export interface SdkConnectorDeps {
   home?: string;
 }
 
+/** What the CLI says when the session it is to resume has no conversation (no transcript). */
+const NO_CONVERSATION = /No conversation found/i;
+
 export class SdkConnector implements Connector {
   readonly #deps: Required<SdkConnectorDeps>;
 
@@ -56,13 +59,18 @@ export class SdkConnector implements Connector {
     try {
       return await this.#open(spec, host, claude, spec.resume);
     } catch (error) {
-      // Its conversation is gone (or will not load): a new one starts, and the user is told.
+      // The id has no conversation: one remembered from a Terminal session of the agent before its
+      // first message (both connections share it), or one whose transcript is gone. A new one
+      // starts, as a Terminal session does then.
+      const message = error instanceof Error ? error.message : String(error);
+      if (NO_CONVERSATION.test(message)) return this.#open(spec, host, claude, null);
+      // Its conversation will not load: a new one starts, and the user is told.
       const session = await this.#open(spec, host, claude, null);
       host.emit({
         type: 'notice',
         id: randomUUID(),
         level: 'warning',
-        text: `The earlier conversation could not be resumed, so this is a new one. ${error instanceof Error ? error.message : String(error)}`,
+        text: `The earlier conversation could not be resumed, so this is a new one. ${message}`,
       });
       return session;
     }

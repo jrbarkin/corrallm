@@ -1,4 +1,5 @@
 import type { IpcArgs } from '../../shared/ipc';
+import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
 import {
   CONNECTIONS,
   IMAGE_TYPES,
@@ -98,10 +99,37 @@ export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
   return [parseId(agentId, 'agent'), parseId(promptId, 'prompt'), parseAnswer(answer)];
 }
 
-/** For channels that take only the agent: session:interrupt, session:close. */
+/** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
+}
+
+/** terminal:input: an agent, and the keystrokes typed (any characters: they are keys). */
+export function parseTerminalInputArgs(args: unknown[]): IpcArgs<'terminal:input'> {
+  const [agentId, data] = expect(args, 2, 'an agent and what was typed');
+  if (typeof data !== 'string' || data === '' || data.length > MAX_TERMINAL_INPUT) {
+    throw new TypeError('Expected what was typed');
+  }
+  return [parseId(agentId, 'agent'), data];
+}
+
+/** terminal:resize: an agent, and its terminal's columns and rows. */
+export function parseTerminalResizeArgs(args: unknown[]): IpcArgs<'terminal:resize'> {
+  const [agentId, cols, rows] = expect(args, 3, 'an agent and a size');
+  const count = (value: unknown, max: number) => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
+      throw new TypeError(
+        `Expected a terminal size of up to ${String(MAX_TERMINAL_COLS)}×${String(MAX_TERMINAL_ROWS)}`,
+      );
+    }
+    return value;
+  };
+  return [
+    parseId(agentId, 'agent'),
+    count(cols, MAX_TERMINAL_COLS),
+    count(rows, MAX_TERMINAL_ROWS),
+  ];
 }
 
 export function parseModeArgs(args: unknown[]): IpcArgs<'session:mode'> {

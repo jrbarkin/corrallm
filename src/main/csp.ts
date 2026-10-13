@@ -4,10 +4,21 @@
  * - development: by the Vite dev server (vite.renderer.config.mts)
  */
 
+/**
+ * The two inline styles a terminal (xterm.js 6.0.0, in a Terminal agent's view) writes, by hash:
+ * its scrollbar's <style>, empty, then with the colours of its theme
+ * (src/renderer/terminal/screen.ts: THEME). Only these exact texts are allowed; a change to
+ * either (another theme, another xterm.js) shows as a CSP violation in e2e/terminal.e2e.ts.
+ */
+const TERMINAL_STYLES = [
+  "'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='",
+  "'sha256-FUB/YC7vo6BYz3d6Il7Cf/XewLOEia2ceMMOUVfX8sk='",
+];
+
 export const PROD_CSP = [
   "default-src 'none'",
   "script-src 'self'",
-  "style-src 'self'",
+  `style-src 'self' ${TERMINAL_STYLES.join(' ')}`,
   // Vite inlines small assets as data: URIs.
   "img-src 'self' data:",
   "font-src 'self' data:",

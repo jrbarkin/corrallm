@@ -4,6 +4,7 @@ import type {
   SessionEvent,
   UserMessage,
 } from '../../shared/session';
+import type { TerminalEvent } from '../../shared/terminal';
 
 /*
  * The seam a connection plugs into. A connector starts an agent's session (Claude Code in a
@@ -61,6 +62,24 @@ export interface LiveSession {
   setModel(model: string): Promise<void>;
   /** Ends the session: resolves once its process has exited. It need not emit 'closed'. */
   close(): Promise<void>;
+  /** A Terminal session's screen, which its agent view shows; other connections have none. */
+  readonly terminal?: TerminalScreen;
+}
+
+/**
+ * The screen of a session that runs its CLI in a terminal (the Terminal connection). The manager
+ * shows it in the agent's view, in the renderer that started the session.
+ */
+export interface TerminalScreen {
+  /**
+   * Shows the screen to a view: 'screen' with what it shows now, then its 'output' as the CLI
+   * prints, and 'exit' when the CLI exits (or has). Returns a function that stops showing it.
+   */
+  show(view: (event: TerminalEvent) => void): () => void;
+  /** Keystrokes the user typed in the view. */
+  input(data: string): void;
+  /** The view's size changed: the terminal takes it. */
+  resize(cols: number, rows: number): void;
 }
 
 /** Starts sessions of one kind of connection. */

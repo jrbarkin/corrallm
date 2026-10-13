@@ -48,7 +48,12 @@ const api: AppApi = {
   setSessionMode: (agentId, mode) => invoke(API_CHANNELS.setSessionMode, agentId, mode),
   setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
   closeSession: (agentId) => invoke(API_CHANNELS.closeSession, agentId),
+  attachTerminal: (agentId) => invoke(API_CHANNELS.attachTerminal, agentId),
+  detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
+  writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
+  resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
+  onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

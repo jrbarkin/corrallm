@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Connection, SessionEvent, SessionOptions } from '../../shared/session';
+import type { TerminalEvent } from '../../shared/terminal';
 import { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import { unavailable } from './connector';
@@ -26,6 +27,8 @@ let projects: Map<Electron.WebContents, string>;
 let canvases: Map<Electron.WebContents, string>;
 /** What each renderer heard: agent, connection and event. */
 let heard: Map<Electron.WebContents, [string, Connection, SessionEvent][]>;
+/** What each renderer's terminal views heard: agent and event. */
+let shown: Map<Electron.WebContents, [string, TerminalEvent][]>;
 let environment: () => Promise<Record<string, string>>;
 
 function manager(connectors: Partial<Record<Connection, Connector>> = {}) {
@@ -39,6 +42,11 @@ function manager(connectors: Partial<Record<Connection, Connector>> = {}) {
       const list = heard.get(contents) ?? [];
       list.push([agentId, connection, event]);
       heard.set(contents, list);
+    },
+    terminal: (contents, agentId, event) => {
+      const list = shown.get(contents) ?? [];
+      list.push([agentId, event]);
+      shown.set(contents, list);
     },
   });
 }
@@ -63,6 +71,7 @@ beforeEach(async () => {
   projects = new Map();
   canvases = new Map();
   heard = new Map();
+  shown = new Map();
   environment = () => Promise.resolve({ PATH: '/usr/bin' });
 });
 afterEach(async () => {
@@ -274,5 +283,91 @@ describe('SessionManager', () => {
     });
     await sessions.closeEverything();
     expect(closed.sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  describe('terminal views', () => {
+    /** A Terminal session faked: its screen says which run it is, and records what it is told. */
+    function terminals() {
+      const runs: { input: string[]; sizes: number[][]; shown: number }[] = [];
+      const connector: Connector = {
+        start: () => {
+          const run = { input: [] as string[], sizes: [] as number[][], shown: 0 };
+          runs.push(run);
+          const screen = `run ${String(runs.length)}`;
+          return Promise.resolve({
+            send: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            interrupt: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+            terminal: {
+              show: (view) => {
+                run.shown += 1;
+                view({ type: 'screen', data: screen, cols: 80, rows: 24 });
+                return () => {
+                  run.shown -= 1;
+                };
+              },
+              input: (data) => run.input.push(data),
+              resize: (cols, rows) => run.sizes.push([cols, rows]),
+            },
+          });
+        },
+      };
+      return { runs, connector };
+    }
+    const TERMINAL: SessionOptions = { ...OPTIONS, connection: 'terminal' };
+    const screens = (contents: Electron.WebContents) =>
+      (shown.get(contents) ?? []).map(([agent, event]) =>
+        event.type === 'screen' ? `${agent}:${event.data}` : `${agent}:${event.type}`,
+      );
+
+    it('shows an agent’s terminal in its view: the session running, and each one started after', async () => {
+      const { runs, connector } = terminals();
+      const sessions = manager({ terminal: connector });
+      const contents = window();
+      // The view opens before the session starts: it is shown once it runs.
+      sessions.attachTerminal(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      await vi.waitFor(() => {
+        expect(screens(contents)).toEqual(['a:run 1']);
+      });
+      // Opened again: shown afresh, once.
+      sessions.attachTerminal(contents, 'a');
+      await vi.waitFor(() => {
+        expect(screens(contents)).toEqual(['a:run 1', 'a:run 1']);
+      });
+      expect(runs[0]?.shown).toBe(1);
+
+      // Another run of it (after it stopped, and the next message started it again).
+      await sessions.close(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      await vi.waitFor(() => {
+        expect(screens(contents).at(-1)).toBe('a:run 2');
+      });
+
+      sessions.detachTerminal(contents, 'a');
+      expect(runs[1]?.shown).toBe(0);
+      await sessions.close(contents, 'a');
+      await sessions.start(contents, 'a', TERMINAL);
+      expect(screens(contents)).toHaveLength(3);
+    });
+
+    it('passes keystrokes and sizes to the running session’s terminal, and to nothing without one', async () => {
+      const { runs, connector } = terminals();
+      const sessions = manager({ terminal: connector });
+      const contents = window();
+      await sessions.inputTerminal(contents, 'a', 'lost');
+      await sessions.start(contents, 'a', TERMINAL);
+      await sessions.inputTerminal(contents, 'a', 'hi\r');
+      await sessions.resizeTerminal(contents, 'a', 120, 40);
+      expect(runs[0]).toMatchObject({ input: ['hi\r'], sizes: [[120, 40]] });
+      // An SDK session has no terminal.
+      await sessions.start(contents, 'b', OPTIONS);
+      sessions.attachTerminal(contents, 'b');
+      await sessions.inputTerminal(contents, 'b', 'x');
+      expect(screens(contents)).toEqual([]);
+    });
   });
 });

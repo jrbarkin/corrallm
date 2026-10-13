@@ -6,6 +6,7 @@ import type {
   SessionOptions,
   UserMessage,
 } from './session';
+import type { TerminalEvent } from './terminal';
 
 /**
  * The IPC contract between the main process and the renderer.
@@ -71,12 +72,26 @@ export interface IpcContract {
   'session:model': { args: [agentId: string, model: string]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
+  /**
+   * Shows an agent's terminal (a Terminal session's) in the renderer's view: main sends
+   * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
+   * again for each session after, until the view detaches.
+   */
+  'terminal:attach': { args: [agentId: string]; result: null };
+  /** The view no longer shows the agent's terminal. */
+  'terminal:detach': { args: [agentId: string]; result: null };
+  /** Keystrokes typed in an agent's terminal view, for its CLI (dropped if none runs). */
+  'terminal:input': { args: [agentId: string, data: string]; result: null };
+  /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
+  'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
 export interface IpcEvents {
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: Connection, event: SessionEvent];
+  /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
+  'terminal:event': [agentId: string, event: TerminalEvent];
 }
 
 /** A canvas file: its name (without folders) and its text (src/renderer/graph/file.ts). */
@@ -119,11 +134,16 @@ export interface InvokeApi {
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
+  attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
+  detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
+  writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
+  resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
+  onTerminalEvent(listener: (...args: IpcEventArgs<'terminal:event'>) => void): () => void;
 }
 
 /** The API the preload script exposes to the renderer as `window.api`. */
@@ -144,11 +164,16 @@ export const API_CHANNELS = {
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
   closeSession: 'session:close',
+  attachTerminal: 'terminal:attach',
+  detachTerminal: 'terminal:detach',
+  writeTerminal: 'terminal:input',
+  resizeTerminal: 'terminal:resize',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */
 export const API_EVENTS = {
   onSessionEvent: 'session:event',
+  onTerminalEvent: 'terminal:event',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;
