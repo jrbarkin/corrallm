@@ -45,8 +45,12 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
                      (ConnectMenu.tsx). Canvases save as .corral files (versioned JSON; format and
                      validation in file.ts, open/save bar in FileBar.tsx). examples/ holds .corral
-                     examples, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
-                     each one valid and written exactly as toFile writes it.
+                     templates, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
+                     each one valid and written exactly as toFile writes it. A template may leave
+                     blanks ({{key}}, filled from its `fields`; templates.ts) and leave agents' types
+                     open (no `agent`: the default, or chosen when it is used; withAgents translates
+                     steps between types via EQUIVALENT_ACTIONS in agents.ts). It opens as a new
+                     canvas or is inserted into this one as a group (insert.ts).
 src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
                      a Claude Code-style session (Transcript.tsx, Composer.tsx) beside the agent's
                      questions and queue. Sessions are scripted for now: session.ts is the model and

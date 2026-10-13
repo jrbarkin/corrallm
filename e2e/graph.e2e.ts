@@ -746,6 +746,7 @@ test('shows every queue side by side, a wait below what it waits for and linked 
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
 
@@ -772,6 +773,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Feature crew/ })
     .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
   const builder = () =>
@@ -944,11 +946,16 @@ test('opens each example from the gallery, drawing its agents and the work betwe
     'Team lead',
     'Fan-out research',
     'Release checks',
+    'TDD relay',
+    'Head to head',
+    'Spec first',
+    'Review panel',
   ]) {
     const gallery = page.getByRole('dialog', { name: 'Templates' });
     if ((await gallery.count()) === 0)
       await page.getByRole('button', { name: 'Templates…' }).click();
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+    await gallery.getByRole('button', { name: 'Create canvas' }).click();
     await expect(gallery).toHaveCount(0);
     await expect(nodes().nth(1), name).toBeVisible();
     // Attached rather than visible: a straight vertical edge has no width.
@@ -966,6 +973,7 @@ test('keeps work both ways readable, gives messages room, and shows the menus of
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
 
   // Work both ways between two agents: each arrow's count stays clear of the other's, and of the
   // agents' cards.

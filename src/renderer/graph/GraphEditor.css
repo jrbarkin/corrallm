@@ -1160,6 +1160,43 @@ input.graph-label {
   color: white;
 }
 
+/* A template's agents: each with its type, or the default; a hollow dot where it is left open. */
+.graph-template-agents {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 10px;
+}
+
+.graph-template-agents legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.graph-template-agent {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.graph-template-agent select {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 8px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+}
+
+.graph-example-agent:not([data-agent]) {
+  box-sizing: border-box;
+  border: 1.5px solid color-mix(in srgb, CanvasText 45%, transparent);
+  background: transparent;
+}
+
 /* A wait: a chip for each agent it waits for, with a button that takes it off. */
 .graph-queue-wait {
   flex-wrap: wrap;

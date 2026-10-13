@@ -1,6 +1,21 @@
 # corrallm
 
-Cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron Forge, Vite, React and TypeScript.
+**An orchestrator for coding agents that can adopt any agentic workflow, and combine them.**
+
+Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working. corrallm treats each one as a building block you can adopt, change, and run alongside the others.
+
+- **A canvas of agents.** Each agent is one of those CLIs, with its own session and a queue of work.
+- **Queues you can read.** Steps (the agent's own actions), messages, if-thens, and waits on other agents' work make the order and hand-offs of a workflow explicit, and editable.
+- **Templates.** A workflow, say a TDD relay where Codex writes the tests, Claude makes them pass and Codex refactors, is a template. Start a canvas from it, or insert it into a larger one as one group among others, so a single effort can mix a spec-driven planning group, two racing builders and a review panel. A template can name the CLI for each role, or leave a role open for whichever agent you choose.
+- **See it run.** All queues shows every agent's queue side by side: the task each is on, and where one waits for another.
+
+As models change, the workflows that work best change with them. corrallm is where you build, mix and run them.
+
+> **Status:** early. Agent sessions and runs are simulated for now; corrallm doesn't drive the real CLIs yet.
+
+## Development
+
+corrallm is a cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron Forge, Vite, React and TypeScript.
 
 ## Prerequisites
 

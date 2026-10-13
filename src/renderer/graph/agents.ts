@@ -134,3 +134,36 @@ export const AGENT_ACTIONS: Record<AgentType, readonly AgentAction[]> = {
     { name: '/rewind', description: 'Rewind the chat, file changes, or both' },
   ],
 };
+
+/**
+ * Actions that do the same job in each agent type that has one (running commands, editing,
+ * searching the web, reviewing, working in a worktree, handing work to a subagent, …), so that a
+ * step keeps its meaning when its agent's type changes, as when a template's role is given
+ * another agent (templates.ts).
+ */
+export const EQUIVALENT_ACTIONS: readonly Partial<Readonly<Record<AgentType, string>>>[] = [
+  { Claude: 'Bash', Codex: 'exec_command', Qwen: 'run_shell_command', Gemini: 'run_shell_command' },
+  { Claude: 'Edit', Codex: 'apply_patch', Qwen: 'edit', Gemini: 'replace' },
+  { Claude: 'Write', Qwen: 'write_file', Gemini: 'write_file' },
+  { Claude: 'Read', Qwen: 'read_file', Gemini: 'read_file' },
+  { Claude: 'Grep', Qwen: 'grep_search', Gemini: 'grep_search' },
+  { Claude: 'Glob', Qwen: 'glob', Gemini: 'glob' },
+  { Claude: 'WebSearch', Codex: 'web_search', Qwen: 'web_search', Gemini: 'google_web_search' },
+  { Claude: 'WebFetch', Qwen: 'web_fetch', Gemini: 'web_fetch' },
+  { Claude: '/code-review', Codex: '/review', Qwen: '/review' },
+  { Claude: 'EnterWorktree', Codex: '/worktree', Qwen: 'enter_worktree' },
+  { Claude: 'Agent', Codex: 'spawn_agent', Qwen: 'agent', Gemini: 'invoke_agent' },
+  { Claude: '/plan', Codex: '/plan', Qwen: '/plan', Gemini: '/plan' },
+  { Claude: '/init', Codex: '/init', Qwen: '/init', Gemini: '/init' },
+  { Claude: '/goal', Codex: '/goal', Qwen: '/goal' },
+];
+
+/** What agent type `to` calls the action `from` calls `action`, if it has one for the same job. */
+export function equivalentAction(
+  action: string,
+  from: AgentType,
+  to: AgentType,
+): string | undefined {
+  if (from === to) return action;
+  return EQUIVALENT_ACTIONS.find((job) => job[from] === action)?.[to];
+}

@@ -482,7 +482,7 @@ export function groupColors(nodes: readonly GraphNode[]): Map<string, number> {
 }
 
 /** The colour for a new group: the one fewest groups have, the first of those on a tie. */
-function nextGroupColor(nodes: readonly GraphNode[]): number {
+export function nextGroupColor(nodes: readonly GraphNode[]): number {
   const parentIds = new Set(nodes.map((n) => n.parentId));
   const uses = new Array<number>(GROUP_COLORS).fill(0);
   for (const n of nodes) {
@@ -694,7 +694,12 @@ function resized<T extends GraphNode>(node: T, { width, height }: Size): T {
 }
 
 /** The box around `nodes` (non-empty), in their parent's coordinates. */
-function bounds(nodes: readonly GraphNode[]): { x1: number; y1: number; x2: number; y2: number } {
+export function bounds(nodes: readonly GraphNode[]): {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+} {
   return {
     x1: Math.min(...nodes.map((n) => n.position.x)),
     y1: Math.min(...nodes.map((n) => n.position.y)),

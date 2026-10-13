@@ -60,11 +60,13 @@ import {
 } from './graph';
 import type { Graph } from './graph';
 import { ExampleGallery } from './ExampleGallery';
+import type { TemplateChoices } from './ExampleGallery';
 import { EXAMPLES } from './examples';
 import type { Example } from './examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from './file';
-import { fillTemplate } from './templates';
+import { fillTemplate, withAgents } from './templates';
+import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
 import type { KeyAction } from './keys';
@@ -144,6 +146,11 @@ export function GraphEditor({
 function reason(error: unknown): string {
   const message = error instanceof Error ? error.message : 'Unknown error';
   return message.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
+}
+
+/** A template as a canvas: its blanks filled in, and its agents given their types. */
+function fromTemplate(example: Example, { values, agents }: TemplateChoices): Graph {
+  return withAgents(fillTemplate(fromFile(example.text), values), agents);
 }
 
 function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFiles | undefined }) {
@@ -334,6 +341,12 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
     // React Flow holds the new nodes by now (its effects run first); it fits once they are measured.
     if (loads > 0) void fitView({ padding: 0.2, maxZoom: 1 });
   }, [loads, fitView]);
+  /** The group a template was last inserted as: the view moves to show it. */
+  const [inserted, setInserted] = useState<string>();
+  useEffect(() => {
+    if (inserted !== undefined)
+      void fitView({ nodes: [{ id: inserted }], padding: 0.3, maxZoom: 1 });
+  }, [inserted, fitView]);
 
   /** Replaces the canvas with one from a file (`name`), or a new one, and fits the view to it. */
   const load = useCallback(
@@ -386,10 +399,10 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
           }, failed('open the canvas'));
         });
       },
-      /** Opens a template as a new canvas, saved nowhere yet, its blanks filled from `values`. */
-      example: (example: Example, values: Readonly<Record<string, string>>, edited: boolean) => {
+      /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */
+      example: (example: Example, choices: TemplateChoices, edited: boolean) => {
         unless(edited, () => {
-          load(fillTemplate(fromFile(example.text), values), undefined);
+          load(fromTemplate(example, choices), undefined);
           files.forget().catch(failed('open the template'));
         });
       },
@@ -826,9 +839,23 @@ function Editor({ initialGraph, files }: { initialGraph: Graph; files: CanvasFil
         {gallery && (
           <ExampleGallery
             examples={EXAMPLES}
-            onPick={(example, values) => {
+            canInsert={graph.nodes.length > 0}
+            onPick={(example, choices, use) => {
               setGallery(false);
-              commands?.example(example, values, edited);
+              if (use === 'new') {
+                commands?.example(example, choices, edited);
+                return;
+              }
+              // Inserted as one group, beside what is there, and brought into view.
+              const group = crypto.randomUUID();
+              setGraph((g) =>
+                insertGraph(g, fromTemplate(example, choices), {
+                  group,
+                  name: example.name,
+                  newId: () => crypto.randomUUID(),
+                }),
+              );
+              setInserted(group);
             }}
             onClose={closeGallery}
           />

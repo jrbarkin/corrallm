@@ -10,7 +10,6 @@
         "x": 0,
         "y": 0
       },
-      "agent": "Claude",
       "queue": [
         {
           "id": "spec",
@@ -30,7 +29,6 @@
         "x": 0,
         "y": 220
       },
-      "agent": "Codex",
       "queue": [
         {
           "id": "planned",
@@ -47,7 +45,7 @@
         },
         {
           "id": "tests",
-          "action": "exec_command"
+          "action": "Bash"
         }
       ]
     },
@@ -59,7 +57,6 @@
         "x": 0,
         "y": 440
       },
-      "agent": "Claude",
       "queue": [
         {
           "id": "built",

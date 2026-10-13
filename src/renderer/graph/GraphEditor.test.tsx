@@ -679,6 +679,7 @@ describe('GraphEditor', () => {
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
       fireEvent.click(gallery.getByRole('button', { name: /^Team lead/ }));
+      fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(nodes().map((n) => n.textContent)).toContain('Lead');
       expect(files.forget).toHaveBeenCalled();
@@ -713,6 +714,36 @@ describe('GraphEditor', () => {
       expect(message.value).toBe(
         "Write Vitest tests for this, and nothing else: don't implement it.\n\nA slugify(text) helper in src/text.ts.\n\nPut them where this project keeps its tests, named the way the others are.",
       );
+    });
+
+    it('inserts a template into the canvas as a group, each agent of the type chosen', () => {
+      const { nodes, container } = setup(coder, fakeFiles());
+      fireEvent.click(button('Templates…'));
+      const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
+      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      // Each agent starts as the template names it; the Tester is left to the default agent.
+      const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
+      expect((tester as HTMLSelectElement).value).toBe('Codex');
+      fireEvent.change(tester, { target: { value: '' } });
+      fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(nodes().map((n) => n.textContent)).toEqual([
+        'Coder',
+        'TDD relay',
+        'Tester',
+        'Implementer',
+        'Refactorer',
+      ]);
+      const agentOf = (label: string) =>
+        [...container.querySelectorAll('.react-flow__node')]
+          .find((n) => n.textContent === label)
+          ?.querySelector('[data-agent]')
+          ?.getAttribute('data-agent');
+      expect(['Tester', 'Implementer', 'Refactorer'].map(agentOf)).toEqual([
+        'Claude',
+        'Claude',
+        'Codex',
+      ]);
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {

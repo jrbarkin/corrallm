@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { AGENT_ACTIONS, EQUIVALENT_ACTIONS } from './agents';
+import type { AgentType } from './agents';
 import type { Graph } from './graph';
-import { fillTemplate, placeholdersOf } from './templates';
+import { fillTemplate, placeholdersOf, withAgents } from './templates';
 
 const template: Graph = {
   nodes: [
@@ -51,5 +53,67 @@ describe('templates', () => {
     expect(fillTemplate(template, { feature: 'search' }).nodes[0]?.data.label).toBe(
       '{{language}} tester',
     );
+  });
+});
+
+describe('withAgents', () => {
+  const pinned: Graph = {
+    nodes: [
+      {
+        id: 'tester',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'Tester',
+          agent: 'Codex',
+          queue: [
+            { id: 'run', action: 'exec_command' },
+            { id: 'diff', action: '/diff' },
+            {
+              id: 'red',
+              if: { kind: 'failed' },
+              then: [{ id: 'patch', action: 'apply_patch' }],
+            },
+          ],
+        },
+      },
+      {
+        id: 'any',
+        type: 'agent',
+        position: { x: 0, y: 100 },
+        data: { label: 'Any', queue: [{ id: 'run', action: 'Bash' }] },
+      },
+    ],
+    edges: [],
+  };
+
+  it('gives each agent its chosen type, its steps the same job in that type where there is one', () => {
+    const [tester, any] = withAgents(pinned, { tester: 'Claude', any: 'Gemini' }).nodes;
+    expect(tester?.data.agent).toBe('Claude');
+    // Codex's /diff has no Claude equivalent: it stays, for the user to see and change.
+    expect(tester?.data.queue).toEqual([
+      { id: 'run', action: 'Bash' },
+      { id: 'diff', action: '/diff' },
+      { id: 'red', if: { kind: 'failed' }, then: [{ id: 'patch', action: 'Edit' }] },
+    ]);
+    expect(any?.data).toEqual({
+      label: 'Any',
+      agent: 'Gemini',
+      queue: [{ id: 'run', action: 'run_shell_command' }],
+    });
+  });
+
+  it('leaves an agent left open without a type, to be the default agent', () => {
+    const [tester] = withAgents(pinned, { tester: undefined }).nodes;
+    expect(tester?.data.agent).toBeUndefined();
+    expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash' });
+  });
+
+  it('only names, as equivalents, actions each agent type has', () => {
+    for (const job of EQUIVALENT_ACTIONS) {
+      for (const [type, action] of Object.entries(job)) {
+        expect(AGENT_ACTIONS[type as AgentType].map((a) => a.name)).toContain(action);
+      }
+    }
   });
 });
