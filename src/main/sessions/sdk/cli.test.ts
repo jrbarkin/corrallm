@@ -39,7 +39,7 @@ const LOGINS =
  * something else; resolves with it and what it said (in `events`).
  */
 async function start(
-  mode: 'manual' | 'acceptEdits' = 'manual',
+  mode: 'manual' | 'acceptEdits' | null = 'manual',
   login: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-test' },
   events: SessionEvent[] = [],
 ) {
@@ -122,6 +122,21 @@ describe('SdkConnector through the Agent SDK', () => {
     await session.interrupt();
     const ended = await waitFor(events, (e) => e.type === 'end');
     expect(ended).toMatchObject({ messages: [id], interrupted: true, failed: false });
+  });
+
+  it('starts in the user’s own default mode when none was chosen, as the CLI then says', async () => {
+    await mkdir(path.join(folder, '.claude'));
+    await writeFile(
+      path.join(folder, '.claude', 'settings.json'),
+      JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }),
+    );
+    const { session, events } = await start(null);
+    expect(events[0]).toMatchObject({ type: 'started', mode: 'acceptEdits' });
+    // Its turns run in it: an edit is not asked about, and no other mode is reported.
+    const id = '00000000-0000-4000-8000-00000000000c';
+    await session.send({ id, text: 'please edit it' });
+    await waitFor(events, (e) => e.type === 'end');
+    expect(events.some((e) => e.type === 'permission' || e.type === 'mode')).toBe(false);
   });
 
   it('does not start the session on a Claude subscription login, and says why', async () => {

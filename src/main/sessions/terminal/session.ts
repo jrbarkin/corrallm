@@ -169,7 +169,8 @@ export class TerminalSession implements LiveSession {
     this.#deps = deps;
     this.#id = spec.resume ?? randomUUID();
     this.#resuming = spec.resume !== null;
-    this.#mode = spec.mode;
+    // Until its hooks say otherwise: Manual, if the user's own default mode applies.
+    this.#mode = spec.mode ?? 'manual';
     this.#screen = this.#newScreen();
   }
 
@@ -194,7 +195,7 @@ export class TerminalSession implements LiveSession {
     this.#host.emit({
       type: 'started',
       model: this.#spec.model,
-      mode: this.#spec.mode,
+      mode: this.#mode,
       // The terminal is its own model picker.
       models: [],
     });
@@ -269,9 +270,10 @@ export class TerminalSession implements LiveSession {
       '--settings',
       settings,
       ...(this.#resuming ? ['--resume', this.#id] : ['--session-id', this.#id]),
-      ...(model === null ? [] : ['--model', model]),
-      // Manual is Claude Code's default: the user's own default mode (their settings) applies.
-      ...(mode === 'manual' ? [] : ['--permission-mode', mode]),
+      // Only what corrallm was given: otherwise the user's own default model and mode apply.
+      ...(model === null || model === 'default' ? [] : ['--model', model]),
+      // (Its flag takes corrallm's names: 'manual' among them, as of 2.1.296.)
+      ...(mode === null ? [] : ['--permission-mode', mode]),
     ];
     const pty = await this.#deps.spawn(this.#deps.claude, args, {
       cwd: this.#spec.cwd,

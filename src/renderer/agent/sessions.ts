@@ -158,13 +158,15 @@ export class SessionStore {
     onDone?.(true, '');
   }
 
+  /** The user chose a mode for the agent: its session switches to it, or starts in it. */
   setMode(agentId: string, mode: Mode): void {
-    this.#dispatch(agentId, { type: 'mode', mode });
+    this.#dispatch(agentId, { type: 'mode', mode, chosen: true });
     this.#drivers.get(agentId)?.driver.setMode(mode);
   }
 
+  /** The user chose a model for the agent: its session switches to it, or starts with it. */
   setModel(agentId: string, model: string): void {
-    this.#dispatch(agentId, { type: 'model', model });
+    this.#dispatch(agentId, { type: 'model', model, chosen: true });
     this.#drivers.get(agentId)?.driver.setModel(model);
   }
 

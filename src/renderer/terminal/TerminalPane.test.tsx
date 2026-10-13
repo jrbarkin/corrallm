@@ -95,7 +95,7 @@ describe('a Terminal agent', () => {
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
       connection: 'terminal',
       model: null,
-      mode: 'manual',
+      mode: null,
     });
     expect(terminals.backend.attach).toHaveBeenCalledWith('a');
 

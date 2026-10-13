@@ -21,6 +21,7 @@ import {
 } from './login';
 import { Prompts } from './prompts';
 import { SdkSession, Stderr, stopped } from './session';
+import { modeSettings } from './settings';
 import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
 
@@ -128,7 +129,6 @@ export class SdkConnector implements Connector {
     const inbox = new Inbox<SDKUserMessage>();
     const stderr = new Stderr();
     const translator = new Translator({ places });
-    translator.setMode(spec.mode);
     // Events before the session runs wait, so that 'started' comes first.
     const early: SessionEvent[] = [];
     const live: { session?: SdkSession } = {};
@@ -154,7 +154,8 @@ export class SdkConnector implements Connector {
       // Claude Code's own system prompt and settings: without them it is a bare agent.
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       settingSources: ['user', 'project', 'local'],
-      permissionMode: sdkMode(spec.mode),
+      // Only a mode the user chose: otherwise their own default mode applies, as in a terminal.
+      ...(spec.mode === null ? {} : { permissionMode: sdkMode(spec.mode) }),
       // So that the composer can switch to bypassing permissions, as Shift+Tab does.
       allowDangerouslySkipPermissions: true,
       canUseTool: prompts.canUseTool,
@@ -185,6 +186,10 @@ export class SdkConnector implements Connector {
     }));
     const current = model ?? (models.some((m) => m.value === 'default') ? 'default' : null);
     translator.setModels(init.models, current);
+    // The mode chosen, or the user's own default (the CLI says so again at its first turn).
+    const settings = await modeSettings(query);
+    const mode = spec.mode ?? settings.defaultMode ?? 'manual';
+    translator.setMode(mode);
     const session = new SdkSession({
       query,
       inbox,
@@ -192,10 +197,10 @@ export class SdkConnector implements Connector {
       translator,
       prompts,
       stderr,
-      mode: spec.mode,
+      mode,
     });
     live.session = session;
-    host.emit({ type: 'started', model: current, mode: spec.mode, models });
+    host.emit({ type: 'started', model: current, mode, models });
     host.emit({ type: 'commands', commands: SdkSession.commands(init.commands) });
     if (resume !== null) {
       const history = await this.#history(resume, places);

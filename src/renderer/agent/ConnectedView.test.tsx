@@ -91,7 +91,7 @@ describe('a connected agent', () => {
     expect(backend.start).toHaveBeenCalledWith('a', {
       connection: 'sdk',
       model: null,
-      mode: 'manual',
+      mode: null,
     });
 
     fireEvent.click(view.getByRole('button', { name: 'All queues' }));

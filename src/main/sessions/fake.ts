@@ -36,13 +36,10 @@ export class FakeConnector implements Connector {
     if (spec.resume !== null) {
       host.emit({ type: 'notice', id: randomUUID(), level: 'info', text: `Resumed ${id}` });
     }
-    host.emit({
-      type: 'started',
-      model: spec.model ?? 'default',
-      mode: spec.mode,
-      models: FAKE_MODELS,
-    });
-    return Promise.resolve(new FakeSession(spec.mode, host, this.#pause));
+    // Its user's own default mode is Manual.
+    const mode = spec.mode ?? 'manual';
+    host.emit({ type: 'started', model: spec.model ?? 'default', mode, models: FAKE_MODELS });
+    return Promise.resolve(new FakeSession(mode, host, this.#pause));
   }
 }
 

@@ -9,7 +9,7 @@ import type {
   UserMessage,
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
-import type { CanvasMemory } from '../memory';
+import type { CanvasMemory, Chosen, Remembered } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 
 const NO_PROJECT =
@@ -52,7 +52,9 @@ interface Agent {
  * starts an agent's session with its connection's connector (connector.ts), in the canvas's
  * project folder, resuming the agent's last session, and passes the renderer's requests on to it.
  * It remembers each agent's session id with the canvas's file (memory.ts), so that sessions survive
- * a restart. A canvas opened or forgotten, a new project folder, a renderer that goes, and the app
+ * a restart, and the model and mode the agent was given (at its start, or switched to since), so
+ * that it starts with them again; never bypassing permissions, which the user chooses afresh each
+ * time. A canvas opened or forgotten, a new project folder, a renderer that goes, and the app
  * quitting all end sessions.
  */
 export class SessionManager {
@@ -60,6 +62,8 @@ export class SessionManager {
   readonly #agents = new Map<WebContents, Map<string, Agent>>();
   /** Each renderer's agents' session ids: what starting an agent again resumes. */
   readonly #ids = new WeakMap<WebContents, Map<string, string>>();
+  /** The model and mode each renderer's agents were given: what starting them again uses. */
+  readonly #chosen = new WeakMap<WebContents, Map<string, Chosen>>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
   /**
@@ -84,9 +88,17 @@ export class SessionManager {
     const cwd = this.#deps.projectOf(contents);
     if (cwd === undefined) throw new Error(NO_PROJECT);
     this.#watch(contents);
+    // What the user chose now, or else what the agent was given before.
+    void this.#choose(contents, agentId, options);
+    const chosen = this.#chosenOf(contents).get(agentId);
+    const given: SessionOptions = {
+      connection: options.connection,
+      model: options.model ?? chosen?.model ?? null,
+      mode: options.mode ?? chosen?.mode ?? null,
+    };
     const agent: Agent = {
       connection: options.connection,
-      session: this.#launch(contents, agentId, cwd, options, () => agents.get(agentId) === agent),
+      session: this.#launch(contents, agentId, cwd, given, () => agents.get(agentId) === agent),
     };
     agents.set(agentId, agent);
     try {
@@ -116,12 +128,16 @@ export class SessionManager {
     await (await this.#session(contents, agentId)).interrupt();
   }
 
+  /** Switches the agent's session's mode: what it starts in next time too (but bypassing). */
   async setMode(contents: WebContents, agentId: string, mode: PermissionMode): Promise<void> {
     await (await this.#session(contents, agentId)).setMode(mode);
+    await this.#choose(contents, agentId, { mode });
   }
 
+  /** Switches the agent's session's model: what it starts with next time too. */
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
+    await this.#choose(contents, agentId, { model });
   }
 
   /**
@@ -165,26 +181,40 @@ export class SessionManager {
     if (agent) await this.#end(contents, agentId, agent, false);
   }
 
-  /** A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load. */
+  /**
+   * A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load, and
+   * what its agents were given.
+   */
   async canvasOpened(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
     const file = this.#deps.canvasOf(contents);
-    const { sessions } = file === undefined ? { sessions: {} } : await this.#deps.memory.get(file);
+    const { sessions, chosen = {} } =
+      file === undefined ? { sessions: {} } : await this.#deps.memory.get(file);
     this.#ids.set(contents, new Map(Object.entries(sessions)));
+    this.#chosen.set(contents, new Map(Object.entries(chosen)));
   }
 
   /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
   async canvasForgotten(contents: WebContents): Promise<void> {
     await this.#endAll(contents, true);
     this.#ids.set(contents, new Map());
+    this.#chosen.set(contents, new Map());
   }
 
-  /** The canvas was saved (maybe to a new file): the file remembers its agents' sessions. */
+  /**
+   * The canvas was saved (maybe to a new file): the file remembers its agents' sessions, and what
+   * they were given.
+   */
   async canvasSaved(contents: WebContents): Promise<void> {
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
     const sessions = Object.fromEntries(this.#idsOf(contents));
-    await this.#deps.memory.update(file, (remembered) => ({ ...remembered, sessions }));
+    const chosen = Object.fromEntries(this.#chosenOf(contents));
+    await this.#deps.memory.update(file, (remembered) => {
+      const next: Remembered = { ...remembered, sessions, chosen };
+      if (Object.keys(chosen).length === 0) delete next.chosen;
+      return next;
+    });
   }
 
   /** The canvas has a new project folder: its sessions end and are forgotten, to start afresh there. */
@@ -233,6 +263,37 @@ export class SessionManager {
       ...remembered,
       sessions: { ...remembered.sessions, [agentId]: sessionId },
     }));
+  }
+
+  /**
+   * Records what the user chose for an agent (each of `model` and `mode` that is not null), with
+   * the canvas's file if it has one. Choosing to bypass permissions forgets the mode instead: a
+   * session never starts bypassing them unless the user says so then.
+   */
+  async #choose(
+    contents: WebContents,
+    agentId: string,
+    { model = null, mode = null }: { model?: string | null; mode?: PermissionMode | null },
+  ): Promise<void> {
+    if (model === null && mode === null) return;
+    const all = this.#chosenOf(contents);
+    const { model: before, mode: was } = all.get(agentId) ?? {};
+    const kept = mode === null ? was : mode === 'bypassPermissions' ? undefined : mode;
+    const chosen: Chosen = {
+      ...((model ?? before) === undefined ? {} : { model: model ?? before }),
+      ...(kept === undefined ? {} : { mode: kept }),
+    };
+    if (Object.keys(chosen).length === 0) all.delete(agentId);
+    else all.set(agentId, chosen);
+    const file = this.#deps.canvasOf(contents);
+    if (file === undefined) return;
+    await this.#deps.memory.update(file, (remembered) => {
+      const others = Object.entries(remembered.chosen ?? {}).filter(([id]) => id !== agentId);
+      if (Object.keys(chosen).length > 0) others.push([agentId, chosen]);
+      const next: Remembered = { ...remembered, chosen: Object.fromEntries(others) };
+      if (others.length === 0) delete next.chosen;
+      return next;
+    });
   }
 
   /** Shows the agent's session's screen in the renderer's view, if it has a view and a screen. */
@@ -308,6 +369,15 @@ export class SessionManager {
       this.#agents.set(contents, agents);
     }
     return agents;
+  }
+
+  #chosenOf(contents: WebContents): Map<string, Chosen> {
+    let chosen = this.#chosen.get(contents);
+    if (!chosen) {
+      chosen = new Map();
+      this.#chosen.set(contents, chosen);
+    }
+    return chosen;
   }
 
   #idsOf(contents: WebContents): Map<string, string> {

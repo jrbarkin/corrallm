@@ -297,13 +297,15 @@ export class ConnectedDriver implements SessionDriver {
   #run(): Promise<void> {
     if (this.#closed) return Promise.reject(new Error('This session was closed.'));
     if (!this.#running) {
-      const { mode, model, models } = this.#io.session();
+      const { chosen = {}, models } = this.#io.session();
+      const model = models?.some((m) => m.value === chosen.model) ? chosen.model : undefined;
       const running = this.#backend
         .start(this.#agentId, {
           connection: this.connection,
-          // A model it offered before; otherwise the CLI's default.
-          model: models?.some((m) => m.value === model) ? model : null,
-          mode,
+          // What the user chose here (a model a connected session offered); main fills in the
+          // rest: what the agent was given before, or the user's own defaults.
+          model: model ?? null,
+          mode: chosen.mode ?? null,
         })
         .then(() => undefined);
       running.catch(() => {

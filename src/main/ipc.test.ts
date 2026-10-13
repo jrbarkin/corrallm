@@ -213,6 +213,10 @@ describe('session:* handlers', () => {
     expect([contents, agentId, given]).toEqual([sender, 'a', options]);
     // Built afresh: nothing the renderer sent is passed on as it came.
     expect(given).not.toBe(options);
+    // No model or mode chosen: main's to decide (what the agent last chose, or the user's own).
+    const unchosen = { connection: 'terminal', model: null, mode: null };
+    await invoke('session:start', ['b', unchosen], sender);
+    expect(services.sessions.start).toHaveBeenLastCalledWith(sender, 'b', unchosen);
 
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
     expect(services.sessions.send).toHaveBeenCalledWith(sender, 'a', { id: 'm1', text: 'Hi' });

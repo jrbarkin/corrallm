@@ -32,6 +32,19 @@ describe('CanvasMemory', () => {
     expect(await readdir(dir)).toEqual(['canvases.json']);
   });
 
+  it('remembers the model and mode each agent was given', async () => {
+    const memory = new CanvasMemory(file);
+    await memory.update('/work/team.corral', (m) => ({
+      ...m,
+      sessions: { a: 'id-a' },
+      chosen: { a: { model: 'haiku', mode: 'plan' }, b: { mode: 'acceptEdits' } },
+    }));
+    expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
+      sessions: { a: 'id-a' },
+      chosen: { a: { model: 'haiku', mode: 'plan' }, b: { mode: 'acceptEdits' } },
+    });
+  });
+
   it('applies updates made together in order, losing none', async () => {
     const memory = new CanvasMemory(file);
     await Promise.all(
@@ -70,20 +83,38 @@ describe('CanvasMemory', () => {
       JSON.stringify({
         version: 1,
         canvases: {
-          '/good.corral': { project: '/p', sessions: { a: 'id', b: 42 } },
+          '/good.corral': {
+            project: '/p',
+            sessions: { a: 'id', b: 42 },
+            chosen: {
+              a: { model: 'haiku', mode: 'yolo' },
+              b: { model: 'rm -rf /', mode: 'plan' },
+              c: 'fast',
+            },
+          },
           '/bad.corral': { project: 7 },
           '/worse.corral': 'nope',
         },
       }),
     );
     const memory = new CanvasMemory(file);
-    expect(await memory.get('/good.corral')).toEqual({ project: '/p', sessions: { a: 'id' } });
+    expect(await memory.get('/good.corral')).toEqual({
+      project: '/p',
+      sessions: { a: 'id' },
+      chosen: { a: { model: 'haiku' }, b: { mode: 'plan' } },
+    });
     expect(await memory.get('/bad.corral')).toEqual({ sessions: {} });
     expect(await memory.get('/worse.corral')).toEqual({ sessions: {} });
     await memory.update('/good.corral', (m) => m);
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
       version: 1,
-      canvases: { '/good.corral': { project: '/p', sessions: { a: 'id' } } },
+      canvases: {
+        '/good.corral': {
+          project: '/p',
+          sessions: { a: 'id' },
+          chosen: { a: { model: 'haiku' }, b: { mode: 'plan' } },
+        },
+      },
     });
   });
 });

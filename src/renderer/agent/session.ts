@@ -122,6 +122,12 @@ export interface Session {
   mode: Mode;
   /** The model picked for it; null for its agent's default. */
   model: string | null;
+  /**
+   * The mode and model the user chose for it here (in its composer), as opposed to what its
+   * session said: what a connected session is started with. Anything not chosen is main's to fill
+   * in (what the agent was given before, else the user's own default).
+   */
+  chosen?: { mode?: Mode; model?: string };
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
   /** What a connected session has used, as it last said. */
@@ -172,8 +178,9 @@ export type SessionAction =
   | { type: 'end'; id: string; seconds: number; interrupted: boolean; failed?: boolean }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
-  | { type: 'mode'; mode: Mode }
-  | { type: 'model'; model: string }
+  /** The mode or model: `chosen` when the user chose it, rather than the session saying so. */
+  | { type: 'mode'; mode: Mode; chosen?: boolean }
+  | { type: 'model'; model: string; chosen?: boolean }
   /** A connected session started: the models it offers, and its model and mode. */
   | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
   | { type: 'usage'; usage: SessionUsage }
@@ -286,9 +293,17 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'unqueue':
       return { ...session, queued: session.queued.filter((q) => q.id !== action.id) };
     case 'mode':
-      return { ...session, mode: action.mode };
+      return {
+        ...session,
+        mode: action.mode,
+        ...(action.chosen === true ? { chosen: { ...session.chosen, mode: action.mode } } : {}),
+      };
     case 'model':
-      return { ...session, model: action.model };
+      return {
+        ...session,
+        model: action.model,
+        ...(action.chosen === true ? { chosen: { ...session.chosen, model: action.model } } : {}),
+      };
     case 'connected':
       return { ...session, models: action.models, model: action.model, mode: action.mode };
     case 'usage':

@@ -16,7 +16,7 @@ import { SessionManager } from './manager';
 /** A stand-in for a renderer's web contents: the manager keys sessions by it, and hears it go. */
 const renderer = () => new EventEmitter() as unknown as Electron.WebContents;
 
-const OPTIONS: SessionOptions = { connection: 'sdk', model: null, mode: 'manual' };
+const OPTIONS: SessionOptions = { connection: 'sdk', model: null, mode: null };
 
 let dir: string;
 let memory: CanvasMemory;
@@ -160,6 +160,61 @@ describe('SessionManager', () => {
     // Another agent starts afresh.
     await after.start(reopened, 'b', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBeNull();
+  });
+
+  it('starts an agent with the model and mode it was last given, after a restart too', async () => {
+    const before = manager();
+    const contents = window('/work/team.corral');
+    // Nothing chosen: the CLI's default model, and the user's own default mode.
+    await before.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)).toMatchObject({ model: null, mode: null });
+    await before.setModel(contents, 'a', 'fast');
+    await before.setMode(contents, 'a', 'plan');
+    // Chosen before it started: given at the start.
+    await before.start(contents, 'b', { ...OPTIONS, mode: 'acceptEdits' });
+    await before.closeEverything();
+
+    const after = manager();
+    const reopened = window('/work/team.corral');
+    await after.canvasOpened(reopened);
+    await after.start(reopened, 'a', OPTIONS);
+    expect(fake.started.at(-1)).toMatchObject({ agentId: 'a', model: 'fast', mode: 'plan' });
+    await after.start(reopened, 'b', { ...OPTIONS, connection: 'terminal' });
+    expect(terminal.started.at(-1)).toMatchObject({
+      agentId: 'b',
+      model: null,
+      mode: 'acceptEdits',
+    });
+    // What the renderer chose now wins, and is what is remembered next.
+    await after.close(reopened, 'a');
+    await after.start(reopened, 'a', { ...OPTIONS, model: 'default' });
+    expect(fake.started.at(-1)).toMatchObject({ model: 'default', mode: 'plan' });
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).chosen?.a).toEqual({
+      model: 'default',
+      mode: 'plan',
+    });
+  });
+
+  it('never starts an agent bypassing permissions because it did before', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
+    await sessions.setMode(contents, 'a', 'bypassPermissions');
+    await sessions.close(contents, 'a');
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.mode).toBeNull();
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).chosen?.a).toBeUndefined();
+  });
+
+  it('forgets the model and mode chosen when the canvas is replaced by a new one', async () => {
+    const sessions = manager();
+    const contents = window();
+    await sessions.start(contents, 'a', { ...OPTIONS, mode: 'plan' });
+    await sessions.canvasForgotten(contents);
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.mode).toBeNull();
   });
 
   it('remembers the sessions of a canvas first saved after they started', async () => {

@@ -29,9 +29,13 @@ export interface SessionSpec {
   cwd: string;
   /** The environment its process gets: the user's login shell's, cleaned (environment.ts). */
   env: Readonly<Record<string, string>>;
-  /** The model to start with, or null for the CLI's default. */
+  /** The model to start with, or null for the CLI's default ('default' is that too). */
   model: string | null;
-  mode: PermissionMode;
+  /**
+   * The mode to start in, or null for the user's own default mode (their settings'): the session
+   * says which it is ('started', then 'mode' if the CLI says otherwise).
+   */
+  mode: PermissionMode | null;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
 }

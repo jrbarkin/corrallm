@@ -77,7 +77,7 @@ if (args[0] === 'auth' && args[1] === 'status') {
 }
 
 const sessionId = option('--resume') ?? option('--session-id') ?? randomUUID();
-let mode = option('--permission-mode') ?? 'default';
+let mode = option('--permission-mode') ?? projectSettings().permissions.defaultMode ?? 'default';
 let model = option('--model') ?? 'claude-opus-5-5';
 let cost = 0;
 /** The turn going on, if any: whether it was interrupted. */
@@ -476,6 +476,12 @@ input.on('line', (line) => {
         status: null,
         permissionMode: mode,
         uuid: randomUUID(),
+      });
+    } else if (subtype === 'get_settings') {
+      respond(message.request_id, {
+        effective: projectSettings(),
+        sources: [],
+        applied: { model, effort: null },
       });
     } else if (subtype === 'set_model') {
       model = message.request.model ?? 'claude-opus-5-5';

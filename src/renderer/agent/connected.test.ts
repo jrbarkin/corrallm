@@ -39,6 +39,37 @@ describe('a connected session', () => {
     await settle();
   });
 
+  it('starts with only what the user chose here: main fills in what the agent was given before', async () => {
+    const { store, backend, emit } = connected();
+    // A model picked while it was simulated is not one the CLI offers: not passed on.
+    store.setModel('a', 'Opus 5.5');
+    store.open('a');
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'sdk',
+      model: null,
+      mode: null,
+    });
+    const models = [
+      { value: 'default', label: 'Default' },
+      { value: 'haiku', label: 'Haiku' },
+    ];
+    // Main started it in the mode it was given last time, which the session shows.
+    emit('a', 'sdk', { type: 'started', model: 'default', mode: 'plan', models });
+    expect(store.of('a')).toMatchObject({ mode: 'plan', model: 'default' });
+    await settle();
+
+    // Once it stops, it starts again with what the user has chosen since.
+    store.setModel('a', 'haiku');
+    emit('a', 'sdk', { type: 'closed' }, { type: 'mode', mode: 'acceptEdits' });
+    store.open('a');
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'sdk',
+      model: 'haiku',
+      mode: null,
+    });
+    await settle();
+  });
+
   it('sends a message, streams the reply into the transcript, and hears when the turn ends', async () => {
     const { store, backend, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();

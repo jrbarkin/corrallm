@@ -46,6 +46,9 @@ class FakeQuery {
     this.finish();
   });
   initialization: Promise<unknown> = Promise.resolve(INIT);
+  /** The CLI's settings, merged, as get_settings answers (the runtime's getSettings()). */
+  settings: unknown = { effective: {} };
+  readonly getSettings = vi.fn(() => Promise.resolve(this.settings));
   readonly #messages: (SDKMessage | Error | null)[] = [];
   #wake: (() => void) | undefined;
 
@@ -248,6 +251,36 @@ describe('SdkConnector', () => {
       description: 'Free up context by summarizing the conversation so far',
       argumentHint: '<optional custom summarization instructions>',
     });
+  });
+
+  it('starts in the user’s own default mode when none was chosen, saying which it is', async () => {
+    const { sdk, host, query, events } = connector({
+      prepare: (q) => {
+        q.settings = { effective: { permissions: { defaultMode: 'acceptEdits' } }, sources: [] };
+      },
+    });
+    await sdk.start({ ...SPEC, mode: null }, host);
+    expect(query().options).not.toHaveProperty('permissionMode');
+    expect(events[0]).toMatchObject({ type: 'started', mode: 'acceptEdits' });
+  });
+
+  it('says Manual when the CLI says nothing of its default mode, and a chosen mode wins', async () => {
+    const quiet = connector({
+      prepare: (q) => {
+        q.getSettings.mockRejectedValue(new Error('Unknown request: get_settings'));
+      },
+    });
+    await quiet.sdk.start({ ...SPEC, mode: null }, quiet.host);
+    expect(quiet.events[0]).toMatchObject({ type: 'started', mode: 'manual' });
+
+    const chosen = connector({
+      prepare: (q) => {
+        q.settings = { effective: { permissions: { defaultMode: 'acceptEdits' } } };
+      },
+    });
+    await chosen.sdk.start({ ...SPEC, mode: 'plan' }, chosen.host);
+    expect(chosen.query().options.permissionMode).toBe('plan');
+    expect(chosen.events[0]).toMatchObject({ type: 'started', mode: 'plan' });
   });
 
   it('starts with the model picked', async () => {

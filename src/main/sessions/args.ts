@@ -39,7 +39,7 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const parsed: SessionOptions = {
     connection: oneOf(connection, CONNECTIONS, 'connection'),
     model: model === null ? null : parseModel(model),
-    mode: parseMode(mode),
+    mode: mode === null ? null : parseMode(mode),
   };
   return [parseId(agentId, 'agent'), parsed];
 }

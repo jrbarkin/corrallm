@@ -49,12 +49,22 @@ export interface ModelChoice {
   description?: string;
 }
 
-/** How a session is started. Main picks the folder (the canvas's project) and what it resumes. */
+/**
+ * How a session is started. Main picks the folder (the canvas's project) and what it resumes, and
+ * remembers the model and mode each agent was given, so that it starts with them again.
+ */
 export interface SessionOptions {
   connection: Connection;
-  /** The model to start with (a value its models gave before), or null for the CLI's default. */
+  /**
+   * The model the user chose (a value its models gave), or null: the one the agent was last given,
+   * else the CLI's default.
+   */
   model: string | null;
-  mode: PermissionMode;
+  /**
+   * The mode the user chose, or null: the one the agent was last given, else the user's own
+   * default mode (their Claude Code settings).
+   */
+  mode: PermissionMode | null;
 }
 
 /** The kinds of image the user can paste into a message (those Claude reads). */

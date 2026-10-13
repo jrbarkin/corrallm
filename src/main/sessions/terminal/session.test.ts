@@ -45,7 +45,7 @@ const SPEC: SessionSpec = {
   cwd: '/work/app',
   env: { PATH: '/usr/bin', HOME: '/home/me', CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' },
   model: null,
-  mode: 'manual',
+  mode: null,
   resume: null,
 };
 
@@ -136,6 +136,12 @@ describe('a Terminal session', () => {
     await start({ mode: 'plan', model: 'haiku' });
     expect(claude().arg('--permission-mode')).toBe('plan');
     expect(claude().arg('--model')).toBe('haiku');
+  });
+
+  it('starts in Manual when that was chosen, whatever the user’s default; the default model as such', async () => {
+    await start({ mode: 'manual', model: 'default' });
+    expect(claude().arg('--permission-mode')).toBe('manual');
+    expect(claude().args).not.toContain('--model');
   });
 
   it('answers Claude Code’s status probe, and its device query while no view shows it', async () => {

@@ -1,10 +1,24 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 
-/** What main remembers of a canvas file: its project folder, and its agents' sessions' ids. */
+import { MODEL_PATTERN, PERMISSION_MODES } from '../shared/session';
+import type { PermissionMode } from '../shared/session';
+
+/** The model and mode an agent was given (each only if it was): it starts with them again. */
+export interface Chosen {
+  model?: string;
+  mode?: PermissionMode;
+}
+
+/**
+ * What main remembers of a canvas file: its project folder, its agents' sessions' ids, and the
+ * model and mode each agent was given.
+ */
 export interface Remembered {
   project?: string;
   /** The id of each agent's Claude Code session, by agent id: resumed when the agent starts. */
   sessions: Readonly<Record<string, string>>;
+  /** What each agent was given, by agent id: what its session starts with. */
+  chosen?: Readonly<Record<string, Chosen>>;
 }
 
 const NOTHING: Remembered = { sessions: {} };
@@ -17,7 +31,8 @@ const VERSION = 1;
  * app's user data. The canvas file itself only holds what the canvas means (src/renderer/graph/
  * file.ts), so it can be shared: where it runs on this machine is kept here.
  *
- *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id } } } }
+ *   { "version": 1, "canvases": { "<canvas path>": {
+ *       "project"?, "sessions": { "<agent>": id }, "chosen"?: { "<agent>": { "model"?, "mode"? } } } } }
  *
  * Updates are applied one at a time, in order, and written whole (beside it, then moved over it).
  */
@@ -91,17 +106,36 @@ function parse(text: string): Map<string, Remembered> {
   if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     if (!isRecord(value)) continue;
-    const { project, sessions } = value;
+    const { project, sessions, chosen } = value;
     if (project !== undefined && typeof project !== 'string') continue;
     const ids = Object.entries(isRecord(sessions) ? sessions : {}).filter(
       (entry): entry is [string, string] => typeof entry[1] === 'string',
     );
+    const choices = Object.entries(isRecord(chosen) ? chosen : {}).flatMap(
+      ([agent, given]): [string, Chosen][] => {
+        const parsed = parseChosen(given);
+        return parsed === undefined ? [] : [[agent, parsed]];
+      },
+    );
     canvases.set(canvas, {
       ...(project === undefined ? {} : { project }),
       sessions: Object.fromEntries(ids),
+      ...(choices.length === 0 ? {} : { chosen: Object.fromEntries(choices) }),
     });
   }
   return canvases;
+}
+
+/** The model and mode an entry gives, those that are right; undefined if neither is. */
+function parseChosen(value: unknown): Chosen | undefined {
+  if (!isRecord(value)) return undefined;
+  const { model, mode } = value;
+  const known = PERMISSION_MODES.find((m) => m === mode);
+  const chosen: Chosen = {
+    ...(typeof model === 'string' && MODEL_PATTERN.test(model) ? { model } : {}),
+    ...(known === undefined ? {} : { mode: known }),
+  };
+  return Object.keys(chosen).length === 0 ? undefined : chosen;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
