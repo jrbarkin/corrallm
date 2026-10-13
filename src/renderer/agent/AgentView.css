@@ -699,6 +699,45 @@
  * What the queues' run holds the agent for the user to decide (an OK), right above the message box,
  * amber like an agent asking on the canvas: what is written below answers it, or a choice.
  */
+/* Bypassing permissions, picked from the mode menu: confirmed first. */
+.agent-bypass {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #dc2626 55%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #dc2626 8%, Canvas);
+  font-size: 13px;
+}
+
+.agent-bypass p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.agent-bypass button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-bypass button[data-danger] {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: white;
+}
+
+.agent-bypass button[data-danger]:hover {
+  background: color-mix(in srgb, #dc2626 80%, black);
+}
+
 .agent-ok {
   display: flex;
   flex-wrap: wrap;

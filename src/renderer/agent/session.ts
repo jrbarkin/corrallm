@@ -37,7 +37,11 @@ export type {
 /** When the agent asks before acting: Claude Code's permission modes (its settings' names). */
 export type Mode = PermissionMode;
 
-/** The modes as Claude Code's desktop app names them, in the order Shift+Tab cycles them. */
+/**
+ * The modes as Claude Code's desktop app names them, in its order. Shift+Tab cycles them, all but
+ * bypassing permissions (CYCLED_MODES), which is chosen from the mode menu, once confirmed, as
+ * Claude Code offers it only when told to.
+ */
 export const MODES: readonly { mode: Mode; label: string; description: string }[] = [
   { mode: 'manual', label: 'Manual', description: 'Asks before editing files or running commands' },
   {
@@ -49,6 +53,11 @@ export const MODES: readonly { mode: Mode; label: string; description: string }[
   { mode: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks' },
   { mode: 'auto', label: 'Auto', description: 'Decides for itself what needs your approval' },
 ];
+
+/** The modes Shift+Tab cycles, in order: never bypassing permissions. */
+export const CYCLED_MODES: readonly Mode[] = MODES.flatMap(({ mode }) =>
+  mode === 'bypassPermissions' ? [] : [mode],
+);
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';
@@ -130,6 +139,8 @@ export interface Session {
   chosen?: { mode?: Mode; model?: string };
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
+  /** The modes a connected session can switch to, when not all (bypassing turned off). */
+  modes?: readonly Mode[];
   /** What a connected session has used, as it last said. */
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
@@ -181,8 +192,14 @@ export type SessionAction =
   /** The mode or model: `chosen` when the user chose it, rather than the session saying so. */
   | { type: 'mode'; mode: Mode; chosen?: boolean }
   | { type: 'model'; model: string; chosen?: boolean }
-  /** A connected session started: the models it offers, and its model and mode. */
-  | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
+  /** A connected session started: the models (and modes, if not all) it offers, its model and mode. */
+  | {
+      type: 'connected';
+      models: readonly ModelChoice[];
+      model: string | null;
+      mode: Mode;
+      modes?: readonly Mode[];
+    }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
   /** What a resumed session did before: entries put ahead of the transcript's. */
@@ -304,8 +321,13 @@ export function reduce(session: Session, action: SessionAction): Session {
         model: action.model,
         ...(action.chosen === true ? { chosen: { ...session.chosen, model: action.model } } : {}),
       };
-    case 'connected':
-      return { ...session, models: action.models, model: action.model, mode: action.mode };
+    case 'connected': {
+      const { models, model, mode, modes } = action;
+      const next: Session = { ...session, models, model, mode };
+      if (modes === undefined) delete next.modes;
+      else next.modes = modes;
+      return next;
+    }
     case 'usage':
       return { ...session, usage: action.usage };
     case 'commands':

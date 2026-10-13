@@ -8,6 +8,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import { PERMISSION_MODES } from '../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../shared/session';
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
@@ -156,7 +157,8 @@ export class SdkConnector implements Connector {
       settingSources: ['user', 'project', 'local'],
       // Only a mode the user chose: otherwise their own default mode applies, as in a terminal.
       ...(spec.mode === null ? {} : { permissionMode: sdkMode(spec.mode) }),
-      // So that the composer can switch to bypassing permissions, as Shift+Tab does.
+      // So that the mode menu can switch to bypassing permissions once the user confirms it (it
+      // is never in the Shift+Tab cycle, as in Claude Code without this flag).
       allowDangerouslySkipPermissions: true,
       canUseTool: prompts.canUseTool,
       includePartialMessages: true,
@@ -200,7 +202,16 @@ export class SdkConnector implements Connector {
       mode,
     });
     live.session = session;
-    host.emit({ type: 'started', model: current, mode, models });
+    host.emit({
+      type: 'started',
+      model: current,
+      mode,
+      models,
+      // Bypassing permissions is not offered where the CLI's settings turn it off.
+      ...(settings.bypassDisabled
+        ? { modes: PERMISSION_MODES.filter((m) => m !== 'bypassPermissions') }
+        : {}),
+    });
     host.emit({ type: 'commands', commands: SdkSession.commands(init.commands) });
     if (resume !== null) {
       const history = await this.#history(resume, places);

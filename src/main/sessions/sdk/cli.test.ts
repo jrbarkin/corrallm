@@ -139,6 +139,21 @@ describe('SdkConnector through the Agent SDK', () => {
     expect(events.some((e) => e.type === 'permission' || e.type === 'mode')).toBe(false);
   });
 
+  it('leaves bypassing permissions out where the project’s settings turn it off, as the CLI does', async () => {
+    await mkdir(path.join(folder, '.claude'));
+    await writeFile(
+      path.join(folder, '.claude', 'settings.json'),
+      JSON.stringify({ permissions: { disableBypassPermissionsMode: 'disable' } }),
+    );
+    const { session, events } = await start();
+    expect(events[0]).toMatchObject({
+      type: 'started',
+      modes: ['manual', 'acceptEdits', 'plan', 'auto'],
+    });
+    await expect(session.setMode('bypassPermissions')).rejects.toThrow(/disabled by settings/);
+    expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
   it('does not start the session on a Claude subscription login, and says why', async () => {
     const events: SessionEvent[] = [];
     await expect(start('manual', {}, events)).rejects.toThrow(SUBSCRIPTION_LOGIN);

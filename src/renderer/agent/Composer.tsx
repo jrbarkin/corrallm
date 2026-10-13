@@ -6,7 +6,7 @@ import type { ImageType } from '../../shared/session';
 import { AgentType } from '../graph/agents';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
-import { MODES } from './session';
+import { CYCLED_MODES, MODES } from './session';
 import type { MessageImage, Mode, ModelChoice, Session, SessionUsage } from './session';
 
 /** What the composer does to its agent's session (sessions.ts). */
@@ -46,10 +46,12 @@ const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Defau
 
 /**
  * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
- * line, Shift+Tab switches mode. While the agent works, Enter queues the message (shown above, ✕
- * takes it back to edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the
- * permission mode, the model (a connected session's own models, once it has started), what a
- * connected session has used, and Send (or Stop).
+ * line, Shift+Tab switches mode (never into bypassing permissions). While the agent works, Enter
+ * queues the message (shown above, ✕ takes it back to edit) and Esc interrupts; otherwise Esc
+ * clears the draft. Under the box: the permission mode (its menu offers bypassing permissions,
+ * once the user confirms it, unless the session says its settings turn it off), the model (a
+ * connected session's own models, once it has started), what a connected session has used, and
+ * Send (or Stop).
  *
  * A connected session's composer also completes slash commands ("/" at the start: Tab puts one
  * in, Enter runs it) and file mentions ("@": the project folder's files), and takes images pasted
@@ -82,6 +84,8 @@ export function Composer({
   const [caret, setCaret] = useState(0);
   const [images, setImages] = useState<Attachment[]>([]);
   const [problem, setProblem] = useState<string>();
+  /** Whether it asks the user to confirm bypassing permissions, picked from the mode menu. */
+  const [confirming, setConfirming] = useState(false);
   /** The completion picked in the menu, by its place. */
   const [active, setActive] = useState(0);
   /** The draft as it was when Esc closed the menu: it stays closed until the draft changes. */
@@ -102,6 +106,18 @@ export function Composer({
       : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
   const model = models.find((m) => m.value === session.model) ?? models[0];
   const mode = MODES.find((m) => m.mode === session.mode) ?? MODES[0];
+  /** The modes it can switch to: all, unless the session said otherwise. */
+  const modes = MODES.filter((m) => session.modes?.includes(m.mode) ?? true);
+  /** Switches to a mode picked from the menu: bypassing permissions only once confirmed. */
+  const pickMode = (picked: Mode) => {
+    if (picked === 'bypassPermissions' && session.mode !== picked) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
+    controls.setMode(picked);
+    field.current?.focus();
+  };
 
   const at: Completing | undefined = connected ? completing(draft, caret) : undefined;
   const mention = at?.kind === 'file' ? at.query : undefined;
@@ -228,6 +244,47 @@ export function Composer({
         </ul>
       )}
       {above}
+      {confirming && (
+        <div
+          className="agent-bypass"
+          role="alertdialog"
+          aria-label="Bypass permissions?"
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return;
+            // Esc says no, and leaves the view open.
+            event.stopPropagation();
+            setConfirming(false);
+            field.current?.focus();
+          }}
+        >
+          <p>
+            <strong>Bypass permissions?</strong> {agentName} won’t ask before it edits files or runs
+            commands, so use it only where mistakes are easy to undo.
+          </p>
+          <button
+            type="button"
+            data-danger=""
+            // It asks for the user's attention: the keyboard comes here.
+            autoFocus
+            onClick={() => {
+              setConfirming(false);
+              controls.setMode('bypassPermissions');
+              field.current?.focus();
+            }}
+          >
+            Bypass permissions
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConfirming(false);
+              field.current?.focus();
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       <div
         className="agent-input"
         onDragOver={(event: DragEvent) => {
@@ -346,9 +403,10 @@ export function Composer({
               submit();
             } else if (event.key === 'Tab' && event.shiftKey) {
               event.preventDefault();
-              const at = MODES.findIndex((m) => m.mode === session.mode);
-              const next = MODES[(at + 1) % MODES.length];
-              if (next) controls.setMode(next.mode);
+              // Never into bypassing permissions; out of it, back to the first.
+              const cycle = CYCLED_MODES.filter((m) => modes.some((offered) => offered.mode === m));
+              const next = cycle[(cycle.indexOf(session.mode) + 1) % cycle.length];
+              if (next !== undefined) controls.setMode(next);
             } else if (event.key === 'Escape' && (working || draft !== '' || images.length > 0)) {
               // Otherwise Esc goes on to close the view.
               event.stopPropagation();
@@ -365,12 +423,11 @@ export function Composer({
             label="Mode"
             value={mode?.label ?? ''}
             title={`${mode?.description ?? ''} (Shift+Tab to switch)`}
-            choices={MODES.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
+            choices={modes.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
             chosen={session.mode}
             onChoose={(key) => {
-              const picked = MODES.find((m) => m.mode === key);
-              if (picked) controls.setMode(picked.mode);
-              field.current?.focus();
+              const picked = modes.find((m) => m.mode === key);
+              if (picked) pickMode(picked.mode);
             }}
           />
           <ChoiceMenu

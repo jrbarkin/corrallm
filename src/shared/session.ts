@@ -145,8 +145,18 @@ export interface SessionUsage {
  * the Agent tool call a subagent's entry belongs to.
  */
 export type SessionEvent =
-  /** The session runs (started, or resumed): its model and mode, and the models it offers. */
-  | { type: 'started'; model: string | null; mode: PermissionMode; models: ModelChoice[] }
+  /**
+   * The session runs (started, or resumed): its model and mode, and the models it offers.
+   * `modes`: the modes it can switch to, when not all of them (bypassing permissions turned off
+   * in the user's or their organization's settings).
+   */
+  | {
+      type: 'started';
+      model: string | null;
+      mode: PermissionMode;
+      models: ModelChoice[];
+      modes?: PermissionMode[];
+    }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }
   /**

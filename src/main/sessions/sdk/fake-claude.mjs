@@ -468,6 +468,23 @@ input.on('line', (line) => {
       if (turn) turn.interrupted = true;
       respond(message.request_id, { still_queued: [] });
     } else if (subtype === 'set_permission_mode') {
+      if (
+        message.request.mode === 'bypassPermissions' &&
+        projectSettings().permissions.disableBypassPermissionsMode === 'disable'
+      ) {
+        process.stdout.write(
+          `${JSON.stringify({
+            type: 'control_response',
+            response: {
+              subtype: 'error',
+              request_id: message.request_id,
+              error:
+                'Cannot set permission mode to bypassPermissions because it is disabled by settings or configuration',
+            },
+          })}\n`,
+        );
+        return;
+      }
       mode = message.request.mode;
       respond(message.request_id, {});
       say({

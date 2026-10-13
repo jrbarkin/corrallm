@@ -158,6 +158,50 @@ describe('the agent view', () => {
     expect(transcript.getByRole('group', { name: 'Bash command: npm test' })).toBeTruthy();
   });
 
+  it('never switches into bypassing permissions with Shift+Tab', () => {
+    const { view, composer } = open();
+    const mode = () => view.getByRole('button', { name: /^Mode: / }).getAttribute('aria-label');
+    const seen = [mode()];
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+      seen.push(mode());
+    }
+    expect(seen).toEqual([
+      'Mode: Manual',
+      'Mode: Accept edits',
+      'Mode: Plan',
+      'Mode: Auto',
+      'Mode: Manual',
+    ]);
+  });
+
+  it('bypasses permissions from the mode menu only once it is confirmed', () => {
+    const { view, composer } = open();
+    const menu = () => view.getByRole('button', { name: /^Mode: / });
+    fireEvent.click(menu());
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    const confirm = within(view.getByRole('alertdialog', { name: 'Bypass permissions?' }));
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Manual');
+    fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }));
+    expect(view.queryByRole('alertdialog')).toBeNull();
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Manual');
+
+    // Escape says no too, and leaves the view open.
+    fireEvent.click(menu());
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    fireEvent.keyDown(view.getByRole('button', { name: 'Bypass permissions' }), { key: 'Escape' });
+    expect(view.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+
+    fireEvent.click(menu());
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    fireEvent.click(view.getByRole('button', { name: 'Bypass permissions' }));
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Bypass permissions');
+    // Out of it with Shift+Tab, to Manual.
+    fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
+    expect(menu().getAttribute('aria-label')).toBe('Mode: Manual');
+  });
+
   it('asks for your OK above the composer while the run holds it, where what you send asks for changes', () => {
     render(
       <GraphEditor

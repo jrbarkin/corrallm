@@ -171,6 +171,32 @@ describe('a connected agent', () => {
     expect(openLink).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/queues');
   });
 
+  it('switches to bypassing permissions once confirmed, and hides it where the CLI turns it off', async () => {
+    const { backend, view, emit } = await open({ connection: 'sdk' });
+    emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
+    fireEvent.click(view.getByRole('button', { name: 'Mode: Manual' }));
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
+    expect(backend.setMode).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole('button', { name: 'Bypass permissions' }));
+    await settle();
+    expect(backend.setMode).toHaveBeenCalledWith('a', 'bypassPermissions');
+
+    // Started again where the user's settings turn it off: not offered.
+    emit(
+      { type: 'closed' },
+      {
+        type: 'started',
+        model: 'opus',
+        mode: 'manual',
+        models: MODELS,
+        modes: ['manual', 'acceptEdits', 'plan', 'auto'],
+      },
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Mode: Manual' }));
+    expect(view.getAllByRole('menuitemradio')).toHaveLength(4);
+    expect(view.queryByRole('menuitemradio', { name: /^Bypass permissions/ })).toBeNull();
+  });
+
   it('says what it needs to run: a project folder', async () => {
     const { transcript } = await open({ connection: 'sdk' });
     expect(transcript.getByText(/Choose a project folder for this canvas/)).toBeTruthy();

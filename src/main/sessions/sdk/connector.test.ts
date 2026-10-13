@@ -283,6 +283,23 @@ describe('SdkConnector', () => {
     expect(chosen.events[0]).toMatchObject({ type: 'started', mode: 'plan' });
   });
 
+  it('does not offer bypassing permissions where the CLI’s settings turn it off', async () => {
+    const off = connector({
+      prepare: (q) => {
+        q.settings = { effective: { permissions: { disableBypassPermissionsMode: 'disable' } } };
+      },
+    });
+    await off.sdk.start(SPEC, off.host);
+    expect(off.events[0]).toMatchObject({
+      type: 'started',
+      modes: ['manual', 'acceptEdits', 'plan', 'auto'],
+    });
+
+    const on = connector();
+    await on.sdk.start(SPEC, on.host);
+    expect(on.events[0]).not.toHaveProperty('modes');
+  });
+
   it('starts with the model picked', async () => {
     const { sdk, host, query, events } = connector();
     await sdk.start({ ...SPEC, model: 'haiku' }, host);
