@@ -18,7 +18,8 @@
         },
         {
           "id": "tests",
-          "action": "Bash"
+          "action": "Bash",
+          "instruction": "Run the tests."
         }
       ]
     },

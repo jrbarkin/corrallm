@@ -64,6 +64,7 @@ import {
   setRepeat,
   setCondition,
   setConnection,
+  setInstruction,
   setTime,
   setWaitFor,
   spawnAgent,
@@ -407,6 +408,9 @@ function Editor({
       },
       editMessage: (owner, itemId, message) => {
         setGraph((g) => editMessage(g, owner, itemId, message));
+      },
+      setInstruction: (owner, itemId, instruction) => {
+        setGraph((g) => setInstruction(g, owner, itemId, instruction));
       },
       setCondition: (owner, ifId, condition) => {
         setGraph((g) => setCondition(g, owner, ifId, condition));

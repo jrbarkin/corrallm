@@ -17,6 +17,8 @@ export interface QueueEdits {
   move: (owner: string, itemId: string, index: number) => void;
   retarget: (owner: string, itemId: string, target: string | undefined) => void;
   editMessage: (owner: string, itemId: string, message: string) => void;
+  /** What a step is to do, in the user's words ('' takes it off). */
+  setInstruction: (owner: string, itemId: string, instruction: string) => void;
   setCondition: (owner: string, ifId: string, condition: Condition) => void;
   setWaitFor: (owner: string, waitId: string, targets: WaitTarget[]) => void;
   /** A delay's time, or a wait's time limit (`undefined` takes the limit off). */
@@ -51,6 +53,9 @@ export function editsOf(edits: QueueEdits, owner: string) {
     },
     onEditMessage: (itemId: string, message: string) => {
       edits.editMessage(owner, itemId, message);
+    },
+    onInstruction: (itemId: string, instruction: string) => {
+      edits.setInstruction(owner, itemId, instruction);
     },
     onCondition: (ifId: string, condition: Condition) => {
       edits.setCondition(owner, ifId, condition);

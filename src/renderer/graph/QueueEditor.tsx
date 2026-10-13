@@ -117,6 +117,8 @@ interface QueueProps {
   onMove: (itemId: string, index: number) => void;
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
+  /** Sets what a step is to do, in the user's words ('' takes it off). */
+  onInstruction: (itemId: string, instruction: string) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   /** Sets a delay's time, or a wait's time limit (`undefined` takes it off). */
@@ -366,6 +368,7 @@ function contextOf({
   onRemove,
   onRetarget,
   onEditMessage,
+  onInstruction,
   onWaitFor,
   onTime,
   onApproval,
@@ -396,6 +399,7 @@ function contextOf({
     onRemove,
     onRetarget,
     onEditMessage,
+    onInstruction,
     onWaitFor,
     onTime,
     onApproval,
@@ -437,6 +441,7 @@ interface Context extends AddContext {
   onRemove: (itemId: string) => void;
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
+  onInstruction: (itemId: string, instruction: string) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   onTime: (itemId: string, time: Time | undefined) => void;
   onApproval: (okId: string, approve: string) => void;
@@ -728,7 +733,10 @@ function TargetChip({
   );
 }
 
-/** A step: its handle, its action, the agent it acts on (a chip that changes it), and remove. */
+/**
+ * A step: its handle, its action, what it is to do (in the user's words, edited in place: a slash
+ * command's arguments), the agent it acts on (a chip that changes it), and remove.
+ */
 function StepRow({
   item,
   handle,
@@ -739,6 +747,7 @@ function StepRow({
   context: Context;
 }) {
   const known = context.actions.some((a) => a.name === item.action);
+  const command = item.action.startsWith('/');
   return (
     <div
       className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}
@@ -751,6 +760,16 @@ function StepRow({
       >
         {item.action}
       </span>{' '}
+      <textarea
+        className="graph-queue-instruction"
+        rows={1}
+        aria-label={command ? `Arguments for ${item.action}` : `What ${item.action} is to do`}
+        placeholder={command ? 'Arguments' : 'What to do'}
+        value={item.instruction ?? ''}
+        onChange={(event) => {
+          context.onInstruction(item.id, event.target.value);
+        }}
+      />
       <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
       <RemoveButton item={item} context={context} />
     </div>

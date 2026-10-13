@@ -18,7 +18,8 @@
         },
         {
           "id": "red",
-          "action": "exec_command"
+          "action": "exec_command",
+          "instruction": "Run the new tests."
         },
         {
           "id": "red-check",
@@ -62,7 +63,8 @@
             },
             {
               "id": "green",
-              "action": "Bash"
+              "action": "Bash",
+              "instruction": "Run the tests."
             }
           ],
           "until": {
@@ -97,7 +99,8 @@
         },
         {
           "id": "still-green",
-          "action": "exec_command"
+          "action": "exec_command",
+          "instruction": "Run the tests."
         },
         {
           "id": "broke",

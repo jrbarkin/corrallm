@@ -1,11 +1,14 @@
 /**
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
- * one to the node whose queue it is in.
+ * one to the node whose queue it is in. `instruction`: what it is to do, in the user's words (what
+ * to run, what to read); a connected agent is told it with the step (a slash command takes it as
+ * its arguments: run/turns.ts), a simulated one ignores it.
  */
 export interface QueueStep {
   id: string;
   action: string;
   target?: string;
+  instruction?: string;
 }
 
 /**

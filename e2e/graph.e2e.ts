@@ -879,7 +879,9 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
       .getByRole('group', { name: /^Builder: / })
       .evaluateAll((groups) => groups.map((g) => g.getAttribute('aria-label') ?? ''));
   const before = await builder();
-  const tests = before.indexOf('Builder: exec_command');
+  // The template's test run says what it is to do.
+  const run = 'Builder: exec_command “Run the tests.”';
+  const tests = before.indexOf(run);
   const wait = before.findIndex((label) => label.startsWith('Builder: Wait for'));
   expect(tests).toBeGreaterThan(wait);
 
@@ -891,7 +893,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
   await page.mouse.move(from.x, to.y + 4, { steps: 12 });
   await page.mouse.up();
   const after = await builder();
-  expect(after.indexOf('Builder: exec_command')).toBeLessThan(
+  expect(after.indexOf(run)).toBeLessThan(
     after.findIndex((label) => label.startsWith('Builder: Wait for')),
   );
 

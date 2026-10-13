@@ -36,6 +36,7 @@ import {
   setApproval,
   setCondition,
   setConnection,
+  setInstruction,
   setRepeat,
   setTime,
   setWaitFor,
@@ -367,6 +368,17 @@ describe('queues', () => {
     expect(queueOf(retarget(sent, 'a', 'm1', undefined)).at(-1)).toEqual(note);
   });
 
+  it('says what a step is to do, in the user’s words; empty takes it off', () => {
+    const told = setInstruction(queued, 'a', 'q3', 'run npm test');
+    expect(queueOf(told)[2]).toEqual({ ...third, instruction: 'run npm test' });
+    expect(queueOf(setInstruction(told, 'a', 'q3', ''))[2]).toEqual(third);
+    expect(setInstruction(told, 'a', 'q3', 'run npm test')).toBe(told);
+    expect(setInstruction(queued, 'a', 'q3', '')).toBe(queued);
+    // Only a step has one.
+    const note = addToQueue(queued, 'a', { id: 'm1', message: 'Use staging' });
+    expect(setInstruction(note, 'a', 'm1', 'x')).toBe(note);
+  });
+
   it('holds waits for other agents or their steps, which can be changed', () => {
     const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
     const waiting = addToQueue(queued, 'a', wait);
@@ -511,6 +523,10 @@ describe('queues', () => {
       expect(inner(editMessage(filled, 'a', 'fix', 'Fix it'))[0]).toEqual({
         ...fix,
         message: 'Fix it',
+      });
+      expect(inner(setInstruction(filled, 'a', 'tests', 'only the cart'))[1]).toEqual({
+        ...tests,
+        instruction: 'only the cart',
       });
       expect(inner(setWaitFor(filled, 'a', 'w', [{ agent: 'b', item: 's' }]))[2]).toEqual({
         id: 'w',

@@ -766,8 +766,8 @@ export class RunStore {
   }
 
   /**
-   * What a connected agent's step asks of it (turns.ts): its action, as its type names it, and the
-   * agent it acts on if that is another one still there.
+   * What a connected agent's step asks of it (turns.ts): its action, as its type names it, the
+   * agent it acts on if that is another one still there, and what it is to do, in the user's words.
    */
   #stepMessage(node: GraphNode, step: QueueStep): string {
     const actions = AGENT_ACTIONS[node.data.agent ?? DEFAULT_AGENT];
@@ -775,7 +775,12 @@ export class RunStore {
       step.target !== undefined && step.target !== node.id
         ? this.#agents().find((n) => n.id === step.target)
         : undefined;
-    return stepMessage(step.action, actions, other && agentName(this.#nodes, other.id));
+    return stepMessage(
+      step.action,
+      actions,
+      other && agentName(this.#nodes, other.id),
+      step.instruction,
+    );
   }
 
   /**

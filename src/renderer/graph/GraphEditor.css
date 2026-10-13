@@ -360,6 +360,46 @@ input.graph-label {
   opacity: 0.7;
 }
 
+/* A step's action and its agent keep to one line each: what it is to do takes the squeeze. */
+.graph-queue-row > .graph-queue-action,
+.graph-queue-row:has(> .graph-queue-instruction) > :is(.graph-queue-target, .graph-queue-remove) {
+  flex: none;
+  white-space: nowrap;
+}
+
+/*
+ * What a step is to do, in the user's words, edited in place: while empty, the rest of its line;
+ * once written, a line of its own under the step (as a message's text is), growing as it wraps.
+ */
+.graph-queue-instruction {
+  flex: 1 1 0;
+  min-width: 3em;
+  max-height: 6lh;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: none;
+  field-sizing: content;
+}
+
+.graph-queue-instruction::placeholder {
+  color: color-mix(in srgb, CanvasText 45%, transparent);
+}
+
+.graph-queue-row:has(> .graph-queue-instruction:not(:placeholder-shown)) {
+  flex-wrap: wrap;
+}
+
+.graph-queue-row > .graph-queue-instruction:not(:placeholder-shown) {
+  /* Under the action: past the handle (14px) and the gap after it (8px). */
+  flex: 1 1 calc(100% - 22px);
+  order: 1;
+  margin-left: 22px;
+}
+
 /* A message: its keyword and agent on the first line, its text below, as wide as the row. */
 .graph-queue-message {
   flex-wrap: wrap;
@@ -1602,8 +1642,14 @@ input.graph-label {
   opacity: 0;
 }
 
-.graph-queue-message:not(:hover, :focus-within) textarea {
+.graph-queue-message:not(:hover, :focus-within) textarea,
+.graph-queue-row:not(:hover, :focus-within) > .graph-queue-instruction {
   border-color: transparent;
+}
+
+/* At rest, a step without words says nothing of them. */
+.graph-queue-row:not(:hover, :focus-within) > .graph-queue-instruction::placeholder {
+  color: transparent;
 }
 
 .graph-queue-if {

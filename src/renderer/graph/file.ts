@@ -33,7 +33,7 @@ import type {
  * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
  * how it runs, if not simulated ("terminal" or "sdk": agents.ts); where it runs (the project
  * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
- * has them; a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
+ * has them; a step may say what it is to do ("instruction", text: none when empty); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
  * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
  * whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An OK
  * is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
@@ -291,7 +291,13 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };
   if ('message' in item) return { id, message: text(item.message, `${where}.message`), ...aimed };
-  return { id, action: name(item.action, `${where}.action`), ...aimed };
+  const instruction = optional(item.instruction, `${where}.instruction`, text);
+  return {
+    id,
+    action: name(item.action, `${where}.action`),
+    ...aimed,
+    ...(instruction === undefined || instruction === '' ? {} : { instruction }),
+  };
 }
 
 function readRepeat(item: Record<string, unknown>, where: string): QueueRepeat {

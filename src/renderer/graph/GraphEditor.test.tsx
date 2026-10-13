@@ -88,6 +88,36 @@ describe('GraphEditor', () => {
     expect(count()).toBe('1');
   });
 
+  it('says what a step is to do in the box beside it: arguments, for a command', () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'a',
+            queue: [
+              { id: 's', action: 'Bash' },
+              { id: 'c', action: '/code-review' },
+            ],
+          },
+          selected: true,
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const what = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'What Bash is to do' });
+    expect(what.placeholder).toBe('What to do');
+    fireEvent.change(what, { target: { value: 'run npm test' } });
+    expect(
+      panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'What Bash is to do' }).value,
+    ).toBe('run npm test');
+    expect(
+      panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Arguments for /code-review' })
+        .placeholder,
+    ).toBe('Arguments');
+  });
+
   it('adds a node inside a group when double-clicking its body', () => {
     const { nodes, node } = setup({ nodes: [frame], edges: [] });
     fireEvent.doubleClick(node('F'), { clientX: 200, clientY: 150 });

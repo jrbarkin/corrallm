@@ -18,7 +18,8 @@
         },
         {
           "id": "tests",
-          "action": "Bash"
+          "action": "Bash",
+          "instruction": "Run the full test suite, then say how many tests failed, as “N failed”."
         },
         {
           "id": "red",

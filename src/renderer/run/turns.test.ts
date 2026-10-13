@@ -23,6 +23,22 @@ describe('what the run says to a connected agent', () => {
     expect(stepMessage('exec_command', claude)).toBe('Use the exec_command tool for this step.');
   });
 
+  it('says what a step is to do, in the user’s words: after a tool, or as a command’s arguments', () => {
+    expect(stepMessage('Bash', claude, undefined, 'run npm test')).toBe(
+      'Use the Bash tool for this step: run npm test',
+    );
+    expect(stepMessage('Read', claude, 'Builder', ' its notes in NOTES.md ')).toBe(
+      'Use the Read tool for this step, on the work of Builder (another agent): its notes in NOTES.md',
+    );
+    expect(stepMessage('/code-review', claude, undefined, 'src/cart.ts')).toBe(
+      '/code-review src/cart.ts',
+    );
+    // Blank: as if there were none.
+    expect(stepMessage('Bash', claude, undefined, '  ')).toBe(
+      'Use the Bash tool for this step (run shell commands).',
+    );
+  });
+
   it('asks a plain yes-or-no question about a condition in the user’s words', () => {
     expect(conditionQuestion('  the tests pass ')).toBe(
       'corrallm asks: is this true now? “the tests pass” Start your answer with yes or no.',

@@ -141,6 +141,30 @@ describe('fromFile', () => {
     expect(toFile(fromFile(text))).toBe(text);
   });
 
+  it('reads back what a step is to do, in the user’s words', () => {
+    const told: QueueItem[] = [
+      { id: 'tests', action: 'Bash', instruction: 'run npm test' },
+      { id: 'look', action: 'Read', target: 'b', instruction: 'its notes' },
+    ];
+    const withSteps: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: told } } : n,
+      ),
+    };
+    const text = toFile(withSteps);
+    expect(text).toContain('"instruction": "run npm test"');
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(told);
+    expect(toFile(fromFile(text))).toBe(text);
+    // An empty one is none.
+    const empty = JSON.stringify({
+      ...saved,
+      nodes: [{ ...saved.nodes[2], queue: [{ id: 's', action: 'Bash', instruction: '' }] }],
+      links: [],
+    });
+    expect(fromFile(empty).nodes[0]?.data.queue).toEqual([{ id: 's', action: 'Bash' }]);
+  });
+
   it('reads back OKs, on what they name or (no words) on the work before them', () => {
     const asked: QueueItem[] = [
       { id: 'spec', message: 'Write SPEC.md' },
@@ -304,6 +328,12 @@ describe('fromFile', () => {
       'a node inside itself',
       (f) => Object.assign(f.nodes[0] ?? {}, { parent: 'a' }),
       /nodes\[\d\]\.parent: "\w" is inside itself/,
+    ],
+    [
+      'a step’s instruction that is not text',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 's', action: 'Bash', instruction: 3 }] }),
+      /^nodes\[1\]\.queue\[0\]\.instruction must be text$/,
     ],
     [
       'a broken condition',

@@ -63,6 +63,23 @@ describe('untilText', () => {
   });
 });
 
+describe('steps in words', () => {
+  it('names a step by its action, and what it is to do when the user said', () => {
+    const tests = {
+      id: 's',
+      action: 'Bash',
+      instruction: 'run the whole test suite, slowly, twice',
+    };
+    expect(itemLabel(tests)).toBe('Bash “run the whole test…”');
+    expect(taskLabel([coder], { ...tests, target: 'c' })).toBe(
+      'Bash “run the whole test suite,…” → Coder',
+    );
+    expect(itemLabel({ id: 's', action: 'Bash' })).toBe('Bash');
+    // Its buttons name the action alone.
+    expect(describeItem([coder], tests)).toBe('Bash');
+  });
+});
+
 describe('repeats in words', () => {
   it('names a repeat by when it stops and its rounds, and finds the steps inside it', () => {
     expect(taskLabel([coder], loop)).toBe('Repeat until its last step succeeds (up to 3 rounds)');

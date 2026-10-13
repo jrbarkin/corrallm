@@ -18,6 +18,7 @@ import type {
   QueueDelay,
   QueueItem,
   QueueRepeat,
+  QueueStep,
   QueueWait,
   RepeatEnds,
   Until,
@@ -104,7 +105,12 @@ export const itemLabel = (item: QueueItem): string =>
               ? item.message.trim() === ''
                 ? 'an empty message'
                 : `“${threadTitle(item.message, 24)}”`
-              : item.action;
+              : stepText(item, 24);
+
+/** A step: its action, and what it is to do when the user said, cut at `max` characters. */
+function stepText({ action, instruction = '' }: QueueStep, max: number): string {
+  return instruction.trim() === '' ? action : `${action} “${threadTitle(instruction, max)}”`;
+}
 
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
 export function agentName(nodes: readonly GraphNode[], id: string): string {
@@ -141,7 +147,7 @@ export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string 
   if (isIf(item)) return `If ${ifText(item.if)}`;
   const what = isMessage(item)
     ? `Message ${item.message.trim() === '' ? '(empty)' : `“${threadTitle(item.message, 32)}”`}`
-    : item.action;
+    : stepText(item, 32);
   return item.target === undefined ? what : `${what} → ${agentName(nodes, item.target)}`;
 }
 

@@ -1061,6 +1061,18 @@ describe('RunStore', () => {
       expect(store.snapshot().agents.t?.outcomes).toEqual({ tree: 'failed' });
     });
 
+    it('says what a step is to do, in your words; a simulated agent ignores them', () => {
+      const a = connected('a', [{ id: 'tests', action: 'Bash', instruction: 'run npm test' }]);
+      const s = agent('s', [{ id: 'sim', action: 'Bash', instruction: 'run npm test' }]);
+      const { store, sent, pending } = setup([a, s], () => 0.9);
+      store.start();
+      expect(sent.map((m) => [m.agent, m.text])).toEqual([
+        ['a', 'Use the Bash tool for this step: run npm test'],
+      ]);
+      // The simulated step is timed, as any other.
+      expect(pending()).toBe(1);
+    });
+
     it('judges “the output contains” by what the checked turn replied', () => {
       const a = connected('a', [
         { id: 'tests', action: 'Bash' },

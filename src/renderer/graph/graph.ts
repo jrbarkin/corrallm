@@ -404,6 +404,21 @@ export function editMessage(graph: Graph, id: string, itemId: string, message: s
   );
 }
 
+/** Says what a step is to do, in the user's words ('' takes it off). */
+export function setInstruction(
+  graph: Graph,
+  id: string,
+  itemId: string,
+  instruction: string,
+): Graph {
+  return mapItems(graph, id, itemId, (q) => {
+    if (!('action' in q) || (q.instruction ?? '') === instruction) return q;
+    const step: QueueStep = { ...q, instruction };
+    if (instruction === '') delete step.instruction;
+    return step;
+  });
+}
+
 /** Adds a question an agent asks the user. */
 export function askUser(graph: Graph, id: string, question: Question): Graph {
   return updateQuestions(graph, id, (questions) => [...questions, question]);

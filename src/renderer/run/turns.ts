@@ -7,19 +7,24 @@ import type { AgentAction } from '../graph/agents';
  */
 
 /**
- * What a step asks of a connected agent: a slash command is sent as that command; a tool, as a
- * short instruction to use it for the step, with what it does (`actions`: its agent type's, from
- * agents.ts), and whose work it acts on when that is another agent's (`other`, its name).
+ * What a step asks of a connected agent: a slash command is sent as that command, with what the
+ * step is to do (`instruction`, the user's words) as its arguments; a tool, as a short instruction
+ * to use it for the step, then what the step is to do ("Use the Bash tool for this step: run npm
+ * test"), or else what the tool does (`actions`: its agent type's, from agents.ts), and whose work
+ * it acts on when that is another agent's (`other`, its name).
  */
 export function stepMessage(
   action: string,
   actions: readonly AgentAction[],
   other?: string,
+  instruction?: string,
 ): string {
-  if (action.startsWith('/')) return action;
+  const told = instruction?.trim() ?? '';
+  if (action.startsWith('/')) return told === '' ? action : `${action} ${told}`;
+  const on = other === undefined ? '' : `, on the work of ${other} (another agent)`;
+  if (told !== '') return `Use the ${action} tool for this step${on}: ${told}`;
   const what = actions.find((a) => a.name === action)?.description;
   const does = what === undefined ? '' : ` (${what.charAt(0).toLowerCase()}${what.slice(1)})`;
-  const on = other === undefined ? '' : `, on the work of ${other} (another agent)`;
   return `Use the ${action} tool for this step${does}${on}.`;
 }
 

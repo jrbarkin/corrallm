@@ -51,7 +51,8 @@
         },
         {
           "id": "tests",
-          "action": "exec_command"
+          "action": "exec_command",
+          "instruction": "Run the tests."
         },
         {
           "id": "failing",
