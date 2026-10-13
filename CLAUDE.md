@@ -111,8 +111,12 @@ src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an 
                      an Agent SDK agent's chip also offers Continue in Terminal, and so does its
                      composer for a command only Claude Code's terminal runs (commands.ts:
                      /permissions, /login, a bare /config…, completed "In Terminal" and never sent
-                     to the SDK session): the agent switches to Terminal, which resumes the same
-                     session, and SessionStore.sendOnceIn runs the command there. The view answers
+                     to the SDK session; and a shell command for its bash mode, "!" first,
+                     bashCommand): the agent switches to Terminal, which resumes the same session,
+                     and SessionStore.sendOnceIn runs the command there (a "!" message is typed into
+                     Claude Code's prompt like any other, so the renderer still passes no command
+                     line: running one in main, for the Agent SDK, would need the security rule
+                     changed first). The view answers
                      some commands itself for an Agent SDK agent (commands.ts' VIEW_COMMANDS), in
                      a panel above the composer: /resume (ResumePicker.tsx) picks another of the
                      project folder's conversations to open in the agent (SessionStore.resume:

@@ -34,7 +34,7 @@ import type { HeldAsk } from '../run/asks';
 import { SearchPicker } from '../search/SearchPicker';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
-import { completedCommands, terminalCommand, viewCommand } from './commands';
+import { bashCommand, completedCommands, terminalCommand, viewCommand } from './commands';
 import type { ViewCommand } from './commands';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
@@ -381,8 +381,9 @@ export function AgentView({
   /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
   const commands = connection === 'sdk' ? completedCommands(session.commands) : session.commands;
   /**
-   * What the composer sends: a command only Claude Code's terminal runs is offered there instead;
-   * while the run asks (`ask.reply`), the answer, unless it is a command the session runs.
+   * What the composer sends: a command only Claude Code's terminal runs (one of its screens, or a
+   * shell command for its bash mode) is offered there instead; while the run asks (`ask.reply`),
+   * the answer, unless it is a command the session runs.
    */
   const send = (text: string, images?: MessageImage[]) => {
     const answered = connection === 'sdk' ? viewCommand(text) : undefined;
@@ -391,7 +392,10 @@ export function AgentView({
       setOpened(answered);
       return;
     }
-    if (connection === 'sdk' && terminalCommand(text, session.commands)) {
+    if (
+      connection === 'sdk' &&
+      (terminalCommand(text, session.commands) || bashCommand(text) !== undefined)
+    ) {
       setOffer(text.trim());
       return;
     }
@@ -793,8 +797,8 @@ function AskBar({
 
 /**
  * Offers Terminal for a command only Claude Code's terminal runs, above the composer: "/permissions
- * opens a screen of Claude Code's own…: [Continue in Terminal] [Cancel]". Esc cancels, leaving the
- * view open.
+ * opens a screen of Claude Code's own…: [Continue in Terminal] [Cancel]", or "!npm test runs in
+ * Claude Code's bash mode…". Esc cancels, leaving the view open.
  */
 function TerminalOffer({
   command,
@@ -817,8 +821,9 @@ function TerminalOffer({
       }}
     >
       <p>
-        {command} opens a screen of Claude Code’s own, which only its terminal shows: continue this
-        conversation in Terminal to run it there.
+        {bashCommand(command) === undefined
+          ? `${command} opens a screen of Claude Code’s own, which only its terminal shows: continue this conversation in Terminal to run it there.`
+          : `${command} runs in Claude Code’s bash mode, which only its terminal has: continue this conversation in Terminal to run it there, its output going into the conversation.`}
       </p>
       <button
         type="button"

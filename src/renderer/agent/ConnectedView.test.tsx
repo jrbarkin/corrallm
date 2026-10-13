@@ -1034,6 +1034,25 @@ describe('an Agent SDK agent continued in Terminal', () => {
     });
   });
 
+  it('offers Terminal for a shell command in Claude Code’s bash mode (“!”), and runs it there', async () => {
+    const { backend, view, send } = await open({ connection: 'sdk' });
+    await send('!npm test');
+    // Not sent to the Agent SDK session, where it would be a prompt: Terminal is offered.
+    expect(backend.send).not.toHaveBeenCalled();
+    const offer = within(view.getByRole('group', { name: 'Continue in Terminal?' }));
+    expect(offer.getByText(/^!npm test runs in Claude Code’s bash mode/)).toBeTruthy();
+
+    fireEvent.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
+    await settle();
+    expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
+      'Agent: Claude · Terminal',
+    );
+    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+      id: expect.any(String) as unknown,
+      text: '!npm test',
+    });
+  });
+
   it('takes the offer back on Cancel, and keeps the view open on Escape', async () => {
     const { backend, send, view } = await open({ connection: 'sdk' });
     await send('/login');

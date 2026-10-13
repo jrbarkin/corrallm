@@ -5,7 +5,8 @@ import type { SlashCommand } from '../../shared/session';
  * has commands that open a screen of its own (/permissions, /login, /hooks…): the Agent SDK runs
  * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker, /mcp's
  * servers, /rewind); for the others it offers to continue the conversation in Terminal, where Claude Code
- * itself runs, instead of sending them.
+ * itself runs, instead of sending them. So it does for Claude Code's bash mode ("!" first: a shell
+ * command run directly, its output put in the conversation), which only its terminal has.
  */
 
 /** The commands the agent view answers itself, as Claude Code describes them. */
@@ -60,6 +61,17 @@ function parse(text: string): { name: string; args: string } | undefined {
   const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   const name = match?.[1];
   return name === undefined ? undefined : { name, args: match?.[2]?.trim() ?? '' };
+}
+
+/**
+ * The shell command a message runs in Claude Code's bash mode, if it is one: what follows a "!" at
+ * its start ("!npm test": "npm test").
+ */
+export function bashCommand(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('!')) return undefined;
+  const command = trimmed.slice(1).trim();
+  return command === '' ? undefined : command;
 }
 
 /** The view's own command a message runs, if it runs one ("/resume"). */

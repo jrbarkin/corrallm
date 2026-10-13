@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SlashCommand } from '../../shared/session';
-import { completedCommands, terminalCommand, viewCommand } from './commands';
+import { bashCommand, completedCommands, terminalCommand, viewCommand } from './commands';
 
 const command = (name: string, description = ''): SlashCommand => ({
   name,
@@ -33,6 +33,18 @@ describe('terminalCommand', () => {
 
   it('leaves a command to the session once it offers it, as a newer CLI may', () => {
     expect(terminalCommand('/hooks', [...OFFERED, command('hooks')])).toBeUndefined();
+  });
+});
+
+describe('bashCommand', () => {
+  it('finds a shell command for Claude Code’s bash mode: “!” first', () => {
+    expect(bashCommand('!ls -la')).toBe('ls -la');
+    expect(bashCommand('  ! git status ')).toBe('git status');
+    expect(bashCommand('!echo "a\nb"')).toBe('echo "a\nb"');
+    // Not a bare "!", nor a "!" further on.
+    expect(bashCommand('!')).toBeUndefined();
+    expect(bashCommand('! ')).toBeUndefined();
+    expect(bashCommand('Run !ls')).toBeUndefined();
   });
 });
 
