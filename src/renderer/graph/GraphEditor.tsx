@@ -69,6 +69,7 @@ import {
   setRepeat,
   setCondition,
   setConnection,
+  setExpect,
   setInstruction,
   setTime,
   setWaitFor,
@@ -452,6 +453,9 @@ function Editor({
       },
       setInstruction: (owner, itemId, instruction) => {
         setGraph((g) => setInstruction(g, owner, itemId, instruction));
+      },
+      setExpect: (owner, itemId, expect) => {
+        setGraph((g) => setExpect(g, owner, itemId, expect));
       },
       setCondition: (owner, ifId, condition) => {
         setGraph((g) => setCondition(g, owner, ifId, condition));

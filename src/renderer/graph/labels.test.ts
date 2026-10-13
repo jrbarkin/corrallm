@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphNode } from './graph';
 import {
   describe as describeItem,
+  expectedText,
   ifText,
   itemLabel,
   taskLabel,
@@ -61,6 +62,33 @@ describe('untilText', () => {
     expect(taskLabel([coder, judge], { ...loop, until: follows })).toBe(
       "Repeat until Judge's repeat ends",
     );
+  });
+});
+
+describe('steps expected to fail, in words', () => {
+  it('says so wherever the step is named, but not on its buttons', () => {
+    const red = {
+      id: 'red',
+      action: 'Bash',
+      instruction: 'Run the new tests.',
+      expect: 'fails',
+    } as const;
+    expect(itemLabel(red)).toBe('Bash “Run the new tests.” (expected to fail)');
+    expect(taskLabel([coder], { ...red, target: 'c' })).toBe(
+      'Bash “Run the new tests.” (expected to fail) → Coder',
+    );
+    expect(itemLabel({ id: 'red', action: 'Bash', expect: 'fails' })).toBe(
+      'Bash (expected to fail)',
+    );
+    expect(waitTargetLabel([agent('t', 'Tester', [red])], { agent: 't', item: 'red' })).toBe(
+      'Tester: Bash “Run the new tests.” (expected to fail)',
+    );
+    expect(describeItem([coder], red)).toBe('Bash');
+  });
+
+  it('says how it went once judged: failing as expected, or passing', () => {
+    expect(expectedText(true)).toBe('failed, as expected');
+    expect(expectedText(false)).toBe('passed, but was expected to fail');
   });
 });
 

@@ -419,6 +419,22 @@ export function setInstruction(
   });
 }
 
+/** Expects a step to fail ('fails'), or (undefined) to succeed, as steps do. */
+export function setExpect(
+  graph: Graph,
+  id: string,
+  itemId: string,
+  expect: QueueStep['expect'],
+): Graph {
+  return mapItems(graph, id, itemId, (q) => {
+    if (!('action' in q) || q.expect === expect) return q;
+    const step: QueueStep = { ...q };
+    if (expect === undefined) delete step.expect;
+    else step.expect = expect;
+    return step;
+  });
+}
+
 /** Adds a question an agent asks the user. */
 export function askUser(graph: Graph, id: string, question: Question): Graph {
   return updateQuestions(graph, id, (questions) => [...questions, question]);

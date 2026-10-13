@@ -198,6 +198,45 @@ describe('the queues view', () => {
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
 
+  it('shows how a step expected to fail went: failed as expected, or passed', () => {
+    // A simulated step goes as expected three times in four (the run takes its chance as it starts).
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const { queues } = setup({
+      nodes: [
+        agent('a', 0, [
+          { id: 'red', action: 'Bash', instruction: 'Run the new tests.', expect: 'fails' },
+        ]),
+      ],
+      edges: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const view = within(queues());
+    const task = () =>
+      view.getByRole('group', { name: 'a: Bash “Run the new tests.” (expected to fail)' });
+    const run = () => task().querySelector('[data-run]')?.getAttribute('data-run');
+    expect(
+      within(task()).getByRole('button', { name: /is expected to do: fail$/ }).textContent,
+    ).toBe('expect: fails');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // Here, it fails.
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    expect(within(task()).queryByText(/as expected|was expected/)).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(run()).toBe('succeeded');
+    expect(within(task()).getByText('failed, as expected')).toBeTruthy();
+    // Here, it passes: its failure.
+    random.mockReturnValue(0.1);
+    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(run()).toBe('failed');
+    expect(within(task()).getByText('passed, but was expected to fail')).toBeTruthy();
+    expect(within(task()).queryByText('failed, as expected')).toBeNull();
+  });
+
   it('counts down a delay the run holds a lane at, and goes on from it when told', () => {
     const { queues } = setup({
       nodes: [

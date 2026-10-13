@@ -36,7 +36,8 @@ import type {
  * how it runs, if not simulated (a Claude agent's "terminal" or "sdk", a Codex agent's
  * "codex-terminal" or "app-server": agents.ts); where it runs (the project
  * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
- * has them; a step may say what it is to do ("instruction", text: none when empty); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
+ * has them; a step may say what it is to do ("instruction", text: none when empty), and that it is
+ * expected to fail ("expect": "fails"); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
  * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
  * whole number from 1 to 604800 (7 days), { "at": "HH:MM" }, a 24-hour local time of day, or
  * { "resets": "fiveHour" | "weekly", "backend": "Claude" | "Codex" }, when that backend's usage
@@ -301,11 +302,16 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const aimed = target === undefined ? {} : { target };
   if ('message' in item) return { id, message: text(item.message, `${where}.message`), ...aimed };
   const instruction = optional(item.instruction, `${where}.instruction`, text);
+  const expect = optional(item.expect, `${where}.expect`, (v, at): 'fails' => {
+    if (v !== 'fails') throw new Error(`${at} must be "fails"`);
+    return v;
+  });
   return {
     id,
     action: name(item.action, `${where}.action`),
     ...aimed,
     ...(instruction === undefined || instruction === '' ? {} : { instruction }),
+    ...(expect === undefined ? {} : { expect }),
   };
 }
 

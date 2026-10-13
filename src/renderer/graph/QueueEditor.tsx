@@ -17,6 +17,7 @@ import {
   agentName,
   andList,
   describe,
+  expectedText,
   ifText,
   itemLabel,
   okWhat,
@@ -124,6 +125,8 @@ interface QueueProps {
   onEditMessage: (itemId: string, message: string) => void;
   /** Sets what a step is to do, in the user's words ('' takes it off). */
   onInstruction: (itemId: string, instruction: string) => void;
+  /** Expects a step to fail ('fails'), or (undefined) to succeed. */
+  onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onCondition: (ifId: string, condition: Condition) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   /** Sets a delay's time, or a wait's time limit (`undefined` takes it off). */
@@ -374,6 +377,7 @@ function contextOf({
   onRetarget,
   onEditMessage,
   onInstruction,
+  onExpect,
   onWaitFor,
   onTime,
   onApproval,
@@ -406,6 +410,7 @@ function contextOf({
     onRetarget,
     onEditMessage,
     onInstruction,
+    onExpect,
     onWaitFor,
     onTime,
     onApproval,
@@ -453,6 +458,7 @@ interface Context extends AddContext {
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   onInstruction: (itemId: string, instruction: string) => void;
+  onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   onTime: (itemId: string, time: Time | undefined) => void;
   onApproval: (okId: string, approve: string) => void;
@@ -754,9 +760,86 @@ function TargetChip({
   );
 }
 
+/** What a step can be expected to do: succeed, as steps do, or fail. */
+const EXPECT = [
+  { expect: undefined, label: 'Succeed', detail: 'As any step: failing fails it' },
+  {
+    expect: 'fails',
+    label: 'Fail',
+    detail: 'Red before green: failing is its success, and passing its failure',
+  },
+] as const;
+
+/** Picks what a step is expected to do: succeed, as steps do, or fail. */
+function ExpectPicker({
+  item,
+  context,
+  onClose,
+}: {
+  item: QueueStep;
+  context: Context;
+  onClose: () => void;
+}) {
+  return (
+    <SearchPicker
+      label="Expect it to…"
+      options={EXPECT}
+      optionLabel={(option) => option.label}
+      optionDetail={(option) => option.detail}
+      optionKey={(option) => option.label}
+      onPick={(option) => {
+        context.onExpect(item.id, option.expect);
+        onClose();
+      }}
+      onCancel={onClose}
+    />
+  );
+}
+
+/**
+ * A step expected to fail, on a line of its own under the step: "expect: fails", a chip that
+ * changes it, and once the run has judged it (its row's `data-expected`), how that went: failed,
+ * as expected, or passed.
+ */
+function Expectation({
+  item,
+  context,
+  open,
+  onToggle,
+}: {
+  item: QueueStep;
+  context: Context;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const expected = context.marks(item.id)['data-expected'];
+  return (
+    <div className="graph-queue-expectation">
+      <button
+        type="button"
+        className="graph-queue-target graph-queue-expect"
+        aria-label={`Change what ${item.action} is expected to do: fail`}
+        title="Failing is its success, and passing its failure"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        expect: fails
+      </button>
+      {expected !== undefined && (
+        <span className="graph-queue-expected" data-expected={expected}>
+          {expectedText(expected === 'met')}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /**
  * A step: its handle, its action, what it is to do (in the user's words, edited in place: a slash
- * command's arguments), the agent it acts on (a chip that changes it), and remove.
+ * command's arguments), the agent it acts on (a chip that changes it), and remove. A tool's action
+ * also says what the step is expected to do (it takes no room on the line: a slash command's turn
+ * is not judged pass or fail, so it has none); expected to fail, a line under the step says so,
+ * and, once the run has judged it, how that went.
  */
 function StepRow({
   item,
@@ -767,20 +850,41 @@ function StepRow({
   handle: HandleProps;
   context: Context;
 }) {
+  const [expecting, setExpecting] = useState(false);
   const known = context.actions.some((a) => a.name === item.action);
   const command = item.action.startsWith('/');
+  const fails = item.expect === 'fails';
+  const unknown = known ? {} : { title: `${context.agent} has no ${item.action}` };
+  const toggle = () => {
+    setExpecting(!expecting);
+  };
   return (
     <div
       className={known ? 'graph-queue-row' : 'graph-queue-row unavailable'}
       {...context.marks(item.id)}
     >
       <Handle handle={handle} item={item} context={context} />
-      <span
-        className="graph-queue-action"
-        {...(known ? {} : { title: `${context.agent} has no ${item.action}` })}
-      >
-        {item.action}
-      </span>{' '}
+      {command ? (
+        <span className="graph-queue-action" {...unknown}>
+          {item.action}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="graph-queue-action"
+          aria-label={`Change what ${item.action} is expected to do`}
+          title={
+            fails
+              ? 'Change what it is expected to do'
+              : 'Expect it to fail, as tests written to fail first do'
+          }
+          {...unknown}
+          aria-expanded={expecting}
+          onClick={toggle}
+        >
+          {item.action}
+        </button>
+      )}{' '}
       <textarea
         className="graph-queue-instruction"
         rows={1}
@@ -796,6 +900,16 @@ function StepRow({
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
+      {fails && <Expectation item={item} context={context} open={expecting} onToggle={toggle} />}
+      {expecting && (
+        <ExpectPicker
+          item={item}
+          context={context}
+          onClose={() => {
+            setExpecting(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -36,6 +36,7 @@ import {
   setApproval,
   setCondition,
   setConnection,
+  setExpect,
   setInstruction,
   setRepeat,
   setTime,
@@ -379,6 +380,17 @@ describe('queues', () => {
     expect(setInstruction(note, 'a', 'm1', 'x')).toBe(note);
   });
 
+  it('expects a step to fail, or (undefined) to succeed as steps do', () => {
+    const red = setExpect(queued, 'a', 'q3', 'fails');
+    expect(queueOf(red)[2]).toEqual({ ...third, expect: 'fails' });
+    expect(queueOf(setExpect(red, 'a', 'q3', undefined))[2]).toEqual(third);
+    expect(setExpect(red, 'a', 'q3', 'fails')).toBe(red);
+    expect(setExpect(queued, 'a', 'q3', undefined)).toBe(queued);
+    // Only a step does.
+    const note = addToQueue(queued, 'a', { id: 'm1', message: 'Use staging' });
+    expect(setExpect(note, 'a', 'm1', 'fails')).toBe(note);
+  });
+
   it('holds waits for other agents or their steps, which can be changed', () => {
     const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
     const waiting = addToQueue(queued, 'a', wait);
@@ -527,6 +539,10 @@ describe('queues', () => {
       expect(inner(setInstruction(filled, 'a', 'tests', 'only the cart'))[1]).toEqual({
         ...tests,
         instruction: 'only the cart',
+      });
+      expect(inner(setExpect(filled, 'a', 'tests', 'fails'))[1]).toEqual({
+        ...tests,
+        expect: 'fails',
       });
       expect(inner(setWaitFor(filled, 'a', 'w', [{ agent: 'b', item: 's' }]))[2]).toEqual({
         id: 'w',

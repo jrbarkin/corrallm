@@ -85,6 +85,12 @@ export interface AgentRun {
    * (a new round clears them).
    */
   outcomes: Readonly<Record<string, Outcome>>;
+  /**
+   * How each step expected to fail (QueueStep.expect) went against that, by id, once judged:
+   * true, it failed, as expected (its outcome: succeeded); false, it passed (its outcome: failed).
+   * Kept as long as its outcome is; none for a step whose turn failed, which ran neither way.
+   */
+  asExpected?: Readonly<Record<string, boolean>>;
   /** Each repeat its queue has reached this run, by id: its round. */
   rounds?: Readonly<Record<string, Round>>;
   /** The changes the user asked for at each OK this run, by its id, oldest first. */
@@ -184,9 +190,14 @@ const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
 /** What the run says when it takes a connected agent's answer to its question as no. */
 const UNCLEAR = 'corrallm took that as no: the answer wasn’t a clear yes or no.';
 const UNANSWERED = 'corrallm took that as no: the question wasn’t answered.';
-/** What the run says when a connected agent's step reply gives no verdict (turns.ts). */
+/**
+ * What the run says when a connected agent's step reply gives no verdict (turns.ts): it takes the
+ * step as going as expected, as succeeded or (for a step expected to fail) as failed.
+ */
 const NO_VERDICT =
   'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.';
+const NO_VERDICT_FAILED =
+  'corrallm took the step as failed, as expected: its reply didn’t end with SUCCEEDED or FAILED.';
 
 const IDLE: Run = { running: false, agents: {} };
 
@@ -197,7 +208,8 @@ const IDLE: Run = { running: false, agents: {} };
  * goes to its session too (turns.ts words it: a slash command as it is, a tool as an instruction
  * to use it that asks how it went), done when its turn ends, failed if the agent says so (a turn
  * that ends well may run tests that fail); a simulated agent's step takes a few seconds and may
- * fail.
+ * fail. A step expected to fail (QueueStep.expect) is turned round once judged: failing is its
+ * success, passing its failure (a tool's turn that fails is no verdict: it fails all the same).
  * A wait holds until what it waits for is done (a step, or all of an agent's work), or its time
  * limit passes; a delay holds until its time has come; an if-then runs its steps only if its
  * condition holds of the task before it. A connected agent's conditions are its own: whether the
@@ -428,10 +440,15 @@ export class RunStore {
   ): AgentRun {
     const rounds: Record<string, Round> = { ...run.rounds };
     const next = this.#next(node, run.outcomes, rounds, agents, now);
+    // How a step went against what was expected lasts as long as how it went (a new round clears it).
+    const asExpected = Object.entries(run.asExpected ?? {}).filter(
+      ([id]) => next.outcomes[id] !== undefined,
+    );
     return {
       ...next,
       ...(Object.keys(rounds).length > 0 ? { rounds } : {}),
       ...(run.changes ? { changes: run.changes } : {}),
+      ...(asExpected.length > 0 ? { asExpected: Object.fromEntries(asExpected) } : {}),
     };
   }
 
@@ -914,7 +931,9 @@ export class RunStore {
    * Starts a task: the agent is busy with it until it finishes. A message, or a connected agent's
    * step, finishes when the turn it starts ends (a message aimed at another agent, that agent's
    * turn): a connected agent's tool step as it says at the end of its reply (SUCCEEDED or FAILED;
-   * neither, as its turn ended, which the run says); a simulated agent's step, after a while.
+   * neither, as expected, as its turn ended, which the run says); a simulated agent's step, after
+   * a while. A step expected to fail is turned round once judged: failing is its success, and
+   * passing its failure. A tool's turn that fails says neither: the step fails.
    */
   #begin(
     agent: string,
@@ -923,8 +942,8 @@ export class RunStore {
   ): AgentRun {
     const token = {};
     this.#busy.set(agent, token);
-    const finish = (outcome: Outcome, reply = '') => {
-      this.#finish(agent, task.id, token, outcome, reply);
+    const finish = (outcome: Outcome, reply = '', asExpected?: boolean) => {
+      this.#finish(agent, task.id, token, outcome, reply, asExpected);
     };
     const ended = ({ failed, reply }: TurnEnd) => {
       finish(failed ? 'failed' : 'succeeded', reply);
@@ -932,6 +951,12 @@ export class RunStore {
     const node = this.#agents().find((n) => n.id === agent);
     const holder = { agent, token };
     if (!isMessage(task)) {
+      /** Whether it is meant to fail: then failing is its success, and passing its failure. */
+      const fails = task.expect === 'fails';
+      /** How it went, once judged: whether it passed, turned round if it was meant to fail. */
+      const went = (passed: boolean, reply = '') => {
+        finish(passed === fails ? 'failed' : 'succeeded', reply, fails ? !passed : undefined);
+      };
       if (node && isConnected(node)) {
         // A tool's step went as the agent says on its reply's last line (a slash command's, as
         // its turn ended): a turn that ends well may have run tests that fail.
@@ -941,18 +966,24 @@ export class RunStore {
             return;
           }
           const verdict = stepVerdict(reply);
-          if (verdict === undefined) this.#io.tell(node, NO_VERDICT);
-          finish(verdict === false ? 'failed' : 'succeeded', reply);
+          if (verdict === undefined) this.#io.tell(node, fails ? NO_VERDICT_FAILED : NO_VERDICT);
+          went(verdict ?? !fails, reply);
         };
         this.#send(node, this.#stepMessage(node, task), {
-          ended: isCommand(task.action) ? ended : judged,
+          ended: isCommand(task.action)
+            ? ({ failed, reply }) => {
+                went(!failed, reply);
+              }
+            : judged,
           holder,
         });
       } else {
         const [least, most] = STEP_MS;
         const ms = least + (hash(task.id) % (most - least));
         this.#after(ms, () => {
-          finish(this.#io.chance() < FAILS ? 'failed' : 'succeeded');
+          // It goes wrong now and then: it fails, or, meant to fail, it passes.
+          const wrong = this.#io.chance() < FAILS;
+          went(wrong === fails);
         });
       }
     } else if (task.message.trim() === '') {
@@ -1120,20 +1151,31 @@ export class RunStore {
     });
   }
 
-  #finish(agent: string, task: string, token: object, outcome: Outcome, reply: string): void {
+  #finish(
+    agent: string,
+    task: string,
+    token: object,
+    outcome: Outcome,
+    reply: string,
+    asExpected?: boolean,
+  ): void {
     if (this.#busy.get(agent) !== token) return;
     this.#busy.delete(agent);
     this.#replies.set(JSON.stringify([agent, task]), reply);
-    this.#record(agent, task, outcome);
+    this.#record(agent, task, outcome, asExpected);
     this.#settle(true);
   }
 
-  /** Records how an agent's task went, for the next settle to move it on from. */
-  #record(agent: string, task: string, outcome: Outcome): void {
+  /**
+   * Records how an agent's task went, for the next settle to move it on from; and, for a step
+   * expected to fail, how that went against what was expected.
+   */
+  #record(agent: string, task: string, outcome: Outcome, asExpected?: boolean): void {
     const run = this.#run.agents[agent];
     if (!run) return;
-    const outcomes = { ...run.outcomes, [task]: outcome };
-    this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: { ...run, outcomes } } };
+    const next: AgentRun = { ...run, outcomes: { ...run.outcomes, [task]: outcome } };
+    if (asExpected !== undefined) next.asExpected = { ...run.asExpected, [task]: asExpected };
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: next } };
   }
 
   #after(ms: number, run: () => void): void {

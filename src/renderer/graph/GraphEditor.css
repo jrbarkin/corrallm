@@ -1499,6 +1499,61 @@ input.graph-label {
   font-size: 12px;
 }
 
+/*
+ * A step expected to fail: a line of its own under the step (and what it is to do), its chip, and
+ * once judged, how it went: green when it failed, as expected; red when it passed.
+ */
+.graph-queue-row:has(> .graph-queue-expectation) {
+  flex-wrap: wrap;
+}
+
+.graph-queue-expectation {
+  display: flex;
+  flex: 1 1 calc(100% - 22px);
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  order: 2;
+  min-width: 0;
+  /* Under the action: past the handle (14px) and the gap after it (8px). */
+  margin-left: 22px;
+}
+
+.graph-queue-expect {
+  flex: none;
+  white-space: nowrap;
+}
+
+/*
+ * A tool's action, which changes what its step is expected to do: it reads as text, and shows it
+ * can be clicked when pointed at.
+ */
+button.graph-queue-action {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.graph-queue-action:hover,
+button.graph-queue-action[aria-expanded='true'] {
+  color: var(--graph-accent, #2563eb);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.graph-queue-expected {
+  color: color-mix(in srgb, #22a35a 80%, CanvasText);
+  font-size: 12px;
+}
+
+.graph-queue-expected[data-expected='unmet'] {
+  color: color-mix(in srgb, #e5484d 85%, CanvasText);
+}
+
 .graph-queue-ok-asked {
   overflow: hidden;
   font-size: 12px;

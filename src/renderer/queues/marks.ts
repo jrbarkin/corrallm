@@ -15,9 +15,10 @@ export function taskKey(lane: string, item: string | null): string {
  * Every task's marks, by lane and id (null: the lane's end): `data-at` (where it is measured),
  * `data-mark` (a wait, stuck, work handed on, or an OK), `data-waited-for`, `data-active` (a link
  * of what the pointer is on ends there), `data-run` (the run is on it, held at it, waits on the
- * user for it as its agent (in `asking`) asks permission, or how it went), `data-until` (while the
- * run holds the agent at it, a delay or a wait with a time limit: when its time comes, in epoch
- * ms), `data-decide` (the run holds the agent there for the user to decide: its decision bar
+ * user for it as its agent (in `asking`) asks permission, or how it went), `data-expected` (a
+ * step expected to fail, once judged: `met`, it failed, as expected; `unmet`, it passed),
+ * `data-until` (while the run holds the agent at it, a delay or a wait with a time limit: when its
+ * time comes, in epoch ms), `data-decide` (the run holds the agent there for the user to decide: its decision bar
  * shows; not for a session that would not start), at an OK, `data-asked` (the last changes asked for there, this run) with
  * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
  * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
@@ -73,6 +74,7 @@ export function queueMarks(
     const until = held ? at.until : undefined;
     const asked = item === null ? undefined : at?.changes?.[item];
     const usage = held ? at.usage : undefined;
+    const expected = item === null ? undefined : at?.asExpected?.[item];
     return {
       'data-at': key,
       'data-mark': mark,
@@ -80,6 +82,7 @@ export function queueMarks(
       'data-active': activeEnds.has(key) ? '' : undefined,
       // A permission prompt in the task asks the user too; but only the run's own hold decides.
       'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
+      'data-expected': expected === undefined ? undefined : expected ? 'met' : 'unmet',
       'data-until': until === undefined ? undefined : String(until),
       // A session that would not start is decided where it says why (asks.ts), not on the row.
       'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,

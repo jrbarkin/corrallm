@@ -115,10 +115,21 @@ export const itemLabel = (item: QueueItem): string =>
                 : `“${threadTitle(item.message, 24)}”`
               : stepText(item, 24);
 
-/** A step: its action, and what it is to do when the user said, cut at `max` characters. */
-function stepText({ action, instruction = '' }: QueueStep, max: number): string {
-  return instruction.trim() === '' ? action : `${action} “${threadTitle(instruction, max)}”`;
+/**
+ * A step: its action, what it is to do when the user said (cut at `max` characters), and whether
+ * it is expected to fail.
+ */
+function stepText({ action, instruction = '', expect }: QueueStep, max: number): string {
+  const what = instruction.trim() === '' ? action : `${action} “${threadTitle(instruction, max)}”`;
+  return expect === 'fails' ? `${what} (expected to fail)` : what;
 }
+
+/**
+ * How a step expected to fail went, once judged (the run's AgentRun.asExpected): it failed, as
+ * expected (`true`: its success), or it passed (its failure).
+ */
+export const expectedText = (asExpected: boolean): string =>
+  asExpected ? 'failed, as expected' : 'passed, but was expected to fail';
 
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
 export function agentName(nodes: readonly GraphNode[], id: string): string {

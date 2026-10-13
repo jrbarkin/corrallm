@@ -1,6 +1,6 @@
 import type { Answer } from '../run/runner';
 import type { QueueEntry } from './QueueEditor';
-import type { Condition, QueueRepeat, Time, WaitTarget } from './queue';
+import type { Condition, QueueRepeat, QueueStep, Time, WaitTarget } from './queue';
 
 /** What changes about a repeat: when it stops, how many rounds it runs at most, and then what. */
 export type RepeatChange = Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>;
@@ -19,6 +19,8 @@ export interface QueueEdits {
   editMessage: (owner: string, itemId: string, message: string) => void;
   /** What a step is to do, in the user's words ('' takes it off). */
   setInstruction: (owner: string, itemId: string, instruction: string) => void;
+  /** Whether a step is expected to fail ('fails'), or (undefined) to succeed. */
+  setExpect: (owner: string, itemId: string, expect: QueueStep['expect']) => void;
   setCondition: (owner: string, ifId: string, condition: Condition) => void;
   setWaitFor: (owner: string, waitId: string, targets: WaitTarget[]) => void;
   /** A delay's time, or a wait's time limit (`undefined` takes the limit off). */
@@ -56,6 +58,9 @@ export function editsOf(edits: QueueEdits, owner: string) {
     },
     onInstruction: (itemId: string, instruction: string) => {
       edits.setInstruction(owner, itemId, instruction);
+    },
+    onExpect: (itemId: string, expect: QueueStep['expect']) => {
+      edits.setExpect(owner, itemId, expect);
     },
     onCondition: (ifId: string, condition: Condition) => {
       edits.setCondition(owner, ifId, condition);
