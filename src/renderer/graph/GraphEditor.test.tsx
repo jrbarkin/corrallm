@@ -268,6 +268,7 @@ describe('GraphEditor', () => {
     fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
     expect(field().getAttribute('aria-label')).toBe('Wait how long?');
     expect(field().placeholder).toBe('10 minutes, 1 hour, until 9:00…');
+    // A Claude agent's delay can also wait for Claude's usage to reset.
     expect(options()).toEqual([
       '5 minutes',
       '10 minutes',
@@ -275,6 +276,8 @@ describe('GraphEditor', () => {
       '1 hour',
       '4 hours',
       'Until 9:00 AM',
+      'Until Claude’s usage resets (5-hour)',
+      'Until Claude’s usage resets (weekly)',
     ]);
     // What is typed is read as the times it can mean, listed first.
     fireEvent.change(field(), { target: { value: '15' } });
@@ -344,11 +347,13 @@ describe('GraphEditor', () => {
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
     fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
-    expect(panel.getAllByRole('option').map((o) => o.textContent)).toEqual([
+    expect(panel.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
       'the previous step succeeded',
       'the previous step failed',
       'the output contains…',
       'the wait ran out of time',
+      // A Claude agent's If can check Claude's usage.
+      'Claude’s usage is over…',
     ]);
     fireEvent.click(panel.getByRole('option', { name: 'the wait ran out of time' }));
     // After a message, there is no wait to run out of time.
@@ -662,6 +667,132 @@ describe('GraphEditor', () => {
     expect(run('Planner: Grep')).toBe('running');
     expect(run('Builder: Your OK on the work before it')).toBe('stopped');
     expect(run('Tester: Your OK on the tests')).toBe('running');
+  });
+
+  it('shows a usage gauge per backend, with its rule and Simulate usage…, and holds the run by it', () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'Builder',
+            queue: [
+              { id: 'one', action: 'Edit' },
+              { id: 'two', action: 'Bash' },
+            ],
+          },
+        }),
+        agentNode('x', 0, 100, { data: { label: 'Coder', agent: 'Codex' } }),
+        agentNode('g', 0, 200, { data: { label: 'Writer', agent: 'Gemini' } }),
+      ],
+      edges: [],
+    });
+    // A gauge for each backend the agents use whose usage corrallm reads.
+    const gauge = (backend: string) =>
+      screen.getByRole('button', { name: new RegExp(`^${backend} usage:`) });
+    expect(gauge('Claude').getAttribute('aria-label')).toBe('Claude usage: no reading');
+    expect(gauge('Codex').getAttribute('aria-label')).toBe('Codex usage: no reading');
+    expect(screen.queryByRole('button', { name: /^Gemini usage/ })).toBeNull();
+
+    // Its panel: no reading yet, where readings come from, and the rule, set from chips.
+    fireEvent.click(gauge('Claude'));
+    const dialog = screen.getByRole('dialog', { name: 'Claude usage' });
+    const panel = within(dialog);
+    expect(panel.getByText('Not read yet')).toBeTruthy();
+    expect(panel.getByText(/Read from Claude Code’s status line/)).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Add a rule…' }));
+    fireEvent.click(panel.getByRole('option', { name: /^Pause and ask me/ }));
+    fireEvent.click(panel.getByRole('button', { name: 'Change the share: 80%' }));
+    fireEvent.change(panel.getByRole('combobox'), { target: { value: '90' } });
+    fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Enter' });
+    expect(panel.getByRole('button', { name: 'Change the share: 90%' })).toBeTruthy();
+    expect(
+      panel.getByRole('button', { name: 'Change what happens: Pause and ask me' }),
+    ).toBeTruthy();
+
+    // Simulated usage, to try it: the gauge fills, amber past the rule's share.
+    fireEvent.click(panel.getByRole('button', { name: 'Simulate usage…' }));
+    fireEvent.change(panel.getByRole('textbox', { name: '5-hour window: share used (%)' }), {
+      target: { value: '95' },
+    });
+    fireEvent.click(panel.getByRole('button', { name: 'Simulate' }));
+    expect(gauge('Claude').getAttribute('aria-label')).toBe(
+      'Claude usage: 95% of 5-hour window, 30% of weekly window',
+    );
+    expect(gauge('Claude').hasAttribute('data-over')).toBe(true);
+    expect(panel.getByText(/^Simulated /)).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Claude usage' })).toBeNull();
+
+    // Run: the Builder is held before its first task, and asked about on the canvas.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    // All queues shows the gauges too.
+    expect(queues.getByRole('button', { name: /^Claude usage:/ })).toBeTruthy();
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    const row = queues.getByRole('group', { name: 'Builder: Edit' });
+    expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
+    expect(
+      within(row).getByText('Claude has used 95% of its 5-hour window (over 90%)'),
+    ).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Wait for the reset' })).toBeTruthy();
+    expect(queues.getByRole('button', { name: 'Decide for Builder' }).title).toBe(
+      'Builder: Claude has used 95% of its 5-hour window (over 90%)',
+    );
+    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
+    expect(node('a').classList.contains('asking')).toBe(true);
+    const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(
+      sidebar.getByText('Claude has used 95% of its 5-hour window (over 90%). Go on?'),
+    ).toBeTruthy();
+    fireEvent.click(sidebar.getByRole('button', { name: 'Go on' }));
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+    expect(node('a').classList.contains('asking')).toBe(false);
+  });
+
+  it("checks a Claude agent's usage in an If, and waits for its window to reset", () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0),
+        agentNode('g', 0, 100, { data: { label: 'g', agent: 'Gemini' } }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const panel = within(screen.getByRole('dialog', { name: 'a' }));
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+    fireEvent.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
+    // The share is typed; each window is offered for it.
+    fireEvent.change(panel.getByRole('combobox', { name: 'Claude’s usage is over…' }), {
+      target: { value: '85' },
+    });
+    expect(options().slice(0, 2)).toEqual([
+      'Over 85% of the 5-hour window',
+      'Over 85% of the weekly window',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'Over 85% of the weekly window' }));
+    expect(
+      panel.getByRole('button', { name: 'Move If Claude’s usage is over 85% (weekly)' }),
+    ).toBeTruthy();
+
+    fireEvent.click(panel.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Claude’s usage resets (5-hour)',
+      }),
+    ).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Back to the canvas' }));
+
+    // A Gemini agent's usage is not read: neither is offered.
+    fireEvent.doubleClick(node('g'));
+    const other = within(screen.getByRole('dialog', { name: 'g' }));
+    fireEvent.click(other.getByRole('button', { name: 'Add to queue' }));
+    fireEvent.click(other.getByRole('option', { name: /^If… then/ }));
+    expect(other.queryByRole('option', { name: /usage/ })).toBeNull();
   });
 
   it("offers a Claude agent Claude Code's own tools, Workflow included", () => {

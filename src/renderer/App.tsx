@@ -6,6 +6,7 @@ import type { CanvasFiles } from './graph/GraphEditor';
 import { OpenLinkContext } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
+import type { UsageSource } from './usage/store';
 
 /**
  * Canvases are opened and saved by the main process (src/main/canvas.ts), which also keeps the
@@ -54,6 +55,14 @@ const openLink: OpenLink = (url) => {
   window.api.openLink(url).catch(() => undefined);
 };
 
+/** Usage readings and rules are main's (src/main/usage.ts): one per backend, for every canvas. */
+const usageSource: UsageSource = {
+  get: () => window.api.getUsage(),
+  setRule: (backend, rule) => window.api.setUsageRule(backend, rule),
+  simulate: (backend, windows) => window.api.simulateUsage(backend, windows),
+  onChanged: (listener) => window.api.onUsageChanged(listener),
+};
+
 type PingState =
   { status: 'pending' } | { status: 'ok'; version: string } | { status: 'error'; message: string };
 
@@ -95,6 +104,7 @@ export function App() {
           files={files}
           sessionBackend={sessionBackend}
           terminalBackend={terminalBackend}
+          usageSource={usageSource}
         />
       </OpenLinkContext.Provider>
     </main>

@@ -166,4 +166,33 @@ describe('preload', () => {
     stop();
     expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
   });
+
+  it('invokes the usage channels with their arguments', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue({ readings: [], rules: {} });
+    await expect(api.getUsage()).resolves.toEqual({ readings: [], rules: {} });
+    expect(invoke).toHaveBeenLastCalledWith('usage:get');
+    const rule = { window: 'weekly', percent: 90, action: 'warn' } as const;
+    await api.setUsageRule('Claude', rule);
+    expect(invoke).toHaveBeenLastCalledWith('usage:rule', 'Claude', rule);
+    const windows = { fiveHour: { usedPercent: 85, resetsAt: null } };
+    await api.simulateUsage('Claude', windows);
+    expect(invoke).toHaveBeenLastCalledWith('usage:simulate', 'Claude', windows);
+  });
+
+  it('passes usage changes on without Electron’s event object, until told to stop', async () => {
+    const api = await exposed();
+    const heard = vi.fn<Parameters<AppApi['onUsageChanged']>[0]>();
+    const stop = api.onUsageChanged(heard);
+    const [channel, receive] = on.mock.calls[0] ?? [];
+    expect(channel).toBe('usage:changed');
+    if (!receive) throw new Error('not listening');
+
+    const state = { readings: [], rules: {} };
+    receive({ sender: 'the ipcRenderer event' }, state);
+    expect(heard).toHaveBeenCalledWith(state);
+
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('usage:changed', receive);
+  });
 });

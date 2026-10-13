@@ -20,6 +20,7 @@ import { agentEnvironment, loginShellEnvironment } from './sessions/environment'
 import { SessionManager } from './sessions/manager';
 import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
+import { UsageReadings } from './usage';
 import { createMainWindow } from './window';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
@@ -94,6 +95,14 @@ function main(): void {
       // What the user chose for the app as a whole.
       const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
       const projects = new ProjectFolders(memory, canvasFile);
+      // Every backend's usage, read from its agents' CLIs: every window hears each change.
+      const usage = new UsageReadings({ file: path.join(app.getPath('userData'), 'usage.json') });
+      await usage.load();
+      usage.subscribe((state) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendEvent(window.webContents, 'usage:changed', state);
+        }
+      });
       let environment: Promise<Record<string, string>> | undefined;
       // Resolved once, when the first session starts.
       const agentsEnvironment = () =>
@@ -106,6 +115,9 @@ function main(): void {
           clientApp: `${app.getName()}/${app.getVersion()}`,
           distribution: CORRALLM_DISTRIBUTION,
           consent: planConsent(settings),
+          usage: (backend, windows) => {
+            usage.take(backend, windows);
+          },
         }),
         environment: agentsEnvironment,
         // The conversations Claude Code kept, whichever connection ran them.
@@ -142,7 +154,7 @@ function main(): void {
         },
         openExternal: (url) => shell.openExternal(url),
       });
-      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions });
+      registerIpcHandlers(trustedOrigin, { projects, files, links, sessions, usage });
 
       // Every agent's process ends before the app does, and what main remembers is written.
       let quitting = false;
@@ -155,6 +167,7 @@ function main(): void {
           memory.flush(),
           settings.flush(),
           links.flush(),
+          usage.flush(),
         ]).finally(() => {
           app.quit();
         });

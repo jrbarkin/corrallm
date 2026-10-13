@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Connection, MessageImage } from '../../shared/session';
+import type { UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { RunStore } from './runner';
@@ -49,6 +50,7 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
   const told: [string, string][] = [];
   /** The connections the run switched agents to, as the user chose. */
   const connects: [string, Connection][] = [];
+  let usage: UsageState = { readings: [], rules: {} };
   const store = new RunStore({
     send: (to, text, done, images, refused) => {
       const message: (typeof sent)[number] = {
@@ -80,6 +82,7 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     },
     now: () => clock,
     chance,
+    usage: () => usage,
   });
   store.update(initial);
   const tick = () => {
@@ -132,6 +135,24 @@ function setup(initial: GraphNode[], chance = () => 0.9) {
     pending: () => timers.length,
     edit: (next: GraphNode[]) => {
       store.update(next);
+    },
+    /** The time now on the run's clock. */
+    now: () => clock,
+    /** Main tells a new reading of Claude's usage (read now), or a rule. */
+    reading: (windows: UsageWindows | null) => {
+      const others = usage.readings.filter((r) => r.backend !== 'Claude');
+      usage = {
+        ...usage,
+        readings: [
+          ...others,
+          ...(windows ? [{ backend: 'Claude' as const, windows, at: clock }] : []),
+        ],
+      };
+      store.usageChanged();
+    },
+    rule: (rule: UsageRule | null) => {
+      usage = { ...usage, rules: rule ? { Claude: rule } : {} };
+      store.usageChanged();
     },
   };
 }
@@ -1350,6 +1371,274 @@ describe('RunStore', () => {
       store.decide('a', 'loop', { reply: 'Like this', images: [png] });
       expect(sent.at(-2)).toMatchObject({ text: 'Like this', images: [png] });
       expect(sent.at(-1)?.text).toBe('Make it match');
+    });
+  });
+
+  describe('usage', () => {
+    const HOUR = 60 * MINUTE;
+    /** Claude's 5-hour window, `used` percent of it used, resetting in `left` ms. */
+    const fiveHour = (used: number, resetsAt: number | null = 2 * HOUR) => ({
+      fiveHour: { usedPercent: used, resetsAt },
+    });
+    const ask = { window: 'fiveHour', percent: 80, action: 'ask' } as const;
+
+    it('checks an If on usage against the latest reading when the run reaches it', () => {
+      const queue: QueueItem[] = [
+        {
+          id: 'high',
+          if: { kind: 'usageAbove', backend: 'Claude', window: 'fiveHour', percent: 80 },
+          then: [{ id: 'hand', message: 'Hand the mechanical steps to Codex', target: 'b' }],
+        },
+        { id: 'work', message: 'Go on' },
+      ];
+      const run = setup([connected('a', queue), agent('b')], never);
+      run.reading(fiveHour(85));
+      run.store.start();
+      expect(run.sent.map((s) => s.agent)).toEqual(['b']);
+      // Decided once: a reading after it changes nothing.
+      run.reading(fiveHour(10));
+      run.reply('b');
+      expect(run.store.snapshot().agents.a?.outcomes.high).toBe('succeeded');
+
+      // Not over (or no reading, or a window that has reset): skipped.
+      for (const windows of [fiveHour(80), null, fiveHour(99, run.now())]) {
+        const again = setup([connected('a', queue), agent('b')], never);
+        again.reading(windows);
+        again.store.start();
+        expect(again.store.snapshot().agents.a?.outcomes.high).toBe('skipped');
+      }
+    });
+
+    it('pauses and asks, between tasks, once usage passes the rule’s share', () => {
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'two', action: 'Bash' },
+        ]),
+      ]);
+      run.rule(ask);
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'running one' });
+      // The task going on goes on.
+      run.reading(fiveHour(85));
+      expect(run.where()).toEqual({ a: 'running one' });
+      run.tick();
+      expect(run.where()).toEqual({ a: 'asking two' });
+      expect(run.store.snapshot().agents.a?.usage).toEqual({
+        backend: 'Claude',
+        window: 'fiveHour',
+        percent: 80,
+        used: 85,
+        resetsAt: 2 * HOUR,
+      });
+    });
+
+    it('holds every agent on the backend, and Go on goes on for all until the window resets', () => {
+      const gemini = agent('g', [{ id: 'four', action: 'Edit' }]);
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'later', delay: { seconds: 3 * 60 * 60 } },
+          { id: 'two', action: 'Bash' },
+        ]),
+        agent('b', [{ id: 'three', message: 'Write the docs' }]),
+        // Not on it: Gemini's usage is not read, and an Agent SDK agent runs on an API key.
+        { ...gemini, data: { ...gemini.data, agent: 'Gemini' } },
+        connected('s', [{ id: 'five', message: 'Review' }], 'sdk'),
+      ]);
+      run.rule(ask);
+      run.reading(fiveHour(90));
+      run.store.start();
+      expect(run.where()).toEqual({
+        a: 'asking one',
+        b: 'asking three',
+        g: 'running four',
+        s: 'running five',
+      });
+      run.store.decide('a', 'one', { choice: 'goOn' });
+      expect(run.where()).toMatchObject({ a: 'running one', b: 'running three' });
+
+      // Once the window resets, a new reading over the share asks again.
+      run.advance(2 * HOUR);
+      expect(run.where()).toMatchObject({ a: 'waiting later' });
+      run.reading(fiveHour(95, 7 * HOUR));
+      run.advance(HOUR + MINUTE);
+      expect(run.where()).toMatchObject({ a: 'asking two' });
+    });
+
+    it('waits for the reset when asked to, or stops the queue there', () => {
+      const queue: QueueItem[] = [{ id: 'one', action: 'Edit' }];
+      const run = setup([agent('a', queue), agent('b', [{ id: 'w', waitFor: [{ agent: 'a' }] }])]);
+      run.rule(ask);
+      run.reading(fiveHour(90));
+      run.store.start();
+      run.store.decide('a', 'one', { choice: 'wait' });
+      expect(run.where()).toMatchObject({ a: 'waiting one' });
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      run.advance(2 * HOUR);
+      expect(run.where()).toMatchObject({ a: 'running one' });
+
+      const stopped = setup([
+        agent('a', queue),
+        agent('b', [{ id: 'w', waitFor: [{ agent: 'a' }] }]),
+      ]);
+      stopped.rule(ask);
+      stopped.reading(fiveHour(90));
+      stopped.store.start();
+      stopped.store.decide('a', 'one', { choice: 'stop' });
+      expect(stopped.where()).toEqual({ a: 'stopped one', b: 'stopped w' });
+    });
+
+    it('stops the whole if-then or repeat a held step sits in', () => {
+      const queue: QueueItem[] = [
+        { id: 'first', action: 'Read' },
+        { id: 'if', if: { kind: 'succeeded' }, then: [{ id: 'in-if', action: 'Edit' }] },
+        { id: 'after', action: 'Bash' },
+      ];
+      const run = setup([agent('a', queue)]);
+      run.rule(ask);
+      run.store.start();
+      run.reading(fiveHour(90));
+      run.tick();
+      expect(run.where()).toEqual({ a: 'asking in-if' });
+      run.store.decide('a', 'in-if', { choice: 'stop' });
+      expect(run.where()).toEqual({ a: 'stopped if' });
+    });
+
+    it('finishes the task going on, then waits for the reset, as a rule may say', () => {
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'two', action: 'Bash' },
+        ]),
+      ]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'waitForReset' });
+      run.store.start();
+      run.reading(fiveHour(85));
+      run.tick();
+      expect(run.where()).toEqual({ a: 'waiting two' });
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      // A new reading after the reset (usage counted afresh) frees it, as the reset time does.
+      run.advance(HOUR);
+      expect(run.where()).toEqual({ a: 'waiting two' });
+      run.advance(HOUR);
+      expect(run.where()).toEqual({ a: 'running two' });
+    });
+
+    it('goes on now from a wait for the reset, for the rest of the window', () => {
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'two', action: 'Bash' },
+        ]),
+      ]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'waitForReset' });
+      run.reading(fiveHour(85));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'waiting one' });
+      run.store.goOn('a', 'one');
+      expect(run.where()).toEqual({ a: 'running one' });
+      run.tick();
+      expect(run.where()).toEqual({ a: 'running two' });
+    });
+
+    it('lets a lower reading, or a rule taken off, free a held agent', () => {
+      const run = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      run.rule(ask);
+      run.reading(fiveHour(85));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'asking one' });
+      run.reading(fiveHour(40));
+      expect(run.where()).toEqual({ a: 'running one' });
+
+      const ruled = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      ruled.rule(ask);
+      ruled.reading(fiveHour(85));
+      ruled.store.start();
+      ruled.rule(null);
+      expect(ruled.where()).toEqual({ a: 'running one' });
+    });
+
+    it('warns once a window, in the session of the agent that reaches its next task, and goes on', () => {
+      const run = setup([
+        agent('a', [
+          { id: 'one', action: 'Edit' },
+          { id: 'two', action: 'Bash' },
+        ]),
+        agent('b', [{ id: 'three', action: 'Edit' }]),
+      ]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'warn' });
+      run.reading(fiveHour(85, null));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'running one', b: 'running three' });
+      run.tick();
+      expect(run.where()).toEqual({ a: 'running two', b: 'done' });
+      expect(run.told).toEqual([['a', 'Claude has used 85% of its 5-hour window (over 80%).']]);
+    });
+
+    it('asks when it cannot wait for a reset it does not know', () => {
+      const run = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'waitForReset' });
+      run.reading(fiveHour(85, null));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'asking one' });
+      run.store.decide('a', 'one', { choice: 'wait' });
+      expect(run.where()).toEqual({ a: 'asking one' });
+    });
+
+    it('waits until usage resets: the reset time of the reading when the queue reached it', () => {
+      const queue: QueueItem[] = [
+        { id: 'reset', delay: { resets: 'fiveHour', backend: 'Claude' } },
+        { id: 'big', message: 'Start the big refactor' },
+      ];
+      const run = setup([connected('a', queue, 'terminal')], never);
+      run.reading(fiveHour(30));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'waiting reset' });
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      // A later reading (the next window's) does not move it.
+      run.advance(HOUR);
+      run.reading(fiveHour(5, 6 * HOUR));
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      run.advance(HOUR);
+      expect(run.sent.map((s) => s.text)).toEqual(['Start the big refactor']);
+    });
+
+    it('limits a wait until usage resets, or not at all without a reading', () => {
+      const queue: QueueItem[] = [
+        { id: 'w', waitFor: [{ agent: 'b' }], timeout: { resets: 'fiveHour', backend: 'Claude' } },
+      ];
+      const b = agent('b', [{ id: 'long', delay: { seconds: 6 * 60 * 60 } }]);
+      const run = setup([agent('a', queue), b]);
+      run.reading(fiveHour(30));
+      run.store.start();
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      run.advance(2 * HOUR);
+      expect(run.store.snapshot().agents.a?.outcomes.w).toBe('timedOut');
+
+      const unread = setup([agent('a', queue), b]);
+      unread.store.start();
+      expect(unread.where()).toMatchObject({ a: 'waiting w' });
+      expect(unread.store.snapshot().agents.a?.until).toBeUndefined();
+      unread.tick();
+      expect(unread.told).toEqual([]);
+    });
+
+    it('goes on at once from a wait for a reset with no reading, saying so', () => {
+      const queue: QueueItem[] = [
+        { id: 'reset', delay: { resets: 'weekly', backend: 'Claude' } },
+        { id: 'big', message: 'Start the big refactor' },
+      ];
+      const run = setup([connected('a', queue, 'terminal')], never);
+      run.store.start();
+      expect(run.sent.map((s) => s.text)).toEqual(['Start the big refactor']);
+      run.tick();
+      expect(run.told).toEqual([
+        [
+          'a',
+          'Claude’s usage hasn’t been read yet, so the queue went on without waiting for its weekly reset.',
+        ],
+      ]);
     });
   });
 });

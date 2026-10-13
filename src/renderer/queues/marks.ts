@@ -3,6 +3,7 @@ import { isApproval, isRepeat, isRepeatEnds, isWait } from '../graph/queue';
 import type { QueueItem, QueueRepeat } from '../graph/queue';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
+import { holdText } from '../usage/usage';
 import type { Lanes } from './lanes';
 
 /** A task's key, by its agent's id and its own (null: the end of the agent's queue). */
@@ -20,6 +21,8 @@ export function taskKey(lane: string, item: string | null): string {
  * shows; not for a session that would not start), at an OK, `data-asked` (the last changes asked for there, this run) with
  * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
  * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
+ * Where a usage rule holds the agent before a task: `data-usage` (why), `data-usage-backend` (whose
+ * usage) and `data-usage-reset` (when its window resets, in epoch ms, if known).
  */
 export function queueMarks(
   { lanes, links, isStuck }: Lanes,
@@ -69,6 +72,7 @@ export function queueMarks(
     const held = run.running && at?.current === item;
     const until = held ? at.until : undefined;
     const asked = item === null ? undefined : at?.changes?.[item];
+    const usage = held ? at.usage : undefined;
     return {
       'data-at': key,
       'data-mark': mark,
@@ -81,6 +85,11 @@ export function queueMarks(
       'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
+      'data-usage':
+        usage && `${holdText(usage)}${at?.status === 'waiting' ? ': waiting for it to reset' : ''}`,
+      'data-usage-backend': usage?.backend,
+      'data-usage-reset':
+        usage?.resetsAt === null || usage === undefined ? undefined : String(usage.resetsAt),
       'data-round':
         repeat && roundText(repeat, run, lane, (agent, id) => repeats.get(taskKey(agent, id))),
     };

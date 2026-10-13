@@ -9,6 +9,7 @@ import type {
   UserMessage,
 } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
+import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
@@ -128,6 +129,11 @@ export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
   /** Its environment: the agents' (spec.env), as a terminal sets it up (connector.ts). */
   env: (token: string) => Record<string, string>;
   timing: TerminalTiming;
+  /**
+   * Takes what its CLI says of its account's usage limits (cli.ts: `statusLine`, `readUsage`), for
+   * main's readings.
+   */
+  usage?: (windows: UsageWindows) => void;
 }
 
 export class TerminalSession<M extends SessionMode = PermissionMode> implements LiveSession<M> {
@@ -217,9 +223,16 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** Starts its CLI: resolves once it runs. */
   async launch(): Promise<void> {
     try {
-      this.#registration = await this.#deps.hooks.register((event) => {
-        this.#hook(event);
-      });
+      this.#registration = await this.#deps.hooks.register(
+        (event) => {
+          this.#hook(event);
+        },
+        // A CLI with a status line of corrallm's posts its input there too.
+        this.#cli.statusLine &&
+          ((input) => {
+            this.#statusLine(input);
+          }),
+      );
       this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-terminal-'));
       await this.#cli.prepare(this.#settingsDir, this.#registration);
       await this.#start();
@@ -235,6 +248,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       // The terminal is its own model picker.
       models: [],
     });
+    this.#readUsage();
   }
 
   send(message: UserMessage): Promise<void> {
@@ -523,6 +537,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       interrupted,
       failed: !interrupted && (turn.failed || (turn.ran && this.#state === 'error')),
     });
+    this.#readUsage();
   }
 
   /** Whether a message can be typed now: the CLI's prompt is ready, and empty. */
@@ -793,6 +808,30 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     if (listed === this.#listed) return;
     this.#listed = listed;
     this.#host.emit({ type: 'asking', asks });
+  }
+
+  // ---- Usage.
+
+  /** What its CLI gave its status line (Claude Code's): its usage limits go to main's readings. */
+  #statusLine(input: HookEvent): void {
+    if (this.#exited || this.#closing) return;
+    const windows = this.#cli.statusLine?.(input);
+    if (windows) this.#deps.usage?.(windows);
+  }
+
+  /**
+   * Reads its account's usage, where its CLI reads it apart from its terminal (Codex's: a private
+   * app server), as it starts and after each turn: what it says goes to main's readings.
+   */
+  #readUsage(): void {
+    const usage = this.#deps.usage;
+    if (!usage || !this.#cli.readUsage) return;
+    void this.#cli.readUsage().then(
+      (windows) => {
+        if (windows && !this.#closing) usage(windows);
+      },
+      () => undefined,
+    );
   }
 
   // ---- Housekeeping.

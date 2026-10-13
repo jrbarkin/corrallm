@@ -9,6 +9,7 @@ import {
   PERMISSION_MODES,
 } from '../../../shared/session';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
+import type { UsageWindows } from '../../../shared/usage';
 import { askedQuestions } from '../sdk/prompts';
 import { property, text as textOf, toolSummary } from '../sdk/tools';
 import type { Places } from '../sdk/tools';
@@ -16,11 +17,13 @@ import type { Launch, TerminalCli, TerminalSignal } from './cli';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
+import { statusLineSettings, statusLineUsage } from './statusline';
 import { keystrokes, typeable } from './typing';
 
 /*
  * Claude Code, as a Terminal session runs it (cli.ts). It starts with --settings (a file in the
- * session's folder: corrallm's HTTP hooks, merged with the user's), --session-id (new) or --resume
+ * session's folder: corrallm's HTTP hooks, merged with the user's, and corrallm's status line,
+ * which reads its usage limits and runs the user's own: statusline.ts), --session-id (new) or --resume
  * (one with no transcript starts afresh under the same id), and --model/--permission-mode only
  * when corrallm was given them (otherwise the user's own default model and mode apply). Its screen
  * reports its state (Program Status, OSC 7501: read by the session's screen) and shows its prompt
@@ -48,6 +51,8 @@ export interface ClaudeCodeOptions {
   cwd: string;
   /** The user's home folder: where the files it asks about are shown from (as ~), outside it. */
   home: string;
+  /** Its environment (the agents'), which finds the user's own status line. */
+  env: Readonly<Record<string, string>>;
 }
 
 export class ClaudeCode implements TerminalCli<PermissionMode> {
@@ -68,9 +73,11 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly defaultMode = 'manual';
   /** Where it works, for the files its asks are about. */
   #places: Places;
+  readonly #env: Readonly<Record<string, string>>;
 
-  constructor({ cwd, home }: ClaudeCodeOptions) {
+  constructor({ cwd, home, env }: ClaudeCodeOptions) {
     this.#places = { cwd, home };
+    this.#env = env;
   }
 
   newId(): string {
@@ -82,9 +89,19 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     const { cwd } = this.#places;
     const realCwd = await realpath(cwd).catch(() => cwd);
     if (realCwd !== cwd) this.#places = { ...this.#places, realCwd };
-    await writeFile(path.join(dir, SETTINGS), JSON.stringify(hookSettings(hooks.url)), {
-      mode: 0o600,
+    // corrallm's status line, which wraps the user's own, reports Claude Code's usage limits.
+    const statusLine = await statusLineSettings({
+      dir,
+      url: hooks.statusUrl,
+      token: hooks.token,
+      env: this.#env,
+      cwd,
     });
+    await writeFile(
+      path.join(dir, SETTINGS),
+      JSON.stringify({ ...hookSettings(hooks.url), ...statusLine }),
+      { mode: 0o600 },
+    );
   }
 
   args({ dir, id, resume, model, mode }: Launch<PermissionMode>): string[] {
@@ -194,6 +211,10 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
 
   submitted(text: string): string {
     return typeable(text).trim();
+  }
+
+  statusLine(input: HookEvent): UsageWindows | undefined {
+    return statusLineUsage(input, Date.now());
   }
 }
 

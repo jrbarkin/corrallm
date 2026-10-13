@@ -2,6 +2,7 @@ import type { Edge } from '@xyflow/react';
 
 import { CONNECTIONS } from '../../shared/session';
 import type { Connection } from '../../shared/session';
+import { USAGE_BACKENDS, USAGE_WINDOWS } from '../../shared/usage';
 import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
@@ -37,7 +38,11 @@ import type {
  * folder) is not in the file, which main remembers per file instead. Queue items are as queue.ts
  * has them; a step may say what it is to do ("instruction", text: none when empty); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
  * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
- * whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An OK
+ * whole number from 1 to 604800 (7 days), { "at": "HH:MM" }, a 24-hour local time of day, or
+ * { "resets": "fiveHour" | "weekly", "backend": "Claude" | "Codex" }, when that backend's usage
+ * window resets (by its latest reading). An if-then's condition may be { "kind": "usageAbove",
+ * "backend", "window", "percent" }: whether the backend's usage is over that share (1 to 99) of
+ * the window. Usage rules are not in the file: they are the user's, kept by main. An OK
  * is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
  * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
@@ -349,10 +354,21 @@ function readDelay(item: Record<string, unknown>, where: string): QueueDelay {
   return { id: name(item.id, `${where}.id`), delay: readTime(item.delay, `${where}.delay`) };
 }
 
-/** `{ "seconds" }` (a whole number from 1 to MAX_SECONDS), or `{ "at": "HH:MM" }`. */
+/**
+ * `{ "seconds" }` (a whole number from 1 to MAX_SECONDS), `{ "at": "HH:MM" }`, or `{ "resets",
+ * "backend" }`.
+ */
 function readTime(value: unknown, where: string): Time {
   const time = record(value, where);
-  if ('seconds' in time === 'at' in time) throw new Error(`${where} must have seconds or at`);
+  if (['seconds', 'at', 'resets'].filter((key) => key in time).length !== 1) {
+    throw new Error(`${where} must have one of seconds, at or resets`);
+  }
+  if ('resets' in time) {
+    return {
+      resets: oneOf(time.resets, `${where}.resets`, USAGE_WINDOWS),
+      backend: oneOf(time.backend, `${where}.backend`, USAGE_BACKENDS),
+    };
+  }
   if ('at' in time) {
     if (typeof time.at !== 'string' || !CLOCK.test(time.at))
       throw new Error(`${where}.at must be a time like "09:00"`);
@@ -388,11 +404,35 @@ function readCondition(value: unknown, where: string): Condition {
     case 'outputContains':
     case 'freeText':
       return { kind: condition.kind, text: text(condition.text, `${where}.text`) };
+    case 'usageAbove': {
+      const { percent } = condition;
+      if (
+        typeof percent !== 'number' ||
+        !Number.isInteger(percent) ||
+        percent < 1 ||
+        percent > 99
+      ) {
+        throw new Error(`${where}.percent must be a whole number from 1 to 99`);
+      }
+      return {
+        kind: 'usageAbove',
+        backend: oneOf(condition.backend, `${where}.backend`, USAGE_BACKENDS),
+        window: oneOf(condition.window, `${where}.window`, USAGE_WINDOWS),
+        percent,
+      };
+    }
     default:
       throw new Error(
-        `${where}.kind must be one of: succeeded, failed, outputContains, timedOut, freeText`,
+        `${where}.kind must be one of: succeeded, failed, outputContains, timedOut, freeText, usageAbove`,
       );
   }
+}
+
+/** One of `allowed`, or throws naming them. */
+function oneOf<T extends string>(value: unknown, where: string, allowed: readonly T[]): T {
+  const found = allowed.find((one) => one === value);
+  if (found === undefined) throw new Error(`${where} must be one of: ${allowed.join(', ')}`);
+  return found;
 }
 
 /**

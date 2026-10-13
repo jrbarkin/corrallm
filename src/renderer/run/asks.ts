@@ -4,14 +4,16 @@ import type { GraphNode } from '../graph/graph';
 import { agentName, itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
 import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
+import { holdText, resetTime } from '../usage/usage';
+import type { UsageHold } from '../usage/usage';
 import type { Run } from './runner';
 
 /*
  * What each hold for the user asks (an OK, a repeat out of rounds, a session that would not
- * start), derived from the graph and the run, never stored: an edit or a Stop needs nothing
- * withdrawn. One ask shows in four places (a
- * queue's row, All queues' lane head, the canvas's Needs you sidebar, the bar above an agent's
- * composer or, for a Terminal agent, under its terminal), each answering through RunStore.decide.
+ * start, a usage rule), derived from the graph and the run, never stored: an edit or a Stop needs
+ * nothing withdrawn. One ask shows in four places (a queue's row, All queues' lane head, the
+ * canvas's Needs you sidebar, the bar above an agent's composer or, for a Terminal agent, under
+ * its terminal), each answering through RunStore.decide.
  */
 
 /** One way to answer a hold: `key` is what RunStore.decide is told (`{ choice: key }`). */
@@ -49,6 +51,37 @@ const ROUND_ANSWERS: Answers = {
 };
 
 /**
+ * How the user answers where a usage rule holds an agent before a task: Go on (primary) or Wait
+ * for the reset (each for every agent on that backend, until the window resets), or Stop here.
+ * No wait without a reset time to wait for.
+ */
+export function usageAnswers({
+  backend,
+  resetsAt,
+}: Pick<UsageHold, 'backend' | 'resetsAt'>): Answers {
+  return {
+    choices: [
+      {
+        key: 'goOn',
+        label: 'Go on',
+        title: `Every ${backend} agent carries on until the window resets`,
+        primary: true,
+      },
+      ...(resetsAt === null
+        ? []
+        : [
+            {
+              key: 'wait',
+              label: 'Wait for the reset',
+              title: `Every ${backend} agent holds until the window resets, then goes on`,
+            },
+          ]),
+      { key: 'stop', label: 'Stop here', title: 'Stop this queue here, and whatever waits on it' },
+    ],
+  };
+}
+
+/**
  * How the user answers at an item, if the run can hold its queue there for them. An OK: Approve
  * (primary) or Stop here, or the changes to make, in their words. A repeat out of rounds: One more
  * round (primary) or Go on, or what to try next, in their words (then one more round).
@@ -77,9 +110,10 @@ export interface HeldAsk extends Answers {
  * after the work before it (pauses passed over), if there is any. A repeat out of rounds says how
  * many it ran, and what still does not hold. A task whose session would not start says why, and
  * what waits, and offers to switch that session's agent: "Switch to Terminal" ("Switch Reviewer
- * to Terminal" for an agent it handed a message to).
+ * to Terminal" for an agent it handed a message to). A usage rule says how much of which window is
+ * used, before the task it holds, and when the window resets (as of `now`).
  */
-export function heldAsks(nodes: readonly GraphNode[], run: Run): HeldAsk[] {
+export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()): HeldAsk[] {
   if (!run.running) return [];
   return nodes.flatMap((agent): HeldAsk[] => {
     const at = run.agents[agent.id];
@@ -104,6 +138,19 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run): HeldAsk[] {
             },
           ],
           refusal: { agent: to, switchTo },
+        },
+      ];
+    }
+    if (item && at.usage) {
+      const reset =
+        at.usage.resetsAt === null ? '' : ` · resets ${resetTime(at.usage.resetsAt, now)}`;
+      return [
+        {
+          agent,
+          item,
+          text: `${holdText(at.usage)}. Go on?`,
+          detail: `Before ${itemLabel(item)}${reset}`,
+          ...usageAnswers(at.usage),
         },
       ];
     }

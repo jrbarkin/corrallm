@@ -10,6 +10,7 @@ import { CodexTui, PASTE_END, PASTE_START, pasteable } from './tui';
 
 const HOOKS: HookRegistration = {
   url: 'http://127.0.0.1:4000/hook',
+  statusUrl: 'http://127.0.0.1:4000/status',
   token: 'secret',
   release: () => undefined,
 };

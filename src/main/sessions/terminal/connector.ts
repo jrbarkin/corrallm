@@ -1,5 +1,6 @@
 import { homedir, tmpdir } from 'node:os';
 
+import type { UsageBackend, UsageWindows } from '../../../shared/usage';
 import { requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
@@ -50,6 +51,8 @@ export interface TerminalConnectorOptions {
   timing?: Partial<TerminalTiming>;
   /** The user's home folder. */
   home?: string;
+  /** Takes the usage readings its sessions' status lines report (main's UsageReadings). */
+  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
 }
 
 export class TerminalConnector implements Connector {
@@ -58,6 +61,7 @@ export class TerminalConnector implements Connector {
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #home: string;
+  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
 
@@ -67,24 +71,27 @@ export class TerminalConnector implements Connector {
     tmp = tmpdir(),
     timing = {},
     home = homedir(),
+    usage,
   }: TerminalConnectorOptions = {}) {
     this.#spawn = spawn;
     this.#findClaude = findClaude;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...timing };
     this.#home = home;
+    this.#usage = usage;
   }
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#findClaude(spec.env);
     const session = new TerminalSession(spec, host, {
       executable: claude,
-      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home }),
+      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home, env: spec.env }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
+      usage: (windows) => this.#usage?.('Claude', windows),
     });
     await session.launch();
     return session;

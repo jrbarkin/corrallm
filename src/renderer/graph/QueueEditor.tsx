@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 
+import { USAGE_WINDOWS } from '../../shared/usage';
+import type { UsageBackend, UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
-import { answersOf } from '../run/asks';
+import { answersOf, usageAnswers } from '../run/asks';
+import type { Answers } from '../run/asks';
 import type { Answer } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
+import { backendOfType, windowText } from '../usage/usage';
+import { DEFAULT_AGENT } from './agents';
 import type { AgentAction, AgentType } from './agents';
 import type { GraphNode } from './graph';
 import type { RepeatChange } from './edits';
@@ -388,6 +393,7 @@ function contextOf({
     owner: node.id,
     inRepeat: false,
     agent,
+    usage: backendOfType(agent),
     actions,
     others,
     name,
@@ -425,6 +431,11 @@ function contextOf({
 interface AddContext {
   owner: string;
   inRepeat: boolean;
+  /**
+   * The backend the agent's type is, if corrallm reads its usage: an If can check it, and a delay
+   * wait for its usage window to reset.
+   */
+  usage?: UsageBackend | undefined;
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
   itemLabel: (item: QueueItem) => string;
@@ -482,6 +493,7 @@ export function QueueAddMenu({
   const context = {
     owner: node.id,
     inRepeat: false,
+    usage: backendOfType(node.data.agent ?? DEFAULT_AGENT),
     actions,
     others,
     itemLabel,
@@ -587,16 +599,25 @@ function TimePicker({
   label,
   current,
   allowNone = false,
+  usage,
   onPick,
   onCancel,
 }: {
   label: string;
   current?: Time;
   allowNone?: boolean;
+  /** A backend whose usage windows' resets are offered too (a delay's, for an agent on it). */
+  usage?: UsageBackend | undefined;
   onPick: (time: Time | undefined) => void;
   onCancel: () => void;
 }) {
-  const options: (Time | null)[] = [...(allowNone ? [null] : []), ...TIME_PRESETS];
+  const options: (Time | null)[] = [
+    ...(allowNone ? [null] : []),
+    ...TIME_PRESETS,
+    ...(usage === undefined
+      ? []
+      : USAGE_WINDOWS.map((resets): Time => ({ resets, backend: usage }))),
+  ];
   return (
     <SearchPicker
       label={label}
@@ -771,8 +792,40 @@ function StepRow({
         }}
       />
       <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
+      <RowCountdown id={item.id} context={context} />
+      <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
+      <UsageHeld item={item} context={context} />
     </div>
+  );
+}
+
+/**
+ * Where a usage rule holds the run before a task (its row's `data-usage`): why, and while it asks
+ * the user, how to decide (Go on, Wait for the reset, Stop here), shown without pointing at it.
+ */
+function UsageHeld({ item, context }: { item: QueueStep | QueueMessage; context: Context }) {
+  const marks = context.marks(item.id);
+  const why = marks['data-usage'];
+  const backend = marks['data-usage-backend'];
+  if (why === undefined || backend === undefined) return null;
+  const reset = marks['data-usage-reset'];
+  return (
+    <>
+      <span className="graph-queue-usage">{why}</span>
+      {marks['data-decide'] !== undefined && (
+        <DecideBar
+          item={item}
+          answers={usageAnswers({
+            backend: backend as UsageBackend,
+            resetsAt: reset === undefined ? null : Number(reset),
+          })}
+          onDecide={(answer) => {
+            context.onDecide(item.id, answer);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -799,7 +852,10 @@ function MessageRow({
           context.onEditMessage(item.id, event.target.value);
         }}
       />
+      <RowCountdown id={item.id} context={context} />
+      <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
+      <UsageHeld item={item} context={context} />
     </div>
   );
 }
@@ -1067,6 +1123,7 @@ function DelayRow({
         <TimePicker
           label="Wait how long?"
           current={item.delay}
+          usage={context.usage}
           onPick={(time) => {
             if (time) context.onTime(item.id, time);
             setEditing(false);
@@ -1185,13 +1242,16 @@ function ApprovalRow({
  */
 export function DecideBar({
   item,
+  answers: given,
   onDecide,
 }: {
   item: QueueItem;
+  /** How to answer, where it is not the item's own (a usage rule's hold before a task). */
+  answers?: Answers;
   onDecide: (answer: Answer) => void;
 }) {
   const [replying, setReplying] = useState(false);
-  const answers = answersOf(item);
+  const answers = given ?? answersOf(item);
   if (!answers) return null;
   const { choices, reply } = answers;
   const button = (choice: (typeof choices)[number]) => (
@@ -1284,6 +1344,7 @@ function IfRow({
         {editing && (
           <ConditionPicker
             current={item.if}
+            usage={context.usage}
             onPick={(condition) => {
               if (condition.kind !== 'repeatEnds') onCondition(condition);
               setEditing(false);
@@ -1421,6 +1482,7 @@ function AddMenu({
       )}
       {step === 'condition' && (
         <ConditionPicker
+          usage={context.usage}
           onPick={(condition) => {
             if (condition.kind !== 'repeatEnds') onAdd({ if: condition, then: [] });
             close();
@@ -1433,7 +1495,7 @@ function AddMenu({
           mode="until"
           leaders={leaderOptions(context, undefined)}
           onPick={(until) => {
-            if (until.kind !== 'timedOut') {
+            if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') {
               onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
             }
             close();
@@ -1470,6 +1532,7 @@ function AddMenu({
       {step === 'delay' && (
         <TimePicker
           label="Wait how long?"
+          usage={context.usage}
           onPick={(time) => {
             if (time) onAdd({ delay: time });
             close();
@@ -1566,11 +1629,63 @@ function leaderOptions(context: AddContext, self: QueueRepeat | undefined): Lead
   );
 }
 
-/** What a condition dropdown offers: a condition, one that needs text to look for, or a leader. */
+/**
+ * What a condition dropdown offers: a condition, one that needs text to look for, one on usage
+ * (which needs a share and a window), or a leader.
+ */
 interface ConditionChoice {
   label: string;
   detail?: string;
-  pick: Condition | RepeatEnds | 'text';
+  pick: Condition | RepeatEnds | 'text' | 'usage';
+}
+
+/** The shares a usage condition offers before anything is typed. */
+const USAGE_PERCENTS = [50, 70, 80, 90, 95];
+
+/** A usage condition's share and window, as its picker offers them. */
+interface UsageChoice {
+  percent: number;
+  window: UsageWindow;
+}
+
+/**
+ * Picks the share and window of a usage condition by typing: "85" offers 85% of each window. With
+ * `current`, its share is typed in to start from.
+ */
+function UsagePicker({
+  backend,
+  current,
+  onPick,
+  onCancel,
+}: {
+  backend: UsageBackend;
+  current?: UsageChoice | undefined;
+  onPick: (choice: UsageChoice) => void;
+  onCancel: () => void;
+}) {
+  const choice = (percent: number, window: UsageWindow): UsageChoice => ({ percent, window });
+  const options = USAGE_WINDOWS.flatMap((window) =>
+    USAGE_PERCENTS.map((percent) => choice(percent, window)),
+  );
+  return (
+    <SearchPicker
+      label={`${backend}’s usage is over…`}
+      placeholder="80%, 90% weekly…"
+      options={options}
+      optionLabel={({ percent, window }) => `Over ${String(percent)}% of the ${windowText(window)}`}
+      optionKey={({ percent, window }) => `${window}:${String(percent)}`}
+      typed={(query) => {
+        const percent = Number(/\d+/.exec(query)?.[0]);
+        if (!Number.isInteger(percent) || percent < 1 || percent > 99) return [];
+        const weekly = /week/i.test(query);
+        const windows: UsageWindow[] = weekly ? ['weekly'] : ['fiveHour', 'weekly'];
+        return windows.map((window) => choice(percent, window));
+      }}
+      {...(current ? { initialQuery: `${String(current.percent)}%` } : {})}
+      onPick={onPick}
+      onCancel={onCancel}
+    />
+  );
 }
 
 /**
@@ -1583,16 +1698,32 @@ function ConditionPicker({
   mode = 'if',
   current,
   leaders = [],
+  usage,
   onPick,
   onCancel,
 }: {
   mode?: 'if' | 'until';
   current?: Condition | RepeatEnds;
   leaders?: readonly Leader[];
+  /** A backend whose usage an if-then can check (the agent's). */
+  usage?: UsageBackend | undefined;
   onPick: (condition: Condition | RepeatEnds) => void;
   onCancel: () => void;
 }) {
-  const [needs, setNeeds] = useState<'kind' | 'text'>('kind');
+  const [needs, setNeeds] = useState<'kind' | 'text' | 'usage'>('kind');
+  const backend = current?.kind === 'usageAbove' ? current.backend : usage;
+  if (needs === 'usage' && backend !== undefined) {
+    return (
+      <UsagePicker
+        backend={backend}
+        current={current?.kind === 'usageAbove' ? current : undefined}
+        onPick={({ percent, window }) => {
+          onPick({ kind: 'usageAbove', backend, window, percent });
+        }}
+        onCancel={onCancel}
+      />
+    );
+  }
   if (needs === 'text') {
     return (
       <TextPrompt
@@ -1609,6 +1740,15 @@ function ConditionPicker({
       label: c.label,
       pick: c.kind === 'outputContains' ? 'text' : { kind: c.kind },
     })),
+    ...(mode === 'if' && backend !== undefined
+      ? [
+          {
+            label: `${backend}’s usage is over…`,
+            detail: 'By its latest reading, when the run gets here',
+            pick: 'usage' as const,
+          },
+        ]
+      : []),
     ...leaders.map(({ name, until }) => ({
       label: `${name}'s repeat ends`,
       detail: `Go round with it: as many rounds as ${name}'s repeat`,
@@ -1633,7 +1773,7 @@ function ConditionPicker({
         },
       }}
       onPick={(c) => {
-        if (c.pick === 'text') setNeeds('text');
+        if (c.pick === 'text' || c.pick === 'usage') setNeeds(c.pick);
         else onPick(c.pick);
       }}
       onCancel={onCancel}
@@ -1794,7 +1934,7 @@ function RepeatRow({
             current={item.until}
             leaders={leaderOptions(context, item)}
             onPick={(until) => {
-              if (until.kind !== 'timedOut') onRepeat({ until });
+              if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') onRepeat({ until });
               close();
             }}
             onCancel={close}

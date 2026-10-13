@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem } from '../graph/queue';
-import { answersOf, heldAsks } from './asks';
+import type { UsageHold } from '../usage/usage';
+import { answersOf, heldAsks, usageAnswers } from './asks';
 import type { AgentRun, Run } from './runner';
 
 const agent = (id: string, label: string, queue: QueueItem[]): GraphNode => ({
@@ -152,5 +153,44 @@ describe('answersOf', () => {
       reply: { label: 'What should change?', button: 'Ask for changes' },
     });
     expect(answersOf({ id: 'step', action: 'Read' })).toBeUndefined();
+  });
+});
+
+describe('a usage rule that pauses and asks', () => {
+  const coder = agent('c', 'Coder', [
+    { id: 'tests', message: 'Write the tests for the parser' },
+    { id: 'if', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit' }] },
+  ]);
+  const hold: UsageHold = {
+    backend: 'Claude',
+    window: 'fiveHour',
+    percent: 80,
+    used: 84,
+    resetsAt: new Date(2026, 9, 12, 15, 40).getTime(),
+  };
+  const held = (current: string, usage = hold): Run => ({
+    running: true,
+    agents: { c: { current, status: 'asking', outcomes: {}, usage } },
+  });
+
+  it('asks whether to go on, before the task it holds, saying when the window resets', () => {
+    const now = new Date(2026, 9, 12, 12, 0).getTime();
+    const [ask] = heldAsks([coder], held('tests'), now);
+    expect(ask?.text).toBe('Claude has used 84% of its 5-hour window (over 80%). Go on?');
+    expect(ask?.detail).toMatch(/^Before “Write the tests for the…” · resets 3:40\sPM$/);
+    expect(ask?.choices.map((choice) => choice.key)).toEqual(['goOn', 'wait', 'stop']);
+    expect(ask?.reply).toBeUndefined();
+    // A step in an if-then is held as well.
+    expect(heldAsks([coder], held('fix'), now)[0]?.item.id).toBe('fix');
+  });
+
+  it('offers no wait for a reset it does not know', () => {
+    expect(usageAnswers({ ...hold, resetsAt: null }).choices.map((c) => c.key)).toEqual([
+      'goOn',
+      'stop',
+    ]);
+    expect(heldAsks([coder], held('tests', { ...hold, resetsAt: null }))[0]?.detail).toBe(
+      'Before “Write the tests for the…”',
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import type { ReactNode } from 'react';
 
 import type { ProjectFolder } from '../../shared/ipc';
 import { SHORTCUTS } from './keys';
@@ -6,8 +7,8 @@ import { SHORTCUTS } from './keys';
 /**
  * The canvas's file: its name (and whether it has changes not saved), with New, Open, Save, Save
  * As and the examples, and (given `project`) the folder its agents work in, which a click
- * changes. Below it, a question before unsaved changes are discarded (`discarding`), or why the
- * last open or save failed (`problem`).
+ * changes, with `extra` beside it (the usage gauges). Below it, a question before unsaved changes
+ * are discarded (`discarding`), or why the last open or save failed (`problem`).
  */
 export function FileBar({
   name,
@@ -23,6 +24,7 @@ export function FileBar({
   onDiscard,
   onKeep,
   onDismiss,
+  extra,
 }: {
   /** The file's name; undefined for a canvas never saved. */
   name: string | undefined;
@@ -40,6 +42,8 @@ export function FileBar({
   /** Keeps the unsaved changes: what would have discarded them does not happen. */
   onKeep: () => void;
   onDismiss: () => void;
+  /** Shown beside the project folder. */
+  extra?: ReactNode;
 }) {
   return (
     <div className="graph-file-panel">
@@ -64,26 +68,29 @@ export function FileBar({
           Templates…
         </button>
       </div>
-      {project && (
-        <button
-          type="button"
-          className="graph-file-project graph-panel"
-          data-chosen={project.folder ? '' : undefined}
-          aria-label={
-            project.folder ? `Project folder: ${project.folder.name}` : 'Choose a project folder'
-          }
-          title={
-            project.folder
-              ? `${project.folder.path}\nWhere this canvas's agents work. Click to choose another folder.`
-              : "Choose the folder this canvas's agents work in"
-          }
-          onClick={project.onChoose}
-        >
-          <span className="graph-file-project-name">
-            {project.folder ? project.folder.name : 'Choose a project folder…'}
-          </span>
-        </button>
-      )}
+      <div className="graph-file-row">
+        {project && (
+          <button
+            type="button"
+            className="graph-file-project graph-panel"
+            data-chosen={project.folder ? '' : undefined}
+            aria-label={
+              project.folder ? `Project folder: ${project.folder.name}` : 'Choose a project folder'
+            }
+            title={
+              project.folder
+                ? `${project.folder.path}\nWhere this canvas's agents work. Click to choose another folder.`
+                : "Choose the folder this canvas's agents work in"
+            }
+            onClick={project.onChoose}
+          >
+            <span className="graph-file-project-name">
+              {project.folder ? project.folder.name : 'Choose a project folder…'}
+            </span>
+          </button>
+        )}
+        {extra}
+      </div>
       {discarding && <DiscardQuestion name={name} onDiscard={onDiscard} onKeep={onKeep} />}
       {problem !== undefined && (
         <p className="graph-file-problem graph-panel" role="alert">

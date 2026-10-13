@@ -1,10 +1,11 @@
-import { MAX_SECONDS } from './queue';
-import type { Time } from './queue';
+import { WINDOW_NAMES } from '../../shared/usage';
+import { isUsageReset, MAX_SECONDS } from './queue';
+import type { Time, UsageReset } from './queue';
 
 /*
  * Times as the queue has them (queue.ts: Time), read from what the user types and put in words.
  * Lengths are whole seconds; times of day are local, 24-hour "HH:MM", and mean the next time the
- * clock shows that.
+ * clock shows that; a usage window's reset is when its backend's latest reading says it resets.
  */
 
 /** The times a picker offers before anything is typed. */
@@ -138,8 +139,12 @@ const LENGTH_WORDS = [
   [1, 'second'],
 ] as const;
 
-/** A time in words: "10 minutes", "1 hour 30 minutes", "until 9:00 AM" (in `locale`'s way). */
+/**
+ * A time in words: "10 minutes", "1 hour 30 minutes", "until 9:00 AM" (in `locale`'s way), "until
+ * Claude’s usage resets (5-hour)".
+ */
 export function timeText(time: Time, locale?: string): string {
+  if (isUsageReset(time)) return `until ${resetText(time)}`;
   if ('at' in time) return `until ${clockText(time.at, locale)}`;
   let left = time.seconds;
   const words: string[] = [];
@@ -153,7 +158,13 @@ export function timeText(time: Time, locale?: string): string {
 
 /** A time limit in words: "at most 30 minutes", "no later than 6:00 PM". */
 export function limitText(time: Time, locale?: string): string {
+  if (isUsageReset(time)) return `no later than ${resetText(time)}`;
   return 'at' in time ? `no later than ${clockText(time.at, locale)}` : `at most ${timeText(time)}`;
+}
+
+/** "Claude’s usage resets (5-hour)". */
+function resetText({ backend, resets }: UsageReset): string {
+  return `${backend}’s usage resets (${WINDOW_NAMES[resets]})`;
 }
 
 /** A time of day ("HH:MM") as `locale` shows one: "9:00 AM", "09:00". */
@@ -179,9 +190,19 @@ export function leftText(ms: number): string {
 /**
  * When a time comes (epoch ms), for a queue that reached it at `since`: a length later, or the next
  * time the local clock shows the time of day, strictly after `since`. The day is moved by the
- * calendar, not by 24 hours, so a change to or from daylight saving time keeps the time of day.
+ * calendar, not by 24 hours, so a change to or from daylight saving time keeps the time of day. A
+ * usage window's reset is when `resetOf` says (its backend's latest reading), or `since` if that
+ * has passed or nothing says.
  */
-export function deadline(time: Time, since: number): number {
+export function deadline(
+  time: Time,
+  since: number,
+  resetOf?: (time: UsageReset) => number | undefined,
+): number {
+  if (isUsageReset(time)) {
+    const reset = resetOf?.(time);
+    return reset !== undefined && reset > since ? reset : since;
+  }
   if ('seconds' in time) return since + time.seconds * 1000;
   const [hours = 0, minutes = 0] = time.at.split(':').map(Number);
   const day = new Date(since);
@@ -195,5 +216,7 @@ export function deadline(time: Time, since: number): number {
 
 /** Whether two times are the same. */
 export function sameTime(a: Time, b: Time): boolean {
-  return 'at' in a ? 'at' in b && a.at === b.at : 'seconds' in b && a.seconds === b.seconds;
+  if (isUsageReset(a)) return isUsageReset(b) && a.resets === b.resets && a.backend === b.backend;
+  if ('at' in a) return 'at' in b && a.at === b.at;
+  return 'seconds' in b && a.seconds === b.seconds;
 }

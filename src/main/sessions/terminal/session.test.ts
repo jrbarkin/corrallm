@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
+import type { UsageBackend, UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../connector';
 import { TerminalConnector } from './connector';
 import { FakeClaude } from './fake-claude';
@@ -26,6 +28,7 @@ let fake: FakeClaudeOptions;
 let events: SessionEvent[];
 let remembered: string[];
 let sessions: LiveSession[];
+let readings: [UsageBackend, UsageWindows][];
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-terminal-'));
@@ -34,6 +37,7 @@ beforeEach(async () => {
   events = [];
   remembered = [];
   sessions = [];
+  readings = [];
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -59,6 +63,7 @@ async function start(spec: Partial<SessionSpec> = {}) {
     findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
     tmp: dir,
     timing: TIMING,
+    usage: (backend, windows) => readings.push([backend, windows]),
   });
   const session = await connector.start(
     { ...SPEC, ...spec },
@@ -133,6 +138,30 @@ describe('a Terminal session', () => {
     };
     expect(hooks.UserPromptSubmit?.[0]?.hooks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/hook$/);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'hears Claude Code’s usage limits from the status line it is given',
+    async () => {
+      await start();
+      const settings = claude().arg('--settings') ?? '';
+      const { statusLine } = JSON.parse(readFileSync(settings, 'utf8')) as {
+        statusLine: { type: string; command: string };
+      };
+      expect(statusLine.type).toBe('command');
+      // Run as Claude Code runs it: through the shell, the input on stdin, the token in its env.
+      const input = {
+        session_id: 's',
+        rate_limits: { five_hour: { used_percentage: 61, resets_at: 1_791_810_000 } },
+      };
+      const child = spawn(statusLine.command, [], { shell: true, env: claude().options.env });
+      child.stdin.end(`${JSON.stringify(input)}\n`);
+      await until(() => {
+        expect(readings).toEqual([
+          ['Claude', { fiveHour: { usedPercent: 61, resetsAt: 1_791_810_000_000 } }],
+        ]);
+      });
+    },
+  );
 
   it('starts in a mode or model chosen in corrallm', async () => {
     await start({ mode: 'plan', model: 'haiku' });

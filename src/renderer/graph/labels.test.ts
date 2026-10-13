@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphNode } from './graph';
 import {
   describe as describeItem,
+  ifText,
   itemLabel,
   taskLabel,
   untilText,
@@ -94,5 +95,16 @@ describe('repeats in words', () => {
     );
     expect(waitTargetLabel([coder], { agent: 'c', item: 'loop' })).toBe('Coder: its repeat');
     expect(waitTargetLabel([coder], { agent: 'c', item: 'gone' })).toBe('Coder: a removed step');
+  });
+});
+
+describe('ifText', () => {
+  it('reads a usage condition with its backend, share and window', () => {
+    expect(ifText({ kind: 'usageAbove', backend: 'Claude', window: 'fiveHour', percent: 80 })).toBe(
+      'Claude’s usage is over 80% (5-hour)',
+    );
+    expect(ifText({ kind: 'usageAbove', backend: 'Codex', window: 'weekly', percent: 95 })).toBe(
+      'Codex’s usage is over 95% (weekly)',
+    );
   });
 });

@@ -1,4 +1,5 @@
 import type { SessionMode, TerminalAsk } from '../../../shared/session';
+import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
 import type { ProgramStatus } from './status';
@@ -9,7 +10,7 @@ import type { ProgramStatus } from './status';
  * it asks the user), and how to type a message into its prompt. The session does the rest the same
  * way for every CLI: the pty and main's copy of its screen, views, turns (when one starts and ends,
  * what it waits on), what it asks listed outside its terminal, the queue's messages, files dropped
- * on it, interrupts, and closing.
+ * on it, interrupts, closing, and passing on what the CLI says of its account's usage limits.
  *
  * Claude Code's is claude-code.ts; Codex's is in src/main/sessions/codex/terminal/. A TerminalCli
  * is made for one session, and may keep what it needs between calls (as what its hooks told).
@@ -111,6 +112,17 @@ export interface TerminalCli<M extends SessionMode> {
   draft(screen: Screen): string | undefined;
   /** The writes that type `text` into its prompt (the session presses Enter after). */
   keystrokes(text: string): string[];
+  /**
+   * What its status line was given, posted to the hook server's /status path by a status line
+   * `prepare` set up (Claude Code's: statusline.ts), as usage windows, if it says any. The input is
+   * untrusted JSON: read, never acted on beyond.
+   */
+  statusLine?(input: HookEvent): UsageWindows | undefined;
+  /**
+   * Reads its account's usage limits apart from its terminal (Codex's: a private app server), when
+   * the session starts and after each turn ends; undefined if it cannot say. Never prompts the CLI.
+   */
+  readUsage?(): Promise<UsageWindows | undefined>;
   /** `text`, as its hooks will say it was submitted (to tell corrallm's own prompts from the user's). */
   submitted(text: string): string;
 }

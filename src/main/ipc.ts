@@ -4,6 +4,7 @@ import type { WebContents } from 'electron';
 import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
 import { MAX_FILE_MATCHES } from '../shared/session';
+import { parseBackend, parseRule, parseWindows } from '../shared/usage';
 import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
 import type { ProjectFiles } from './files';
 import type { LinkOpener } from './links';
@@ -28,6 +29,7 @@ import {
   parseTerminalResizeArgs,
 } from './sessions/args';
 import type { SessionManager } from './sessions/manager';
+import type { UsageReadings } from './usage';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends IpcChannel> = (args: unknown[]) => IpcArgs<C>;
@@ -75,6 +77,7 @@ export interface IpcServices {
     | 'resizeTerminal'
     | 'dropOnTerminal'
   >;
+  usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
 
 /**
@@ -150,7 +153,21 @@ export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open'> {
   return [url];
 }
 
-function createHandlers({ projects, files, links, sessions }: IpcServices): HandlerTable {
+/** `ArgsParser` for usage:rule: a backend whose usage corrallm reads, and a rule or null. */
+export function parseUsageRuleArgs(args: unknown[]): IpcArgs<'usage:rule'> {
+  const [backend, rule] = args;
+  if (args.length !== 2) throw new TypeError('Expected a backend and a rule (or null)');
+  return [parseBackend(backend), rule === null ? null : parseRule(rule)];
+}
+
+/** `ArgsParser` for usage:simulate: a backend, and its windows (checked as a reading's) or null. */
+export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
+  const [backend, windows] = args;
+  if (args.length !== 2) throw new TypeError('Expected a backend and its windows (or null)');
+  return [parseBackend(backend), windows === null ? null : parseWindows(windows, Date.now())];
+}
+
+function createHandlers({ projects, files, links, sessions, usage }: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'canvas:open': {
@@ -329,6 +346,21 @@ function createHandlers({ projects, files, links, sessions }: IpcServices): Hand
       parseArgs: parseTerminalDropArgs,
       handler: async ({ contents }, agentId, paths) => {
         await sessions.dropOnTerminal(contents, agentId, paths);
+        return null;
+      },
+    },
+    'usage:get': { parseArgs: noArgs, handler: () => usage.state() },
+    'usage:rule': {
+      parseArgs: parseUsageRuleArgs,
+      handler: (_caller, backend, rule) => {
+        usage.setRule(backend, rule);
+        return null;
+      },
+    },
+    'usage:simulate': {
+      parseArgs: parseSimulateArgs,
+      handler: (_caller, backend, windows) => {
+        usage.simulate(backend, windows);
         return null;
       },
     },

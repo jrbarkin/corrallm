@@ -165,6 +165,27 @@ describe('fromFile', () => {
     expect(fromFile(empty).nodes[0]?.data.queue).toEqual([{ id: 's', action: 'Bash' }]);
   });
 
+  it('reads back usage conditions, and delays and time limits until a usage window resets', () => {
+    const usage: QueueItem[] = [
+      { id: 'reset', delay: { resets: 'fiveHour', backend: 'Claude' } },
+      { id: 'built', waitFor: [{ agent: 'b' }], timeout: { resets: 'weekly', backend: 'Codex' } },
+      {
+        id: 'high',
+        if: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 80 },
+        then: [{ id: 'hand', message: 'Take the mechanical steps.', target: 'b' }],
+      },
+    ];
+    const withUsage: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: usage } } : n,
+      ),
+    };
+    const text = toFile(withUsage);
+    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(usage);
+    expect(toFile(fromFile(text))).toBe(text);
+  });
+
   it('reads back OKs, on what they name or (no words) on the work before them', () => {
     const asked: QueueItem[] = [
       { id: 'spec', message: 'Write SPEC.md' },
@@ -346,7 +367,65 @@ describe('fromFile', () => {
       'a broken condition',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'i', if: { kind: 'maybe' }, then: [] }] }),
-      /^nodes\[1\]\.queue\[0\]\.if\.kind must be one of: succeeded, failed, outputContains, timedOut, freeText$/,
+      /^nodes\[1\]\.queue\[0\]\.if\.kind must be one of: succeeded, failed, outputContains, timedOut, freeText, usageAbove$/,
+    ],
+    [
+      'a usage condition on a backend whose usage corrallm reads not',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'i',
+              if: { kind: 'usageAbove', backend: 'Gemini', window: 'weekly', percent: 80 },
+              then: [],
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.if\.backend must be one of: Claude, Codex$/,
+    ],
+    [
+      'a usage condition over all of a window',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'i',
+              if: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 100 },
+              then: [],
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.if\.percent must be a whole number from 1 to 99$/,
+    ],
+    [
+      'a usage condition on a window there is none of',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'i',
+              if: { kind: 'usageAbove', backend: 'Claude', window: 'daily', percent: 80 },
+              then: [],
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.if\.window must be one of: fiveHour, weekly$/,
+    ],
+    [
+      'a delay until a window there is none of resets',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'd', delay: { resets: 'monthly', backend: 'Claude' } }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.resets must be one of: fiveHour, weekly$/,
+    ],
+    [
+      'a delay until the usage of a backend corrallm reads not resets',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'd', delay: { resets: 'weekly', backend: 'Qwen' } }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.delay\.backend must be one of: Claude, Codex$/,
     ],
     [
       'a wait inside an if-then',
@@ -389,7 +468,7 @@ describe('fromFile', () => {
         Object.assign(f.nodes[1] ?? {}, {
           queue: [{ id: 'd', delay: { seconds: 60, at: '09:00' } }],
         }),
-      /^nodes\[1\]\.queue\[0\]\.delay must have seconds or at$/,
+      /^nodes\[1\]\.queue\[0\]\.delay must have one of seconds, at or resets$/,
     ],
     [
       'a time limit that is neither',
@@ -397,7 +476,7 @@ describe('fromFile', () => {
         Object.assign(f.nodes[1] ?? {}, {
           queue: [{ id: 'w', waitFor: [{ agent: 'b' }], timeout: {} }],
         }),
-      /^nodes\[1\]\.queue\[0\]\.timeout must have seconds or at$/,
+      /^nodes\[1\]\.queue\[0\]\.timeout must have one of seconds, at or resets$/,
     ],
     [
       'a delay inside an if-then',
@@ -481,6 +560,22 @@ describe('fromFile', () => {
         Object.assign(f.nodes[1] ?? {}, {
           queue: [
             { id: 'r', repeat: [], until: { kind: 'timedOut' }, rounds: 3, otherwise: 'ask' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.until\.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds$/,
+    ],
+    [
+      'a repeat until usage is over a share',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [],
+              until: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 80 },
+              rounds: 3,
+              otherwise: 'ask',
+            },
           ],
         }),
       /^nodes\[1\]\.queue\[0\]\.until\.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds$/,

@@ -13,6 +13,7 @@ import type {
   UserMessage,
 } from './session';
 import type { TerminalEvent } from './terminal';
+import type { UsageBackend, UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
  * The IPC contract between the main process and the renderer.
@@ -144,6 +145,15 @@ export interface IpcContract {
    * terminal, quoted, as a terminal does.
    */
   'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
+  /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
+  'usage:get': { args: []; result: UsageState };
+  /** Sets a backend's usage rule, or (null) takes it off. Every renderer hears 'usage:changed'. */
+  'usage:rule': { args: [backend: UsageBackend, rule: UsageRule | null]; result: null };
+  /**
+   * Simulates a backend's usage (to try rules without spending real usage), or (null) forgets
+   * its reading. A real reading replaces a simulated one. Every renderer hears 'usage:changed'.
+   */
+  'usage:simulate': { args: [backend: UsageBackend, windows: UsageWindows | null]; result: null };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
@@ -152,6 +162,11 @@ export interface IpcEvents {
   'session:event': [agentId: string, connection: Connection, event: SessionEvent];
   /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
   'terminal:event': [agentId: string, event: TerminalEvent];
+  /**
+   * Usage readings or rules changed (a reading came, or a rule was set): every renderer hears it,
+   * since usage belongs to the backend's account, not to one canvas.
+   */
+  'usage:changed': [state: UsageState];
 }
 
 /** A canvas file: its name (without folders) and its text (src/renderer/graph/file.ts). */
@@ -217,12 +232,16 @@ export interface InvokeApi {
   openLink(...args: IpcArgs<'link:open'>): Promise<IpcResult<'link:open'>>;
   /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
   dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
+  getUsage(): Promise<IpcResult<'usage:get'>>;
+  setUsageRule(...args: IpcArgs<'usage:rule'>): Promise<IpcResult<'usage:rule'>>;
+  simulateUsage(...args: IpcArgs<'usage:simulate'>): Promise<IpcResult<'usage:simulate'>>;
 }
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
   onTerminalEvent(listener: (...args: IpcEventArgs<'terminal:event'>) => void): () => void;
+  onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
 }
 
 /** The API the preload script exposes to the renderer as `window.api`. */
@@ -257,12 +276,16 @@ export const API_CHANNELS = {
   resizeTerminal: 'terminal:resize',
   openLink: 'link:open',
   dropOnTerminal: 'terminal:drop',
+  getUsage: 'usage:get',
+  setUsageRule: 'usage:rule',
+  simulateUsage: 'usage:simulate',
 } as const satisfies Record<keyof InvokeApi, IpcChannel>;
 
 /** Which event each `EventApi` function listens for. */
 export const API_EVENTS = {
   onSessionEvent: 'session:event',
   onTerminalEvent: 'terminal:event',
+  onUsageChanged: 'usage:changed',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;

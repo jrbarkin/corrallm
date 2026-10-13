@@ -73,8 +73,12 @@ const api: AppApi = {
       ? Promise.resolve(null)
       : invoke(API_CHANNELS.dropOnTerminal, agentId, paths);
   },
+  getUsage: () => invoke(API_CHANNELS.getUsage),
+  setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
+  simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
   onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
   onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
+  onUsageChanged: (listener) => listen(API_EVENTS.onUsageChanged, listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

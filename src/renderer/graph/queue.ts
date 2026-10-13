@@ -1,3 +1,5 @@
+import type { UsageBackend, UsageWindow } from '../../shared/usage';
+
 /**
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
  * one to the node whose queue it is in. `instruction`: what it is to do, in the user's words (what
@@ -22,16 +24,27 @@ export interface QueueMessage {
 }
 
 /**
- * What an if-then checks before it runs its steps: one of `CONDITIONS`, or (`freeText`) a condition
+ * What an if-then checks before it runs its steps: one of `CONDITIONS`, (`freeText`) a condition
  * in the user's own words, for the agent to judge (a connected agent is asked, yes or no, in its
- * session: run/turns.ts). The output it looks in is what the agent replied in the checked task.
+ * session: run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
+ * a window, by its latest reading when the run reaches it (src/shared/usage.ts). The output it looks
+ * in is what the agent replied in the checked task.
  */
 export type Condition =
   | { kind: 'succeeded' }
   | { kind: 'failed' }
   | { kind: 'outputContains'; text: string }
   | { kind: 'timedOut' }
-  | { kind: 'freeText'; text: string };
+  | { kind: 'freeText'; text: string }
+  | UsageAbove;
+
+/** Whether a backend's usage is over `percent` of `window`. */
+export interface UsageAbove {
+  kind: 'usageAbove';
+  backend: UsageBackend;
+  window: UsageWindow;
+  percent: number;
+}
 
 /** Runs its steps (`then`: actions and messages) only when its condition (`if`) holds. */
 export interface QueueIf {
@@ -67,11 +80,22 @@ export function chooseTarget(
 }
 
 /**
- * A time: how long (`seconds`, whole, 1 to MAX_SECONDS, counted from when the queue reaches it), or
- * (`at`, "HH:MM", 24-hour, local) the next time the clock shows that after the queue reaches it.
- * Parsed and put in words by time.ts.
+ * A time: how long (`seconds`, whole, 1 to MAX_SECONDS, counted from when the queue reaches it),
+ * (`at`, "HH:MM", 24-hour, local) the next time the clock shows that after the queue reaches it, or
+ * (UsageReset) when a backend's usage window resets, by its latest reading when the queue reaches
+ * it. Parsed and put in words by time.ts.
  */
-export type Time = { seconds: number } | { at: string };
+export type Time = { seconds: number } | { at: string } | UsageReset;
+
+/** When a backend's usage window (`resets`) resets, as its latest reading says. */
+export interface UsageReset {
+  resets: UsageWindow;
+  backend: UsageBackend;
+}
+
+export function isUsageReset(time: Time): time is UsageReset {
+  return 'resets' in time;
+}
 
 /** The longest a length can be: 7 days, in seconds. */
 export const MAX_SECONDS = 7 * 24 * 60 * 60;
@@ -123,10 +147,10 @@ export interface RepeatEnds {
 }
 
 /**
- * When a repeat stops: a condition (any but timedOut) of each round's last task that ran, or
- * another agent's repeat ending.
+ * When a repeat stops: a condition (any but timedOut and usageAbove) of each round's last task
+ * that ran, or another agent's repeat ending.
  */
-export type Until = Exclude<Condition, { kind: 'timedOut' }> | RepeatEnds;
+export type Until = Exclude<Condition, { kind: 'timedOut' | 'usageAbove' }> | RepeatEnds;
 
 /** The most rounds a repeat runs unattended. */
 export const MAX_ROUNDS = 20;

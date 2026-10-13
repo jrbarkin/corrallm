@@ -37,8 +37,12 @@ afterEach(() => {
   registrations = [];
 });
 
-async function register(server: HookServer, listener: (event: HookEvent) => void) {
-  const registration = await server.register(listener);
+async function register(
+  server: HookServer,
+  listener: (event: HookEvent) => void,
+  status?: (input: HookEvent) => void,
+) {
+  const registration = await server.register(listener, status);
   registrations.push(registration);
   return registration;
 }
@@ -135,5 +139,30 @@ describe('HookServer', () => {
     expect((await post(again.url, '{}', { Authorization: `Bearer ${again.token}` })).status).toBe(
       200,
     );
+  });
+
+  it('hears a session’s status line input at its status path, with the same token', async () => {
+    const server = new HookServer();
+    const hooks = vi.fn<(event: HookEvent) => void>();
+    const status = vi.fn<(input: HookEvent) => void>();
+    const { url, statusUrl, token } = await register(server, hooks, status);
+    expect(statusUrl).toBe(url.replace(/\/hook$/, '/status'));
+
+    const input = { rate_limits: { five_hour: { used_percentage: 42 } } };
+    expect((await post(statusUrl, JSON.stringify(input))).status).toBe(401);
+    await expect(
+      post(statusUrl, JSON.stringify(input), { Authorization: `Bearer ${token}` }),
+    ).resolves.toEqual({ status: 200, text: '{}' });
+    await vi.waitFor(() => {
+      expect(status).toHaveBeenCalledWith(input);
+    });
+    expect(hooks).not.toHaveBeenCalled();
+
+    // A session that does not listen for it: answered, but nobody hears it.
+    const other = await register(server, hooks);
+    expect((await post(statusUrl, '{}', { Authorization: `Bearer ${other.token}` })).status).toBe(
+      200,
+    );
+    expect(hooks).not.toHaveBeenCalled();
   });
 });
