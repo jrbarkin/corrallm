@@ -233,8 +233,9 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      chance. Where corrallm can't hear a connected agent's replies (its session said
                      `unheard`: its CLI's settings turn off the hooks a Terminal session listens to;
                      RunIO.unheard), "the output contains" and conditions in the user's words don't
-                     hold (it is not asked), its steps count as succeeded, and the run says so once
-                     a run, in its session. Stop (and Run again) takes back what the run sent that
+                     hold (it is not asked), its steps count as succeeded (one expected to fail
+                     went neither way: how it went was never heard), and the run says so once a
+                     run, in its session. Stop (and Run again) takes back what the run sent that
                      is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue
                      or interrupting its turn), and no longer hears those turns end. Waits hold
                      until their target is done or their time limit passes, delays until their
