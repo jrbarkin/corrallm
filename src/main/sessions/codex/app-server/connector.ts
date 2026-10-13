@@ -6,8 +6,8 @@ import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../con
 import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
 import { checkVersion, requireCodex } from '../codex';
-import { appServerRefusal, codexLogin } from '../login';
-import type { CodexLogin } from '../login';
+import { appServerRefusal, ASK_EACH_SESSION, codexLogin } from '../login';
+import type { Distribution, PlanConsent } from '../login';
 import { startAppServer } from '../rpc';
 import type { SpawnAppServer } from '../rpc';
 import { readSkills, slashCommands } from './commands';
@@ -27,7 +27,8 @@ import { Translator } from './translate';
  * skills, MCP servers), and is theirs: `codex resume` sees it, and corrallm resumes it after a
  * restart. One private app server per session, closed with it.
  *
- * It runs on an API key (or another provider's login), not a ChatGPT plan (../login.ts says why).
+ * It runs on whatever login Codex has; on a ChatGPT plan only once the user allows it, and never in
+ * a build made as a commercial or hosted product (../login.ts says why).
  */
 
 export interface AppServerConnectorDeps {
@@ -37,8 +38,10 @@ export interface AppServerConnectorDeps {
   findCodex?: (env: Readonly<Record<string, string>>) => Promise<string>;
   /** Starts the app server's process (child_process.spawn; a fake in tests). */
   spawn?: SpawnAppServer;
-  /** Why the connection does not run on a login, if it does not (login.ts). */
-  refusal?: (login: CodexLogin) => string | undefined;
+  /** How this build is offered: only a local one runs on a ChatGPT login (login.ts). */
+  distribution?: Distribution;
+  /** The user's say on running on their ChatGPT plan, kept for good (main's settings). */
+  consent?: PlanConsent;
   /** Runs git for /diff, in the agents' environment. */
   git?: (env: Readonly<Record<string, string>>) => RunGit;
   home?: string;
@@ -53,7 +56,8 @@ export class AppServerConnector implements Connector<CodexMode> {
   readonly #clientApp: string;
   readonly #findCodex: (env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #spawn: SpawnAppServer | undefined;
-  readonly #refusal: (login: CodexLogin) => string | undefined;
+  readonly #distribution: Distribution;
+  readonly #consent: PlanConsent;
   readonly #git: (env: Readonly<Record<string, string>>) => RunGit;
   readonly #home: string;
 
@@ -61,14 +65,16 @@ export class AppServerConnector implements Connector<CodexMode> {
     clientApp,
     findCodex = (env) => requireCodex(env),
     spawn,
-    refusal = appServerRefusal,
+    distribution = 'local',
+    consent = ASK_EACH_SESSION,
     git = runGit,
     home = homedir(),
   }: AppServerConnectorDeps) {
     this.#clientApp = clientApp;
     this.#findCodex = findCodex;
     this.#spawn = spawn;
-    this.#refusal = refusal;
+    this.#distribution = distribution;
+    this.#consent = consent;
     this.#git = git;
     this.#home = home;
   }
@@ -113,7 +119,7 @@ export class AppServerConnector implements Connector<CodexMode> {
       const old = server.version === undefined ? undefined : checkVersion(server.version);
       if (old !== undefined) throw new Error(old);
       const login = codexLogin(await server.request('account/read', { refreshToken: false }));
-      const refused = this.#refusal(login);
+      const refused = appServerRefusal(login, this.#distribution);
       if (refused !== undefined) throw new Error(refused);
       const [listed, skilled, limits] = await Promise.all([
         server.request('model/list', { limit: 100 }).catch(() => undefined),
@@ -184,6 +190,8 @@ export class AppServerConnector implements Connector<CodexMode> {
         models,
         skills,
         login,
+        // On a ChatGPT plan, the session asks before it first uses it (unless allowed for good).
+        ...(login.kind === 'chatgpt' ? { consent: this.#consent } : {}),
         git: this.#git(spec.env),
         newThread: (mode, current) => newThread(mode, current),
       });

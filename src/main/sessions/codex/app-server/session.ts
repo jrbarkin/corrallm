@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type {
   CodexMode,
   EffortChoice,
@@ -9,7 +11,8 @@ import type {
 import type { LiveSession, SessionHost } from '../../connector';
 import { notice, output, property, text, unifiedDiff } from '../../transcript';
 import type { Places } from '../../transcript';
-import type { CodexLogin } from '../login';
+import { PLAN_DECLINED, planPrompt } from '../login';
+import type { CodexLogin, PlanConsent } from '../login';
 import type { AppServer } from '../rpc';
 import { RPC_ERRORS, RpcFailure } from '../rpc';
 import { IMPLEMENT_PLAN, INIT_PROMPT, parseMessage, readSkills, slashCommands } from './commands';
@@ -34,6 +37,9 @@ import { historyEvents, OUTPUT_EVERY_MS } from './translate';
  *
  * Slash commands (commands.ts) run as Codex's TUI runs them: /review, /compact and /init are turns
  * of the thread; the others are answered here.
+ *
+ * On a ChatGPT login, the first turn that would use the user's plan asks first (login.ts), unless
+ * they allowed it for good: Yes allows it for the session, No sends nothing.
  */
 
 /** A model, as model/list lists it: its choice, and what it takes. */
@@ -64,6 +70,11 @@ export interface AppServerSessionParts {
   models: CodexModel[];
   skills: Skill[];
   login: CodexLogin;
+  /**
+   * On a ChatGPT login: the user's say on using their plan, kept for good. The session asks before
+   * its first turn uses it, unless they allowed it for good already.
+   */
+  consent?: PlanConsent;
   /** Runs git, for /diff. */
   git: RunGit;
   /** Starts a new thread, for /new (in the session's mode, with its model). */
@@ -86,7 +97,12 @@ interface Turn {
   plan: string | undefined;
   /** /compact's turn: it ends once its compaction has. */
   compact: boolean;
+  /** The prompt asking to use the user's ChatGPT plan, while it waits: it ends with the answer. */
+  consent: { id: string; settle: (answer: PlanAnswer | undefined) => void } | undefined;
 }
+
+/** How the user answered whether a session may use their ChatGPT plan. */
+type PlanAnswer = Extract<SessionAnswer, { kind: 'permission' }>['answer'];
 
 /** How many of an MCP server's tools /mcp names. */
 const MCP_TOOLS_SHOWN = 8;
@@ -150,6 +166,8 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #newThread: AppServerSessionParts['newThread'];
   readonly #now: () => number;
   readonly #login: CodexLogin;
+  /** Whom to ask before using the user's ChatGPT plan: none once it may be used. */
+  #consent: PlanConsent | undefined;
   #thread: ThreadInfo;
   /** The thread whose id was last remembered (a thread is kept once it has a turn). */
   #remembered: string | undefined;
@@ -176,6 +194,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#newThread = parts.newThread;
     this.#now = parts.now ?? Date.now;
     this.#login = parts.login;
+    this.#consent = parts.consent;
     this.#thread = parts.thread;
     this.#mode = parts.mode;
     this.#model = parts.thread.model;
@@ -188,6 +207,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       if (this.#closing) return;
       this.#closing = true;
       this.#prompts.withdrawAll();
+      this.#withdrawConsent();
       const said = stderr
         .split('\n')
         .filter((line) => line.trim() !== '')
@@ -216,6 +236,10 @@ export class AppServerSession implements LiveSession<CodexMode> {
       this.#planAnswered(turn, answer.answer);
       return Promise.resolve();
     }
+    if (turn?.consent?.id === promptId && answer.kind === 'permission') {
+      turn.consent.settle(answer.answer);
+      return Promise.resolve();
+    }
     try {
       this.#prompts.answer(promptId, answer);
       return Promise.resolve();
@@ -230,6 +254,11 @@ export class AppServerSession implements LiveSession<CodexMode> {
     turn.interrupted = true;
     if (turn.plan !== undefined) {
       this.#host.emit({ type: 'withdrawn', id: turn.plan });
+      this.#end(turn, { interrupted: true, failed: false });
+      return;
+    }
+    if (turn.consent !== undefined) {
+      this.#withdrawConsent();
       this.#end(turn, { interrupted: true, failed: false });
       return;
     }
@@ -268,6 +297,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#closing = true;
     if (this.#flushing) clearTimeout(this.#flushing);
     this.#prompts.withdrawAll();
+    this.#withdrawConsent();
     await this.#server.close();
   }
 
@@ -323,6 +353,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       interrupted: false,
       plan: undefined,
       compact: false,
+      consent: undefined,
     };
     this.#turn = turn;
     this.#host.emit({ type: 'user', id: message.id, text: message.text });
@@ -358,6 +389,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
 
   /** Asks Codex for a turn of the thread, with the session's settings. */
   async #start(turn: Turn, input: UserInput[], clientId?: string): Promise<void> {
+    if (!(await this.#mayUsePlan(turn))) return;
     const settings = modeSettings(this.#mode);
     const result = await this.#server.request('turn/start', {
       threadId: this.#thread.id,
@@ -380,6 +412,50 @@ export class AppServerSession implements LiveSession<CodexMode> {
       },
     });
     this.#bind(turn, text(property(property(result, 'turn'), 'id')));
+  }
+
+  /**
+   * Whether the turn may go on to use the user's ChatGPT plan: at once where it may be used (another
+   * login, or allowed for this session or for good), else once the user says so (planPrompt). False
+   * if the turn ended meanwhile (interrupted: nothing was sent); throws if they said no.
+   */
+  async #mayUsePlan(turn: Turn): Promise<boolean> {
+    const consent = this.#consent;
+    if (consent === undefined || this.#login.kind !== 'chatgpt') return true;
+    const given = await consent.given().catch(() => false);
+    if (this.#turn !== turn) return false;
+    if (turn.stop) {
+      this.#end(turn, { interrupted: true, failed: false });
+      return false;
+    }
+    if (!given) {
+      const id = `${turn.messages[0] ?? randomUUID()}:chatgpt-plan`;
+      const prompt = planPrompt(id, this.#login);
+      const answer = await new Promise<PlanAnswer | undefined>((settle) => {
+        turn.consent = { id, settle };
+        this.#host.emit(prompt);
+        this.#host.emit({ type: 'status', status: 'waiting' });
+      });
+      turn.consent = undefined;
+      if (answer === undefined || this.#turn !== turn) return false;
+      if (answer === 'deny') throw new Error(PLAN_DECLINED);
+      if (answer === 'always') {
+        consent.give().catch((error: unknown) => {
+          console.error('Could not keep that the ChatGPT plan may be used:', error);
+        });
+      }
+      this.#host.emit({ type: 'status', status: 'working' });
+    }
+    this.#consent = undefined;
+    return true;
+  }
+
+  /** The prompt asking to use the user's ChatGPT plan no longer waits (the turn or session ended). */
+  #withdrawConsent(): void {
+    const consent = this.#turn?.consent;
+    if (!consent) return;
+    this.#host.emit({ type: 'withdrawn', id: consent.id });
+    consent.settle(undefined);
   }
 
   /** Codex's turn `codex` is the one `turn` waits for: interrupted at once if it was asked to stop. */
@@ -410,6 +486,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       interrupted: false,
       plan: undefined,
       compact: false,
+      consent: undefined,
     };
     this.#host.emit({ type: 'status', status: 'working' });
   }
@@ -506,6 +583,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     });
     switch (name) {
       case 'review': {
+        if (!(await this.#mayUsePlan(turn))) return;
         const result = await this.#server.request('review/start', {
           threadId: this.#thread.id,
           target:
@@ -516,6 +594,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
         return;
       }
       case 'compact':
+        if (!(await this.#mayUsePlan(turn))) return;
         turn.compact = true;
         await this.#server.request('thread/compact/start', { threadId: this.#thread.id });
         return;

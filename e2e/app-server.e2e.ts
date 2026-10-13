@@ -34,15 +34,22 @@ test.beforeEach(async () => {
   await mkdir(folder);
   await mkdir(profile);
   await writeFile(path.join(folder, 'README.md'), '# Shop\n');
-  // Runs the fake with this Node, whatever the login shell's PATH has; it keeps its threads.
   codex = path.join(dir, 'codex');
-  await writeFile(
-    codex,
-    `#!/bin/sh\nFAKE_CODEX_STATE="${path.join(dir, 'threads.json')}" exec "${process.execPath}" "${FAKE_CODEX}" "$@"\n`,
-  );
-  await chmod(codex, 0o755);
+  await fakeCodex();
   await launch();
 });
+
+/**
+ * The fake `codex` agents run: the fake, run with this Node whatever the login shell's PATH has,
+ * keeping its threads, logged in as `login` says (an API key unless told otherwise).
+ */
+async function fakeCodex(login: 'apikey' | 'chatgpt' = 'apikey') {
+  await writeFile(
+    codex,
+    `#!/bin/sh\nFAKE_CODEX_LOGIN=${login} FAKE_CODEX_STATE="${path.join(dir, 'threads.json')}" exec "${process.execPath}" "${FAKE_CODEX}" "$@"\n`,
+  );
+  await chmod(codex, 0o755);
+}
 
 test.afterEach(async () => {
   await closeApp();
@@ -234,4 +241,37 @@ test('resumes the agent’s Codex thread after the app restarts, with its histor
   // The thread's turns, as they were.
   await expect(again.getByText('remember this', { exact: true })).toBeVisible();
   await expect(again.getByText('You said: remember this')).toBeVisible();
+});
+
+test('runs on the user’s ChatGPT plan once they allow it, and asks no more if told not to', async () => {
+  await fakeCodex('chatgpt');
+  await canvasFile();
+  await chooseProject();
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Shop' });
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+  await send(view, 'Hello');
+  // Nothing goes until the user says so, quoting what OpenAI allows.
+  const prompt = transcript.getByRole('group', { name: 'Use your ChatGPT plan here?: Plus' });
+  await expect(prompt.getByText(/local or open-source application/)).toBeVisible();
+  await expect(prompt.getByText(/never been permitted for commercial/)).toBeVisible();
+  // It needs the user, on the canvas too.
+  await expect(page.locator('.react-flow__node')).toHaveClass(/\basking\b/);
+  await prompt.getByRole('button', { name: "Yes, and don't ask again on this computer" }).click();
+  await expect(transcript.getByText('You said: Hello')).toBeVisible();
+  await expect(transcript.getByText('Always allowed: ChatGPT plan')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByText('team.corral')).toBeVisible();
+
+  // After a restart, it asks no more.
+  await closeApp();
+  await launch();
+  await page.keyboard.press('ControlOrMeta+o');
+  await page.locator('.react-flow__node').dblclick();
+  const again = page.getByRole('dialog', { name: 'Shop' });
+  await send(again, 'Again');
+  const after = again.getByRole('log', { name: 'Transcript' });
+  await expect(after.getByText('You said: Again')).toBeVisible();
+  await expect(after.getByRole('group', { name: /^Use your ChatGPT plan here\?/ })).toHaveCount(0);
 });

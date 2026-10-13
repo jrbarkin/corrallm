@@ -70,15 +70,22 @@ export class CanvasMemory {
   }
 
   async #write(canvases: Map<string, Remembered>): Promise<void> {
-    const text = `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`;
-    const partial = `${this.#file}.${String(process.pid)}.partial`;
-    try {
-      await writeFile(partial, text, 'utf8');
-      await rename(partial, this.#file);
-    } catch (error) {
-      await rm(partial, { force: true });
-      throw error;
-    }
+    await writeWhole(
+      this.#file,
+      `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`,
+    );
+  }
+}
+
+/** Writes a file whole: beside it, then moved over it, so it is never left half written. */
+export async function writeWhole(file: string, text: string): Promise<void> {
+  const partial = `${file}.${String(process.pid)}.partial`;
+  try {
+    await writeFile(partial, text, 'utf8');
+    await rename(partial, file);
+  } catch (error) {
+    await rm(partial, { force: true });
+    throw error;
   }
 }
 

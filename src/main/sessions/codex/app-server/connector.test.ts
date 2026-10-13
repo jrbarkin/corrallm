@@ -541,10 +541,102 @@ describe('the App Server connection', () => {
     expect(fresh.events[0]).toMatchObject({ type: 'started' });
   });
 
-  it('runs on an API key: refuses a ChatGPT login, and says how to log in without one', async () => {
-    await expect(start({}, { FAKE_CODEX_LOGIN: 'chatgpt' })).rejects.toThrow(
-      /logged in with ChatGPT.*Codex · Terminal/s,
-    );
+  describe('on a ChatGPT login', () => {
+    const CHATGPT = { FAKE_CODEX_LOGIN: 'chatgpt' };
+    /** The user's say, kept for good, as main's settings keep it. */
+    function kept(given = false) {
+      const consent = {
+        given: vi.fn(() => Promise.resolve(given)),
+        give: vi.fn(() => {
+          given = true;
+          return Promise.resolve();
+        }),
+      };
+      return consent;
+    }
+
+    it('asks before its first turn uses the plan: Yes, for this session', async () => {
+      const consent = kept();
+      const { session, events, heard, ended, turn } = await start({}, CHATGPT, { consent });
+      await session.send({ id: 'm1', text: 'Hello' });
+      const prompt = await heard('permission', {
+        id: 'm1:chatgpt-plan',
+        tool: 'ChatGPT plan',
+        summary: 'Plus',
+        always: "Yes, and don't ask again on this computer",
+      });
+      expect(events.at(-1)).toEqual({ type: 'status', status: 'waiting' });
+      // Nothing went to Codex's model yet.
+      expect(await requests('turn/start')).toEqual([]);
+      await session.answer(prompt.id, { kind: 'permission', answer: 'once' });
+      await ended('m1');
+      expect(texts(events)).toContain('You said: Hello');
+      expect(consent.give).not.toHaveBeenCalled();
+      // Asked once a session.
+      await turn('/review', 'r');
+      await turn('Again', 'm2');
+      expect(events.filter((e) => e.type === 'permission')).toHaveLength(1);
+
+      // The next session asks again.
+      const next = await start({}, CHATGPT, { consent });
+      await next.session.send({ id: 'n1', text: 'Hello' });
+      await next.heard('permission', { id: 'n1:chatgpt-plan' });
+    });
+
+    it('asks no more once told not to ask again, in this session or the next', async () => {
+      const consent = kept();
+      const first = await start({}, CHATGPT, { consent });
+      await first.session.send({ id: 'm1', text: 'Hello' });
+      const prompt = await first.heard('permission');
+      await first.session.answer(prompt.id, { kind: 'permission', answer: 'always' });
+      await first.ended('m1');
+      expect(consent.give).toHaveBeenCalledOnce();
+
+      const next = await start({}, CHATGPT, { consent });
+      await next.turn('Hello', 'n1');
+      expect(texts(next.events)).toContain('You said: Hello');
+      expect(next.events.some((e) => e.type === 'permission')).toBe(false);
+    });
+
+    it('sends nothing when the user says no, and says what else runs on the plan', async () => {
+      const { session, events, heard, ended } = await start({}, CHATGPT, { consent: kept() });
+      await session.send({ id: 'm1', text: 'Hello' });
+      const prompt = await heard('permission');
+      await session.answer(prompt.id, { kind: 'permission', answer: 'deny' });
+      await ended('m1');
+      expect(events.at(-2)).toMatchObject({
+        type: 'notice',
+        level: 'error',
+        text: expect.stringMatching(/^Not sent: .*Codex · Terminal/s) as unknown,
+      });
+      expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: false, failed: true });
+      expect(await requests('turn/start')).toEqual([]);
+    });
+
+    it('stops asking when the turn is interrupted, and sends nothing', async () => {
+      const { session, events, heard, ended } = await start({}, CHATGPT, { consent: kept() });
+      await session.send({ id: 'm1', text: 'Hello' });
+      const prompt = await heard('permission');
+      await session.interrupt();
+      await ended('m1');
+      expect(events).toContainEqual({ type: 'withdrawn', id: prompt.id });
+      expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true, failed: false });
+      expect(await requests('turn/start')).toEqual([]);
+    });
+
+    it('is refused by a build made as a commercial or hosted product', async () => {
+      await expect(start({}, CHATGPT, { distribution: 'hosted' })).rejects.toThrow(
+        /logged in with ChatGPT.*commercial or hosted.*Codex · Terminal/s,
+      );
+    });
+  });
+
+  it('runs on an API key without asking; refuses no login, and says how to log in', async () => {
+    const consent = { given: vi.fn(), give: vi.fn() };
+    const { turn, events } = await start({}, {}, { consent });
+    await turn('Hello', 'm1');
+    expect(events.some((e) => e.type === 'permission')).toBe(false);
+    expect(consent.given).not.toHaveBeenCalled();
     await expect(start({}, { FAKE_CODEX_LOGIN: 'none' })).rejects.toThrow(/isn't logged in/);
   });
 
@@ -563,7 +655,12 @@ describe('the App Server connection, replaying the real Codex', () => {
     const recordedSession = await start(
       { cwd: '/work/smoke/one', model: 'gpt-6-luna', effort: 'low', ...spec },
       {},
-      { spawn: replaying, refusal: () => undefined, home: '/Users/someone' },
+      {
+        spawn: replaying,
+        // Recorded on a ChatGPT login, allowed for good.
+        consent: { given: () => Promise.resolve(true), give: () => Promise.resolve() },
+        home: '/Users/someone',
+      },
     );
     return { ...recordedSession, problems, sent };
   }
