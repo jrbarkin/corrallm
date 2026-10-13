@@ -40,6 +40,10 @@ class FakeQuery {
     .mockResolvedValue({ still_queued: [] });
   readonly setPermissionMode = vi.fn<(mode: PermissionMode) => Promise<void>>().mockResolvedValue();
   readonly setModel = vi.fn<(model?: string) => Promise<void>>().mockResolvedValue();
+  readonly stopTask = vi.fn<(taskId: string) => Promise<void>>().mockResolvedValue();
+  readonly applyFlagSettings = vi
+    .fn<(settings: Record<string, unknown>) => Promise<void>>()
+    .mockResolvedValue();
   readonly close = vi.fn(() => {
     this.finish();
   });
@@ -160,6 +164,9 @@ describe('SdkConnector', () => {
       permissionMode: 'default',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
+      // Hooks that fail or block are shown; the composer offers what the CLI predicts next.
+      includeHookEvents: true,
+      promptSuggestions: true,
       env: {
         PATH: '/usr/bin',
         HOME: '/home/user',
@@ -188,7 +195,12 @@ describe('SdkConnector', () => {
       value: 'haiku',
       label: 'Haiku 5.5',
       description: 'Fastest for quick answers',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     });
+    // A model that takes no effort level offers none.
+    expect(started?.models.find((m) => m.value === 'claude-haiku-4-5-20251001')).not.toHaveProperty(
+      'efforts',
+    );
     const commands = events[1]?.type === 'commands' ? events[1].commands : [];
     expect(commands).toContainEqual({
       name: 'compact',
@@ -404,6 +416,53 @@ describe('SdkConnector', () => {
     query().setPermissionMode.mockRejectedValueOnce(new Error('Auto mode is not available'));
     await expect(session.setMode('auto')).rejects.toThrow(/not available/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
+  it('sets the effort the composer picks, for this session', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    await session.setEffort?.('xhigh');
+    await session.setEffort?.(null);
+    expect(query().applyFlagSettings.mock.calls).toEqual([
+      [{ effortLevel: 'xhigh' }],
+      [{ effortLevel: null }],
+    ]);
+  });
+
+  it('stops a task running in the background, and only one that is', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    await expect(session.stopTask?.('b1')).rejects.toThrow(/not running/);
+    query().say({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' }],
+    } as unknown as SDKMessage);
+    await settle();
+    await session.stopTask?.('b1');
+    expect(query().stopTask).toHaveBeenCalledWith('b1');
+  });
+
+  it('denies a tool with what to do instead: Claude goes on with it, as in Claude Code', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    const asked = query().canUseTool(
+      'Bash',
+      { command: 'npm test' },
+      { signal: new AbortController().signal, toolUseID: 'toolu_2', requestId: 'r2' },
+    );
+    await session.answer('toolu_2:prompt', {
+      kind: 'permission',
+      answer: 'deny',
+      feedback: 'Use pnpm here',
+    });
+    const result = await asked;
+    expect(result).toEqual({
+      behavior: 'deny',
+      message:
+        "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nUse pnpm here",
+      decisionClassification: 'user_reject',
+    });
   });
 
   it('carries out an approved plan in the mode chosen, once the CLI has left plan mode', async () => {

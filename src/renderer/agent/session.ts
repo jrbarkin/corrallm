@@ -1,6 +1,8 @@
 import type {
   AskedQuestion,
+  BackgroundTask,
   DiffLine,
+  EffortLevel,
   MessageImage,
   ModelChoice,
   PermissionMode,
@@ -9,13 +11,16 @@ import type {
   SlashCommand,
   Todo,
   ToolDetail,
+  ToolProgress,
   ToolStatus,
 } from '../../shared/session';
 import type { CardQuestion } from '../graph/Questions';
 import { mergeHistory } from './history';
 
 export type {
+  BackgroundTask,
   DiffLine,
+  EffortLevel,
   MessageImage,
   ModelChoice,
   PlanAnswer,
@@ -23,6 +28,7 @@ export type {
   SlashCommand,
   Todo,
   ToolDetail,
+  ToolProgress,
   ToolStatus,
 };
 
@@ -75,6 +81,8 @@ export type Entry =
       status: ToolStatus;
       detail?: ToolDetail;
       parent?: string;
+      /** How it is going, as a connected session reports: time, a subagent's work. */
+      progress?: ToolProgress;
     }
   | {
       id: string;
@@ -88,6 +96,8 @@ export type Entry =
       /** What it asks, as the CLI words it, when it says. */
       title?: string;
       answer?: Answer;
+      /** What the user told Claude to do instead, with a no. */
+      feedback?: string;
       withdrawn?: boolean;
     }
   | { id: string; kind: 'question'; questions: SessionQuestion[]; withdrawn?: boolean }
@@ -121,6 +131,12 @@ export interface Session {
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
   commands?: readonly SlashCommand[];
+  /** The work a connected session runs in the background now, which the user can stop. */
+  tasks?: readonly BackgroundTask[];
+  /** What a connected session predicts the user sends next, until a turn starts. */
+  suggestion?: string;
+  /** The effort picked for a connected session (null: its model's default), once picked. */
+  effort?: EffortLevel | null;
 }
 
 /**
@@ -154,7 +170,8 @@ export type SessionAction =
   | { type: 'stream'; id: string; text: string }
   /** Shows a prompt and waits for its answer. */
   | { type: 'ask'; entry: Prompt }
-  | { type: 'answer'; id: string; answer: Answer }
+  /** Answers a permission prompt; `feedback`, with a no: what to do instead. */
+  | { type: 'answer'; id: string; answer: Answer; feedback?: string }
   /** Answers question `index` of the question prompt `id`. */
   | { type: 'answerQuestion'; id: string; index: number; answer: string }
   | { type: 'answerPlan'; id: string; answer: PlanAnswer }
@@ -171,6 +188,9 @@ export type SessionAction =
   | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
+  | { type: 'tasks'; tasks: readonly BackgroundTask[] }
+  | { type: 'suggestion'; text: string }
+  | { type: 'effort'; effort: EffortLevel | null }
   /** What a resumed session did before: what the transcript does not show yet goes in (history.ts). */
   | { type: 'restore'; entries: Entry[] };
 
@@ -197,8 +217,16 @@ export function reduce(session: Session, action: SessionAction): Session {
     status: session.status === 'idle' ? 'idle' : entries.some(isOpen) ? 'waiting' : 'working',
   });
   switch (action.type) {
-    case 'start':
-      return { ...session, status: 'working', entries: [...session.entries, action.entry] };
+    case 'start': {
+      // What was predicted for it is no longer.
+      const started: Session = {
+        ...session,
+        status: 'working',
+        entries: [...session.entries, action.entry],
+      };
+      delete started.suggestion;
+      return started;
+    }
     case 'add':
       return { ...session, entries: [...session.entries, action.entry] };
     case 'update':
@@ -221,7 +249,13 @@ export function reduce(session: Session, action: SessionAction): Session {
       return {
         ...settled(
           update(action.id, (entry) =>
-            entry.kind === 'permission' ? { ...entry, answer: action.answer } : entry,
+            entry.kind === 'permission'
+              ? {
+                  ...entry,
+                  answer: action.answer,
+                  ...(action.feedback === undefined ? {} : { feedback: action.feedback }),
+                }
+              : entry,
           ),
         ),
         allowed: always ? [...session.allowed, asked.tool] : session.allowed,
@@ -283,11 +317,24 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'model':
       return { ...session, model: action.model };
     case 'connected':
-      return { ...session, models: action.models, model: action.model, mode: action.mode };
+      // A session that starts runs nothing in the background yet.
+      return {
+        ...session,
+        models: action.models,
+        model: action.model,
+        mode: action.mode,
+        tasks: [],
+      };
     case 'usage':
       return { ...session, usage: action.usage };
     case 'commands':
       return { ...session, commands: action.commands };
+    case 'tasks':
+      return { ...session, tasks: action.tasks };
+    case 'suggestion':
+      return { ...session, suggestion: action.text };
+    case 'effort':
+      return { ...session, effort: action.effort };
     case 'restore':
       return { ...session, entries: mergeHistory(session.entries, action.entries) };
   }

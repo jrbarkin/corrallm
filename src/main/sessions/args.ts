@@ -2,6 +2,7 @@ import type { IpcArgs } from '../../shared/ipc';
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_INPUT, MAX_TERMINAL_ROWS } from '../../shared/terminal';
 import {
   CONNECTIONS,
+  EFFORT_LEVELS,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
@@ -15,6 +16,7 @@ import {
   PLAN_MODES,
 } from '../../shared/session';
 import type {
+  EffortLevel,
   MessageImage,
   PermissionMode,
   PlanAnswer,
@@ -142,15 +144,33 @@ export function parseModelArgs(args: unknown[]): IpcArgs<'session:model'> {
   return [parseId(agentId, 'agent'), parseModel(model)];
 }
 
+/** session:effort: an agent, and an effort level (null: its model's default). */
+export function parseEffortArgs(args: unknown[]): IpcArgs<'session:effort'> {
+  const [agentId, effort] = expect(args, 2, 'an agent and an effort');
+  const level: EffortLevel | null =
+    effort === null ? null : oneOf(effort, EFFORT_LEVELS, 'effort level');
+  return [parseId(agentId, 'agent'), level];
+}
+
+/** session:stopTask: an agent, and the id of a task its session runs (main checks it does). */
+export function parseStopTaskArgs(args: unknown[]): IpcArgs<'session:stopTask'> {
+  const [agentId, taskId] = expect(args, 2, 'an agent and a task');
+  return [parseId(agentId, 'agent'), parseId(taskId, 'task')];
+}
+
 function parseAnswer(value: unknown): SessionAnswer {
   const kind = isRecord(value) ? value.kind : undefined;
   switch (kind) {
     case 'permission': {
-      const { answer } = record(value, 'the answer', ['kind', 'answer']);
-      return {
-        kind,
-        answer: oneOf(answer, ['once', 'always', 'deny'] as const, 'permission answer'),
-      };
+      const { answer, feedback } = record(value, 'the answer', ['kind', 'answer', 'feedback']);
+      const given = oneOf(answer, ['once', 'always', 'deny'] as const, 'permission answer');
+      if (feedback === undefined) return { kind, answer: given };
+      // "No, and tell Claude what to do differently".
+      if (typeof feedback !== 'string' || feedback.length > MAX_ANSWER_LENGTH) {
+        throw new TypeError('Expected what to do instead, as text');
+      }
+      if (given !== 'deny') throw new TypeError('What to do instead goes only with a no');
+      return { kind, answer: given, feedback };
     }
     case 'question': {
       const { answers } = record(value, 'the answer', ['kind', 'answers']);

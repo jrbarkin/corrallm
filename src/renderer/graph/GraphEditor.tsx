@@ -975,8 +975,8 @@ function Editor({
                 );
               },
               findFiles: (query) => sessionStore.findFiles(query),
-              answer: (permissionId, answer) => {
-                sessionStore.answer(openedNode.id, permissionId, answer);
+              answer: (permissionId, answer, feedback) => {
+                sessionStore.answer(openedNode.id, permissionId, answer, feedback);
               },
               answerQuestion: (promptId, index, answer) => {
                 sessionStore.answerQuestion(openedNode.id, promptId, index, answer);
@@ -995,6 +995,12 @@ function Editor({
               },
               setModel: (model) => {
                 sessionStore.setModel(openedNode.id, model);
+              },
+              setEffort: (effort) => {
+                sessionStore.setEffort(openedNode.id, effort);
+              },
+              stopTask: (taskId) => {
+                sessionStore.stopTask(openedNode.id, taskId);
               },
             }}
             onClose={closeOpened}

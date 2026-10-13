@@ -2,6 +2,7 @@ import type { WebContents } from 'electron';
 
 import type {
   Connection,
+  EffortLevel,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -15,6 +16,8 @@ import type { Connector, LiveSession, SessionHost } from './connector';
 const NO_PROJECT =
   'Choose a project folder for this canvas first (in the bar at the top left): its agents work in it.';
 const NOT_RUNNING = 'This agent’s session is not running.';
+const NO_EFFORT = 'This agent’s effort is set in its terminal (/effort).';
+const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
@@ -122,6 +125,23 @@ export class SessionManager {
 
   async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
     await (await this.#session(contents, agentId)).setModel(model);
+  }
+
+  async setEffort(
+    contents: WebContents,
+    agentId: string,
+    effort: EffortLevel | null,
+  ): Promise<void> {
+    const session = await this.#session(contents, agentId);
+    if (!session.setEffort) throw new Error(NO_EFFORT);
+    await session.setEffort(effort);
+  }
+
+  /** Stops a task the agent's session runs in the background (the session checks it does). */
+  async stopTask(contents: WebContents, agentId: string, taskId: string): Promise<void> {
+    const session = await this.#session(contents, agentId);
+    if (!session.stopTask) throw new Error(NO_TASKS);
+    await session.stopTask(taskId);
   }
 
   /**

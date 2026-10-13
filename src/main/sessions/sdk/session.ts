@@ -9,6 +9,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
+  EffortLevel,
   PermissionMode,
   PlanMode,
   SessionAnswer,
@@ -171,6 +172,19 @@ export class SdkSession implements LiveSession {
     await this.#query.setModel(model);
     this.#translator.setModel(model);
     this.#host.emit({ type: 'model', model });
+  }
+
+  /** For this session only, as Claude Code's /effort does without saving it. */
+  async setEffort(effort: EffortLevel | null): Promise<void> {
+    await this.#query.applyFlagSettings({ effortLevel: effort });
+  }
+
+  /** Stops a task the CLI runs in the background; its notification says it stopped. */
+  async stopTask(taskId: string): Promise<void> {
+    if (!this.#translator.runsInBackground(taskId)) {
+      throw new Error('That task is not running in the background.');
+    }
+    await this.#query.stopTask(taskId);
   }
 
   async close(): Promise<void> {

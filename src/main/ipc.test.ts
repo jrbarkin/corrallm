@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
 
 import { API_CHANNELS, MAX_CANVAS_BYTES } from '../shared/ipc';
 import {
+  MAX_ANSWER_LENGTH,
   MAX_FILE_MATCHES,
   MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
@@ -49,6 +50,8 @@ function fakeServices() {
       interrupt: vi.fn<IpcServices['sessions']['interrupt']>().mockResolvedValue(undefined),
       setMode: vi.fn<IpcServices['sessions']['setMode']>().mockResolvedValue(undefined),
       setModel: vi.fn<IpcServices['sessions']['setModel']>().mockResolvedValue(undefined),
+      setEffort: vi.fn<IpcServices['sessions']['setEffort']>().mockResolvedValue(undefined),
+      stopTask: vi.fn<IpcServices['sessions']['stopTask']>().mockResolvedValue(undefined),
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
@@ -216,6 +219,16 @@ describe('session:* handlers', () => {
     expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'bypassPermissions');
     await invoke('session:model', ['a', 'claude-haiku-5-5[1m]'], sender);
     expect(services.sessions.setModel).toHaveBeenCalledWith(sender, 'a', 'claude-haiku-5-5[1m]');
+    await invoke('session:effort', ['a', 'xhigh'], sender);
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'xhigh');
+    await invoke('session:effort', ['a', null], sender);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+    await invoke('session:stopTask', ['a', 'b1'], sender);
+    expect(services.sessions.stopTask).toHaveBeenCalledWith(sender, 'a', 'b1');
+    // Denied, with what to do instead.
+    const denied = { kind: 'permission', answer: 'deny', feedback: 'Use pnpm' };
+    await invoke('session:answer', ['a', 'p3', denied], sender);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'p3', denied);
     await invoke('session:close', ['a'], sender);
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
   });
@@ -338,6 +351,26 @@ describe('session:* handlers', () => {
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
+    ['session:effort', 'an unknown effort', ['a', 'ultra'], /effort/],
+    ['session:effort', 'no effort', ['a'], /an agent and an effort/],
+    ['session:stopTask', 'a task that is not named', ['a', ''], /task's id/],
+    ['session:stopTask', 'a very long task id', ['a', 't'.repeat(MAX_ID_LENGTH + 1)], /task's id/],
+    [
+      'session:answer',
+      'what to do instead, with a yes',
+      ['a', 'p', { kind: 'permission', answer: 'once', feedback: 'Go' }],
+      /only with a no/,
+    ],
+    [
+      'session:answer',
+      'what to do instead, too long',
+      [
+        'a',
+        'p',
+        { kind: 'permission', answer: 'deny', feedback: 'x'.repeat(MAX_ANSWER_LENGTH + 1) },
+      ],
+      /what to do instead/,
+    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

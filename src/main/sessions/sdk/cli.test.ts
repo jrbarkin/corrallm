@@ -109,4 +109,49 @@ describe('SdkConnector through the Agent SDK', () => {
     const ended = await waitFor(events, (e) => e.type === 'end');
     expect(ended).toMatchObject({ messages: [id], interrupted: true, failed: false });
   });
+
+  it('stops a command running in the background, and sets the effort', async () => {
+    const { session, events } = await start('acceptEdits');
+    await session.setEffort?.('high');
+    await session.send({ id: '00000000-0000-4000-8000-00000000000c', text: 'background' });
+    const listed = await waitFor(
+      events,
+      (e) => e.type === 'tasks' && e.tasks.some((task) => task.tool !== undefined),
+    );
+    if (listed.type !== 'tasks') throw new Error('no tasks');
+    expect(listed.tasks).toEqual([
+      {
+        id: 'b1',
+        description: 'npm run dev',
+        kind: 'command',
+        tool: expect.any(String) as unknown,
+      },
+    ]);
+    await waitFor(events, (e) => e.type === 'end');
+    await expect(session.stopTask?.('nope')).rejects.toThrow(/not running/);
+    await session.stopTask?.('b1');
+    const stopped = await waitFor(
+      events,
+      (e) => e.type === 'tool' && e.id === listed.tasks[0]?.tool && e.status === 'interrupted',
+    );
+    expect(stopped).toMatchObject({ tool: 'Bash', summary: 'npm run dev' });
+    expect(events.at(-1)).toEqual({ type: 'tasks', tasks: [] });
+  });
+
+  it('says when a hook blocks a command, shows a command’s progress, and predicts the next message', async () => {
+    const { session, events } = await start('acceptEdits');
+    await session.send({ id: '00000000-0000-4000-8000-00000000000d', text: 'hook test suggest' });
+    await waitFor(events, (e) => e.type === 'suggestion');
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'notice',
+        level: 'error',
+        text: 'PreToolUse:Bash hook returned blocking error: Use pnpm, not npm.',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'tool', summary: 'npm test', progress: { seconds: 3 } }),
+    );
+    expect(events.at(-1)).toEqual({ type: 'suggestion', text: 'Run the tests' });
+  });
 });

@@ -615,6 +615,207 @@ describe('a connected agent', () => {
       }),
     );
     expect(prompt.getByText('Do you want to proceed?')).toBeTruthy();
-    expect(prompt.getAllByRole('button').map((b) => b.textContent)).toEqual(['Yes', 'No']);
+    // Numbered as in Claude Code; then what to tell Claude instead.
+    expect(
+      prompt
+        .getAllByRole('button')
+        .map((b) => [b.getAttribute('aria-keyshortcuts'), b.textContent]),
+    ).toEqual([
+      ['1', '1Yes'],
+      ['2', '2No'],
+      [null, 'Tell Claude'],
+    ]);
+  });
+
+  it('answers a permission prompt with 1, 2 or 3, or with what to do instead', async () => {
+    const { backend, composer, send, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Test it');
+    const ask = (id: string) => {
+      emit({
+        type: 'permission',
+        id,
+        tool: 'Bash',
+        summary: 'npm test',
+        always: "Yes, and don't ask again for `npm test` commands in shop",
+      });
+    };
+    ask('p1');
+    // A draft being written takes the key; an empty box gives it to the prompt.
+    fireEvent.change(composer, { target: { value: 'x' } });
+    fireEvent.keyDown(composer, { key: '2' });
+    expect(backend.answer).not.toHaveBeenCalled();
+    fireEvent.change(composer, { target: { value: '' } });
+    fireEvent.keyDown(composer, { key: '2' });
+    await settle();
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'p1', {
+      kind: 'permission',
+      answer: 'always',
+    });
+
+    ask('p2');
+    fireEvent.keyDown(document.body, { key: '3' });
+    await settle();
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'p2', {
+      kind: 'permission',
+      answer: 'deny',
+    });
+
+    ask('p3');
+    // The prompt still open, after the answered ones.
+    const asked = transcript.getAllByRole('group', { name: 'Bash command: npm test' }).at(-1);
+    const prompt = within(asked ?? document.body);
+    const instead = prompt.getByRole('textbox', {
+      name: 'No, and tell Claude what to do differently',
+    });
+    fireEvent.change(instead, { target: { value: 'Use pnpm, not npm' } });
+    // Typing there types: digits are not answers.
+    fireEvent.keyDown(instead, { key: '1' });
+    fireEvent.keyDown(instead, { key: 'Enter' });
+    await settle();
+    expect(backend.answer).toHaveBeenLastCalledWith('a', 'p3', {
+      kind: 'permission',
+      answer: 'deny',
+      feedback: 'Use pnpm, not npm',
+    });
+    expect(transcript.getByText(/Use pnpm, not npm/).textContent).toBe(
+      'Denied: Bash npm test · Use pnpm, not npm',
+    );
+  });
+
+  it('shows how long a tool call has run, and how a subagent is going', async () => {
+    const { send, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Go');
+    emit(
+      {
+        type: 'tool',
+        id: 't',
+        tool: 'Bash',
+        summary: 'npm test',
+        status: 'running',
+        progress: { seconds: 75 },
+      },
+      {
+        type: 'tool',
+        id: 'g',
+        tool: 'Agent',
+        summary: 'Read the README',
+        status: 'running',
+        progress: { doing: 'Reading README.md', toolUses: 1, tokens: 21465, seconds: 1 },
+      },
+    );
+    const line = (name: string) =>
+      transcript.getByRole('button', { name }).closest<HTMLElement>('.agent-tool');
+    expect(line('Bash npm test')?.querySelector('.agent-tool-progress')?.textContent).toBe(
+      '1m 15s',
+    );
+    expect(line('Agent Read the README')?.querySelector('.agent-tool-progress')?.textContent).toBe(
+      'Reading README.md · 1 tool use · 21.5k tokens · 1s',
+    );
+    emit({
+      type: 'tool',
+      id: 'g',
+      tool: 'Agent',
+      summary: 'Read the README',
+      status: 'done',
+      progress: { toolUses: 2, tokens: 25546, seconds: 4 },
+    });
+    expect(line('Agent Read the README')?.querySelector('.agent-tool-progress')?.textContent).toBe(
+      'Done · 2 tool uses · 25.5k tokens · 4s',
+    );
+  });
+
+  it('shows what runs in the background, above its composer and on its line, and stops it', async () => {
+    const { backend, view, send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    await send('Start the dev server, and survey the code meanwhile');
+    emit(
+      { type: 'tool', id: 'toolu_dev', tool: 'Bash', summary: 'npm run dev', status: 'running' },
+      {
+        type: 'tasks',
+        tasks: [
+          { id: 'b1', description: 'npm run dev', kind: 'command', tool: 'toolu_dev' },
+          { id: 'a1', description: 'Survey the code', kind: 'agent' },
+        ],
+      },
+      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+    );
+    const strip = within(view.getByRole('group', { name: 'Background tasks' }));
+    expect(strip.getByText('npm run dev')).toBeTruthy();
+    fireEvent.click(strip.getByRole('button', { name: 'Stop Survey the code' }));
+    await settle();
+    expect(backend.stopTask).toHaveBeenCalledWith('a', 'a1');
+    // The command's own line has a Stop too.
+    const line = transcript
+      .getByRole('button', { name: 'Bash npm run dev' })
+      .closest<HTMLElement>('.agent-tool');
+    fireEvent.click(
+      within(line ?? document.body).getByRole('button', { name: 'Stop npm run dev' }),
+    );
+    await settle();
+    expect(backend.stopTask).toHaveBeenLastCalledWith('a', 'b1');
+    emit({ type: 'tasks', tasks: [] });
+    expect(view.queryByRole('group', { name: 'Background tasks' })).toBeNull();
+  });
+
+  it('offers what Claude Code predicts you send next: Tab takes it', async () => {
+    const { composer, send, sent, emit } = await open({ connection: 'sdk' });
+    await send('Fix the bug');
+    emit(
+      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+      { type: 'suggestion', text: 'Run the tests' },
+    );
+    expect(composer.placeholder).toBe('Run the tests');
+    fireEvent.keyDown(composer, { key: 'Tab' });
+    expect(composer.value).toBe('Run the tests');
+    await send('Run the tests');
+    expect(composer.placeholder).toBe('Queue a message for a…');
+  });
+
+  it('brings back earlier messages with Up and Down, keeping the draft', async () => {
+    const { composer, send, sent, emit } = await open({ connection: 'sdk' });
+    for (const text of ['First', 'Second']) {
+      await send(text);
+      emit({ type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false });
+    }
+    fireEvent.change(composer, { target: { value: 'Draft' } });
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+    expect(composer.value).toBe('Second');
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+    expect(composer.value).toBe('First');
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+    expect(composer.value).toBe('First');
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(composer.value).toBe('Second');
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(composer.value).toBe('Draft');
+  });
+
+  it('sets its effort beside the model, when the model takes one', async () => {
+    const { backend, view, emit } = await open({ connection: 'sdk' });
+    emit({
+      type: 'started',
+      model: 'opus',
+      mode: 'manual',
+      models: [
+        { value: 'opus', label: 'Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        { value: 'old', label: 'Old model' },
+      ],
+    });
+    const effort = () => view.queryByRole('button', { name: /^Effort: / });
+    expect(effort()?.getAttribute('aria-label')).toBe('Effort: Default');
+    fireEvent.click(effort() ?? document.body);
+    expect(
+      within(view.getByRole('menu', { name: 'Effort' }))
+        .getAllByRole('menuitemradio')
+        .map((item) => item.firstChild?.textContent),
+    ).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^High/ }));
+    await settle();
+    expect(backend.setEffort).toHaveBeenCalledWith('a', 'high');
+    expect(effort()?.textContent).toBe('High effort');
+
+    // A model that takes none: no effort to set.
+    fireEvent.click(view.getByRole('button', { name: 'Model: Opus' }));
+    fireEvent.click(view.getByRole('menuitemradio', { name: /^Old model/ }));
+    expect(effort()).toBeNull();
   });
 });

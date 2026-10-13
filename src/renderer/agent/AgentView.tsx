@@ -42,7 +42,8 @@ import './AgentView.css';
 export interface SessionControls extends ComposerControls {
   /** Starts the session (again), as when the view opens: a connected one resumes. */
   open: () => void;
-  answer: (permissionId: string, answer: Answer) => void;
+  /** `feedback`, with a no: what Claude should do instead. */
+  answer: (permissionId: string, answer: Answer, feedback?: string) => void;
   answerQuestion: (promptId: string, index: number, answer: string) => void;
   answerPlan: (promptId: string, answer: PlanAnswer) => void;
 }
@@ -440,8 +441,8 @@ export function AgentView({
                     note={sessionNote(agent, connection, project)}
                     answers={{
                       // The prompt's buttons are gone: the keyboard goes back to the composer.
-                      onAnswer: (permissionId, answer) => {
-                        controls.answer(permissionId, answer);
+                      onAnswer: (permissionId, answer, feedback) => {
+                        controls.answer(permissionId, answer, feedback);
                         composer.current?.focus();
                       },
                       onAnswerQuestion: (promptId, index, answer) => {
@@ -452,6 +453,7 @@ export function AgentView({
                         controls.answerPlan(promptId, answer);
                         composer.current?.focus();
                       },
+                      ...(controls.stopTask ? { onStopTask: controls.stopTask } : {}),
                     }}
                   />
                   <Composer

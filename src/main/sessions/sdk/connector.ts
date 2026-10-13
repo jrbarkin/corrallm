@@ -123,6 +123,10 @@ export class SdkConnector implements Connector {
       canUseTool: prompts.canUseTool,
       includePartialMessages: true,
       forwardSubagentText: true,
+      // Hooks' failures and blocks are shown as Claude Code shows them (translate.ts).
+      includeHookEvents: true,
+      // What the user might send next, which the composer offers.
+      promptSuggestions: true,
       // Interrupting stops the turn; background subagents and commands go on.
       perTaskStopAffordance: true,
       // Thinking as Claude Code shows it: summarized.
@@ -145,6 +149,9 @@ export class SdkConnector implements Connector {
       value: m.value,
       label: m.displayName,
       description: m.description,
+      ...(m.supportsEffort === true && m.supportedEffortLevels !== undefined
+        ? { efforts: [...m.supportedEffortLevels] }
+        : {}),
     }));
     const current = model ?? (models.some((m) => m.value === 'default') ? 'default' : null);
     translator.setModels(init.models, current);

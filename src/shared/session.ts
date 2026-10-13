@@ -37,16 +37,44 @@ export type ToolDetail =
   | { kind: 'diff'; added: number; removed: number; lines: DiffLine[] }
   | { kind: 'output'; text: string };
 
+/**
+ * How a tool call is going, as its CLI reports while it runs: how long it has run, and for a
+ * subagent, what it is doing now, its tool uses and the tokens it has used (kept once it is done).
+ */
+export interface ToolProgress {
+  seconds?: number;
+  /** What a subagent is doing now, as the CLI words it ("Reading README.md"). */
+  doing?: string;
+  toolUses?: number;
+  tokens?: number;
+}
+
+/** Work going on in the background (a subagent, a command), which the user can stop. */
+export interface BackgroundTask {
+  /** The CLI's id for it. */
+  id: string;
+  description: string;
+  kind: 'agent' | 'command' | 'other';
+  /** The tool call that started it, when known: its line in the transcript. */
+  tool?: string;
+}
+
 export interface Todo {
   text: string;
   status: 'pending' | 'active' | 'done';
 }
+
+/** How much effort Claude puts into a reply, least to most (Claude Code's /effort levels). */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 /** A model a session offers: what the CLI calls it, and how the model picker shows it. */
 export interface ModelChoice {
   value: string;
   label: string;
   description?: string;
+  /** The effort levels it can be set to, if it takes one. */
+  efforts?: EffortLevel[];
 }
 
 /** How a session is started. Main picks the folder (the canvas's project) and what it resumes. */
@@ -106,9 +134,12 @@ export type PlanMode = (typeof PLAN_MODES)[number];
 /** How the user answers a plan: go ahead in a mode; or keep planning, saying what to change. */
 export type PlanAnswer = { approve: true; mode: PlanMode } | { approve: false; feedback: string };
 
-/** The user's answer to a prompt a session showed. */
+/**
+ * The user's answer to a prompt a session showed. A permission denied with `feedback` (what to do
+ * instead) lets Claude go on with it; denied without, the turn stops, as in Claude Code.
+ */
 export type SessionAnswer =
-  | { kind: 'permission'; answer: 'once' | 'always' | 'deny' }
+  | { kind: 'permission'; answer: 'once' | 'always' | 'deny'; feedback?: string }
   /** An answer to each of the questions asked, in order. */
   | { kind: 'question'; answers: string[] }
   | { kind: 'plan'; answer: PlanAnswer };
@@ -157,8 +188,16 @@ export type SessionEvent =
       status: ToolStatus;
       detail?: ToolDetail;
       parent?: string;
+      progress?: ToolProgress;
     }
   | { type: 'todos'; id: string; items: Todo[] }
+  /**
+   * The work going on in the background now (every such task: it replaces the last list). Sent
+   * whenever that changes, in a turn or not; a session that starts has none.
+   */
+  | { type: 'tasks'; tasks: BackgroundTask[] }
+  /** What the user might send next, as the CLI predicts it after a turn: the composer offers it. */
+  | { type: 'suggestion'; text: string }
   /**
    * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
    * or null where it offers no "always". `title`: what it asks, as the CLI words it ("Claude wants

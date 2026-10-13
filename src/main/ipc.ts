@@ -11,11 +11,13 @@ import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
   parseAnswerArgs,
+  parseEffortArgs,
   parseFilesArgs,
   parseModeArgs,
   parseModelArgs,
   parseSendArgs,
   parseStartArgs,
+  parseStopTaskArgs,
   parseTerminalInputArgs,
   parseTerminalResizeArgs,
 } from './sessions/args';
@@ -44,6 +46,8 @@ export interface IpcServices {
     | 'interrupt'
     | 'setMode'
     | 'setModel'
+    | 'setEffort'
+    | 'stopTask'
     | 'close'
     | 'canvasOpened'
     | 'canvasForgotten'
@@ -207,6 +211,20 @@ function createHandlers({ projects, files, sessions }: IpcServices): HandlerTabl
       parseArgs: parseModelArgs,
       handler: async ({ contents }, agentId, model) => {
         await sessions.setModel(contents, agentId, model);
+        return null;
+      },
+    },
+    'session:effort': {
+      parseArgs: parseEffortArgs,
+      handler: async ({ contents }, agentId, effort) => {
+        await sessions.setEffort(contents, agentId, effort);
+        return null;
+      },
+    },
+    'session:stopTask': {
+      parseArgs: parseStopTaskArgs,
+      handler: async ({ contents }, agentId, taskId) => {
+        await sessions.stopTask(contents, agentId, taskId);
         return null;
       },
     },

@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../shared/session';
@@ -7,7 +7,15 @@ import { AgentType } from '../graph/agents';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
 import { MODES } from './session';
-import type { MessageImage, Mode, ModelChoice, Session, SessionUsage } from './session';
+import type {
+  BackgroundTask,
+  EffortLevel,
+  MessageImage,
+  Mode,
+  ModelChoice,
+  Session,
+  SessionUsage,
+} from './session';
 
 /** What the composer does to its agent's session (sessions.ts). */
 export interface ComposerControls {
@@ -17,6 +25,10 @@ export interface ComposerControls {
   unqueue: (queuedId: string) => void;
   setMode: (mode: Mode) => void;
   setModel: (model: string) => void;
+  /** How much effort Claude puts into replies (null: the model's default), for a connected session. */
+  setEffort?: (effort: EffortLevel | null) => void;
+  /** Stops a task a connected session runs in the background. */
+  stopTask?: (taskId: string) => void;
   /** The project folder's files matching what follows an "@", for a connected session. */
   findFiles?: (query: string) => Promise<string[]>;
 }
@@ -44,16 +56,29 @@ const MODELS: Record<AgentType, readonly string[]> = {
 /** What a connected session offers before it has said: its CLI's default model. */
 const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Default model' }];
 
+/** The effort levels, as the effort menu names them, with what Claude Code says of each. */
+const EFFORTS: Record<EffortLevel, { label: string; detail: string }> = {
+  low: { label: 'Low', detail: 'Quick, straightforward implementation' },
+  medium: { label: 'Medium', detail: 'Balanced approach with standard testing' },
+  high: { label: 'High', detail: 'Comprehensive implementation with extensive testing' },
+  xhigh: { label: 'Extra high', detail: 'Extended reasoning with thorough analysis' },
+  max: { label: 'Max', detail: 'Maximum capability with deepest reasoning (this session only)' },
+};
+
 /**
  * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
- * line, Shift+Tab switches mode. While the agent works, Enter queues the message (shown above, ✕
- * takes it back to edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the
- * permission mode, the model (a connected session's own models, once it has started), what a
- * connected session has used, and Send (or Stop).
+ * line, Shift+Tab switches mode, Up and Down bring back the messages sent before (from the first or
+ * last line of the box; Down past the last brings the draft back). While the agent works, Enter
+ * queues the message (shown above, ✕ takes it back to edit) and Esc interrupts; otherwise Esc
+ * clears the draft. Under the box: the permission mode, the model (a connected session's own
+ * models, once it has started) and its effort (when the model takes one), what a connected session
+ * has used, and Send (or Stop).
  *
  * A connected session's composer also completes slash commands ("/" at the start: Tab puts one
- * in, Enter runs it) and file mentions ("@": the project folder's files), and takes images pasted
- * or dropped into it, sent with the message.
+ * in, Enter runs it) and file mentions ("@": the project folder's files), takes images pasted
+ * or dropped into it, sent with the message, offers what Claude Code predicts the user sends next
+ * (the empty box shows it; Tab takes it), and lists the work the session runs in the background,
+ * above the box, each with a Stop.
  */
 export function Composer({
   agentName,
@@ -87,6 +112,8 @@ export function Composer({
   /** The draft as it was when Esc closed the menu: it stays closed until the draft changes. */
   const [dismissed, setDismissed] = useState<string>();
   const [found, setFound] = useState<{ query: string; files: string[] }>();
+  /** Which earlier message Up and Down have brought back, and the draft they took the place of. */
+  const [recalled, setRecalled] = useState<{ index: number; draft: string }>();
   /** Where the caret goes once the draft a completion made is in the box. */
   const placeCaret = useRef<number | undefined>(undefined);
   const findFiles = useRef(controls.findFiles);
@@ -102,6 +129,21 @@ export function Composer({
       : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
   const model = models.find((m) => m.value === session.model) ?? models[0];
   const mode = MODES.find((m) => m.mode === session.mode) ?? MODES[0];
+  const efforts = connected && controls.setEffort ? (model?.efforts ?? []) : [];
+  const effort = session.effort ?? null;
+  const tasks = session.tasks ?? [];
+  /** What the empty box offers: Claude Code's guess at what is sent next. */
+  const suggestion = working || placeholder !== undefined ? undefined : session.suggestion;
+  /** The messages sent before, oldest first, each once in a row: what Up brings back. */
+  const sent = useMemo(() => {
+    const texts: string[] = [];
+    for (const entry of session.entries) {
+      if (entry.kind === 'user' && entry.text.trim() !== '' && texts.at(-1) !== entry.text) {
+        texts.push(entry.text);
+      }
+    }
+    return texts;
+  }, [session.entries]);
 
   const at: Completing | undefined = connected ? completing(draft, caret) : undefined;
   const mention = at?.kind === 'file' ? at.query : undefined;
@@ -151,6 +193,14 @@ export function Composer({
     setActive(0);
   };
 
+  /** Brings back message `index` of those sent (past the last: the draft), caret at its end. */
+  const recall = (index: number, kept: string) => {
+    const text = index < sent.length ? (sent[index] ?? '') : kept;
+    setRecalled(index < sent.length ? { index, draft: kept } : undefined);
+    placeCaret.current = text.length;
+    edit(text, text.length);
+  };
+
   const submit = (text = draft.trim()) => {
     if (text === '' && images.length === 0) return;
     controls.send(
@@ -160,6 +210,7 @@ export function Composer({
     setDraft('');
     setImages([]);
     setProblem(undefined);
+    setRecalled(undefined);
   };
 
   /** Puts the completion in; a command picked with Enter runs at once, as in Claude Code. */
@@ -201,6 +252,9 @@ export function Composer({
 
   return (
     <div className="agent-composer">
+      {connected && controls.stopTask && tasks.length > 0 && (
+        <BackgroundTasks tasks={tasks} onStop={controls.stopTask} />
+      )}
       {session.queued.length > 0 && (
         <ul className="agent-queued" aria-label="Queued messages">
           {session.queued.map((queued) => (
@@ -303,10 +357,13 @@ export function Composer({
           aria-controls={menu.length > 0 ? listId : undefined}
           aria-activedescendant={menu.length > 0 ? `${listId}-${String(picked)}` : undefined}
           placeholder={
-            placeholder ?? (working ? `Queue a message for ${agentName}…` : `Message ${agentName}…`)
+            placeholder ??
+            suggestion ??
+            (working ? `Queue a message for ${agentName}…` : `Message ${agentName}…`)
           }
           value={draft}
           onChange={(event) => {
+            setRecalled(undefined);
             edit(event.target.value, event.target.selectionStart);
           }}
           onSelect={(event) => {
@@ -340,6 +397,37 @@ export function Composer({
                 setDismissed(draft);
                 return;
               }
+            }
+            const box = event.currentTarget;
+            const plain = !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+            if (
+              plain &&
+              event.key === 'ArrowUp' &&
+              !box.value.slice(0, box.selectionStart).includes('\n')
+            ) {
+              // From the first line, the message sent before the one shown (or the last sent).
+              const index = recalled === undefined ? sent.length - 1 : recalled.index - 1;
+              if (index < 0) return;
+              event.preventDefault();
+              recall(index, recalled?.draft ?? draft);
+              return;
+            }
+            if (
+              plain &&
+              event.key === 'ArrowDown' &&
+              recalled !== undefined &&
+              !box.value.slice(box.selectionEnd).includes('\n')
+            ) {
+              event.preventDefault();
+              recall(recalled.index + 1, recalled.draft);
+              return;
+            }
+            if (plain && event.key === 'Tab' && suggestion !== undefined && draft === '') {
+              // The suggestion offered goes into the box.
+              event.preventDefault();
+              placeCaret.current = suggestion.length;
+              edit(suggestion, suggestion.length);
+              return;
             }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
@@ -388,6 +476,24 @@ export function Composer({
               field.current?.focus();
             }}
           />
+          {efforts.length > 0 && (
+            <ChoiceMenu
+              label="Effort"
+              value={effort === null ? 'Default' : EFFORTS[effort].label}
+              shown={effort === null ? 'Default effort' : `${EFFORTS[effort].label} effort`}
+              title="How much effort Claude puts into its replies, this session"
+              choices={[
+                { key: 'default', label: 'Default', detail: 'The model’s own' },
+                ...efforts.map((level) => ({ key: level, ...EFFORTS[level] })),
+              ]}
+              chosen={effort ?? 'default'}
+              onChoose={(key) => {
+                const picked = efforts.find((level) => level === key);
+                controls.setEffort?.(picked ?? null);
+                field.current?.focus();
+              }}
+            />
+          )}
           {session.usage && <Usage usage={session.usage} />}
           {working ? (
             <button
@@ -442,10 +548,51 @@ function Usage({ usage }: { usage: SessionUsage }) {
   );
 }
 
-/** A button showing a choice ("Mode: Manual"), opening a menu of the others. */
+/**
+ * The work a connected session runs in the background (subagents, commands), above the box, each
+ * with a Stop.
+ */
+function BackgroundTasks({
+  tasks,
+  onStop,
+}: {
+  tasks: readonly BackgroundTask[];
+  onStop: (taskId: string) => void;
+}) {
+  return (
+    <ul className="agent-tasks" role="group" aria-label="Background tasks">
+      {tasks.map((task) => (
+        <li key={task.id} data-kind={task.kind}>
+          <span className="agent-tasks-kind">
+            {task.kind === 'agent' ? 'Subagent' : task.kind === 'command' ? 'Command' : 'Task'}
+          </span>
+          <span className="agent-tasks-description" title={task.description}>
+            {task.description}
+          </span>
+          <button
+            type="button"
+            aria-label={`Stop ${task.description}`}
+            title="Stop it"
+            onClick={() => {
+              onStop(task.id);
+            }}
+          >
+            Stop
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * A button showing a choice ("Mode: Manual"; what it shows may say more: `shown`), opening a menu
+ * of the others.
+ */
 function ChoiceMenu({
   label,
   value,
+  shown = value,
   title,
   choices,
   chosen,
@@ -453,6 +600,7 @@ function ChoiceMenu({
 }: {
   label: string;
   value: string;
+  shown?: string;
   title: string;
   choices: readonly { key: string; label: string; detail?: string }[];
   chosen: string;
@@ -483,7 +631,7 @@ function ChoiceMenu({
           setOpen(!open);
         }}
       >
-        {value}
+        {shown}
       </button>
       {open && (
         <div className="agent-choice-menu" role="menu" aria-label={label}>

@@ -12,7 +12,8 @@ import { displayPath, property, proposedDetail, text, toolSummary } from './tool
 
 /*
  * What Claude Code asks the user, through the Agent SDK's canUseTool: permission to run a tool
- * (allow once, always, or deny, as the CLI offers them), the questions of AskUserQuestion, and
+ * (allow once, always, or deny, as the CLI offers them; denied with what to do instead, Claude goes
+ * on with that), the questions of AskUserQuestion, and
  * plan mode's plan to approve (ExitPlanMode). Each becomes a prompt event; the renderer's answer
  * (session:answer) becomes the CLI's permission result. A prompt the CLI stops waiting for (the
  * turn was interrupted) is withdrawn.
@@ -21,6 +22,9 @@ import { displayPath, property, proposedDetail, text, toolSummary } from './tool
 /** What the CLI is told when the user says no: what it says itself, stopping to wait for them. */
 export const DENIED =
   "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+/** What it is told when the user says no and what to do instead (their words follow), going on. */
+export const DENIED_WITH_FEEDBACK =
+  "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n";
 
 /** What happens around prompts: events to the renderer, and a plan approved in a mode. */
 export interface PromptHost {
@@ -113,13 +117,22 @@ export class Prompts {
           updatedPermissions: always === null ? [] : suggestions,
           decisionClassification: 'user_permanent',
         };
-      case 'deny':
-        return {
-          behavior: 'deny',
-          message: DENIED,
-          interrupt: true,
-          decisionClassification: 'user_reject',
-        };
+      case 'deny': {
+        // "No, and tell Claude what to do differently": it goes on with what they said.
+        const feedback = answer.feedback?.trim() ?? '';
+        return feedback === ''
+          ? {
+              behavior: 'deny',
+              message: DENIED,
+              interrupt: true,
+              decisionClassification: 'user_reject',
+            }
+          : {
+              behavior: 'deny',
+              message: `${DENIED_WITH_FEEDBACK}${feedback}`,
+              decisionClassification: 'user_reject',
+            };
+      }
     }
   };
 

@@ -98,3 +98,46 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   await composer.press('Escape');
   await expect(transcript.getByText(/^Interrupted · \d+s$/)).toBeVisible();
 });
+
+test('stops work in the background, answers with the keyboard, and sets the effort', async () => {
+  const folder = path.join(dir, 'shop');
+  await mkdir(folder);
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, folder);
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
+  await page.locator('.react-flow__node').dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
+  const transcript = view.getByRole('log', { name: 'Transcript' });
+
+  // The effort goes to the session (session:effort): the CLI takes it.
+  await view.getByRole('button', { name: 'Effort: Default' }).click();
+  await view.getByRole('menuitemradio', { name: /^High/ }).click();
+  await expect(view.getByRole('button', { name: 'Effort: High' })).toBeVisible();
+
+  // Its permission prompt is answered with 1, typed in the empty composer.
+  await composer.fill('start the dev server in the background');
+  await composer.press('Enter');
+  await expect(transcript.getByRole('group', { name: 'Bash command: npm run dev' })).toBeVisible();
+  await composer.press('1');
+  await expect(composer).toHaveValue('');
+  const tasks = view.getByRole('group', { name: 'Background tasks' });
+  await expect(tasks.getByText('npm run dev')).toBeVisible();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
+
+  // Stopped from its line (session:stopTask): its line says so, and the list is gone.
+  const line = transcript.locator('.agent-tool', {
+    has: page.getByRole('button', { name: 'Bash npm run dev' }),
+  });
+  await line.getByRole('button', { name: 'Stop npm run dev' }).click();
+  await expect(tasks).toBeHidden();
+  await expect(line).toHaveAttribute('data-status', 'interrupted');
+  await expect(transcript.getByRole('alert')).toHaveCount(0);
+});

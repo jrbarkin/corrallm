@@ -76,6 +76,10 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
     await api.setSessionModel('a', 'opus');
     expect(invoke).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
+    await api.setSessionEffort('a', 'high');
+    expect(invoke).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
+    await api.stopSessionTask('a', 'b1');
+    expect(invoke).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
     await api.closeSession('a');
     expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
   });

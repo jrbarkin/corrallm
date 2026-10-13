@@ -201,6 +201,37 @@ describe('SessionManager', () => {
     );
   });
 
+  it('sets the effort and stops background tasks of a session that takes them, and of no other', async () => {
+    // A Terminal session has neither: its terminal sets them.
+    const terminal: LiveSession = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const live = {
+      ...terminal,
+      setEffort: vi.fn<NonNullable<LiveSession['setEffort']>>().mockResolvedValue(undefined),
+      stopTask: vi.fn<NonNullable<LiveSession['stopTask']>>().mockResolvedValue(undefined),
+    };
+    const sessions = manager({
+      sdk: { start: () => Promise.resolve(live) },
+      terminal: { start: () => Promise.resolve(terminal) },
+    });
+    const contents = window();
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.setEffort(contents, 'a', 'max');
+    await sessions.stopTask(contents, 'a', 'b1');
+    expect(live.setEffort).toHaveBeenCalledWith('max');
+    expect(live.stopTask).toHaveBeenCalledWith('b1');
+
+    await sessions.start(contents, 'b', { ...OPTIONS, connection: 'terminal' });
+    await expect(sessions.setEffort(contents, 'b', 'low')).rejects.toThrow(/in its terminal/);
+    await expect(sessions.stopTask(contents, 'b', 'b1')).rejects.toThrow(/in its terminal/);
+  });
+
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {
     const sessions = manager();
     const contents = window('/work/team.corral');

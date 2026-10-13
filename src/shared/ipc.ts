@@ -1,5 +1,6 @@
 import type {
   Connection,
+  EffortLevel,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -70,6 +71,16 @@ export interface IpcContract {
   'session:mode': { args: [agentId: string, mode: PermissionMode]; result: null };
   /** Switches an agent's session's model (a value from the models it offers). */
   'session:model': { args: [agentId: string, model: string]; result: null };
+  /**
+   * Sets how much effort Claude puts into an agent's session's replies, for that session (null:
+   * its model's default). Rejects for a session that does not take it (a Terminal's).
+   */
+  'session:effort': { args: [agentId: string, effort: EffortLevel | null]; result: null };
+  /**
+   * Stops a task an agent's session runs in the background (a subagent, a command), by the id its
+   * 'tasks' event gave. Rejects for a task it does not run in the background.
+   */
+  'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
   /**
@@ -133,6 +144,8 @@ export interface InvokeApi {
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
+  setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
+  stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
@@ -163,6 +176,8 @@ export const API_CHANNELS = {
   interruptSession: 'session:interrupt',
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
+  setSessionEffort: 'session:effort',
+  stopSessionTask: 'session:stopTask',
   closeSession: 'session:close',
   attachTerminal: 'terminal:attach',
   detachTerminal: 'terminal:detach',

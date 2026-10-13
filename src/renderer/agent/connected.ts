@@ -1,5 +1,6 @@
 import type {
   Connection,
+  EffortLevel,
   PermissionMode,
   SessionAnswer,
   SessionEvent,
@@ -19,6 +20,8 @@ export interface SessionBackend {
   interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: PermissionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
+  setEffort(agentId: string, effort: EffortLevel | null): Promise<null>;
+  stopTask(agentId: string, taskId: string): Promise<null>;
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
@@ -39,6 +42,8 @@ export const NO_BACKEND: SessionBackend = (() => {
     interrupt: refuse,
     setMode: refuse,
     setModel: refuse,
+    setEffort: refuse,
+    stopTask: refuse,
     close: refuse,
     files: () => Promise.resolve([]),
     onEvent: () => () => undefined,
@@ -109,7 +114,13 @@ export class ConnectedDriver implements SessionDriver {
   answer(id: string, answer: SessionAnswer): void {
     // A question's answers are recorded one by one by the store; the others here.
     if (answer.kind === 'permission') {
-      this.#io.dispatch({ type: 'answer', id, answer: answer.answer });
+      const { feedback } = answer;
+      this.#io.dispatch({
+        type: 'answer',
+        id,
+        answer: answer.answer,
+        ...(feedback === undefined ? {} : { feedback }),
+      });
     } else if (answer.kind === 'plan') {
       this.#io.dispatch({ type: 'answerPlan', id, answer: answer.answer });
     }
@@ -135,6 +146,15 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.setModel(agentId, model));
   }
 
+  setEffort(effort: EffortLevel | null): void {
+    // Not started yet: it is set once it starts.
+    this.#tell((agentId) => this.#backend.setEffort(agentId, effort));
+  }
+
+  stopTask(taskId: string): void {
+    this.#tell((agentId) => this.#backend.stopTask(agentId, taskId));
+  }
+
   close(): void {
     this.#closed = true;
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
@@ -153,14 +173,21 @@ export class ConnectedDriver implements SessionDriver {
     const find = (id: string) => io.session().entries.find((entry) => entry.id === id);
     const parent = (p: string | undefined) => (p === undefined ? {} : { parent: p });
     switch (event.type) {
-      case 'started':
+      case 'started': {
         io.dispatch({
           type: 'connected',
           models: event.models,
           model: event.model,
           mode: event.mode,
         });
+        // The effort picked goes on in a session started again, if its model takes one.
+        const { effort } = io.session();
+        const model = event.models.find((m) => m.value === event.model);
+        if (effort !== undefined && effort !== null && (model?.efforts?.length ?? 0) > 0) {
+          this.setEffort(effort);
+        }
         return;
+      }
       case 'commands':
         io.dispatch({ type: 'commands', commands: event.commands });
         return;
@@ -214,7 +241,7 @@ export class ConnectedDriver implements SessionDriver {
         return;
       }
       case 'tool': {
-        const { id, tool, summary, status, detail } = event;
+        const { id, tool, summary, status, detail, progress } = event;
         this.#put({
           id,
           kind: 'tool',
@@ -223,9 +250,16 @@ export class ConnectedDriver implements SessionDriver {
           status,
           ...(detail === undefined ? {} : { detail }),
           ...parent(event.parent),
+          ...(progress === undefined ? {} : { progress }),
         });
         return;
       }
+      case 'tasks':
+        io.dispatch({ type: 'tasks', tasks: event.tasks });
+        return;
+      case 'suggestion':
+        io.dispatch({ type: 'suggestion', text: event.text });
+        return;
       case 'todos':
         this.#put({ id: event.id, kind: 'todos', items: event.items });
         return;
@@ -284,6 +318,8 @@ export class ConnectedDriver implements SessionDriver {
         return;
       case 'closed':
         this.#running = undefined;
+        // Its CLI is gone, and what it ran in the background with it.
+        if ((io.session().tasks?.length ?? 0) > 0) io.dispatch({ type: 'tasks', tasks: [] });
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
           this.#end([...this.#turns.keys()], {
