@@ -47,6 +47,9 @@ export const EMPTY_FRAME = {
 } as const;
 /** How many colours groups take turns with (`.group-color-0` … in GraphEditor.css). */
 export const GROUP_COLORS = 8;
+/** Space between neighbouring nodes in a row, and between rows, as the canvas lays them out. */
+export const NODE_GAP = 40;
+export const RANK_GAP = 60;
 /** How far "Add node" moves a new node that would land on another node's top-left corner. */
 const NUDGE = 24;
 
@@ -108,11 +111,83 @@ export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
 }
 
 /**
- * What a new agent (node `id`) starts with besides its label: the default agent, and a queue that
- * starts with a message to write, telling the agent what to do.
+ * Adds an agent spawned from agent `from` in its agent view: of the same type, in the same group,
+ * and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
+ * right. A `linked` one is linked to it, as drawing from its bottom dot lets two agents talk, and
+ * goes below it, where the canvas's top-to-bottom layout puts what an agent links to (layout.ts),
+ * in a row that starts under its left edge. Along its row it steps right past every card and group
+ * in the way, so agents spawned one after another line up left to right. Its group grows to fit it.
  */
-function newAgent(id: string): Pick<GraphNode['data'], 'agent' | 'queue'> {
-  return { agent: DEFAULT_AGENT, queue: [{ id: `${id}/message`, message: '' }] };
+export function spawnAgent(
+  graph: Graph,
+  from: string,
+  id: string,
+  relation: 'peer' | 'linked',
+): Graph {
+  const source = graph.nodes.find((n) => n.id === from);
+  if (source?.type !== 'agent') return graph;
+  const { nodes } = graph;
+  const byId = indexById(nodes);
+  const parentIds = new Set(nodes.map((n) => n.parentId));
+  /** A node's box on the canvas, with the half of a parent node's card that sits above its box. */
+  const footprint = (n: GraphNode) => {
+    const { x, y } = absolutePosition(n, byId);
+    const { width, height } = size(n);
+    const card = n.type === 'agent' && parentIds.has(n.id) ? CARD_SIZE.height / 2 : 0;
+    return { x, y: y - card, width, height: height + card };
+  };
+  const ancestors = new Set<string>();
+  for (let p = parentOf(source, byId); p; p = parentOf(p, byId)) ancestors.add(p.id);
+  // Its own groups hold it; every other card and group is in the way if the new card would come
+  // within a gap of it along the row, or within PADDING of it across.
+  const others = nodes.filter((n) => !ancestors.has(n.id)).map(footprint);
+  const inTheWay = (x: number, y: number) =>
+    others.find(
+      (o) =>
+        x < o.x + o.width + NODE_GAP &&
+        o.x < x + CARD_SIZE.width + NODE_GAP &&
+        y < o.y + o.height + PADDING &&
+        o.y < y + CARD_SIZE.height + PADDING,
+    );
+  const at = footprint(source);
+  const spot =
+    relation === 'peer'
+      ? { x: at.x + at.width + NODE_GAP, y: at.y }
+      : { x: at.x, y: at.y + at.height + RANK_GAP };
+  // Each step passes one of them for good, so this ends.
+  for (let o = inTheWay(spot.x, spot.y); o; o = inTheWay(spot.x, spot.y)) {
+    spot.x = o.x + o.width + NODE_GAP;
+  }
+  const group = parentOf(source, byId);
+  const origin = group ? absolutePosition(group, byId) : { x: 0, y: 0 };
+  const node = withParent(
+    {
+      id,
+      type: 'agent',
+      position: { x: spot.x - origin.x, y: spot.y - origin.y },
+      data: { label: nextLabel(nodes, 'Agent'), ...newAgent(id, source.data.agent) },
+      selected: true,
+    },
+    group?.id,
+  );
+  const spawned = {
+    nodes: autosize([...nodes.map((n) => select(n, false)), node]),
+    edges: graph.edges.map((e) => select(e, false)),
+  };
+  return relation === 'linked'
+    ? connect(spawned, { source: from, target: id, sourceHandle: 'bottom', targetHandle: 'top' })
+    : spawned;
+}
+
+/**
+ * What a new agent (node `id`) starts with besides its label: its type (the default agent unless
+ * given), and a queue that starts with a message to write, telling the agent what to do.
+ */
+function newAgent(
+  id: string,
+  agent: AgentType = DEFAULT_AGENT,
+): Pick<GraphNode['data'], 'agent' | 'queue'> {
+  return { agent, queue: [{ id: `${id}/message`, message: '' }] };
 }
 
 /** Sets a node's label. Any string is accepted, including an empty one. */

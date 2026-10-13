@@ -529,12 +529,12 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
 
   // Rewound to its first frame, the panel sits exactly on the node's card...
   const first = await page.evaluate(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    const [grow] = dialog?.getAnimations() ?? [];
-    if (!dialog || !grow) return null;
+    const panel = document.querySelector('[role="dialog"] .agent-panel');
+    const [grow] = panel?.getAnimations() ?? [];
+    if (!panel || !grow) return null;
     grow.pause();
     grow.currentTime = 0;
-    const { x, y, width, height } = dialog.getBoundingClientRect();
+    const { x, y, width, height } = panel.getBoundingClientRect();
     grow.finish();
     return { x, y, width, height };
   });
@@ -619,7 +619,9 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   const a = await addAgentAt('Agent 1', 300, 200);
   await a.dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await expect.poll(() => view.evaluate((el) => el.getAnimations().length)).toBe(0);
+  await expect
+    .poll(() => view.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
+    .toBe(0);
   const [editor, opened] = await Promise.all([box(page.locator('.graph-editor')), box(view)]);
   expect(opened.width).toBeGreaterThan(editor.width * 0.95);
   expect(opened.height).toBeGreaterThan(editor.height * 0.9);
@@ -669,6 +671,100 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   await expect(transcript.getByText('Add rate limiting', { exact: true })).toBeVisible();
 });
 
+test('spawns an agent from the agent view, minimizing the first into its rail', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await a.dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  const panel = view.locator('.agent-panel');
+  const settled = () =>
+    expect.poll(() => panel.evaluate((el) => el.getAnimations().length)).toBe(0);
+  await settled();
+
+  // The queue is left of the session, and the rail runs down the right edge, beside the panel.
+  const [dialog, rest, queue, transcript, rail] = await Promise.all([
+    box(view),
+    box(panel),
+    box(view.getByRole('complementary', { name: 'Questions and queue' })),
+    box(view.getByRole('log', { name: 'Transcript' })),
+    box(view.getByRole('navigation', { name: 'Agents' })),
+  ]);
+  expect(queue.x + queue.width).toBeLessThanOrEqual(transcript.x + 1);
+  expect(Math.abs(rail.x + rail.width - (dialog.x + dialog.width))).toBeLessThanOrEqual(1);
+  expect(rest.x + rest.width).toBeLessThan(rail.x);
+  expect(rail.height).toBeGreaterThan(dialog.height * 0.95);
+
+  // ⊕: the panel shrinks into the top of the stack, where Agent 1's card appears...
+  const minimized = await page.evaluate(() => {
+    const rect = (el: Element) => {
+      const { x, y, width, height } = el.getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    const from = document.querySelector('[role="dialog"]');
+    const shrinking = from?.querySelector('.agent-panel');
+    from?.querySelector<HTMLElement>('[aria-label="New agent"]')?.click();
+    const [shrink] = shrinking?.getAnimations() ?? [];
+    const top = from?.querySelector('.agent-stack-card');
+    if (!shrinking || !shrink || !top) return null;
+    shrink.pause();
+    shrink.currentTime = Number(shrink.effect?.getComputedTiming().endTime);
+    const at = rect(shrinking);
+    shrink.finish();
+    return { at, card: rect(top) };
+  });
+  if (!minimized) throw new Error('the panel did not minimize');
+  const { at, card: landing } = minimized;
+  expectSamePlace(at, landing);
+  expectSamePlace({ x: at.width, y: at.height }, { x: landing.width, y: landing.height });
+
+  // ...then the new agent's panel grows out of the ⊕, over the same backdrop, to full size.
+  const grown = await page.waitForFunction(
+    () => {
+      const rect = (el: Element) => {
+        const { x, y, width, height } = el.getBoundingClientRect();
+        return { x, y, width, height };
+      };
+      const growing = document.querySelector('[role="dialog"][aria-label="Agent 2"] .agent-panel');
+      const plus = document.querySelector('[aria-label="New agent"]');
+      const [grow] = growing?.getAnimations() ?? [];
+      if (!growing || !plus || !grow) return null;
+      grow.pause();
+      grow.currentTime = 0;
+      const start = rect(growing);
+      grow.finish();
+      return { start, plus: rect(plus) };
+    },
+    undefined,
+    { polling: 'raf' },
+  );
+  const growth = await grown.jsonValue();
+  if (!growth) throw new Error('the new panel did not grow');
+  expectSamePlace(growth.start, growth.plus);
+  expectSamePlace(
+    { x: growth.start.width, y: growth.start.height },
+    { x: growth.plus.width, y: growth.plus.height },
+  );
+  const next = page.getByRole('dialog', { name: 'Agent 2' });
+  await expect
+    .poll(() => next.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
+    .toBe(0);
+  expect(await box(next.locator('.agent-panel'))).toEqual(rest);
+  await expect(
+    next.getByRole('navigation', { name: 'Agents' }).getByRole('button', { name: /^Switch to / }),
+  ).toHaveAccessibleName('Switch to Agent 1');
+
+  // Switching back puts Agent 2 on the stack; Back closes onto the canvas, where Agent 2 sits
+  // beside Agent 1, in its row.
+  await next.getByRole('button', { name: 'Switch to Agent 1' }).click();
+  await expect(view.getByRole('button', { name: 'Switch to Agent 2' })).toBeVisible();
+  await settled();
+  expect(await box(panel)).toEqual(rest);
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const [one, two] = await Promise.all([box(card('Agent 1')), box(card('Agent 2'))]);
+  expect(Math.abs(two.y - one.y)).toBeLessThanOrEqual(1);
+  expect(two.x).toBeGreaterThan(one.x + one.width);
+});
+
 test("keeps an if-then's steps inside it, in the agent view's narrow queue", async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await a.dblclick();
@@ -708,7 +804,9 @@ test('links a wait to the step it waits for, across two queues side by side', as
   // Agent 2 waits for it: picking Agent 1 opens its queue beside, where the step is picked.
   await node('Agent 2').dblclick();
   view = page.getByRole('dialog', { name: 'Agent 2' });
-  await expect.poll(() => view.evaluate((el) => el.getAnimations().length)).toBe(0);
+  await expect
+    .poll(() => view.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
+    .toBe(0);
   const own = view.getByRole('complementary', { name: 'Questions and queue' });
   await own.getByRole('button', { name: 'Add to queue' }).click();
   await page.keyboard.type('wait');
@@ -985,7 +1083,9 @@ test('keeps work both ways readable, gives messages room, and shows the menus of
 
   await node('Checker').dblclick();
   const panel = page.getByRole('dialog', { name: 'Checker' });
-  await expect.poll(() => panel.evaluate((el) => el.getAnimations().length)).toBe(0);
+  await expect
+    .poll(() => panel.locator('.agent-panel').evaluate((el) => el.getAnimations().length))
+    .toBe(0);
 
   // A message's text gets the width of its row.
   const widths = await panel

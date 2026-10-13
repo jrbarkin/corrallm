@@ -2,18 +2,19 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GraphEditor } from '../graph/GraphEditor';
-import type { GraphNode } from '../graph/graph';
+import type { Graph, GraphNode } from '../graph/graph';
 
-const agent = (id: string): GraphNode => ({
+const agent = (id: string, extra: Partial<GraphNode> = {}): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
   data: { label: id },
+  ...extra,
 });
 
 /** Opens agent `a` in its view; returns the view and its composer. */
-function open() {
-  const { container } = render(<GraphEditor initialGraph={{ nodes: [agent('a')], edges: [] }} />);
+function open(graph: Graph = { nodes: [agent('a')], edges: [] }) {
+  const { container } = render(<GraphEditor initialGraph={graph} />);
   const card = container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
   if (!card) throw new Error('no agent');
   fireEvent.doubleClick(card);
@@ -24,8 +25,16 @@ function open() {
     fireEvent.keyDown(composer, { key: 'Enter' });
   };
   const transcript = within(view.getByRole('log', { name: 'Transcript' }));
-  return { card, view, composer, send, transcript };
+  return { container, card, view, composer, send, transcript };
 }
+
+/** The agent view shown, by its agent's name. */
+const shown = (name: string) => within(screen.getByRole('dialog', { name }));
+/** The agents stacked in the view shown, top first. */
+const stacked = () =>
+  within(screen.getByRole('dialog'))
+    .queryAllByRole('button', { name: /^Switch to / })
+    .map((button) => button.getAttribute('aria-label'));
 
 /** Lets the scripted session play for `ms`. */
 const play = (ms = 10_000) => {
@@ -146,5 +155,91 @@ describe('the agent view', () => {
     play();
     expect(transcript.queryByRole('group', { name: 'Edit file: src/index.ts' })).toBeNull();
     expect(transcript.getByRole('group', { name: 'Bash command: npm test' })).toBeTruthy();
+  });
+
+  describe('its rail', () => {
+    /** Agent a, a Codex agent, in a group. */
+    const grouped: Graph = {
+      nodes: [
+        {
+          id: 'F',
+          type: 'frame',
+          position: { x: 0, y: 0 },
+          data: { label: 'Group 1', color: 3 },
+          width: 400,
+          height: 300,
+        },
+        agent('a', {
+          parentId: 'F',
+          position: { x: 20, y: 52 },
+          data: { label: 'a', agent: 'Codex' },
+        }),
+      ],
+      edges: [],
+    };
+
+    it('spawns a new agent of its type in its group, not linked, and stacks itself under it', () => {
+      const { container, view, send } = open(grouped);
+      send('Add rate limiting');
+      fireEvent.click(view.getByRole('button', { name: 'New agent' }));
+
+      // The new agent is shown, and on the canvas: a Codex agent in a's group, not linked to a.
+      const next = shown('Agent 1');
+      expect(screen.queryByRole('dialog', { name: 'a' })).toBeNull();
+      const card = screen.getByRole('group', { name: 'Agent 1, Codex' });
+      expect(card.classList.contains('group-color-3')).toBe(true);
+      expect(card.classList.contains('selected')).toBe(true);
+      expect(container.querySelectorAll('.react-flow__edge')).toHaveLength(0);
+      expect(next.getByRole('button', { name: 'Agent: Codex' })).toBeTruthy();
+      // a waits on top of the stack, still working.
+      expect(stacked()).toEqual(['Switch to a']);
+      expect(next.getByRole('button', { name: 'Switch to a' }).dataset.status).toBe('working');
+    });
+
+    it('spawns one linked to the agent shown, from the menu beside its ⊕', () => {
+      const { container, view } = open(grouped);
+      fireEvent.click(view.getByRole('button', { name: 'Ways to add an agent' }));
+      const menu = within(view.getByRole('menu', { name: 'New agent' }));
+      fireEvent.click(menu.getByRole('menuitem', { name: 'New agent, linked to a' }));
+      const links = () =>
+        [...container.querySelectorAll('.react-flow__edge')].map((e) =>
+          e.getAttribute('aria-label'),
+        );
+      expect(links()).toEqual(['a and Agent 1 can talk']);
+
+      // The menu's other choice is the ⊕'s: on its own.
+      fireEvent.click(shown('Agent 1').getByRole('button', { name: 'Ways to add an agent' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'New agent' }));
+      expect(shown('Agent 2')).toBeTruthy();
+      expect(links()).toEqual(['a and Agent 1 can talk']);
+    });
+
+    it('switches to a stacked agent, the one shown going on top of the stack', () => {
+      const { view } = open();
+      fireEvent.click(view.getByRole('button', { name: 'New agent' }));
+      fireEvent.click(shown('Agent 1').getByRole('button', { name: 'New agent' }));
+      expect(stacked()).toEqual(['Switch to Agent 1', 'Switch to a']);
+
+      fireEvent.click(shown('Agent 2').getByRole('button', { name: 'Switch to a' }));
+      expect(shown('a')).toBeTruthy();
+      expect(stacked()).toEqual(['Switch to Agent 2', 'Switch to Agent 1']);
+      fireEvent.click(shown('a').getByRole('button', { name: 'Switch to Agent 1' }));
+      expect(stacked()).toEqual(['Switch to a', 'Switch to Agent 2']);
+    });
+
+    it('closes to the canvas from any agent in the stack, which then starts afresh', () => {
+      const { container, view } = open();
+      fireEvent.click(view.getByRole('button', { name: 'New agent' }));
+      fireEvent.click(shown('Agent 1').getByRole('button', { name: 'Back to the canvas' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // The agent shown last has the keyboard on the canvas.
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Agent 1, Claude');
+
+      fireEvent.doubleClick(screen.getByRole('group', { name: 'a, Claude' }));
+      expect(stacked()).toEqual([]);
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(container.querySelectorAll('.react-flow__node')).toHaveLength(2);
+    });
   });
 });

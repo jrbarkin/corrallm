@@ -48,11 +48,16 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      examples, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
                      each one valid and written exactly as toFile writes it.
 src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
-                     a Claude Code-style session (Transcript.tsx, Composer.tsx) beside the agent's
-                     questions and queue. Sessions are scripted for now: session.ts is the model and
-                     reducer, player.ts plays a turn's steps in time, script.ts writes the turn, and
-                     sessions.ts keeps every agent's session (useSyncExternalStore) so turns play on
-                     while the canvas is shown.
+                     the agent's questions and queue, left of a Claude Code-style session
+                     (Transcript.tsx, Composer.tsx). A rail at its right edge (Rail.tsx) spawns an
+                     agent from the one shown (spawnAgent in graph.ts: a peer beside it, or one
+                     linked below it) and stacks the others opened that way, to switch between.
+                     GraphEditor keeps the stack (the agent shown first) and clears it when the view
+                     closes. motion.ts animates the panel: out of its canvas card and back, minimized
+                     into the rail, grown out of the ⊕ or a stacked card. Sessions are scripted for
+                     now: session.ts is the model and reducer, player.ts plays a turn's steps in
+                     time, script.ts writes the turn, and sessions.ts keeps every agent's session
+                     (useSyncExternalStore) so turns play on while the canvas is shown.
 src/renderer/queues/ Every agent's queue side by side, task by task, laid out like a diff viewer
                      (QueuesView.tsx), from the canvas or an agent. lanes.ts aligns rows so a wait
                      sits below what it waits for, links waits and work handed over, and finds waits
