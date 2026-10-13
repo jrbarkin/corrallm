@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { absolutePosition, CARD_SIZE, edgeId } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { insertGraph } from './insert';
-import type { QueueItem, QueueRepeat } from './queue';
+import type { QueueItem, QueueRepeat, Until } from './queue';
 
 const agent = (
   id: string,
@@ -18,16 +18,21 @@ const agent = (
 });
 
 /** A two-agent part: x hands y a message, and y waits for it, then loops waiting and handing back. */
-const loop = (inner: QueueItem[]): QueueItem => ({
+const loop = (inner: QueueItem[], until: Until = { kind: 'succeeded' }): QueueItem => ({
   id: 'loop',
   repeat: inner as QueueRepeat['repeat'],
-  until: { kind: 'succeeded' },
+  until,
   rounds: 2,
   otherwise: 'goOn',
 });
 const part: Graph = {
   nodes: [
-    agent('x', 100, 50, { queue: [{ id: 'hand', message: 'Over to you', target: 'y' }] }),
+    agent('x', 100, 50, {
+      queue: [
+        { id: 'hand', message: 'Over to you', target: 'y' },
+        loop([], { kind: 'repeatEnds', agent: 'y', item: 'loop' }),
+      ],
+    }),
     agent('y', 100, 250, {
       queue: [
         { id: 'w', waitFor: [{ agent: 'x', item: 'hand' }] },
@@ -66,7 +71,11 @@ describe('insertGraph', () => {
     const byId = new Map(nodes.map((n) => [n.id, n]));
     expect(absolutePosition(y, byId).y - absolutePosition(x, byId).y).toBe(200);
     // What pointed at x and y points at their new selves.
-    expect(x.data.queue).toEqual([{ id: 'hand', message: 'Over to you', target: 'new-2' }]);
+    expect(x.data.queue).toEqual([
+      { id: 'hand', message: 'Over to you', target: 'new-2' },
+      // The repeat it goes round with.
+      loop([], { kind: 'repeatEnds', agent: 'new-2', item: 'loop' }),
+    ]);
     expect(y.data.queue).toEqual([
       { id: 'w', waitFor: [{ agent: 'new-1', item: 'hand' }] },
       // Inside a repeat too.

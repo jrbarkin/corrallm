@@ -26,13 +26,11 @@ const rows = (nodes: GraphNode[]) => {
   );
 };
 
-const loop = (id: string, repeat: RepeatedItem[]): QueueRepeat => ({
-  id,
-  repeat,
-  until: { kind: 'succeeded' },
-  rounds: 3,
-  otherwise: 'ask',
-});
+const loop = (
+  id: string,
+  repeat: RepeatedItem[],
+  until: QueueRepeat['until'] = { kind: 'succeeded' },
+): QueueRepeat => ({ id, repeat, until, rounds: 3, otherwise: 'ask' });
 
 describe('lanesOf', () => {
   it('puts each agent’s queue in a lane, a wait in the row after what it waits for', () => {
@@ -236,5 +234,115 @@ describe('lanesOf', () => {
       true,
       false,
     ]);
+  });
+
+  describe('repeats that go round with another', () => {
+    /** Head to head: two builders go round with a judge, who waits for both builds each round. */
+    const builder = (id: string) =>
+      agent(id, [
+        { id: 'worktree', action: 'EnterWorktree' },
+        loop(
+          'rounds',
+          [
+            { id: 'build', message: 'Build it' },
+            { id: 'scored', waitFor: [{ agent: 'judge', item: 'judge' }] },
+          ],
+          { kind: 'repeatEnds', agent: 'judge', item: 'judging' },
+        ),
+      ]);
+    const judge = agent('judge', [
+      loop(
+        'judging',
+        [
+          {
+            id: 'built',
+            waitFor: [
+              { agent: 'claude', item: 'build' },
+              { agent: 'codex', item: 'build' },
+            ],
+          },
+          { id: 'judge', message: 'Judge them' },
+        ],
+        { kind: 'outputContains', text: 'WINNER' },
+      ),
+      { id: 'merge', message: 'Merge the winner' },
+    ]);
+
+    it('lines up waits round by round, a follower ending after its leader, and none stuck', () => {
+      const layout = lanesOf([builder('claude'), builder('codex'), judge]);
+      expect(
+        layout.lanes.map((lane) => [
+          lane.agent.id,
+          lane.cells.map((cell) => [cell.item.id, cell.row, cell.span]),
+          lane.cells.flatMap(
+            (cell) => cell.inner?.map((inner) => [inner.item.id, inner.row]) ?? [],
+          ),
+        ]),
+      ).toEqual([
+        [
+          'claude',
+          [
+            ['worktree', 0, 1],
+            ['rounds', 1, 5],
+          ],
+          [
+            ['build', 2],
+            ['scored', 5],
+          ],
+        ],
+        [
+          'codex',
+          [
+            ['worktree', 0, 1],
+            ['rounds', 1, 5],
+          ],
+          [
+            ['build', 2],
+            ['scored', 5],
+          ],
+        ],
+        [
+          'judge',
+          [
+            ['judging', 0, 5],
+            ['merge', 5, 1],
+          ],
+          [
+            ['built', 3],
+            ['judge', 4],
+          ],
+        ],
+      ]);
+      expect(layout.links.map((link) => link.key)).toEqual([
+        'claude:scored>judge:judge',
+        'codex:scored>judge:judge',
+        'judge:built>claude:build',
+        'judge:built>codex:build',
+      ]);
+      const ids = ['worktree', 'rounds', 'build', 'scored', 'judging', 'built', 'judge', 'merge'];
+      for (const lane of ['claude', 'codex', 'judge'])
+        for (const id of ids) expect(layout.isStuck(lane, id)).toBe(false);
+    });
+
+    it('marks stuck a leader that waits for all of its follower’s work, and repeats following each other', () => {
+      const leader = agent('a', [loop('lead', [{ id: 'w', waitFor: [{ agent: 'b' }] }])]);
+      const follower = agent('b', [
+        loop('follow', [{ id: 'x', action: 'Read' }], {
+          kind: 'repeatEnds',
+          agent: 'a',
+          item: 'lead',
+        }),
+      ]);
+      expect(lanesOf([leader, follower]).isStuck('a', 'w')).toBe(true);
+
+      const one = agent('a', [
+        loop('r', [{ id: 'x', action: 'Read' }], { kind: 'repeatEnds', agent: 'b', item: 'r' }),
+      ]);
+      const other = agent('b', [
+        loop('r', [{ id: 'y', action: 'Read' }], { kind: 'repeatEnds', agent: 'a', item: 'r' }),
+      ]);
+      const both = lanesOf([one, other]);
+      expect([both.isStuck('a', 'r'), both.isStuck('b', 'r')]).toEqual([true, true]);
+    });
   });
 });

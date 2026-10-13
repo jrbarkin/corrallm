@@ -520,10 +520,12 @@ function LaneCells({
                     const cell = inner.find((c) => c.item.id === itemId);
                     return cell && cell.row - row;
                   },
+                  // Each item in a repeat picks, and its header the repeat.
+                  picking,
                 }
               : {})}
           />
-          {picking && (
+          {picking && !inner && (
             <PickTask
               label={`Wait for ${picking.name}: ${itemLabel(item)}`}
               pressed={picking.current === item.id}

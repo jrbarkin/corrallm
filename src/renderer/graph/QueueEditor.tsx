@@ -10,6 +10,7 @@ import type { GraphNode } from './graph';
 import type { RepeatChange } from './edits';
 import {
   agentName,
+  andList,
   describe,
   ifText,
   itemLabel,
@@ -26,6 +27,7 @@ import {
   isIf,
   isMessage,
   isRepeat,
+  isRepeatEnds,
   isWait,
   MAX_ROUNDS,
   sameTarget,
@@ -42,6 +44,7 @@ import type {
   QueueRepeat,
   QueueStep,
   QueueWait,
+  RepeatEnds,
   RepeatedItem,
   Time,
   Until,
@@ -145,6 +148,11 @@ interface QueueProps {
    * queues lines them up with the other lanes).
    */
   rowOf?: (itemId: string) => number | undefined;
+  /**
+   * While a wait's target is picked from this queue: inside a repeat, each item picks, and the
+   * repeat's header the whole repeat (QueueEditor and All queues' lanes cover the other items).
+   */
+  picking?: Picking | undefined;
 }
 
 /**
@@ -162,13 +170,10 @@ export function QueueEditor({
   only,
   add = 'anything',
   addLabel = 'Add to queue',
-  picking,
   ...props
 }: QueueProps & {
   /** The name of the ⊕ that adds anything. */
   addLabel?: string;
-  /** While a wait's target is picked from this queue: each item, and its end, picks. */
-  picking?: Picking | undefined;
   /** Shows only the items for which this holds (an if-then whole, with all of its steps). */
   only?: (item: QueueItem) => boolean;
   /**
@@ -177,7 +182,7 @@ export function QueueEditor({
    */
   add?: 'anything' | 'nothing' | { workFor: string };
 }) {
-  const { node, onAdd, onMove } = props;
+  const { node, onAdd, onMove, picking } = props;
   const queue = node.data.queue ?? EMPTY;
   const context = contextOf(props);
   const shown = only ? queue.filter(only) : queue;
@@ -197,7 +202,7 @@ export function QueueEditor({
           renderItem={(item, handle) => (
             <>
               <ItemRow item={item} handle={handle} context={context} props={props} />
-              {picking && (
+              {picking && !isRepeat(item) && (
                 <PickTask
                   label={`Wait for ${picking.name}: ${itemLabel(item)}`}
                   pressed={picking.current === item.id}
@@ -370,12 +375,15 @@ function contextOf({
   choosing,
   marks,
   rowOf,
+  picking,
 }: QueueProps): Context {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
   const queue = node.data.queue ?? EMPTY;
   return {
+    owner: node.id,
+    inRepeat: false,
     agent,
     actions,
     others,
@@ -402,11 +410,17 @@ function contextOf({
     ...(onChooseStep ? { onChooseStep } : {}),
     ...(choosing ? { choosing } : {}),
     ...(rowOf ? { rowOf } : {}),
+    ...(picking ? { picking } : {}),
   };
 }
 
-/** What the ⊕ and its menus need: the agent's actions, the other agents, and how items read. */
+/**
+ * What the ⊕ and its menus need: whose queue it is (`owner`), whether they add inside a repeat, the
+ * agent's actions, the other agents, and how items read.
+ */
 interface AddContext {
+  owner: string;
+  inRepeat: boolean;
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
   itemLabel: (item: QueueItem) => string;
@@ -433,6 +447,7 @@ interface Context extends AddContext {
   choosing?: Omit<StepChoice, 'agent'>;
   marks: (itemId: string) => RowMarks;
   rowOf?: (itemId: string) => number | undefined;
+  picking?: Picking;
 }
 
 /**
@@ -459,7 +474,14 @@ export function QueueAddMenu({
   onChooseStep?: (choice: StepChoice) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
-  const context = { actions, others, itemLabel, ...(onChooseStep ? { onChooseStep } : {}) };
+  const context = {
+    owner: node.id,
+    inRepeat: false,
+    actions,
+    others,
+    itemLabel,
+    ...(onChooseStep ? { onChooseStep } : {}),
+  };
   return <AddMenu label={label} place="queue" up={up} context={context} onAdd={onAdd} />;
 }
 
@@ -763,15 +785,33 @@ function MessageRow({
   );
 }
 
-/** What a wait can wait for: each other agent (all of its work), then each item in its queue. */
+/**
+ * What a wait can wait for: each other agent (all of its work), then each item in its queue, and
+ * each item in a repeat there: each round of it for a wait in a repeat (`context.inRepeat`), or
+ * once its repeat is over.
+ */
 function waitOptions(context: AddContext) {
+  const option = (agent: GraphNode, item: QueueItem, detail: string) => ({
+    target: { agent: agent.id, item: item.id },
+    label: `${nameOf(agent)}: ${context.itemLabel(item)}`,
+    detail,
+  });
   return context.others.flatMap((agent) => [
     { target: { agent: agent.id }, label: nameOf(agent), detail: 'All of its work' },
-    ...(agent.data.queue ?? []).map((item) => ({
-      target: { agent: agent.id, item: item.id },
-      label: `${nameOf(agent)}: ${context.itemLabel(item)}`,
-      detail: isRepeat(item) ? 'All of its rounds' : 'Just this step',
-    })),
+    ...(agent.data.queue ?? []).flatMap((item) =>
+      isRepeat(item)
+        ? [
+            option(agent, item, 'All of its rounds'),
+            ...item.repeat.map((inner) =>
+              option(
+                agent,
+                inner,
+                context.inRepeat ? 'This step, each round' : 'This step, once its repeat is over',
+              ),
+            ),
+          ]
+        : [option(agent, item, 'Just this step')],
+    ),
   ]);
 }
 
@@ -1226,7 +1266,7 @@ function IfRow({
           <ConditionPicker
             current={item.if}
             onPick={(condition) => {
-              onCondition(condition);
+              if (condition.kind !== 'repeatEnds') onCondition(condition);
               setEditing(false);
             }}
             onCancel={() => {
@@ -1292,7 +1332,7 @@ function AddMenu({
   place,
   up = false,
   target,
-  context,
+  context: given,
   onAdd,
 }: {
   label: string;
@@ -1304,6 +1344,8 @@ function AddMenu({
   context: AddContext;
   onAdd: (entry: QueueEntry) => void;
 }) {
+  // A wait added to a repeat waits round by round.
+  const context = place === 'repeat' ? { ...given, inRepeat: true } : given;
   const [step, setStep] = useState<
     'closed' | 'choose' | 'condition' | 'until' | 'wait' | 'delay' | 'ok' | 'message' | AgentAction
   >('closed');
@@ -1361,7 +1403,7 @@ function AddMenu({
       {step === 'condition' && (
         <ConditionPicker
           onPick={(condition) => {
-            onAdd({ if: condition, then: [] });
+            if (condition.kind !== 'repeatEnds') onAdd({ if: condition, then: [] });
             close();
           }}
           onCancel={close}
@@ -1370,6 +1412,7 @@ function AddMenu({
       {step === 'until' && (
         <ConditionPicker
           mode="until"
+          leaders={leaderOptions(context, undefined)}
           onPick={(until) => {
             if (until.kind !== 'timedOut') {
               onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
@@ -1457,20 +1500,77 @@ const CONDITION_CHOICES: Readonly<
   >
 > = { if: CONDITIONS, until: UNTIL_CONDITIONS };
 
+/** A repeat another can go round with: its agent's name, and where it is. */
+interface Leader {
+  name: string;
+  until: RepeatEnds;
+}
+
+/**
+ * The other agents' repeats a repeat (`self`, undefined for a new one) can go round with: first
+ * those it waits on (a wait in it waits for the repeat, or for an item in it), then the rest; none
+ * that goes round with it already (two repeats would wait on each other).
+ */
+function leaderOptions(context: AddContext, self: QueueRepeat | undefined): Leader[] {
+  const leaders = context.others.flatMap((agent) =>
+    (agent.data.queue ?? []).flatMap((item): (Leader & { repeat: QueueRepeat })[] => {
+      if (!isRepeat(item)) return [];
+      const { until } = item;
+      const follows =
+        self !== undefined &&
+        isRepeatEnds(until) &&
+        until.agent === context.owner &&
+        until.item === self.id;
+      return follows
+        ? []
+        : [
+            {
+              name: nameOf(agent),
+              until: { kind: 'repeatEnds', agent: agent.id, item: item.id },
+              repeat: item,
+            },
+          ];
+    }),
+  );
+  const waitedOn = ({ until, repeat }: { until: RepeatEnds; repeat: QueueRepeat }) =>
+    self?.repeat.some(
+      (inner) =>
+        isWait(inner) &&
+        inner.waitFor.some(
+          (target) =>
+            target.agent === until.agent &&
+            (target.item === repeat.id || repeat.repeat.some((q) => q.id === target.item)),
+        ),
+    ) ?? false;
+  return [...leaders.filter(waitedOn), ...leaders.filter((leader) => !waitedOn(leader))].map(
+    ({ name, until }) => ({ name, until }),
+  );
+}
+
+/** What a condition dropdown offers: a condition, one that needs text to look for, or a leader. */
+interface ConditionChoice {
+  label: string;
+  detail?: string;
+  pick: Condition | RepeatEnds | 'text';
+}
+
 /**
  * Picks a condition, then the text to look for if it needs one. Or takes what was typed as the
  * condition, in the user's own words; changing such a condition starts from them. An if-then's
- * (`mode` 'if'), or when a repeat stops ('until'), which offers no timedOut.
+ * (`mode` 'if'), or when a repeat stops ('until'), which offers no timedOut but the other agents'
+ * repeats it can go round with (`leaders`).
  */
 function ConditionPicker({
   mode = 'if',
   current,
+  leaders = [],
   onPick,
   onCancel,
 }: {
   mode?: 'if' | 'until';
-  current?: Condition;
-  onPick: (condition: Condition) => void;
+  current?: Condition | RepeatEnds;
+  leaders?: readonly Leader[];
+  onPick: (condition: Condition | RepeatEnds) => void;
   onCancel: () => void;
 }) {
   const [needs, setNeeds] = useState<'kind' | 'text'>('kind');
@@ -1485,15 +1585,27 @@ function ConditionPicker({
       />
     );
   }
+  const choices: ConditionChoice[] = [
+    ...CONDITION_CHOICES[mode].map((c): ConditionChoice => ({
+      label: c.label,
+      pick: c.kind === 'outputContains' ? 'text' : { kind: c.kind },
+    })),
+    ...leaders.map(({ name, until }) => ({
+      label: `${name}'s repeat ends`,
+      detail: `Go round with it: as many rounds as ${name}'s repeat`,
+      pick: until,
+    })),
+  ];
   return (
     <SearchPicker
       label={mode === 'if' ? 'If…' : 'Repeat until…'}
       placeholder={
         mode === 'if' ? 'Pick a condition, or describe one…' : 'Pick when to stop, or describe it…'
       }
-      options={CONDITION_CHOICES[mode]}
+      options={choices}
       optionLabel={(c) => c.label}
-      optionKey={(c) => c.kind}
+      optionDetail={(c) => c.detail}
+      optionKey={(c) => JSON.stringify(c.pick)}
       {...(current?.kind === 'freeText' ? { initialQuery: current.text } : {})}
       freeText={{
         detail: 'In your own words, for the agent to judge',
@@ -1502,8 +1614,8 @@ function ConditionPicker({
         },
       }}
       onPick={(c) => {
-        if (c.kind === 'outputContains') setNeeds('text');
-        else onPick({ kind: c.kind });
+        if (c.pick === 'text') setNeeds('text');
+        else onPick(c.pick);
       }}
       onCancel={onCancel}
     />
@@ -1573,9 +1685,11 @@ function OtherwisePicker({
 /**
  * A repeat: "Repeat until <condition>", how many rounds at most and what then (each a chip that
  * changes it), and under it, indented on a rail that ends in ↺, the steps, messages, waits and
- * delays it runs each round, with its own ⊕. While the run is in it, a pill says which round
- * (`data-round`); once it is out of rounds and asks the user, how to decide shows under its header,
- * without pointing at it.
+ * delays it runs each round, with its own ⊕. One that goes round with another agent's repeat shows
+ * neither rounds nor then (it runs as many as that one); one that others go round with names them
+ * at its foot. While the run is in it, a pill says which round (`data-round`); once it is out of
+ * rounds and asks the user, how to decide shows under its header, without pointing at it. While a
+ * wait's target is picked from its queue, each item it holds picks, and its header the repeat.
  */
 function RepeatRow({
   item,
@@ -1597,7 +1711,31 @@ function RepeatRow({
   const text = context.untilText(item.until);
   const rounds = roundsText(item.rounds);
   const then = otherwiseText(item);
-  const { rowOf } = context;
+  /** It goes round with another: as many rounds as that one, so its own are not shown. */
+  const follows = isRepeatEnds(item.until);
+  const { rowOf, picking } = context;
+  /** Inside it, a wait waits round by round. */
+  const inside = { ...context, inRepeat: true };
+  /** The other agents' repeats that go round with it. */
+  const followers = context.others.filter((agent) =>
+    (agent.data.queue ?? []).some(
+      (q) =>
+        isRepeat(q) &&
+        isRepeatEnds(q.until) &&
+        q.until.agent === context.owner &&
+        q.until.item === item.id,
+    ),
+  );
+  const pick = (picked: QueueItem) =>
+    picking && (
+      <PickTask
+        label={`Wait for ${picking.name}: ${itemLabel(picked)}`}
+        pressed={picking.current === picked.id}
+        onPick={() => {
+          picking.onPick(picked.id);
+        }}
+      />
+    );
   const close = () => {
     setEditing(undefined);
   };
@@ -1620,8 +1758,8 @@ function RepeatRow({
         <Handle handle={handle} item={item} context={context} />
         <span className="graph-queue-keyword">Repeat until</span>
         {chip('until', `Change when it stops: ${text}`, text)}
-        {chip('rounds', `Change how many rounds: ${rounds}`, rounds)}
-        {chip('otherwise', `Change what happens after the last round: ${then}`, then)}
+        {!follows && chip('rounds', `Change how many rounds: ${rounds}`, rounds)}
+        {!follows && chip('otherwise', `Change what happens after the last round: ${then}`, then)}
         <RemoveButton item={item} context={context} />
         {marks['data-decide'] !== undefined && (
           <DecideBar
@@ -1635,6 +1773,7 @@ function RepeatRow({
           <ConditionPicker
             mode="until"
             current={item.until}
+            leaders={leaderOptions(context, item)}
             onPick={(until) => {
               if (until.kind !== 'timedOut') onRepeat({ until });
               close();
@@ -1660,6 +1799,7 @@ function RepeatRow({
             onCancel={close}
           />
         )}
+        {pick(item)}
       </div>
       {item.repeat.length > 0 && (
         <SortableList
@@ -1669,9 +1809,17 @@ function RepeatRow({
           onMove={onMove}
           {...(rowOf ? { rowOf: (inner: RepeatedItem) => rowOf(inner.id) } : {})}
           renderItem={(inner, innerHandle) => (
-            <RepeatedRow item={inner} handle={innerHandle} context={context} />
+            <>
+              <RepeatedRow item={inner} handle={innerHandle} context={inside} />
+              {pick(inner)}
+            </>
           )}
         />
+      )}
+      {followers.length > 0 && (
+        <p className="graph-queue-repeat-foot">
+          {andList(followers.map(nameOf))} go{followers.length === 1 ? 'es' : ''} round with it
+        </p>
       )}
       <AddMenu
         label={`Add to ${context.describe(item)}`}

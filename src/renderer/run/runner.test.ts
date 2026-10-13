@@ -629,7 +629,7 @@ describe('RunStore', () => {
   describe('repeats', () => {
     const loop = (
       repeat: RepeatedItem[],
-      more: Partial<Omit<QueueRepeat, 'id' | 'repeat'>> = {},
+      more: Partial<Omit<QueueRepeat, 'repeat'>> = {},
     ): QueueRepeat => ({
       id: 'loop',
       repeat,
@@ -809,6 +809,151 @@ describe('RunStore', () => {
       expect(where()).toEqual({ a: 'waiting pause' });
       expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 1 } });
       expect(store.snapshot().agents.a?.until).toBe(21 * MINUTE);
+    });
+
+    describe('across agents', () => {
+      it('matches a wait in a repeat to the same round of a step in another agent’s repeat', () => {
+        // The reviewer reviews each round's work; the coder goes round with the reviewer.
+        const reviewer = agent('reviewer', [
+          loop(
+            [
+              { id: 'ready', waitFor: [{ agent: 'coder', item: 'implement' }] },
+              { id: 'review', action: 'Read' },
+            ],
+            { id: 'reviewing', until: { kind: 'outputContains', text: 'APPROVED' } },
+          ),
+        ]);
+        const coder = agent('coder', [
+          loop(
+            [
+              { id: 'implement', action: 'Edit' },
+              { id: 'reviewed', waitFor: [{ agent: 'reviewer', item: 'review' }] },
+            ],
+            { id: 'work', until: { kind: 'repeatEnds', agent: 'reviewer', item: 'reviewing' } },
+          ),
+        ]);
+        // Every step succeeds; the first review is not approved, the second is.
+        const { store, tick, where } = setup(
+          [reviewer, coder],
+          draws(0.9, 0.9, 0.9, 0.9, 0.9, 0.1),
+        );
+        store.start();
+        expect(where()).toEqual({ reviewer: 'waiting ready', coder: 'running implement' });
+        tick();
+        expect(where()).toEqual({ reviewer: 'running review', coder: 'waiting reviewed' });
+        tick();
+        // Round 2: the reviewer waits for round 2's work, not round 1's; the coder goes round.
+        expect(where()).toEqual({ reviewer: 'waiting ready', coder: 'running implement' });
+        expect(store.snapshot().agents.coder?.outcomes.reviewed).toBeUndefined();
+        expect(store.snapshot().agents.coder?.rounds).toEqual({ work: { round: 2 } });
+        tick();
+        expect(where()).toEqual({ reviewer: 'running review', coder: 'waiting reviewed' });
+        tick();
+        // Approved: the reviewer's repeat ends, and the coder's with it.
+        expect(where()).toEqual({ reviewer: 'done', coder: 'done' });
+        expect(store.snapshot().agents.coder?.outcomes).toMatchObject({
+          reviewed: 'succeeded',
+          work: 'succeeded',
+        });
+      });
+
+      it('holds a wait outside a repeat until the repeat ends', () => {
+        // The build fails in round 1, and passes in round 2.
+        const a = agent('a', [loop([{ id: 'build', action: 'Edit' }])]);
+        const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'build' }] }, next]);
+        // b first: it sees how round 1 went before a goes round.
+        const { store, tick, where } = setup([b, a], draws(0.1));
+        store.start();
+        tick();
+        expect(where()).toEqual({ a: 'running build', b: 'waiting w' });
+        tick();
+        expect(where()).toEqual({ a: 'done', b: 'running next' });
+        expect(store.snapshot().agents.b?.outcomes.w).toBe('succeeded');
+      });
+
+      it('passes a wait for a round of a repeat that ended before it', () => {
+        // a's build always fails: a's repeat ends after 2 rounds, b's runs 3, waiting each round.
+        const a = agent('a', [
+          loop([{ id: 'build', action: 'Edit' }], { rounds: 2, otherwise: 'goOn' }),
+        ]);
+        const b = agent('b', [
+          loop([{ id: 'w', waitFor: [{ agent: 'a', item: 'build' }] }], {
+            id: 'again',
+            otherwise: 'goOn',
+          }),
+          next,
+        ]);
+        const { store, tick, where } = setup([a, b], () => 0.1);
+        store.start();
+        tick();
+        expect(where()).toEqual({ a: 'running build', b: 'waiting w' });
+        expect(store.snapshot().agents.b?.rounds).toEqual({ again: { round: 2 } });
+        tick();
+        expect(where()).toEqual({ a: 'done', b: 'running next' });
+        expect(store.snapshot().agents.b?.rounds).toEqual({ again: { round: 3 } });
+        expect(store.snapshot().agents.b?.outcomes).toMatchObject({ w: 'failed', again: 'failed' });
+      });
+
+      describe('following another repeat', () => {
+        const leader = (queue: QueueItem[] = []) =>
+          agent('lead', [
+            ...queue,
+            loop([{ id: 'work', action: 'Edit' }], {
+              id: 'leading',
+              until: { kind: 'outputContains', text: 'DONE' },
+              rounds: 1,
+            }),
+          ]);
+        const follower = agent('follow', [
+          loop([{ id: 'chore', action: 'Read' }], {
+            id: 'following',
+            until: { kind: 'repeatEnds', agent: 'lead', item: 'leading' },
+          }),
+          next,
+        ]);
+
+        it('holds at the end of its round until its leader goes on, and ends with it', () => {
+          // Steps succeed, and the leader's condition never holds.
+          const { store, tick, where } = setup([leader(), follower]);
+          store.start();
+          tick();
+          expect(where()).toEqual({ lead: 'asking leading', follow: 'waiting following' });
+          expect(store.snapshot().running).toBe(true);
+          // Not a hold to end early: it ends with its leader.
+          store.goOn('follow', 'following');
+          expect(where()).toEqual({ lead: 'asking leading', follow: 'waiting following' });
+
+          // One more round for the leader is one more for its follower.
+          store.decide('lead', 'leading', { choice: 'more' });
+          expect(where()).toEqual({ lead: 'running work', follow: 'running chore' });
+          expect(store.snapshot().agents.follow?.rounds).toEqual({ following: { round: 2 } });
+          tick();
+          expect(where()).toEqual({ lead: 'asking leading', follow: 'waiting following' });
+          store.decide('lead', 'leading', { choice: 'goOn' });
+          expect(where()).toEqual({ lead: 'done', follow: 'running next' });
+          expect(store.snapshot().agents.follow?.outcomes.following).toBe('failed');
+        });
+
+        it('stops when its leader’s queue is stopped, and ends once its leader is gone', () => {
+          const { store, tick, where, edit } = setup([
+            leader([{ id: 'ok', approve: '' }]),
+            follower,
+          ]);
+          store.start();
+          tick();
+          expect(where()).toEqual({ lead: 'asking ok', follow: 'waiting following' });
+          store.decide('lead', 'ok', { choice: 'stop' });
+          expect(where()).toEqual({ lead: 'stopped ok', follow: 'stopped following' });
+          expect(store.snapshot().running).toBe(false);
+
+          store.start();
+          tick();
+          expect(where()).toEqual({ lead: 'asking ok', follow: 'waiting following' });
+          edit([agent('lead', [{ id: 'ok', approve: '' }]), follower]);
+          expect(where()).toEqual({ lead: 'asking ok', follow: 'running next' });
+          expect(store.snapshot().agents.follow?.outcomes.following).toBe('succeeded');
+        });
+      });
     });
   });
 });

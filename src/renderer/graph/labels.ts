@@ -8,6 +8,7 @@ import {
   isIf,
   isMessage,
   isRepeat,
+  isRepeatEnds,
   isWait,
   UNTIL_CONDITIONS,
 } from './queue';
@@ -18,6 +19,7 @@ import type {
   QueueItem,
   QueueRepeat,
   QueueWait,
+  RepeatEnds,
   Until,
   WaitTarget,
 } from './queue';
@@ -33,17 +35,29 @@ export const ifText = (condition: Condition): string =>
 
 /**
  * How a repeat's `until` reads after "Repeat until": "its last step succeeds", "the output contains
- * “APPROVED”", or the user's own words.
+ * “APPROVED”", the user's own words, or the repeat it goes round with: "Judge's repeat ends" ("a
+ * removed repeat ends" once that is gone).
  */
-export function untilText(_nodes: readonly GraphNode[], until: Until): string {
+export function untilText(nodes: readonly GraphNode[], until: Until): string {
   switch (until.kind) {
     case 'outputContains':
       return `the output contains “${until.text}”`;
     case 'freeText':
       return until.text;
+    case 'repeatEnds':
+      return leaderOf(nodes, until)
+        ? `${agentName(nodes, until.agent)}'s repeat ends`
+        : 'a removed repeat ends';
     default:
       return UNTIL_CONDITIONS.find((c) => c.kind === until.kind)?.label ?? '';
   }
+}
+
+/** The repeat another goes round with (`until`), if it is still there. */
+export function leaderOf(nodes: readonly GraphNode[], until: RepeatEnds): QueueRepeat | undefined {
+  const leader = nodes.find((n) => n.id === until.agent && n.type === 'agent');
+  const found = leader && findItem(leader.data.queue ?? [], until.item)?.item;
+  return found && isRepeat(found) ? found : undefined;
 }
 
 /** "up to 3 rounds", "up to 1 round". */
@@ -114,13 +128,13 @@ export function andList(names: readonly string[]): string {
 
 /**
  * How an item reads in full, as All queues names it: what it does, and to which agent; a repeat,
- * how many rounds it runs at most (unless it goes round with another).
+ * how many rounds it runs at most (unless it goes round with another, as many as that one).
  */
 export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string {
   if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
   if (isRepeat(item)) {
     const text = repeatText(nodes, item);
-    return `${text} (${roundsText(item.rounds)})`;
+    return isRepeatEnds(item.until) ? text : `${text} (${roundsText(item.rounds)})`;
   }
   if (isDelay(item)) return delayText(item);
   if (isApproval(item)) return okText(item);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
+import type { QueueItem, QueueRepeat } from '../graph/queue';
 
 const agent = (id: string, extra: Partial<GraphNode> = {}): GraphNode => ({
   id,
@@ -299,6 +300,75 @@ describe('the agent view', () => {
         .closest('[data-run]')
         ?.getAttribute('data-run'),
     ).toBe('running');
+  });
+
+  it("picks a step inside the other agent's repeat, beside, for a wait inside its own repeat", () => {
+    const round = (id: string, repeat: QueueItem[]): QueueItem => ({
+      id,
+      repeat: repeat as QueueRepeat['repeat'],
+      until: { kind: 'succeeded' },
+      rounds: 3,
+      otherwise: 'ask',
+    });
+    render(
+      <GraphEditor
+        initialGraph={{
+          nodes: [
+            agent('a', {
+              data: {
+                label: 'a',
+                queue: [
+                  round('work', [
+                    { id: 'implement', action: 'Edit' },
+                    { id: 'reviewed', waitFor: [{ agent: 'r' }] },
+                  ]),
+                ],
+              },
+            }),
+            agent('r', {
+              position: { x: 0, y: 100 },
+              data: {
+                label: 'Reviewer',
+                queue: [
+                  round('reviewing', [
+                    { id: 'ready', waitFor: [{ agent: 'a', item: 'implement' }] },
+                    { id: 'review', action: 'Read' },
+                  ]),
+                ],
+              },
+            }),
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    const card = document.querySelector<HTMLElement>('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('no agent');
+    fireEvent.doubleClick(card);
+    const view = shown('a');
+    fireEvent.click(view.getByRole('button', { name: 'Change what it waits for: Reviewer' }));
+    const beside = within(view.getByRole('complementary', { name: "Reviewer's queue" }));
+    // Each item inside its repeat picks; its header, the whole repeat.
+    expect(
+      beside
+        .getAllByRole('button', { name: /^Wait for (Reviewer|all)/ })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'Wait for Reviewer: its repeat',
+      'Wait for Reviewer: its wait',
+      'Wait for Reviewer: Read',
+      "Wait for all of Reviewer's work",
+    ]);
+    fireEvent.click(beside.getByRole('button', { name: 'Wait for Reviewer: Read' }));
+    expect(
+      view.getByRole('button', { name: 'Change what it waits for: Reviewer: Read' }),
+    ).toBeTruthy();
+    // The two waits in the repeats are linked across the queues, each to what it waits for.
+    expect(
+      [...screen.getByRole('dialog', { name: 'a' }).querySelectorAll('[data-link]')].map((l) =>
+        l.getAttribute('data-link'),
+      ),
+    ).toEqual(['reviewed>review', 'ready>implement']);
   });
 
   describe('its rail', () => {

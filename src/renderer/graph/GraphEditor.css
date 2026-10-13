@@ -447,6 +447,13 @@ input.graph-label {
   line-height: 1;
 }
 
+/* Who goes round with a repeat, muted, at its foot. */
+.graph-queue-repeat-foot {
+  margin: 18px 14px 0 28px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
 /* While the run is in a repeat: which round, in a pill on its top edge; once over, how many. */
 .graph-queue-repeat[data-round]::before {
   position: absolute;
@@ -1457,7 +1464,7 @@ input.graph-label {
  * Tasks linked to other queues take their link's colour: a wait, work handed on, what is waited
  * for. An OK, which holds its queue like a wait, is amber.
  */
-:where(.graph-queue-row, .graph-queue-if)[data-mark] {
+:where(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-mark] {
   border-color: color-mix(in srgb, var(--mark) 60%, transparent);
   background-color: color-mix(in srgb, var(--mark) 8%, Canvas);
 }

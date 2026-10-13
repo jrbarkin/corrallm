@@ -2,7 +2,7 @@ import { AGENT_ACTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
 import type { AgentType } from './agents';
 import type { Graph } from './graph';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
-import type { Condition, QueueItem, RepeatedItem } from './queue';
+import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
 
 /**
  * A blank in a template, written `{{key}}` in its agents' names, messages, conditions (a repeat's
@@ -19,7 +19,8 @@ const PLACEHOLDER = /\{\{(\w+)\}\}/g;
 
 /** Every piece of text in a canvas that a placeholder may be in. */
 function textsOf(graph: Graph): string[] {
-  const ofCondition = (condition: Condition) => ('text' in condition ? [condition.text] : []);
+  const ofCondition = (condition: Condition | Until) =>
+    'text' in condition ? [condition.text] : [];
   const ofItem = (item: QueueItem): string[] =>
     isWait(item) || isDelay(item)
       ? []
@@ -45,7 +46,7 @@ export function placeholdersOf(graph: Graph): string[] {
 export function fillTemplate(graph: Graph, values: Readonly<Record<string, string>>): Graph {
   const fill = (text: string) =>
     text.replace(PLACEHOLDER, (whole, key: string) => values[key] ?? whole);
-  const fillCondition = <C extends Condition>(condition: C): C =>
+  const fillCondition = <C extends Condition | Until>(condition: C): C =>
     'text' in condition ? { ...condition, text: fill(condition.text) } : condition;
   const fillStep = <T extends RepeatedItem>(step: T): T =>
     isMessage(step) ? { ...step, message: fill(step.message) } : step;

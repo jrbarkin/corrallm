@@ -1,5 +1,13 @@
 import type { GraphNode } from '../graph/graph';
-import { isApproval, isDelay, isIf, isRepeat, isWait } from '../graph/queue';
+import {
+  isApproval,
+  isDelay,
+  isIf,
+  isRepeat,
+  isRepeatEnds,
+  isWait,
+  withRepeated,
+} from '../graph/queue';
 import type { QueueItem, RepeatedItem, WaitTarget } from '../graph/queue';
 
 /**
@@ -50,8 +58,9 @@ export interface Lanes {
   /** The waits and work handed over between lanes. */
   links: Link[];
   /**
-   * Whether an item is in a loop of waits (waits waiting on each other) with no way out: it would
-   * never run. A loop that holds a wait with a time limit is not stuck: the limit breaks it.
+   * Whether an item is in a loop of waits (waits waiting on each other, or repeats going round with
+   * each other) with no way out: it would never run, or never end. A loop that holds a wait with a
+   * time limit is not stuck: the limit breaks it.
    */
   isStuck: (agent: string, item: string) => boolean;
 }
@@ -70,8 +79,9 @@ interface Dependency {
  * the end of an agent's lane for all of its work). A repeat takes the rows of what it holds, in
  * order below its own; the item after it comes after the last of them. A wait for a step in a
  * repeat comes after that step if the wait is in a repeat too (it waits for it round by round),
- * and after the whole repeat if not. Waits in a loop of waits are laid out as if they did not
- * wait; the loop is stuck unless a time limit breaks it.
+ * and after the whole repeat if not. A repeat that goes round with another ends after it. Waits in
+ * a loop of waits are laid out as if they did not wait; the loop is stuck unless a time limit
+ * breaks it.
  */
 export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   const agents = nodes.filter((n) => n.type === 'agent');
@@ -116,8 +126,14 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
         after.set(next, [...behind(previous), ...waitsOf(inner, true)]);
         previous = next;
       }
+      // It ends with the last item it holds, and a repeat that follows another, after that one.
       const end = endOf(agent.id, item.id);
-      after.set(end, behind(previous, 0));
+      const { until } = item;
+      const leader =
+        isRepeatEnds(until) && byId.get(until.agent)?.data.queue?.some((q) => q.id === until.item)
+          ? [{ key: endOf(until.agent, until.item), wait: true, gap: 1 }]
+          : [];
+      after.set(end, [...behind(previous, 0), ...leader]);
       previous = end;
     }
     after.set(key(agent.id, null), behind(previous));
@@ -127,7 +143,7 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
   const looped = new Set(loops.flat());
   const timed = new Set(
     agents.flatMap((agent) =>
-      itemsOf(agent.data.queue ?? []).flatMap((item) =>
+      withRepeated(agent.data.queue ?? []).flatMap((item) =>
         isWait(item) && item.timeout !== undefined ? [key(agent.id, item.id)] : [],
       ),
     ),
@@ -174,7 +190,7 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     links.push(next);
   };
   for (const agent of agents) {
-    for (const item of itemsOf(agent.data.queue ?? [])) {
+    for (const item of withRepeated(agent.data.queue ?? [])) {
       const handed =
         isWait(item) || isDelay(item) || isApproval(item) || isRepeat(item)
           ? []
@@ -209,13 +225,8 @@ export function lanesOf(nodes: readonly GraphNode[]): Lanes {
     lanes,
     rows: Math.max(0, ...lanes.map((lane) => lane.end + 1)),
     links,
-    isStuck: (agent, item) => stuck.has(key(agent, item)),
+    isStuck: (agent, item) => stuck.has(key(agent, item)) || stuck.has(endOf(agent, item)),
   };
-}
-
-/** A queue's items, each repeat followed by what it holds. */
-function itemsOf(queue: readonly QueueItem[]): QueueItem[] {
-  return queue.flatMap((item): QueueItem[] => (isRepeat(item) ? [item, ...item.repeat] : [item]));
 }
 
 /** The loops of a dependency graph, each the nodes on it (Tarjan's strongly connected components). */

@@ -33,4 +33,38 @@ describe('queueLinks', () => {
       { key: 'w>build', from: { column: 'own', item: 'build' }, to: { column: 'peer', item: 'w' } },
     ]);
   });
+
+  it('links waits inside repeats, and what they wait for inside repeats', () => {
+    const round = (id: string, repeat: QueueItem[]): QueueItem => ({
+      id,
+      repeat: repeat as Extract<QueueItem, { repeat: unknown }>['repeat'],
+      until: { kind: 'succeeded' },
+      rounds: 3,
+      otherwise: 'ask',
+    });
+    const coder = agent('coder', [
+      round('work', [
+        { id: 'implement', action: 'Edit' },
+        { id: 'reviewed', waitFor: [{ agent: 'reviewer', item: 'review' }] },
+      ]),
+    ]);
+    const reviewer = agent('reviewer', [
+      round('reviewing', [
+        { id: 'ready', waitFor: [{ agent: 'coder', item: 'implement' }] },
+        { id: 'review', action: 'Read' },
+      ]),
+    ]);
+    expect(queueLinks(coder, reviewer)).toEqual([
+      {
+        key: 'reviewed>review',
+        from: { column: 'peer', item: 'review' },
+        to: { column: 'own', item: 'reviewed' },
+      },
+      {
+        key: 'ready>implement',
+        from: { column: 'own', item: 'implement' },
+        to: { column: 'peer', item: 'ready' },
+      },
+    ]);
+  });
 });

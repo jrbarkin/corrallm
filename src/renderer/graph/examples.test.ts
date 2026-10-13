@@ -4,7 +4,7 @@ import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
-import { findItem, isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
+import { findItem, isApproval, isDelay, isIf, isRepeat, isRepeatEnds, isWait } from './queue';
 import type { QueueItem } from './queue';
 import { workEdges } from './work';
 
@@ -30,6 +30,13 @@ describe.each(EXAMPLES)('the $name example', (example) => {
         } else if (isIf(item)) {
           item.then.forEach(check);
         } else if (isRepeat(item)) {
+          // A repeat that goes round with another: one of another agent's repeats.
+          if (isRepeatEnds(item.until)) {
+            const { agent: leader, item: id } = item.until;
+            expect(leader).not.toBe(agent.id);
+            const found = agents.get(leader)?.data.queue?.find((q) => q.id === id);
+            expect(found && isRepeat(found)).toBe(true);
+          }
           item.repeat.forEach(check);
         } else if (!isDelay(item) && !isApproval(item)) {
           if (item.target !== undefined) expect(agents.has(item.target)).toBe(true);

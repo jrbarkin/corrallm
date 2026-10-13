@@ -45,7 +45,8 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      times (a delay's, a wait's time limit: one Time model in queue.ts) read from
                      what is typed, worded and turned into deadlines in time.ts; a repeat
                      (QueueRepeat: steps, messages, waits and delays run in rounds until a
-                     condition holds, at most `rounds`, then ask or go on) is one item holding
+                     condition holds, at most `rounds`, then ask or go on; or, `until` a
+                     RepeatEnds, going round with another agent's repeat) is one item holding
                      others: findItem (queue.ts) finds an item at any depth, and graph.ts's
                      operations reach inside through mapItems;
                      automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
@@ -87,7 +88,10 @@ src/renderer/run/    Running the queues, simulated until agents are connected (r
                      stops whatever waits on it). A repeat runs in rounds (AgentRun.rounds), its
                      condition decided once per round of the round's last task that ran; out of
                      rounds it fails and goes on, or asks (decide: one more round, what to try
-                     next, or go on). Delays and limits are the run's own, on the real
+                     next, or go on). A wait in a repeat for a step in another repeat waits for
+                     that round of it (#resultOf); one outside waits for the repeat to end. A
+                     repeat that follows another holds at the end of each round until its leader
+                     goes round, and ends with it (#follow). Delays and limits are the run's own, on the real
                      clock (RunIO.now, one alarm re-checked at least once a minute); Go on now
                      (RunStore.goOn) ends a hold early. asks.ts derives what each hold for the user
                      asks (never stored), shown on its row, All queues' lane head, the Needs you

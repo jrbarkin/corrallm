@@ -301,6 +301,19 @@
   transform: translateX(-50%);
 }
 
+/* Who goes round with it, above its ⊕. */
+.queues-cell[data-repeat] > .graph-queue-repeat:has(> .graph-queue-repeat-foot) {
+  padding-bottom: 74px;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat > .graph-queue-repeat-foot {
+  position: absolute;
+  right: 14px;
+  bottom: 36px;
+  left: 28px;
+  margin: 0;
+}
+
 /* Where an agent has nothing to do, waiting: its stripes run while the run holds it there. */
 .queues-idle {
   border-radius: 10px;

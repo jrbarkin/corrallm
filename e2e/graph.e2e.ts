@@ -1032,6 +1032,70 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   await view.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
+test('lines repeats up across lanes, round by round, with ribbons between the steps inside them', async () => {
+  await page.getByRole('button', { name: 'Start from a template…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Templates' })
+    .getByRole('button', { name: /^Head to head/ })
+    .click();
+  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const view = page.getByRole('dialog', { name: 'All queues' });
+  const task = (lane: string, item: string) => view.locator(`[data-at='["${lane}","${item}"]']`);
+
+  // Each competitor's repeat goes round with the judge's: the two sit side by side, level.
+  const follows = (lane: string) =>
+    view.getByRole('group', { name: `${lane}: Repeat until Judge's repeat ends` });
+  const [claude, codex] = [await box(follows('Claude')), await box(follows('Codex'))];
+  expect(Math.abs(claude.y - codex.y)).toBeLessThanOrEqual(1);
+  expect(codex.x).toBeGreaterThan(claude.x + claude.width);
+  const judging = view.getByRole('group', {
+    name: 'Judge: Repeat until the output contains “WINNER” (up to 2 rounds)',
+  });
+  await expect(judging).toBeVisible();
+
+  // The judge's wait inside its repeat comes after each build inside theirs, a ribbon joining
+  // them from the side of one repeat to the side of the other, level with each.
+  const build = await box(task('codex', 'build'));
+  const built = await box(task('judge', 'built'));
+  expect(built.y).toBeGreaterThanOrEqual(build.y + build.height);
+  const ribbon = await box(view.locator('g[data-link="judge:built>codex:build"] .queues-ribbon'));
+  expect(Math.abs(ribbon.x - (codex.x + codex.width))).toBeLessThanOrEqual(1);
+  expect(Math.abs(ribbon.x + ribbon.width - (await box(judging)).x)).toBeLessThanOrEqual(1);
+  expect(ribbon.y).toBeGreaterThanOrEqual(build.y);
+  expect(ribbon.y).toBeLessThan(build.y + build.height);
+  expect(ribbon.y + ribbon.height).toBeGreaterThan(built.y);
+  expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(built.y + built.height);
+  await expect(view.locator('g[data-link="judge:built>claude:build"]')).toHaveCount(2);
+  // Rows run through the repeats: Codex's wait inside its repeat is level with the judge's merge.
+  const scored = await box(task('codex', 'scored'));
+  const merge = await box(task('judge', 'merge'));
+  expect(Math.abs(scored.y - merge.y)).toBeLessThanOrEqual(1);
+  // Nothing waits in a loop.
+  await expect(view.locator('[data-at][data-mark="stuck"], g[data-mark="stuck"]')).toHaveCount(0);
+
+  // A lane's ⊕ adds a repeat, and the repeat's own ⊕ a step inside it.
+  await view.getByRole('button', { name: "Add to Judge's queue" }).click();
+  const field = view.getByRole('combobox');
+  await field.fill('repeat');
+  await field.press('Enter');
+  await expect(field).toHaveAttribute('aria-label', 'Repeat until…');
+  await field.press('Enter');
+  const added = view.getByRole('group', {
+    name: 'Judge: Repeat until its last step succeeds (up to 3 rounds)',
+  });
+  await added.hover();
+  await added.getByRole('button', { name: 'Add to Repeat until its last step succeeds' }).click();
+  await field.fill('Read');
+  await field.press('Enter');
+  await field.press('Enter');
+  const header = await box(added.locator('.graph-queue-repeat-head'));
+  const read = await box(added.getByRole('button', { name: 'Move Read', exact: true }));
+  expect(read.y).toBeGreaterThan(header.y + header.height);
+  const card = await box(added);
+  expect(read.y + read.height).toBeLessThan(card.y + card.height);
+});
+
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);

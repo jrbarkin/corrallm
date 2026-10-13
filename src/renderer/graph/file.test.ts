@@ -177,6 +177,13 @@ describe('fromFile', () => {
         otherwise: 'ask',
       },
       {
+        id: 'follow',
+        repeat: [],
+        until: { kind: 'repeatEnds', agent: 'b', item: 'reviewing' },
+        rounds: 1,
+        otherwise: 'goOn',
+      },
+      {
         id: 'judged',
         repeat: [{ id: 'judge', message: 'Judge' }],
         until: { kind: 'outputContains', text: 'WINNER' },
@@ -391,7 +398,23 @@ describe('fromFile', () => {
             { id: 'r', repeat: [], until: { kind: 'timedOut' }, rounds: 3, otherwise: 'ask' },
           ],
         }),
-      /^nodes\[1\]\.queue\[0\]\.until\.kind must be one of: succeeded, failed, outputContains, freeText$/,
+      /^nodes\[1\]\.queue\[0\]\.until\.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds$/,
+    ],
+    [
+      'a repeat that follows nobody',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [],
+              until: { kind: 'repeatEnds', agent: 'b' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.until\.item must be non-empty text$/,
     ],
     [
       'an if-then inside a repeat',

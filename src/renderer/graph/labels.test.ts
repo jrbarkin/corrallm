@@ -45,6 +45,22 @@ describe('untilText', () => {
       'the reviewer is happy',
     ]);
   });
+
+  it('names the repeat a repeat goes round with, or says it was removed', () => {
+    const judge = agent('j', 'Judge', [{ ...loop, id: 'judging' }]);
+    const follows = { kind: 'repeatEnds' as const, agent: 'j', item: 'judging' };
+    expect(untilText([coder, judge], follows)).toBe("Judge's repeat ends");
+    expect(untilText([coder, judge], { ...follows, item: 'gone' })).toBe('a removed repeat ends');
+    expect(untilText([coder], follows)).toBe('a removed repeat ends');
+    // Not a repeat: nothing to go round with.
+    expect(
+      untilText([coder, agent('j', 'Judge', [{ id: 'judging', action: 'Read' }])], follows),
+    ).toBe('a removed repeat ends');
+    // A follower runs as many rounds as its leader: its own are not named.
+    expect(taskLabel([coder, judge], { ...loop, until: follows })).toBe(
+      "Repeat until Judge's repeat ends",
+    );
+  });
 });
 
 describe('repeats in words', () => {

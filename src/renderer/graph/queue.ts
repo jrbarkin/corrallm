@@ -38,7 +38,9 @@ export interface QueueIf {
 
 /**
  * What a wait waits for: an agent (`agent`, an id) to finish its whole queue, or, with `item` (the
- * id of an item in that agent's queue), to have done that item.
+ * id of an item in that agent's queue, or in a repeat in it), to have done that item. A step in a
+ * repeat is done round by round: a wait in a repeat waits for it in the same round, and a wait
+ * outside one waits for its repeat to end.
  */
 export interface WaitTarget {
   agent: string;
@@ -109,8 +111,18 @@ export interface QueueApproval {
 /** What a repeat holds: steps, messages, waits and delays (no if-thens, repeats or OKs). */
 export type RepeatedItem = QueueStep | QueueMessage | QueueWait | QueueDelay;
 
-/** When a repeat stops: a condition (any but timedOut) of each round's last task that ran. */
-export type Until = Exclude<Condition, { kind: 'timedOut' }>;
+/** Another agent's repeat (its agent, and its id there): a repeat ending with it goes round with it. */
+export interface RepeatEnds {
+  kind: 'repeatEnds';
+  agent: string;
+  item: string;
+}
+
+/**
+ * When a repeat stops: a condition (any but timedOut) of each round's last task that ran, or
+ * another agent's repeat ending.
+ */
+export type Until = Exclude<Condition, { kind: 'timedOut' }> | RepeatEnds;
 
 /** The most rounds a repeat runs unattended. */
 export const MAX_ROUNDS = 20;
@@ -118,7 +130,10 @@ export const MAX_ROUNDS = 20;
 /**
  * A repeat: runs `repeat` in rounds; after each it stops if `until` holds, else runs again, up to
  * `rounds` in all; then asks the user ('ask': one more round, or go on) or goes on having failed
- * ('goOn'). Repeats sit in the queue itself, not in an if-then or another repeat.
+ * ('goOn'). Following another repeat (`until` a RepeatEnds, its leader), it runs as many rounds as
+ * that one, each once the leader has gone on to the next, and ends with it; its `rounds` and
+ * `otherwise` are kept, but unused. Repeats sit in the queue itself, not in an if-then or another
+ * repeat.
  */
 export interface QueueRepeat {
   id: string;
@@ -149,6 +164,15 @@ export function isApproval(item: QueueItem): item is QueueApproval {
 
 export function isRepeat(item: QueueItem): item is QueueRepeat {
   return 'repeat' in item;
+}
+
+export function isRepeatEnds(until: Until): until is RepeatEnds {
+  return until.kind === 'repeatEnds';
+}
+
+/** A queue's items, each repeat followed by the items it holds (not those of if-thens). */
+export function withRepeated(queue: readonly QueueItem[]): QueueItem[] {
+  return queue.flatMap((item): QueueItem[] => (isRepeat(item) ? [item, ...item.repeat] : [item]));
 }
 
 /**

@@ -495,6 +495,80 @@ describe('GraphEditor', () => {
     expect(field().value).toBe('the loss stops falling');
   });
 
+  it("goes round with another agent's repeat, and waits for a step inside one, round by round", () => {
+    const judging = {
+      id: 'judging',
+      repeat: [{ id: 'judge', message: 'Judge both versions' }],
+      until: { kind: 'outputContains' as const, text: 'WINNER' },
+      rounds: 2,
+      otherwise: 'goOn' as const,
+    };
+    const { node } = setup({
+      nodes: [
+        agentNode('j', 0, 0, { data: { label: 'Judge', queue: [judging] } }),
+        agentNode('c', 0, 100, { data: { label: 'Claude', queue: [] } }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('c'));
+    const panel = within(screen.getByRole('dialog', { name: 'Claude' }));
+    const plus = (name = 'Add to queue') => {
+      fireEvent.click(panel.getByRole('button', { name }));
+    };
+    plus();
+    fireEvent.click(panel.getByRole('option', { name: /^Repeat until…/ }));
+    // Another agent's repeat, after the conditions: go round with it.
+    const leader = panel.getByRole('option', { name: /^Judge's repeat ends/ });
+    expect(leader.textContent).toBe(
+      "Judge's repeat ends Go round with it: as many rounds as Judge's repeat",
+    );
+    fireEvent.click(leader);
+    // It runs as many rounds as the judge's: its own are not shown.
+    expect(
+      panel.getByRole('button', { name: "Change when it stops: Judge's repeat ends" }),
+    ).toBeTruthy();
+    expect(panel.queryByRole('button', { name: /^Change how many rounds/ })).toBeNull();
+    expect(panel.queryByRole('button', { name: /^Change what happens after/ })).toBeNull();
+
+    // A wait inside it, for a step inside the judge's repeat, picked in the judge's queue beside.
+    plus("Add to Repeat until Judge's repeat ends");
+    fireEvent.click(panel.getByRole('option', { name: /^Wait for…/ }));
+    fireEvent.click(panel.getByRole('option', { name: 'Judge' }));
+    const beside = within(panel.getByRole('complementary', { name: "Judge's queue" }));
+    fireEvent.click(beside.getByRole('button', { name: 'Wait for Judge: “Judge both versions”' }));
+    expect(
+      panel.getByRole('button', { name: 'Move Wait for Judge: “Judge both versions”' }),
+    ).toBeTruthy();
+
+    // The judge's repeat names who goes round with it.
+    expect(beside.getByText('Claude goes round with it')).toBeTruthy();
+    // Its own waits are offered the steps inside Claude's repeat: each round inside a repeat, and
+    // once that repeat is over outside one.
+    const choices = () => beside.getAllByRole('option').map((o) => o.textContent);
+    fireEvent.click(
+      beside.getByRole('button', { name: 'Add to Repeat until the output contains “WINNER”' }),
+    );
+    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    expect(choices()).toEqual([
+      'Claude All of its work',
+      'Claude: its repeat All of its rounds',
+      'Claude: its wait This step, each round',
+    ]);
+    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+    fireEvent.click(beside.getByRole('button', { name: "Add to Judge's queue" }));
+    fireEvent.click(beside.getByRole('option', { name: /^Wait for…/ }));
+    expect(choices().at(-1)).toBe('Claude: its wait This step, once its repeat is over');
+    fireEvent.keyDown(beside.getByRole('combobox'), { key: 'Escape' });
+
+    // Claude's repeat goes round with the judge's, so it is not offered back to the judge.
+    fireEvent.click(beside.getByRole('button', { name: /^Change when it stops/ }));
+    expect(beside.getAllByRole('option').map((o) => o.firstChild?.textContent)).toEqual([
+      'its last step succeeds',
+      'its last step fails',
+      'the output contains…',
+    ]);
+  });
+
   it('asks for your OK on the canvas while the run holds an agent at one', () => {
     const queue = (approve: string) => [
       { id: 'spec', action: 'Read' },

@@ -7,6 +7,7 @@ import {
   isMessage,
   isPause,
   isRepeat,
+  isRepeatEnds,
   isWait,
   unfit,
 } from '../graph/queue';
@@ -17,6 +18,7 @@ import type {
   QueueMessage,
   QueueRepeat,
   QueueStep,
+  RepeatEnds,
   RepeatedItem,
   WaitTarget,
 } from '../graph/queue';
@@ -115,9 +117,11 @@ const IDLE: Run = { running: false, agents: {} };
  * holds until the user decides (`decide`): the queue goes on, the agent makes the changes asked
  * for and it asks again, or the queue stops there, and with it whatever waits on it. A repeat
  * runs what it holds in rounds, until its condition holds of a round's last task that ran, at
- * most its rounds; then it goes on having failed, or asks the user for one more round. Rounds,
- * like delays, are the run's: the agent is only sent each round's messages. Queues are read as
- * they run (`update` gives it the graph as it changes), so edits take effect at once.
+ * most its rounds; then it goes on having failed, or asks the user for one more round. A wait in a
+ * repeat for a step in another repeat waits for it in the same round; a wait outside one, for that
+ * repeat to end. A repeat that follows another goes round with it, and ends with it. Rounds, like
+ * delays, are the run's: the agent is only sent each round's messages. Queues are read as they run
+ * (`update` gives it the graph as it changes), so edits take effect at once.
  */
 export class RunStore {
   #run: Run = IDLE;
@@ -137,6 +141,8 @@ export class RunStore {
   readonly #arrived = new Map<string, number>();
   /** The holds the user said to go on from (Go on now), by agent and item. */
   readonly #ended = new Set<string>();
+  /** How each item in a repeat went in the rounds before the one it is on, by agent, item and round. */
+  readonly #past = new Map<string, Outcome>();
   /** The one timer that wakes the run when the next delay or time limit comes. */
   #alarm: { at: number; cancel: () => void } | undefined;
 
@@ -183,6 +189,10 @@ export class RunStore {
   goOn(agent: string, item: string): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || at?.status !== 'waiting' || at.current !== item) return;
+    // A repeat that follows another ends with it, not before.
+    const queue = this.#agents().find((n) => n.id === agent)?.data.queue ?? [];
+    const held = findItem(queue, item)?.item;
+    if (!held || isRepeat(held)) return;
     this.#ended.add(JSON.stringify([agent, item]));
     this.#settle(false);
   }
@@ -303,7 +313,7 @@ export class RunStore {
         ? this.#rounds(node, item, queue.slice(0, index), outcomes, rounds, agents, now)
         : isIf(item)
           ? this.#ifThen(node, item, index, outcomes)
-          : this.#reach(node.id, item, outcomes, agents, now);
+          : this.#reach(node.id, item, Infinity, outcomes, agents, now);
       if (typeof at !== 'string') return at;
       outcomes[item.id] = at;
     }
@@ -312,12 +322,13 @@ export class RunStore {
 
   /**
    * What happens when an agent's queue reaches an item that holds or runs: a delay, a wait, a step
-   * or a message (in its queue, or in a repeat in it). Where it then is (held, stopped, or busy
-   * with the task), or, done at once, how the item went.
+   * or a message (in its queue, or in round `round` of a repeat in it; Infinity outside one). Where
+   * it then is (held, stopped, or busy with the task), or, done at once, how the item went.
    */
   #reach(
     agent: string,
     item: RepeatedItem,
+    round: number,
     outcomes: Record<string, Outcome>,
     agents: Readonly<Record<string, AgentRun>>,
     now: number,
@@ -330,7 +341,7 @@ export class RunStore {
       return 'succeeded';
     }
     if (!isWait(item)) return this.#begin(agent, item, outcomes);
-    const results = item.waitFor.map((target) => this.#resultOf(target, agents));
+    const results = item.waitFor.map((target) => this.#resultOf(target, agents, round));
     // A stop wins over everything, a time limit too: what it waits for will never be done.
     if (results.includes('stopped')) return { current: item.id, status: 'stopped', outcomes };
     if (results.every((result) => result !== undefined))
@@ -377,7 +388,8 @@ export class RunStore {
    * end, the condition is decided (once) of the round's last task that ran (or the last before the
    * repeat, if none did). If it holds, the repeat succeeded; if not, the next round starts, afresh,
    * while rounds are left (`rounds`, and those the user added); then it fails and goes on, or asks
-   * the user. Rounds that end at once run on here, no further than the rounds left.
+   * the user. A repeat that follows another instead goes round when that one does (#follow), and
+   * ends with it. Rounds that end at once run on here, no further than the rounds left.
    */
   #rounds(
     node: GraphNode,
@@ -394,24 +406,34 @@ export class RunStore {
     for (;;) {
       for (const item of repeat.repeat) {
         if (outcomes[item.id] !== undefined) continue;
-        const at = this.#reach(node.id, item, outcomes, agents, now);
+        const at = this.#reach(node.id, item, state.round, outcomes, agents, now);
         if (typeof at !== 'string') return at;
         outcomes[item.id] = at;
       }
-      const key = JSON.stringify([node.id, repeat.id, state.round]);
-      const held =
-        this.#held.get(key) ??
-        this.#holds(repeat.until, lastRan(repeat.repeat, outcomes) ?? lastRan(before, outcomes));
-      this.#held.set(key, held);
-      if (held) return 'succeeded';
-      if (state.round >= repeat.rounds + (state.more ?? 0)) {
-        return repeat.otherwise === 'goOn'
-          ? 'failed'
-          : { current: repeat.id, status: 'asking', outcomes };
+      const { until } = repeat;
+      if (isRepeatEnds(until)) {
+        const followed = this.#follow(repeat, until, state.round, outcomes, agents);
+        if (followed !== undefined) return followed;
+      } else {
+        const key = JSON.stringify([node.id, repeat.id, state.round]);
+        const held =
+          this.#held.get(key) ??
+          this.#holds(until, lastRan(repeat.repeat, outcomes) ?? lastRan(before, outcomes));
+        this.#held.set(key, held);
+        if (held) return 'succeeded';
+        if (state.round >= repeat.rounds + (state.more ?? 0)) {
+          return repeat.otherwise === 'goOn'
+            ? 'failed'
+            : { current: repeat.id, status: 'asking', outcomes };
+        }
       }
-      // The next round: what this one did is forgotten, and its holds are counted afresh.
+      // The next round: what this one did is kept for waits matched to it, then forgotten; its
+      // holds are counted afresh.
       for (const item of repeat.repeat) {
         const at = JSON.stringify([node.id, item.id]);
+        const outcome = outcomes[item.id];
+        if (outcome !== undefined)
+          this.#past.set(JSON.stringify([node.id, item.id, state.round]), outcome);
         Reflect.deleteProperty(outcomes, item.id);
         this.#arrived.delete(at);
         this.#ended.delete(at);
@@ -419,6 +441,33 @@ export class RunStore {
       state = { ...state, round: state.round + 1 };
       rounds[repeat.id] = state;
     }
+  }
+
+  /**
+   * Where a repeat that follows another (its leader, `until`) is at the end of its round `round`:
+   * undefined to go round again, once the leader has gone on to a later round; the leader's outcome
+   * once it is over (succeeded if it is gone); stopped with the leader's queue; or else held until
+   * the leader goes on.
+   */
+  #follow(
+    repeat: QueueRepeat,
+    until: RepeatEnds,
+    round: number,
+    outcomes: Record<string, Outcome>,
+    agents: Readonly<Record<string, AgentRun>>,
+  ): AgentRun | Outcome | undefined {
+    const queue = this.#agents().find((n) => n.id === until.agent)?.data.queue;
+    const leader = queue && findItem(queue, until.item)?.item;
+    if (!leader || !isRepeat(leader)) return 'succeeded';
+    const run = agents[until.agent];
+    if ((run?.rounds?.[leader.id]?.round ?? 0) > round) return undefined;
+    const ended = run?.outcomes[leader.id];
+    if (ended !== undefined) return ended;
+    return {
+      current: repeat.id,
+      status: run?.status === 'stopped' ? 'stopped' : 'waiting',
+      outcomes,
+    };
   }
 
   /** When an agent reached a hold (by agent and item): now, the first time it is asked. */
@@ -431,9 +480,16 @@ export class RunStore {
   /**
    * How what a wait waits for went, once it is done; undefined until then; 'stopped' if it never
    * will be, its agent's queue stopped short of it. A step: its outcome. An agent's work: the
-   * outcome of its last task that ran. What is gone counts as done, and well.
+   * outcome of its last task that ran. What is gone counts as done, and well. A step in a repeat is
+   * done round by round: for a wait in round `round` of a repeat, once it has run that many times
+   * (or its repeat is over, as it will not run again), how it went that round; for a wait outside
+   * one (`round` Infinity), once its repeat is over.
    */
-  #resultOf(target: WaitTarget, agents: Readonly<Record<string, AgentRun>>): Outcome | undefined {
+  #resultOf(
+    target: WaitTarget,
+    agents: Readonly<Record<string, AgentRun>>,
+    round: number,
+  ): Outcome | undefined {
     const node = this.#agents().find((n) => n.id === target.agent);
     if (!node) return 'succeeded';
     const run = agents[target.agent];
@@ -443,8 +499,20 @@ export class RunStore {
       if (run?.status !== 'done') return undefined;
       return lastRan(node.data.queue ?? [], run.outcomes) ?? 'succeeded';
     }
-    if (!findItem(node.data.queue ?? [], target.item)) return 'succeeded';
+    const found = findItem(node.data.queue ?? [], target.item);
+    if (!found) return 'succeeded';
     const outcome = run?.outcomes[target.item];
+    if (found.repeat) {
+      const at = run?.rounds?.[found.repeat.id]?.round ?? 0;
+      const times = Math.max(at - 1, 0) + (outcome === undefined ? 0 : 1);
+      if (times >= round) {
+        return round === at
+          ? (outcome ?? 'succeeded')
+          : (this.#past.get(JSON.stringify([target.agent, target.item, round])) ?? 'succeeded');
+      }
+      if (run?.outcomes[found.repeat.id] !== undefined) return outcome ?? 'succeeded';
+      return stopped ? 'stopped' : undefined;
+    }
     if (outcome === undefined || outcome === 'stopped') return stopped ? 'stopped' : undefined;
     return outcome;
   }
@@ -608,6 +676,7 @@ export class RunStore {
     this.#held.clear();
     this.#arrived.clear();
     this.#ended.clear();
+    this.#past.clear();
   }
 
   #set(run: Run): void {

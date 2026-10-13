@@ -1,6 +1,6 @@
 import { autosize, bounds, edgeId, nextGroupColor, PADDING, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
+import { isApproval, isDelay, isIf, isRepeat, isRepeatEnds, isWait } from './queue';
 import type { QueueItem } from './queue';
 
 /** Space between what is on the canvas and a group inserted beside it. */
@@ -10,8 +10,8 @@ const GAP = 120;
  * A canvas with another (`part`, such as a template) added as one new group (`group`, labelled
  * `name`, or "name 2" and so on if a group has that name), to the right of everything already
  * there, and the only selected node. The part's agents get new ids (`newId`), and what pointed at
- * them (links, work aimed at an agent, waits, inside if-thens and repeats too) follows; they keep
- * their layout inside the group.
+ * them (links, work aimed at an agent, waits, inside if-thens and repeats too, and the repeats
+ * others go round with) follows; they keep their layout inside the group.
  */
 export function insertGraph(
   graph: Graph,
@@ -26,7 +26,14 @@ export function insertGraph(
     }
     if (isDelay(item) || isApproval(item)) return item;
     if (isIf(item)) return { ...item, then: item.then.map(retarget) };
-    if (isRepeat(item)) return { ...item, repeat: item.repeat.map(retarget) };
+    if (isRepeat(item)) {
+      const { until } = item;
+      return {
+        ...item,
+        repeat: item.repeat.map(retarget),
+        until: isRepeatEnds(until) ? { ...until, agent: rename(until.agent) } : until,
+      };
+    }
     return item.target === undefined ? item : { ...item, target: rename(item.target) };
   };
 

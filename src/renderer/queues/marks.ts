@@ -1,5 +1,5 @@
 import type { RowMarks } from '../graph/QueueEditor';
-import { isApproval, isRepeat, isWait } from '../graph/queue';
+import { isApproval, isRepeat, isRepeatEnds, isWait } from '../graph/queue';
 import type { QueueItem, QueueRepeat } from '../graph/queue';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
@@ -54,21 +54,21 @@ export function queueMarks(
   return (lane, item) => {
     const key = taskKey(lane, item);
     const state = taskState(run, lane, item);
+    const repeat = repeats.get(key);
     const mark =
-      item !== null && waits.has(key)
-        ? isStuck(lane, item)
-          ? 'stuck'
-          : 'wait'
-        : oks.has(key)
-          ? 'ok'
-          : handed.has(key)
-            ? 'handoff'
-            : undefined;
+      item !== null && (waits.has(key) || repeat) && isStuck(lane, item)
+        ? 'stuck'
+        : waits.has(key)
+          ? 'wait'
+          : oks.has(key)
+            ? 'ok'
+            : handed.has(key)
+              ? 'handoff'
+              : undefined;
     const at = run.agents[lane];
     const held = run.running && at?.current === item;
     const until = held ? at.until : undefined;
     const asked = item === null ? undefined : at?.changes?.[item];
-    const repeat = repeats.get(key);
     return {
       'data-at': key,
       'data-mark': mark,
@@ -80,23 +80,38 @@ export function queueMarks(
       'data-decide': held && at.status === 'asking' ? '' : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
-      'data-round': repeat && roundText(repeat, run.agents[lane]),
+      'data-round':
+        repeat && roundText(repeat, run, lane, (agent, id) => repeats.get(taskKey(agent, id))),
     };
   };
 }
 
 /**
- * Where a run is with a repeat, as its pill reads: the round it is on, of how many it runs at most
- * (its rounds, and those the user added), while the run is in it; once over, how many it took.
+ * Where a run is with a repeat (in `lane`), as its pill reads: the round it is on, of how many it
+ * runs at most (its rounds, and those the user added; for one that follows another, found by
+ * `repeatOf`, that one's), while the run is in it; once over, how many it took.
  */
-function roundText(repeat: QueueRepeat, at: Run['agents'][string] | undefined): string | undefined {
+function roundText(
+  repeat: QueueRepeat,
+  run: Run,
+  lane: string,
+  repeatOf: (agent: string, id: string) => QueueRepeat | undefined,
+): string | undefined {
+  const at = run.agents[lane];
   const state = at?.rounds?.[repeat.id];
   if (!at || !state) return undefined;
-  const { round, more = 0 } = state;
+  const { round } = state;
   if (at.outcomes[repeat.id] !== undefined)
     return `${String(round)} round${round === 1 ? '' : 's'}`;
   const inside =
     at.status !== 'done' &&
     (at.current === repeat.id || repeat.repeat.some((item) => item.id === at.current));
-  return inside ? `Round ${String(round)} of ${String(repeat.rounds + more)}` : undefined;
+  if (!inside) return undefined;
+  const { until } = repeat;
+  const [owner, counted] = isRepeatEnds(until)
+    ? [until.agent, repeatOf(until.agent, until.item)]
+    : [lane, repeat];
+  if (!counted) return `Round ${String(round)}`;
+  const more = run.agents[owner]?.rounds?.[counted.id]?.more ?? 0;
+  return `Round ${String(round)} of ${String(counted.rounds + more)}`;
 }

@@ -131,4 +131,57 @@ describe('queueMarks', () => {
       });
     });
   });
+
+  it("counts a follower's rounds as its leader's, and marks repeats following each other stuck", () => {
+    const repeat = (id: string, agent: string, item: string, rounds: number): QueueItem => ({
+      id,
+      repeat: [{ id: `${id}-step`, action: 'Read' }],
+      until: { kind: 'repeatEnds', agent, item },
+      rounds,
+      otherwise: 'ask',
+    });
+    const leader: QueueItem = {
+      id: 'lead',
+      repeat: [{ id: 'work', action: 'Edit' }],
+      until: { kind: 'succeeded' },
+      rounds: 4,
+      otherwise: 'ask',
+    };
+    const marks = queueMarks(
+      lanesOf([agent('a', [leader]), agent('b', [repeat('follow', 'a', 'lead', 1)])]),
+      {
+        running: true,
+        agents: {
+          a: {
+            current: 'work',
+            status: 'running',
+            outcomes: {},
+            rounds: { lead: { round: 2, more: 1 } },
+          },
+          b: {
+            current: 'follow',
+            status: 'waiting',
+            outcomes: {},
+            rounds: { follow: { round: 2 } },
+          },
+        },
+      },
+      new Set(),
+    );
+    expect(marks('b', 'follow')).toMatchObject({
+      'data-round': 'Round 2 of 5',
+      'data-run': 'waiting',
+    });
+    expect(marks('b', 'follow')['data-mark']).toBeUndefined();
+
+    const stuck = queueMarks(
+      lanesOf([agent('a', [repeat('r', 'b', 'r', 3)]), agent('b', [repeat('r', 'a', 'r', 3)])]),
+      { running: false, agents: {} },
+      new Set(),
+    );
+    expect([stuck('a', 'r')['data-mark'], stuck('b', 'r')['data-mark']]).toEqual([
+      'stuck',
+      'stuck',
+    ]);
+  });
 });

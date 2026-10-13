@@ -34,8 +34,9 @@ import type {
  * a whole number from 1 to 604800 (7 days), or { "at": "HH:MM" }, a 24-hour local time of day. An
  * OK is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
- * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut);
- * at most how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in its repeats included, since waits
+ * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
+ * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
+ * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in its repeats included, since waits
  * name them. A link's dots are the ones it was drawn between ("top" or "bottom"). Where the queues'
  * run is, and what the user decided in it, is never saved.
  */
@@ -363,7 +364,11 @@ function readCondition(value: unknown, where: string): Condition {
   }
 }
 
-/** When a repeat stops: a condition, any but timedOut. */
+/**
+ * When a repeat stops: a condition (any but timedOut), or another agent's repeat to go round with,
+ * `{ "kind": "repeatEnds", "agent", "item" }` (not checked against the canvas, like what a wait
+ * waits for).
+ */
 function readUntil(value: unknown, where: string): Until {
   const until = record(value, where);
   switch (until.kind) {
@@ -373,8 +378,16 @@ function readUntil(value: unknown, where: string): Until {
     case 'outputContains':
     case 'freeText':
       return { kind: until.kind, text: text(until.text, `${where}.text`) };
+    case 'repeatEnds':
+      return {
+        kind: 'repeatEnds',
+        agent: name(until.agent, `${where}.agent`),
+        item: name(until.item, `${where}.item`),
+      };
     default:
-      throw new Error(`${where}.kind must be one of: succeeded, failed, outputContains, freeText`);
+      throw new Error(
+        `${where}.kind must be one of: succeeded, failed, outputContains, freeText, repeatEnds`,
+      );
   }
 }
 
