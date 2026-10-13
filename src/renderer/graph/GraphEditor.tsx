@@ -982,6 +982,9 @@ function Editor({
               setModel: (model) => {
                 sessionStore.setModel(openedNode.id, model);
               },
+              setEffort: (effort) => {
+                sessionStore.setEffort(openedNode.id, effort);
+              },
             }}
             onClose={closeOpened}
           />

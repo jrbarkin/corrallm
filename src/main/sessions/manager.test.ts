@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Connection, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { CanvasMemory } from '../memory';
-import type { Connector, LiveSession, SessionHost } from './connector';
+import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
 import { FakeConnector } from './fake';
 import { SessionManager } from './manager';
@@ -251,6 +251,36 @@ describe('SessionManager', () => {
     await expect(sessions.send(contents, 'a', { id: 'n', text: 'Again' })).rejects.toThrow(
       /not running/,
     );
+  });
+
+  it('passes a reasoning effort on to a session that offers one, and starts sessions at one', async () => {
+    const setEffort = vi.fn<NonNullable<LiveSession['setEffort']>>().mockResolvedValue(undefined);
+    const plain: LiveSession = {
+      send: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      setMode: () => Promise.resolve(),
+      setModel: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const specs: SessionSpec[] = [];
+    const sessions = manager({
+      sdk: {
+        start: (spec) => {
+          specs.push(spec);
+          return Promise.resolve({ ...plain, setEffort });
+        },
+      },
+      terminal: { start: () => Promise.resolve(plain) },
+    });
+    const contents = window();
+    await sessions.start(contents, 'a', { ...OPTIONS, effort: 'high' });
+    expect(specs[0]?.effort).toBe('high');
+    await sessions.setEffort(contents, 'a', 'low');
+    expect(setEffort).toHaveBeenCalledWith('low');
+    // A session whose models offer no efforts says so.
+    await sessions.start(contents, 'b', { ...OPTIONS, connection: 'terminal' });
+    await expect(sessions.setEffort(contents, 'b', 'low')).rejects.toThrow(/no reasoning effort/);
   });
 
   it('ends a renderer’s sessions when its canvas changes, telling it', async () => {

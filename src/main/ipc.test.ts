@@ -49,6 +49,7 @@ function fakeServices() {
       interrupt: vi.fn<IpcServices['sessions']['interrupt']>().mockResolvedValue(undefined),
       setMode: vi.fn<IpcServices['sessions']['setMode']>().mockResolvedValue(undefined),
       setModel: vi.fn<IpcServices['sessions']['setModel']>().mockResolvedValue(undefined),
+      setEffort: vi.fn<IpcServices['sessions']['setEffort']>().mockResolvedValue(undefined),
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
       canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
       canvasForgotten: vi
@@ -230,6 +231,22 @@ describe('session:* handlers', () => {
     expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'read-only');
   });
 
+  it('start sessions at a reasoning effort, and switch it (or back to the model’s default)', async () => {
+    const sender = {};
+    const options = {
+      connection: 'app-server',
+      model: 'gpt-6-luna',
+      mode: 'auto',
+      effort: 'xhigh',
+    };
+    await invoke('session:start', ['a', options], sender);
+    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    await invoke('session:effort', ['a', 'low'], sender);
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'low');
+    await invoke('session:effort', ['a', null], sender);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+  });
+
   const start = { connection: 'terminal', model: null, mode: 'manual' };
   it.each([
     ['session:start', 'no options', ['a'], /Expected an agent and how to start/],
@@ -355,6 +372,15 @@ describe('session:* handlers', () => {
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
+    ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
+    ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
+    ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],
+    [
+      'session:start',
+      'an effort that is not a word',
+      ['a', { connection: 'app-server', model: null, mode: 'auto', effort: '--yolo' }],
+      /reasoning effort/,
+    ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);

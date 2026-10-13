@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { isPermissionMode } from '../../shared/session';
 import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 
@@ -9,12 +10,28 @@ export const FAKE_MODELS: ModelChoice[] = [
   { value: 'fast', label: 'Fast', description: 'Another model to pick' },
 ];
 
+/** The models a fake Codex session offers: with reasoning efforts to choose, as Codex's have. */
+export const FAKE_CODEX_MODELS: ModelChoice[] = [
+  {
+    value: 'default',
+    label: 'Default',
+    description: 'The fake’s default model',
+    efforts: [
+      { value: 'low', label: 'Low', description: 'Fast responses' },
+      { value: 'high', label: 'High', description: 'Deeper reasoning' },
+    ],
+    defaultEffort: 'low',
+  },
+  { value: 'fast', label: 'Fast', description: 'Another model to pick' },
+];
+
 /**
  * A connector that runs no CLI, for tests, standing in for any connection (Claude Code's or
  * Codex's). Each turn echoes the message, thinks, and runs a command, asking first in the modes
  * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
- * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes
- * and models, and remembers a made-up session id.
+ * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes,
+ * models and (for Codex, whose models offer them) reasoning efforts, and remembers a made-up
+ * session id.
  *
  * The manager's tests use it, and so do the e2e tests (CORRALLM_FAKE_SESSIONS=1, honoured only by
  * unpackaged builds), to drive the whole path from the renderer through IPC and back.
@@ -38,11 +55,13 @@ export class FakeConnector implements Connector<SessionMode> {
     if (spec.resume !== null) {
       host.emit({ type: 'notice', id: randomUUID(), level: 'info', text: `Resumed ${id}` });
     }
+    const codex = !isPermissionMode(spec.mode);
     host.emit({
       type: 'started',
       model: spec.model ?? 'default',
       mode: spec.mode,
-      models: FAKE_MODELS,
+      models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
+      ...(codex ? { effort: spec.effort ?? null } : {}),
     });
     return Promise.resolve(new FakeSession(spec.mode, host, this.#pause));
   }
@@ -107,6 +126,11 @@ class FakeSession implements LiveSession<SessionMode> {
 
   setModel(model: string): Promise<void> {
     this.#host.emit({ type: 'model', model });
+    return Promise.resolve();
+  }
+
+  setEffort(effort: string | null): Promise<void> {
+    this.#host.emit({ type: 'effort', effort });
     return Promise.resolve();
   }
 

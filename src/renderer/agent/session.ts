@@ -3,6 +3,7 @@ import type {
   AskedQuestion,
   CodexMode,
   DiffLine,
+  EffortChoice,
   MessageImage,
   ModelChoice,
   PermissionMode,
@@ -19,6 +20,7 @@ import type { Question } from '../graph/queue';
 
 export type {
   DiffLine,
+  EffortChoice,
   MessageImage,
   ModelChoice,
   PlanAnswer,
@@ -162,6 +164,11 @@ export interface Session {
   model: string | null;
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
+  /**
+   * How hard its model reasons (one of the efforts its model offers), where its connection lets
+   * the user choose; null for the model's default.
+   */
+  effort?: string | null;
   /** What a connected session has used, as it last said. */
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
@@ -212,8 +219,15 @@ export type SessionAction =
   | { type: 'unqueue'; id: string }
   | { type: 'mode'; mode: Mode }
   | { type: 'model'; model: string }
-  /** A connected session started: the models it offers, and its model and mode. */
-  | { type: 'connected'; models: readonly ModelChoice[]; model: string | null; mode: Mode }
+  | { type: 'effort'; effort: string | null }
+  /** A connected session started: the models it offers, its model and mode, and its effort. */
+  | {
+      type: 'connected';
+      models: readonly ModelChoice[];
+      model: string | null;
+      mode: Mode;
+      effort?: string | null;
+    }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
   /** What a resumed session did before: entries put ahead of the transcript's. */
@@ -327,8 +341,16 @@ export function reduce(session: Session, action: SessionAction): Session {
       return { ...session, mode: action.mode };
     case 'model':
       return { ...session, model: action.model };
+    case 'effort':
+      return { ...session, effort: action.effort };
     case 'connected':
-      return { ...session, models: action.models, model: action.model, mode: action.mode };
+      return {
+        ...session,
+        models: action.models,
+        model: action.model,
+        mode: action.mode,
+        ...(action.effort === undefined ? {} : { effort: action.effort }),
+      };
     case 'usage':
       return { ...session, usage: action.usage };
     case 'commands':

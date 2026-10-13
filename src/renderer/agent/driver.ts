@@ -31,6 +31,8 @@ export interface SessionDriver {
   /** The user switched mode or model: the store has already recorded it. */
   setMode(mode: Mode): void;
   setModel(model: string): void;
+  /** The user chose how hard the model reasons (null: its default), where its connection lets them. */
+  setEffort?(effort: string | null): void;
   /** Makes sure the session runs, as when its view opens: a connected one starts or resumes. */
   open(): void;
   /** Lets the session go, for another driver or none: a turn going on ends, interrupted. */

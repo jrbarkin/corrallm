@@ -141,6 +141,14 @@ export class SessionManager {
     await (await this.#session(contents, agentId)).setModel(model);
   }
 
+  /** Switches the agent's session's reasoning effort, where its connection offers a choice. */
+  async setEffort(contents: WebContents, agentId: string, effort: string | null): Promise<void> {
+    const session = await this.#session(contents, agentId);
+    if (!session.setEffort)
+      throw new Error('This agent’s session has no reasoning effort to choose.');
+    await session.setEffort(effort);
+  }
+
   /**
    * Shows an agent's terminal in the renderer's view (terminal:event): the screen of the session
    * that runs, if any, and of each one that starts until the view is detached.
@@ -228,7 +236,7 @@ export class SessionManager {
     contents: WebContents,
     agentId: string,
     cwd: string,
-    { connection, model, mode }: SessionOptions,
+    { connection, model, mode, effort }: SessionOptions,
     current: () => boolean,
   ): Promise<LiveSession<SessionMode>> {
     const connector = this.#deps.connectors[connection];
@@ -247,7 +255,10 @@ export class SessionManager {
         if (current()) void this.#remember(contents, cli, agentId, sessionId);
       },
     };
-    return connector.start({ agentId, cwd, env, model, mode, resume }, host);
+    return connector.start(
+      { agentId, cwd, env, model, mode, ...(effort === undefined ? {} : { effort }), resume },
+      host,
+    );
   }
 
   async #remember(

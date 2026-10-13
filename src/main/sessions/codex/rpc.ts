@@ -44,13 +44,16 @@ export class RpcFailure extends Error {
 }
 
 /** A request's id: echoed back exactly as it came. */
-type RequestId = string | number;
+export type RequestId = string | number;
 
 /** What the other end sends that is not an answer: notifications, and requests to answer. */
 export interface RpcHandlers {
   notification?: (method: string, params: unknown) => void;
-  /** Answers a request the server makes: resolves with its result, or rejects (an RpcFailure). */
-  request?: (method: string, params: unknown) => Promise<unknown>;
+  /**
+   * Answers a request the server makes: resolves with its result, or rejects (an RpcFailure).
+   * `id` is the request's (the server names it again when it stops waiting for the answer).
+   */
+  request?: (method: string, params: unknown, id: RequestId) => Promise<unknown>;
 }
 
 /**
@@ -125,7 +128,7 @@ export class JsonRpcPeer {
       if (!handle) {
         throw new RpcFailure(RPC_ERRORS.methodNotFound, `corrallm does not handle ${method}`);
       }
-      const result = await handle(method, params);
+      const result = await handle(method, params, id);
       if (!this.#closed) this.#send({ id, result });
     } catch (error) {
       const { code, message } =
@@ -176,7 +179,7 @@ export interface AppServerOptions {
   args?: readonly string[];
   onNotification?: (method: string, params: unknown) => void;
   /** Answers the server's requests (approvals, questions); unhandled ones are refused. */
-  onRequest?: (method: string, params: unknown) => Promise<unknown>;
+  onRequest?: (method: string, params: unknown, id: RequestId) => Promise<unknown>;
   /** Starts the process (child_process.spawn; a fake in tests). */
   spawn?: SpawnAppServer;
   /** How long it may take to exit once its input ends, and again once told to stop. */

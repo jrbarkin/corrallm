@@ -47,6 +47,7 @@ const api: AppApi = {
   interruptSession: (agentId) => invoke(API_CHANNELS.interruptSession, agentId),
   setSessionMode: (agentId, mode) => invoke(API_CHANNELS.setSessionMode, agentId, mode),
   setSessionModel: (agentId, model) => invoke(API_CHANNELS.setSessionModel, agentId, model),
+  setSessionEffort: (agentId, effort) => invoke(API_CHANNELS.setSessionEffort, agentId, effort),
   closeSession: (agentId) => invoke(API_CHANNELS.closeSession, agentId),
   attachTerminal: (agentId) => invoke(API_CHANNELS.attachTerminal, agentId),
   detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),

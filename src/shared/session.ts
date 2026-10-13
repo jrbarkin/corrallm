@@ -113,6 +113,19 @@ export interface ModelChoice {
   value: string;
   label: string;
   description?: string;
+  /**
+   * How hard it can reason (Codex's reasoning efforts, as its model picker offers them), where the
+   * CLI lets the user choose; and the effort it reasons at unless one is chosen.
+   */
+  efforts?: EffortChoice[];
+  defaultEffort?: string;
+}
+
+/** A reasoning effort a model offers: what the CLI calls it ('high'), and how the picker shows it. */
+export interface EffortChoice {
+  value: string;
+  label: string;
+  description?: string;
 }
 
 /** How a session is started. Main picks the folder (the canvas's project) and what it resumes. */
@@ -122,6 +135,8 @@ export interface SessionOptions {
   model: string | null;
   /** One of its connection's CLI's modes. */
   mode: SessionMode;
+  /** The reasoning effort to start with (one its model offers), or null for the model's default. */
+  effort?: string | null;
 }
 
 /** The kinds of image the user can paste into a message (those Claude reads). */
@@ -220,8 +235,17 @@ export interface UsageLimit {
  * the Agent tool call a subagent's entry belongs to.
  */
 export type SessionEvent =
-  /** The session runs (started, or resumed): its model and mode, and the models it offers. */
-  | { type: 'started'; model: string | null; mode: SessionMode; models: ModelChoice[] }
+  /**
+   * The session runs (started, or resumed): its model and mode, and the models it offers; and the
+   * reasoning effort it runs at, where its model offers a choice.
+   */
+  | {
+      type: 'started';
+      model: string | null;
+      mode: SessionMode;
+      models: ModelChoice[];
+      effort?: string | null;
+    }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }
   /**
@@ -268,6 +292,8 @@ export type SessionEvent =
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'mode'; mode: SessionMode }
   | { type: 'model'; model: string }
+  /** The reasoning effort it runs at now (null: its model's default). */
+  | { type: 'effort'; effort: string | null }
   /** The turn ended: interrupted by the user, or failed (an API error, a usage limit). */
   | { type: 'end'; messages: string[]; seconds: number; interrupted: boolean; failed: boolean }
   /**
@@ -294,3 +320,5 @@ export const MAX_FILE_MATCHES = 50;
 export const MAX_QUESTIONS = 4;
 /** What a model's value may look like: an alias ('opus'), an id, or a provider's id or ARN. */
 export const MODEL_PATTERN = /^[\w.:/@[\]-]{1,200}$/;
+/** What a reasoning effort's value may look like ('low', 'xhigh'). */
+export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;

@@ -17,6 +17,8 @@ export interface ComposerControls {
   unqueue: (queuedId: string) => void;
   setMode: (mode: Mode) => void;
   setModel: (model: string) => void;
+  /** Chooses how hard the model reasons, where the session's models offer efforts. */
+  setEffort?: (effort: string | null) => void;
   /** The project folder's files matching what follows an "@", for a connected session. */
   findFiles?: (query: string) => Promise<string[]>;
 }
@@ -48,8 +50,9 @@ const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Defau
  * Where the user writes to the agent, as in Claude Code: Enter sends, Shift+Enter starts a new
  * line, Shift+Tab switches mode. While the agent works, Enter queues the message (shown above, ✕
  * takes it back to edit) and Esc interrupts; otherwise Esc clears the draft. Under the box: the
- * permission mode, the model (a connected session's own models, once it has started), what a
- * connected session has used, and Send (or Stop).
+ * permission mode, the model (a connected session's own models, once it has started), how hard it
+ * reasons (where its models offer a choice, as Codex's do), what a connected session has used, and
+ * Send (or Stop).
  *
  * A connected session's composer also completes slash commands ("/" at the start: Tab puts one
  * in, Enter runs it) and file mentions ("@": the project folder's files), and takes images pasted
@@ -101,6 +104,8 @@ export function Composer({
       ? DEFAULT_MODEL
       : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
   const model = models.find((m) => m.value === session.model) ?? models[0];
+  const efforts = model?.efforts ?? [];
+  const effort = session.effort ?? model?.defaultEffort ?? '';
   const modes = modesOf(agent);
   const mode = modeOf(agent, session.mode);
 
@@ -389,6 +394,23 @@ export function Composer({
               field.current?.focus();
             }}
           />
+          {efforts.length > 0 && controls.setEffort && (
+            <ChoiceMenu
+              label="Effort"
+              value={efforts.find((e) => e.value === effort)?.label ?? effort}
+              title="How hard the model reasons"
+              choices={efforts.map((e) => ({
+                key: e.value,
+                label: e.label,
+                ...(e.description === undefined ? {} : { detail: e.description }),
+              }))}
+              chosen={effort}
+              onChoose={(value) => {
+                controls.setEffort?.(value);
+                field.current?.focus();
+              }}
+            />
+          )}
           {session.usage && <Usage usage={session.usage} />}
           {working ? (
             <button

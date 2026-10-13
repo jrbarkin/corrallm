@@ -151,6 +151,11 @@ export class SessionStore {
     this.#drivers.get(agentId)?.driver.setModel(model);
   }
 
+  setEffort(agentId: string, effort: string | null): void {
+    this.#dispatch(agentId, { type: 'effort', effort });
+    this.#drivers.get(agentId)?.driver.setEffort?.(effort);
+  }
+
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
   reset(): void {
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);

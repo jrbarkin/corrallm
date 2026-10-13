@@ -11,6 +11,7 @@ import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
   parseAnswerArgs,
+  parseEffortArgs,
   parseFilesArgs,
   parseModeArgs,
   parseModelArgs,
@@ -44,6 +45,7 @@ export interface IpcServices {
     | 'interrupt'
     | 'setMode'
     | 'setModel'
+    | 'setEffort'
     | 'close'
     | 'canvasOpened'
     | 'canvasForgotten'
@@ -207,6 +209,13 @@ function createHandlers({ projects, files, sessions }: IpcServices): HandlerTabl
       parseArgs: parseModelArgs,
       handler: async ({ contents }, agentId, model) => {
         await sessions.setModel(contents, agentId, model);
+        return null;
+      },
+    },
+    'session:effort': {
+      parseArgs: parseEffortArgs,
+      handler: async ({ contents }, agentId, effort) => {
+        await sessions.setEffort(contents, agentId, effort);
         return null;
       },
     },

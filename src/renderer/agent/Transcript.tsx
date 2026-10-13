@@ -142,7 +142,8 @@ function EntryView({
       return (
         <details className="agent-thinking">
           <summary>Thought for {entry.seconds}s</summary>
-          <p>{entry.text}</p>
+          {/* Markdown: Codex's reasoning summaries open with a bold title. */}
+          <Markdown text={entry.text} />
         </details>
       );
     case 'tool':
@@ -361,12 +362,15 @@ function Plan({
   const open = answer === undefined && entry.withdrawn !== true;
   return (
     <div className="agent-plan" role="group" aria-label="Plan">
-      <p className="agent-permission-title">Ready to code? Here is the plan:</p>
+      <p className="agent-permission-title">
+        {codex ? 'Proposed plan' : 'Ready to code? Here is the plan:'}
+      </p>
       <div className="agent-text agent-plan-text">
         <Markdown text={entry.plan} />
       </div>
       {open ? (
         <>
+          {codex && <p>Implement this plan?</p>}
           <div className="agent-permission-choices">
             {PLAN_CHOICES[codex ? 'Codex' : 'Claude'].map(([mode, text]) => (
               <button

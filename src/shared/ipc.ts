@@ -70,6 +70,11 @@ export interface IpcContract {
   'session:mode': { args: [agentId: string, mode: SessionMode]; result: null };
   /** Switches an agent's session's model (a value from the models it offers). */
   'session:model': { args: [agentId: string, model: string]; result: null };
+  /**
+   * Switches an agent's session's reasoning effort (one its model offers; null for the model's
+   * default), where its connection offers a choice (Codex's app server).
+   */
+  'session:effort': { args: [agentId: string, effort: string | null]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
   /**
@@ -133,6 +138,7 @@ export interface InvokeApi {
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
   setSessionMode(...args: IpcArgs<'session:mode'>): Promise<IpcResult<'session:mode'>>;
   setSessionModel(...args: IpcArgs<'session:model'>): Promise<IpcResult<'session:model'>>;
+  setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
   attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
@@ -163,6 +169,7 @@ export const API_CHANNELS = {
   interruptSession: 'session:interrupt',
   setSessionMode: 'session:mode',
   setSessionModel: 'session:model',
+  setSessionEffort: 'session:effort',
   closeSession: 'session:close',
   attachTerminal: 'terminal:attach',
   detachTerminal: 'terminal:detach',

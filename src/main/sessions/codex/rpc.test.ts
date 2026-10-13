@@ -50,9 +50,11 @@ describe('JsonRpcPeer', () => {
   it('answers every request the server makes: as handled, or as not handled', async () => {
     const sent: unknown[] = [];
     const notified = vi.fn();
+    const ids: unknown[] = [];
     const peer = new JsonRpcPeer((line) => sent.push(JSON.parse(line)), {
       notification: notified,
-      request: (method) => {
+      request: (method, _params, id) => {
+        ids.push(id);
         if (method === 'item/commandExecution/requestApproval') {
           return Promise.resolve({ decision: 'accept' });
         }
@@ -75,6 +77,8 @@ describe('JsonRpcPeer', () => {
       { id: 'q', error: { code: -32602, message: 'no such question' } },
       { id: 9, error: { code: -32603, message: 'boom' } },
     ]);
+    // Each handled with its id, which the server names when it stops waiting for an answer.
+    expect(ids).toEqual([0, 'q', 9]);
   });
 
   it('says a method is not handled when it has no handler for requests', async () => {

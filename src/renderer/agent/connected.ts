@@ -20,6 +20,7 @@ export interface SessionBackend {
   interrupt(agentId: string): Promise<null>;
   setMode(agentId: string, mode: SessionMode): Promise<null>;
   setModel(agentId: string, model: string): Promise<null>;
+  setEffort(agentId: string, effort: string | null): Promise<null>;
   close(agentId: string): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
@@ -40,6 +41,7 @@ export const NO_BACKEND: SessionBackend = (() => {
     interrupt: refuse,
     setMode: refuse,
     setModel: refuse,
+    setEffort: refuse,
     close: refuse,
     files: () => Promise.resolve([]),
     onEvent: () => () => undefined,
@@ -136,6 +138,10 @@ export class ConnectedDriver implements SessionDriver {
     this.#tell((agentId) => this.#backend.setModel(agentId, model));
   }
 
+  setEffort(effort: string | null): void {
+    this.#tell((agentId) => this.#backend.setEffort(agentId, effort));
+  }
+
   close(): void {
     this.#closed = true;
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
@@ -160,6 +166,7 @@ export class ConnectedDriver implements SessionDriver {
           models: event.models,
           model: event.model,
           mode: event.mode,
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
         });
         return;
       case 'commands':
@@ -278,6 +285,9 @@ export class ConnectedDriver implements SessionDriver {
       case 'model':
         io.dispatch({ type: 'model', model: event.model });
         return;
+      case 'effort':
+        io.dispatch({ type: 'effort', effort: event.effort });
+        return;
       case 'end':
         this.#end(event.messages, event);
         return;
@@ -298,14 +308,19 @@ export class ConnectedDriver implements SessionDriver {
   #run(): Promise<void> {
     if (this.#closed) return Promise.reject(new Error('This session was closed.'));
     if (!this.#running) {
-      const { mode, model, models } = this.#io.session();
+      const { mode, model, models, effort } = this.#io.session();
+      const offered = models?.find((m) => m.value === model);
       const running = this.#backend
         .start(this.#agentId, {
           connection: this.connection,
           // A model it offered before; otherwise the CLI's default.
-          model: models?.some((m) => m.value === model) ? model : null,
+          model: offered ? model : null,
           // One of its CLI's modes (the session may have been another CLI's before).
           mode: modeFor(CONNECTION_CLI[this.connection], mode),
+          // An effort its model offered, if one was chosen.
+          ...(effort != null && offered?.efforts?.some((e) => e.value === effort)
+            ? { effort }
+            : {}),
         })
         .then(() => undefined);
       running.catch(() => {

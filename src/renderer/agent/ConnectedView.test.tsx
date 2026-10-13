@@ -125,6 +125,9 @@ describe('a connected Codex agent', () => {
       { type: 'plan', id: 'p', plan: '1. Read it\n2. Change it' },
     );
     const plan = within(transcript.getByRole('group', { name: 'Plan' }));
+    // As Codex's TUI shows it: the proposed plan, then whether to implement it.
+    expect(plan.getByText('Proposed plan')).toBeTruthy();
+    expect(plan.getByText('Implement this plan?')).toBeTruthy();
     expect(plan.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Yes, implement this plan',
       'Keep planning',
@@ -139,6 +142,89 @@ describe('a connected Codex agent', () => {
       answer: { approve: true, mode: 'auto' },
     });
     expect(plan.getByText('Approved: carrying it out in Default')).toBeTruthy();
+  });
+});
+
+const CODEX_MODELS = [
+  {
+    value: 'gpt-6.1-sol',
+    label: 'GPT-6.1-Sol',
+    efforts: [
+      { value: 'low', label: 'Low', description: 'Fast responses' },
+      { value: 'xhigh', label: 'Extra high', description: 'Deepest' },
+    ],
+    defaultEffort: 'low',
+  },
+  { value: 'gpt-6-luna', label: 'GPT-6-Luna' },
+];
+
+describe('a Codex agent’s reasoning', () => {
+  it('shows its summary as Codex writes it: Markdown, a bold title first', async () => {
+    const { send, sent, emit, transcript } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    await send('Why?');
+    emit(
+      { type: 'user', id: sent(), text: 'Why?' },
+      { type: 'thinking', id: 'rs_1', text: '**Reading the code**\n\nThe bug is in `start`.' },
+    );
+    const thinking = transcript.getByText(/^Thought for/).closest('details');
+    if (!thinking) throw new Error('no thinking shown');
+    expect(within(thinking).getByText('Reading the code').tagName).toBe('STRONG');
+    expect(within(thinking).getByText('start').tagName).toBe('CODE');
+  });
+});
+
+describe('a Codex agent’s reasoning effort', () => {
+  it('is chosen beside its model, from the efforts the model offers', async () => {
+    const { backend, view, emit, send, sent } = await open({
+      agent: 'Codex',
+      connection: 'app-server',
+    });
+    expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
+    emit({
+      type: 'started',
+      model: 'gpt-6.1-sol',
+      mode: 'auto',
+      models: CODEX_MODELS,
+      effort: null,
+    });
+    // The model's default, until one is chosen.
+    const effort = () => view.getByRole('button', { name: /^Effort: / });
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Low');
+    fireEvent.click(effort());
+    const menu = within(view.getByRole('menu', { name: 'Effort' }));
+    expect(menu.getAllByRole('menuitemradio').map((item) => item.firstChild?.textContent)).toEqual([
+      'Low',
+      'Extra high',
+    ]);
+    fireEvent.click(menu.getByRole('menuitemradio', { name: /^Extra high/ }));
+    await settle();
+    expect(backend.setEffort).toHaveBeenCalledWith('a', 'xhigh');
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Extra high');
+
+    // Main says it changed (a model without that effort): shown so.
+    emit({ type: 'effort', effort: 'low' });
+    expect(effort().getAttribute('aria-label')).toBe('Effort: Low');
+    // A model with no efforts to choose has no picker.
+    emit({ type: 'model', model: 'gpt-6-luna' });
+    expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
+
+    // Started again (after it stopped), it starts at the effort chosen.
+    emit(
+      { type: 'model', model: 'gpt-6.1-sol' },
+      { type: 'effort', effort: 'xhigh' },
+      { type: 'closed' },
+    );
+    await send('Again');
+    expect(backend.start).toHaveBeenLastCalledWith('a', {
+      connection: 'app-server',
+      model: 'gpt-6.1-sol',
+      mode: 'auto',
+      effort: 'xhigh',
+    });
+    expect(sent()).toBeTruthy();
   });
 });
 

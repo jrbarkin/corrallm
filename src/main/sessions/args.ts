@@ -5,6 +5,7 @@ import {
   CODEX_MODES,
   CONNECTION_CLI,
   CONNECTIONS,
+  EFFORT_PATTERN,
   IMAGE_TYPES,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
@@ -35,10 +36,11 @@ import type {
 
 export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
-  const { connection, model, mode } = record(options, 'the session options', [
+  const { connection, model, mode, effort } = record(options, 'the session options', [
     'connection',
     'model',
     'mode',
+    'effort',
   ]);
   const connected = oneOf(connection, CONNECTIONS, 'connection');
   const parsed: SessionOptions = {
@@ -50,6 +52,7 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
       CLI_MODES[CONNECTION_CLI[connected]],
       `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
     ),
+    ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
   };
   return [parseId(agentId, 'agent'), parsed];
 }
@@ -155,6 +158,11 @@ export function parseModelArgs(args: unknown[]): IpcArgs<'session:model'> {
   return [parseId(agentId, 'agent'), parseModel(model)];
 }
 
+export function parseEffortArgs(args: unknown[]): IpcArgs<'session:effort'> {
+  const [agentId, effort] = expect(args, 2, 'an agent and a reasoning effort');
+  return [parseId(agentId, 'agent'), parseEffort(effort)];
+}
+
 function parseAnswer(value: unknown): SessionAnswer {
   const kind = isRecord(value) ? value.kind : undefined;
   switch (kind) {
@@ -201,6 +209,15 @@ function parsePlanAnswer(value: unknown): PlanAnswer {
 /** Any CLI's mode: the manager checks it is one of the running session's CLI. */
 function parseMode(value: unknown): SessionMode {
   return oneOf<SessionMode>(value, [...PERMISSION_MODES, ...CODEX_MODES], 'mode');
+}
+
+/** A reasoning effort ('high'), or null for the model's default. */
+function parseEffort(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !EFFORT_PATTERN.test(value)) {
+    throw new TypeError('Expected a reasoning effort');
+  }
+  return value;
 }
 
 function parseModel(value: unknown): string {

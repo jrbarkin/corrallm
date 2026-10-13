@@ -36,6 +36,11 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
   /** The model to start with, or null for the CLI's default. */
   model: string | null;
   mode: M;
+  /**
+   * The reasoning effort to start with, where its models offer a choice (Codex's); null or absent
+   * for the model's default.
+   */
+  effort?: string | null;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
 }
@@ -64,6 +69,11 @@ export interface LiveSession<M extends SessionMode = PermissionMode> {
   interrupt(): Promise<void>;
   setMode(mode: M): Promise<void>;
   setModel(model: string): Promise<void>;
+  /**
+   * Switches the reasoning effort (one its model offers; null: the model's default), for a
+   * connection whose models offer a choice (Codex's app server); the others have none.
+   */
+  setEffort?(effort: string | null): Promise<void>;
   /** Ends the session: resolves once its process has exited. It need not emit 'closed'. */
   close(): Promise<void>;
   /** A Terminal session's screen, which its agent view shows; other connections have none. */
