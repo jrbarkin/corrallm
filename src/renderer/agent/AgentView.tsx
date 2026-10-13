@@ -68,6 +68,8 @@ export interface SessionControls extends ComposerControls {
  * While the queues' run holds the agent for the user (`ask`, at an OK or a repeat out of rounds),
  * a bar above the composer asks, with its choices; what is sent from the composer then is the
  * answer in the user's words (the changes to make, or what to try next), not a message of its own.
+ * A Terminal agent has no composer: the bar, under its terminal, has a box of its own for that.
+ * Either way, that answer goes to the agent's session as a message (RunStore.decide).
  */
 export function AgentView({
   node,
@@ -402,6 +404,20 @@ export function AgentView({
                   note={sessionNote(agent, connection, project)}
                   onStart={controls.open}
                   onUnqueue={controls.unqueue}
+                  ask={
+                    ask && (
+                      <AskBar
+                        key={ask.item.id}
+                        ask={ask}
+                        onChoose={(choice) => {
+                          own.onDecide(ask.item.id, { choice });
+                        }}
+                        onReply={(text) => {
+                          own.onDecide(ask.item.id, { reply: text });
+                        }}
+                      />
+                    )
+                  }
                   above={
                     <QueueAddMenu
                       node={node}
@@ -509,13 +525,33 @@ const waitsFor = (text: string) =>
  * the spec: write below what should change, or [Approve] [Stop here]". Otherwise, its question:
  * "3 rounds done, and still not: its last step succeeds. What should it try next? Write it below,
  * or [One more round] [Go on]".
+ *
+ * With `onReply`, where there is no composer below (a Terminal agent's bar), the reply has a box
+ * of its own after the choices: "Waits for your OK on the spec: [Approve] [Stop here] [What should
+ * change?] [Ask for changes]".
  */
-function AskBar({ ask, onChoose }: { ask: HeldAsk; onChoose: (choice: string) => void }) {
-  const reply = ask.reply?.label;
+function AskBar({
+  ask,
+  onChoose,
+  onReply,
+}: {
+  ask: HeldAsk;
+  onChoose: (choice: string) => void;
+  /** Takes the reply typed in the bar's own box (trimmed, never empty). */
+  onReply?: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const reply = onReply === undefined ? ask.reply?.label : undefined;
   const below = reply?.replace(/\?$/, '');
   const text = isApproval(ask.item)
     ? `${waitsFor(ask.text)}${below === undefined ? ':' : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}`
     : `${ask.text}${reply === undefined ? '' : ` ${reply} Write it below, or`}`;
+  const send = () => {
+    const typed = draft.trim();
+    if (typed === '' || !onReply) return;
+    onReply(typed);
+    setDraft('');
+  };
   return (
     <div className="agent-ok" role="group" aria-label="Needs you">
       <span className="agent-ok-text">{text}</span>
@@ -532,6 +568,24 @@ function AskBar({ ask, onChoose }: { ask: HeldAsk; onChoose: (choice: string) =>
           {choice.label}
         </button>
       ))}
+      {onReply && ask.reply && (
+        <span className="agent-ok-reply">
+          <input
+            aria-label={ask.reply.label}
+            placeholder={ask.reply.label}
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') send();
+            }}
+          />
+          <button type="button" disabled={draft.trim() === ''} onClick={send}>
+            {ask.reply.button}
+          </button>
+        </span>
+      )}
     </div>
   );
 }

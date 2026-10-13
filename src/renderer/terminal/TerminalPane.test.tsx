@@ -197,6 +197,98 @@ describe('a Terminal agent', () => {
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
   });
 
+  it('asks for your OK in the bar under its terminal: Approve, Stop here, or changes typed in', async () => {
+    const { view, session, sessions } = await open({
+      queue: [
+        { id: 'ok', approve: 'the spec in SPEC.md' },
+        { id: 'next', action: 'Read' },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await settle();
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const row = () =>
+      side
+        .getByRole('button', { name: 'Move Your OK on the spec in SPEC.md' })
+        .closest<HTMLElement>('[data-run]');
+    const terminalSession = within(view.getByRole('region', { name: 'Session' }));
+    const bar = () => terminalSession.queryByRole('group', { name: 'Needs you' });
+    const asks = () => within(bar() ?? document.body);
+
+    // No composer to write in: the bar has its own box for the changes.
+    expect(row()?.dataset.run).toBe('asking');
+    expect(asks().getByText('Waits for your OK on the spec in SPEC.md:')).toBeTruthy();
+    expect(
+      asks()
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['Approve', 'Stop here', 'Ask for changes']);
+    const changes = asks().getByRole<HTMLInputElement>('textbox', { name: 'What should change?' });
+    const ask = asks().getByRole<HTMLButtonElement>('button', { name: 'Ask for changes' });
+    expect(ask.disabled).toBe(true);
+
+    // The changes go to Claude Code as a message: main types them into the terminal.
+    fireEvent.change(changes, { target: { value: 'Cover the empty state too' } });
+    fireEvent.click(ask);
+    await settle();
+    expect(sessions.backend.send).toHaveBeenCalledWith('a', {
+      id: expect.any(String) as unknown,
+      text: 'Cover the empty state too',
+    });
+    expect(row()?.dataset.run).toBe('running');
+    expect(bar()).toBeNull();
+
+    // Once that turn ends, it asks again.
+    const sent = sessions.sent();
+    session(
+      { type: 'user', id: sent, text: 'Cover the empty state too' },
+      { type: 'status', status: 'working' },
+      { type: 'end', messages: [sent], seconds: 5, interrupted: false, failed: false },
+    );
+    expect(row()?.dataset.run).toBe('asking');
+    fireEvent.click(asks().getByRole('button', { name: 'Approve' }));
+    expect(row()?.dataset.run).toBe('succeeded');
+    expect(bar()).toBeNull();
+  });
+
+  it('asks in its bar when a repeat is out of rounds, where what to try next is typed in', async () => {
+    const { view, sessions } = await open({
+      queue: [
+        {
+          id: 'loop',
+          // An empty message is skipped: no round ends with its last step succeeding.
+          repeat: [{ id: 'note', message: '' }],
+          until: { kind: 'succeeded' },
+          rounds: 1,
+          otherwise: 'ask',
+        },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    await settle();
+    const asks = within(view.getByRole('group', { name: 'Needs you' }));
+    expect(asks.getByText('1 round done, and still not: its last step succeeds.')).toBeTruthy();
+    expect(asks.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'One more round',
+      'Go on',
+      'Try this',
+    ]);
+    const next = asks.getByRole('textbox', { name: 'What should it try next?' });
+    fireEvent.change(next, { target: { value: 'Try a smaller fix' } });
+    fireEvent.keyDown(next, { key: 'Enter' });
+    await settle();
+    expect(sessions.backend.send).toHaveBeenCalledWith('a', {
+      id: expect.any(String) as unknown,
+      text: 'Try a smaller fix',
+    });
+  });
+
   it('lets its terminal go when the view closes, and shows it again when it opens', async () => {
     const { terminals, view, card } = await open();
     const first = fakeScreens.latest();

@@ -187,6 +187,111 @@ describe('a connected agent', () => {
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
+  it('asks for your OK above its composer, where what is sent goes to Claude Code as the changes', async () => {
+    const { backend, view, composer, send, emit, sent } = await open({
+      connection: 'sdk',
+      queue: [
+        { id: 'ok', approve: 'the spec in SPEC.md' },
+        { id: 'next', action: 'Read' },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    const row = () =>
+      side
+        .getByRole('button', { name: 'Move Your OK on the spec in SPEC.md' })
+        .closest<HTMLElement>('[data-run]');
+    const bar = () => view.queryByRole('group', { name: 'Needs you' });
+    expect(row()?.dataset.run).toBe('asking');
+    expect(
+      within(bar() ?? document.body).getByText(
+        'Waits for your OK on the spec in SPEC.md: write below what should change, or',
+      ),
+    ).toBeTruthy();
+    expect(composer.placeholder).toBe('What should change?');
+
+    await send('Cover the empty state too');
+    expect(backend.send).toHaveBeenCalledWith('a', {
+      id: sent(),
+      text: 'Cover the empty state too',
+    });
+    expect(row()?.dataset.run).toBe('running');
+    expect(bar()).toBeNull();
+    // The run waits for the turn the changes start: once main ends it, the OK asks again.
+    emit(
+      { type: 'user', id: sent(), text: 'Cover the empty state too' },
+      { type: 'status', status: 'working' },
+      { type: 'end', messages: [sent()], seconds: 4, interrupted: false, failed: false },
+    );
+    expect(row()?.dataset.run).toBe('asking');
+    fireEvent.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
+    expect(row()?.dataset.run).toBe('succeeded');
+    expect(composer.placeholder).toBe('Message a…');
+  });
+
+  it('lists what the run asks and what its session asks in the canvas’s Needs you sidebar', async () => {
+    const { backend, view, emit } = await open({
+      connection: 'sdk',
+      queue: [
+        { id: 'ask', message: 'Pick a branch' },
+        { id: 'ok', approve: 'the branch' },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await settle();
+    // The run's message is a turn of the real session, where Claude asks a question.
+    const turn = backend.send.mock.calls.at(-1)?.[1].id ?? '';
+    emit(
+      { type: 'user', id: turn, text: 'Pick a branch' },
+      { type: 'status', status: 'working' },
+      {
+        type: 'question',
+        id: 'q',
+        questions: [
+          {
+            header: 'Branch',
+            text: 'Which branch?',
+            options: [
+              { label: 'main', description: 'The default branch' },
+              { label: 'develop', description: 'Where work goes first' },
+            ],
+            multiple: false,
+          },
+        ],
+      },
+    );
+    const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(sidebar().getByText('Which branch?')).toBeTruthy();
+    fireEvent.click(sidebar().getByRole('button', { name: 'develop' }));
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'q', {
+      kind: 'question',
+      answers: ['develop'],
+    });
+
+    // The turn ends: the run reaches the OK, which the sidebar asks, answered there.
+    emit({ type: 'end', messages: [turn], seconds: 6, interrupted: false, failed: false });
+    expect(sidebar().getByText('Your OK on the branch?')).toBeTruthy();
+    expect(sidebar().getByText('1', { selector: '.graph-questions-count' })).toBeTruthy();
+    fireEvent.change(sidebar().getByRole('textbox', { name: 'What should change?' }), {
+      target: { value: 'Use main instead' },
+    });
+    fireEvent.click(sidebar().getByRole('button', { name: 'Ask for changes' }));
+    await settle();
+    expect(backend.send).toHaveBeenLastCalledWith('a', {
+      id: expect.any(String) as unknown,
+      text: 'Use main instead',
+    });
+    expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+  });
+
   it('asks to approve its plan, and to carry it out in a mode', async () => {
     const { backend, send, emit, transcript } = await open({ connection: 'sdk' });
     await send('Plan it');

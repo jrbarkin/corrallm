@@ -6,10 +6,9 @@ import type { Run } from './runner';
 
 /*
  * What each hold for the user asks (an OK, a repeat out of rounds), derived from the graph and the
- * run, never
- * stored: an edit or a Stop needs nothing withdrawn. One ask shows in four places (a queue's row,
- * All queues' lane head, the canvas's Needs you sidebar, the bar above an agent's composer), each
- * answering through RunStore.decide.
+ * run, never stored: an edit or a Stop needs nothing withdrawn. One ask shows in four places (a
+ * queue's row, All queues' lane head, the canvas's Needs you sidebar, the bar above an agent's
+ * composer or, for a Terminal agent, under its terminal), each answering through RunStore.decide.
  */
 
 /** One way to answer a hold: `key` is what RunStore.decide is told (`{ choice: key }`). */

@@ -129,11 +129,13 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      own, on the real clock (RunIO.now, one alarm re-checked at least once a
                      minute); Go on now (RunStore.goOn) ends a hold early. asks.ts derives what each
                      hold for the user asks (never stored), shown on its row, All queues' lane head,
-                     the Needs you sidebar and above the agent's composer. run.css marks where the
-                     run is on a queue's rows, wherever they are shown.
+                     the Needs you sidebar and above the agent's composer (for a Terminal agent, in
+                     the bar under its terminal, with a box of its own for the reply). run.css marks
+                     where the run is on a queue's rows, wherever they are shown.
 src/renderer/terminal/ A Terminal agent's session in its agent view (TerminalPane.tsx): the CLI's own
                      terminal (xterm.js, screen.ts), linked to main's (link.ts, backend.ts), with a bar
-                     of what the session does, its queued messages and the queue's ⊕.
+                     of what the run asks of the user, what the session does, its queued messages
+                     and the queue's ⊕.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown
                      (its `typed` lists options read from what was typed, such as times, first).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the

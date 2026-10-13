@@ -19,16 +19,18 @@ const STATUS: Record<Session['status'], string> = {
 /**
  * A Terminal agent's session: Claude Code's own terminal (its CLI runs in the main process, and
  * this shows it: link.ts), in place of the transcript and composer, so that everything Claude Code
- * does works here as it does in a terminal. Under it, a bar with what the session is doing (as
- * corrallm follows it), the messages queued for it (corrallm types each into the terminal once
- * Claude Code is ready), and the queue's ⊕. Over it, while no CLI runs: why, and a button to start
- * it again (resuming its session).
+ * does works here as it does in a terminal. Under it, a bar with what the queues' run asks of the
+ * user (`ask`: their OK, or a repeat out of rounds), what the session is doing (as corrallm follows
+ * it), the messages queued for it (corrallm types each into the terminal once Claude Code is
+ * ready), and the queue's ⊕. Over it, while no CLI runs: why, and a button to start it again
+ * (resuming its session).
  */
 export function TerminalPane({
   agentId,
   backend,
   session,
   note,
+  ask,
   above,
   onStart,
   onUnqueue,
@@ -39,6 +41,8 @@ export function TerminalPane({
   session: Session;
   /** How the session runs, and where (or what it needs to). */
   note: string;
+  /** What the queues' run asks of the user, if anything: first in the bar, with its answers. */
+  ask?: ReactNode;
   /** What sits in the bar (the queue's ⊕). */
   above?: ReactNode;
   /** Starts its CLI again, resuming its session. */
@@ -107,6 +111,7 @@ export function TerminalPane({
         )}
       </div>
       <div className="agent-terminal-bar">
+        {ask}
         {session.queued.length > 0 && (
           <ul className="agent-queued" aria-label="Queued messages">
             {session.queued.map((queued) => (
