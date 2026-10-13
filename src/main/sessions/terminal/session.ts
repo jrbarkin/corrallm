@@ -45,8 +45,16 @@ import { ENTER } from './typing';
 export interface TerminalTiming {
   /** Between the writes that type a message. */
   key: number;
-  /** Between a message's last keystrokes and the Enter that sends it. */
+  /**
+   * After a message's keystrokes (once the CLI's prompt shows them, where it waits for that: see
+   * `echo`), before the Enter that sends it.
+   */
   enter: number;
+  /**
+   * How long the CLI may take to show a message's keystrokes in its prompt before Enter is pressed
+   * anyway, where it waits for them (TerminalCli.waitsForEcho; see `#shown`).
+   */
+  echo: number;
   /**
    * How long the CLI may take to take a message once Enter is pressed (twice: see `#confirm`).
    */
@@ -64,6 +72,7 @@ export interface TerminalTiming {
 export const TIMING: TerminalTiming = {
   key: 4,
   enter: 80,
+  echo: 3000,
   confirm: 2000,
   settle: 50,
   startup: 3000,
@@ -90,6 +99,8 @@ const PASTE_END = '\x1b[201~';
 const ASK_WINDOW = 5000;
 /** At most this many asks are listed. */
 const MAX_ASKS = 8;
+/** How much of the end of a message the prompt must show before Enter is pressed (`#shown`). */
+const TAIL = 40;
 
 type State = ProgramStatus['state'];
 /** The CLI at work on a turn, or waiting on the user in one. */
@@ -569,7 +580,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       this.#write(keys);
       await pause(this.#deps.timing.key);
     }
-    if (!typing.stopped && writes.length > 0) await pause(this.#deps.timing.enter);
+    if (!typing.stopped && writes.length > 0) {
+      if (this.#cli.waitsForEcho) await this.#shown(message.text, typing);
+      await pause(this.#deps.timing.enter);
+    }
     this.#typing = undefined;
     if (typing.stopped || this.#exited || this.#closing) {
       this.#settle();
@@ -585,6 +599,23 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#awaiting = true;
     this.#unconfirmed.push(this.#cli.submitted(message.text));
     this.#confirm(0);
+  }
+
+  /**
+   * Waits until the CLI's prompt shows the end of the message (`text`), at most `timing.echo`: it
+   * has read those keys. A CLI that reads keys late (TerminalCli.waitsForEcho) takes an Enter read
+   * in one go with keys before it for part of a paste, not a submit: keys pile up so while it is
+   * busy (Claude Code just after its folder trust dialog, or as a turn ends), and the message would
+   * stay in the prompt.
+   */
+  async #shown(text: string, typing: { stopped: boolean }): Promise<void> {
+    const tail = flat(this.#cli.submitted(text)).slice(-TAIL);
+    const until = Date.now() + this.#deps.timing.echo;
+    while (!typing.stopped && !this.#exited && Date.now() < until) {
+      await this.#screen.settled();
+      if (flat(this.#cli.draft(this.#screen) ?? '').endsWith(tail)) return;
+      await new Promise((resolve) => setTimeout(resolve, this.#deps.timing.settle));
+    }
   }
 
   /**
@@ -871,4 +902,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     this.#screen.dispose();
   }
+}
+
+/** Text with each run of whitespace (line breaks, the prompt's wrapping) as one space. */
+function flat(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }

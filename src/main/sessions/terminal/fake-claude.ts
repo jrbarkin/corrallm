@@ -10,7 +10,8 @@ import type { Pty, PtyOptions } from './pty';
  * server. Each prompt submitted gets a turn: "ask …" asks for permission first (answered with
  * "1"), as "question …" asks a question (AskUserQuestion) and "plan …" a plan to approve
  * (ExitPlanMode), and "elicit …" waits on the user for an MCP server, told only by a notification;
- * "slow …" works until told otherwise, "fail …" fails, anything else is answered at once.
+ * "slow …" works until told otherwise, "fail …" fails, anything else is answered at once. With
+ * `busy`, it reads keys late as its prompt shows and as a turn ends, as the real one does.
  */
 
 const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
@@ -25,6 +26,15 @@ export interface FakeClaudeOptions {
   sessionId?: string;
   /** Sessions it can resume. */
   transcripts?: readonly string[];
+  /**
+   * For this long (ms) after its prompt shows (as it starts or the trust dialog closes) and after
+   * each turn ends, it reads no keys: what is written meanwhile is read in one go once it is free,
+   * as by the real CLI (2.1.296), which takes such a read for a paste: its text goes into the
+   * prompt, and an Enter in it is an invisible character on a line of its own, not a submit. The
+   * next Enter removes that and asks for a review instead of sending ("Removed 1 invisible
+   * character · review and press Enter to send").
+   */
+  busy?: number;
 }
 
 /** One run of the fake CLI. */
@@ -47,6 +57,10 @@ export class FakeClaude implements Pty {
   readonly #data = new Set<(data: string) => void>();
   readonly #exit = new Set<(exit: { exitCode: number }) => void>();
   #trusting: boolean;
+  /** Until when it reads no keys (see `busy`); what was written meanwhile; an Enter taken in. */
+  #busyUntil = 0;
+  #unread: string[] = [];
+  #invisible = false;
   #state: 'starting' | 'idle' | 'working' | 'blocked' | 'done' | 'error' = 'starting';
   #mode = 'default';
 
@@ -163,8 +177,25 @@ export class FakeClaude implements Pty {
       } else if (data === '\x1b') this.#become('idle');
       return;
     }
+    const wait = this.#busyUntil - Date.now();
+    if (wait > 0) {
+      if (this.#unread.push(data) === 1) {
+        setTimeout(() => {
+          this.#read(this.#unread.splice(0).join(''));
+        }, wait);
+      }
+      return;
+    }
+    this.#read(data);
+  }
+
+  /** Keys read in one go: more than one is a paste, where Enter goes in as a character. */
+  #read(data: string): void {
     for (const key of data) {
-      if (key === '\r') void this.#submit();
+      if (key === '\r' && data.length > 1) {
+        this.draft += '\n';
+        this.#invisible = true;
+      } else if (key === '\r') void this.#submit();
       else if (key === '\x1b') {
         if (this.#state === 'working') this.#become('idle');
       } else if (key === '\x03') {
@@ -198,6 +229,7 @@ export class FakeClaude implements Pty {
   #ready(state: 'idle'): void {
     this.report(`state=${state}`);
     this.#state = state;
+    this.#busyUntil = Date.now() + (this.#options.busy ?? 0);
     this.#draw();
   }
 
@@ -220,6 +252,11 @@ export class FakeClaude implements Pty {
   }
 
   async #submit(): Promise<void> {
+    if (this.#invisible) {
+      this.#invisible = false;
+      this.print('\r\n  Removed 1 invisible character · review and press Enter to send');
+      return;
+    }
     const prompt = this.draft;
     if (prompt === '' || this.#state === 'working') return;
     this.draft = '';
@@ -311,6 +348,7 @@ export class FakeClaude implements Pty {
     // Unless interrupted meanwhile.
     if (!this.#working()) return;
     this.#become('done');
+    this.#busyUntil = Date.now() + (this.#options.busy ?? 0);
     this.#draw();
   }
 

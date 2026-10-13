@@ -33,7 +33,14 @@ import type {
 import { deadline } from '../graph/time';
 import { usageBackendOf, warningText } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
-import { conditionQuestion, replyContains, stepMessage, yesOrNo } from './turns';
+import {
+  conditionQuestion,
+  isCommand,
+  replyContains,
+  stepMessage,
+  stepVerdict,
+  yesOrNo,
+} from './turns';
 
 /**
  * How a task went. skipped: an if-then whose condition did not hold (or cannot, where it sits), an
@@ -177,6 +184,9 @@ const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
 /** What the run says when it takes a connected agent's answer to its question as no. */
 const UNCLEAR = 'corrallm took that as no: the answer wasn’t a clear yes or no.';
 const UNANSWERED = 'corrallm took that as no: the question wasn’t answered.';
+/** What the run says when a connected agent's step reply gives no verdict (turns.ts). */
+const NO_VERDICT =
+  'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.';
 
 const IDLE: Run = { running: false, agents: {} };
 
@@ -185,7 +195,9 @@ const IDLE: Run = { running: false, agents: {} };
  * agent's session (sessions.ts), or, aimed at another agent, to that agent's, and is done when the
  * turn it starts ends (failed, if that turn failed or was interrupted). A connected agent's step
  * goes to its session too (turns.ts words it: a slash command as it is, a tool as an instruction
- * to use it), done when its turn ends; a simulated agent's step takes a few seconds and may fail.
+ * to use it that asks how it went), done when its turn ends, failed if the agent says so (a turn
+ * that ends well may run tests that fail); a simulated agent's step takes a few seconds and may
+ * fail.
  * A wait holds until what it waits for is done (a step, or all of an agent's work), or its time
  * limit passes; a delay holds until its time has come; an if-then runs its steps only if its
  * condition holds of the task before it. A connected agent's conditions are its own: whether the
@@ -901,7 +913,8 @@ export class RunStore {
   /**
    * Starts a task: the agent is busy with it until it finishes. A message, or a connected agent's
    * step, finishes when the turn it starts ends (a message aimed at another agent, that agent's
-   * turn); a simulated agent's step, after a while.
+   * turn): a connected agent's tool step as it says at the end of its reply (SUCCEEDED or FAILED;
+   * neither, as its turn ended, which the run says); a simulated agent's step, after a while.
    */
   #begin(
     agent: string,
@@ -920,7 +933,21 @@ export class RunStore {
     const holder = { agent, token };
     if (!isMessage(task)) {
       if (node && isConnected(node)) {
-        this.#send(node, this.#stepMessage(node, task), { ended, holder });
+        // A tool's step went as the agent says on its reply's last line (a slash command's, as
+        // its turn ended): a turn that ends well may have run tests that fail.
+        const judged = ({ failed, reply }: TurnEnd) => {
+          if (failed || this.#busy.get(agent) !== token) {
+            ended({ failed, reply });
+            return;
+          }
+          const verdict = stepVerdict(reply);
+          if (verdict === undefined) this.#io.tell(node, NO_VERDICT);
+          finish(verdict === false ? 'failed' : 'succeeded', reply);
+        };
+        this.#send(node, this.#stepMessage(node, task), {
+          ended: isCommand(task.action) ? ended : judged,
+          holder,
+        });
       } else {
         const [least, most] = STEP_MS;
         const ms = least + (hash(task.id) % (most - least));

@@ -13,6 +13,10 @@ vi.mock('../terminal/screen', async () => {
   return { createScreen: fakeScreens.create };
 });
 
+/** What the run asks at the end of a tool's step: how it went (run/turns.ts). */
+const VERDICT =
+  ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
+
 const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id,
   type: 'agent',
@@ -384,7 +388,7 @@ describe('a connected agent', () => {
     );
     expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
-      text: 'Use the Bash tool for this step (run shell commands).',
+      text: 'Use the Bash tool for this step (run shell commands).' + VERDICT,
     });
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
@@ -650,7 +654,7 @@ describe('a connected agent', () => {
     await settle();
     expect(backend.send).toHaveBeenLastCalledWith('a', {
       id: sent(),
-      text: 'Use the Read tool for this step (read files).',
+      text: 'Use the Read tool for this step (read files).' + VERDICT,
     });
     expect(composer.placeholder).toBe('Queue a message for a…');
   });

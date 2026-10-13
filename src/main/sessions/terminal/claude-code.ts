@@ -71,6 +71,12 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   };
   /** Manual, as Claude Code calls its default mode. */
   readonly defaultMode = 'manual';
+  /**
+   * Enter once its prompt shows what was typed: keys that pile up while it is busy (just after
+   * its folder trust dialog, or as a turn ends) are read in one go, as a paste, and 2.1.296 keeps
+   * an Enter among them as an invisible character, not a submit.
+   */
+  readonly waitsForEcho = true;
   /** Where it works, for the files its asks are about. */
   #places: Places;
   readonly #env: Readonly<Record<string, string>>;

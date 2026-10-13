@@ -28,7 +28,10 @@ import type { HookTrust } from './trust';
  *   failed: Stop does not run for a turn that errs, as at a usage limit).
  * - A message is pasted in (bracketed paste: its line breaks stay, nothing in it is taken as a
  *   key), then sent with Enter. It is typed only into its composer, as drawn (composer.ts): the
- *   title says nothing of its pickers and startup screens.
+ *   title says nothing of its pickers and startup screens. Unlike Claude Code's, its Enter is not
+ *   held until the composer shows the message (TerminalCli.waitsForEcho): an Enter read in one go
+ *   with the paste, as keys that piled up while it was busy are, still sends it (probed with the
+ *   paste and Enter in one write as its title first said Ready, its MCP servers starting).
  * - Its usage limits are read apart from its terminal (`readUsage`: a private app server, usage.ts),
  *   never by typing /status into it.
  */

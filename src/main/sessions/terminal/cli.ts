@@ -103,6 +103,13 @@ export interface TerminalCli<M extends SessionMode> {
    * reports being ready: what it reports does not cover all its dialogs (as Codex's pickers).
    */
   readonly waitsForPrompt?: boolean;
+  /**
+   * Whether Enter waits until its prompt shows the end of what was typed (at most TerminalTiming's
+   * `echo`): it reads keys that piled up while it was busy in one go, as a paste, where an Enter
+   * among them is not a submit (as Claude Code, just after its folder trust dialog or as a turn
+   * ends).
+   */
+  readonly waitsForEcho?: boolean;
   /** What a hook event it posted means. The event is untrusted JSON: read, never acted on beyond. */
   hook(event: HookEvent): TerminalSignal<M>[];
   /**
