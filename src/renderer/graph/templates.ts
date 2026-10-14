@@ -1,4 +1,4 @@
-import { AGENT_ACTIONS, AGENT_CONNECTIONS, DEFAULT_AGENT, equivalentAction } from './agents';
+import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
 import type { AgentConnection, AgentType } from './agents';
 import type { Graph } from './graph';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
@@ -94,20 +94,7 @@ export function withAgents(
       const was = node.data.agent ?? DEFAULT_AGENT;
       const type = types[node.id];
       const now = type ?? DEFAULT_AGENT;
-      const has = new Set(AGENT_ACTIONS[now].map((a) => a.name));
-      const translate = <T extends RepeatedItem>(step: T): T =>
-        isWait(step) || isDelay(step) || isMessage(step) || has.has(step.action)
-          ? step
-          : { ...step, action: equivalentAction(step.action, was, now) ?? step.action };
-      const queue = node.data.queue?.map((item): QueueItem =>
-        isApproval(item)
-          ? item
-          : isIf(item)
-            ? { ...item, then: item.then.map(translate) }
-            : isRepeat(item)
-              ? { ...item, repeat: item.repeat.map(translate) }
-              : translate(item),
-      );
+      const queue = node.data.queue && translateActions(node.data.queue, was, now);
       const data = { ...node.data, ...(queue ? { queue } : {}) };
       if (type === undefined) delete data.agent;
       else data.agent = type;

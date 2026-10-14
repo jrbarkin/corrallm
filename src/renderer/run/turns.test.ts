@@ -97,4 +97,16 @@ describe('what the run says to a connected agent', () => {
     expect(replyContains('Not approved yet.', 'APPROVED')).toBe(false);
     expect(replyContains('', 'APPROVED')).toBe(false);
   });
+
+  it('matches whole lines when requested, excluding rejection and mentions of the verdict', () => {
+    expect(replyContains('NOT APPROVED', 'APPROVED', true)).toBe(false);
+    expect(replyContains('Verdict: APPROVED', 'APPROVED', true)).toBe(false);
+    expect(replyContains('APPROVED: once the tests pass', 'APPROVED', true)).toBe(false);
+    expect(replyContains('APPROVED', 'APPROVED', true)).toBe(true);
+    expect(replyContains('No issues.\r\n APPROVED \r\n', 'APPROVED', true)).toBe(true);
+    expect(replyContains('not approved', 'APPROVED', true)).toBe(false);
+    expect(replyContains('', 'APPROVED', true)).toBe(false);
+    // Existing substring conditions keep their meaning.
+    expect(replyContains('Verdict: APPROVED', 'APPROVED')).toBe(true);
+  });
 });

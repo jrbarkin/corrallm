@@ -77,6 +77,8 @@ export class FakeClaude implements Pty {
 
   /** The value of a flag it was started with. */
   arg(flag: string): string | undefined {
+    const assigned = this.args.find((arg) => arg.startsWith(`${flag}=`));
+    if (assigned !== undefined) return assigned.slice(flag.length + 1);
     const at = this.args.indexOf(flag);
     return at === -1 ? undefined : this.args[at + 1];
   }

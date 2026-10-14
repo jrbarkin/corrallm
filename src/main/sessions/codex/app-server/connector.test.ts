@@ -128,6 +128,43 @@ function texts(events: SessionEvent[]): string[] {
 }
 
 describe('the App Server connection', () => {
+  it.each([
+    { login: 'none', distribution: 'local' as const, why: /isn't logged in/ },
+    { login: 'chatgpt', distribution: 'hosted' as const, why: /commercial or hosted/ },
+    { login: 'chatgpt', distribution: 'commercial' as const, why: /commercial or hosted/ },
+  ])(
+    'offers Codex Terminal when $login login is refused in a $distribution build',
+    async ({ login, distribution, why }) => {
+      const events: SessionEvent[] = [];
+      const remember = vi.fn();
+      await expect(
+        connector({ FAKE_CODEX_LOGIN: login }, { distribution }).start(
+          {
+            agentId: 'a',
+            cwd: dir,
+            env: { PATH: process.env.PATH ?? '', FAKE_CODEX_LOG: path.join(dir, 'requests.jsonl') },
+            model: null,
+            mode: 'auto',
+            resume: null,
+          },
+          { emit: (event) => events.push(event), remember },
+        ),
+      ).rejects.toThrow(why);
+      expect(events).toEqual([
+        {
+          type: 'notice',
+          id: expect.any(String) as unknown,
+          level: 'error',
+          text: expect.stringMatching(why) as unknown,
+          switchTo: 'codex-terminal',
+        },
+      ]);
+      expect(remember).not.toHaveBeenCalled();
+      expect(await requests('thread/start')).toEqual([]);
+      expect(await requests('turn/start')).toEqual([]);
+    },
+  );
+
   it('starts a Codex thread in the project folder, offering Codex’s models, efforts and commands', async () => {
     const { events } = await start({ mode: 'read-only' });
     expect(events[0]).toEqual({

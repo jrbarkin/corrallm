@@ -296,7 +296,7 @@ const SPEC: SessionSpec<CodexMode> = {
 
 async function start(
   spec: Partial<SessionSpec<CodexMode>> = {},
-  id = 'thread-1',
+  id = '0199a3f0-1234-7000-8000-123456789abc',
   { starting = 0 }: { starting?: number } = {},
 ) {
   const cli = new TitledCli();
@@ -348,6 +348,27 @@ const seen = () =>
   );
 
 describe('a Terminal session of another CLI', () => {
+  it('rejects a hostile resume id supplied directly to the session before spawning', async () => {
+    await expect(start({ resume: '--dangerously-skip-permissions' })).rejects.toThrow(
+      /session.*id/i,
+    );
+    expect(runs).toEqual([]);
+    expect(remembered).toEqual([]);
+  });
+
+  it('never remembers a hostile hook session id, even from a CLI adapter', async () => {
+    await start();
+    const run = runs[0];
+    expect(run).toBeDefined();
+    await run?.hook('SessionStart', { session_id: '--dangerously-skip-permissions' });
+    expect(remembered).toEqual([]);
+    const valid = '0199a3f0-1234-7000-8000-123456789abc';
+    await run?.hook('SessionStart', { session_id: valid });
+    await until(() => {
+      expect(remembered).toEqual([valid]);
+    });
+  });
+
   it('remembers the session id only once the CLI’s hooks tell it', async () => {
     const session = await start();
     expect(remembered).toEqual([]);
@@ -356,7 +377,7 @@ describe('a Terminal session of another CLI', () => {
     await until(() => {
       expect(last('end')).toBeDefined();
     });
-    expect(remembered).toEqual(['thread-1']);
+    expect(remembered).toEqual(['0199a3f0-1234-7000-8000-123456789abc']);
   });
 
   it('pastes a message in, follows the turn by its title, and ends it with its last reply', async () => {
@@ -398,7 +419,7 @@ describe('a Terminal session of another CLI', () => {
 
   it('waits for a message it holds while it starts, however long that takes', async () => {
     // Longer than the CLI may take to take a message (twice `confirm`).
-    const session = await start({}, 'thread-1', { starting: 1300 });
+    const session = await start({}, '0199a3f0-1234-7000-8000-123456789abc', { starting: 1300 });
     await session.send({ id: 'm1', text: 'Hello' });
     await until(() => {
       expect(last('end')).toBeDefined();
@@ -424,11 +445,12 @@ describe('a Terminal session of another CLI', () => {
   });
 
   it('starts afresh when the session it resumes is gone, in its own words', async () => {
-    const session = await start({ resume: 'gone' });
+    const gone = '0199a3f0-1234-7000-8000-123456789abd';
+    const session = await start({ resume: gone });
     await until(() => {
       expect(runs).toHaveLength(2);
     });
-    expect(runs.map((run) => run.args)).toEqual([['resume', 'gone'], []]);
+    expect(runs.map((run) => run.args)).toEqual([['resume', gone], []]);
     const live: LiveSession<CodexMode> = session;
     await expect(live.setMode('read-only')).rejects.toThrow('Use /permissions in its terminal.');
     runs[1]?.exit(2);

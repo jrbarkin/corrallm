@@ -288,7 +288,7 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
   await expect.poll(async () => (await starts()).length).toBe(2);
   await claudeReady(2);
   const again = (await starts())[1] ?? [];
-  expect(again[again.indexOf('--resume') + 1]).toBe(args[args.indexOf('--session-id') + 1]);
+  expect(again).toContain(`--resume=${args[args.indexOf('--session-id') + 1] ?? ''}`);
   expect(again[again.indexOf('--effort') + 1]).toBe('low');
   expect(again).not.toContain('--model');
   expect(again).not.toContain('--permission-mode');
@@ -635,7 +635,7 @@ test('resumes the agent’s session after the app restarts', async () => {
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();
   const [first] = await starts();
-  const id = first?.[3];
+  const id = first?.[3] ?? '';
 
   // Quitting ends Claude Code first.
   await closeApp();
@@ -646,5 +646,5 @@ test('resumes the agent’s session after the app restarts', async () => {
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
   await openShop(2);
   await expect.poll(starts).toHaveLength(2);
-  expect((await starts()).at(-1)?.slice(2, 4)).toEqual(['--resume', id]);
+  expect((await starts()).at(-1)).toContain(`--resume=${id}`);
 });

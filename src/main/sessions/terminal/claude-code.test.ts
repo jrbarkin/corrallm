@@ -3,6 +3,56 @@ import { describe, expect, it } from 'vitest';
 import type { TerminalAsk } from '../../../shared/session';
 import { ClaudeCode } from './claude-code';
 
+const SESSION = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+const LAUNCH = {
+  dir: '/tmp/session',
+  cwd: '/work/app',
+  id: SESSION,
+  resume: true,
+  model: null,
+  mode: null,
+};
+
+describe('Claude Code session ids', () => {
+  it('resumes a UUID as the value of one flag', () => {
+    const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+    expect(claude.args(LAUNCH)).toContain(`--resume=${SESSION}`);
+    expect(claude.args({ ...LAUNCH, id: SESSION.toUpperCase() })).toContain(
+      `--resume=${SESSION.toUpperCase()}`,
+    );
+    expect(claude.args({ ...LAUNCH, resume: false })).toContain(SESSION);
+  });
+
+  it.each([
+    '--dangerously-skip-permissions',
+    'session-1',
+    '../session',
+    '',
+    ` ${SESSION}`,
+    `${SESSION} `,
+    `${SESSION}\n`,
+    `${SESSION}\0`,
+  ])('refuses the non-UUID session id %j before building CLI arguments', (id) => {
+    const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+    expect(() => claude.args({ ...LAUNCH, id })).toThrow(/session.*id/i);
+    expect(() => claude.args({ ...LAUNCH, id, resume: false })).toThrow(/session.*id/i);
+  });
+
+  it('remembers only UUIDs from untrusted hooks while still hearing the event', () => {
+    const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+    const event = { hook_event_name: 'UserPromptSubmit', prompt: 'hello' };
+    expect(claude.hook({ ...event, session_id: SESSION })).toContainEqual({
+      kind: 'session',
+      id: SESSION,
+    });
+    for (const id of ['--dangerously-skip-permissions', 'session-1', 42, `${SESSION}\n`]) {
+      const signals = claude.hook({ ...event, session_id: id });
+      expect(signals.some((signal) => signal.kind === 'session')).toBe(false);
+      expect(signals).toContainEqual({ kind: 'prompt', text: 'hello' });
+    }
+  });
+});
+
 /** What Claude Code asks, as its PermissionRequest hook tells it for `tool` with `input`. */
 function asked(tool: string, input: Record<string, unknown>): TerminalAsk | undefined {
   const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });

@@ -564,7 +564,7 @@ export class SessionManager {
     return ids;
   }
 
-  /** A renderer that goes, or loads another page, takes its sessions with it. */
+  /** A renderer that goes, crashes, or loads another page takes its sessions with it. */
   #watch(contents: WebContents): void {
     if (this.#watched.has(contents)) return;
     this.#watched.add(contents);
@@ -575,6 +575,10 @@ export class SessionManager {
       });
     });
     contents.on('did-navigate', () => {
+      this.#views.delete(contents);
+      void this.#endAll(contents, false);
+    });
+    contents.on('render-process-gone', () => {
       this.#views.delete(contents);
       void this.#endAll(contents, false);
     });

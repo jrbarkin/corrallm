@@ -463,35 +463,38 @@ describe('SessionManager', () => {
     expect(types(contents)).toEqual(['a:closed']);
   });
 
-  it('ends a renderer’s sessions when it goes, and every session when the app quits', async () => {
-    const closed: string[] = [];
-    const connector: Connector = {
-      start: (spec) =>
-        Promise.resolve({
-          send: () => Promise.resolve(),
-          answer: () => Promise.resolve(),
-          interrupt: () => Promise.resolve(),
-          setMode: () => Promise.resolve(),
-          setModel: () => Promise.resolve(),
-          close: async () => {
-            await new Promise((resolve) => setTimeout(resolve, 5));
-            closed.push(spec.agentId);
-          },
-        }),
-    };
-    const sessions = manager({ sdk: connector });
-    const gone = window();
-    const staying = window();
-    await sessions.start(gone, 'a', OPTIONS);
-    await sessions.start(staying, 'b', OPTIONS);
-    await sessions.start(staying, 'c', OPTIONS);
-    (gone as unknown as EventEmitter).emit('destroyed');
-    await vi.waitFor(() => {
-      expect(closed).toEqual(['a']);
-    });
-    await sessions.closeEverything();
-    expect(closed.sort()).toEqual(['a', 'b', 'c']);
-  });
+  it.each(['destroyed', 'render-process-gone'])(
+    'ends only the renderer’s sessions on %s, and every session when the app quits',
+    async (event) => {
+      const closed: string[] = [];
+      const connector: Connector = {
+        start: (spec) =>
+          Promise.resolve({
+            send: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            interrupt: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+            close: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+              closed.push(spec.agentId);
+            },
+          }),
+      };
+      const sessions = manager({ sdk: connector });
+      const gone = window();
+      const staying = window();
+      await sessions.start(gone, 'a', OPTIONS);
+      await sessions.start(staying, 'b', OPTIONS);
+      await sessions.start(staying, 'c', OPTIONS);
+      (gone as unknown as EventEmitter).emit(event);
+      await vi.waitFor(() => {
+        expect(closed).toEqual(['a']);
+      });
+      await sessions.closeEverything();
+      expect(closed.sort()).toEqual(['a', 'b', 'c']);
+    },
+  );
 
   describe('terminal views', () => {
     /** A Terminal session faked: its screen says which run it is, and records what it is told. */

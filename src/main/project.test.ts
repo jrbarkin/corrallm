@@ -92,6 +92,27 @@ describe('project folders', () => {
     expect((await memory.get('/work/new.corral')).project).toBe(app);
   });
 
+  it('keeps Codex threads when the project folder is chosen again or the canvas is saved', async () => {
+    const app = path.join(dir, 'app');
+    const window = contents();
+    const canvas = '/work/team.corral';
+    const thread = '0199a3f0-1234-7000-8000-123456789abc';
+    canvases.set(window, canvas);
+    await memory.update(canvas, () => ({ project: app, sessions: {}, threads: { coder: thread } }));
+
+    pick(app);
+    await projects.choose(window);
+    await projects.remember(window);
+
+    // Check the saved file too: the thread must survive an app restart.
+    const restored = new CanvasMemory(path.join(dir, 'canvases.json'));
+    expect(await restored.get(canvas)).toEqual({
+      project: app,
+      sessions: {},
+      threads: { coder: thread },
+    });
+  });
+
   it('does not bring back a folder that is gone', async () => {
     const window = contents();
     canvases.set(window, '/work/team.corral');

@@ -59,6 +59,12 @@ function main(): void {
     return;
   }
 
+  // Only one instance may write this profile's state or resume its agents' conversations.
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
+
   // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden, and connected
   // sessions with a fake connector instead of Claude Code. Never in packaged builds.
   const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';

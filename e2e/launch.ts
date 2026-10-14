@@ -22,7 +22,8 @@ import { agentElectronExecutable } from './agent-electron';
 export async function launchApp({
   env: extra = {},
   profile: given,
-}: { env?: Record<string, string>; profile?: string } = {}): Promise<{
+  args = [],
+}: { env?: Record<string, string>; profile?: string; args?: string[] } = {}): Promise<{
   app: ElectronApplication;
   close: () => Promise<void>;
 }> {
@@ -40,7 +41,7 @@ export async function launchApp({
     const executablePath = agentElectronExecutable();
     app = await electron.launch({
       ...(executablePath ? { executablePath } : {}),
-      args: ['.', `--user-data-dir=${profile}`],
+      args: ['.', `--user-data-dir=${profile}`, ...args],
       env: {
         ...env,
         // Paths with nothing there: only the CLIs a test gives are found (main looks nowhere else).

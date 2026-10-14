@@ -65,10 +65,12 @@ export class ProjectFolders {
     const file = this.#canvasOf(contents);
     if (file === undefined) return;
     const project = this.#folders.get(contents);
-    await this.#memory.update(file, ({ sessions }) => ({
-      ...(project === undefined ? {} : { project }),
-      sessions,
-    }));
+    await this.#memory.update(file, (remembered) => {
+      const next = { ...remembered };
+      if (project === undefined) delete next.project;
+      else next.project = project;
+      return next;
+    });
   }
 
   /** Forgets the folder, for a new canvas. */

@@ -356,7 +356,9 @@ describe('Codex in a terminal, as the real one ran', () => {
   });
 
   it('starts afresh when the session it resumes is gone', async () => {
-    const session = await start(['resume-missing', 'prompts'], { resume: 'gone' });
+    const session = await start(['resume-missing', 'prompts'], {
+      resume: '0199a3f0-1234-7000-8000-123456789abc',
+    });
     await until(() => {
       expect(runs).toHaveLength(2);
     });

@@ -252,18 +252,21 @@ describe('a Terminal session', () => {
   });
 
   it('resumes the session it had; one with no transcript starts afresh under its id', async () => {
-    fake.transcripts = ['kept'];
-    await start({ resume: 'kept' });
-    expect(claude().arg('--resume')).toBe('kept');
+    const kept = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    const gone = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';
+    fake.transcripts = [kept];
+    await start({ resume: kept });
+    expect(claude().arg('--resume')).toBe(kept);
+    expect(claude().args).toContain(`--resume=${kept}`);
 
-    await start({ resume: 'gone' });
+    await start({ resume: gone });
     await until(() => {
-      expect(claude().arg('--session-id')).toBe('gone');
+      expect(claude().arg('--session-id')).toBe(gone);
     });
     expect(runs.map((run) => run.arg('--resume') ?? run.arg('--session-id'))).toEqual([
-      'kept',
-      'gone',
-      'gone',
+      kept,
+      gone,
+      gone,
     ]);
     expect(seen()).not.toContain('closed');
   });
@@ -725,21 +728,22 @@ describe('a Terminal session', () => {
   });
 
   it('follows the session id and the permission mode its hooks tell', async () => {
-    fake.sessionId = 'after-clear';
+    const afterClear = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13';
+    fake.sessionId = afterClear;
     const session = await start();
     claude().setMode('acceptEdits');
     await session.send({ id: 'm1', text: 'Hello' });
     await until(() => {
       expect(last('end')).toBeDefined();
     });
-    expect(remembered.at(-1)).toBe('after-clear');
+    expect(remembered.at(-1)).toBe(afterClear);
     expect(seen()).toContain('mode:acceptEdits');
     // /clear: until the next prompt says the new id, one that starts afresh after a restart.
     await claude().hook('SessionEnd', { reason: 'clear' });
     await until(() => {
       expect(remembered).toHaveLength(3);
     });
-    expect(remembered[2]).not.toBe('after-clear');
+    expect(remembered[2]).not.toBe(afterClear);
   });
 
   it('refuses what only its terminal does: answers, modes and models', async () => {

@@ -848,7 +848,11 @@ export class RunStore {
       case 'outputContains':
         held = isConnected(node)
           ? !this.#unheard(node) &&
-            replyContains(this.#replyOf(node.id, checked, at.outcomes), condition.text)
+            replyContains(
+              this.#replyOf(node.id, checked, at.outcomes),
+              condition.text,
+              condition.wholeLine,
+            )
           : this.#io.chance() < HOLDS;
         break;
       case 'freeText':

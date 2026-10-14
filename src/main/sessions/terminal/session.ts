@@ -11,6 +11,7 @@ import type {
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
+import { isSessionId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
@@ -246,6 +247,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#deps = deps;
     this.#cli = deps.cli;
     this.#id = spec.resume ?? deps.cli.newId();
+    if (this.#id !== null && !isSessionId(this.#id)) {
+      throw new TypeError('Expected a UUID session id');
+    }
     this.#resuming = spec.resume !== null;
     // Until its hooks say otherwise: the CLI's own default, if the user's applies.
     this.#mode = spec.mode ?? deps.cli.defaultMode;
@@ -791,7 +795,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #signal(signal: TerminalSignal<M>): void {
     switch (signal.kind) {
       case 'session':
-        if (signal.id !== this.#id && /^[\w-]{1,200}$/.test(signal.id)) {
+        if (signal.id !== this.#id && isSessionId(signal.id)) {
           this.#id = signal.id;
           this.#host.remember(signal.id);
         }

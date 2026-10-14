@@ -1,6 +1,7 @@
 import { MODEL_PATTERN } from '../../../../shared/session';
 import type { CodexMode } from '../../../../shared/session';
 import type { UsageWindows } from '../../../../shared/usage';
+import { isSessionId } from '../../id';
 import type { Launch, TerminalCli, TerminalSignal } from '../../terminal/cli';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import type { Screen } from '../../terminal/screen';
@@ -120,6 +121,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   }
 
   args({ id, resume, model, mode, cwd }: Launch<CodexMode>): string[] {
+    if (id !== null && !isSessionId(id)) throw new TypeError('Expected a UUID session id');
     const overrides = [
       folderTrust(cwd),
       ...this.#hooks,
@@ -194,7 +196,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     if (event.agent_id !== undefined && event.agent_id !== null) return [];
     const signals: TerminalSignal<CodexMode>[] = [];
     const id = text('session_id');
-    if (id !== undefined) signals.push({ kind: 'session', id });
+    if (isSessionId(id)) signals.push({ kind: 'session', id });
     const model = text('model');
     if (model !== undefined && model !== this.#model && MODEL_PATTERN.test(model)) {
       this.#model = model;

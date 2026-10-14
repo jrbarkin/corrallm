@@ -1,5 +1,7 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 
+import { isSessionId } from './sessions/id';
+
 /**
  * What main remembers of a canvas file: its project folder, and its agents' sessions' ids (Claude
  * Code's sessions, Codex's threads). What its agents are set to run with (their models, efforts and
@@ -119,8 +121,8 @@ function parse(text: string): Map<string, Remembered> {
 /** The ids in a record of them, by agent; values that are not ids are left out. */
 function ids(value: unknown): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(isRecord(value) ? value : {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    Object.entries(isRecord(value) ? value : {}).filter((entry): entry is [string, string] =>
+      isSessionId(entry[1]),
     ),
   );
 }

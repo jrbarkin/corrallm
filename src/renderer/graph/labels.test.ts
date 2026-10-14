@@ -38,12 +38,14 @@ describe('untilText', () => {
         { kind: 'succeeded' as const },
         { kind: 'failed' as const },
         { kind: 'outputContains' as const, text: 'APPROVED' },
+        { kind: 'outputContains' as const, text: 'APPROVED', wholeLine: true },
         { kind: 'freeText' as const, text: 'the reviewer is happy' },
       ].map((until) => untilText([coder], until)),
     ).toEqual([
       'its last step succeeds',
       'its last step fails',
       'the output contains “APPROVED”',
+      'the output contains “APPROVED” on a line of its own',
       'the reviewer is happy',
     ]);
   });

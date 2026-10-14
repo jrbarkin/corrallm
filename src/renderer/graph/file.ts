@@ -463,6 +463,7 @@ function readCondition(value: unknown, where: string): Condition {
     case 'timedOut':
       return { kind: condition.kind };
     case 'outputContains':
+      return readOutputCondition(condition, where);
     case 'freeText':
       return { kind: condition.kind, text: text(condition.text, `${where}.text`) };
     case 'usageAbove': {
@@ -489,6 +490,22 @@ function readCondition(value: unknown, where: string): Condition {
   }
 }
 
+/** An output match, preserving whether it looks for text on a line of its own. */
+function readOutputCondition(
+  condition: Record<string, unknown>,
+  where: string,
+): Extract<Condition, { kind: 'outputContains' }> {
+  const wholeLine = optional(condition.wholeLine, `${where}.wholeLine`, (value, at) => {
+    if (typeof value !== 'boolean') throw new Error(`${at} must be true or false`);
+    return value;
+  });
+  return {
+    kind: 'outputContains',
+    text: text(condition.text, `${where}.text`),
+    ...(wholeLine === undefined ? {} : { wholeLine }),
+  };
+}
+
 /** One of `allowed`, or throws naming them. */
 function oneOf<T extends string>(value: unknown, where: string, allowed: readonly T[]): T {
   const found = allowed.find((one) => one === value);
@@ -508,6 +525,7 @@ function readUntil(value: unknown, where: string): Until {
     case 'failed':
       return { kind: until.kind };
     case 'outputContains':
+      return readOutputCondition(until, where);
     case 'freeText':
       return { kind: until.kind, text: text(until.text, `${where}.text`) };
     case 'repeatEnds':

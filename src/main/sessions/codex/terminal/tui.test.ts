@@ -66,8 +66,31 @@ describe('starting Codex', () => {
   });
 
   it('resumes a session by its id', async () => {
-    const args = (await prepared()).args({ ...LAUNCH, id: 'thread-1', resume: true });
-    expect(args.slice(0, 5)).toEqual(['resume', 'thread-1', '--no-daemon', '-C', '/work/shop']);
+    const args = (await prepared()).args({ ...LAUNCH, id: RECORDED_SESSION, resume: true });
+    expect(args.slice(0, 5)).toEqual([
+      'resume',
+      RECORDED_SESSION,
+      '--no-daemon',
+      '-C',
+      '/work/shop',
+    ]);
+    expect(
+      (await prepared()).args({ ...LAUNCH, id: RECORDED_SESSION.toUpperCase(), resume: true })[1],
+    ).toBe(RECORDED_SESSION.toUpperCase());
+  });
+
+  it.each([
+    '--dangerously-skip-permissions',
+    'thread-1',
+    '../session',
+    '',
+    ` ${RECORDED_SESSION}`,
+    `${RECORDED_SESSION} `,
+    `${RECORDED_SESSION}\n`,
+    `${RECORDED_SESSION}\0`,
+  ])('refuses the non-UUID session id %j before building CLI arguments', async (id) => {
+    const tui = await prepared();
+    expect(() => tui.args({ ...LAUNCH, id, resume: true })).toThrow(/session.*id/i);
   });
 
   it('starts in the mode and with the model corrallm chose', async () => {
@@ -130,6 +153,20 @@ async function replayed(): Promise<(ProgramStatus | TerminalSignal<CodexMode> | 
 }
 
 describe('following Codex', () => {
+  it('remembers only UUIDs from untrusted hooks while still hearing the event', async () => {
+    const tui = await prepared();
+    const event = { hook_event_name: 'UserPromptSubmit', prompt: 'hello' };
+    expect(tui.hook({ ...event, session_id: RECORDED_SESSION })).toContainEqual({
+      kind: 'session',
+      id: RECORDED_SESSION,
+    });
+    for (const id of ['--dangerously-skip-permissions', 'thread-1', 42, `${RECORDED_SESSION}\n`]) {
+      const signals = tui.hook({ ...event, session_id: id });
+      expect(signals.some((signal) => signal.kind === 'session')).toBe(false);
+      expect(signals).toContainEqual({ kind: 'prompt', text: 'hello' });
+    }
+  });
+
   it('reads what its title and hooks say, as the real Codex said it', async () => {
     expect(await replayed()).toEqual([
       // Ready, then its MCP servers start: a message sent meanwhile is held.
@@ -179,13 +216,15 @@ describe('following Codex', () => {
     expect(
       tui.hook({ session_id: 'child', agent_id: 'a1', hook_event_name: 'Stop', model: 'm' }),
     ).toEqual([]);
-    expect(tui.hook({ session_id: 's', hook_event_name: 'Stop', model: 'gpt-6-luna' })).toEqual([
-      { kind: 'session', id: 's' },
+    expect(
+      tui.hook({ session_id: RECORDED_SESSION, hook_event_name: 'Stop', model: 'gpt-6-luna' }),
+    ).toEqual([
+      { kind: 'session', id: RECORDED_SESSION },
       { kind: 'model', model: 'gpt-6-luna' },
     ]);
-    expect(tui.hook({ session_id: 's', hook_event_name: 'Stop', model: 'gpt-6-luna' })).toEqual([
-      { kind: 'session', id: 's' },
-    ]);
+    expect(
+      tui.hook({ session_id: RECORDED_SESSION, hook_event_name: 'Stop', model: 'gpt-6-luna' }),
+    ).toEqual([{ kind: 'session', id: RECORDED_SESSION }]);
   });
 });
 

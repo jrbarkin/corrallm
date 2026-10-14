@@ -90,6 +90,28 @@ describe('toFile', () => {
 });
 
 describe('fromFile', () => {
+  it('preserves whole-line output conditions for Ifs and repeats', () => {
+    const wholeLine: QueueItem[] = [
+      { id: 'if', if: { kind: 'outputContains', text: 'READY', wholeLine: true }, then: [] },
+      {
+        id: 'loop',
+        repeat: [{ id: 'review', message: 'Review it' }],
+        until: { kind: 'outputContains', text: 'APPROVED', wholeLine: true },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+    ];
+    const withConditions: Graph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'a' ? { ...n, data: { ...n.data, queue: wholeLine } } : n,
+      ),
+    };
+    const saved = toFile(withConditions);
+    expect(fromFile(saved).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(wholeLine);
+    expect(toFile(fromFile(saved))).toBe(saved);
+  });
+
   it('reads back what was saved, with groups sized to fit what they hold', () => {
     const plain = (node: GraphNode): GraphNode => {
       const { id, type, position, parentId } = node;
@@ -473,6 +495,32 @@ describe('fromFile', () => {
       (f) =>
         Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'i', if: { kind: 'maybe' }, then: [] }] }),
       /^nodes\[1\]\.queue\[0\]\.if\.kind must be one of: succeeded, failed, outputContains, timedOut, freeText, usageAbove$/,
+    ],
+    [
+      'an If with a non-boolean whole-line match',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'outputContains', text: 'READY', wholeLine: 'yes' }, then: [] },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.if\.wholeLine must be true or false$/,
+    ],
+    [
+      'a repeat with a non-boolean whole-line match',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            {
+              id: 'r',
+              repeat: [],
+              until: { kind: 'outputContains', text: 'APPROVED', wholeLine: 1 },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.until\.wholeLine must be true or false$/,
     ],
     [
       'a usage condition on a backend whose usage corrallm reads not',

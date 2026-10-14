@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { SAFE_GIT_OPTIONS } from './git';
+
 /*
  * The files of a project folder, for the composer's @-mentions (as Claude Code completes
  * "@src/ma" to "@src/main/"): the files git knows of (tracked, and untracked but not ignored),
@@ -101,12 +103,16 @@ function withFolders(files: string[]): string[] {
 /** The files git knows of in `folder`: tracked, and untracked but not ignored. */
 function gitFiles(folder: string, env: Readonly<Record<string, string>>): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const git = spawn('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
-      cwd: folder,
-      env,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
+    const git = spawn(
+      'git',
+      [...SAFE_GIT_OPTIONS, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      {
+        cwd: folder,
+        env,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      },
+    );
     const chunks: Buffer[] = [];
     let size = 0;
     const timer = setTimeout(() => {

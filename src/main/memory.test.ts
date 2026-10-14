@@ -17,16 +17,41 @@ afterEach(async () => {
 });
 
 describe('CanvasMemory', () => {
+  it('drops hostile and malformed session ids read from canvases.json for either CLI', async () => {
+    const valid = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    const ids = {
+      valid,
+      flag: '--dangerously-skip-permissions',
+      malformed: 'session-1',
+      path: '../session',
+      newline: `${valid}\n`,
+      space: ` ${valid}`,
+      control: `${valid}\0`,
+      wrongType: 42,
+    };
+    await writeFile(
+      file,
+      JSON.stringify({ version: 1, canvases: { '/team.corral': { sessions: ids, threads: ids } } }),
+    );
+    expect(await new CanvasMemory(file).get('/team.corral')).toEqual({
+      sessions: { valid },
+      threads: { valid },
+    });
+  });
+
   it('remembers a canvas file’s project folder and sessions, across instances', async () => {
     const memory = new CanvasMemory(file);
     expect(await memory.get('/work/team.corral')).toEqual({ sessions: {} });
     await memory.update('/work/team.corral', (m) => ({ ...m, project: '/work/app' }));
-    await memory.update('/work/team.corral', (m) => ({ ...m, sessions: { a: 'id-a' } }));
+    await memory.update('/work/team.corral', (m) => ({
+      ...m,
+      sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
+    }));
 
     const again = new CanvasMemory(file);
     expect(await again.get('/work/team.corral')).toEqual({
       project: '/work/app',
-      sessions: { a: 'id-a' },
+      sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
     });
     // Written whole: nothing is left beside it.
     expect(await readdir(dir)).toEqual(['canvases.json']);
@@ -36,29 +61,32 @@ describe('CanvasMemory', () => {
     const memory = new CanvasMemory(file);
     await memory.update('/work/team.corral', (m) => ({
       ...m,
-      sessions: { a: 'claude-a' },
-      threads: { a: 'codex-a' },
+      sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
+      threads: { a: '0199a3f0-1234-7000-8000-123456789abc' },
     }));
     expect(await new CanvasMemory(file).get('/work/team.corral')).toEqual({
-      sessions: { a: 'claude-a' },
-      threads: { a: 'codex-a' },
+      sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
+      threads: { a: '0199a3f0-1234-7000-8000-123456789abc' },
     });
   });
 
   it('applies updates made together in order, losing none', async () => {
     const memory = new CanvasMemory(file);
     await Promise.all(
-      ['a', 'b', 'c'].map((agent) =>
+      ['a', 'b', 'c'].map((agent, index) =>
         memory.update('/c.corral', (m) => ({
           ...m,
-          sessions: { ...m.sessions, [agent]: `id-${agent}` },
+          sessions: {
+            ...m.sessions,
+            [agent]: `0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e1${String(index + 1)}`,
+          },
         })),
       ),
     );
     expect((await new CanvasMemory(file).get('/c.corral')).sessions).toEqual({
-      a: 'id-a',
-      b: 'id-b',
-      c: 'id-c',
+      a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+      b: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12',
+      c: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13',
     });
   });
 
@@ -86,7 +114,7 @@ describe('CanvasMemory', () => {
         canvases: {
           '/good.corral': {
             project: '/p',
-            sessions: { a: 'id', b: 42 },
+            sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11', b: 42 },
             chosen: {
               a: { model: 'haiku', mode: 'yolo' },
               b: { model: 'rm -rf /', mode: 'plan' },
@@ -99,14 +127,17 @@ describe('CanvasMemory', () => {
       }),
     );
     const memory = new CanvasMemory(file);
-    expect(await memory.get('/good.corral')).toEqual({ project: '/p', sessions: { a: 'id' } });
+    expect(await memory.get('/good.corral')).toEqual({
+      project: '/p',
+      sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
+    });
     expect(await memory.get('/bad.corral')).toEqual({ sessions: {} });
     expect(await memory.get('/worse.corral')).toEqual({ sessions: {} });
     await memory.update('/good.corral', (m) => m);
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
       version: 1,
       canvases: {
-        '/good.corral': { project: '/p', sessions: { a: 'id' } },
+        '/good.corral': { project: '/p', sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' } },
       },
     });
   });

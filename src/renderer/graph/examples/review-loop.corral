@@ -63,12 +63,13 @@
             },
             {
               "id": "review",
-              "message": "Review the change: look for bugs and missing tests. If nothing must change, say APPROVED; otherwise write what must change to REVIEW.md."
+              "message": "Review the change: look for bugs and missing tests. If nothing must change, say APPROVED on a line of its own; otherwise write what must change to REVIEW.md and say NOT APPROVED on a line of its own."
             }
           ],
           "until": {
             "kind": "outputContains",
-            "text": "APPROVED"
+            "text": "APPROVED",
+            "wholeLine": true
           },
           "rounds": 3,
           "otherwise": "ask"

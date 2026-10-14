@@ -39,6 +39,8 @@ import { pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
+  const assigned = args.find((arg) => arg.startsWith(`${flag}=`));
+  if (assigned !== undefined) return assigned.slice(flag.length + 1);
   const at = args.indexOf(flag);
   return at === -1 ? undefined : args[at + 1];
 };

@@ -1,7 +1,7 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import type { AgentSettings, Cli, Connection } from '../../shared/session';
-import { AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
+import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
 import type { AgentConnection, AgentType } from './agents';
 import {
   isApproval,
@@ -230,18 +230,24 @@ export function renameNode(graph: Graph, id: string, label: string): Graph {
 }
 
 /**
- * Sets the coding agent a node runs, dropping a connection its new type does not offer. Groups
- * (frames) have none.
+ * Sets the coding agent a node runs, translating steps and dropping a connection its new type
+ * does not offer. Groups (frames) have none.
  */
 export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
   const node = graph.nodes.find((n) => n.id === id);
   if (node?.type !== 'agent' || node.data.agent === agent) return graph;
   const { connection, ...data } = node.data;
   const kept = connection !== undefined && AGENT_CONNECTIONS[agent].includes(connection);
+  const queue = data.queue && translateActions(data.queue, data.agent ?? DEFAULT_AGENT, agent);
   return {
     ...graph,
     nodes: graph.nodes.map((n) =>
-      n === node ? { ...n, data: { ...data, agent, ...(kept ? { connection } : {}) } } : n,
+      n === node
+        ? {
+            ...n,
+            data: { ...data, agent, ...(queue ? { queue } : {}), ...(kept ? { connection } : {}) },
+          }
+        : n,
     ),
   };
 }

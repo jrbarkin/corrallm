@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
@@ -139,7 +140,16 @@ export class AppServerConnector implements Connector<CodexMode> {
       if (old !== undefined) throw new Error(old);
       const login = codexLogin(await server.request('account/read', { refreshToken: false }));
       const refused = appServerRefusal(login, this.#distribution);
-      if (refused !== undefined) throw new Error(refused);
+      if (refused !== undefined) {
+        host.emit({
+          type: 'notice',
+          id: randomUUID(),
+          level: 'error',
+          text: refused,
+          switchTo: 'codex-terminal',
+        });
+        throw new Error(refused);
+      }
       const [listed, skilled, limits] = await Promise.all([
         server.request('model/list', { limit: 100 }).catch(() => undefined),
         server.request('skills/list', { cwds: [spec.cwd] }).catch(() => undefined),

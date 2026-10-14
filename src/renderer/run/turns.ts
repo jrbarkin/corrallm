@@ -84,9 +84,12 @@ export function yesOrNo(reply: string): boolean | undefined {
 }
 
 /**
- * Whether a reply contains the text an If looks for, exactly as written: its case too, so that a
- * marker such as "APPROVED" is not found in "not approved".
+ * Whether a reply contains the text an If looks for, case and all. With `wholeLine`, the text
+ * must be on a line of its own (whitespace around it allowed), so APPROVED is not found in
+ * NOT APPROVED.
  */
-export function replyContains(reply: string, text: string): boolean {
-  return reply.includes(text);
+export function replyContains(reply: string, text: string, wholeLine = false): boolean {
+  return wholeLine
+    ? reply.split(/\r?\n/).some((line) => line.trim() === text)
+    : reply.includes(text);
 }

@@ -1458,6 +1458,33 @@ describe('RunStore', () => {
       expect(sent.map((s) => s.text).at(-1)).toBe('Tag it again');
     });
 
+    it('keeps the Review loop running on NOT APPROVED, ending only on an APPROVED line', () => {
+      const example = EXAMPLES.find((e) => e.name === 'Review loop');
+      const nodes = fromFile(example?.text ?? '').nodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          connection: node.data.agent === 'Codex' ? ('app-server' as const) : ('sdk' as const),
+        },
+      }));
+      const { store, reply, where, sent } = setup(nodes, never);
+      store.start();
+      reply('coder');
+      reply('reviewer', false, 'NOT APPROVED');
+      expect(store.snapshot().agents.reviewer?.rounds).toEqual({ reviewing: { round: 2 } });
+      expect(sent.find((turn) => turn.agent === 'reviewer')?.text).toMatch(
+        /APPROVED.*line of its own/,
+      );
+      expect(where()).toEqual({ reviewer: 'waiting ready', coder: 'running implement' });
+      reply('coder');
+      reply('reviewer', false, 'The previous verdict was NOT APPROVED; there are still issues.');
+      expect(store.snapshot().agents.reviewer?.rounds).toEqual({ reviewing: { round: 3 } });
+      reply('coder');
+      reply('reviewer', false, 'No changes needed.\r\n\r\nAPPROVED\r\n');
+      expect(where()).toEqual({ reviewer: 'done', coder: 'done' });
+      expect(store.snapshot().agents.reviewer?.outcomes.reviewing).toBe('succeeded');
+    });
+
     it('repeats until a round’s output contains it', () => {
       const a = connected('a', [
         {
@@ -1599,39 +1626,62 @@ describe('RunStore', () => {
         'other products to use through the Agent SDK: run this agent in Terminal, or give ' +
         'Claude Code an API key or a cloud provider.';
 
-      it('holds the agent for you, not failed, and goes on once it runs another way', () => {
-        const a = connected('a', [
-          { id: 'tests', action: 'Bash' },
-          { id: 'next', message: 'Carry on' },
-        ]);
-        const { store, sent, where, connects, reply, edit } = setup([a], never);
-        store.start();
-        sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
-        expect(where()).toEqual({ a: 'asking tests' });
-        expect(store.snapshot().running).toBe(true);
-        expect(store.snapshot().agents.a?.refused).toEqual({
-          agent: 'a',
-          connection: 'sdk',
-          text: why,
-          switchTo: 'terminal',
-        });
-        // Only switching answers it.
-        store.decide('a', 'tests', { choice: 'approve' });
-        store.decide('a', 'tests', { reply: 'Go on' });
-        expect(where()).toEqual({ a: 'asking tests' });
-        expect(connects).toEqual([]);
-        store.decide('a', 'tests', { choice: 'switch' });
-        expect(connects).toEqual([['a', 'terminal']]);
+      it.each([
+        {
+          agent: 'Claude' as const,
+          connection: 'sdk' as const,
+          switchTo: 'terminal' as const,
+          action: 'Bash',
+          reason: why,
+        },
+        {
+          agent: 'Codex' as const,
+          connection: 'app-server' as const,
+          switchTo: 'codex-terminal' as const,
+          action: 'exec_command',
+          reason: "Codex isn't logged in. Switch this agent to Codex · Terminal and log in there.",
+        },
+      ])(
+        'holds the $connection agent for you, not failed, and goes on once it runs in $switchTo',
+        ({ agent: type, connection, switchTo, action, reason }) => {
+          const node = connected(
+            'a',
+            [
+              { id: 'tests', action },
+              { id: 'next', message: 'Carry on' },
+            ],
+            connection,
+          );
+          const a = { ...node, data: { ...node.data, agent: type } };
+          const { store, sent, where, connects, reply, edit } = setup([a], never);
+          store.start();
+          sent[0]?.refused?.({ text: reason, switchTo });
+          expect(where()).toEqual({ a: 'asking tests' });
+          expect(store.snapshot().running).toBe(true);
+          expect(store.snapshot().agents.a?.refused).toEqual({
+            agent: 'a',
+            connection,
+            text: reason,
+            switchTo,
+          });
+          // Only switching answers it.
+          store.decide('a', 'tests', { choice: 'approve' });
+          store.decide('a', 'tests', { reply: 'Go on' });
+          expect(where()).toEqual({ a: 'asking tests' });
+          expect(connects).toEqual([]);
+          store.decide('a', 'tests', { choice: 'switch' });
+          expect(connects).toEqual([['a', switchTo]]);
 
-        // Its session sends the message it kept once the agent runs in Terminal: the run waits
-        // for that turn to end, as for any other.
-        edit([{ ...a, data: { ...a.data, connection: 'terminal' } }]);
-        expect(where()).toEqual({ a: 'running tests' });
-        expect(store.snapshot().agents.a?.refused).toBeUndefined();
-        reply('a');
-        expect(store.snapshot().agents.a?.outcomes).toEqual({ tests: 'succeeded' });
-        expect(sent.at(-1)?.text).toBe('Carry on');
-      });
+          // Its session sends the message it kept once the agent runs in Terminal: the run waits
+          // for that turn to end, as for any other.
+          edit([{ ...a, data: { ...a.data, connection: switchTo } }]);
+          expect(where()).toEqual({ a: 'running tests' });
+          expect(store.snapshot().agents.a?.refused).toBeUndefined();
+          reply('a');
+          expect(store.snapshot().agents.a?.outcomes).toEqual({ tests: 'succeeded' });
+          expect(sent.at(-1)?.text).toBe('Carry on');
+        },
+      );
 
       it('holds the agent that handed it the message, and switches the one that would not start', () => {
         const a = connected('a', []);

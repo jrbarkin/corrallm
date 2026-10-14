@@ -32,12 +32,13 @@ export interface QueueMessage {
  * in the user's own words, for the agent to judge (a connected agent is asked, yes or no, in its
  * session: run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
  * a window, by its latest reading when the run reaches it (src/shared/usage.ts). The output it looks
- * in is what the agent replied in the checked task.
+ * in is what the agent replied in the checked task; `wholeLine` requires that text on a line of
+ * its own, rather than anywhere in the reply.
  */
 export type Condition =
   | { kind: 'succeeded' }
   | { kind: 'failed' }
-  | { kind: 'outputContains'; text: string }
+  | { kind: 'outputContains'; text: string; wholeLine?: boolean }
   | { kind: 'timedOut' }
   | { kind: 'freeText'; text: string }
   | UsageAbove;

@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 
+import { SAFE_GIT_OPTIONS } from '../../../git';
+
 /*
  * /diff, as Codex's TUI does it (codex-rs/tui/src/get_git_diff.rs, rust-v0.160.1): git's diff of
  * the project folder's changes not yet staged, then its untracked files, each file's on its own.
@@ -24,15 +26,6 @@ const GIT_MS = 15_000;
 const MAX_BUFFER = 32 * 1024 * 1024;
 /** At most this many untracked files are shown. */
 const MAX_UNTRACKED = 100;
-/** Settings that keep a repository's configuration from running anything. */
-const SAFE = [
-  '-c',
-  'core.quotepath=false',
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  'safe.bareRepository=explicit',
-];
 const DIFF = [
   'diff',
   '--no-color',
@@ -48,7 +41,7 @@ export function runGit(env: Readonly<Record<string, string>>): RunGit {
     new Promise((resolve, reject) => {
       execFile(
         'git',
-        [...SAFE, ...args],
+        [...SAFE_GIT_OPTIONS, ...args],
         { cwd, env, timeout: GIT_MS, maxBuffer: MAX_BUFFER, windowsHide: true },
         (error, stdout) => {
           if (!error) resolve({ code: 0, stdout });

@@ -11,6 +11,7 @@ import {
 import { CLAUDE_EFFORTS } from '../sdk/session';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
+import { isSessionId } from '../id';
 import { askedQuestions } from '../sdk/prompts';
 import { proposedDetail, property, text as textOf, toolSummary } from '../sdk/tools';
 import type { Places } from '../sdk/tools';
@@ -143,10 +144,11 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   }
 
   args({ dir, id, resume, model, mode }: Launch<PermissionMode>): string[] {
+    if (id !== null && !isSessionId(id)) throw new TypeError('Expected a UUID session id');
     return [
       '--settings',
       path.join(dir, SETTINGS),
-      ...(id === null ? [] : resume ? ['--resume', id] : ['--session-id', id]),
+      ...(id === null ? [] : resume ? [`--resume=${id}`] : ['--session-id', id]),
       // Only what corrallm was given: otherwise the user's own default model, effort and mode apply.
       ...(model === null || model === 'default' ? [] : ['--model', model]),
       ...(this.#effort === undefined ? [] : ['--effort', this.#effort]),
@@ -166,7 +168,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     };
     const signals: TerminalSignal<PermissionMode>[] = [];
     const id = text('session_id');
-    if (id !== undefined) signals.push({ kind: 'session', id });
+    if (isSessionId(id)) signals.push({ kind: 'session', id });
     const mode = modeOf(text('permission_mode'));
     if (mode !== undefined) signals.push({ kind: 'mode', mode });
     switch (text('hook_event_name')) {

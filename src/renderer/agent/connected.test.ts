@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent } from '../../shared/session';
+import type { Connection, SessionEvent } from '../../shared/session';
 import { fakeBackend } from '../test-backend';
 import { rewindPoints } from './session';
 import { SessionStore } from './sessions';
@@ -9,10 +9,10 @@ import { SessionStore } from './sessions';
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** A store with agent `a` connected through the Agent SDK, and the backend it talks to. */
-function connected() {
+function connected(connection: Connection = 'sdk') {
   const fake = fakeBackend();
   const store = new SessionStore(fake.backend);
-  store.sync([{ id: 'a', connection: 'sdk' }]);
+  store.sync([{ id: 'a', connection }]);
   return { store, ...fake };
 }
 
@@ -700,84 +700,108 @@ describe('a connected session that would not start', () => {
     "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other " +
     'products to use through the Agent SDK: run this agent in Terminal, or give Claude Code an ' +
     'API key or a cloud provider.';
+  const connections = [
+    {
+      connection: 'sdk' as const,
+      switchTo: 'terminal' as const,
+      agent: 'Claude' as const,
+      reason: why,
+    },
+    {
+      connection: 'app-server' as const,
+      switchTo: 'codex-terminal' as const,
+      agent: 'Codex' as const,
+      reason: "Codex isn't logged in. Switch this agent to Codex · Terminal and log in there.",
+    },
+  ];
 
-  /** A store whose agent `a` runs through the Agent SDK, which main refuses to start, as it does. */
-  function refused() {
-    const fake = connected();
+  /** A store whose agent `a` main refuses to start, offering its CLI's Terminal connection. */
+  function refused(
+    connection: Connection = 'sdk',
+    switchTo: Connection = 'terminal',
+    reason = why,
+  ) {
+    const fake = connected(connection);
     fake.backend.start.mockImplementation((_agent, options) => {
-      if (options.connection !== 'sdk') return Promise.resolve(null);
-      fake.emit('a', 'sdk', {
+      if (options.connection !== connection) return Promise.resolve(null);
+      fake.emit('a', connection, {
         type: 'notice',
         id: crypto.randomUUID(),
         level: 'error',
-        text: why,
-        switchTo: 'terminal',
+        text: reason,
+        switchTo,
       });
       return Promise.reject(
-        new Error(`Error invoking remote method 'session:start': Error: ${why}`),
+        new Error(`Error invoking remote method 'session:start': Error: ${reason}`),
       );
     });
     return fake;
   }
 
-  it('keeps the message, queued, says why once, and tells whoever sent it', async () => {
-    const { store, backend } = refused();
-    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
-    const held = vi.fn<(refusal: { text: string; switchTo: string }) => void>();
-    store.send('a', 'Claude', 'Fix the bug', done, undefined, held);
-    await settle();
-    expect(held).toHaveBeenCalledExactlyOnceWith({ text: why, switchTo: 'terminal' });
-    expect(done).not.toHaveBeenCalled();
-    expect(backend.send).not.toHaveBeenCalled();
-    // Never sent: not a turn of the transcript (nor its end, failed), but a message still to send.
-    const session = store.of('a');
-    expect(session.status).toBe('idle');
-    expect(session.entries).toEqual([
-      {
-        id: expect.any(String) as unknown,
-        kind: 'notice',
-        level: 'error',
-        text: why,
-        switchTo: 'terminal',
-      },
-    ]);
-    expect(session.queued.map((q) => q.text)).toEqual(['Fix the bug']);
+  it.each(connections)(
+    'keeps the $connection message, queued, says why once, and tells whoever sent it',
+    async ({ connection, switchTo, agent, reason }) => {
+      const { store, backend } = refused(connection, switchTo, reason);
+      const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+      const held = vi.fn<(refusal: { text: string; switchTo: string }) => void>();
+      store.send('a', agent, 'Fix the bug', done, undefined, held);
+      await settle();
+      expect(held).toHaveBeenCalledExactlyOnceWith({ text: reason, switchTo });
+      expect(done).not.toHaveBeenCalled();
+      expect(backend.send).not.toHaveBeenCalled();
+      // Never sent: not a turn of the transcript (nor its end, failed), but a message still to send.
+      const session = store.of('a');
+      expect(session.status).toBe('idle');
+      expect(session.entries).toEqual([
+        {
+          id: expect.any(String) as unknown,
+          kind: 'notice',
+          level: 'error',
+          text: reason,
+          switchTo,
+        },
+      ]);
+      expect(session.queued.map((q) => q.text)).toEqual(['Fix the bug']);
 
-    // Another message tries the session again, and waits behind the first; the refusal is said once.
-    store.send('a', 'Claude', 'And the tests');
-    await settle();
-    expect(backend.start).toHaveBeenCalledTimes(2);
-    expect(store.of('a').queued.map((q) => q.text)).toEqual(['Fix the bug', 'And the tests']);
-    expect(store.of('a').entries.map((e) => e.kind)).toEqual(['notice']);
-  });
+      // Another message tries the session again, and waits behind the first; the refusal is said once.
+      store.send('a', agent, 'And the tests');
+      await settle();
+      expect(backend.start).toHaveBeenCalledTimes(2);
+      expect(store.of('a').queued.map((q) => q.text)).toEqual(['Fix the bug', 'And the tests']);
+      expect(store.of('a').entries.map((e) => e.kind)).toEqual(['notice']);
+    },
+  );
 
-  it('sends what it kept once the agent runs another way, and whoever sent it hears the turn end', async () => {
-    const { store, backend, emit } = refused();
-    const done = vi.fn<(interrupted: boolean, reply: string) => void>();
-    store.send('a', 'Claude', 'Fix the bug', done);
-    await settle();
-    const [kept] = store.of('a').queued;
+  it.each(connections)(
+    'sends what $connection kept once the agent runs in $switchTo, and whoever sent it hears the turn end',
+    async ({ connection, switchTo, agent, reason }) => {
+      const { store, backend, emit } = refused(connection, switchTo, reason);
+      const done = vi.fn<(interrupted: boolean, reply: string) => void>();
+      store.send('a', agent, 'Fix the bug', done);
+      await settle();
+      const [kept] = store.of('a').queued;
 
-    store.sync([{ id: 'a', connection: 'terminal' }]);
-    await settle();
-    expect(backend.start).toHaveBeenLastCalledWith(
-      'a',
-      expect.objectContaining({ connection: 'terminal' }),
-    );
-    expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
-      id: kept?.id,
-      text: 'Fix the bug',
-    });
-    expect(store.of('a').queued).toEqual([]);
-    emit(
-      'a',
-      'terminal',
-      { type: 'user', id: kept?.id ?? '', text: 'Fix the bug' },
-      { type: 'text', id: 'x', text: 'Fixed.' },
-      end([kept?.id ?? '']),
-    );
-    expect(done).toHaveBeenCalledExactlyOnceWith(false, 'Fixed.');
-  });
+      store.sync([{ id: 'a', connection: switchTo }]);
+      await settle();
+      expect(backend.start).toHaveBeenLastCalledWith(
+        'a',
+        expect.objectContaining({ connection: switchTo }),
+      );
+      expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
+        id: kept?.id,
+        text: 'Fix the bug',
+      });
+      expect(store.of('a').queued).toEqual([]);
+      emit(
+        'a',
+        switchTo,
+        { type: 'user', id: kept?.id ?? '', text: 'Fix the bug' },
+        { type: 'text', id: 'x', text: 'Fixed.' },
+        end([kept?.id ?? '']),
+      );
+      expect(done).toHaveBeenCalledExactlyOnceWith(false, 'Fixed.');
+    },
+  );
 
   it('takes a kept message back off the queue', async () => {
     const { store } = refused();

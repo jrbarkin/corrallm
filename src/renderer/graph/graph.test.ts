@@ -1,5 +1,6 @@
 import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
+import type { QueueItem } from './queue';
 
 import {
   absolutePosition,
@@ -624,6 +625,52 @@ describe('questions', () => {
 });
 
 describe('setAgent', () => {
+  it('translates steps to the new CLI, including Ifs and repeats, keeping their instructions', () => {
+    const queue: QueueItem[] = [
+      { id: 'run', action: 'Bash', instruction: 'npm test', expect: 'fails' },
+      { id: 'read', action: 'Read', target: 'b', instruction: 'REVIEW.md' },
+      { id: 'custom', action: '/custom' },
+      { id: 'message', message: 'Carry on', target: 'b' },
+      { id: 'if', if: { kind: 'failed' }, then: [{ id: 'edit', action: 'Edit' }] },
+      {
+        id: 'loop',
+        repeat: [
+          { id: 'search', action: 'WebSearch', instruction: 'Find the package documentation' },
+          { id: 'wait', waitFor: [{ agent: 'b' }] },
+          { id: 'delay', delay: { seconds: 60 } },
+        ],
+        until: { kind: 'succeeded' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+    ];
+    const g = graphOf([
+      agentNode('a', 0, 0, { data: { label: 'a', queue } }),
+      agentNode('b', 0, 100),
+    ]);
+    const changed = setAgent(g, 'a', AgentType.Codex);
+    expect(get(changed, 'a').data.queue).toEqual([
+      { id: 'run', action: 'exec_command', instruction: 'npm test', expect: 'fails' },
+      { id: 'read', action: 'Read', target: 'b', instruction: 'REVIEW.md' },
+      { id: 'custom', action: '/custom' },
+      { id: 'message', message: 'Carry on', target: 'b' },
+      { id: 'if', if: { kind: 'failed' }, then: [{ id: 'edit', action: 'apply_patch' }] },
+      {
+        id: 'loop',
+        repeat: [
+          { id: 'search', action: 'web_search', instruction: 'Find the package documentation' },
+          { id: 'wait', waitFor: [{ agent: 'b' }] },
+          { id: 'delay', delay: { seconds: 60 } },
+        ],
+        until: { kind: 'succeeded' },
+        rounds: 3,
+        otherwise: 'ask',
+      },
+    ]);
+    expect(get(changed, 'b')).toBe(get(g, 'b'));
+    expect(get(g, 'a').data.queue).toEqual(queue);
+  });
+
   it("sets a node's agent type; groups have none", () => {
     const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 100, 200, 200)]);
     const qwen = setAgent(g, 'a', AgentType.Qwen);

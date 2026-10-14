@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -50,6 +50,21 @@ describe('ProjectFiles', () => {
     const found = await files().find(folder, 'plan', 50);
     expect(found).toEqual(['notes/plan.md']);
     expect(await files().find(folder, 'left', 50)).toEqual([]);
+  });
+
+  it('does not run a repository’s fsmonitor when suggesting files', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: folder });
+    await write('notes.md');
+    execFileSync('git', ['add', 'notes.md'], { cwd: folder });
+    const hook = path.join(folder, 'fsmonitor-hook');
+    await writeFile(hook, "#!/bin/sh\nprintf invoked > fsmonitor-invoked\nprintf 'timestamp\\0'\n");
+    await chmod(hook, 0o755);
+    execFileSync('git', ['config', 'core.fsmonitor', './fsmonitor-hook'], { cwd: folder });
+
+    expect(await files().find(folder, 'notes', 50)).toEqual(['notes.md']);
+    await expect(readFile(path.join(folder, 'fsmonitor-invoked'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
 

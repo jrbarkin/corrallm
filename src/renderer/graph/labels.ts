@@ -31,7 +31,7 @@ import { limitText, timeText } from './time';
 /** How a condition reads after "If". */
 export const ifText = (condition: Condition): string =>
   condition.kind === 'outputContains'
-    ? `the output contains "${condition.text}"`
+    ? `the output contains "${condition.text}"${condition.wholeLine ? ' on a line of its own' : ''}`
     : condition.kind === 'freeText'
       ? condition.text
       : condition.kind === 'usageAbove'
@@ -50,7 +50,7 @@ export const usageAboveText = ({ backend, percent, window }: UsageAbove): string
 export function untilText(nodes: readonly GraphNode[], until: Until): string {
   switch (until.kind) {
     case 'outputContains':
-      return `the output contains “${until.text}”`;
+      return `the output contains “${until.text}”${until.wholeLine ? ' on a line of its own' : ''}`;
     case 'freeText':
       return until.text;
     case 'repeatEnds':

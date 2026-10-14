@@ -1,5 +1,7 @@
 import { CONNECTION_CLI } from '../../shared/session';
 import type { Connection, InstalledClis } from '../../shared/session';
+import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
+import type { QueueItem, RepeatedItem } from './queue';
 
 /** The coding agent a node runs. */
 export const AgentType = {
@@ -281,4 +283,26 @@ export function equivalentAction(
 ): string | undefined {
   if (from === to) return action;
   return EQUIVALENT_ACTIONS.find((job) => job[from] === action)?.[to];
+}
+
+/** Steps keep their job when an agent changes type, including those inside Ifs and repeats. */
+export function translateActions(
+  queue: readonly QueueItem[],
+  from: AgentType,
+  to: AgentType,
+): QueueItem[] {
+  const has = new Set(AGENT_ACTIONS[to].map((a) => a.name));
+  const translate = <T extends RepeatedItem>(step: T): T =>
+    isWait(step) || isDelay(step) || isMessage(step) || has.has(step.action)
+      ? step
+      : { ...step, action: equivalentAction(step.action, from, to) ?? step.action };
+  return queue.map((item): QueueItem =>
+    isApproval(item)
+      ? item
+      : isIf(item)
+        ? { ...item, then: item.then.map(translate) }
+        : isRepeat(item)
+          ? { ...item, repeat: item.repeat.map(translate) }
+          : translate(item),
+  );
 }
