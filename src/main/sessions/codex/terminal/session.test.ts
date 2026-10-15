@@ -43,6 +43,7 @@ class Replay implements Pty {
   #unread: string[] = [];
   #wake: (() => void) | undefined;
   exited = false;
+  exitOnCtrlC = false;
 
   constructor(name: TerminalFixture, args: readonly string[], options: PtyOptions) {
     this.#records = recordedTerminal(name);
@@ -61,6 +62,10 @@ class Replay implements Pty {
 
   write(data: string): void {
     this.written.push(data);
+    if (data === '\x03' && this.exitOnCtrlC) {
+      this.#end(0);
+      return;
+    }
     this.#unread.push(data);
     this.#wake?.();
   }
@@ -214,6 +219,18 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('lets Codex close naturally with Ctrl+C instead of killing its pty', async () => {
+    const session = await start(['prompts']);
+    const run = runs.at(-1);
+    if (!run) throw new Error('Codex did not start');
+    run.exitOnCtrlC = true;
+    const kill = vi.spyOn(run, 'kill');
+    await session.close();
+    expect(run.written).toContain('\x03');
+    expect(kill).not.toHaveBeenCalled();
+    expect(run.exited).toBe(true);
+  });
+
   it('pastes the queue’s messages in, follows its turns and an approval, and hears each end', async () => {
     const session = await start(['prompts']);
     expect(runs[0]?.args.slice(0, 3)).toEqual(['--no-daemon', '-C', '/work/smoke/p2']);

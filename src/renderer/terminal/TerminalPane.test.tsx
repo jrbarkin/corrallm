@@ -505,12 +505,12 @@ describe('a Terminal agent', () => {
       'Hard to say.',
     );
     const terminalSession = within(view.getByRole('region', { name: 'Session' }));
-    const warning = terminalSession.getByRole('note');
-    expect(warning.textContent).toBe(
-      'corrallm took that as no: the answer wasn’t a clear yes or no.',
-    );
-    fireEvent.click(within(warning).getByRole('button', { name: 'Dismiss' }));
-    expect(terminalSession.queryByRole('note')).toBeNull();
+    const needs = within(terminalSession.getByRole('group', { name: 'Needs you' }));
+    expect(needs.getByText(/The answer did not clearly say yes or no/)).toBeTruthy();
+    expect(sessions.backend.send).toHaveBeenCalledTimes(3);
+    fireEvent.click(needs.getByRole('button', { name: 'Condition does not hold' }));
+    expect(terminalSession.queryByRole('group', { name: 'Needs you' })).toBeNull();
+    expect(sessions.backend.send).toHaveBeenCalledTimes(3);
   });
 
   it('warns in its bar when its settings keep corrallm from hearing Claude Code, as the run does', async () => {

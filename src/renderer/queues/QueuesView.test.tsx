@@ -168,9 +168,10 @@ describe('the queues view', () => {
     expect(view.getByRole('status').textContent).toBe('2 working · 0 waiting');
     fireEvent.click(view.getByRole('button', { name: 'Stop' }));
     expect(run('a: Workflow')).toBe('stopped');
-    expect(view.getByRole('status').textContent).toBe('Stopped');
+    expect(view.getByRole('status').textContent).toBe('Paused');
+    expect(view.getByRole('button', { name: 'Resume' })).toBeTruthy();
     // Run again: an agent's own queue marks the task it is on too.
-    fireEvent.click(view.getByRole('button', { name: 'Run' }));
+    fireEvent.click(view.getByRole('button', { name: 'Run again' }));
     fireEvent.click(view.getByRole('button', { name: 'Open a' }));
     const own = within(screen.getByRole('dialog', { name: 'a' })).getByRole('button', {
       name: 'Move Workflow',

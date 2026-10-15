@@ -810,6 +810,15 @@ describe('a Terminal session', () => {
     });
   });
 
+  it('gives Claude its native Ctrl+C exit sequence before resorting to a kill', async () => {
+    fake = { exitOnCtrlC: 3 };
+    const session = await start();
+    await session.close();
+    expect(claude().written.filter((keys) => keys === '\x03')).toHaveLength(3);
+    expect(claude().kills).toEqual([]);
+    expect(claude().exited).toBe(true);
+  });
+
   it('closes: ends Claude Code, waits for it, and removes its settings', async () => {
     const session = await start();
     const settings = claude().arg('--settings') ?? '';

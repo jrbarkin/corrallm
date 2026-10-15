@@ -18,6 +18,8 @@ const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
 const RULE = '─'.repeat(40);
 
 export interface FakeClaudeOptions {
+  /** Test graceful native exit after this many Ctrl+C keys. */
+  exitOnCtrlC?: number;
   /** Whether it reports its status (Claude Code 2.1.295 and later do). */
   reports?: boolean;
   /** Shows the folder trust dialog first, until "Yes" (Enter on option 2) is picked. */
@@ -53,6 +55,7 @@ export class FakeClaude implements Pty {
   /** Whether it has exited. */
   exited = false;
   draft = '';
+  #shutdownKeys = 0;
   readonly #options: FakeClaudeOptions;
   readonly #data = new Set<(data: string) => void>();
   readonly #exit = new Set<(exit: { exitCode: number }) => void>();
@@ -163,6 +166,14 @@ export class FakeClaude implements Pty {
   write(data: string): void {
     this.written.push(data);
     if (this.exited) return;
+    if (
+      data === '\x03' &&
+      this.#options.exitOnCtrlC !== undefined &&
+      ++this.#shutdownKeys >= this.#options.exitOnCtrlC
+    ) {
+      this.exit(0);
+      return;
+    }
     // A terminal's answers to its queries (or another key's escape sequence): not typing.
     if (data.startsWith('\x1b') && data.length > 1) return;
     if (this.#trusting) {

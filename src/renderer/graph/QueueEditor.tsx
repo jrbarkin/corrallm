@@ -6,7 +6,7 @@ import type { UsageBackend, UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
 import { answersOf, usageAnswers } from '../run/asks';
 import type { Answers } from '../run/asks';
-import type { Answer } from '../run/runner';
+import type { Answer, TaskAttempt, TaskProblem } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
 import { backendOfType, windowText } from '../usage/usage';
 import { DEFAULT_AGENT } from './agents';
@@ -905,6 +905,7 @@ function StepRow({
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
+      <TaskResult item={item} context={context} />
       {fails && <Expectation item={item} context={context} open={expecting} onToggle={toggle} />}
       {expecting && (
         <ExpectPicker
@@ -948,6 +949,94 @@ function UsageHeld({ item, context }: { item: QueueStep | QueueMessage; context:
   );
 }
 
+/** A row's recovery problem, projected by queueMarks from the run. */
+function problemOf(marks: RowMarks): TaskProblem | undefined {
+  const kind = marks['data-problem'];
+  if (kind !== 'failed' && kind !== 'uncertain' && kind !== 'cancelled') return undefined;
+  const conditionKey = marks['data-problem-condition'];
+  return {
+    kind,
+    reason: marks['data-problem-reason'] ?? 'unknown',
+    text: marks['data-problem-text'] ?? '',
+    agent: marks['data-problem-agent'] ?? '',
+    ...(conditionKey === undefined ? {} : { conditionKey }),
+  };
+}
+
+/** The task's concise attempt record and recovery choices, beside the original task. */
+function TaskResult({
+  item,
+  context,
+  controls = true,
+}: {
+  item: QueueItem;
+  context: Context;
+  controls?: boolean;
+}) {
+  const marks = context.marks(item.id);
+  const problem = problemOf(marks);
+  const attempts = marks['data-attempts']
+    ? (JSON.parse(marks['data-attempts']) as TaskAttempt[])
+    : [];
+  if (!problem && attempts.length === 0) return null;
+  const latest = attempts.at(-1);
+  const label = (status: string) => status.charAt(0).toUpperCase() + status.slice(1);
+  return (
+    <div className="graph-queue-result">
+      {problem && <p className="graph-queue-problem">{problem.text}</p>}
+      {attempts.length > 0 && (
+        <details className="graph-queue-attempts">
+          <summary>
+            <span>
+              {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
+            </span>
+            <span>
+              {label(latest?.status ?? '')}
+              {latest?.reason ? ` · ${latest.reason.replace(/[_-]/g, ' ')}` : ''}
+            </span>
+          </summary>
+          <ol>
+            {attempts.map((attempt, index) => (
+              <li key={attempt.id}>
+                <span>
+                  Attempt {index + 1} · {label(attempt.status)}
+                </span>
+                <time dateTime={new Date(attempt.startedAt).toISOString()}>
+                  {new Date(attempt.startedAt).toLocaleTimeString()}
+                </time>
+                {attempt.endedAt !== undefined && (
+                  <>
+                    {' – '}
+                    <time dateTime={new Date(attempt.endedAt).toISOString()}>
+                      {new Date(attempt.endedAt).toLocaleTimeString()}
+                    </time>
+                  </>
+                )}
+                {attempt.text && <p>{attempt.text}</p>}
+                {!attempt.text && attempt.reason && <p>{attempt.reason.replace(/[_-]/g, ' ')}</p>}
+                {attempt.message && (
+                  <p>
+                    You asked: <span>{attempt.message}</span>
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      {controls && problem && marks['data-decide'] !== undefined && (
+        <DecideBar
+          item={item}
+          problem={problem}
+          onDecide={(answer) => {
+            context.onDecide(item.id, answer);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /** A message: the agent it goes to (a chip that changes it), and its text, edited in place. */
 function MessageRow({
   item,
@@ -959,20 +1048,27 @@ function MessageRow({
   context: Context;
 }) {
   if (item.submission) {
-    const { status, images } = item.submission;
+    const { status, images, unresolved } = item.submission;
     return (
       <div
         className="graph-queue-row graph-queue-message graph-queue-submission"
         {...context.marks(item.id)}
         data-run={status}
         data-submission={item.submission.id}
+        data-unresolved={unresolved ? '' : undefined}
       >
         <span className="graph-queue-keyword">Message</span>
         <span
           className="graph-queue-submission-status"
-          title={status === 'completed' ? 'The agent’s turn ended.' : undefined}
+          title={
+            unresolved
+              ? 'Inspect the native conversation; this submission was not replayed.'
+              : status === 'completed'
+                ? 'The agent’s turn ended.'
+                : undefined
+          }
         >
-          {status.charAt(0).toUpperCase() + status.slice(1)}
+          {unresolved ? 'Unresolved' : status.charAt(0).toUpperCase() + status.slice(1)}
         </span>
         {(images?.length ?? 0) > 0 && (
           <span className="graph-queue-submission-images">
@@ -1000,6 +1096,7 @@ function MessageRow({
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
+      <TaskResult item={item} context={context} />
     </div>
   );
 }
@@ -1185,6 +1282,7 @@ function WaitRow({
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />
+      <TaskResult item={item} context={context} />
       {timing && (
         <TimePicker
           label="Go on anyway after…"
@@ -1279,6 +1377,7 @@ function DelayRow({
           }}
         />
       )}
+      <TaskResult item={item} context={context} />
     </div>
   );
 }
@@ -1359,6 +1458,7 @@ function ApprovalRow({
       {marks['data-decide'] !== undefined && (
         <DecideBar
           item={item}
+          problem={problemOf(marks)}
           onDecide={(answer) => {
             context.onDecide(item.id, answer);
           }}
@@ -1376,6 +1476,7 @@ function ApprovalRow({
           }}
         />
       )}
+      <TaskResult item={item} context={context} controls={false} />
     </div>
   );
 }
@@ -1389,15 +1490,17 @@ function ApprovalRow({
 export function DecideBar({
   item,
   answers: given,
+  problem,
   onDecide,
 }: {
   item: QueueItem;
   /** How to answer, where it is not the item's own (a usage rule's hold before a task). */
   answers?: Answers;
+  problem?: TaskProblem | undefined;
   onDecide: (answer: Answer) => void;
 }) {
   const [replying, setReplying] = useState(false);
-  const answers = given ?? answersOf(item);
+  const answers = given ?? answersOf(item, problem);
   if (!answers) return null;
   const { choices, reply } = answers;
   const button = (choice: (typeof choices)[number]) => (
@@ -1487,6 +1590,7 @@ function IfRow({
         </button>
         <span className="graph-queue-keyword">then</span>
         <RemoveButton item={item} context={context} />
+        <TaskResult item={item} context={context} />
         {editing && (
           <ConditionPicker
             current={item.if}
@@ -2069,6 +2173,7 @@ function RepeatRow({
         {marks['data-decide'] !== undefined && (
           <DecideBar
             item={item}
+            problem={problemOf(marks)}
             onDecide={(answer) => {
               context.onDecide(item.id, answer);
             }}
@@ -2105,6 +2210,7 @@ function RepeatRow({
           />
         )}
         {pick(item)}
+        <TaskResult item={item} context={context} controls={false} />
       </div>
       {item.repeat.length > 0 && (
         <SortableList

@@ -1,4 +1,4 @@
-import type { ModelInfo, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ModelInfo, SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import type { SessionEvent } from '../../../shared/session';
@@ -227,6 +227,55 @@ const failedResult = sdk({
 });
 
 describe('Translator, on errors', () => {
+  it('reports a final structured model refusal, but not one recovered by a later assistant reply', () => {
+    const translate = translator();
+    const assistant = (stop_reason: string, said: string) =>
+      sdk({
+        type: 'assistant',
+        uuid: 'reply',
+        parent_tool_use_id: null,
+        message: { id: 'reply', content: [{ type: 'text', text: said }], usage: {}, stop_reason },
+      });
+    const success = sdk({ ...failedResult, is_error: false }) as SDKResultMessage;
+    translate.translate(assistant('refusal', 'I cannot help with this request.'));
+    expect(translate.takeResult(success, false)).toMatchObject({
+      status: 'failed',
+      reason: 'declined',
+    });
+    translate.translate(assistant('refusal', 'I cannot help with this request.'));
+    translate.translate(assistant('end_turn', 'The fallback completed it.'));
+    expect(translate.takeResult(success, false)).toEqual({
+      status: 'completed',
+      reason: 'completed',
+    });
+  });
+
+  it('carries typed usage and authentication failures without turning interruption into failure', () => {
+    const translate = translator();
+    translate.translate(
+      sdk({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rejected', resetsAt: 1791875400, rateLimitType: 'five_hour' },
+      }),
+    );
+    translate.translate(assistantError('rate_limit', 'Limit reached'));
+    expect(translate.takeResult(failedResult as SDKResultMessage, false)).toMatchObject({
+      status: 'failed',
+      reason: 'usage-limit',
+      resetsAt: 1791875400000,
+    });
+    translate.translate(assistantError('authentication_failed', 'Not logged in'));
+    expect(translate.takeResult(failedResult as SDKResultMessage, false)).toMatchObject({
+      status: 'failed',
+      reason: 'auth',
+      message: expect.stringContaining('Not logged in') as string,
+    });
+    expect(translate.takeResult(failedResult as SDKResultMessage, true)).toEqual({
+      status: 'cancelled',
+      reason: 'interrupted',
+    });
+  });
+
   it('says a usage limit was hit, and when it resets', () => {
     const translate = translator();
     translate.translate(

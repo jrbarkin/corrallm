@@ -248,6 +248,8 @@ class FakeSession implements LiveSession<SessionMode> {
         detail: { kind: 'output', text: 'hello' },
       });
       turn.tool = undefined;
+      if (text.includes('End your reply with SUCCEEDED or FAILED'))
+        emit({ type: 'text', id: `${id}/verdict`, text: '\nSUCCEEDED' });
       return true;
     };
 

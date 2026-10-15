@@ -1,5 +1,6 @@
+import { turnResult } from '../../shared/session';
 import type { SessionAnswer } from '../../shared/session';
-import type { DriverIO, SessionDriver, Turn } from './driver';
+import type { DriverDone, DriverIO, SessionDriver, Turn } from './driver';
 import { play } from './player';
 import type { Playback } from './player';
 import { scriptedTurn } from './script';
@@ -17,10 +18,16 @@ export class ScriptedDriver implements SessionDriver {
     this.#io = io;
   }
 
-  start(turn: Turn, done: (interrupted: boolean) => void): void {
+  start(turn: Turn, done: DriverDone): void {
     const io = this.#io;
     this.#playback = play(scriptedTurn(turn.text, turn.agent, io.session().mode, io.newId), {
-      dispatch: io.dispatch,
+      dispatch: (action) => {
+        io.dispatch(
+          action.type === 'end'
+            ? { ...action, messages: [turn.id], result: turnResult(action) }
+            : action,
+        );
+      },
       later: io.later,
       now: io.now,
       allowed: (tool) => io.session().allowed.includes(tool),
@@ -29,7 +36,7 @@ export class ScriptedDriver implements SessionDriver {
         this.#playback = undefined;
         // The next queued message starts first: one sent as the sender hears goes after it.
         io.idle();
-        done(interrupted);
+        done(interrupted, turnResult({ interrupted }));
       },
     });
   }

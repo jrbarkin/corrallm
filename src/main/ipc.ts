@@ -3,6 +3,9 @@ import type { WebContents } from 'electron';
 
 import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
+import { parseRunCheckpoint } from '../shared/run';
+import type { RunJournal } from './run-journal';
+import type { RunShutdown } from './run-shutdown';
 import { MAX_FILE_MATCHES } from '../shared/session';
 import type { InstalledClis } from '../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../shared/usage';
@@ -50,6 +53,8 @@ export type IpcHandler<C extends IpcChannel> = (
  * project files to show), sessions, the CLIs the user has, and usage.
  */
 export interface IpcServices {
+  runs: Pick<RunJournal, 'get' | 'save' | 'opened' | 'saved' | 'forgotten'>;
+  shutdown: Pick<RunShutdown, 'ready'>;
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
   links: Pick<LinkOpener, 'open'>;
@@ -176,6 +181,8 @@ export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
 }
 
 function createHandlers({
+  runs,
+  shutdown,
   projects,
   files,
   links,
@@ -186,11 +193,44 @@ function createHandlers({
 }: IpcServices): HandlerTable {
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
+    'run:get': { parseArgs: noArgs, handler: ({ contents }) => runs.get(contents) },
+    'run:save': {
+      parseArgs: (args) => {
+        if (args.length !== 2 || typeof args[0] !== 'string' || args[0].length > 100) {
+          throw new TypeError('Expected a canvas token and run checkpoint');
+        }
+        return [args[0], args[1] === null ? null : parseRunCheckpoint(args[1])];
+      },
+      handler: async ({ contents }, token, checkpoint) => {
+        await runs.save(contents, token, checkpoint);
+        return null;
+      },
+    },
+    'run:ready': {
+      parseArgs: (args) => {
+        const [id, error] = args;
+        if (
+          args.length !== 2 ||
+          typeof id !== 'string' ||
+          id.length > 100 ||
+          !(error === null || (typeof error === 'string' && error.length <= 4096))
+        ) {
+          throw new TypeError('Expected a shutdown request and error (or null)');
+        }
+        return [id, error];
+      },
+      handler: ({ contents }, id, error) => {
+        shutdown.ready(contents, id, error);
+        return null;
+      },
+    },
     'canvas:open': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
+        // Explicit replacement must also work when the previous journal cannot be read.
         const file = await openCanvas(contents);
         if (file === null) return null;
+        await runs.opened(contents);
         // Another canvas: the old one's sessions end, and the new one's folder comes back.
         await sessions.canvasOpened(contents);
         const project = await projects.restore(contents);
@@ -200,8 +240,10 @@ function createHandlers({
     'canvas:save': {
       parseArgs: parseSaveArgs,
       handler: async ({ contents }, text, choose) => {
+        await runs.get(contents);
         const name = await saveCanvas(contents, text, choose);
         if (name !== null) {
+          await runs.saved(contents);
           await projects.remember(contents);
           await sessions.canvasSaved(contents);
         }
@@ -211,7 +253,9 @@ function createHandlers({
     'canvas:forget': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
+        // New preserves the old journal and starts a fresh identity, even after a bad restore.
         forgetCanvas(contents);
+        await runs.forgotten(contents);
         projects.forget(contents);
         await sessions.canvasForgotten(contents);
         return null;
@@ -220,6 +264,7 @@ function createHandlers({
     'project:choose': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
+        await runs.get(contents);
         const before = projects.of(contents);
         const chosen = await projects.choose(contents);
         if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
@@ -236,6 +281,7 @@ function createHandlers({
     'session:start': {
       parseArgs: parseStartArgs,
       handler: async ({ contents }, agentId, options) => {
+        await runs.get(contents);
         await sessions.start(contents, agentId, options);
         return null;
       },

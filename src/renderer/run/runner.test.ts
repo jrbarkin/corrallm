@@ -8,6 +8,7 @@ import { fromFile } from '../graph/file';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { fillTemplate } from '../graph/templates';
+import { readRun } from './checkpoint';
 import { RunStore } from './runner';
 import type { Refusal, TurnEnd } from './runner';
 
@@ -206,12 +207,15 @@ describe('RunStore', () => {
     store.start();
     expect(sent.map((s) => [s.agent, s.text])).toEqual([['b', 'Over to you']]);
     expect(where()).toEqual({ a: 'running hand', b: 'done' });
-    // Not after a moment: when the turn it starts in b's session ends, however it ends.
+    // Not after a moment: when the turn it starts in b's session ends.
     advance(MINUTE);
     expect(where()).toEqual({ a: 'running hand', b: 'done' });
     reply('b');
     expect(where()).toEqual({ a: 'running again', b: 'done' });
     reply('b', true);
+    expect(where()).toEqual({ a: 'asking again', b: 'done' });
+    expect(store.snapshot().agents.a?.problem).toMatchObject({ kind: 'failed', agent: 'b' });
+    store.decide('a', 'again', { choice: 'continue' });
     expect(store.snapshot().agents.a?.outcomes).toMatchObject({
       hand: 'succeeded',
       again: 'failed',
@@ -293,7 +297,9 @@ describe('RunStore', () => {
     store.stop();
     tick(); // c's step was cancelled: nothing moves.
     expect(store.snapshot().running).toBe(false);
-    expect(where()).toEqual({ a: 'waiting w', b: 'waiting w', c: 'running slow' });
+    expect(store.snapshot().paused).toBe(true);
+    expect(where()).toEqual({ a: 'waiting w', b: 'waiting w', c: 'asking slow' });
+    expect(store.snapshot().agents.c?.problem?.kind).toBe('cancelled');
     store.reset();
     expect(store.snapshot()).toEqual({ running: false, agents: {} });
   });
@@ -489,7 +495,8 @@ describe('RunStore', () => {
       store.stop();
       store.goOn('a', 'pause');
       expect(store.snapshot().running).toBe(false);
-      expect(where()).toEqual({ a: 'waiting pause', b: 'running busy' });
+      expect(store.snapshot().paused).toBe(true);
+      expect(where()).toEqual({ a: 'waiting pause', b: 'asking busy' });
     });
   });
 
@@ -659,7 +666,9 @@ describe('RunStore', () => {
       reply('a');
       store.decide('a', 'two', { choice: 'approve' });
       expect(store.snapshot().running).toBe(false);
-      expect(where()).toEqual({ a: 'running two' });
+      expect(store.snapshot().paused).toBe(true);
+      expect(where()).toEqual({ a: 'asking two' });
+      expect(store.snapshot().agents.a?.problem?.kind).toBe('cancelled');
       expect(sent).toHaveLength(1);
 
       // Run again: from the top, nothing approved or asked for.
@@ -1101,6 +1110,8 @@ describe('RunStore', () => {
       expect(pending()).toBe(0);
       reply('a');
       reply('a', true);
+      expect(where()).toEqual({ a: 'asking tests', b: 'done', t: 'running tree' });
+      store.decide('a', 'tests', { choice: 'continue' });
       expect(sent.map((s) => [s.agent, s.text])).toEqual([
         ['a', '/code-review'],
         [
@@ -1113,9 +1124,11 @@ describe('RunStore', () => {
           `Use the Read tool for this step (read files), on the work of Builder (another agent).${VERDICT}`,
         ],
       ]);
-      // A failed or interrupted turn failed the step.
+      // A native execution failure waits for review before the queue continues.
       reply('a', false, 'Read it.\nSUCCEEDED');
       reply('t', true);
+      expect(store.snapshot().agents.t?.problem?.kind).toBe('failed');
+      store.decide('t', 'tree', { choice: 'continue' });
       expect(where()).toEqual({ a: 'done', b: 'done', t: 'done' });
       expect(store.snapshot().agents.a?.outcomes).toEqual({
         review: 'succeeded',
@@ -1160,7 +1173,9 @@ describe('RunStore', () => {
       const { store, reply, where, sent, told } = setup([a], never);
       store.start();
       // The tests fail, as they should yet: the step failed, though its turn ended well.
-      reply('a', false, 'All 12 tests fail: wc.js is missing, as expected.\n\n**FAILED**');
+      reply('a', false, 'All 12 tests fail: wc.js is missing, as expected.\n\nFAILED');
+      expect(where()).toEqual({ a: 'asking red' });
+      store.decide('a', 'red', { choice: 'continue' });
       expect(store.snapshot().agents.a?.outcomes).toMatchObject({
         red: 'failed',
         'red-check': 'skipped',
@@ -1178,27 +1193,31 @@ describe('RunStore', () => {
       expect(told).toEqual([]);
     });
 
-    it('takes a step whose reply says neither as its turn went, and says so in its session', () => {
+    it('holds a step whose reply has no verdict until the user resolves it', () => {
       const a = connected('a', [
         { id: 'tests', action: 'Bash' },
         { id: 'review', action: '/code-review' },
       ]);
-      const { store, reply, told } = setup([a], never);
+      const { store, reply, where, sent, told } = setup([a], never);
       store.start();
       reply('a', false, 'Ran them: 2 tests failed.');
-      expect(told).toEqual([
-        [
-          'a',
-          'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.',
-        ],
-      ]);
+      expect(where()).toEqual({ a: 'asking tests' });
+      expect(store.snapshot().agents.a?.outcomes).toEqual({});
+      expect(store.snapshot().agents.a?.problem).toMatchObject({
+        kind: 'uncertain',
+        reason: 'missing-verdict',
+        agent: 'a',
+      });
+      expect(sent).toHaveLength(1);
+      store.decide('a', 'tests', { choice: 'resolve' });
+      expect(where()).toEqual({ a: 'running review' });
       // A slash command is sent as it is, with nothing asked of it: its turn is how it went.
       reply('a', false, 'No issues found.');
       expect(store.snapshot().agents.a?.outcomes).toEqual({
         tests: 'succeeded',
         review: 'succeeded',
       });
-      expect(told).toHaveLength(1);
+      expect(told).toEqual([]);
     });
 
     describe('a step expected to fail', () => {
@@ -1237,7 +1256,7 @@ describe('RunStore', () => {
         expect(told).toEqual([]);
       });
 
-      it('fails when its turn fails, and goes as expected when its reply says neither', () => {
+      it('holds execution failures and missing verdicts instead of treating either as an expected failure', () => {
         const a = connected('a', [
           { ...red, id: 'broken' },
           red,
@@ -1246,21 +1265,25 @@ describe('RunStore', () => {
         ]);
         const { store, reply, told } = setup([a], never);
         store.start();
-        // Interrupted, or an error: the tests never ran, so they did not fail as expected.
-        reply('a', true, 'Interrupted');
+        // An execution error does not establish that the tests failed as expected.
+        reply('a', true, 'API failed before the tests ran');
+        expect(store.snapshot().agents.a?.problem?.kind).toBe('failed');
+        expect(store.snapshot().agents.a?.outcomes).toEqual({});
+        store.decide('a', 'broken', { choice: 'continue' });
         reply('a', false, 'Ran them: 12 tests failed.');
-        expect(told).toEqual([
-          [
-            'a',
-            'corrallm took the step as failed, as expected: its reply didn’t end with SUCCEEDED or FAILED.',
-          ],
-        ]);
+        expect(store.snapshot().agents.a?.problem?.kind).toBe('uncertain');
+        expect(store.snapshot().agents.a?.asExpected).toBeUndefined();
+        store.decide('a', 'red', { choice: 'retry' });
+        reply('a', false, 'Ran them: 12 tests failed.\nFAILED');
         reply('a', false, 'No issues found.');
+        expect(store.snapshot().agents.a?.problem?.kind).toBe('failed');
+        store.decide('a', 'review', { choice: 'continue' });
         expect(store.snapshot().agents.a).toMatchObject({
           outcomes: { broken: 'failed', red: 'succeeded', review: 'failed' },
           asExpected: { red: true, review: false },
         });
         expect(store.snapshot().agents.a?.asExpected).not.toHaveProperty('broken');
+        expect(told).toEqual([]);
       });
 
       it('ends a repeat once it fails, forgetting each round how it went', () => {
@@ -1338,12 +1361,16 @@ describe('RunStore', () => {
         },
       );
 
-      it('counts as succeeded, judged neither way, when its agent’s replies can’t be heard', () => {
+      it('holds an unheard result until resolved, without judging whether it failed as expected', () => {
         const a = connected('a', [red, early('redo')], 'terminal');
         const { store, reply, where, told } = setup([a], never, new Set(['a']));
         store.start();
         // Its hooks are off: its turn ends, with no reply heard.
         reply('a');
+        expect(where()).toEqual({ a: 'asking red' });
+        expect(store.snapshot().agents.a?.outcomes).toEqual({});
+        expect(store.snapshot().agents.a?.problem?.kind).toBe('uncertain');
+        store.decide('a', 'red', { choice: 'resolve' });
         expect(where()).toEqual({ a: 'done' });
         expect(store.snapshot().agents.a?.outcomes).toEqual({ red: 'succeeded', early: 'skipped' });
         // Nothing says it failed, as expected: how it went was never heard.
@@ -1353,7 +1380,7 @@ describe('RunStore', () => {
       });
     });
 
-    it('says once when it can’t read an agent’s replies, and asks it nothing', () => {
+    it('warns once and holds unreadable steps for review, without asking unreadable conditions', () => {
       const a = connected(
         'a',
         [
@@ -1376,8 +1403,18 @@ describe('RunStore', () => {
       store.start();
       // Its hooks are off: its turn ends, with no reply heard.
       reply('a');
+      expect(where()).toEqual({ a: 'asking tests' });
+      expect(store.snapshot().agents.a?.problem?.kind).toBe('uncertain');
+      store.decide('a', 'tests', { choice: 'resolve' });
+      expect(where()).toEqual({ a: 'asking green' });
+      expect(store.snapshot().agents.a?.problem?.conditionKey).toBe(JSON.stringify(['a', 'green']));
+      store.decide('a', 'green', { choice: 'no' });
+      expect(where()).toEqual({ a: 'asking flaky' });
+      store.decide('a', 'flaky', { choice: 'no' });
       expect(where()).toEqual({ a: 'running again' });
       reply('a');
+      expect(where()).toEqual({ a: 'asking again' });
+      store.decide('a', 'again', { choice: 'resolve' });
       expect(where()).toEqual({ a: 'done' });
       expect(store.snapshot().agents.a?.outcomes).toMatchObject({
         tests: 'succeeded',
@@ -1387,14 +1424,10 @@ describe('RunStore', () => {
       });
       // Not asked whether a test is flaky: it could not be heard answering.
       expect(sent).toHaveLength(2);
-      expect(told).toEqual([
-        [
-          'a',
-          'corrallm can’t read this agent’s replies (its hooks are off), so in this run “the ' +
-            'output contains” and conditions in your words don’t hold, without asking it, and its ' +
-            'steps count as succeeded.',
-        ],
-      ]);
+      expect(told).toHaveLength(1);
+      expect(told[0]?.[0]).toBe('a');
+      expect(told[0]?.[1]).toMatch(/^corrallm can’t read this agent’s replies/);
+      expect(told[0]?.[1]).not.toContain('steps count as succeeded');
       // Said again in the next run.
       store.start();
       reply('a');
@@ -1417,6 +1450,11 @@ describe('RunStore', () => {
       ]);
       reply('c', false, '1 of 4 failed.\nFAILED');
       reply('d', false, 'All 4 pass.\n\nSUCCEEDED');
+      expect(store.snapshot().agents.c?.problem).toMatchObject({
+        kind: 'failed',
+        reason: 'task-failed',
+      });
+      store.decide('c', 'tests', { choice: 'continue' });
       expect(store.snapshot().agents.c?.outcomes).toEqual({ tests: 'failed' });
       expect(store.snapshot().agents.d?.outcomes).toEqual({ tests: 'succeeded' });
     });
@@ -1445,7 +1483,7 @@ describe('RunStore', () => {
       ]);
       const { store, reply, where, sent } = setup([a, agent('b')], never);
       store.start();
-      reply('a', false, 'Ran 12 tests: 0 failed.');
+      reply('a', false, 'Ran 12 tests: 0 failed.\nSUCCEEDED');
       expect(where()).toEqual({ a: 'running tag', b: 'done' });
       reply('a', false, 'Tagged v1.2, but 2 tests are failing on CI.');
       expect(where()).toEqual({ a: 'running fix', b: 'done' });
@@ -1549,15 +1587,19 @@ describe('RunStore', () => {
       reply('a', false, 'No. Two checks are red.');
       expect(where()).toEqual({ a: 'running docs' });
       expect(told).toEqual([]);
-      // Neither yes nor no: no, and the run says so in its session.
+      // Neither yes nor no: the condition stays unresolved until the user decides.
       reply('a', false, 'Mostly: the API page is missing.');
-      expect(told).toEqual([
-        ['a', 'corrallm took that as no: the answer wasn’t a clear yes or no.'],
-      ]);
-      // A question its turn never answered (interrupted, failed) is no as well.
+      expect(where()).toEqual({ a: 'asking docs' });
+      expect(store.snapshot().agents.a?.problem?.kind).toBe('uncertain');
+      store.decide('a', 'docs', { choice: 'no' });
+      expect(where()).toEqual({ a: 'running news' });
+      // A failed query also stays unresolved instead of silently taking its false branch.
       reply('a', true);
-      expect(told.at(-1)).toEqual(['a', 'corrallm took that as no: the question wasn’t answered.']);
+      expect(where()).toEqual({ a: 'asking news' });
+      expect(store.snapshot().agents.a?.problem?.kind).toBe('failed');
+      store.decide('a', 'news', { choice: 'no' });
       expect(where()).toEqual({ a: 'done' });
+      expect(told).toEqual([]);
       expect(store.snapshot().agents.a?.outcomes).toMatchObject({
         flaky: 'succeeded',
         green: 'skipped',
@@ -1605,7 +1647,7 @@ describe('RunStore', () => {
       const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }]);
       const { store, reply, where, sent } = setup([a, b], never);
       store.start();
-      reply('a');
+      reply('a', false, 'Tests passed.\nSUCCEEDED');
       expect(where()).toEqual({ a: 'running next', b: 'running hand' });
       store.stop();
       expect(sent.map((s) => [s.agent, s.text, s.withdrawn])).toEqual([
@@ -1617,7 +1659,10 @@ describe('RunStore', () => {
       reply('a', true);
       reply('a', true);
       expect(store.snapshot().running).toBe(false);
-      expect(where()).toEqual({ a: 'running next', b: 'running hand' });
+      expect(store.snapshot().paused).toBe(true);
+      expect(where()).toEqual({ a: 'asking next', b: 'asking hand' });
+      expect(store.snapshot().agents.a?.problem).toMatchObject({ kind: 'cancelled', agent: 'a' });
+      expect(store.snapshot().agents.b?.problem).toMatchObject({ kind: 'cancelled', agent: 'a' });
 
       // Run again: from the top, the earlier run's ends unheard.
       store.start();
@@ -1682,7 +1727,7 @@ describe('RunStore', () => {
           edit([{ ...a, data: { ...a.data, connection: switchTo } }]);
           expect(where()).toEqual({ a: 'running tests' });
           expect(store.snapshot().agents.a?.refused).toBeUndefined();
-          reply('a');
+          reply('a', false, 'Tests passed.\nSUCCEEDED');
           expect(store.snapshot().agents.a?.outcomes).toEqual({ tests: 'succeeded' });
           expect(sent.at(-1)?.text).toBe('Carry on');
         },
@@ -1731,7 +1776,7 @@ describe('RunStore', () => {
       ]);
       const { store, reply, where, sent } = setup([a], never);
       store.start();
-      reply('a');
+      reply('a', false, 'Layout built.\nSUCCEEDED');
       store.decide('a', 'ok', { reply: ' Match this ', images: [png] });
       expect(sent.at(-1)).toMatchObject({ agent: 'a', text: 'Match this', images: [png] });
       reply('a');
@@ -1988,6 +2033,17 @@ describe('RunStore', () => {
       expect(run.where()).toEqual({ a: 'asking one' });
       run.store.decide('a', 'one', { choice: 'wait' });
       expect(run.where()).toEqual({ a: 'asking one' });
+    });
+
+    it('persists a usage override even when the native reset time is unknown', () => {
+      const run = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      run.rule({ window: 'fiveHour', percent: 80, action: 'ask' });
+      run.reading(fiveHour(85, null));
+      run.store.start();
+      run.store.decide('a', 'one', { choice: 'goOn' });
+      expect(() => readRun(run.store.checkpoint())).not.toThrow();
+      run.store.restore(run.store.checkpoint());
+      expect(run.store.snapshot().paused).toBe(true);
     });
 
     it('waits until usage resets: the reset time of the reading when the queue reached it', () => {

@@ -50,7 +50,8 @@ test('simulates usage and sets a rule in main, remembered across a restart', asy
     await close();
     ({ app, close } = await launchApp({ profile }));
     page = await app.firstWindow();
-    await claudeCanvas(page);
+    // The unsaved template canvas is restored too; it already supplies Claude's gauge.
+    await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await expect(gauge()).toHaveAttribute('aria-label', 'Claude usage: 92% of 5-hour window');
     await gauge().click();
     await expect(panel().getByText(/^Simulated /)).toBeVisible();

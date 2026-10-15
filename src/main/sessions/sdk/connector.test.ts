@@ -379,6 +379,7 @@ describe('SdkConnector', () => {
       seconds: 5,
       interrupted: false,
       failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
   });
 

@@ -213,33 +213,33 @@ src/renderer/run/    Running the queues (runner.ts, a store like sessions.ts): e
                      instruction to use it; with what the step is to do in the user's words,
                      QueueStep.instruction, edited in the step's row: a command's arguments, or
                      after the tool, then a paragraph asking for SUCCEEDED or FAILED on the
-                     reply's last line), done when their turn ends: a tool's step fails if its
-                     turn failed or the agent says FAILED (a turn that ends well may have run
-                     tests that fail; no verdict counts as succeeded, said in its session by
-                     RunIO.tell), for Claude and Codex agents alike, a command's as its turn
-                     ended; a simulated agent's steps take a timer and may fail (and ignore the
+                     reply's last line), judged only by an exact final SUCCEEDED or FAILED line.
+                     Missing verdicts are uncertain; native execution errors take precedence over
+                     a declared verdict. Messages and slash commands use native turn completion.
+                     Unhandled failure, cancellation and uncertainty hold the original task for
+                     the user; authored If failed/repeat recovery still handles known task failures.
+                     A simulated agent's steps take a timer and may fail (and ignore the
                      instruction). A step expected to fail (QueueStep.expect, set from a tool's
                      action in its row, then shown as an "expect: fails" chip under the step; in
                      .corral files) asks the agent the same, and is
                      turned round once judged: failing is its success, passing its failure, so
                      Ifs, repeats and waits read whether it went as expected (AgentRun.asExpected,
                      on its row: "failed, as expected" or "passed, but was expected to fail"); a
-                     tool's turn that fails is no verdict and fails it, and a reply with none goes
-                     as expected. A connected agent's conditions are real (never
+                     tool's native execution failure is not an expected task failure; a missing
+                     verdict stays uncertain. A connected agent's conditions are real (never
                      chance): "the output contains" is matched, exactly, against what it replied in
                      the checked task's turn (RunIO.send's `done`: SessionStore's turnReply, its
                      top-level text; for a Terminal agent, the Stop hook's last reply). With
                      `wholeLine: true`, the text must occupy its own line (surrounding whitespace
                      allowed); Review loop uses this so NOT APPROVED does not end it. A condition in
                      the user's words is asked of it in its own session, yes or no ("corrallm asks:
-                     …"; an unclear or missing answer is no, said in its session by RunIO.tell, a
-                     warning notice a Terminal agent's bar shows too); a simulated agent's are by
-                     chance. Where corrallm can't hear a connected agent's replies (its session said
+                     …"; an unclear or failed answer holds Needs you for retry or a human yes/no);
+                     a simulated agent's are by chance. Where corrallm can't hear a connected agent's replies (its session said
                      `unheard`: its CLI's settings turn off the hooks a Terminal session listens to;
-                     RunIO.unheard), "the output contains" and conditions in the user's words don't
-                     hold (it is not asked), its steps count as succeeded (one expected to fail
-                     went neither way: how it went was never heard), and the run says so once a
-                     run, in its session. Stop (and Run again) takes back what the run sent that
+                     RunIO.unheard), tool verdicts and output/own-words conditions stay uncertain,
+                     and the run says why once per run. Stop pauses with a cancelled attempt;
+                     Resume holds it for a decision and Run again explicitly starts fresh. Stop
+                     (and Run again) takes back what the run sent that
                      is still going (RunIO.send returns it: SessionStore.send's take-back, off the session's queue
                      or interrupting its turn), and no longer hears those turns end. Waits hold
                      until their target is done or their time limit passes, delays until their
@@ -301,6 +301,15 @@ TypeScript: `tsconfig.json` is solution-style and references `tsconfig.node.json
 ESLint enforces the process boundaries: renderer and shared code cannot import Electron, Node built-ins or main/preload code; the preload cannot import Node built-ins.
 
 Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/preload/index.ts` to `.vite/build/preload.cjs`, and the renderer to `.vite/renderer/main_window/`.
+
+## Run recovery and persistence
+
+- `TurnResult` keeps native completion, cancellation and failure reasons separate (quota, auth, API, declined, start/connection errors). A tool's task verdict is independent of that native result. Cancellation never triggers an If failed branch or satisfies an expected failure.
+- `AgentRun.problem` holds the original queue item in Needs you. Retry, Mark resolved, Continue with failure/cancellation and Stop here are explicit decisions. Corrective composer messages include the original objective, keep the human note as a visible Message row, and create another attempt. A direct Terminal submission is correlated by its native message ID when exactly one held task owns that console; observation never sends it again. Slash commands stay commands. Attempt metadata stores timestamps, concise reasons and corrective notes.
+- `run/checkpoint.ts` validates the whole versioned runner snapshot before applying it. It includes cursor/outcomes, repeat rounds, held condition decisions, deadlines and minimal reply evidence for downstream conditions. `agent/submission-state.ts` stores manual Message metadata, never an executable queue of messages. Restored running/queued submissions are unresolved and are never automatically sent.
+- `run/persistence.ts` serializes writes and holds dispatch across canvas identity changes. Every automated dispatch waits for its in-flight checkpoint to reach main. Main owns paths and generation tokens: `main/run-journal.ts` atomically journals each named canvas and durable draft under the profile's `runs/`, and remembers the last active canvas. Save As copies the checkpoint and native IDs; stale generations cannot overwrite another canvas. Unsaved workflow edits survive too. A missing named file restores as an unsaved draft with a warning.
+- Reopen/reload restores paused. Resume is explicit; an interrupted in-flight task stays uncertain until inspected/resolved or explicitly retried. Native session reconnection uses each connection's existing restart/resume and exact conversation ID. Main's `RunShutdown` asks the renderer to freeze/save, waits for acknowledgement, then gracefully interrupts/exits native sessions and flushes IDs/settings. A failed save prevents closing and surfaces the reason.
+- TODO(V2): full assistant transcripts and terminal-screen snapshots. The native CLI owns conversation history today; this checkpoint preserves queue state and result evidence, not a full conversation copy.
 
 ## Security rules (do not regress)
 

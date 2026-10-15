@@ -83,3 +83,8 @@ export function canvasFile(contents: WebContents): string | undefined {
 export function forgetCanvas(contents: WebContents): void {
   files.delete(contents);
 }
+
+/** Main-only restoration of a path previously chosen through this app's file dialog. */
+export function associateCanvas(contents: WebContents, file: string): void {
+  files.set(contents, file);
+}

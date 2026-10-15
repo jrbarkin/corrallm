@@ -825,10 +825,15 @@ describe('a connected agent', () => {
       { type: 'text', id: 'm:0', text: 'Hard to say: one test timed out once.' },
       { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
     );
-    expect(
-      transcript.getByText('corrallm took that as no: the answer wasn’t a clear yes or no.'),
-    ).toBeTruthy();
-    // Taken as no: the queue goes on past the If.
+    const needs = within(
+      within(view.getByRole('region', { name: 'Session' })).getByRole('group', {
+        name: 'Needs you',
+      }),
+    );
+    expect(needs.getByText(/The answer did not clearly say yes or no/)).toBeTruthy();
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    // The user explicitly decides the condition; the queue then goes past the If.
+    fireEvent.click(needs.getByRole('button', { name: 'Condition does not hold' }));
     await settle();
     expect(backend.send).toHaveBeenLastCalledWith('a', { id: sent(), text: 'Carry on' });
   });

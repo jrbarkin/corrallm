@@ -7,6 +7,14 @@ import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
 import type { UsageSource } from './usage/store';
+import type { RunSource } from './run/persistence';
+
+const runSource: RunSource = {
+  get: () => window.api.getRun(),
+  save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
+  ready: (request, error) => window.api.runReady(request, error),
+  onStopping: (listener) => window.api.onRunStopping(listener),
+};
 
 /**
  * Canvases are opened and saved by the main process (src/main/canvas.ts), which also keeps the
@@ -108,6 +116,7 @@ export function App() {
           sessionBackend={sessionBackend}
           terminalBackend={terminalBackend}
           usageSource={usageSource}
+          runSource={runSource}
         />
       </OpenLinkContext.Provider>
     </main>

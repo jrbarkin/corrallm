@@ -1592,6 +1592,132 @@ describe('GraphEditor', () => {
       });
     });
 
+    it.each([
+      'unreadable journal',
+      'invalid workflow',
+      'invalid queue state',
+      'invalid submitted messages',
+      'invalid saved canvas',
+    ])('recovers from %s with New while keeping native work unavailable', async (failure) => {
+      const files = fakeFiles();
+      let replaced = false;
+      files.forget.mockImplementation(() => {
+        replaced = true;
+        return Promise.resolve(null);
+      });
+      const source = {
+        get: vi.fn(() => {
+          if (!replaced && failure === 'unreadable journal')
+            return Promise.reject(new Error('Unreadable journal'));
+          return Promise.resolve({
+            token: replaced ? 'new-draft' : 'old',
+            name: null,
+            checkpoint: replaced
+              ? null
+              : {
+                  version: 1 as const,
+                  workflow: failure === 'invalid workflow' ? '{}' : toFile(coder),
+                  state:
+                    failure === 'invalid queue state'
+                      ? '{}'
+                      : JSON.stringify({
+                          version: 1,
+                          run: { running: false, agents: {} },
+                          replies: [],
+                          held: [],
+                          arrived: [],
+                          ended: [],
+                          past: [],
+                          due: [],
+                          usageDecided: [],
+                          warned: [],
+                        }),
+                  messages:
+                    failure === 'invalid submitted messages' ? '{}' : '{"version":1,"agents":[]}',
+                  updatedAt: 1,
+                },
+            ...(failure === 'invalid saved canvas' && !replaced
+              ? { savedText: 'unreadable saved canvas' }
+              : {}),
+          });
+        }),
+        save: vi.fn().mockResolvedValue(null),
+        ready: vi.fn().mockResolvedValue(null),
+        onStopping: () => () => undefined,
+      };
+      const sessions = fakeBackend();
+      const { container } = render(
+        <GraphEditor
+          initialGraph={coder}
+          files={files}
+          runSource={source}
+          sessionBackend={sessions.backend}
+        />,
+      );
+      expect((await screen.findByRole('alert')).textContent).toContain('Could not');
+      expect(container.querySelector('.react-flow__node')).toBeNull();
+      expect(sessions.backend.start).not.toHaveBeenCalled();
+      fireEvent.click(button('New'));
+      await waitFor(() => {
+        expect(container.querySelector('.react-flow')).not.toBeNull();
+      });
+      expect(files.forget).toHaveBeenCalledOnce();
+      await waitFor(() => {
+        expect(source.save).toHaveBeenCalled();
+      });
+      expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
+    });
+
+    it('keeps a rejected persisted file detached from the retained canvas on the next Save', async () => {
+      let association: 'original' | 'invalid' | 'draft' = 'original';
+      const files = fakeFiles({ name: 'invalid.corral', text: 'Remember the milk' });
+      files.open.mockImplementation(() => {
+        association = 'invalid';
+        return Promise.resolve({ name: 'invalid.corral', text: 'Remember the milk' });
+      });
+      files.forget.mockImplementation(() => {
+        association = 'draft';
+        return Promise.resolve(null);
+      });
+      const savedAssociations: string[] = [];
+      files.save.mockImplementation(() => {
+        savedAssociations.push(association);
+        return Promise.resolve('recovered.corral');
+      });
+      const runSource = {
+        get: vi.fn(() =>
+          Promise.resolve({
+            token: association,
+            checkpoint: null,
+            name: association === 'draft' ? null : `${association}.corral`,
+            ...(association === 'draft'
+              ? {}
+              : {
+                  savedText: association === 'invalid' ? 'Remember the milk' : toFile(coder),
+                }),
+          }),
+        ),
+        save: vi.fn().mockResolvedValue(null),
+        ready: vi.fn().mockResolvedValue(null),
+        onStopping: () => () => undefined,
+      };
+      const { container } = render(<GraphEditor files={files} runSource={runSource} />);
+      await waitFor(() => {
+        expect(button('Open…').disabled).toBe(false);
+      });
+      fireEvent.click(button('Open…'));
+      expect((await screen.findByRole('alert')).textContent).toContain(
+        'This is not a corrallm canvas',
+      );
+      expect(files.forget).toHaveBeenCalledOnce();
+      expect(container.querySelector('.react-flow__node[data-id="x"]')).not.toBeNull();
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(savedAssociations).toEqual(['draft']);
+      });
+      expect(runSource.save.mock.calls.at(-1)?.[0]).toBe('draft');
+    });
+
     it('says why a file cannot be opened, and keeps the canvas', async () => {
       const files = fakeFiles({ name: 'notes.corral', text: 'Remember the milk' });
       const { nodes } = setup(coder, files);

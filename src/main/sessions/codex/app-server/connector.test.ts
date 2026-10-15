@@ -668,7 +668,12 @@ describe('the App Server connection', () => {
         level: 'error',
         text: expect.stringMatching(/^Not sent: .*Codex · Terminal/s) as unknown,
       });
-      expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: false, failed: true });
+      expect(events.at(-1)).toMatchObject({
+        type: 'end',
+        interrupted: true,
+        failed: false,
+        result: { status: 'cancelled', reason: 'interrupted' },
+      });
       expect(await requests('turn/start')).toEqual([]);
     });
 

@@ -1,8 +1,8 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CanvasMemory } from './memory';
 
@@ -88,6 +88,31 @@ describe('CanvasMemory', () => {
       b: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12',
       c: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13',
     });
+  });
+
+  it('rejects flush after a write failure until a later metadata write succeeds', async () => {
+    await writeFile(file, 'blocks the metadata directory');
+    const nested = path.join(file, 'canvases.json');
+    const memory = new CanvasMemory(nested);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      // Ordinary metadata updates remain nonfatal; shutdown must still see their failed write.
+      await memory.update('/work/team.corral', () => ({
+        sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
+      }));
+      expect(logged).toHaveBeenCalledOnce();
+      await expect(memory.flush()).rejects.toThrow();
+
+      await rm(file);
+      await mkdir(file);
+      await memory.update('/work/team.corral', (current) => current);
+      await expect(memory.flush()).resolves.toBeUndefined();
+      expect((await new CanvasMemory(nested).get('/work/team.corral')).sessions).toEqual({
+        a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+      });
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('keeps only the canvases used most recently', async () => {

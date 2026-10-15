@@ -35,6 +35,10 @@ function listen<E extends IpcEvent>(
 
 const api: AppApi = {
   ping: () => invoke(API_CHANNELS.ping),
+  getRun: () => invoke(API_CHANNELS.getRun),
+  saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
+  runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
+  onRunStopping: (listener) => listen(API_EVENTS.onRunStopping, listener),
   openCanvas: () => invoke(API_CHANNELS.openCanvas),
   saveCanvas: (text, choose) => invoke(API_CHANNELS.saveCanvas, text, choose),
   forgetCanvas: () => invoke(API_CHANNELS.forgetCanvas),

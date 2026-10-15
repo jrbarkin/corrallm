@@ -113,6 +113,9 @@ const REMEMBERED = {
 export class SessionManager {
   readonly #deps: SessionManagerDeps;
   readonly #agents = new Map<WebContents, Map<string, Agent>>();
+  /** Removed agents still own native processes until their bounded close has finished. */
+  readonly #closing = new Map<WebContents, Set<Promise<void>>>();
+  readonly #ending = new WeakMap<Agent, Promise<void>>();
   /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
   readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
   /** Renderers whose going is watched for. */
@@ -131,6 +134,7 @@ export class SessionManager {
 
   /** Starts an agent's session (resuming its last), unless it runs already with that connection. */
   async start(contents: WebContents, agentId: string, options: SessionOptions): Promise<void> {
+    await this.#settled(contents);
     const agents = this.#agentsOf(contents);
     const running = agents.get(agentId);
     if (running?.connection === options.connection) {
@@ -415,7 +419,8 @@ export class SessionManager {
 
   /** Ends every session, as the app quits: resolves once they have all closed. */
   async closeEverything(): Promise<void> {
-    await Promise.all([...this.#agents.keys()].map((contents) => this.#endAll(contents, false)));
+    const renderers = new Set([...this.#agents.keys(), ...this.#closing.keys()]);
+    await Promise.all([...renderers].map((contents) => this.#endAll(contents, false)));
   }
 
   async #launch(
@@ -523,7 +528,21 @@ export class SessionManager {
   }
 
   /** Ends a session, telling the renderer (`tell`) when it did not ask for it. */
-  async #end(contents: WebContents, agentId: string, agent: Agent, tell: boolean): Promise<void> {
+  #end(contents: WebContents, agentId: string, agent: Agent, tell: boolean): Promise<void> {
+    const existing = this.#ending.get(agent);
+    if (existing) return existing;
+    const pending = this.#closing.get(contents) ?? new Set<Promise<void>>();
+    this.#closing.set(contents, pending);
+    const closing = this.#close(contents, agentId, agent, tell).finally(() => {
+      pending.delete(closing);
+      if (pending.size === 0) this.#closing.delete(contents);
+    });
+    this.#ending.set(agent, closing);
+    pending.add(closing);
+    return closing;
+  }
+
+  async #close(contents: WebContents, agentId: string, agent: Agent, tell: boolean): Promise<void> {
     const agents = this.#agents.get(contents);
     if (agents?.get(agentId) === agent) agents.delete(agentId);
     if (tell) this.#deps.emit(contents, agentId, agent.connection, { type: 'closed' });
@@ -533,17 +552,33 @@ export class SessionManager {
     } catch {
       return; // It never started.
     }
-    await Promise.race([
-      session.close().catch((error: unknown) => {
-        console.error(`Could not close ${agentId}'s session:`, error);
-      }),
-      new Promise((resolve) => setTimeout(resolve, CLOSE_MS)),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        session.close().catch((error: unknown) => {
+          console.error(`Could not close ${agentId}'s session:`, error);
+        }),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, CLOSE_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async #endAll(contents: WebContents, tell: boolean): Promise<void> {
     const agents = [...(this.#agents.get(contents) ?? [])];
     await Promise.all(agents.map(([id, agent]) => this.#end(contents, id, agent, tell)));
+    await this.#settled(contents);
+  }
+
+  async #settled(contents: WebContents): Promise<void> {
+    for (;;) {
+      const pending = this.#closing.get(contents);
+      if (!pending?.size) return;
+      await Promise.all(pending);
+    }
   }
 
   #agentsOf(contents: WebContents): Map<string, Agent> {

@@ -1,3 +1,4 @@
+import type { RunCheckpoint, RunContext } from './run';
 import type {
   Connection,
   FilesRewind,
@@ -35,6 +36,12 @@ import type { UsageBackend, UsageRule, UsageState, UsageWindows } from './usage'
 export interface IpcContract {
   /** Round-trip check. Resolves with a human-readable version string. */
   'app:ping': { args: []; result: string };
+  /** Restore the current named canvas or durable draft, without starting an agent. */
+  'run:get': { args: []; result: RunContext };
+  /** Main selects storage; the token rejects writes from an earlier canvas generation. */
+  'run:save': { args: [token: string, checkpoint: RunCheckpoint | null]; result: null };
+  /** Renderer froze dispatch and finished persisting before the requested shutdown. */
+  'run:ready': { args: [requestId: string, error: string | null]; result: null };
   /**
    * Asks for a canvas file to open (the Open dialog). Resolves with it, or null if cancelled. Its
    * agents' sessions end, and its project folder, if one was chosen for it, comes back.
@@ -177,6 +184,8 @@ export interface IpcContract {
 
 /** Events main sends the renderer: each one's name, and what it carries. */
 export interface IpcEvents {
+  /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
+  'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: Connection, event: SessionEvent];
   /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
@@ -222,6 +231,9 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  */
 export interface InvokeApi {
   ping(): Promise<IpcResult<'app:ping'>>;
+  getRun(): Promise<IpcResult<'run:get'>>;
+  saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
+  runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
   openCanvas(): Promise<IpcResult<'canvas:open'>>;
   saveCanvas(...args: IpcArgs<'canvas:save'>): Promise<IpcResult<'canvas:save'>>;
   forgetCanvas(): Promise<IpcResult<'canvas:forget'>>;
@@ -261,6 +273,7 @@ export interface InvokeApi {
 
 /** A function per event: it listens for the event, and returns a function that stops listening. */
 export interface EventApi {
+  onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
   onTerminalEvent(listener: (...args: IpcEventArgs<'terminal:event'>) => void): () => void;
   onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
@@ -272,6 +285,9 @@ export interface AppApi extends InvokeApi, EventApi {}
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
   ping: 'app:ping',
+  getRun: 'run:get',
+  saveRun: 'run:save',
+  runReady: 'run:ready',
   openCanvas: 'canvas:open',
   saveCanvas: 'canvas:save',
   forgetCanvas: 'canvas:forget',
@@ -308,6 +324,7 @@ export const API_CHANNELS = {
 
 /** Which event each `EventApi` function listens for. */
 export const API_EVENTS = {
+  onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
   onTerminalEvent: 'terminal:event',
   onUsageChanged: 'usage:changed',

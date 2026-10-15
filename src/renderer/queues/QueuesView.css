@@ -2,6 +2,14 @@
  * All queues, task by task: each lane a pane of its agent's queue (the queue's own rows, edited in
  * place), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
  */
+.queues-problem {
+  margin: 6px 0;
+  font-size: 0.85em;
+  font-weight: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .queues-view {
   --queues-wait: var(--queue-wait);
   --queues-handoff: var(--queue-handoff);

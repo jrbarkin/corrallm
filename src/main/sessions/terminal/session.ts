@@ -334,23 +334,43 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   }
 
   async close(): Promise<void> {
-    // TODO(7d): CLI-specific graceful interrupt/exit, awaited with a bounded kill fallback,
-    // so native conversation history is flushed before reconnecting by its saved ID.
     this.#closing = true;
     if (this.#typing) this.#typing.stopped = true;
     this.#clearTimers();
     const pty = this.#pty;
     if (pty && !this.#exited) {
       const exited = this.#exit;
-      const within = (ms: number) =>
-        Promise.race([
+      const within = (ms: number) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        return Promise.race([
           exited.then(() => true),
-          new Promise<boolean>((resolve) => setTimeout(resolve, ms, false)),
-        ]);
-      pty.kill();
-      if (!(await within(this.#deps.timing.kill))) {
-        pty.kill(process.platform === 'win32' ? undefined : 'SIGKILL');
-        await within(this.#deps.timing.kill);
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(resolve, ms, false);
+          }),
+        ]).finally(() => {
+          clearTimeout(timer);
+        });
+      };
+      const hasExited = () => this.#exited;
+      const keys = this.#cli.shutdownKeys ?? [];
+      for (const [index, key] of keys.entries()) {
+        if (hasExited()) break;
+        pty.write(key);
+        if (
+          await within(
+            index === keys.length - 1
+              ? this.#deps.timing.kill
+              : Math.min(50, this.#deps.timing.kill / 6),
+          )
+        )
+          break;
+      }
+      if (!hasExited()) {
+        pty.kill();
+        if (!(await within(Math.min(1000, this.#deps.timing.kill)))) {
+          pty.kill(process.platform === 'win32' ? undefined : 'SIGKILL');
+          await within(Math.min(500, this.#deps.timing.kill));
+        }
       }
     }
     await this.#cleanUp();

@@ -35,6 +35,7 @@ export class CanvasMemory {
   readonly #limit: number;
   #canvases: Promise<Map<string, Remembered>> | undefined;
   #writing: Promise<void> = Promise.resolve();
+  #writeError: Error | undefined;
 
   constructor(file: string, limit = LIMIT) {
     this.#file = file;
@@ -45,11 +46,17 @@ export class CanvasMemory {
     return (await this.#load()).get(canvas) ?? NOTHING;
   }
 
-  /** Changes what it remembers of `canvas`, which becomes the canvas used most recently. */
-  update(canvas: string, change: (remembered: Remembered) => Remembered): Promise<void> {
+  /**
+   * Changes what it remembers of `canvas`, which becomes the canvas used most recently.
+   * `known` distinguishes an intentionally empty record from one absent from memory.
+   */
+  update(
+    canvas: string,
+    change: (remembered: Remembered, known: boolean) => Remembered,
+  ): Promise<void> {
     const run = async () => {
       const canvases = await this.#load();
-      const next = change(canvases.get(canvas) ?? NOTHING);
+      const next = change(canvases.get(canvas) ?? NOTHING, canvases.has(canvas));
       canvases.delete(canvas);
       canvases.set(canvas, next);
       for (const oldest of canvases.keys()) {
@@ -57,17 +64,20 @@ export class CanvasMemory {
         canvases.delete(oldest);
       }
       await this.#write(canvases);
+      this.#writeError = undefined;
     };
-    // A failed write is logged: what it remembers is a convenience, never worth failing a save for.
+    // Ordinary metadata updates remain nonfatal, but shutdown must not lose native resume IDs.
     this.#writing = this.#writing.then(run).catch((error: unknown) => {
+      this.#writeError = error instanceof Error ? error : new Error(String(error));
       console.error('Could not remember the canvas:', error);
     });
     return this.#writing;
   }
 
-  /** Resolves once every update so far is written: before the app quits. */
-  flush(): Promise<void> {
-    return this.#writing;
+  /** Resolves once every update so far is written; rejects a still-unrecovered write failure. */
+  async flush(): Promise<void> {
+    await this.#writing;
+    if (this.#writeError !== undefined) throw this.#writeError;
   }
 
   #load(): Promise<Map<string, Remembered>> {

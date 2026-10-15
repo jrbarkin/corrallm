@@ -34,6 +34,9 @@ import { queueMarks } from '../queues/marks';
 import { withSubmissions } from '../queues/submissions';
 import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
+import { readRun } from '../run/checkpoint';
+import { RunPersistence } from '../run/persistence';
+import type { RunSource } from '../run/persistence';
 import { UsageStore } from '../usage/store';
 import type { UsageSource } from '../usage/store';
 import { UsageGauges } from '../usage/UsageGauge';
@@ -163,12 +166,14 @@ export function GraphEditor({
   sessionBackend,
   terminalBackend = NO_TERMINAL,
   usageSource,
+  runSource,
 }: {
   initialGraph?: Graph;
   files?: CanvasFiles;
   sessionBackend?: SessionBackend;
   terminalBackend?: TerminalBackend;
   usageSource?: UsageSource;
+  runSource?: RunSource;
 }) {
   return (
     <ReactFlowProvider>
@@ -178,6 +183,7 @@ export function GraphEditor({
         sessionBackend={sessionBackend}
         terminalBackend={terminalBackend}
         usageSource={usageSource}
+        runSource={runSource}
       />
     </ReactFlowProvider>
   );
@@ -197,14 +203,27 @@ function Editor({
   sessionBackend,
   terminalBackend,
   usageSource,
+  runSource,
 }: {
   initialGraph: Graph;
   files: CanvasFiles | undefined;
   sessionBackend: SessionBackend | undefined;
   terminalBackend: TerminalBackend;
   usageSource: UsageSource | undefined;
+  runSource: RunSource | undefined;
 }) {
   const [graph, setRawGraph] = useState(initialGraph);
+  /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
+  const [saved, setSaved] = useState(() => ({
+    name: undefined as string | undefined,
+    text: toFile(initialGraph),
+  }));
+  /** Why the last open or save failed. */
+  const [problem, setProblem] = useState<string>();
+  /** The folder the canvas's agents work in (main keeps it; this is what the file bar shows). */
+  const [project, setProject] = useState<ProjectFolder | null>(null);
+  /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
+  const [loads, setLoads] = useState(0);
   /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
   const [usageStore] = useState(() => new UsageStore(usageSource));
   const usage = useSyncExternalStore(usageStore.subscribe, usageStore.snapshot);
@@ -213,24 +232,55 @@ function Editor({
    * steps and questions; a simulated agent's steps are simulated. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
-  const [{ sessionStore, runStore }] = useState(() => {
+  const [{ sessionStore, runStore, persistence, documentState }] = useState(() => {
     let runner: RunStore | undefined = undefined;
-    const sessionStore = new SessionStore(sessionBackend, (id) => {
-      const at = runner?.snapshot().agents[id];
-      return at?.current ?? Object.keys(at?.outcomes ?? {}).at(-1);
-    });
+    let persistence: RunPersistence | undefined = undefined;
+    let workflow = toFile(initialGraph);
+    const documentState = {
+      read: () => workflow,
+      write: (next: string) => {
+        workflow = next;
+      },
+    };
+    const sessionStore = new SessionStore(
+      sessionBackend,
+      (id) => {
+        const at = runner?.snapshot().agents[id];
+        return at?.current ?? Object.keys(at?.outcomes ?? {}).at(-1);
+      },
+      {
+        submitted: (agent, message) => {
+          if (message.text.trim().startsWith('/')) return;
+          const task = runner?.observeSubmission(agent, message.id, message.text);
+          if (task) sessionStore.tagSubmission(agent, message.id, task.agent, task.item);
+        },
+        ended: (agent, message, reply, result) => {
+          runner?.observeEnd(agent, message, reply, result);
+        },
+      },
+    );
     runner = new RunStore({
-      send: (agent, text, done, images, refused, origin) =>
+      ...(runSource
+        ? {
+            beforeSend: () => {
+              if (!persistence)
+                return Promise.reject(new Error('Run storage has not initialized.'));
+              return persistence.flush();
+            },
+          }
+        : {}),
+      send: (agent, text, done, images, refused, origin, displayText) =>
         sessionStore.send(
           agent.id,
           agent.data.agent ?? DEFAULT_AGENT,
           text,
-          (failed, reply) => {
-            done({ failed, reply });
+          (failed, reply, result) => {
+            done({ failed, reply, ...(result ? { result } : {}) });
           },
           images && [...images],
           refused,
           origin ?? 'queue',
+          displayText,
         ),
       tell: (agent, text) => {
         sessionStore.notice(agent.id, 'warning', text);
@@ -251,10 +301,110 @@ function Editor({
       usage: () => usageStore.snapshot(),
       unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
     });
-    return { sessionStore, runStore: runner };
+    const runStore = runner;
+    if (runSource)
+      persistence = new RunPersistence(runSource, {
+        capture: () => ({
+          version: 1,
+          workflow: documentState.read(),
+          state: runStore.checkpoint(),
+          messages: sessionStore.serializeSubmissions(),
+          updatedAt: Date.now(),
+        }),
+        freeze: () => {
+          runStore.pause();
+        },
+        error: (error) => {
+          setProblem(`Could not save or restore run progress: ${ipcErrorMessage(error)}`);
+        },
+        restore: (context) => {
+          const checkpoint = context.checkpoint;
+          const next = checkpoint
+            ? fromFile(checkpoint.workflow)
+            : context.savedText
+              ? fromFile(context.savedText)
+              : undefined;
+          const savedText = context.savedText
+            ? toFile(fromFile(context.savedText))
+            : toFile(EMPTY_GRAPH);
+          if (checkpoint) {
+            readRun(checkpoint.state);
+            const check = new SessionStore();
+            check.restoreSubmissions(checkpoint.messages);
+          }
+          if (next) {
+            runStore.reset();
+            sessionStore.reset();
+            documentState.write(toFile(next));
+            setLoads((n) => n + 1);
+            setRawGraph(next);
+            sessionStore.sync(
+              next.nodes.flatMap((n) =>
+                n.type === 'agent'
+                  ? [{ id: n.id, connection: connectionOf(n.data), settings: n.data.settings }]
+                  : [],
+              ),
+            );
+            runStore.update(next.nodes);
+            if (checkpoint) {
+              sessionStore.restoreSubmissions(checkpoint.messages);
+              runStore.restore(checkpoint.state);
+            }
+            setSaved({
+              name: context.name ?? undefined,
+              text: savedText,
+            });
+          }
+          setProject(context.project ?? null);
+          if (context.warning) setProblem(context.warning);
+        },
+      });
+    return { sessionStore, runStore, persistence, documentState };
   });
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
+  const [restoring, setRestoring] = useState(runSource !== undefined);
+  const [restoreFailed, setRestoreFailed] = useState(false);
+  useEffect(() => {
+    if (!persistence) return;
+    let mounted = true;
+    void persistence.initialize().then(
+      () => {
+        if (!mounted) return;
+        setRestoring(false);
+        persistence.changed();
+      },
+      (error: unknown) => {
+        if (!mounted) return;
+        setRestoring(false);
+        setRestoreFailed(true);
+        setProblem(`Could not restore run progress: ${ipcErrorMessage(error)}`);
+      },
+    );
+    const runChanged = runStore.subscribe(() => {
+      persistence.changed();
+    });
+    const sessionChanged = sessionStore.subscribe(() => {
+      persistence.changed();
+    });
+    const unloading = () => {
+      if (persistence.failedInitialization()) return;
+      runStore.pause();
+      void persistence.flush().catch(() => undefined);
+    };
+    window.addEventListener('beforeunload', unloading);
+    return () => {
+      mounted = false;
+      runChanged();
+      sessionChanged();
+      window.removeEventListener('beforeunload', unloading);
+      persistence.dispose();
+    };
+  }, [persistence, runStore, sessionStore]);
+  useEffect(() => {
+    documentState.write(toFile(graph));
+    persistence?.changed();
+  }, [graph, documentState, persistence]);
   /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
   const displayNodes = useMemo(
     () => withSubmissions(graph.nodes, sessions),
@@ -326,19 +476,10 @@ function Editor({
       }}
     />
   );
-  /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
-  const [saved, setSaved] = useState(() => ({
-    name: undefined as string | undefined,
-    text: toFile(initialGraph),
-  }));
   const text = useMemo(() => toFile(graph), [graph]);
   const edited = text !== saved.text;
   /** What would discard unsaved changes, while the user is asked first. */
   const [discarding, setDiscarding] = useState<{ run: () => void }>();
-  /** Why the last open or save failed. */
-  const [problem, setProblem] = useState<string>();
-  /** The folder the canvas's agents work in (main keeps it; this is what the file bar shows). */
-  const [project, setProject] = useState<ProjectFolder | null>(null);
   // What agents can be set to is read there (its own settings count): again for another folder.
   useEffect(() => {
     sessionStore.forgetOptions();
@@ -546,8 +687,6 @@ function Editor({
     setQueues(undefined);
   }, []);
 
-  /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
-  const [loads, setLoads] = useState(0);
   useEffect(() => {
     // React Flow holds the new nodes by now (its effects run first); it fits once they are measured.
     if (loads > 0) void fitView({ padding: 0.2, maxZoom: 1 });
@@ -562,6 +701,7 @@ function Editor({
   /** Replaces the canvas with one from a file (`name`), or a new one, and fits the view to it. */
   const load = useCallback(
     (next: Graph, name: string | undefined) => {
+      documentState.write(toFile(next));
       setLoads((n) => n + 1);
       setRawGraph(next);
       runStore.reset();
@@ -575,7 +715,7 @@ function Editor({
       setDrawn(undefined);
       setProblem(undefined);
     },
-    [runStore, sessionStore],
+    [runStore, sessionStore, documentState],
   );
   /**
    * The file commands. New and Open replace the canvas, so while it has unsaved changes (`edited`)
@@ -595,6 +735,23 @@ function Editor({
     return {
       new: (edited: boolean) => {
         unless(edited, () => {
+          if (persistence) {
+            runStore.pause();
+            void persistence
+              .prepareForReplacement()
+              .then(() =>
+                persistence.transition(async () => {
+                  await files.forget();
+                  load(EMPTY_GRAPH, undefined);
+                  setProject(null);
+                }, false),
+              )
+              .then(() => {
+                setRestoreFailed(false);
+                persistence.changed();
+              }, failed('start a new canvas'));
+            return;
+          }
           load(EMPTY_GRAPH, undefined);
           setProject(null);
           files.forget().catch(failed('start a new canvas'));
@@ -602,6 +759,33 @@ function Editor({
       },
       open: (edited: boolean) => {
         unless(edited, () => {
+          if (persistence) {
+            runStore.pause();
+            void persistence
+              .prepareForReplacement()
+              .then(() =>
+                persistence.transition(
+                  files.open,
+                  (file) => file !== null,
+                  async () => {
+                    await files.forget();
+                    setProject(null);
+                    setSaved({ name: undefined, text: toFile(EMPTY_GRAPH) });
+                  },
+                ),
+              )
+              .then(
+                () => {
+                  setRestoreFailed(false);
+                  persistence.changed();
+                },
+                (error: unknown) => {
+                  setRestoreFailed(persistence.failedInitialization());
+                  failed('open the canvas')(error);
+                },
+              );
+            return;
+          }
           files.open().then((file) => {
             if (!file) return;
             try {
@@ -619,6 +803,23 @@ function Editor({
       /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */
       example: (example: Example, choices: TemplateChoices, edited: boolean) => {
         unless(edited, () => {
+          if (persistence) {
+            runStore.pause();
+            void persistence
+              .prepareForReplacement()
+              .then(() =>
+                persistence.transition(async () => {
+                  await files.forget();
+                  load(fromTemplate(example, choices), undefined);
+                  setProject(null);
+                }, false),
+              )
+              .then(() => {
+                setRestoreFailed(false);
+                persistence.changed();
+              }, failed('open the template'));
+            return;
+          }
           load(fromTemplate(example, choices), undefined);
           setProject(null);
           files.forget().catch(failed('open the template'));
@@ -630,15 +831,33 @@ function Editor({
         (() => {
           chooseProject().then((folder) => {
             if (folder) setProject(folder);
+            if (persistence)
+              void persistence.rebind(false).then(() => {
+                persistence.changed();
+              }, failed('remember the project folder'));
           }, failed('choose the project folder'));
         }),
       save: (text: string, choose: boolean) => {
+        if (persistence) {
+          void persistence
+            .flush()
+            .then(() =>
+              persistence.transition(async () => {
+                const name = await files.save(text, choose);
+                if (name !== null) setSaved({ name, text });
+              }, false),
+            )
+            .then(() => {
+              persistence.changed();
+            }, failed('save the canvas'));
+          return;
+        }
         files.save(text, choose).then((name) => {
           if (name !== null) setSaved({ name, text });
         }, failed('save the canvas'));
       },
     };
-  }, [files, load]);
+  }, [files, load, persistence, runStore]);
   useEffect(() => {
     if (files)
       document.title = `${saved.name ?? 'Untitled'}${edited ? ' (edited)' : ''} — corrallm`;
@@ -650,6 +869,7 @@ function Editor({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const file = commands ? fileAction(event) : null;
+      if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
         if (file === 'save' || file === 'saveAs') {
@@ -675,7 +895,7 @@ function Editor({
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [apply, commands]);
+  }, [apply, commands, restoreFailed]);
 
   /** Adds a node where the pointer is: into the innermost group there, if any. */
   const addAtPointer = (event: ReactMouseEvent) => {
@@ -809,9 +1029,42 @@ function Editor({
   });
   const canGroup = groupMembers(graph.nodes).length > 0;
 
+  if (restoreFailed) {
+    return (
+      <div className="graph-editor">
+        <div className="graph-file-panel">
+          <p className="graph-file-problem graph-panel" role="alert">
+            {problem ?? 'Run progress could not be restored.'} The saved progress has been kept.
+            Choose New or Open to continue.
+          </p>
+          {commands && (
+            <div className="graph-file graph-panel" role="toolbar" aria-label="Canvas recovery">
+              <button
+                type="button"
+                onClick={() => {
+                  commands.new(false);
+                }}
+              >
+                New
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commands.open(false);
+                }}
+              >
+                Open…
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <GraphActionsContext value={actions}>
-      <div className="graph-editor" ref={wrapper}>
+      <div className="graph-editor" ref={wrapper} inert={restoring} aria-busy={restoring}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1206,6 +1459,9 @@ function Editor({
             }}
             onStop={() => {
               runStore.stop();
+            }}
+            onResume={() => {
+              runStore.resume();
             }}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}

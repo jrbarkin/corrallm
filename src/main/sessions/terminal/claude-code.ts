@@ -70,6 +70,8 @@ export interface ClaudeCodeOptions {
 
 export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly name = 'Claude Code';
+  // Interrupt running work, clear any draft, then exit at an empty prompt.
+  readonly shutdownKeys = ['\x03', '\x03', '\x03'];
   readonly words = {
     answer: 'Answer Claude Code in its terminal.',
     mode: 'Switch modes in Claude Code’s terminal (Shift+Tab).',

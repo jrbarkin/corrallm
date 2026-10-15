@@ -80,6 +80,8 @@ export interface TerminalCli<M extends SessionMode> {
   readonly words: TerminalWords;
   /** The mode it runs in when the user's own default applies, until it says otherwise. */
   readonly defaultMode: M;
+  /** Native interrupt/exit keys, each sent separately before bounded process termination. */
+  readonly shutdownKeys?: readonly string[];
   /** The id a new session starts under, or null where the CLI picks its own (and its hooks tell it). */
   newId(): string | null;
   /** Readies what its process needs before it first starts (a settings file in `dir`, its hooks). */

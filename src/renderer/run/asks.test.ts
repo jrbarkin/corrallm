@@ -140,6 +140,50 @@ describe('a session that would not start', () => {
 });
 
 describe('answersOf', () => {
+  it.each(['condition-key', ''])(
+    'offers a condition decision without a corrective reply when its key is %j',
+    (conditionKey) => {
+      const problem = {
+        kind: 'uncertain' as const,
+        reason: 'missing-verdict',
+        text: 'The agent did not say whether the condition holds.',
+        agent: 'c',
+        conditionKey,
+      };
+      const answers = answersOf(
+        { id: 'gate', if: { kind: 'freeText', text: 'The review is complete' }, then: [] },
+        problem,
+      );
+      expect(answers.choices.map(({ key, label }) => [key, label])).toEqual([
+        ['retry', 'Retry'],
+        ['yes', 'Condition holds'],
+        ['no', 'Condition does not hold'],
+        ['stop', 'Stop here'],
+      ]);
+      expect(answers.reply).toBeUndefined();
+    },
+  );
+
+  it.each(['failed', 'uncertain', 'cancelled'] as const)(
+    'offers recovery for a %s task instead of the item’s normal choices',
+    (kind) => {
+      const problem = {
+        kind,
+        reason: 'api_error',
+        text: 'The request did not finish.',
+        agent: 'r',
+      };
+      const answers = answersOf({ id: 'task', action: 'Bash' }, problem);
+      expect(answers.choices.map(({ key, label }) => [key, label])).toEqual([
+        ['retry', 'Retry'],
+        ['resolve', 'Mark resolved'],
+        ['continue', kind === 'cancelled' ? 'Continue cancelled' : 'Continue with failure'],
+        ['stop', 'Stop here'],
+      ]);
+      expect(answers.reply).toEqual({ label: 'What should it try next?', button: 'Try this' });
+    },
+  );
+
   it('answers an OK with Approve, Stop here, or the changes to make', () => {
     expect(answersOf({ id: 'ok', approve: '' })).toEqual({
       choices: [
@@ -153,6 +197,60 @@ describe('answersOf', () => {
       reply: { label: 'What should change?', button: 'Ask for changes' },
     });
     expect(answersOf({ id: 'step', action: 'Read' })).toBeUndefined();
+  });
+});
+
+describe('a task that needs recovery', () => {
+  const node = agent('c', 'Coder', [{ id: 'task', message: 'Review it', target: 'r' }]);
+  const problem = {
+    kind: 'uncertain' as const,
+    reason: 'restart',
+    text: 'The app closed before the result was recorded.',
+    agent: 'r',
+  };
+  it('keeps the authored task and recipient with the reason and recovery choices', () => {
+    const [ask] = heldAsks([node, reviewer], {
+      running: true,
+      agents: { c: { ...at('task', 'asking'), problem } },
+    });
+    expect(ask?.item.id).toBe('task');
+    expect(ask?.text).toBe(problem.text);
+    expect(ask?.problem).toEqual(problem);
+    expect(ask?.detail).toContain('Reviewer');
+    expect(ask?.choices.map(({ key }) => key)).toEqual(['retry', 'resolve', 'continue', 'stop']);
+  });
+  it('waits for Resume before offering decisions for a paused run', () => {
+    expect(
+      heldAsks([node], {
+        running: false,
+        paused: true,
+        agents: { c: { ...at('task', 'asking'), problem } },
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('a condition query that needs recovery', () => {
+  it('keeps the condition and offers retry, either condition result, or stop without a reply', () => {
+    const node = agent('c', 'Coder', [
+      { id: 'gate', if: { kind: 'freeText', text: 'The review is complete' }, then: [] },
+    ]);
+    const problem = {
+      kind: 'uncertain' as const,
+      reason: 'missing-verdict',
+      text: 'The agent did not say whether the condition holds.',
+      agent: 'c',
+      conditionKey: 'condition-key',
+    };
+    const [ask] = heldAsks([node], {
+      running: true,
+      agents: { c: { ...at('gate', 'asking'), problem } },
+    });
+    expect(ask?.item.id).toBe('gate');
+    expect(ask?.text).toBe(problem.text);
+    expect(ask?.problem).toEqual(problem);
+    expect(ask?.choices.map(({ key }) => key)).toEqual(['retry', 'yes', 'no', 'stop']);
+    expect(ask?.reply).toBeUndefined();
   });
 });
 

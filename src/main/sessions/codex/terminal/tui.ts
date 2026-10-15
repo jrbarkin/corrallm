@@ -68,6 +68,7 @@ export interface CodexTuiOptions {
 }
 
 export class CodexTui implements TerminalCli<CodexMode> {
+  readonly shutdownKeys = ['\x03', '\x03'];
   readonly name = 'Codex';
   readonly words = {
     answer: 'Answer Codex in its terminal.',

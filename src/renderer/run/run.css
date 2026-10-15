@@ -41,6 +41,11 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
 }
 
+:is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run='cancelled'] {
+  opacity: 0.65;
+  box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
+}
+
 :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat):is(
   [data-run='succeeded'],
   [data-run='failed'],

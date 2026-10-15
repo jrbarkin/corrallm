@@ -496,6 +496,86 @@ describe('SessionManager', () => {
     },
   );
 
+  it.each(['render-process-gone', 'did-navigate'])(
+    'joins teardown already started by %s when the app then closes everything',
+    async (event) => {
+      let release: (() => void) | undefined;
+      const closing = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const close = vi.fn(() => closing);
+      const live: LiveSession = {
+        send: () => Promise.resolve(),
+        answer: () => Promise.resolve(),
+        interrupt: () => Promise.resolve(),
+        setMode: () => Promise.resolve(),
+        setModel: () => Promise.resolve(),
+        close,
+      };
+      const sessions = manager({ terminal: { start: () => Promise.resolve(live) } });
+      const contents = window();
+      await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+      (contents as unknown as EventEmitter).emit(event);
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledOnce();
+      });
+
+      let settled = false;
+      const all = sessions.closeEverything().then(() => {
+        settled = true;
+      });
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(settled).toBe(false);
+      } finally {
+        release?.();
+        await all;
+      }
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('waits for an old native session to close before starting its exact-ID replacement', async () => {
+    let release: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    const started: (string | null)[] = [];
+    const close = vi.fn(() => closed);
+    const sessions = manager({
+      terminal: {
+        start: (spec, host) => {
+          started.push(spec.resume);
+          host.remember(spec.resume ?? id);
+          return Promise.resolve({
+            send: () => Promise.resolve(),
+            answer: () => Promise.resolve(),
+            interrupt: () => Promise.resolve(),
+            setMode: () => Promise.resolve(),
+            setModel: () => Promise.resolve(),
+            close,
+          });
+        },
+      },
+    });
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+    const closing = sessions.close(contents, 'a');
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledOnce();
+    });
+    const replacement = sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(started).toEqual([null]);
+    } finally {
+      release?.();
+      await Promise.all([closing, replacement]);
+    }
+    expect(started).toEqual([null, id]);
+  });
+
   describe('terminal views', () => {
     /** A Terminal session faked: its screen says which run it is, and records what it is told. */
     function terminals() {

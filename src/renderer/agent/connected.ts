@@ -1,4 +1,4 @@
-import { CONNECTION_CLI, isModeOf } from '../../shared/session';
+import { CONNECTION_CLI, isModeOf, turnResult } from '../../shared/session';
 import type {
   AgentSettings,
   Cli,
@@ -16,9 +16,10 @@ import type {
   SessionOptions,
   SettingsOptions,
   UserMessage,
+  TurnResult,
 } from '../../shared/session';
 import { ipcErrorMessage } from '../ipc-error';
-import type { DriverIO, SessionDriver, Turn } from './driver';
+import type { DriverDone, DriverIO, SessionDriver, Turn } from './driver';
 import { NEW_SESSION, reduce } from './session';
 import type { Entry, Refusal, Session } from './session';
 
@@ -89,7 +90,7 @@ export const NO_BACKEND: SessionBackend = (() => {
 
 /** A turn it started: who hears when it ends, whether main has its message yet, and when. */
 interface SentTurn {
-  done: (interrupted: boolean) => void;
+  done: DriverDone;
   sent: boolean;
   started: number;
 }
@@ -113,6 +114,8 @@ export class ConnectedDriver implements SessionDriver {
   /** Resolves once the session runs; undefined until it is started, and once it has stopped. */
   #running: Promise<void> | undefined;
   readonly #turns = new Map<string, SentTurn>();
+  readonly #messages = new Set<string>();
+  #lastError: string | undefined;
   /** When each thinking entry began, by id: how long it thought. */
   readonly #thinking = new Map<string, number>();
   /**
@@ -141,7 +144,8 @@ export class ConnectedDriver implements SessionDriver {
     );
   }
 
-  start(turn: Turn, done: (interrupted: boolean) => void): void {
+  start(turn: Turn, done: DriverDone): void {
+    this.#lastError = undefined;
     const sent: SentTurn = { done, sent: false, started: this.#io.now() };
     this.#turns.set(turn.id, sent);
     this.#run()
@@ -166,7 +170,15 @@ export class ConnectedDriver implements SessionDriver {
           return;
         }
         this.#notice('error', ipcErrorMessage(error));
-        this.#end([turn.id], { interrupted: false, failed: true });
+        this.#end([turn.id], {
+          interrupted: false,
+          failed: true,
+          result: {
+            status: 'failed',
+            reason: sent.sent ? 'error' : 'start-failed',
+            message: ipcErrorMessage(error),
+          },
+        });
       });
   }
 
@@ -191,7 +203,11 @@ export class ConnectedDriver implements SessionDriver {
   stop(): void {
     const unsent = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
     if (unsent.length > 0) {
-      this.#end(unsent, { interrupted: true, failed: false });
+      this.#end(unsent, {
+        interrupted: true,
+        failed: false,
+        result: { status: 'cancelled', reason: 'taken-back' },
+      });
       return;
     }
     // Main ends the turn, with an 'end' that says it was interrupted.
@@ -220,7 +236,11 @@ export class ConnectedDriver implements SessionDriver {
     this.#closed = true;
     this.#stopAsking();
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
-      this.#end([...this.#turns.keys()], { interrupted: true, failed: false });
+      this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
+        interrupted: true,
+        failed: false,
+        result: { status: 'cancelled', reason: 'connection-closed' },
+      });
     }
     if (this.#running) {
       this.#running = undefined;
@@ -257,6 +277,7 @@ export class ConnectedDriver implements SessionDriver {
         return;
       }
       case 'user': {
+        this.#messages.add(event.id);
         // The CLI has it: a message sent from here, now on its way, or one it told of itself.
         const known = find(event.id);
         if (!known) {
@@ -434,9 +455,14 @@ export class ConnectedDriver implements SessionDriver {
         this.#stopAsking();
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
-          this.#end([...this.#turns.keys()], {
+          this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
             interrupted: event.error === undefined,
             failed: event.error !== undefined,
+            result: {
+              status: event.error === undefined ? 'cancelled' : 'failed',
+              reason: 'connection-closed',
+              ...(event.error === undefined ? {} : { message: event.error }),
+            },
           });
         }
         return;
@@ -510,6 +536,7 @@ export class ConnectedDriver implements SessionDriver {
     text: string,
     { id = this.#io.newId(), switchTo }: { id?: string; switchTo?: Connection } = {},
   ): void {
+    if (level === 'error') this.#lastError = text;
     const last = this.#io.session().entries.at(-1);
     if (last?.kind === 'notice' && last.level === level && last.text === text) return;
     this.#io.dispatch({
@@ -527,27 +554,40 @@ export class ConnectedDriver implements SessionDriver {
   /** Ends the turn of messages `ids`: the session is idle, and whoever sent them hears. */
   #end(
     ids: readonly string[],
-    { interrupted, failed, seconds }: { interrupted: boolean; failed: boolean; seconds?: number },
+    ending: { interrupted: boolean; failed: boolean; seconds?: number; result?: TurnResult },
   ): void {
     const io = this.#io;
+    const fallback = turnResult(ending);
+    const result =
+      fallback.status === 'failed' &&
+      fallback.message === undefined &&
+      this.#lastError !== undefined
+        ? { ...fallback, message: this.#lastError }
+        : fallback;
+    this.#lastError = undefined;
+    const interrupted = result.status === 'cancelled';
+    const failed = result.status === 'failed';
+    const hadNative = ids.some((id) => this.#messages.has(id));
     const turns = ids.flatMap((id) => {
+      this.#messages.delete(id);
       const turn = this.#turns.get(id);
       this.#turns.delete(id);
       return turn ? [turn] : [];
     });
-    if (turns.length === 0 && io.session().status === 'idle') return;
+    if (turns.length === 0 && !hadNative && io.session().status === 'idle') return;
     const since = turns[0]?.started ?? io.now();
     io.dispatch({
       type: 'end',
       id: io.newId(),
       messages: ids,
-      seconds: seconds ?? Math.max(1, Math.round((io.now() - since) / 1000)),
+      result,
+      seconds: ending.seconds ?? Math.max(1, Math.round((io.now() - since) / 1000)),
       interrupted,
       ...(failed ? { failed: true } : {}),
     });
     // The next queued message starts first: one sent as the sender hears goes after it.
     io.idle();
-    for (const turn of turns) turn.done(interrupted || failed);
+    for (const turn of turns) turn.done(interrupted || failed, result);
   }
 }
 

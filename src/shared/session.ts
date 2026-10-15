@@ -12,6 +12,45 @@
 export const CLIS = ['claude', 'codex'] as const;
 export type Cli = (typeof CLIS)[number];
 
+/** Why a session turn ended; a completed turn does not itself verify a task's objective. */
+export const TURN_REASONS = [
+  'completed',
+  'interrupted',
+  'taken-back',
+  'usage-limit',
+  'auth',
+  'api',
+  'declined',
+  'start-failed',
+  'connection-closed',
+  'error',
+] as const;
+export type TurnReason = (typeof TURN_REASONS)[number];
+
+export interface TurnResult {
+  status: 'completed' | 'failed' | 'cancelled';
+  reason: TurnReason;
+  message?: string;
+  /** When a usage window resets, in epoch milliseconds. */
+  resetsAt?: number;
+}
+
+/** Preserves typed results while accepting events from connections that still use the flags. */
+export function turnResult(end: {
+  interrupted: boolean;
+  failed?: boolean;
+  result?: TurnResult;
+}): TurnResult {
+  return (
+    end.result ??
+    (end.interrupted
+      ? { status: 'cancelled', reason: 'interrupted' }
+      : end.failed
+        ? { status: 'failed', reason: 'error' }
+        : { status: 'completed', reason: 'completed' })
+  );
+}
+
 /** Which CLIs the user has: whether corrallm finds each, as its connections would run it. */
 export type InstalledClis = Readonly<Record<Cli, boolean>>;
 
@@ -519,7 +558,14 @@ export type SessionEvent =
   /** The reasoning effort it runs at now (null: its model's default). */
   | { type: 'effort'; effort: string | null }
   /** The turn ended: interrupted by the user, or failed (an API error, a usage limit). */
-  | { type: 'end'; messages: string[]; seconds: number; interrupted: boolean; failed: boolean }
+  | {
+      type: 'end';
+      messages: string[];
+      seconds: number;
+      interrupted: boolean;
+      failed: boolean;
+      result?: TurnResult;
+    }
   /**
    * The session stopped: its process exited, or main closed it (for another canvas or project).
    * `error` says why, when it failed. The next message starts it again, resuming it.

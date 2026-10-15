@@ -24,6 +24,62 @@ const marksOf = (a: AgentRun, { running = true, asking = [] as string[] } = {}) 
   queueMarks(layout, { running, agents: { a } }, new Set(asking));
 
 describe('queueMarks', () => {
+  it('projects a condition query’s recovery key only onto the held row', () => {
+    const problem = {
+      kind: 'uncertain' as const,
+      reason: 'missing-verdict',
+      text: 'The agent did not say whether the condition holds.',
+      agent: 'a',
+      conditionKey: 'condition-key',
+    };
+    const marks = marksOf({ current: 'build', status: 'asking', outcomes: {}, problem });
+    expect(marks('a', 'build')).toMatchObject({
+      'data-problem-condition': 'condition-key',
+      'data-decide': '',
+    });
+    expect(marks('a', 'ok')['data-problem-condition']).toBeUndefined();
+  });
+
+  it('keeps recovery reasons and attempt records visible while paused, with decisions disabled', () => {
+    const attempt = {
+      id: 'attempt',
+      startedAt: 1000,
+      endedAt: 2000,
+      status: 'uncertain' as const,
+      reason: 'restart',
+      message: 'Check the output file first.',
+    };
+    const problem = {
+      kind: 'uncertain' as const,
+      reason: 'restart',
+      text: 'The result was not recorded.',
+      agent: 'a',
+    };
+    const recovery = {
+      status: 'asking' as const,
+      current: 'build',
+      outcomes: {},
+      problem,
+      attempts: { build: [attempt] },
+    };
+    const paused = queueMarks(
+      layout,
+      { running: false, paused: true, agents: { a: recovery } },
+      new Set(),
+    );
+    expect(paused('a', 'build')).toMatchObject({
+      'data-problem': 'uncertain',
+      'data-problem-text': problem.text,
+      'data-problem-agent': 'a',
+      'data-problem-reason': 'restart',
+      'data-decide': undefined,
+      'data-attempts': JSON.stringify([attempt]),
+    });
+    const resumed = queueMarks(layout, { running: true, agents: { a: recovery } }, new Set());
+    expect(resumed('a', 'build')['data-decide']).toBe('');
+    expect(paused('a', 'ok')['data-problem']).toBeUndefined();
+  });
+
   it.each(['queued', 'running', 'completed', 'failed', 'cancelled'] as const)(
     'marks a submitted message %s independently of the workflow run',
     (status) => {

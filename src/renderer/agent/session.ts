@@ -22,6 +22,7 @@ import type {
   ToolDetail,
   ToolProgress,
   ToolStatus,
+  TurnResult,
 } from '../../shared/session';
 import { AgentType } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
@@ -42,6 +43,7 @@ export type {
   ToolDetail,
   ToolProgress,
   ToolStatus,
+  TurnResult,
 };
 
 /*
@@ -237,7 +239,14 @@ export type Entry =
   /** Where the conversation was cleared (/clear): it starts afresh after it. */
   | { id: string; kind: 'cleared'; conversation?: Conversation }
   /** The end of a turn: how long it took, and whether the user interrupted it, or it failed. */
-  | { id: string; kind: 'end'; seconds: number; interrupted: boolean; failed?: boolean };
+  | {
+      id: string;
+      kind: 'end';
+      seconds: number;
+      interrupted: boolean;
+      failed?: boolean;
+      result?: TurnResult;
+    };
 
 /**
  * Why a connected session would not start, as it said (a notice offering another connection), and
@@ -259,6 +268,12 @@ export interface SubmittedMessage {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   /** The planned task at which it was submitted; absent before the planned queue. */
   after?: string;
+  result?: TurnResult;
+  /** The live reply; omitted from persisted submission records. */
+  reply?: string;
+  task?: { agent: string; item: string };
+  /** The previous process stopped before this submission had a definitive result. */
+  unresolved?: boolean;
 }
 
 export interface Session {
@@ -393,6 +408,7 @@ export type SessionAction =
       interrupted: boolean;
       failed?: boolean;
       messages?: readonly string[];
+      result?: TurnResult;
     }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
@@ -535,7 +551,7 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'status':
       return { ...session, status: action.status };
     case 'end': {
-      const { id, seconds, interrupted, failed } = action;
+      const { id, seconds, interrupted, failed, result } = action;
       const entries = session.entries.map((entry): Entry => {
         if (isOpen(entry)) return { ...entry, withdrawn: true };
         return interrupted && entry.kind === 'tool' && entry.status === 'running'
@@ -547,7 +563,14 @@ export function reduce(session: Session, action: SessionAction): Session {
         status: 'idle',
         entries: [
           ...entries,
-          { id, kind: 'end', seconds, interrupted, ...(failed ? { failed: true } : {}) },
+          {
+            id,
+            kind: 'end',
+            seconds,
+            interrupted,
+            ...(failed ? { failed: true } : {}),
+            ...(result === undefined ? {} : { result }),
+          },
         ],
       };
     }

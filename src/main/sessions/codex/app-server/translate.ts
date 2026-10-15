@@ -6,6 +6,7 @@ import type {
   ToolDetail,
   ToolStatus,
   UsageLimit,
+  TurnResult,
 } from '../../../../shared/session';
 import type { UsageWindows } from '../../../../shared/usage';
 import {
@@ -93,6 +94,21 @@ export class Translator {
   #plan: ProposedPlan | undefined;
   /** Whether the turn going on has shown its error already. */
   #failed = false;
+  #turnFailure: TurnResult | undefined;
+
+  /** Native turn failure is authoritative; a failed tool within a completed turn is not. */
+  takeResult(turn: unknown, interrupted = false): TurnResult {
+    const failure = this.#turnFailure;
+    this.#turnFailure = undefined;
+    const status = property(turn, 'status');
+    if (interrupted || status === 'interrupted')
+      return { status: 'cancelled', reason: 'interrupted' };
+    if (status === 'failed')
+      return property(turn, 'error') == null
+        ? (failure ?? { status: 'failed', reason: 'api' })
+        : this.#failure(property(turn, 'error'));
+    return { status: 'completed', reason: 'completed' };
+  }
   #context: number | null = null;
   #window: number | null = null;
   #limits: UsageLimit[] | undefined;
@@ -647,8 +663,29 @@ export class Translator {
       const message = text(property(error, 'message')) ?? 'The request failed.';
       return [notice('warning', `${message} Codex is retrying.`)];
     }
-    if (text(property(params, 'threadId')) === this.thread) this.#failed = true;
+    if (text(property(params, 'threadId')) === this.thread) {
+      this.#failed = true;
+      this.#turnFailure = this.#failure(error);
+    }
     return [notice('error', this.#errorText(error))];
+  }
+
+  #failure(error: unknown): TurnResult {
+    const info = property(error, 'codexErrorInfo');
+    const status = httpStatus(info);
+    const reason =
+      info === 'unauthorized' || status === 401 || status === 403
+        ? 'auth'
+        : info === 'usageLimitExceeded'
+          ? 'usage-limit'
+          : 'api';
+    const resetsAt = reason === 'usage-limit' ? this.#resets() : undefined;
+    return {
+      status: 'failed',
+      reason,
+      message: this.#errorText(error),
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    };
   }
 
   /** What a turn's error says, with what to do about it (codexErrorInfo says what it was). */

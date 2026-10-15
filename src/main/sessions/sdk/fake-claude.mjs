@@ -11,6 +11,9 @@
 // the SDK asked for them); "a form" has its MCP server github ask for a form first (an
 // elicitation), and replies with what it got. It has two MCP servers, github (connected) and
 // sentry (failed until reconnected), which /mcp's requests list and change.
+// Recovery fixtures opt in with "recovery-failed", "recovery-missing" or "recovery-corrected":
+// explicit FAILED, no verdict or explicit SUCCEEDED. FAKE_CLAUDE_PROMPTS logs received prompts
+// as JSON lines, only when a test gives it a file of its own.
 //
 // `claude auth status --json` says how it is logged in, as the real one would: with a cloud
 // provider (CLAUDE_CODE_USE_BEDROCK, …), an API key (ANTHROPIC_API_KEY), or an apiKeyHelper in
@@ -510,6 +513,12 @@ async function play(message) {
           .map((b) => b.text)
           .join('\n');
   const images = typeof content === 'string' ? 0 : content.filter((b) => b.type === 'image').length;
+  if (process.env.FAKE_CLAUDE_PROMPTS) {
+    appendFileSync(
+      process.env.FAKE_CLAUDE_PROMPTS,
+      `${JSON.stringify({ sessionId, uuid, text })}\n`,
+    );
+  }
   const current = { interrupted: false };
   turn = current;
   const started = Date.now();
@@ -595,6 +604,13 @@ async function play(message) {
   });
 
   const got = text.includes('a form') ? await elicit() : undefined;
+  const recovery = text.includes('recovery-corrected')
+    ? 'The original task is complete.\nSUCCEEDED'
+    : text.includes('recovery-failed')
+      ? 'The original task needs a correction.\nFAILED'
+      : text.includes('recovery-missing')
+        ? 'I inspected the checklist, but gave no task verdict.'
+        : undefined;
   const reply = got
     ? [`github got: ${got.action}`, got.content ? ` ${JSON.stringify(got.content)}` : '']
     : text.includes('markdown')
@@ -612,7 +628,9 @@ async function play(message) {
         ];
   const pieces = text.includes('slow')
     ? Array.from({ length: 40 }, (_, i) => `${i} `)
-    : reply.filter(Boolean);
+    : recovery
+      ? [recovery]
+      : reply.filter(Boolean);
   say({
     type: 'stream_event',
     event: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
@@ -658,7 +676,7 @@ async function play(message) {
     uuid: randomUUID(),
   });
 
-  if (!current.interrupted && text.includes('run')) {
+  if (!current.interrupted && !recovery && text.includes('run')) {
     await useTool(
       current,
       id,
@@ -678,7 +696,7 @@ async function play(message) {
       },
     );
   }
-  if (!current.interrupted && text.includes('hook') && hookEvents) {
+  if (!current.interrupted && !recovery && text.includes('hook') && hookEvents) {
     say({
       type: 'system',
       subtype: 'hook_started',
@@ -701,7 +719,7 @@ async function play(message) {
       uuid: randomUUID(),
     });
   }
-  if (!current.interrupted && text.includes('test')) {
+  if (!current.interrupted && !recovery && text.includes('test')) {
     const toolUseId = `toolu_${randomUUID().replace(/-/g, '')}`;
     say({
       type: 'assistant',
@@ -744,9 +762,10 @@ async function play(message) {
       tool_use_result: { stdout: '42 passed', stderr: '', interrupted: false, isImage: false },
     });
   }
-  if (!current.interrupted && text.includes('background')) await startInBackground(current, id);
-  if (!current.interrupted && text.includes('ask')) await askQuestion(id);
-  if (!current.interrupted && text.includes('edit')) {
+  if (!current.interrupted && !recovery && text.includes('background'))
+    await startInBackground(current, id);
+  if (!current.interrupted && !recovery && text.includes('ask')) await askQuestion(id);
+  if (!current.interrupted && !recovery && text.includes('edit')) {
     const file = NOTES;
     await useTool(
       current,

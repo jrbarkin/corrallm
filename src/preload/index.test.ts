@@ -212,3 +212,29 @@ describe('preload', () => {
     expect(removeListener).toHaveBeenCalledWith('usage:changed', receive);
   });
 });
+
+describe('run persistence preload', () => {
+  it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
+    const api = await exposed();
+    const checkpoint = {
+      version: 1,
+      workflow: '{}',
+      state: '{}',
+      messages: '[]',
+      updatedAt: 1,
+    } as const;
+    await api.getRun();
+    expect(invoke).toHaveBeenLastCalledWith('run:get');
+    await api.saveRun('token', checkpoint);
+    expect(invoke).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
+    await api.runReady('request', null);
+    expect(invoke).toHaveBeenLastCalledWith('run:ready', 'request', null);
+    const listener = vi.fn();
+    const stop = api.onRunStopping(listener);
+    const call = on.mock.calls.find(([channel]) => channel === 'run:stopping');
+    call?.[1]({}, 'request');
+    expect(listener).toHaveBeenCalledWith('request');
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('run:stopping', call?.[1]);
+  });
+});

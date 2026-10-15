@@ -6,7 +6,7 @@ import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../graph/queu
 import type { QueueItem } from '../graph/queue';
 import { holdText, resetTime } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
-import type { Run } from './runner';
+import type { Run, TaskProblem } from './runner';
 
 /*
  * What each hold for the user asks (an OK, a repeat out of rounds, a session that would not
@@ -50,6 +50,20 @@ const ROUND_ANSWERS: Answers = {
   reply: { label: 'What should it try next?', button: 'Try this' },
 };
 
+const CONDITION_ANSWERS: Answers = {
+  choices: [
+    {
+      key: 'retry',
+      label: 'Retry',
+      primary: true,
+      title: 'Ask the agent to check this condition again',
+    },
+    { key: 'yes', label: 'Condition holds' },
+    { key: 'no', label: 'Condition does not hold' },
+    { key: 'stop', label: 'Stop here', title: 'Stop this queue here, and whatever waits on it' },
+  ],
+};
+
 /**
  * How the user answers where a usage rule holds an agent before a task: Go on (primary) or Wait
  * for the reset (each for every agent on that backend, until the window resets), or Stop here.
@@ -86,7 +100,39 @@ export function usageAnswers({
  * (primary) or Stop here, or the changes to make, in their words. A repeat out of rounds: One more
  * round (primary) or Go on, or what to try next, in their words (then one more round).
  */
-export function answersOf(item: QueueItem): Answers | undefined {
+export function answersOf(item: QueueItem, problem: TaskProblem): Answers;
+export function answersOf(item: QueueItem, problem?: TaskProblem): Answers | undefined;
+export function answersOf(item: QueueItem, problem?: TaskProblem): Answers | undefined {
+  if (problem?.conditionKey !== undefined) return CONDITION_ANSWERS;
+  if (problem)
+    return {
+      choices: [
+        {
+          key: 'retry',
+          label: 'Retry',
+          primary: true,
+          title:
+            problem.kind === 'uncertain'
+              ? 'Run the task again; earlier work may already have happened'
+              : 'Run the original task again',
+        },
+        {
+          key: 'resolve',
+          label: 'Mark resolved',
+          title: 'Record that this task is resolved and continue',
+        },
+        {
+          key: 'continue',
+          label: problem.kind === 'cancelled' ? 'Continue cancelled' : 'Continue with failure',
+        },
+        {
+          key: 'stop',
+          label: 'Stop here',
+          title: 'Stop this queue here, and whatever waits on it',
+        },
+      ],
+      reply: { label: 'What should it try next?', button: 'Try this' },
+    };
   return isApproval(item) ? OK_ANSWERS : isRepeat(item) ? ROUND_ANSWERS : undefined;
 }
 
@@ -103,6 +149,8 @@ export interface HeldAsk extends Answers {
    * and the connection Switch (`{ choice: 'switch' }`) runs it with.
    */
   refusal?: { agent: string; switchTo: Connection };
+  /** A task's known failure, cancellation, or uncertain result, awaiting a human decision. */
+  problem?: TaskProblem;
 }
 
 /**
@@ -120,6 +168,17 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()
     if (agent.type !== 'agent' || at?.status !== 'asking' || at.current === undefined) return [];
     const queue = agent.data.queue ?? [];
     const item = findItem(queue, at.current)?.item;
+    if (item && at.problem)
+      return [
+        {
+          agent,
+          item,
+          text: at.problem.text,
+          detail: `${taskLabel(nodes, item)}${at.problem.agent === agent.id ? '' : ` · ${agentName(nodes, at.problem.agent)}`}`,
+          ...answersOf(item, at.problem),
+          problem: at.problem,
+        },
+      ];
     if (item && at.refused) {
       const { agent: to, text, switchTo } = at.refused;
       const name = agentName(nodes, to);

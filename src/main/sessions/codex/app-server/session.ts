@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
+import { turnResult } from '../../../../shared/session';
+
 import type {
   CodexMode,
   ModelChoice,
   SessionAnswer,
   SessionEvent,
   UserMessage,
+  TurnResult,
 } from '../../../../shared/session';
 import type { LiveSession, SessionHost } from '../../connector';
 import { effortChoice, notice, output, property, text, unifiedDiff } from '../../transcript';
@@ -344,7 +347,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       promise.catch((error: unknown) => {
         if (this.#turn !== turn) return;
         this.#host.emit(notice('error', failureText(error)));
-        this.#end(turn, { interrupted: false, failed: true });
+        this.#end(turn, { interrupted: false, failed: true, result: requestResult(error) });
       });
     };
     if (parsed.kind === 'command') {
@@ -496,6 +499,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#end(turn, {
       interrupted: status === 'interrupted' || (turn.interrupted && status !== 'completed'),
       failed: status === 'failed',
+      result: this.#translator.takeResult(codex, turn.interrupted && status !== 'completed'),
     });
   }
 
@@ -519,7 +523,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#start(turn, [textInput(next)]).catch((error: unknown) => {
       if (this.#turn !== turn) return;
       this.#host.emit(notice('error', failureText(error)));
-      this.#end(turn, { interrupted: false, failed: true });
+      this.#end(turn, { interrupted: false, failed: true, result: requestResult(error) });
     });
   }
 
@@ -537,15 +541,17 @@ export class AppServerSession implements LiveSession<CodexMode> {
   }
 
   /** Ends corrallm's turn: whoever sent its message hears; the next message, if any, goes. */
-  #end(turn: Turn, { interrupted, failed }: { interrupted: boolean; failed: boolean }): void {
+  #end(turn: Turn, ending: { interrupted: boolean; failed: boolean; result?: TurnResult }): void {
     if (this.#turn !== turn) return;
+    const result = turnResult(ending);
     this.#turn = undefined;
     this.#host.emit({
       type: 'end',
       messages: turn.messages,
       seconds: Math.max(1, Math.round((this.#now() - turn.began) / 1000)),
-      interrupted,
-      failed,
+      interrupted: result.status === 'cancelled',
+      failed: result.status === 'failed',
+      result,
     });
     const next = this.#queue.shift();
     if (next) this.#run(next);
@@ -811,6 +817,14 @@ function failureText(error: unknown): string {
     return 'Codex is overloaded: try again in a moment.';
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function requestResult(error: unknown): TurnResult {
+  const message = failureText(error);
+  if (error instanceof Error && error.message === PLAN_DECLINED) {
+    return { status: 'cancelled', reason: 'interrupted', message };
+  }
+  return { status: 'failed', reason: error instanceof RpcFailure ? 'api' : 'error', message };
 }
 
 /** /skills: the skills Codex has, to invoke with /name or $name. */

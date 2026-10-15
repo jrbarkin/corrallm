@@ -1,11 +1,10 @@
 import path from 'node:path';
 
 import { app, BrowserWindow, dialog, session, shell } from 'electron';
-import type { MessageBoxOptions } from 'electron';
+import type { MessageBoxOptions, WebContents } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
-import { canvasFile } from './canvas';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
 import { registerIpcHandlers, sendEvent } from './ipc';
@@ -14,6 +13,8 @@ import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
 import { FileRevealer } from './reveal';
+import { RunJournal } from './run-journal';
+import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
 import { planConsent, Settings } from './settings';
 import { createConnectors, createOptions } from './sessions/connectors';
@@ -102,7 +103,24 @@ function main(): void {
       const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
       // What the user chose for the app as a whole.
       const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
-      const projects = new ProjectFolders(memory, canvasFile);
+      const reloading = new WeakMap<WebContents, Promise<void>>();
+      const runs: RunJournal = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
+        memory,
+        projectOf: (contents) => projects.of(contents),
+        settled: async (contents) => {
+          await reloading.get(contents);
+        },
+        restored: async (contents) => {
+          await sessions.canvasOpened(contents);
+          await projects.restore(contents);
+        },
+      });
+      const projects: ProjectFolders = new ProjectFolders(memory, (contents) =>
+        runs.identity(contents),
+      );
+      const shutdown = new RunShutdown((contents, requestId) => {
+        sendEvent(contents, 'run:stopping', requestId);
+      });
       // Every backend's usage, read from its agents' CLIs: every window hears each change.
       const usage = new UsageReadings({ file: path.join(app.getPath('userData'), 'usage.json') });
       await usage.load();
@@ -132,7 +150,7 @@ function main(): void {
         // The conversations Claude Code kept, whichever connection ran them.
         conversations: new Conversations(),
         projectOf: (contents) => projects.of(contents),
-        canvasOf: canvasFile,
+        canvasOf: (contents) => runs.identity(contents),
         memory,
         emit: (contents, agentId, connection, event) => {
           sendEvent(contents, 'session:event', agentId, connection, event);
@@ -173,6 +191,8 @@ function main(): void {
         },
       });
       registerIpcHandlers(trustedOrigin, {
+        runs,
+        shutdown,
         projects,
         files,
         links,
@@ -182,22 +202,77 @@ function main(): void {
         usage,
       });
 
-      // Every agent's process ends before the app does, and what main remembers is written.
-      // TODO(7d): stop queue dispatch, save its cursor/outcomes, then interrupt/exit each
-      // native session gracefully before quitting. Reopen paused and resume exact session IDs.
+      // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.
+      const persistWindows = async (windows: BrowserWindow[]) => {
+        await Promise.all(
+          windows.map((window) =>
+            runs.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
+          ),
+        );
+        await runs.flush();
+        await sessions.closeEverything();
+        await Promise.all([memory.flush(), settings.flush(), links.flush(), usage.flush()]);
+      };
+      const failedClose = (error: unknown) => {
+        console.error('Could not save before closing:', error);
+        dialog.showErrorBox(
+          'The run could not be saved',
+          `${error instanceof Error ? error.message : String(error)}\nThe window remains open. Try again after saving.`,
+        );
+      };
       let quitting = false;
+      let quitApproved = false;
       app.on('before-quit', (event) => {
+        if (quitApproved) return;
+        event.preventDefault();
         if (quitting) return;
         quitting = true;
-        event.preventDefault();
-        void Promise.all([
-          sessions.closeEverything(),
-          memory.flush(),
-          settings.flush(),
-          links.flush(),
-          usage.flush(),
-        ]).finally(() => {
-          app.quit();
+        void persistWindows(BrowserWindow.getAllWindows()).then(
+          () => {
+            quitApproved = true;
+            app.quit();
+          },
+          (error: unknown) => {
+            quitting = false;
+            failedClose(error);
+          },
+        );
+      });
+      // macOS window close does not quit the app, but must save/freeze the run all the same.
+      app.on('browser-window-created', (_event, window) => {
+        window.webContents.on('did-start-navigation', (event) => {
+          if (
+            !event.isMainFrame ||
+            event.isSameDocument ||
+            originKey(event.url) !== trustedOrigin ||
+            !runs.has(window.webContents)
+          )
+            return;
+          // Reload keeps this canvas identity but ends its old native processes. New run:get
+          // waits for their graceful exit and for queued journal writes before restoring.
+          const closing = sessions.closeEverything();
+          reloading.set(window.webContents, closing);
+          void closing.catch((error: unknown) => {
+            console.error('Could not close before reload:', error);
+          });
+        });
+        let approved = false;
+        let closing = false;
+        window.on('close', (event) => {
+          if (quitApproved || approved) return;
+          event.preventDefault();
+          if (quitting || closing) return;
+          closing = true;
+          void persistWindows([window]).then(
+            () => {
+              approved = true;
+              window.close();
+            },
+            (error: unknown) => {
+              closing = false;
+              failedClose(error);
+            },
+          );
         });
       });
 

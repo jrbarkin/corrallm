@@ -247,11 +247,13 @@ const fileLink = (file, text) => `\x1b]8;;${pathToFileURL(file).href}\x07${text}
 async function finish() {
   if (state !== 'working') return;
   const said = lines.at(-1)?.slice(2) ?? '';
-  const reply = said.startsWith('link')
-    ? 'See https://docs.example.com/hooks for more'
-    : said.startsWith('files')
-      ? 'Wrote notes.txt and read outside.txt'
-      : `You said: ${said}`;
+  const reply = said.startsWith('corrallm asks: is this true now?')
+    ? 'No.'
+    : said.startsWith('link')
+      ? 'See https://docs.example.com/hooks for more'
+      : said.startsWith('files')
+        ? 'Wrote notes.txt and read outside.txt'
+        : `You said: ${said}${said.includes('End your reply with SUCCEEDED or FAILED') ? '\nSUCCEEDED' : ''}`;
   lines.push(
     said.startsWith('files')
       ? `⏺ Wrote ${fileLink(path.resolve('notes.txt'), 'notes.txt')} and read ${fileLink(path.resolve('..', 'outside.txt'), 'outside.txt')}`

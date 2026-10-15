@@ -18,6 +18,7 @@ import type {
   ToolDetail,
   ToolProgress,
   ToolStatus,
+  TurnResult,
 } from '../../../shared/session';
 import { notice, resetTime } from '../transcript';
 import type { Places } from './tools';
@@ -146,6 +147,30 @@ export class Translator {
   readonly #warned = new Set<string>();
   /** Whether this turn's error was shown already (an API error's message, before its result). */
   #failed = false;
+  #turnFailure: TurnResult | undefined;
+  #declined: string | undefined;
+
+  /** The SDK's terminal outcome, independent of tool calls that may fail within a turn. */
+  takeResult(result: SDKResultMessage, interrupted: boolean): TurnResult {
+    const failure = this.#turnFailure;
+    const declined = this.#declined;
+    this.#turnFailure = undefined;
+    this.#declined = undefined;
+    if (interrupted) return { status: 'cancelled', reason: 'interrupted' };
+    if (declined !== undefined) return { status: 'failed', reason: 'declined', message: declined };
+    if (result.subtype === 'success' && !result.is_error)
+      return { status: 'completed', reason: 'completed' };
+    const message =
+      result.subtype === 'success'
+        ? result.result.trim()
+        : result.errors.filter((error) => !error.startsWith('[ede_diagnostic]')).join(' ');
+    return {
+      status: 'failed',
+      reason: failure?.reason ?? 'api',
+      ...(failure?.message ? { message: failure.message } : message ? { message } : {}),
+      ...(failure?.resetsAt === undefined ? {} : { resetsAt: failure.resetsAt }),
+    };
+  }
   /** Whether this turn compacted the conversation. */
   #compacted = false;
 
@@ -259,6 +284,15 @@ export class Translator {
   #assistant(message: SDKAssistantMessage): SessionEvent[] {
     const { id, content, usage } = message.message;
     const parent = message.parent_tool_use_id ?? undefined;
+    if (parent === undefined)
+      this.#declined =
+        message.message.stop_reason === 'refusal'
+          ? content
+              .map((block) => (block.type === 'text' ? block.text : ''))
+              .join('\n')
+              .trim()
+              .slice(0, 4000) || 'The model declined the request.'
+          : undefined;
     const events: SessionEvent[] = [];
     if (parent === undefined && message.error === undefined) {
       // What the reply took in (input, cache) and wrote: how full the context is now. The CLI's
@@ -282,7 +316,21 @@ export class Translator {
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('\n')
         .trim();
-      events.push(notice('error', this.#errorText(message.error, said)));
+      const why = this.#errorText(message.error, said);
+      events.push(notice('error', why));
+      if (parent === undefined)
+        this.#turnFailure = {
+          status: 'failed',
+          reason: LOGIN_ERRORS.has(message.error)
+            ? 'auth'
+            : message.error === 'rate_limit'
+              ? 'usage-limit'
+              : 'api',
+          message: why,
+          ...(message.error === 'rate_limit' && this.#reset
+            ? { resetsAt: this.#reset.at * 1000 }
+            : {}),
+        };
       this.#failed = true;
       return events;
     }
@@ -650,6 +698,11 @@ export class Translator {
     const window = info.rateLimitType;
     if (info.status === 'rejected') {
       if (info.resetsAt !== undefined) this.#reset = { at: info.resetsAt, window };
+      this.#turnFailure = {
+        status: 'failed',
+        reason: 'usage-limit',
+        ...(info.resetsAt === undefined ? {} : { resetsAt: info.resetsAt * 1000 }),
+      };
       return [];
     }
     if (info.status !== 'allowed_warning' || info.utilization === undefined) return [];

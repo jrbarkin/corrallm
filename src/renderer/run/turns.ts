@@ -49,10 +49,8 @@ export function stepMessage(
  * as "2 tests failed." is not taken for a verdict.
  */
 export function stepVerdict(reply: string): boolean | undefined {
-  const last = reply.trim().split('\n').at(-1) ?? '';
-  const succeeded = /\bSUCCEEDED\b/.test(last);
-  const failed = /\bFAILED\b/.test(last);
-  return succeeded === failed ? undefined : succeeded;
+  const last = (reply.trim().split('\n').at(-1) ?? '').trim();
+  return last === 'SUCCEEDED' ? true : last === 'FAILED' ? false : undefined;
 }
 
 /**

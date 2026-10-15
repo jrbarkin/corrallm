@@ -69,6 +69,7 @@ export function QueuesView({
   focus,
   backLabel,
   onRun,
+  onResume,
   onStop,
   onOpenAgent,
   onClose,
@@ -83,6 +84,8 @@ export function QueuesView({
   /** Where Back goes: "Canvas", or the agent it was opened from. */
   backLabel: string;
   onRun: () => void;
+  /** Continues the saved run from its current tasks, rather than starting another run. */
+  onResume?: () => void;
   onStop: () => void;
   onOpenAgent: (agentId: string) => void;
   onClose: () => void;
@@ -224,11 +227,13 @@ export function QueuesView({
         ...(needed > 0 ? [`${String(needed)} need${needed === 1 ? 's' : ''} you`] : []),
         ...(stopped > 0 ? [`${String(stopped)} stopped`] : []),
       ].join(' · ')
-    : agents.length === 0
-      ? ''
-      : agents.every(([, a]) => a.status === 'done')
-        ? 'All done'
-        : 'Stopped';
+    : run.paused
+      ? 'Paused'
+      : agents.length === 0
+        ? ''
+        : agents.every(([, a]) => a.status === 'done')
+          ? 'All done'
+          : 'Stopped';
 
   return (
     <div
@@ -243,6 +248,16 @@ export function QueuesView({
             {backLabel}
           </button>
           <h2 className="queues-title">All queues</h2>
+          {run.paused && onResume && (
+            <button
+              type="button"
+              className="queues-run"
+              onClick={onResume}
+              title="Resume this run from its saved tasks"
+            >
+              Resume
+            </button>
+          )}
           <button
             type="button"
             className="queues-run"
@@ -250,7 +265,7 @@ export function QueuesView({
             onClick={run.running ? onStop : onRun}
             title={run.running ? 'Stop every queue where it is' : 'Run every queue from the top'}
           >
-            {run.running ? 'Stop' : 'Run'}
+            {run.running ? 'Stop' : run.paused ? 'Run again' : 'Run'}
           </button>
           <span className="queues-run-status" role="status">
             {runStatus}
@@ -535,6 +550,7 @@ function LaneCells({
             Needs you
           </button>
         )}
+        {ask?.problem && <p className="queues-problem">{ask.text}</p>}
       </div>
       {idle.map(({ from, to, held }) => (
         <div

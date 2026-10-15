@@ -211,7 +211,9 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
   const asking = queues.getByRole('group', { name: 'Releaser: Message “/question Tag it?”' });
   await expect(asking.locator('[data-run]')).toHaveAttribute('data-run', 'asking');
   await queues.getByRole('button', { name: 'Stop', exact: true }).click();
-  await expect(queues.getByRole('button', { name: 'Run', exact: true })).toBeVisible();
+  await expect(queues.getByRole('status')).toHaveText('Paused');
+  await expect(queues.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+  await expect(queues.getByRole('button', { name: 'Run again', exact: true })).toBeVisible();
   await expect(asking.locator('[data-run]')).toHaveAttribute('data-run', 'stopped');
   await expect(
     queues

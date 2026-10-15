@@ -786,7 +786,7 @@ function AskBar({
   const below = reply?.replace(/\?$/, '');
   const text = ask.refusal
     ? `${ask.detail ?? ''}:${said ? '' : ` ${ask.text}`}`
-    : isApproval(ask.item)
+    : !ask.problem && isApproval(ask.item)
       ? `${waitsFor(ask.text)}${below === undefined ? ':' : `: write below ${below.charAt(0).toLowerCase()}${below.slice(1)}, or`}`
       : `${ask.text}${reply === undefined ? '' : ` ${reply} Write it below, or`}`;
   const send = () => {

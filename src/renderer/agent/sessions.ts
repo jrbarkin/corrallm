@@ -1,4 +1,4 @@
-import { CONNECTION_CLI } from '../../shared/session';
+import { CONNECTION_CLI, turnResult } from '../../shared/session';
 import type {
   AgentSettings,
   Cli,
@@ -11,6 +11,7 @@ import type {
   RewindRestore,
   RewindResult,
   SettingsOptions,
+  TurnResult,
 } from '../../shared/session';
 import { DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
@@ -18,6 +19,7 @@ import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { ScriptedDriver } from './scripted';
+import { decodeSubmissions, encodeSubmissions } from './submission-state';
 import { answersOf, conversationOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
   Answer,
@@ -29,6 +31,11 @@ import type {
   SessionAction,
   SubmittedMessage,
 } from './session';
+
+export interface SubmissionObserver {
+  submitted?: (agentId: string, message: SubmittedMessage) => void;
+  ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
+}
 
 /** An agent's driver, how it runs, and whether it is being let go. */
 interface Driving {
@@ -66,13 +73,18 @@ export class SessionStore {
    * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
    * (queued or not) until then.
    */
-  readonly #onDone = new Map<string, (interrupted: boolean, reply: string) => void>();
+  readonly #onDone = new Map<
+    string,
+    (interrupted: boolean, reply: string, result?: TurnResult) => void
+  >();
   /** Who to tell when a message's session would not start (it stays queued), by its id. */
   readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
   readonly #queueMessages = new Set<string>();
+  readonly #displayTexts = new Map<string, string>();
+  readonly #observer: SubmissionObserver;
   readonly #position: (agentId: string) => string | undefined;
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
   readonly #onceIn = new Map<
@@ -84,9 +96,11 @@ export class SessionStore {
   constructor(
     backend: SessionBackend = NO_BACKEND,
     position: (agentId: string) => string | undefined = () => undefined,
+    observer: SubmissionObserver = {},
   ) {
     this.#backend = backend;
     this.#position = position;
+    this.#observer = observer;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -188,14 +202,16 @@ export class SessionStore {
     agentId: string,
     agent: AgentType,
     text: string,
-    onDone?: (interrupted: boolean, reply: string) => void,
+    onDone?: (interrupted: boolean, reply: string, result?: TurnResult) => void,
     images?: MessageImage[],
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' = 'user',
+    displayText?: string,
   ): () => void {
     this.#types.set(agentId, agent);
     const id = crypto.randomUUID();
     if (origin === 'queue') this.#queueMessages.add(id);
+    if (displayText !== undefined) this.#displayTexts.set(id, displayText);
     if (onDone) this.#onDone.set(id, onDone);
     if (onRefused) this.#onRefused.set(id, onRefused);
     const session = this.of(agentId);
@@ -232,23 +248,25 @@ export class SessionStore {
   recordSubmission(agentId: string, text: string, images?: MessageImage[]): void {
     const session = this.of(agentId);
     const after = this.#position(agentId);
+    const result: TurnResult = { status: 'completed', reason: 'completed' };
+    const message: SubmittedMessage = {
+      id: crypto.randomUUID(),
+      text,
+      status: 'completed',
+      result,
+      ...(images?.length ? { images } : {}),
+      ...(after === undefined ? {} : { after }),
+    };
     this.#sessions = {
       ...this.#sessions,
       [agentId]: {
         ...session,
-        submissions: [
-          ...(session.submissions ?? []),
-          {
-            id: crypto.randomUUID(),
-            text,
-            status: 'completed',
-            ...(images?.length ? { images } : {}),
-            ...(after === undefined ? {} : { after }),
-          },
-        ],
+        submissions: [...(session.submissions ?? []), message],
       },
     };
     this.#notify();
+    this.#observer.submitted?.(agentId, message);
+    this.#observer.ended?.(agentId, message.id, '', result);
   }
 
   /** Tells the user something in the agent's session (a notice in its transcript). */
@@ -369,9 +387,10 @@ export class SessionStore {
 
   unqueue(agentId: string, queuedId: string): void {
     if (!this.of(agentId).queued.some(({ id }) => id === queuedId)) return;
-    this.#settleSubmissions(agentId, 'cancelled', queuedId);
+    const result: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+    this.#settleSubmissions(agentId, result, queuedId);
     this.#dispatch(agentId, { type: 'unqueue', id: queuedId });
-    this.#heard(queuedId)?.(true, '');
+    this.#heard(queuedId)?.(true, '', result);
   }
 
   /**
@@ -403,11 +422,14 @@ export class SessionStore {
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
   reset(): void {
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
-    for (const onDone of this.#onDone.values()) onDone(true, '');
+    const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
+    for (const id of Object.keys(this.#sessions)) this.#settleSubmissions(id, result);
+    for (const onDone of this.#onDone.values()) onDone(true, '', result);
     this.#onDone.clear();
     this.#onRefused.clear();
     this.#turns.clear();
     this.#queueMessages.clear();
+    this.#displayTexts.clear();
     this.#onceIn.clear();
     this.#settings.clear();
     this.#options.clear();
@@ -432,18 +454,21 @@ export class SessionStore {
       type: 'start',
       entry: { id, kind: 'user', text, ...pasted, conversation },
     });
-    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted) => {
+    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted, result) => {
       // The next queued message may have started already.
       if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
-      this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id));
+      this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id), result);
     });
   }
 
   /** Who hears when message `id`'s turn ends, now that it does: forgotten, as it ends once. */
-  #heard(id: string): ((interrupted: boolean, reply: string) => void) | undefined {
+  #heard(
+    id: string,
+  ): ((interrupted: boolean, reply: string, result?: TurnResult) => void) | undefined {
     const onDone = this.#onDone.get(id);
     this.#onDone.delete(id);
     this.#onRefused.delete(id);
+    this.#displayTexts.delete(id);
     return onDone;
   }
 
@@ -527,9 +552,6 @@ export class SessionStore {
     this.#unsubscribe ??= this.#backend.onEvent((agentId, connection, event) => {
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
-        if (event.type === 'closed') {
-          this.#settleSubmissions(agentId, event.error === undefined ? 'cancelled' : 'failed');
-        }
         driving.driver.receive(event);
       }
     });
@@ -540,7 +562,6 @@ export class SessionStore {
     const driving = this.#drivers.get(agentId);
     if (!driving) return;
     driving.closing = true;
-    this.#settleSubmissions(agentId, 'cancelled');
     driving.driver.close();
     this.#drivers.delete(agentId);
   }
@@ -549,7 +570,9 @@ export class SessionStore {
   #forget(agentId: string): void {
     this.#letGo(agentId);
     this.#onceIn.delete(agentId);
-    for (const { id } of this.of(agentId).queued) this.#heard(id)?.(true, '');
+    const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
+    this.#settleSubmissions(agentId, result);
+    for (const { id } of this.of(agentId).queued) this.#heard(id)?.(true, '', result);
     this.#turns.delete(agentId);
     this.#sessions = Object.fromEntries(
       Object.entries(this.#sessions).filter(([id]) => id !== agentId),
@@ -561,6 +584,8 @@ export class SessionStore {
   #dispatch(agentId: string, action: SessionAction): void {
     const session = this.of(agentId);
     let submissions = session.submissions;
+    let created: SubmittedMessage | undefined;
+    const ended: (SubmittedMessage & { result: TurnResult })[] = [];
     if (action.type === 'start' || action.type === 'queue') {
       const message = action.type === 'start' ? action.entry : action;
       if (!this.#queueMessages.has(message.id)) {
@@ -571,16 +596,14 @@ export class SessionStore {
           );
         } else {
           const after = this.#position(agentId);
-          submissions = [
-            ...(submissions ?? []),
-            {
-              id: message.id,
-              text: message.text,
-              status,
-              ...(message.images?.length ? { images: message.images } : {}),
-              ...(after === undefined ? {} : { after }),
-            },
-          ];
+          created = {
+            id: message.id,
+            text: this.#displayTexts.get(message.id) ?? message.text,
+            status,
+            ...(message.images?.length ? { images: message.images } : {}),
+            ...(after === undefined ? {} : { after }),
+          };
+          submissions = [...(submissions ?? []), created];
         }
       }
     } else if (action.type === 'refuse') {
@@ -588,15 +611,22 @@ export class SessionStore {
         entry.id === action.id ? { ...entry, status: 'queued' } : entry,
       );
     } else if (action.type === 'end') {
-      submissions = submissions?.map((entry) =>
-        entry.status === 'running' &&
-        (action.messages === undefined || action.messages.includes(entry.id))
-          ? {
-              ...entry,
-              status: action.interrupted ? 'cancelled' : action.failed ? 'failed' : 'completed',
-            }
-          : entry,
-      );
+      const result = turnResult(action);
+      submissions = submissions?.map((entry) => {
+        if (
+          entry.status !== 'running' ||
+          (action.messages !== undefined && !action.messages.includes(entry.id))
+        )
+          return entry;
+        const next = {
+          ...entry,
+          status: result.status,
+          result,
+          reply: turnReply(session, entry.id),
+        };
+        ended.push(next);
+        return next;
+      });
     }
     this.#sessions = {
       ...this.#sessions,
@@ -606,23 +636,60 @@ export class SessionStore {
       },
     };
     this.#notify();
+    if (created) this.#observer.submitted?.(agentId, created);
+    for (const message of ended)
+      this.#observer.ended?.(agentId, message.id, message.reply ?? '', message.result);
   }
 
-  /** Closing a connection also ends turns typed directly into its terminal. */
-  #settleSubmissions(agentId: string, status: SubmittedMessage['status'], id?: string): void {
+  /** Ends outstanding submissions without inventing a native reply. */
+  #settleSubmissions(agentId: string, result: TurnResult, id?: string): void {
     const session = this.of(agentId);
     if (!session.submissions) return;
+    const ended: SubmittedMessage[] = [];
+    const submissions = session.submissions.map((entry) => {
+      if (
+        (entry.status !== 'running' && entry.status !== 'queued') ||
+        (id !== undefined && entry.id !== id)
+      )
+        return entry;
+      const next = { ...entry, status: result.status, result, reply: turnReply(session, entry.id) };
+      ended.push(next);
+      return next;
+    });
+    if (ended.length === 0) return;
+    this.#sessions = { ...this.#sessions, [agentId]: { ...session, submissions } };
+    this.#notify();
+    for (const message of ended)
+      this.#observer.ended?.(agentId, message.id, message.reply ?? '', result);
+  }
+
+  /** Associates a correction with a held task without dispatching or re-observing it. */
+  tagSubmission(agentId: string, messageId: string, owner: string, item: string): void {
+    const session = this.of(agentId);
+    if (!session.submissions?.some(({ id }) => id === messageId)) return;
     this.#sessions = {
       ...this.#sessions,
       [agentId]: {
         ...session,
-        submissions: session.submissions.map((entry) =>
-          (id === undefined ? entry.status === 'running' : entry.id === id)
-            ? { ...entry, status }
-            : entry,
+        submissions: session.submissions.map((message) =>
+          message.id === messageId ? { ...message, task: { agent: owner, item } } : message,
         ),
       },
     };
+    this.#notify();
+  }
+
+  serializeSubmissions(): string {
+    return encodeSubmissions(this.#sessions);
+  }
+
+  /** Restores records only: unresolved work never silently re-sends after a restart. */
+  restoreSubmissions(serialized: string): void {
+    const decoded = decodeSubmissions(serialized);
+    const next = { ...this.#sessions };
+    for (const [id, submissions] of decoded) next[id] = { ...this.of(id), submissions };
+    this.#sessions = next;
+    this.#notify();
   }
 
   #notify(): void {

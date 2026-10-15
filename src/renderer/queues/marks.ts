@@ -82,6 +82,8 @@ export function queueMarks(
               : undefined;
     const at = run.agents[lane];
     const held = run.running && at?.current === item;
+    const problem = at?.current === item ? at.problem : undefined;
+    const attempts = item === null ? undefined : at?.attempts?.[item];
     const until = held ? at.until : undefined;
     const asked = item === null ? undefined : at?.changes?.[item];
     const usage = held ? at.usage : undefined;
@@ -97,6 +99,12 @@ export function queueMarks(
       'data-until': until === undefined ? undefined : String(until),
       // A session that would not start is decided where it says why (asks.ts), not on the row.
       'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,
+      'data-problem': problem?.kind,
+      'data-problem-text': problem?.text,
+      'data-problem-reason': problem?.reason,
+      'data-problem-agent': problem?.agent,
+      'data-problem-condition': problem?.conditionKey,
+      'data-attempts': attempts?.length ? JSON.stringify(attempts) : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
       'data-usage':

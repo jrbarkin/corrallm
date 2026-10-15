@@ -1,4 +1,4 @@
-import type { Connection, MessageImage } from '../../shared/session';
+import type { Connection, MessageImage, TurnResult } from '../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../shared/usage';
 import type { UsageBackend, UsageReading, UsageState } from '../../shared/usage';
 import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
@@ -31,6 +31,8 @@ import type {
   WaitTarget,
 } from '../graph/queue';
 import { deadline } from '../graph/time';
+import { readRun } from './checkpoint';
+import type { SavedRun } from './checkpoint';
 import { usageBackendOf, warningText } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
 import {
@@ -48,7 +50,28 @@ import {
  * time limit past (or the user said to go on). stopped: an OK the user stopped its queue at. A
  * repeat fails when it runs out of rounds and goes on (or the user says to go on).
  */
-export type Outcome = 'succeeded' | 'failed' | 'skipped' | 'timedOut' | 'stopped';
+export type Outcome = 'succeeded' | 'failed' | 'cancelled' | 'skipped' | 'timedOut' | 'stopped';
+
+/** A task held for inspection; its original identity and session stay available. */
+export interface TaskProblem {
+  kind: 'failed' | 'uncertain' | 'cancelled';
+  reason: string;
+  text: string;
+  agent: string;
+  /** An unresolved If/repeat judgment, decided separately from the task's outcome. */
+  conditionKey?: string;
+}
+
+/** A concise execution record, without the session's tool transcript. */
+export interface TaskAttempt {
+  id: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'running' | 'succeeded' | 'failed' | 'uncertain' | 'cancelled';
+  reason?: string;
+  text?: string;
+  message?: string;
+}
 
 /** Where a repeat is: the round it is on (or ended on), and how many rounds the user added. */
 export interface Round {
@@ -59,6 +82,8 @@ export interface Round {
 
 /** Where an agent's queue is, in a run. */
 export interface AgentRun {
+  problem?: TaskProblem;
+  attempts?: Readonly<Record<string, readonly TaskAttempt[]>>;
   /**
    * The task it is on: an item of its queue, a step of an if-then, or an item in a repeat (by id);
    * or a repeat itself, while it asks the user for more rounds.
@@ -103,6 +128,8 @@ export interface AgentRun {
 }
 
 export interface Run {
+  /** Paused progress can resume; starting again is a separate deliberate action. */
+  paused?: boolean;
   /**
    * Whether queues are running: an agent is doing a task, or held (by the run, or for the user).
    * Stopped queues keep no run going.
@@ -130,10 +157,13 @@ export interface Refusal {
 export interface TurnEnd {
   failed: boolean;
   reply: string;
+  result?: TurnResult;
 }
 
 /** What a run needs from its surroundings. */
 export interface RunIO {
+  /** Flushes the current checkpoint before an automated prompt can leave the renderer. */
+  beforeSend?: () => Promise<void>;
   /**
    * Sends a message (with images, if any) to an agent's session; `done` once the turn it starts
    * ends. `refused`, later, each time the session would not start while the message waits to go
@@ -149,6 +179,7 @@ export interface RunIO {
     refused?: (refusal: Refusal) => void,
     /** A typed reply at an OK or repeat: also appears as a manual Message row. */
     origin?: 'user',
+    displayText?: string,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: GraphNode, text: string) => void;
@@ -194,28 +225,15 @@ const HOLDS = 0.5;
 const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
   `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
 
-/** What the run says when it takes a connected agent's answer to its question as no. */
-const UNCLEAR = 'corrallm took that as no: the answer wasn’t a clear yes or no.';
-const UNANSWERED = 'corrallm took that as no: the question wasn’t answered.';
-/**
- * What the run says when a connected agent's step reply gives no verdict (turns.ts): it takes the
- * step as going as expected, as succeeded or (for a step expected to fail) as failed.
- */
-const NO_VERDICT =
-  'corrallm took the step as succeeded: its reply didn’t end with SUCCEEDED or FAILED.';
-const NO_VERDICT_FAILED =
-  'corrallm took the step as failed, as expected: its reply didn’t end with SUCCEEDED or FAILED.';
 /** What the run says, once a run, when it can't read a connected agent's replies (RunIO.unheard). */
 const UNHEARD =
-  'corrallm can’t read this agent’s replies (its hooks are off), so in this run “the output ' +
-  'contains” and conditions in your words don’t hold, without asking it, and its steps count as ' +
-  'succeeded.';
+  'corrallm can’t read this agent’s replies (its hooks are off). Steps wait in Needs you for a ' +
+  'verdict; output checks and conditions in your words wait for your judgment.';
 
 const IDLE: Run = { running: false, agents: {} };
 
-// TODO(7d): persist queue progress/outcomes and native conversation IDs; restore paused,
-// with in-flight prompts unresolved. Reconnect through each connection's native resume,
-// never automatically replay a submitted prompt. Full transcript/screen snapshots are V2.
+// Checkpoints restore paused with in-flight prompts unresolved; only an explicit Retry replays
+// submitted work. Native conversation history remains the source for inspecting its effects.
 
 /**
  * Runs every agent's queue: each agent works through its queue in order. A message goes to the
@@ -286,6 +304,7 @@ export class RunStore {
   readonly #warned = new Set<string>();
   /** The agents the run said it can't read the replies of, this run. */
   readonly #toldUnheard = new Set<string>();
+  readonly #observed = new Map<string, { owner: string; item: string; token: object }>();
 
   constructor(io: RunIO) {
     this.#io = io;
@@ -301,6 +320,79 @@ export class RunStore {
   /** The run: a new object after each change. */
   snapshot = (): Run => this.#run;
 
+  checkpoint(): string {
+    const saved: SavedRun = {
+      version: 1,
+      run: this.#run,
+      replies: [...this.#replies],
+      held: [...this.#held],
+      arrived: [...this.#arrived],
+      ended: [...this.#ended],
+      past: [...this.#past],
+      due: [...this.#due],
+      usageDecided: [...this.#usageDecided],
+      warned: [...this.#warned],
+    };
+    return JSON.stringify(saved);
+  }
+
+  restore(text: string): void {
+    const saved = readRun(text);
+    this.#cancel();
+    this.#forget();
+    for (const [key, value] of saved.replies) this.#replies.set(key, value);
+    for (const [key, value] of saved.held) this.#held.set(key, value);
+    for (const [key, value] of saved.arrived) this.#arrived.set(key, value);
+    for (const key of saved.ended) this.#ended.add(key);
+    for (const [key, value] of saved.past) this.#past.set(key, value);
+    for (const [key, value] of saved.due) this.#due.set(key, value);
+    for (const [key, value] of saved.usageDecided) this.#usageDecided.set(key, value);
+    for (const key of saved.warned) this.#warned.add(key);
+    const agents: Record<string, AgentRun> = {};
+    for (const [id, at] of Object.entries(saved.run.agents)) {
+      if (
+        at.status === 'running' &&
+        at.current !== undefined &&
+        at.outcomes[at.current] === undefined
+      ) {
+        const node = this.#agents().find((n) => n.id === id);
+        const item = node && findItem(node.data.queue ?? [], at.current)?.item;
+        const condition = conditionKey(id, item, at.rounds);
+        agents[id] = {
+          ...at,
+          status: 'asking',
+          problem: {
+            kind: 'uncertain',
+            reason: 'interrupted',
+            text: 'This task was in progress when the session ended. Inspect its native conversation before resolving or retrying.',
+            agent: item && isMessage(item) ? (item.target ?? id) : id,
+            ...(condition ? { conditionKey: condition } : {}),
+          },
+          ...(at.attempts
+            ? {
+                attempts: Object.fromEntries(
+                  Object.entries(at.attempts).map(([task, attempts]) => [
+                    task,
+                    attempts.map((attempt) =>
+                      attempt.status === 'running'
+                        ? {
+                            ...attempt,
+                            status: 'uncertain' as const,
+                            endedAt: this.#io.now(),
+                            reason: 'interrupted',
+                          }
+                        : attempt,
+                    ),
+                  ]),
+                ),
+              }
+            : {}),
+        };
+      } else agents[id] = at;
+    }
+    this.#set({ running: false, paused: Object.keys(agents).length > 0, agents });
+  }
+
   /** Runs every queue from the top. */
   start(): void {
     this.#cancel();
@@ -314,8 +406,28 @@ export class RunStore {
    * is taken back (off their queues, or their turns interrupted).
    */
   stop(): void {
+    this.#interrupt(
+      'cancelled',
+      'The run was stopped. Inspect the session before retrying this task.',
+    );
     this.#cancel();
-    this.#set({ ...this.#run, running: false });
+    this.#set({ ...this.#run, running: false, paused: true });
+  }
+
+  /** Quitting/reloading holds in-flight work as unresolved, never as an automatic retry. */
+  pause(): void {
+    this.#interrupt(
+      'uncertain',
+      'The session was interrupted. Inspect its native conversation before resolving or retrying.',
+    );
+    this.#cancel();
+    this.#set({ ...this.#run, running: false, paused: true });
+  }
+
+  resume(): void {
+    if (!this.#run.paused || this.#run.running) return;
+    this.#run = { ...this.#run, running: true, paused: false };
+    this.#settle(true);
   }
 
   /** Forgets the run, as for another canvas. */
@@ -374,6 +486,44 @@ export class RunStore {
     const node = this.#agents().find((n) => n.id === agent);
     const held = node && findItem(node.data.queue ?? [], item)?.item;
     if (!node || !held) return;
+    if (at.problem) {
+      if (at.problem.conditionKey !== undefined) {
+        if (!('choice' in answer) || !['retry', 'yes', 'no', 'stop'].includes(answer.choice))
+          return;
+        const cleared = { ...at };
+        delete cleared.problem;
+        this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: cleared } };
+        if (answer.choice === 'retry') this.#held.delete(at.problem.conditionKey);
+        else if (answer.choice === 'stop') this.#record(agent, item, 'stopped');
+        else this.#held.set(at.problem.conditionKey, answer.choice === 'yes');
+        this.#settle(true);
+        return;
+      }
+      if ('reply' in answer) {
+        this.#retry(node, held, answer.reply.trim(), answer.images);
+      } else if (answer.choice === 'retry') {
+        this.#retry(node, held);
+      } else if (
+        answer.choice === 'resolve' ||
+        answer.choice === 'continue' ||
+        answer.choice === 'stop'
+      ) {
+        const outcome =
+          answer.choice === 'resolve'
+            ? 'succeeded'
+            : answer.choice === 'stop'
+              ? 'stopped'
+              : at.problem.kind === 'cancelled'
+                ? 'cancelled'
+                : 'failed';
+        const cleared = { ...at };
+        delete cleared.problem;
+        this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: cleared } };
+        this.#record(agent, item, outcome);
+        this.#settle(true);
+      }
+      return;
+    }
     if (at.usage) {
       this.#answerUsage(node, at.usage, item, answer);
       return;
@@ -411,12 +561,190 @@ export class RunStore {
     if (this.#run.running) this.#settle(false);
   }
 
+  /** A prompt typed in the held task's own console is an observed attempt, not another send. */
+  observeSubmission(
+    session: string,
+    message: string,
+    text: string,
+  ): { agent: string; item: string } | undefined {
+    if (!this.#run.running && !this.#run.paused) return undefined;
+    const held = Object.entries(this.#run.agents).filter(
+      ([owner, at]) =>
+        at.problem?.agent === session &&
+        at.problem.conditionKey === undefined &&
+        at.current !== undefined &&
+        !this.#busy.has(owner),
+    );
+    if (held.length !== 1) return undefined;
+    const pair = held[0];
+    if (!pair) return undefined;
+    const [owner, at] = pair;
+    if (!at.current || this.#busy.has(owner)) return undefined;
+    const token = {};
+    this.#busy.set(owner, token);
+    const next = {
+      ...at,
+      status: 'running' as const,
+      attempts: this.#attempts(at, at.current, text),
+    };
+    delete next.problem;
+    this.#observed.set(JSON.stringify([session, message]), { owner, item: at.current, token });
+    this.#set({ ...this.#run, agents: { ...this.#run.agents, [owner]: next } });
+    return { agent: owner, item: at.current };
+  }
+
+  observeEnd(session: string, message: string, reply: string, result: TurnResult): void {
+    const key = JSON.stringify([session, message]);
+    const observed = this.#observed.get(key);
+    this.#observed.delete(key);
+    if (!observed) return;
+    const node = this.#agents().find((n) => n.id === observed.owner);
+    const task = node && findItem(node.data.queue ?? [], observed.item)?.item;
+    if (!task || isIf(task) || isRepeat(task) || isWait(task) || isDelay(task) || isApproval(task))
+      return;
+    this.#taskEnded(observed.owner, task, observed.token, {
+      reply,
+      failed: result.status !== 'completed',
+      result,
+    });
+  }
+
+  #attempts(
+    at: AgentRun | undefined,
+    item: string,
+    message?: string,
+  ): NonNullable<AgentRun['attempts']> {
+    const attempt: TaskAttempt = {
+      id: crypto.randomUUID(),
+      startedAt: this.#io.now(),
+      status: 'running',
+      ...(message ? { message } : {}),
+    };
+    return { ...at?.attempts, [item]: [...(at?.attempts?.[item] ?? []), attempt] };
+  }
+
+  #endAttempt(
+    agent: string,
+    item: string,
+    status: TaskAttempt['status'],
+    reason?: string,
+    text?: string,
+  ): void {
+    const at = this.#run.agents[agent];
+    const attempts = at?.attempts?.[item];
+    if (!at || !attempts?.length) return;
+    const next = attempts.map((attempt, index) =>
+      index === attempts.length - 1 && attempt.status === 'running'
+        ? {
+            ...attempt,
+            endedAt: this.#io.now(),
+            status,
+            ...(reason ? { reason } : {}),
+            ...(text ? { text } : {}),
+          }
+        : attempt,
+    );
+    this.#run = {
+      ...this.#run,
+      agents: {
+        ...this.#run.agents,
+        [agent]: { ...at, attempts: { ...at.attempts, [item]: next } },
+      },
+    };
+  }
+
+  #interrupt(kind: TaskProblem['kind'], text: string): void {
+    for (const agent of this.#busy.keys()) {
+      const at = this.#run.agents[agent];
+      if (!at?.current) continue;
+      this.#endAttempt(agent, at.current, kind, 'interrupted', text);
+      const updated = this.#run.agents[agent] ?? at;
+      const node = this.#agents().find((n) => n.id === agent);
+      const item = node && findItem(node.data.queue ?? [], at.current)?.item;
+      const destination = item && isMessage(item) ? (item.target ?? agent) : agent;
+      const condition = conditionKey(agent, item, at.rounds);
+      this.#run = {
+        ...this.#run,
+        agents: {
+          ...this.#run.agents,
+          [agent]: {
+            ...updated,
+            status: 'asking',
+            problem: {
+              kind,
+              text,
+              reason: 'interrupted',
+              agent: destination,
+              ...(condition ? { conditionKey: condition } : {}),
+            },
+          },
+        },
+      };
+    }
+  }
+
+  /** Authored branches/repeats keep their recovery semantics for known failures. */
+  #handlesFailure(agent: string, item: string): boolean {
+    const queue = this.#agents().find((n) => n.id === agent)?.data.queue ?? [];
+    const found = findItem(queue, item);
+    if (found?.repeat) return true;
+    const container = queue.findIndex(
+      (entry) =>
+        entry.id === item || (isIf(entry) && entry.then.some((inner) => inner.id === item)),
+    );
+    const next = queue.slice(container + 1).find((entry) => !isPause(entry));
+    return container !== -1 && next !== undefined && isIf(next) && next.if.kind === 'failed';
+  }
+
+  #retry(node: GraphNode, task: QueueItem, note?: string, images?: readonly MessageImage[]): void {
+    const at = this.#run.agents[node.id];
+    if (!at || (note !== undefined && note === '' && !images?.length)) return;
+    const cleared = { ...at };
+    delete cleared.problem;
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [node.id]: cleared } };
+    if (
+      isMessage(task) ||
+      (!isIf(task) && !isRepeat(task) && !isWait(task) && !isDelay(task) && !isApproval(task))
+    ) {
+      const next = this.#begin(
+        node.id,
+        task,
+        { ...at.outcomes },
+        note === undefined ? undefined : { note, images },
+      );
+      this.#set({
+        ...this.#run,
+        agents: {
+          ...this.#run.agents,
+          [node.id]: {
+            ...next,
+            ...(at.rounds ? { rounds: at.rounds } : {}),
+            ...(at.changes ? { changes: at.changes } : {}),
+          },
+        },
+      });
+    } else {
+      for (const key of this.#held.keys()) {
+        const parts: unknown = JSON.parse(key);
+        if (Array.isArray(parts) && parts[0] === node.id && parts[1] === task.id)
+          this.#held.delete(key);
+      }
+      this.#settle(true);
+    }
+  }
+
   #agents(): GraphNode[] {
     return this.#nodes.filter((n) => n.type === 'agent');
   }
 
   /** Moves every agent not busy with a task on as far as it can go, until none can. */
   #settle(changed: boolean): void {
+    // Native console work can finish during a pause; retain its evidence without dispatching
+    // queued work or releasing waits until the user resumes the run.
+    if (!this.#run.running && this.#run.paused) {
+      if (changed) this.#set({ ...this.#run });
+      return;
+    }
     const nodes = this.#agents();
     let agents: Record<string, AgentRun> = Object.fromEntries(
       nodes.flatMap((n) => {
@@ -456,6 +784,7 @@ export class RunStore {
     agents: Readonly<Record<string, AgentRun>>,
     now: number,
   ): AgentRun {
+    if (run.problem && run.current && findItem(node.data.queue ?? [], run.current)) return run;
     const rounds: Record<string, Round> = { ...run.rounds };
     const next = this.#next(node, run.outcomes, rounds, agents, now);
     // How a step went against what was expected lasts as long as how it went (a new round clears it).
@@ -467,6 +796,7 @@ export class RunStore {
       ...(Object.keys(rounds).length > 0 ? { rounds } : {}),
       ...(run.changes ? { changes: run.changes } : {}),
       ...(asExpected.length > 0 ? { asExpected: Object.fromEntries(asExpected) } : {}),
+      ...((next.attempts ?? run.attempts) ? { attempts: next.attempts ?? run.attempts } : {}),
     };
   }
 
@@ -526,7 +856,11 @@ export class RunStore {
     // A stop wins over everything, a time limit too: what it waits for will never be done.
     if (results.includes('stopped')) return { current: item.id, status: 'stopped', outcomes };
     if (results.every((result) => result !== undefined))
-      return results.includes('failed') ? 'failed' : 'succeeded';
+      return results.includes('cancelled')
+        ? 'cancelled'
+        : results.includes('failed')
+          ? 'failed'
+          : 'succeeded';
     // Arrival counts for a limit added while it waits, too.
     this.#arrive(key, now);
     const until = item.timeout && this.#until(key, agent, item.timeout, now, true);
@@ -778,7 +1112,7 @@ export class RunStore {
   #decideUsage(hold: UsageHold, choice: 'goOn' | 'wait'): void {
     this.#usageDecided.set(JSON.stringify([hold.backend, hold.window]), {
       choice,
-      until: hold.resetsAt ?? Infinity,
+      until: hold.resetsAt ?? Number.MAX_SAFE_INTEGER,
     });
   }
 
@@ -852,9 +1186,9 @@ export class RunStore {
         held = previous === 'timedOut';
         break;
       case 'outputContains':
+        if (isConnected(node) && this.#unheard(node)) return this.#unheardCondition(node, key, at);
         held = isConnected(node)
-          ? !this.#unheard(node) &&
-            replyContains(
+          ? replyContains(
               this.#replyOf(node.id, checked, at.outcomes),
               condition.text,
               condition.wholeLine,
@@ -865,8 +1199,7 @@ export class RunStore {
         if (isConnected(node)) {
           // Never asked when its answer can't be heard.
           if (!this.#unheard(node)) return this.#ask(node, key, condition.text, at);
-          held = false;
-          break;
+          return this.#unheardCondition(node, key, at);
         }
         held = this.#io.chance() < HOLDS;
         break;
@@ -887,8 +1220,8 @@ export class RunStore {
 
   /**
    * Asks a connected agent, in its session, whether a condition in the user's words holds: it is
-   * busy (at its If or repeat) until its turn ends. Its answer decides (by `key`): yes, it holds;
-   * no, or no clear answer (which it says), it does not.
+   * busy (at its If or repeat) until its turn ends. A clear yes/no decides (by `key`); a failed,
+   * cancelled or unclear query holds for the user without inventing a condition result.
    */
   #ask(
     node: GraphNode,
@@ -898,18 +1231,77 @@ export class RunStore {
   ): AgentRun {
     const token = {};
     this.#busy.set(node.id, token);
+    const attempts = this.#attempts(this.#run.agents[node.id], current);
     this.#send(node, conditionQuestion(condition), {
       holder: { agent: node.id, token },
-      ended: ({ failed, reply }) => {
+      ended: ({ failed, reply, result }) => {
         if (this.#busy.get(node.id) !== token) return;
         this.#busy.delete(node.id);
-        const yes = failed ? undefined : yesOrNo(reply);
-        if (yes === undefined) this.#io.tell(node, failed ? UNANSWERED : UNCLEAR);
-        this.#held.set(key, yes ?? false);
+        const cancelled = result?.status === 'cancelled';
+        const failedQuery = failed || result?.status === 'failed';
+        const yes = cancelled || failedQuery ? undefined : yesOrNo(reply);
+        if (yes === undefined) {
+          const kind = cancelled ? 'cancelled' : failedQuery ? 'failed' : 'uncertain';
+          const reason =
+            result?.status !== 'completed' && result
+              ? result.reason
+              : failed
+                ? 'error'
+                : 'unclear-answer';
+          const text =
+            result?.message ??
+            (cancelled
+              ? 'The condition query was cancelled. Inspect the session before deciding or retrying.'
+              : failedQuery
+                ? 'The agent could not judge this condition. Inspect the session before deciding or retrying.'
+                : 'The answer did not clearly say yes or no. Decide whether the condition holds or ask again.');
+          this.#endAttempt(node.id, current, kind, reason, text);
+          const at = this.#run.agents[node.id];
+          if (at)
+            this.#run = {
+              ...this.#run,
+              agents: {
+                ...this.#run.agents,
+                [node.id]: {
+                  ...at,
+                  status: 'asking',
+                  problem: { kind, reason, text, agent: node.id, conditionKey: key },
+                },
+              },
+            };
+        } else {
+          this.#endAttempt(
+            node.id,
+            current,
+            'succeeded',
+            'completed',
+            yes ? 'The condition holds.' : 'The condition does not hold.',
+          );
+          this.#held.set(key, yes);
+        }
         this.#settle(true);
       },
     });
-    return { current, status: 'running', outcomes };
+    return { current, status: 'running', outcomes, attempts };
+  }
+
+  /** An absent native reply is unknown, even when the condition itself is only a text search. */
+  #unheardCondition(
+    node: GraphNode,
+    key: string,
+    at: { current: string; outcomes: Record<string, Outcome> },
+  ): AgentRun {
+    return {
+      ...at,
+      status: 'asking',
+      problem: {
+        kind: 'uncertain',
+        reason: 'unheard-reply',
+        agent: node.id,
+        conditionKey: key,
+        text: 'This agent’s replies cannot be read. Inspect its session and decide whether the condition holds.',
+      },
+    };
   }
 
   /**
@@ -971,83 +1363,134 @@ export class RunStore {
   /**
    * Starts a task: the agent is busy with it until it finishes. A message, or a connected agent's
    * step, finishes when the turn it starts ends (a message aimed at another agent, that agent's
-   * turn): a connected agent's tool step as it says at the end of its reply (SUCCEEDED or FAILED;
-   * neither, as expected, as its turn ended, which the run says); a simulated agent's step, after
-   * a while. A step expected to fail is turned round once judged: failing is its success, and
-   * passing its failure. A tool's turn that fails says neither: the step fails. An agent whose
-   * replies can't be read (RunIO.unheard) says nothing: its step succeeds, and went neither way.
+   * turn): a connected agent's tool step as its exact last-line SUCCEEDED or FAILED verdict says;
+   * a simulated agent's step, after a while. Expected failure inverts a verified verdict. Native
+   * errors and cancellations hold for inspection; missing or unreadable verdicts stay uncertain.
    */
   #begin(
     agent: string,
     task: QueueStep | QueueMessage,
     outcomes: Record<string, Outcome>,
+    correction?: { note: string; images?: readonly MessageImage[] | undefined },
   ): AgentRun {
     const token = {};
     this.#busy.set(agent, token);
-    const finish = (outcome: Outcome, reply = '', asExpected?: boolean) => {
-      this.#finish(agent, task.id, token, outcome, reply, asExpected);
-    };
-    const ended = ({ failed, reply }: TurnEnd) => {
-      finish(failed ? 'failed' : 'succeeded', reply);
+    const previous = this.#run.agents[agent];
+    const attempts = this.#attempts(previous, task.id, correction?.note);
+    const ended = (turn: TurnEnd) => {
+      this.#taskEnded(agent, task, token, turn);
     };
     const node = this.#agents().find((n) => n.id === agent);
     const holder = { agent, token };
     if (!isMessage(task)) {
-      /** Whether it is meant to fail: then failing is its success, and passing its failure. */
-      const fails = task.expect === 'fails';
-      /** How it went, once judged: whether it passed, turned round if it was meant to fail. */
-      const went = (passed: boolean, reply = '') => {
-        finish(passed === fails ? 'failed' : 'succeeded', reply, fails ? !passed : undefined);
-      };
       if (node && isConnected(node)) {
-        // A tool's step went as the agent says on its reply's last line (a slash command's, as
-        // its turn ended): a turn that ends well may have run tests that fail.
-        const judged = ({ failed, reply }: TurnEnd) => {
-          if (failed || this.#busy.get(agent) !== token) {
-            ended({ failed, reply });
-            return;
-          }
-          const verdict = stepVerdict(reply);
-          if (verdict === undefined && this.#unheard(node)) {
-            // Its reply can't be read: the step counts as succeeded, and went neither way.
-            finish('succeeded', reply);
-            return;
-          }
-          if (verdict === undefined) this.#io.tell(node, fails ? NO_VERDICT_FAILED : NO_VERDICT);
-          went(verdict ?? !fails, reply);
-        };
-        this.#send(node, this.#stepMessage(node, task), {
-          ended: isCommand(task.action)
-            ? ({ failed, reply }) => {
-                went(!failed, reply);
-              }
-            : judged,
+        const original = this.#stepMessage(node, task);
+        const text = correction
+          ? `${correction.note}\n\nContinue this original task and report its result:\n${original}`
+          : original;
+        this.#send(node, text, {
+          ended,
           holder,
+          ...(correction
+            ? { origin: 'user', displayText: correction.note, images: correction.images }
+            : {}),
         });
       } else {
         const [least, most] = STEP_MS;
-        const ms = least + (hash(task.id) % (most - least));
-        this.#after(ms, () => {
-          // It goes wrong now and then: it fails, or, meant to fail, it passes.
+        this.#after(least + (hash(task.id) % (most - least)), () => {
           const wrong = this.#io.chance() < FAILS;
-          went(wrong === fails);
+          this.#finish(
+            agent,
+            task.id,
+            token,
+            wrong ? 'failed' : 'succeeded',
+            '',
+            task.expect === 'fails' ? !wrong : undefined,
+          );
         });
       }
     } else if (task.message.trim() === '') {
       this.#after(0, () => {
-        finish('skipped');
+        this.#finish(agent, task.id, token, 'skipped', '');
       });
     } else {
-      const own = task.target === undefined || task.target === agent;
-      const to = own ? node : this.#agents().find((n) => n.id === task.target);
-      if (to) this.#send(to, task.message, { ended, holder });
-      // Handed to an agent that is gone: nothing to wait for.
+      const to =
+        task.target === undefined || task.target === agent
+          ? node
+          : this.#agents().find((n) => n.id === task.target);
+      if (to)
+        this.#send(
+          to,
+          correction
+            ? `${correction.note}\n\nContinue the original task: ${task.message}`
+            : task.message,
+          {
+            ended,
+            holder,
+            ...(correction
+              ? { origin: 'user', displayText: correction.note, images: correction.images }
+              : {}),
+          },
+        );
       else
         this.#after(0, () => {
-          finish('succeeded');
+          this.#finish(agent, task.id, token, 'succeeded', '');
         });
     }
-    return { current: task.id, status: 'running', outcomes };
+    return { current: task.id, status: 'running', outcomes, attempts };
+  }
+
+  /** Native execution failures take precedence over a declared task verdict. */
+  #taskEnded(agent: string, task: QueueStep | QueueMessage, token: object, turn: TurnEnd): void {
+    if (this.#busy.get(agent) !== token) return;
+    const destination = isMessage(task) ? (task.target ?? agent) : agent;
+    const result = turn.result;
+    let problem: TaskProblem | undefined;
+    let outcome: Outcome = 'succeeded';
+    let asExpected: boolean | undefined;
+    if (result?.status === 'cancelled') {
+      outcome = 'cancelled';
+      problem = {
+        kind: 'cancelled',
+        reason: result.reason,
+        text: result.message ?? 'This task was interrupted or taken back.',
+        agent: destination,
+      };
+    } else if (turn.failed || result?.status === 'failed') {
+      outcome = 'failed';
+      problem = {
+        kind: 'failed',
+        reason: result?.reason ?? 'error',
+        text: result?.message ?? 'The agent could not finish this turn.',
+        agent: destination,
+      };
+    } else if (!isMessage(task)) {
+      const verdict = isCommand(task.action) ? true : stepVerdict(turn.reply);
+      const node = this.#agents().find((n) => n.id === agent);
+      const unheard = node ? this.#unheard(node) : false;
+      if (verdict === undefined || unheard) {
+        problem = {
+          kind: 'uncertain',
+          reason: 'missing-verdict',
+          text: 'The turn ended without a clear SUCCEEDED or FAILED verdict. Inspect the session before continuing.',
+          agent: destination,
+        };
+      } else {
+        const expectedFailure = task.expect === 'fails';
+        outcome = verdict === expectedFailure ? 'failed' : 'succeeded';
+        asExpected = expectedFailure ? !verdict : undefined;
+        if (outcome === 'failed')
+          problem = {
+            kind: 'failed',
+            reason: 'task-failed',
+            text: expectedFailure
+              ? 'This step succeeded, but it was expected to fail.'
+              : 'The agent reported that this step failed.',
+            agent: destination,
+          };
+      }
+    }
+    this.#finish(agent, task.id, token, outcome, turn.reply, asExpected, problem);
   }
 
   /**
@@ -1081,31 +1524,59 @@ export class RunStore {
       images,
       holder,
       origin,
+      displayText,
     }: {
       ended?: (turn: TurnEnd) => void;
       images?: readonly MessageImage[] | undefined;
       holder?: { agent: string; token: object };
       origin?: 'user';
+      displayText?: string;
     } = {},
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
     const sent = { over: false };
-    const withdraw = this.#io.send(
-      to,
-      text,
-      (turn) => {
+    const dispatch = () => {
+      if (sent.over) return;
+      const withdraw = this.#io.send(
+        to,
+        text,
+        (turn) => {
+          sent.over = true;
+          this.#sent.delete(sent);
+          ended?.(turn);
+        },
+        images,
+        holder &&
+          ((refusal) => {
+            this.#refused(holder, to, refusal);
+          }),
+        origin,
+        displayText,
+      );
+      const pending = () => !sent.over;
+      if (pending()) this.#sent.set(sent, withdraw);
+    };
+    if (this.#io.beforeSend) {
+      this.#sent.set(sent, () => {
         sent.over = true;
-        this.#sent.delete(sent);
-        ended?.(turn);
-      },
-      images,
-      holder &&
-        ((refusal) => {
-          this.#refused(holder, to, refusal);
-        }),
-      origin,
-    );
-    if (!sent.over) this.#sent.set(sent, withdraw);
+      });
+      void Promise.resolve()
+        .then(() => this.#io.beforeSend?.())
+        .then(dispatch, (error: unknown) => {
+          if (sent.over) return;
+          sent.over = true;
+          this.#sent.delete(sent);
+          ended?.({
+            failed: true,
+            reply: '',
+            result: {
+              status: 'failed',
+              reason: 'error',
+              message: `The run could not be saved, so the prompt was not sent: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          });
+        });
+    } else dispatch();
   }
 
   /**
@@ -1209,10 +1680,40 @@ export class RunStore {
     outcome: Outcome,
     reply: string,
     asExpected?: boolean,
+    problem?: TaskProblem,
   ): void {
     if (this.#busy.get(agent) !== token) return;
     this.#busy.delete(agent);
     this.#replies.set(JSON.stringify([agent, task]), reply);
+    this.#endAttempt(
+      agent,
+      task,
+      problem?.kind ??
+        (outcome === 'succeeded' ? 'succeeded' : outcome === 'cancelled' ? 'cancelled' : 'failed'),
+      problem?.reason,
+      problem?.text,
+    );
+    if (problem && (problem.kind !== 'failed' || !this.#handlesFailure(agent, task))) {
+      const at = this.#run.agents[agent];
+      if (at)
+        this.#run = {
+          ...this.#run,
+          agents: {
+            ...this.#run.agents,
+            [agent]: {
+              ...at,
+              current: task,
+              status: 'asking',
+              problem,
+              ...(asExpected === undefined
+                ? {}
+                : { asExpected: { ...at.asExpected, [task]: asExpected } }),
+            },
+          },
+        };
+      this.#settle(true);
+      return;
+    }
     this.#record(agent, task, outcome, asExpected);
     this.#settle(true);
   }
@@ -1243,6 +1744,7 @@ export class RunStore {
    * is not heard.
    */
   #cancel(): void {
+    this.#observed.clear();
     for (const cancel of this.#timers) cancel();
     this.#timers.clear();
     this.#busy.clear();
@@ -1258,6 +1760,7 @@ export class RunStore {
    * holds, to run from the top.
    */
   #forget(): void {
+    this.#observed.clear();
     this.#held.clear();
     this.#replies.clear();
     this.#arrived.clear();
@@ -1286,6 +1789,25 @@ export function taskState(run: Run, agent: string, item: string | null): string 
   if (item === null) return at.status === 'done' ? 'reached' : undefined;
   if (at.current === item && at.status !== 'done') return run.running ? at.status : 'stopped';
   return at.outcomes[item];
+}
+
+/** The judgment a structural item was making when its native query was interrupted. */
+function conditionKey(
+  agent: string,
+  item: QueueItem | undefined,
+  rounds?: Readonly<Record<string, Round>>,
+): string | undefined {
+  if (!item) return undefined;
+  const condition = isIf(item)
+    ? item.if
+    : isRepeat(item) && !isRepeatEnds(item.until)
+      ? item.until
+      : undefined;
+  if (!condition || (condition.kind !== 'freeText' && condition.kind !== 'outputContains'))
+    return undefined;
+  return JSON.stringify(
+    isRepeat(item) ? [agent, item.id, rounds?.[item.id]?.round ?? 1] : [agent, item.id],
+  );
 }
 
 /**

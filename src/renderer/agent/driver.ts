@@ -1,4 +1,4 @@
-import type { AgentSettings, MessageImage, SessionAnswer } from '../../shared/session';
+import type { AgentSettings, MessageImage, SessionAnswer, TurnResult } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Refusal, Session, SessionAction } from './session';
 
@@ -22,9 +22,11 @@ export interface Turn {
   agent: AgentType;
 }
 
+export type DriverDone = (interrupted: boolean, result?: TurnResult) => void;
+
 export interface SessionDriver {
   /** Starts a turn; `done` hears when it ends (true if it was interrupted, or failed). */
-  start(turn: Turn, done: (interrupted: boolean) => void): void;
+  start(turn: Turn, done: DriverDone): void;
   /** Passes on the user's answer to the prompt `id`, once it is complete. */
   answer(id: string, answer: SessionAnswer): void;
   /** Interrupts the turn going on, if any, as Escape does in Claude Code. */

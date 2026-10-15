@@ -38,6 +38,42 @@ function tools(events: SessionEvent[]) {
 const about = (params: Record<string, unknown>) => ({ threadId: THREAD, turnId: 't1', ...params });
 
 describe('the App Server translator, on what Codex did', () => {
+  it('reports a typed terminal failure while leaving individual command errors within the turn', () => {
+    const { translator } = play([]);
+    translator.notification(
+      'error',
+      about({
+        error: { message: 'Sign in again', codexErrorInfo: 'unauthorized' },
+        willRetry: false,
+      }),
+    );
+    expect(translator.takeResult({ status: 'failed' })).toMatchObject({
+      status: 'failed',
+      reason: 'auth',
+      message: expect.stringContaining('Sign in again') as string,
+    });
+    translator.notification(
+      'item/completed',
+      about({
+        item: {
+          id: 'bad-test',
+          type: 'commandExecution',
+          command: 'false',
+          status: 'failed',
+          exitCode: 1,
+        },
+      }),
+    );
+    expect(translator.takeResult({ status: 'completed' })).toEqual({
+      status: 'completed',
+      reason: 'completed',
+    });
+    expect(translator.takeResult({ status: 'interrupted' })).toEqual({
+      status: 'cancelled',
+      reason: 'interrupted',
+    });
+  });
+
   it('streams replies, and shows each command it ran with its output', () => {
     const { events } = play(recordedNotifications('turns'));
     expect(Object.values(texts(events))).toEqual([
@@ -429,6 +465,11 @@ describe('the App Server translator, on the shapes Codex declares', () => {
         text: expect.stringMatching(/usage limit\. · resets \w{3} \d+, /) as string,
       },
     ]);
+    expect(translator.takeResult({ status: 'failed' })).toMatchObject({
+      status: 'failed',
+      reason: 'usage-limit',
+      resetsAt: 1_791_896_790_000,
+    });
     expect(
       failed({ responseStreamDisconnected: { httpStatusCode: 502 } }, 'stream disconnected', true),
     ).toMatchObject([{ level: 'warning', text: 'stream disconnected Codex is retrying.' }]);

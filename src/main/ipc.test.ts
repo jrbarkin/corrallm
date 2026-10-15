@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Unit tests never load the real 'electron' module (importing it would download the binary).
-const { handle } = vi.hoisted(() => ({
+const { handle, openCanvas } = vi.hoisted(() => ({
+  openCanvas: vi.fn<() => Promise<{ name: string; text: string } | null>>(),
   handle:
     vi.fn<(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void>(),
 }));
@@ -10,6 +11,12 @@ vi.mock('electron', () => ({
   ipcMain: { handle },
 }));
 
+vi.mock('./canvas', async (importOriginal) => ({
+  ...(await importOriginal<typeof Canvas>()),
+  openCanvas,
+}));
+
+import type * as Canvas from './canvas';
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import {
   MAX_ANSWER_LENGTH,
@@ -33,6 +40,16 @@ function frame(origin: string, overrides: Record<string, unknown> = {}) {
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
   return {
+    runs: {
+      get: vi
+        .fn<IpcServices['runs']['get']>()
+        .mockResolvedValue({ token: 'canvas-token', checkpoint: null, name: null }),
+      save: vi.fn<IpcServices['runs']['save']>().mockResolvedValue(undefined),
+      opened: vi.fn<IpcServices['runs']['opened']>().mockResolvedValue(undefined),
+      saved: vi.fn<IpcServices['runs']['saved']>().mockResolvedValue(undefined),
+      forgotten: vi.fn<IpcServices['runs']['forgotten']>().mockResolvedValue(undefined),
+    },
+    shutdown: { ready: vi.fn<IpcServices['shutdown']['ready']>() },
     projects: {
       choose: vi.fn<IpcServices['projects']['choose']>().mockResolvedValue(null),
       restore: vi.fn<IpcServices['projects']['restore']>().mockResolvedValue(undefined),
@@ -120,6 +137,7 @@ const pingListener = () => listenerFor('app:ping');
 
 beforeEach(() => {
   handle.mockReset();
+  openCanvas.mockReset();
   services = fakeServices();
 });
 
@@ -194,6 +212,30 @@ describe('link:reveal handler', () => {
   ])('rejects %s', (_label, args, message) => {
     expect(() => invoke('link:reveal', args)).toThrow(message);
     expect(services.reveal.reveal).not.toHaveBeenCalled();
+  });
+});
+
+describe('canvas replacement after a failed restore', () => {
+  it('starts New without requiring the rejected journal to be readable', async () => {
+    const sender = {};
+    services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
+    await expect(invoke('canvas:forget', [], sender)).resolves.toBeNull();
+    expect(services.runs.get).not.toHaveBeenCalled();
+    expect(services.runs.forgotten).toHaveBeenCalledWith(sender);
+    expect(services.sessions.canvasForgotten).toHaveBeenCalledWith(sender);
+  });
+
+  it('opens a replacement without reading the rejected journal first', async () => {
+    const sender = {};
+    services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
+    openCanvas.mockResolvedValue({ name: 'replacement.corral', text: '{}' });
+    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
+      name: 'replacement.corral',
+      text: '{}',
+    });
+    expect(services.runs.get).not.toHaveBeenCalled();
+    expect(services.runs.opened).toHaveBeenCalledWith(sender);
+    expect(services.sessions.canvasOpened).toHaveBeenCalledWith(sender);
   });
 });
 
@@ -749,5 +791,31 @@ describe('usage:* handlers', () => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(services.usage.setRule).not.toHaveBeenCalled();
     expect(services.usage.simulate).not.toHaveBeenCalled();
+  });
+});
+
+describe('run journal channels', () => {
+  const checkpoint = { version: 1, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
+  it('uses the sender and generation token, never a renderer-supplied path', async () => {
+    const sender = {};
+    await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });
+    await invoke('run:save', ['canvas-token', checkpoint], sender);
+    expect(services.runs.save).toHaveBeenCalledWith(sender, 'canvas-token', checkpoint);
+    await invoke('run:ready', ['request', null], sender);
+    expect(services.shutdown.ready).toHaveBeenCalledWith(sender, 'request', null);
+  });
+  it.each([
+    ['run:get', ['/a/path']],
+    ['run:save', []],
+    ['run:save', ['t', { ...checkpoint, file: '/a/path' }]],
+    ['run:save', ['t', { ...checkpoint, state: 'broken' }]],
+    ['run:ready', ['request']],
+  ])('rejects invalid %s arguments', (channel, args) => {
+    expect(() => invoke(channel, args as unknown[])).toThrow();
+    expect(services.runs.save).not.toHaveBeenCalled();
+  });
+  it('surfaces a journal write error to the renderer', async () => {
+    services.runs.save.mockRejectedValue(new Error('Disk full'));
+    await expect(invoke('run:save', ['canvas-token', checkpoint])).rejects.toThrow('Disk full');
   });
 });

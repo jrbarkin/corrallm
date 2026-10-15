@@ -424,6 +424,52 @@ input.graph-label {
   white-space: pre-wrap;
 }
 
+.graph-queue-result {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.graph-queue-row:has(> .graph-queue-result) {
+  flex-wrap: wrap;
+}
+
+.graph-queue-problem {
+  margin: 2px 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.graph-queue-attempts {
+  margin: 6px 0;
+  font-size: 0.9em;
+}
+
+.graph-queue-attempts summary {
+  cursor: pointer;
+}
+
+.graph-queue-attempts summary span + span {
+  margin-left: 10px;
+  opacity: 0.65;
+}
+
+.graph-queue-attempts ol {
+  display: grid;
+  gap: 8px;
+  padding-left: 20px;
+}
+
+.graph-queue-attempts p {
+  margin: 2px 0;
+  white-space: pre-wrap;
+}
+
+.graph-queue-attempts time {
+  margin-left: 8px;
+  opacity: 0.6;
+}
+
 .graph-queue-submission[data-run='completed'],
 .graph-queue-submission[data-run='cancelled'] {
   opacity: 0.65;

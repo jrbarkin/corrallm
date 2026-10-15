@@ -30,12 +30,14 @@ describe('what the run says to a connected agent', () => {
 
   it('reads how a step went from the last line of its reply: SUCCEEDED or FAILED', () => {
     expect(stepVerdict('Ran `node --test`: 12 pass.\n\nSUCCEEDED')).toBe(true);
-    expect(stepVerdict('All 12 fail, as expected: wc.js is missing.\n\n**FAILED**')).toBe(false);
-    expect(stepVerdict('Result: FAILED')).toBe(false);
+    expect(stepVerdict('All 12 fail, as expected: wc.js is missing.\n\nFAILED')).toBe(false);
+    expect(stepVerdict('Done.\r\n FAILED \r\n')).toBe(false);
     expect(stepVerdict('Done.\nSUCCEEDED\n')).toBe(true);
     // Not on the last line, in other words, or both: no verdict.
     expect(stepVerdict('FAILED at first.\nThen it passed.')).toBeUndefined();
     expect(stepVerdict('2 tests failed.')).toBeUndefined();
+    expect(stepVerdict('**FAILED**')).toBeUndefined();
+    expect(stepVerdict('Result: FAILED')).toBeUndefined();
     expect(stepVerdict('SUCCEEDED or FAILED?')).toBeUndefined();
     expect(stepVerdict('')).toBeUndefined();
   });

@@ -7,6 +7,12 @@ import { App } from './App';
 /** Stubs window.api: the usage functions the canvas reads at once, and `api`. */
 function stubApi(api: Partial<AppApi>) {
   const usage: Partial<AppApi> = {
+    getRun: vi
+      .fn<AppApi['getRun']>()
+      .mockResolvedValue({ token: 'test', checkpoint: null, name: null }),
+    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
+    runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
+    onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     getUsage: vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} }),
     onUsageChanged: vi.fn<AppApi['onUsageChanged']>(() => () => undefined),
   };
