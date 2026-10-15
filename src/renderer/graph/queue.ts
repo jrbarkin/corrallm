@@ -1,4 +1,5 @@
 import type { UsageBackend, UsageWindow } from '../../shared/usage';
+import type { SubmittedMessage } from '../agent/session';
 
 /**
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
@@ -25,6 +26,8 @@ export interface QueueMessage {
   id: string;
   message: string;
   target?: string;
+  /** Display-only record of a live submission; absent from the workflow and runner's input. */
+  submission?: SubmittedMessage;
 }
 
 /**
@@ -275,7 +278,9 @@ export const UNTIL_CONDITIONS = [
  * is none.
  */
 export function checkedBy(queue: readonly QueueItem[], index: number): QueueItem | undefined {
-  return queue.slice(0, Math.max(index, 0)).findLast((item) => !isPause(item));
+  return queue
+    .slice(0, Math.max(index, 0))
+    .findLast((item) => !isPause(item) && !(isMessage(item) && item.submission));
 }
 
 /**

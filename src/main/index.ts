@@ -183,6 +183,8 @@ function main(): void {
       });
 
       // Every agent's process ends before the app does, and what main remembers is written.
+      // TODO(7d): stop queue dispatch, save its cursor/outcomes, then interrupt/exit each
+      // native session gracefully before quitting. Reopen paused and resume exact session IDs.
       let quitting = false;
       app.on('before-quit', (event) => {
         if (quitting) return;

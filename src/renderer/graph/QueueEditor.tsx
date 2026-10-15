@@ -196,10 +196,12 @@ export function QueueEditor({
   const queue = node.data.queue ?? EMPTY;
   const context = contextOf(props);
   const shown = only ? queue.filter(only) : queue;
+  const planned = queue.filter((item) => !isMessage(item) || item.submission === undefined);
+  const movable = shown.filter((item) => !isMessage(item) || item.submission === undefined);
   /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
   const moveShown = (itemId: string, index: number) => {
-    const at = shown[Math.min(Math.max(index, 0), shown.length - 1)];
-    if (at) onMove(itemId, queue.indexOf(at));
+    const at = movable[Math.min(Math.max(index, 0), movable.length - 1)];
+    if (at) onMove(itemId, planned.indexOf(at));
   };
 
   return (
@@ -209,10 +211,11 @@ export function QueueEditor({
           items={shown}
           className="graph-queue"
           onMove={moveShown}
+          isMovable={(item) => !isMessage(item) || item.submission === undefined}
           renderItem={(item, handle) => (
             <>
               <ItemRow item={item} handle={handle} context={context} props={props} />
-              {picking && !isRepeat(item) && (
+              {picking && !isRepeat(item) && !(isMessage(item) && item.submission) && (
                 <PickTask
                   label={`Wait for ${picking.name}: ${itemLabel(item)}`}
                   pressed={picking.current === item.id}
@@ -392,7 +395,9 @@ function contextOf({
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
-  const queue = node.data.queue ?? EMPTY;
+  const queue = (node.data.queue ?? EMPTY).filter(
+    (item) => !isMessage(item) || item.submission === undefined,
+  );
   return {
     owner: node.id,
     inRepeat: false,
@@ -953,6 +958,31 @@ function MessageRow({
   handle: HandleProps;
   context: Context;
 }) {
+  if (item.submission) {
+    const { status, images } = item.submission;
+    return (
+      <div
+        className="graph-queue-row graph-queue-message graph-queue-submission"
+        {...context.marks(item.id)}
+        data-run={status}
+        data-submission={item.submission.id}
+      >
+        <span className="graph-queue-keyword">Message</span>
+        <span
+          className="graph-queue-submission-status"
+          title={status === 'completed' ? 'The agent’s turn ended.' : undefined}
+        >
+          {status.charAt(0).toUpperCase() + status.slice(1)}
+        </span>
+        {(images?.length ?? 0) > 0 && (
+          <span className="graph-queue-submission-images">
+            {images?.length} {images?.length === 1 ? 'image' : 'images'}
+          </span>
+        )}
+        <p className="graph-queue-submission-text">{item.message}</p>
+      </div>
+    );
+  }
   return (
     <div className="graph-queue-row graph-queue-message" {...context.marks(item.id)}>
       <Handle handle={handle} item={item} context={context} />
@@ -987,20 +1017,22 @@ function waitOptions(context: AddContext) {
   });
   return context.others.flatMap((agent) => [
     { target: { agent: agent.id }, label: nameOf(agent), detail: 'All of its work' },
-    ...(agent.data.queue ?? []).flatMap((item) =>
-      isRepeat(item)
-        ? [
-            option(agent, item, 'All of its rounds'),
-            ...item.repeat.map((inner) =>
-              option(
-                agent,
-                inner,
-                context.inRepeat ? 'This step, each round' : 'This step, once its repeat is over',
+    ...(agent.data.queue ?? [])
+      .filter((item) => !isMessage(item) || item.submission === undefined)
+      .flatMap((item) =>
+        isRepeat(item)
+          ? [
+              option(agent, item, 'All of its rounds'),
+              ...item.repeat.map((inner) =>
+                option(
+                  agent,
+                  inner,
+                  context.inRepeat ? 'This step, each round' : 'This step, once its repeat is over',
+                ),
               ),
-            ),
-          ]
-        : [option(agent, item, 'Just this step')],
-    ),
+            ]
+          : [option(agent, item, 'Just this step')],
+      ),
   ]);
 }
 

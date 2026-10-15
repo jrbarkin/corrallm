@@ -7,7 +7,7 @@ import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
 import { itemLabel, taskLabel } from '../graph/labels';
-import { chooseTarget, findItem, isRepeat, isWait } from '../graph/queue';
+import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../graph/queue';
 import type { WaitTarget } from '../graph/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
@@ -413,7 +413,9 @@ function LaneCells({
   const id = node.id;
   const agent = node.data.agent ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
-  const items = lane.cells.map((cell) => cell.item);
+  const items = lane.cells
+    .map((cell) => cell.item)
+    .filter((item) => !isMessage(item) || item.submission === undefined);
   const { dragging, handle } = useSortable(
     items,
     (itemId, index) => {
@@ -421,7 +423,7 @@ function LaneCells({
     },
     () =>
       [...(grid.current?.querySelectorAll<HTMLElement>('.queues-cell') ?? [])].filter(
-        (cell) => cell.dataset.lane === id,
+        (cell) => cell.dataset.lane === id && cell.hasAttribute('data-sortable'),
       ),
   );
   const agentRun = run.agents[id];
@@ -543,20 +545,21 @@ function LaneCells({
           style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
         />
       ))}
-      {lane.cells.map(({ item, row, span, inner }, index) => (
+      {lane.cells.map(({ item, row, span, inner }) => (
         <div
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
           role="group"
           aria-label={`${name(id)}: ${taskLabel(nodes, item)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
           data-lane={id}
+          data-sortable={items.includes(item) ? '' : undefined}
           // A repeat's cell is a subgrid of the rows it spans: each item it holds in its own.
           data-repeat={inner ? '' : undefined}
           style={{ gridColumn: column, gridRow: `${String(row + 2)} / span ${String(span)}` }}
         >
           <QueueRow
             item={item}
-            handle={handle(item, index)}
+            handle={handle(item, items.indexOf(item))}
             {...edit}
             {...(choosing?.owner === id
               ? { choosing: { waitId: choosing.choice.waitId, index: choosing.choice.index } }
@@ -572,7 +575,7 @@ function LaneCells({
                 }
               : {})}
           />
-          {picking && !inner && (
+          {picking && !inner && !(isMessage(item) && item.submission) && (
             <PickTask
               label={`Wait for ${picking.name}: ${itemLabel(item)}`}
               pressed={picking.current === item.id}

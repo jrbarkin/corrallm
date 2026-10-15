@@ -98,20 +98,20 @@ describe('the agent view', () => {
     expect(side.getByRole('button', { name: 'Move Read' })).toBeTruthy();
   });
 
-  it('shows the chat as the current item of the queue, named by its first message', () => {
+  it('shows each submitted message in the queue without a duplicate chat summary', () => {
     const { view, send } = open();
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
     expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
     send('Add rate limiting to the public API and document every endpoint');
-    const chat = side.getByRole('group', { name: /^Current chat/ });
-    expect(chat.getAttribute('aria-label')).toBe(
-      'Current chat: Add rate limiting to the public API…',
-    );
-    expect(chat.dataset.status).toBe('working');
+    const row = side
+      .getByText('Add rate limiting to the public API and document every endpoint')
+      .closest('[data-submission]');
+    expect(row?.getAttribute('data-run')).toBe('running');
+    expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
     send('And a changelog');
-    expect(side.getByRole('group', { name: /^Current chat/ }).getAttribute('aria-label')).toBe(
-      'Current chat: Add rate limiting to the public API…',
-    );
+    expect(
+      side.getByText('And a changelog').closest('[data-submission]')?.getAttribute('data-run'),
+    ).toBe('queued');
   });
 
   it('closes an open menu on Escape, not the view', () => {

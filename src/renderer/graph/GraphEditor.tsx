@@ -31,6 +31,7 @@ import { ipcErrorMessage } from '../ipc-error';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
+import { withSubmissions } from '../queues/submissions';
 import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
 import { UsageStore } from '../usage/store';
@@ -207,53 +208,62 @@ function Editor({
   /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
   const [usageStore] = useState(() => new UsageStore(usageSource));
   const usage = useSyncExternalStore(usageStore.subscribe, usageStore.snapshot);
-  /** Every agent's session, playing on while its view is closed: scripted, or connected. */
-  const [sessionStore] = useState(() => new SessionStore(sessionBackend));
-  const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   /**
    * Every agent's queue, run: messages go to the agents' sessions, and so do connected agents'
    * steps and questions; a simulated agent's steps are simulated. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
-  const [runStore] = useState(
-    () =>
-      new RunStore({
-        send: (agent, text, done, images, refused) =>
-          sessionStore.send(
-            agent.id,
-            agent.data.agent ?? DEFAULT_AGENT,
-            text,
-            (failed, reply) => {
-              done({ failed, reply });
-            },
-            images && [...images],
-            refused,
-          ),
-        tell: (agent, text) => {
-          sessionStore.notice(agent.id, 'warning', text);
-        },
-        connect: (agent, connection) => {
-          // How an agent runs changes nothing laid out.
-          setRawGraph((g) => setConnection(g, agent.id, connection));
-        },
-        later: (run, ms) => {
-          const timer = setTimeout(run, ms);
-          return () => {
-            clearTimeout(timer);
-          };
-        },
-        // The real clock, read when asked: delays and time limits are real, even simulated.
-        now: () => Date.now(),
-        chance: Math.random,
-        usage: () => usageStore.snapshot(),
-        unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
-      }),
-  );
+  const [{ sessionStore, runStore }] = useState(() => {
+    let runner: RunStore | undefined = undefined;
+    const sessionStore = new SessionStore(sessionBackend, (id) => {
+      const at = runner?.snapshot().agents[id];
+      return at?.current ?? Object.keys(at?.outcomes ?? {}).at(-1);
+    });
+    runner = new RunStore({
+      send: (agent, text, done, images, refused, origin) =>
+        sessionStore.send(
+          agent.id,
+          agent.data.agent ?? DEFAULT_AGENT,
+          text,
+          (failed, reply) => {
+            done({ failed, reply });
+          },
+          images && [...images],
+          refused,
+          origin ?? 'queue',
+        ),
+      tell: (agent, text) => {
+        sessionStore.notice(agent.id, 'warning', text);
+      },
+      connect: (agent, connection) => {
+        // How an agent runs changes nothing laid out.
+        setRawGraph((g) => setConnection(g, agent.id, connection));
+      },
+      later: (run, ms) => {
+        const timer = setTimeout(run, ms);
+        return () => {
+          clearTimeout(timer);
+        };
+      },
+      // The real clock, read when asked: delays and time limits are real, even simulated.
+      now: () => Date.now(),
+      chance: Math.random,
+      usage: () => usageStore.snapshot(),
+      unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
+    });
+    return { sessionStore, runStore: runner };
+  });
+  const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
+  /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
+  const displayNodes = useMemo(
+    () => withSubmissions(graph.nodes, sessions),
+    [graph.nodes, sessions],
+  );
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
   const asks = useMemo(() => heldAsks(graph.nodes, run), [graph.nodes, run]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
-  const layout = useMemo(() => lanesOf(graph.nodes), [graph.nodes]);
+  const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
   const marks = useMemo(() => {
     const asking = new Set(
       Object.entries(sessions).flatMap(([id, session]) =>
@@ -684,8 +694,8 @@ function Editor({
   // the folder as it starts) glows, through classes React Flow puts on it (GraphEditor.css).
   // Screen readers hear an agent's type with its label.
   const nodes = useMemo(() => {
-    const colors = groupColors(graph.nodes);
-    return graph.nodes.map((n) => {
+    const colors = groupColors(displayNodes);
+    return displayNodes.map((n) => {
       const color = colors.get(n.id);
       const status = sessions[n.id]?.status ?? 'idle';
       // Waiting on a permission answer is asking too, as is what its CLI asks in its terminal.
@@ -707,7 +717,7 @@ function Editor({
         ...(n.type === 'agent' ? { ariaLabel: `${name}, ${type}` } : {}),
       };
     });
-  }, [graph.nodes, sessions, run]);
+  }, [displayNodes, sessions, run]);
   /** What Terminal agents' CLIs ask in their terminals: listed, answered there. */
   const inTerminal = graph.nodes.flatMap((agent) => {
     const connection = connectionOf(agent.data);
@@ -782,7 +792,7 @@ function Editor({
   const selectedIds = graph.nodes.filter((n) => n.selected).map((n) => n.id);
   const nameOf = (id: string) =>
     (graph.nodes.find((n) => n.id === id)?.data.label ?? '') || 'Unnamed agent';
-  const openedNode = graph.nodes.find((n) => n.id === front);
+  const openedNode = displayNodes.find((n) => n.id === front);
   /** The other agents opened from the agent view's rail, as its stack shows them. */
   const stack = openedIds.slice(1).flatMap((id) => {
     const n = graph.nodes.find((other) => other.id === id);
@@ -1036,7 +1046,7 @@ function Editor({
           <AgentView
             key={openedNode.id}
             node={openedNode}
-            nodes={graph.nodes}
+            nodes={displayNodes}
             origin={openedCard}
             from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
             stack={stack}
@@ -1097,6 +1107,9 @@ function Editor({
             }}
             session={sessions[openedNode.id] ?? NEW_SESSION}
             controls={{
+              recordSubmission: (text, images) => {
+                sessionStore.recordSubmission(openedNode.id, text, images);
+              },
               open: () => {
                 sessionStore.open(openedNode.id);
               },
@@ -1175,7 +1188,7 @@ function Editor({
             key={`${work.from}->${work.to}`}
             from={work.from}
             to={work.to}
-            nodes={graph.nodes}
+            nodes={displayNodes}
             edits={edits}
             marks={marks}
             onClose={closeWork}
@@ -1183,7 +1196,7 @@ function Editor({
         )}
         {queues && (
           <QueuesView
-            nodes={graph.nodes}
+            nodes={displayNodes}
             sessions={sessions}
             run={run}
             edits={edits}

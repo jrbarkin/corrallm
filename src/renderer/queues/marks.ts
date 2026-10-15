@@ -1,5 +1,5 @@
 import type { RowMarks } from '../graph/QueueEditor';
-import { isApproval, isRepeat, isRepeatEnds, isWait } from '../graph/queue';
+import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from '../graph/queue';
 import type { QueueItem, QueueRepeat } from '../graph/queue';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
@@ -48,6 +48,15 @@ export function queueMarks(
     );
   const waits = kinds(isWait);
   const oks = kinds(isApproval);
+  const submissions = new Map(
+    lanes.flatMap((lane) =>
+      lane.cells.flatMap(({ item }) =>
+        isMessage(item) && item.submission
+          ? [[taskKey(lane.agent.id, item.id), item.submission] as const]
+          : [],
+      ),
+    ),
+  );
   const repeats = new Map(
     lanes.flatMap((lane) =>
       lane.cells.flatMap(({ item }) =>
@@ -57,6 +66,8 @@ export function queueMarks(
   );
   return (lane, item) => {
     const key = taskKey(lane, item);
+    const submission = submissions.get(key);
+    if (submission) return { 'data-at': key, 'data-run': submission.status };
     const state = taskState(run, lane, item);
     const repeat = repeats.get(key);
     const mark =

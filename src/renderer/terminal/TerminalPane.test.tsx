@@ -167,8 +167,16 @@ describe('a Terminal agent', () => {
     session({ type: 'end', messages: ['typed'], seconds: 3, interrupted: false, failed: false });
     expect(status().textContent).toBe('Idle');
     expect(card().classList.contains('working')).toBe(false);
-    // The queue's current chat is what was typed.
-    expect(view.getByRole('group', { name: 'Current chat: Fix the tests' })).toBeTruthy();
+    // The native prompt is observed once as a read-only completed message.
+    const sidebar = view.getByRole('complementary', { name: 'Questions and queue' });
+    const rows = sidebar.querySelectorAll<HTMLElement>('[data-submission]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector('.graph-queue-submission-text')?.textContent).toBe(
+      'Fix the tests',
+    );
+    expect(rows[0]?.dataset.run).toBe('completed');
+    expect(rows[0]?.querySelector('button, input, textarea')).toBeNull();
+    expect(view.queryByRole('group', { name: /^Current chat/ })).toBeNull();
     expect(sessions.backend.send).not.toHaveBeenCalled();
   });
 

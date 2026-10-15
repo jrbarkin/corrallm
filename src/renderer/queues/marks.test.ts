@@ -24,6 +24,28 @@ const marksOf = (a: AgentRun, { running = true, asking = [] as string[] } = {}) 
   queueMarks(layout, { running, agents: { a } }, new Set(asking));
 
 describe('queueMarks', () => {
+  it.each(['queued', 'running', 'completed', 'failed', 'cancelled'] as const)(
+    'marks a submitted message %s independently of the workflow run',
+    (status) => {
+      const live = lanesOf([
+        agent('a', [
+          {
+            id: 'live',
+            message: 'Check it',
+            submission: {
+              id: 'm1',
+              text: 'Check it',
+              status,
+            },
+          },
+        ]),
+      ]);
+      const marks = queueMarks(live, { running: false, agents: {} }, new Set(['a']));
+      expect(marks('a', 'live')['data-run']).toBe(status);
+      expect(marks('a', 'live')['data-decide']).toBeUndefined();
+    },
+  );
+
   it('marks an OK, and the row the run holds for the user to decide at', () => {
     const marks = marksOf({
       current: 'ok',

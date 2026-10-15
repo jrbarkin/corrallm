@@ -162,6 +162,7 @@ async function typeIn(terminal: Locator, ...keys: string[]) {
 }
 
 const status = (view: Locator) => view.locator('.agent-terminal-status');
+const submissions = (view: Locator) => view.locator('.graph-queue-message[data-submission]');
 
 test('runs Codex itself in a terminal in the project folder, and follows its turns', async () => {
   await chooseProject();
@@ -186,11 +187,15 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   expect(start).toMatchObject({ cwd: realpathSync(folder), term: 'xterm-256color' });
   await codexReady();
   await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(0);
 
   // A prompt typed in the terminal (while its MCP servers start): corrallm sees its turn end.
   await typeIn(terminal, 'hello there', 'Enter');
   await expect.poll(prompts).toEqual(['hello there']);
-  await expect(view.getByRole('group', { name: 'Current chat: hello there' })).toBeVisible();
+  await expect(submissions(view)).toHaveCount(1);
+  await expect(submissions(view).first()).toContainText('hello there');
+  const firstSubmission = (await submissions(view).first().getAttribute('data-submission')) ?? '';
+  expect(firstSubmission).not.toBe('');
   await expect(status(view)).toHaveText('Idle');
 
   // It asks to approve a command: it needs the user, here and on the canvas.
@@ -211,21 +216,47 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   await expect(terminal).toHaveAttribute('data-state', 'live');
   await typeIn(terminal, 'y');
   await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(2);
+  await expect(submissions(view).nth(1)).toContainText('ask to run echo');
+  await expect(submissions(view).first()).toHaveAttribute('data-submission', firstSubmission);
+  const submissionIds = await submissions(view).evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute('data-submission')),
+  );
+  expect(new Set(submissionIds).size).toBe(2);
+  expect(await prompts()).toEqual(['hello there', 'ask to run echo']);
   await expect(card).not.toHaveClass(/\basking\b/);
   await expect(needs).toHaveCount(0);
   expect(await starts()).toHaveLength(1);
 });
 
 test('the queues’ Run pastes its message into Codex, and hears its turn end', async () => {
-  await canvasFile([{ id: 'docs', message: 'Write the docs\nand the changelog' }]);
+  const automated = 'Write the docs\nand the changelog';
+  const manual = 'Remember the current API';
+  await canvasFile([{ id: 'docs', message: automated }]);
   await chooseProject();
-  const { view } = await openShop();
+  const { view, terminal } = await openShop();
+  await typeIn(terminal, manual, 'Enter');
+  await expect.poll(prompts).toEqual([manual]);
+  await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(1);
+  const submissionId = (await submissions(view).first().getAttribute('data-submission')) ?? '';
+  expect(submissionId).not.toBe('');
   await view.getByRole('button', { name: 'All queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues' });
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toContainText(manual);
   await queues.getByRole('button', { name: 'Run' }).click();
   await expect(queues.getByRole('status')).toHaveText('All done');
   // Pasted in: one prompt, its line break kept.
-  expect(await prompts()).toEqual(['Write the docs\nand the changelog']);
+  expect(await prompts()).toEqual([manual, automated]);
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
+  // Running the authored queue again repeats its message, never the earlier manual submission.
+  await queues.getByRole('button', { name: 'Run' }).click();
+  await expect.poll(prompts).toEqual([manual, automated, automated]);
+  await expect(queues.getByRole('status')).toHaveText('All done');
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
 });
 
 test('reads Codex’s usage from an app server of its own, as it starts and after each turn', async () => {

@@ -27,6 +27,7 @@ import type {
   Refusal,
   Session,
   SessionAction,
+  SubmittedMessage,
 } from './session';
 
 /** An agent's driver, how it runs, and whether it is being let go. */
@@ -70,6 +71,9 @@ export class SessionStore {
   readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
+  /** Automation already has a queue row; its prompt and native echoes must not create another. */
+  readonly #queueMessages = new Set<string>();
+  readonly #position: (agentId: string) => string | undefined;
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
   readonly #onceIn = new Map<
     string,
@@ -77,8 +81,12 @@ export class SessionStore {
   >();
   #unsubscribe: (() => void) | undefined;
 
-  constructor(backend: SessionBackend = NO_BACKEND) {
+  constructor(
+    backend: SessionBackend = NO_BACKEND,
+    position: (agentId: string) => string | undefined = () => undefined,
+  ) {
     this.#backend = backend;
+    this.#position = position;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -183,9 +191,11 @@ export class SessionStore {
     onDone?: (interrupted: boolean, reply: string) => void,
     images?: MessageImage[],
     onRefused?: (refusal: Refusal) => void,
+    origin: 'user' | 'queue' = 'user',
   ): () => void {
     this.#types.set(agentId, agent);
     const id = crypto.randomUUID();
+    if (origin === 'queue') this.#queueMessages.add(id);
     if (onDone) this.#onDone.set(id, onDone);
     if (onRefused) this.#onRefused.set(id, onRefused);
     const session = this.of(agentId);
@@ -216,6 +226,29 @@ export class SessionStore {
       return;
     }
     this.#onceIn.set(agentId, { connection, agent, text });
+  }
+
+  /** Records a submitted command handled by the view itself, without dispatching a CLI turn. */
+  recordSubmission(agentId: string, text: string, images?: MessageImage[]): void {
+    const session = this.of(agentId);
+    const after = this.#position(agentId);
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...session,
+        submissions: [
+          ...(session.submissions ?? []),
+          {
+            id: crypto.randomUUID(),
+            text,
+            status: 'completed',
+            ...(images?.length ? { images } : {}),
+            ...(after === undefined ? {} : { after }),
+          },
+        ],
+      },
+    };
+    this.#notify();
   }
 
   /** Tells the user something in the agent's session (a notice in its transcript). */
@@ -335,6 +368,8 @@ export class SessionStore {
   }
 
   unqueue(agentId: string, queuedId: string): void {
+    if (!this.of(agentId).queued.some(({ id }) => id === queuedId)) return;
+    this.#settleSubmissions(agentId, 'cancelled', queuedId);
     this.#dispatch(agentId, { type: 'unqueue', id: queuedId });
     this.#heard(queuedId)?.(true, '');
   }
@@ -372,6 +407,7 @@ export class SessionStore {
     this.#onDone.clear();
     this.#onRefused.clear();
     this.#turns.clear();
+    this.#queueMessages.clear();
     this.#onceIn.clear();
     this.#settings.clear();
     this.#options.clear();
@@ -491,6 +527,9 @@ export class SessionStore {
     this.#unsubscribe ??= this.#backend.onEvent((agentId, connection, event) => {
       const driving = this.#drivers.get(agentId);
       if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
+        if (event.type === 'closed') {
+          this.#settleSubmissions(agentId, event.error === undefined ? 'cancelled' : 'failed');
+        }
         driving.driver.receive(event);
       }
     });
@@ -501,6 +540,7 @@ export class SessionStore {
     const driving = this.#drivers.get(agentId);
     if (!driving) return;
     driving.closing = true;
+    this.#settleSubmissions(agentId, 'cancelled');
     driving.driver.close();
     this.#drivers.delete(agentId);
   }
@@ -519,8 +559,70 @@ export class SessionStore {
   }
 
   #dispatch(agentId: string, action: SessionAction): void {
-    this.#sessions = { ...this.#sessions, [agentId]: reduce(this.of(agentId), action) };
+    const session = this.of(agentId);
+    let submissions = session.submissions;
+    if (action.type === 'start' || action.type === 'queue') {
+      const message = action.type === 'start' ? action.entry : action;
+      if (!this.#queueMessages.has(message.id)) {
+        const status = action.type === 'start' ? 'running' : 'queued';
+        if (submissions?.some(({ id }) => id === message.id)) {
+          submissions = submissions.map((entry) =>
+            entry.id === message.id ? { ...entry, status } : entry,
+          );
+        } else {
+          const after = this.#position(agentId);
+          submissions = [
+            ...(submissions ?? []),
+            {
+              id: message.id,
+              text: message.text,
+              status,
+              ...(message.images?.length ? { images: message.images } : {}),
+              ...(after === undefined ? {} : { after }),
+            },
+          ];
+        }
+      }
+    } else if (action.type === 'refuse') {
+      submissions = submissions?.map((entry) =>
+        entry.id === action.id ? { ...entry, status: 'queued' } : entry,
+      );
+    } else if (action.type === 'end') {
+      submissions = submissions?.map((entry) =>
+        entry.status === 'running' &&
+        (action.messages === undefined || action.messages.includes(entry.id))
+          ? {
+              ...entry,
+              status: action.interrupted ? 'cancelled' : action.failed ? 'failed' : 'completed',
+            }
+          : entry,
+      );
+    }
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...reduce(session, action),
+        ...(submissions === undefined ? {} : { submissions }),
+      },
+    };
     this.#notify();
+  }
+
+  /** Closing a connection also ends turns typed directly into its terminal. */
+  #settleSubmissions(agentId: string, status: SubmittedMessage['status'], id?: string): void {
+    const session = this.of(agentId);
+    if (!session.submissions) return;
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...session,
+        submissions: session.submissions.map((entry) =>
+          (id === undefined ? entry.status === 'running' : entry.id === id)
+            ? { ...entry, status }
+            : entry,
+        ),
+      },
+    };
   }
 
   #notify(): void {

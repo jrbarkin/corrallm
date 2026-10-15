@@ -334,6 +334,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   }
 
   async close(): Promise<void> {
+    // TODO(7d): CLI-specific graceful interrupt/exit, awaited with a bounded kill fallback,
+    // so native conversation history is flushed before reconnecting by its saved ID.
     this.#closing = true;
     if (this.#typing) this.#typing.stopped = true;
     this.#clearTimers();

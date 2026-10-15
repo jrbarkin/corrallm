@@ -61,6 +61,8 @@ import './AgentView.css';
 
 /** What the view does to its agent's session (sessions.ts). */
 export interface SessionControls extends ComposerControls {
+  /** Records a submitted command handled locally, without sending another turn. */
+  recordSubmission?: (text: string, images?: MessageImage[]) => void;
   /** Starts the session (again), as when the view opens: a connected one resumes. */
   open: () => void;
   /** `feedback`, with a no: what Claude should do instead. */
@@ -404,6 +406,7 @@ export function AgentView({
   const send = (text: string, images?: MessageImage[]) => {
     const answered = connection === 'sdk' ? viewCommand(text) : undefined;
     if (answered !== undefined) {
+      controls.recordSubmission?.(text, images);
       setRewindTo(undefined);
       setOpened(answered);
       return;
@@ -519,7 +522,7 @@ export function AgentView({
                   )}
                 </section>
                 <h2 className="agent-side-title">Queue</h2>
-                {firstMessage && (
+                {firstMessage && (session.submissions?.length ?? 0) === 0 && (
                   <div
                     className="graph-queue-row agent-thread"
                     role="group"

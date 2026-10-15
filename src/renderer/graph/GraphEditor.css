@@ -405,6 +405,34 @@ input.graph-label {
   flex-wrap: wrap;
 }
 
+.graph-queue-submission-status {
+  margin-left: auto;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.graph-queue-submission-images {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.graph-queue-submission-text {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.graph-queue-submission[data-run='completed'],
+.graph-queue-submission[data-run='cancelled'] {
+  opacity: 0.65;
+}
+
+.graph-queue-submission[data-run='cancelled'] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, CanvasText 30%, transparent);
+}
+
 .graph-queue-message textarea {
   /* Under the keyword: past the handle (14px) and the gap after it (8px). */
   flex: 1 1 calc(100% - 22px);

@@ -69,6 +69,108 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it('shows manual turns in every queue view without saving or running them again', async () => {
+    const sessions = fakeBackend();
+    const initial: Graph = {
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'a',
+            connection: 'sdk',
+            queue: [{ id: 'planned', message: 'Do planned work' }],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(null),
+    };
+    const { container } = render(
+      <GraphEditor initialGraph={initial} files={files} sessionBackend={sessions.backend} />,
+    );
+    const card = container.querySelector('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('no agent');
+    fireEvent.doubleClick(card);
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    const composer = view.getByRole('textbox', { name: 'Message a' });
+    fireEvent.change(composer, { target: { value: 'Inspect the failure' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await waitFor(() => {
+      expect(sessions.backend.send).toHaveBeenCalledTimes(1);
+    });
+    const message = sessions.sent();
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    expect(
+      side.getByText('Inspect the failure').closest('[data-submission]')?.getAttribute('data-run'),
+    ).toBe('running');
+    expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
+    act(() => {
+      sessions.emit(
+        'a',
+        'sdk',
+        { type: 'user', id: message, text: 'Inspect the failure' },
+        { type: 'text', id: 'answer', text: 'I inspected it.' },
+        { type: 'end', messages: [message], seconds: 1, interrupted: false, failed: false },
+      );
+    });
+    expect(
+      side.getByText('Inspect the failure').closest('[data-submission]')?.getAttribute('data-run'),
+    ).toBe('completed');
+    fireEvent.click(view.getByRole('button', { name: 'All queues' }));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    const manual = queues.getByRole('group', { name: 'a: Message “Inspect the failure”' });
+    expect(manual.querySelector('[data-submission]')?.getAttribute('data-run')).toBe('completed');
+    expect(within(manual).queryByRole('button')).toBeNull();
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await waitFor(() => {
+      expect(sessions.backend.send).toHaveBeenCalledTimes(2);
+    });
+    expect(sessions.backend.send.mock.calls.map(([, sent]) => sent.text)).toEqual([
+      'Inspect the failure',
+      'Do planned work',
+    ]);
+    expect(
+      screen.getByRole('dialog', { name: 'All queues' }).querySelectorAll('[data-submission]'),
+    ).toHaveLength(1);
+    fireEvent.click(queues.getByRole('button', { name: 'Back' }));
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    expect(document.title).toBe('Untitled — corrallm');
+    fireEvent.click(button('Save'));
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledTimes(1);
+    });
+    expect(files.save.mock.calls[0]?.[0]).toBe(toFile(initial));
+  });
+
+  it('records an SDK command handled locally as a completed submitted message', async () => {
+    const sessions = fakeBackend();
+    const initial: Graph = {
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'sdk' } })],
+      edges: [],
+    };
+    const { container } = render(
+      <GraphEditor initialGraph={initial} sessionBackend={sessions.backend} />,
+    );
+    const card = container.querySelector('.react-flow__node[data-id="a"]');
+    if (!card) throw new Error('no agent');
+    fireEvent.doubleClick(card);
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    const composer = view.getByRole('textbox', { name: 'Message a' });
+    fireEvent.change(composer, { target: { value: '/mcp' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
+    expect(side.getByText('/mcp').closest('[data-submission]')?.getAttribute('data-run')).toBe(
+      'completed',
+    );
+    await waitFor(() => {
+      expect(sessions.backend.mcp).toHaveBeenCalled();
+    });
+    expect(sessions.backend.send).not.toHaveBeenCalled();
+  });
+
   it('adds a node on double-click on the empty canvas', () => {
     const { nodes, pane } = setup();
     fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });

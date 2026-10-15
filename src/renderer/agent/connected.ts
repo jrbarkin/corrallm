@@ -540,6 +540,7 @@ export class ConnectedDriver implements SessionDriver {
     io.dispatch({
       type: 'end',
       id: io.newId(),
+      messages: ids,
       seconds: seconds ?? Math.max(1, Math.round((io.now() - since) / 1000)),
       interrupted,
       ...(failed ? { failed: true } : {}),

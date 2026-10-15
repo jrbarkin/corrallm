@@ -324,11 +324,13 @@ describe('a connected agent', () => {
     expect(simulate()).toBeTruthy();
   });
 
-  it('names the chat by the first message of the conversation it is on now', async () => {
+  it('retains each submitted message once across clear and CLI changes, without recording history', async () => {
     const { backend, view, send, sent, emit } = await open();
-    const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));
-    const chat = () =>
-      side.queryByRole('group', { name: /^Current chat/ })?.getAttribute('aria-label') ?? null;
+    const sidebar = view.getByRole('complementary', { name: 'Questions and queue' });
+    const side = within(sidebar);
+    const rows = () => [...sidebar.querySelectorAll<HTMLElement>('[data-submission]')];
+    const messages = () =>
+      rows().map((row) => row.querySelector('.graph-queue-submission-text')?.textContent);
     const runAs = async (connection: RegExp) => {
       fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
       fireEvent.click(screen.getByRole('option', { name: connection }));
@@ -345,22 +347,26 @@ describe('a connected agent', () => {
       });
     };
     await send('Sketch the plan');
-    expect(chat()).toBe('Current chat: Sketch the plan');
+    expect(messages()).toEqual(['Sketch the plan']);
+    const first = rows()[0]?.dataset.submission;
+    expect(first).toBeDefined();
+    expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
     // Through the Agent SDK: Claude Code's own conversation, with no message yet.
     await runAs(/^Claude · Agent SDK/);
-    expect(chat()).toBeNull();
+    expect(messages()).toEqual(['Sketch the plan']);
     await turn('Fix the tests');
-    expect(chat()).toBe('Current chat: Fix the tests');
+    expect(messages()).toEqual(['Sketch the plan', 'Fix the tests']);
     // /clear starts another.
     await turn('/clear', { type: 'cleared', id: 'reset-1' });
-    expect(chat()).toBeNull();
+    expect(messages()).toEqual(['Sketch the plan', 'Fix the tests', '/clear']);
     await turn('Write the docs');
-    expect(chat()).toBe('Current chat: Write the docs');
+    const submitted = ['Sketch the plan', 'Fix the tests', '/clear', 'Write the docs'];
+    expect(messages()).toEqual(submitted);
 
     // Codex: its thread, resumed with its history.
     await runAs(/^Codex · App Server/);
-    expect(chat()).toBeNull();
+    expect(messages()).toEqual(submitted);
     const [hear] = backend.onEvent.mock.calls.at(-1) ?? [];
     act(() => {
       hear?.('a', 'app-server', {
@@ -371,13 +377,33 @@ describe('a connected agent', () => {
         ],
       });
     });
-    expect(chat()).toBe('Current chat: Review the pull request');
+    expect(messages()).toEqual(submitted);
+    expect(side.queryByText('Review the pull request')).toBeNull();
+    expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
     // Back to Claude Code's conversation, and to the simulated chat.
     await runAs(/^Claude · Agent SDK/);
-    expect(chat()).toBe('Current chat: Write the docs');
+    expect(messages()).toEqual(submitted);
     await runAs(/^Claude · Simulated/);
-    expect(chat()).toBe('Current chat: Sketch the plan');
+    expect(messages()).toEqual(submitted);
+    expect(rows()[0]?.dataset.submission).toBe(first);
+    expect(new Set(rows().map((row) => row.dataset.submission)).size).toBe(4);
+  });
+
+  it('keeps the Chat fallback for restored history when no messages were submitted here', async () => {
+    const { view, emit } = await open({ connection: 'sdk' });
+    emit({
+      type: 'history',
+      events: [
+        { type: 'user', id: 'restored', text: 'Review the pull request' },
+        { type: 'end', messages: ['restored'], seconds: 3, interrupted: false, failed: false },
+      ],
+    });
+    const sidebar = view.getByRole('complementary', { name: 'Questions and queue' });
+    expect(sidebar.querySelectorAll('[data-submission]')).toHaveLength(0);
+    expect(
+      within(sidebar).getByRole('group', { name: 'Current chat: Review the pull request' }),
+    ).toBeTruthy();
   });
 
   it('does not run through the Agent SDK on a Claude subscription: it says why, and switches to Terminal', async () => {

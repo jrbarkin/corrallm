@@ -251,8 +251,20 @@ export interface Refusal {
 /** An entry the user answers while the turn waits. */
 export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' | 'elicitation' }>;
 
+/** A live user submission, displayed as a Message in the queue without dispatching it again. */
+export interface SubmittedMessage {
+  id: string;
+  text: string;
+  images?: MessageImage[];
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /** The planned task at which it was submitted; absent before the planned queue. */
+  after?: string;
+}
+
 export interface Session {
   entries: Entry[];
+  /** Live manual messages only: not automation sends or restored native history. */
+  submissions?: readonly SubmittedMessage[];
   /** Working on a turn; waiting (mid-turn) for the user to answer a prompt; or idle. */
   status: 'idle' | 'working' | 'waiting';
   /** Messages sent while it works, sent in order once it is idle. */
@@ -374,7 +386,14 @@ export type SessionAction =
   | { type: 'withdraw'; id: string }
   /** Mid-turn: working, or waiting on the user (as a connected session says). */
   | { type: 'status'; status: 'working' | 'waiting' }
-  | { type: 'end'; id: string; seconds: number; interrupted: boolean; failed?: boolean }
+  | {
+      type: 'end';
+      id: string;
+      seconds: number;
+      interrupted: boolean;
+      failed?: boolean;
+      messages?: readonly string[];
+    }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
   /**

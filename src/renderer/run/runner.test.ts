@@ -50,13 +50,14 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
     done?: (turn: TurnEnd) => void;
     refused?: (refusal: Refusal) => void;
     withdrawn: boolean;
+    origin?: 'user';
   }[] = [];
   const told: [string, string][] = [];
   /** The connections the run switched agents to, as the user chose. */
   const connects: [string, Connection][] = [];
   let usage: UsageState = { readings: [], rules: {} };
   const store = new RunStore({
-    send: (to, text, done, images, refused) => {
+    send: (to, text, done, images, refused, origin) => {
       const message: (typeof sent)[number] = {
         agent: to.id,
         text,
@@ -64,6 +65,7 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
         done,
         ...(refused ? { refused } : {}),
         withdrawn: false,
+        ...(origin === undefined ? {} : { origin }),
       };
       sent.push(message);
       return () => {
@@ -551,6 +553,7 @@ describe('RunStore', () => {
       expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
 
       store.decide('a', 'ok', { reply: '  Cover the empty state too \n' });
+      expect(sent.at(-1)?.origin).toBe('user');
       expect(sent.map((s) => [s.agent, s.text])).toEqual([['a', 'Cover the empty state too']]);
       expect(where()).toEqual({ a: 'running ok', b: 'waiting w' });
       expect(store.snapshot().agents.a?.changes).toEqual({ ok: ['Cover the empty state too'] });
@@ -847,6 +850,8 @@ describe('RunStore', () => {
 
         // What to try next goes to the agent before the extra round's message (its turn first).
         store.decide('a', 'loop', { reply: '  Try smaller steps ' });
+        expect(sent.at(-2)?.origin).toBe('user');
+        expect(sent.at(-1)?.origin).toBeUndefined();
         expect(where()).toEqual({ a: 'running build' });
         expect(sent.map((s) => s.text)).toEqual([
           'Build it',

@@ -147,6 +147,8 @@ export interface RunIO {
     done: (turn: TurnEnd) => void,
     images?: readonly MessageImage[],
     refused?: (refusal: Refusal) => void,
+    /** A typed reply at an OK or repeat: also appears as a manual Message row. */
+    origin?: 'user',
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: GraphNode, text: string) => void;
@@ -210,6 +212,10 @@ const UNHEARD =
   'succeeded.';
 
 const IDLE: Run = { running: false, agents: {} };
+
+// TODO(7d): persist queue progress/outcomes and native conversation IDs; restore paused,
+// with in-flight prompts unresolved. Reconnect through each connection's native resume,
+// never automatically replay a submitted prompt. Full transcript/screen snapshots are V2.
 
 /**
  * Runs every agent's queue: each agent works through its queue in order. A message goes to the
@@ -1074,10 +1080,12 @@ export class RunStore {
       ended,
       images,
       holder,
+      origin,
     }: {
       ended?: (turn: TurnEnd) => void;
       images?: readonly MessageImage[] | undefined;
       holder?: { agent: string; token: object };
+      origin?: 'user';
     } = {},
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
@@ -1095,6 +1103,7 @@ export class RunStore {
         ((refusal) => {
           this.#refused(holder, to, refusal);
         }),
+      origin,
     );
     if (!sent.over) this.#sent.set(sent, withdraw);
   }
@@ -1148,7 +1157,7 @@ export class RunStore {
       const note = answer.reply.trim();
       const images = answer.images ?? [];
       if (note === '' && images.length === 0) return;
-      this.#send(node, note, { images: images.length === 0 ? undefined : images });
+      this.#send(node, note, { images: images.length === 0 ? undefined : images, origin: 'user' });
     } else if (answer.choice === 'goOn') {
       this.#record(node.id, repeat.id, 'failed');
       this.#settle(true);
@@ -1182,6 +1191,7 @@ export class RunStore {
     const run: AgentRun = { ...at, status: 'running', changes };
     this.#set({ ...this.#run, agents: { ...this.#run.agents, [node.id]: run } });
     this.#send(node, note, {
+      origin: 'user',
       holder: { agent: node.id, token },
       ended: () => {
         if (this.#busy.get(node.id) !== token) return;

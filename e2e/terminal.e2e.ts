@@ -170,6 +170,7 @@ async function typeIn(terminal: Locator, ...keys: string[]) {
 }
 
 const status = (view: Locator) => view.locator('.agent-terminal-status');
+const submissions = (view: Locator) => view.locator('.graph-queue-message[data-submission]');
 
 test('runs Claude Code itself in a terminal in the project folder, and follows its turns', async () => {
   await writeFile(path.join(folder, '.fake-claude-untrusted'), '');
@@ -203,11 +204,15 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
     .poll(async () => (await logged()).some((entry) => entry.event === 'trusted'))
     .toBe(true);
   await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(0);
 
   // A prompt typed in the terminal: corrallm sees it work, and its turn end.
   await typeIn(terminal, 'hello there', 'Enter');
   await expect.poll(prompts).toEqual(['hello there']);
-  await expect(view.getByRole('group', { name: 'Current chat: hello there' })).toBeVisible();
+  await expect(submissions(view)).toHaveCount(1);
+  await expect(submissions(view).first()).toContainText('hello there');
+  const firstSubmission = (await submissions(view).first().getAttribute('data-submission')) ?? '';
+  expect(firstSubmission).not.toBe('');
   await expect(status(view)).toHaveText('Idle');
 
   // Escape goes to Claude Code, not to the view.
@@ -231,6 +236,9 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   await expect(terminal).toHaveAttribute('data-state', 'live');
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(2);
+  await expect(submissions(view).nth(1)).toContainText('ask to run echo');
+  await expect(submissions(view).first()).toHaveAttribute('data-submission', firstSubmission);
   await expect(card).not.toHaveClass(/\basking\b/);
   await expect(needsYou).toHaveCount(0);
   expect(await starts()).toHaveLength(1);
@@ -247,6 +255,17 @@ test('runs Claude Code itself in a terminal in the project folder, and follows i
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
   await expect(needsYou).toHaveCount(0);
+  await expect(submissions(view)).toHaveCount(3);
+  await expect(submissions(view).nth(2)).toContainText('question about the database');
+  const submissionIds = await submissions(view).evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute('data-submission')),
+  );
+  expect(new Set(submissionIds).size).toBe(3);
+  expect(await prompts()).toEqual([
+    'hello there',
+    'ask to run echo',
+    'question about the database',
+  ]);
 });
 
 test('starts Claude Code with the model, effort and mode its agent is set to, chosen beside its chip', async () => {
@@ -524,15 +543,33 @@ test('shows a file Claude Code names, Cmd-clicked, in the file manager if it is 
 });
 
 test('the queues’ Run types its message into the terminal, and hears its turn end', async () => {
-  await canvasFile([{ id: 'docs', message: 'Write the docs\nand the changelog' }]);
+  const automated = 'Write the docs\nand the changelog';
+  const manual = 'Remember the current API';
+  await canvasFile([{ id: 'docs', message: automated }]);
   await chooseProject();
-  const { view } = await openShop();
+  const { view, terminal } = await openShop();
+  await typeIn(terminal, manual, 'Enter');
+  await expect.poll(prompts).toEqual([manual]);
+  await expect(status(view)).toHaveText('Idle');
+  await expect(submissions(view)).toHaveCount(1);
+  const submissionId = (await submissions(view).first().getAttribute('data-submission')) ?? '';
+  expect(submissionId).not.toBe('');
   await view.getByRole('button', { name: 'All queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues' });
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toContainText(manual);
   await queues.getByRole('button', { name: 'Run' }).click();
   await expect(queues.getByRole('status')).toHaveText('All done');
   // Typed in as a person types it: one prompt, its line break kept, not pasted.
-  expect(await prompts()).toEqual(['Write the docs\nand the changelog']);
+  expect(await prompts()).toEqual([manual, automated]);
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
+  // Running the authored queue again repeats its message, never the earlier manual submission.
+  await queues.getByRole('button', { name: 'Run' }).click();
+  await expect.poll(prompts).toEqual([manual, automated, automated]);
+  await expect(queues.getByRole('status')).toHaveText('All done');
+  await expect(submissions(queues)).toHaveCount(1);
+  await expect(submissions(queues).first()).toHaveAttribute('data-submission', submissionId);
 });
 
 test('starts Claude Code again from its view once it exits, drawn at the view’s size', async () => {
