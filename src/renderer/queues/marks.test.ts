@@ -77,6 +77,12 @@ describe('queueMarks', () => {
     });
     const resumed = queueMarks(layout, { running: true, agents: { a: recovery } }, new Set());
     expect(resumed('a', 'build')['data-decide']).toBe('');
+    const held = marksOf({ ...recovery, paused: true });
+    expect(held('a', 'build')).toMatchObject({
+      'data-problem': 'uncertain',
+      'data-attempts': JSON.stringify([attempt]),
+      'data-decide': undefined,
+    });
     expect(paused('a', 'ok')['data-problem']).toBeUndefined();
   });
 

@@ -81,6 +81,10 @@ export class SessionStore {
   readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
   /** The message whose turn each agent's session is on, by agent id. */
   readonly #turns = new Map<string, string>();
+  /** Runtime holds stop automatic queue draining, while allowing fresh manual intervention. */
+  readonly #heldQueues = new Set<string>();
+  /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
+  readonly #stopping = new Set<string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
   readonly #queueMessages = new Set<string>();
   readonly #displayTexts = new Map<string, string>();
@@ -131,7 +135,11 @@ export class SessionStore {
     }[],
   ): void {
     const wanted = new Map(agents.map(({ id, connection }) => [id, connection]));
-    const known = new Set([...Object.keys(this.#sessions), ...this.#drivers.keys()]);
+    const known = new Set([
+      ...Object.keys(this.#sessions),
+      ...this.#drivers.keys(),
+      ...this.#heldQueues,
+    ]);
     for (const id of known) if (!wanted.has(id)) this.#forget(id);
     for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
     this.#settings.clear();
@@ -154,6 +162,19 @@ export class SessionStore {
   /** Makes sure the agent's session runs, as when its view opens. */
   open(agentId: string): void {
     this.#driver(agentId).open();
+  }
+
+  /** Holds waiting messages after the current turn; releasing sends them in their original order. */
+  holdQueue(agentId: string, held: boolean): void {
+    if (held) this.#heldQueues.add(agentId);
+    else {
+      this.#heldQueues.delete(agentId);
+      // A canvas reset may release its run holds immediately before forgetting these sessions.
+      // Re-check the live queue and hold after that same-stack transition has completed.
+      queueMicrotask(() => {
+        this.#idle(agentId);
+      });
+    }
   }
 
   /**
@@ -191,7 +212,8 @@ export class SessionStore {
   /**
    * Sends the user's message (with the images pasted into it): a new turn, or queued while one is
    * going on (or while messages kept from a session that would not start wait: they go first, and
-   * the session is tried again). `onDone` hears when that turn ends (`interrupted` too if the
+   * the session is tried again). A queue hold keeps earlier messages waiting, while fresh user
+   * input can intervene once idle. `onDone` hears when that turn ends (`interrupted` too if the
    * message is taken off the queue before it is sent, or the turn failed), with what the agent
    * replied in it (turnReply). `onRefused` hears each time the session would not start while the
    * message waits to go (kept, queued). Returns a function that takes the message back: off the
@@ -215,7 +237,8 @@ export class SessionStore {
     if (onDone) this.#onDone.set(id, onDone);
     if (onRefused) this.#onRefused.set(id, onRefused);
     const session = this.of(agentId);
-    if (session.status === 'idle' && session.queued.length === 0) {
+    const held = this.#heldQueues.has(agentId);
+    if (session.status === 'idle' && (held ? origin === 'user' : session.queued.length === 0)) {
       this.#start(agentId, agent, { text, images }, id);
     } else {
       this.#dispatch(agentId, {
@@ -382,7 +405,11 @@ export class SessionStore {
 
   /** Interrupts the turn going on, if any. */
   stop(agentId: string): void {
-    this.#drivers.get(agentId)?.driver.stop();
+    if (this.of(agentId).status === 'idle' || this.#stopping.has(agentId)) return;
+    const driver = this.#drivers.get(agentId)?.driver;
+    if (!driver) return;
+    this.#stopping.add(agentId);
+    driver.stop();
   }
 
   unqueue(agentId: string, queuedId: string): void {
@@ -428,6 +455,8 @@ export class SessionStore {
     this.#onDone.clear();
     this.#onRefused.clear();
     this.#turns.clear();
+    this.#heldQueues.clear();
+    this.#stopping.clear();
     this.#queueMessages.clear();
     this.#displayTexts.clear();
     this.#onceIn.clear();
@@ -485,6 +514,7 @@ export class SessionStore {
 
   /** The session is idle: its next queued message, if any, starts. */
   #idle(agentId: string): void {
+    if (this.#heldQueues.has(agentId)) return;
     const session = this.of(agentId);
     const [next] = session.queued;
     if (!next || session.status !== 'idle') return;
@@ -559,6 +589,7 @@ export class SessionStore {
 
   /** Lets the agent's driver go: its turn ends, and a connected session closes. */
   #letGo(agentId: string): void {
+    this.#stopping.delete(agentId);
     const driving = this.#drivers.get(agentId);
     if (!driving) return;
     driving.closing = true;
@@ -569,6 +600,7 @@ export class SessionStore {
   /** The agent is gone: its session ends, and whoever waits on its queued messages hears. */
   #forget(agentId: string): void {
     this.#letGo(agentId);
+    this.#heldQueues.delete(agentId);
     this.#onceIn.delete(agentId);
     const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
     this.#settleSubmissions(agentId, result);
@@ -582,6 +614,14 @@ export class SessionStore {
   }
 
   #dispatch(agentId: string, action: SessionAction): void {
+    if (
+      action.type === 'start' ||
+      action.type === 'end' ||
+      action.type === 'refuse' ||
+      (action.type === 'add' && action.entry.kind === 'notice' && action.entry.level === 'error')
+    ) {
+      this.#stopping.delete(agentId);
+    }
     const session = this.of(agentId);
     let submissions = session.submissions;
     let created: SubmittedMessage | undefined;

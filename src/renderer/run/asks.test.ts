@@ -49,6 +49,17 @@ describe('heldAsks', () => {
     // An agent deleted while it was held is no longer asked about.
     expect(heldAsks([], { running: true, agents: { p: at('ok', 'asking') } })).toEqual([]);
   });
+
+  it('hides workflow decisions for an individually paused agent until it resumes', () => {
+    const run: Run = {
+      running: true,
+      agents: { p: { ...at('ok', 'asking'), paused: true }, b: at('check', 'asking') },
+    };
+    expect(heldAsks([planner, builder], run).map((ask) => ask.agent.id)).toEqual(['b']);
+    expect(
+      heldAsks([planner], { ...run, agents: { p: at('ok', 'asking') } }).map((ask) => ask.agent.id),
+    ).toEqual(['p']);
+  });
 });
 
 describe('a repeat out of rounds', () => {

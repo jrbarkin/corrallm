@@ -2,6 +2,8 @@ import { createContext, useContext } from 'react';
 
 /** What node and edge views can do to the graph. GraphEditor provides them. */
 export interface GraphActions {
+  /** Runtime queue control, shown beside the agent without changing the saved workflow. */
+  queueState?: (id: string) => 'Pausing' | 'Paused' | undefined;
   /** The node whose label is being edited in place, if any. */
   editing: string | undefined;
   startEditing: (id: string) => void;

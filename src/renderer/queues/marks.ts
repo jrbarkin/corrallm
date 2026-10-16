@@ -81,7 +81,7 @@ export function queueMarks(
               ? 'handoff'
               : undefined;
     const at = run.agents[lane];
-    const held = run.running && at?.current === item;
+    const held = run.running && !at?.paused && at?.current === item;
     const problem = at?.current === item ? at.problem : undefined;
     const attempts = item === null ? undefined : at?.attempts?.[item];
     const until = held ? at.until : undefined;

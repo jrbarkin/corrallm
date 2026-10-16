@@ -8,6 +8,325 @@ afterEach(() => {
 });
 
 describe('SessionStore', () => {
+  describe('held queues', () => {
+    it.each(['reset', 'remove', 'rehold'] as const)(
+      'does not dispatch a released queue if %s supersedes it in the same call stack',
+      async (next) => {
+        const { backend } = fakeBackend();
+        const store = new SessionStore(backend);
+        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.holdQueue('a', true);
+        store.send('a', 'Claude', 'Waiting automation', undefined, undefined, undefined, 'queue');
+        store.holdQueue('a', false);
+        if (next === 'reset') store.reset();
+        else if (next === 'remove') store.sync([]);
+        else store.holdQueue('a', true);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(backend.start).not.toHaveBeenCalled();
+        expect(backend.send).not.toHaveBeenCalled();
+        if (next === 'rehold') {
+          expect(store.of('a').queued).toMatchObject([{ text: 'Waiting automation' }]);
+          store.holdQueue('a', false);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(backend.send).toHaveBeenCalledExactlyOnceWith(
+            'a',
+            expect.objectContaining({ text: 'Waiting automation' }),
+          );
+        }
+        store.reset();
+      },
+    );
+
+    it('finishes the active turn, permits a fresh manual intervention, then resumes waiting messages once in order', async () => {
+      const { backend, emit, sent } = fakeBackend();
+      const submitted = vi.fn();
+      const store = new SessionStore(backend, undefined, { submitted });
+      store.sync([{ id: 'a', connection: 'sdk' }]);
+      const firstDone = vi.fn();
+      store.send('a', 'Claude', 'Active work', firstDone, undefined, undefined, 'queue');
+      await Promise.resolve();
+      await Promise.resolve();
+      const first = sent();
+      const queuedDone = vi.fn();
+      store.send('a', 'Claude', 'Earlier manual message', queuedDone);
+      store.send('a', 'Claude', 'Next automated task', undefined, undefined, undefined, 'queue');
+      store.holdQueue('a', true);
+      expect(backend.interrupt).not.toHaveBeenCalled();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [first],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(firstDone).toHaveBeenCalledOnce();
+      expect(backend.send).toHaveBeenCalledTimes(1);
+      expect(store.of('a').queued.map(({ text }) => text)).toEqual([
+        'Earlier manual message',
+        'Next automated task',
+      ]);
+
+      store.send('a', 'Claude', 'A fresh correction');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.send).toHaveBeenLastCalledWith(
+        'a',
+        expect.objectContaining({ text: 'A fresh correction' }),
+      );
+      const correction = sent();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [correction],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(store.of('a').submissions).toMatchObject([
+        { text: 'Earlier manual message', status: 'queued' },
+        { text: 'A fresh correction', status: 'completed' },
+      ]);
+      expect(submitted).toHaveBeenCalledTimes(2);
+      expect(backend.send).toHaveBeenCalledTimes(2);
+
+      store.holdQueue('a', false);
+      store.holdQueue('a', false);
+      await Promise.resolve();
+      await Promise.resolve();
+      const manual = sent();
+      expect(backend.send).toHaveBeenCalledTimes(3);
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [manual],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      const automated = sent();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [automated],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+        'Active work',
+        'A fresh correction',
+        'Earlier manual message',
+        'Next automated task',
+      ]);
+      expect(queuedDone).toHaveBeenCalledOnce();
+      expect(store.of('a').queued).toEqual([]);
+      store.reset();
+    });
+
+    it('queues new automation while idle and held without blocking another agent or raw terminal prompts', async () => {
+      const { backend, emit } = fakeBackend();
+      const store = new SessionStore(backend);
+      store.sync([
+        { id: 'a', connection: 'terminal' },
+        { id: 'b', connection: 'sdk' },
+      ]);
+      store.holdQueue('a', true);
+      store.send('a', 'Claude', 'Held automation', undefined, undefined, undefined, 'queue');
+      expect(backend.start).not.toHaveBeenCalled();
+      expect(store.of('a').queued).toMatchObject([{ text: 'Held automation' }]);
+      store.send('b', 'Claude', 'Other agent', undefined, undefined, undefined, 'queue');
+      store.open('a');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.send.mock.calls.map(([id]) => id)).toEqual(['b']);
+      emit('a', 'terminal', { type: 'user', id: 'native', text: 'Typed in the native console' });
+      expect(store.of('a').submissions).toMatchObject([
+        { id: 'native', text: 'Typed in the native console', status: 'running' },
+      ]);
+      emit('a', 'terminal', {
+        type: 'end',
+        messages: ['native'],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      expect(store.of('a').submissions?.[0]?.status).toBe('completed');
+      expect(store.of('a').queued).toHaveLength(1);
+      expect(backend.send.mock.calls.map(([id]) => id)).toEqual(['b']);
+      store.reset();
+    });
+
+    it('does not forward a duplicate stop after an unsent turn ends, so a fresh intervention is safe', async () => {
+      const { backend, emit, sent } = fakeBackend();
+      let ready: ((value: null) => void) | undefined;
+      backend.start.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            ready = resolve;
+          }),
+      );
+      const store = new SessionStore(backend);
+      store.sync([{ id: 'a', connection: 'sdk' }]);
+      store.holdQueue('a', true);
+      const done = vi.fn();
+      store.send('a', 'Claude', 'Not yet dispatched', done);
+      store.send('a', 'Claude', 'Keep queued');
+      store.stop('a');
+      store.stop('a');
+      expect(done).toHaveBeenCalledOnce();
+      expect(store.of('a').status).toBe('idle');
+      expect(store.of('a').queued).toMatchObject([{ text: 'Keep queued' }]);
+      store.send('a', 'Claude', 'New intervention');
+      ready?.(null);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+        'New intervention',
+      ]);
+      expect(backend.interrupt).not.toHaveBeenCalled();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+      expect(store.of('a').submissions).toMatchObject([
+        { text: 'Not yet dispatched', status: 'cancelled' },
+        { text: 'Keep queued', status: 'queued' },
+        { text: 'New intervention', status: 'completed' },
+      ]);
+      expect(backend.close).not.toHaveBeenCalled();
+      store.reset();
+    });
+
+    it('interrupts an active turn once and keeps queued work held and the console connected', async () => {
+      const { backend, emit, sent } = fakeBackend();
+      const store = new SessionStore(backend);
+      store.sync([{ id: 'a', connection: 'sdk' }]);
+      store.send('a', 'Claude', 'Active');
+      await Promise.resolve();
+      await Promise.resolve();
+      const active = sent();
+      store.send('a', 'Claude', 'Waiting');
+      store.holdQueue('a', true);
+      store.stop('a');
+      store.stop('a');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.interrupt).toHaveBeenCalledExactlyOnceWith('a');
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [active],
+        seconds: 1,
+        interrupted: true,
+        failed: false,
+      });
+      expect(store.of('a').queued).toMatchObject([{ text: 'Waiting' }]);
+      expect(backend.send).toHaveBeenCalledTimes(1);
+      store.send('a', 'Claude', 'Fresh manual turn');
+      await Promise.resolve();
+      await Promise.resolve();
+      store.stop('a');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.interrupt).toHaveBeenCalledTimes(2);
+      expect(backend.close).not.toHaveBeenCalled();
+      store.reset();
+    });
+
+    it.each(['reset', 'remove'] as const)(
+      'clears runtime holds on %s, including agents with no session yet',
+      async (action) => {
+        const { backend } = fakeBackend();
+        const store = new SessionStore(backend);
+        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.holdQueue('a', true);
+        if (action === 'reset') store.reset();
+        else store.sync([]);
+        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.send(
+          'a',
+          'Claude',
+          'Runs on the new canvas',
+          undefined,
+          undefined,
+          undefined,
+          'queue',
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(backend.send).toHaveBeenCalledExactlyOnceWith(
+          'a',
+          expect.objectContaining({ text: 'Runs on the new canvas' }),
+        );
+        store.reset();
+      },
+    );
+
+    it('allows an interrupt retry after main reports that the first request failed', async () => {
+      const { backend } = fakeBackend();
+      backend.interrupt.mockRejectedValueOnce(new Error('The interrupt did not reach the CLI'));
+      const store = new SessionStore(backend);
+      store.sync([{ id: 'a', connection: 'sdk' }]);
+      store.send('a', 'Claude', 'Active');
+      await Promise.resolve();
+      await Promise.resolve();
+      store.holdQueue('a', true);
+      store.stop('a');
+      store.stop('a');
+      await vi.waitFor(() => {
+        expect(store.of('a').entries.at(-1)).toMatchObject({
+          kind: 'notice',
+          text: 'The interrupt did not reach the CLI',
+        });
+      });
+      expect(backend.interrupt).toHaveBeenCalledOnce();
+      store.stop('a');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.interrupt).toHaveBeenCalledTimes(2);
+      store.reset();
+    });
+
+    it('also holds simulated turns after completion and after interruption', async () => {
+      vi.useFakeTimers();
+      const store = new SessionStore();
+      store.setMode('a', 'bypassPermissions');
+      const done = vi.fn();
+      store.send('a', 'Claude', 'First', done);
+      store.send('a', 'Claude', 'Second', done);
+      store.holdQueue('a', true);
+      vi.runAllTimers();
+      expect(done).toHaveBeenCalledOnce();
+      expect(store.of('a').queued).toMatchObject([{ text: 'Second' }]);
+      store.send('a', 'Claude', 'Intervention', done);
+      store.stop('a');
+      store.stop('a');
+      expect(done).toHaveBeenCalledTimes(2);
+      expect(store.of('a').queued).toMatchObject([{ text: 'Second' }]);
+      store.holdQueue('a', false);
+      await Promise.resolve();
+      vi.runAllTimers();
+      expect(done).toHaveBeenCalledTimes(3);
+      expect(
+        store
+          .of('a')
+          .entries.filter((entry) => entry.kind === 'user')
+          .map((entry) => entry.text),
+      ).toEqual(['First', 'Intervention', 'Second']);
+      store.reset();
+    });
+  });
+
   it('observes the human correction while delivering its wrapped objective, including after queueing', async () => {
     const { backend, emit, sent } = fakeBackend();
     const submitted = vi.fn();

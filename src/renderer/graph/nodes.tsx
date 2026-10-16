@@ -28,7 +28,8 @@ import { isBlank } from './queue';
 export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const hover = useHover();
   const isParent = useStore((state) => state.parentLookup.has(id));
-  const { remove, ungroup } = useGraphActions();
+  const { remove, ungroup, queueState } = useGraphActions();
+  const state = queueState?.(id);
   return (
     <div className="graph-card" data-agent={data.agent ?? DEFAULT_AGENT} {...hover.target}>
       <Handle type="source" id="top" position={Position.Top} />
@@ -36,6 +37,14 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
       <AgentTag agent={data.agent ?? DEFAULT_AGENT} connection={connectionOf(data)} />
       <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
       <QuestionCount count={data.questions?.filter((q) => q.answer === undefined).length ?? 0} />
+      {state && (
+        <span
+          className="graph-agent-control"
+          aria-label={`${data.label || 'Unnamed agent'} queue ${state.toLowerCase()}`}
+        >
+          {state}
+        </span>
+      )}
       <Handle type="source" id="bottom" position={Position.Bottom} />
       <NodeToolbar isVisible={hover.active} className="graph-actions" {...hover.target}>
         {isParent && (

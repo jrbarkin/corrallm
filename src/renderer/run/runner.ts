@@ -82,6 +82,8 @@ export interface Round {
 
 /** Where an agent's queue is, in a run. */
 export interface AgentRun {
+  /** Finish any active task, then hold this queue until this agent is explicitly resumed. */
+  paused?: boolean;
   problem?: TaskProblem;
   attempts?: Readonly<Record<string, readonly TaskAttempt[]>>;
   /**
@@ -164,6 +166,8 @@ export interface TurnEnd {
 export interface RunIO {
   /** Flushes the current checkpoint before an automated prompt can leave the renderer. */
   beforeSend?: () => Promise<void>;
+  /** Holds queued session dispatch without blocking a fresh manual console intervention. */
+  hold?: (agentId: string, held: boolean) => void;
   /**
    * Sends a message (with images, if any) to an agent's session; `done` once the turn it starts
    * ends. `refused`, later, each time the session would not start while the message waits to go
@@ -235,6 +239,13 @@ const IDLE: Run = { running: false, agents: {} };
 // Checkpoints restore paused with in-flight prompts unresolved; only an explicit Retry replays
 // submitted work. Native conversation history remains the source for inspecting its effects.
 
+interface PendingSend {
+  owner: string;
+  destination: string;
+  dispatch: () => void;
+  withdraw: () => void;
+}
+
 /**
  * Runs every agent's queue: each agent works through its queue in order. A message goes to the
  * agent's session (sessions.ts), or, aimed at another agent, to that agent's, and is done when the
@@ -269,11 +280,12 @@ export class RunStore {
   readonly #io: RunIO;
   readonly #listeners = new Set<() => void>();
   /** What cancels each timer set. */
-  readonly #timers = new Set<() => void>();
+  readonly #timers = new Map<() => void, { agent: string; token: object } | undefined>();
   /** The task each busy agent is doing, by a token that is this run's alone. */
   readonly #busy = new Map<string, object>();
   /** What takes back each message the run sent whose turn has not ended yet. */
-  readonly #sent = new Map<object, () => void>();
+  readonly #sent = new Map<object, PendingSend>();
+  readonly #sessionHolds = new Set<string>();
   /** What each agent replied in the turn of each task it finished (by agent and task). */
   readonly #replies = new Map<string, string>();
   /**
@@ -338,6 +350,7 @@ export class RunStore {
 
   restore(text: string): void {
     const saved = readRun(text);
+    for (const [id, at] of Object.entries(saved.run.agents)) if (at.paused) this.#hold(id, true);
     this.#cancel();
     this.#forget();
     for (const [key, value] of saved.replies) this.#replies.set(key, value);
@@ -391,13 +404,22 @@ export class RunStore {
       } else agents[id] = at;
     }
     this.#set({ running: false, paused: Object.keys(agents).length > 0, agents });
+    for (const id of this.#sessionHolds) if (!agents[id]?.paused) this.#hold(id, false);
   }
 
   /** Runs every queue from the top. */
   start(): void {
+    const paused = Object.entries(this.#run.agents)
+      .filter(([, at]) => at.paused)
+      .map(([id]) => id);
     this.#cancel();
     this.#forget();
-    this.#run = { running: true, agents: {} };
+    this.#run = {
+      running: true,
+      agents: Object.fromEntries(
+        paused.map((id) => [id, { paused: true, status: 'waiting', outcomes: {} }]),
+      ),
+    };
     this.#settle(true);
   }
 
@@ -427,7 +449,81 @@ export class RunStore {
   resume(): void {
     if (!this.#run.paused || this.#run.running) return;
     this.#run = { ...this.#run, running: true, paused: false };
+    for (const pending of this.#sent.values()) pending.dispatch();
     this.#settle(true);
+  }
+
+  /** Lets the active task finish, then holds only this agent's queue and future incoming work. */
+  pauseAgent(id: string): void {
+    if (!this.#pauseAgent(id)) return;
+    this.#publishControl();
+  }
+
+  /** Interrupts owned/received tasks, retaining their cancelled holds and the existing console. */
+  killAgent(id: string): void {
+    if (!this.#pauseAgent(id)) return;
+    const affected = new Map(
+      [...this.#busy].filter(([owner]) => {
+        if (owner === id) return true;
+        const at = this.#run.agents[owner];
+        const node = this.#agents().find((node) => node.id === owner);
+        const item = at?.current && node && findItem(node.data.queue ?? [], at.current)?.item;
+        return item && isMessage(item) && item.target === id;
+      }),
+    );
+    this.#interrupt(
+      'cancelled',
+      'This agent was killed. Inspect its session before resolving or retrying.',
+      new Set(affected.keys()),
+    );
+    for (const owner of affected.keys()) this.#busy.delete(owner);
+    for (const [key, observed] of this.#observed)
+      if (affected.has(observed.owner)) this.#observed.delete(key);
+    for (const [cancel, holder] of this.#timers) {
+      if (holder && affected.get(holder.agent) === holder.token) {
+        this.#timers.delete(cancel);
+        cancel();
+      }
+    }
+    for (const [key, pending] of this.#sent) {
+      if (pending.owner === id || pending.destination === id) {
+        this.#sent.delete(key);
+        pending.withdraw();
+      }
+    }
+    this.#publishControl();
+  }
+
+  /** Releases this agent without replaying interrupted work or resuming a globally paused run. */
+  resumeAgent(id: string): void {
+    const at = this.#run.agents[id];
+    if (!at?.paused) return;
+    const next = { ...at };
+    delete next.paused;
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [id]: next } };
+    this.#hold(id, false);
+    if (this.#run.running) for (const pending of this.#sent.values()) pending.dispatch();
+    this.#publishControl();
+  }
+
+  #pauseAgent(id: string): boolean {
+    if (!this.#agents().some((node) => node.id === id)) return false;
+    const at = this.#run.agents[id] ?? { status: 'waiting' as const, outcomes: {} };
+    this.#run = { ...this.#run, agents: { ...this.#run.agents, [id]: { ...at, paused: true } } };
+    this.#hold(id, true); // Before withdrawing: the session must not drain its queue on interrupt.
+    return true;
+  }
+
+  #hold(id: string, held: boolean): void {
+    if (this.#sessionHolds.has(id) === held) return;
+    if (held) this.#sessionHolds.add(id);
+    else this.#sessionHolds.delete(id);
+    this.#io.hold?.(id, held);
+  }
+
+  #publishControl(): void {
+    if (this.#run.running) this.#settle(true);
+    else this.#set({ ...this.#run });
   }
 
   /** Forgets the run, as for another canvas. */
@@ -435,6 +531,7 @@ export class RunStore {
     this.#cancel();
     this.#forget();
     this.#set(IDLE);
+    for (const id of this.#sessionHolds) this.#hold(id, false);
   }
 
   /**
@@ -444,7 +541,7 @@ export class RunStore {
    */
   goOn(agent: string, item: string): void {
     const at = this.#run.agents[agent];
-    if (!this.#run.running || at?.status !== 'waiting' || at.current !== item) return;
+    if (!this.#run.running || at?.paused || at?.status !== 'waiting' || at.current !== item) return;
     if (at.usage) {
       // Waiting for a usage window's reset, as its rule says: every agent on it goes on, until then.
       this.#decideUsage(at.usage, 'goOn');
@@ -474,7 +571,7 @@ export class RunStore {
    */
   decide(agent: string, item: string, answer: Answer): void {
     const at = this.#run.agents[agent];
-    if (!this.#run.running || at?.status !== 'asking' || at.current !== item) return;
+    if (!this.#run.running || at?.paused || at?.status !== 'asking' || at.current !== item) return;
     if (at.refused) {
       const { refused } = at;
       const to = this.#agents().find((n) => n.id === refused.agent);
@@ -550,7 +647,20 @@ export class RunStore {
    */
   update(nodes: readonly GraphNode[]): void {
     this.#nodes = nodes;
-    if (this.#run.running) this.#settle(this.#unrefuse());
+    const present = new Set(this.#agents().map((node) => node.id));
+    for (const id of this.#sessionHolds) if (!present.has(id)) this.#hold(id, false);
+    const removed = Object.entries(this.#run.agents).filter(
+      ([id, at]) => at.paused && !present.has(id),
+    );
+    if (removed.length > 0) {
+      const discarded = new Set(removed.map(([id]) => id));
+      const agents = Object.fromEntries(
+        Object.entries(this.#run.agents).filter(([id]) => !discarded.has(id)),
+      );
+      this.#run = { ...this.#run, agents };
+      if (!this.#run.running) this.#set({ ...this.#run });
+    }
+    if (this.#run.running) this.#settle(this.#unrefuse() || removed.length > 0);
   }
 
   /**
@@ -653,8 +763,12 @@ export class RunStore {
     };
   }
 
-  #interrupt(kind: TaskProblem['kind'], text: string): void {
-    for (const agent of this.#busy.keys()) {
+  #interrupt(
+    kind: TaskProblem['kind'],
+    text: string,
+    owners: ReadonlySet<string> = new Set(this.#busy.keys()),
+  ): void {
+    for (const agent of owners) {
       const at = this.#run.agents[agent];
       if (!at?.current) continue;
       this.#endAttempt(agent, at.current, kind, 'interrupted', text);
@@ -784,6 +898,12 @@ export class RunStore {
     agents: Readonly<Record<string, AgentRun>>,
     now: number,
   ): AgentRun {
+    if (run.paused) {
+      if (run.problem) return run;
+      const next: AgentRun = { ...run, status: 'waiting' };
+      if (run.current && run.outcomes[run.current] !== undefined) delete next.current;
+      return next;
+    }
     if (run.problem && run.current && findItem(node.data.queue ?? [], run.current)) return run;
     const rounds: Record<string, Round> = { ...run.rounds };
     const next = this.#next(node, run.outcomes, rounds, agents, now);
@@ -1051,6 +1171,9 @@ export class RunStore {
     outcomes: Record<string, Outcome>,
     now: number,
   ): AgentRun | undefined {
+    const destination = isMessage(task) ? (task.target ?? agent) : agent;
+    if (this.#run.agents[destination]?.paused)
+      return { current: task.id, status: 'waiting', outcomes };
     const node = this.#agents().find((n) => n.id === agent);
     const backend = node && usageBackendOf(node.data);
     const rule = backend && this.#io.usage?.().rules[backend];
@@ -1342,7 +1465,7 @@ export class RunStore {
     const next = this.#run.running
       ? Math.min(
           ...Object.values(this.#run.agents).flatMap((run) =>
-            run.status === 'waiting' && run.until !== undefined ? [run.until] : [],
+            !run.paused && run.status === 'waiting' && run.until !== undefined ? [run.until] : [],
           ),
         )
       : Infinity;
@@ -1397,22 +1520,30 @@ export class RunStore {
         });
       } else {
         const [least, most] = STEP_MS;
-        this.#after(least + (hash(task.id) % (most - least)), () => {
-          const wrong = this.#io.chance() < FAILS;
-          this.#finish(
-            agent,
-            task.id,
-            token,
-            wrong ? 'failed' : 'succeeded',
-            '',
-            task.expect === 'fails' ? !wrong : undefined,
-          );
-        });
+        this.#after(
+          least + (hash(task.id) % (most - least)),
+          () => {
+            const wrong = this.#io.chance() < FAILS;
+            this.#finish(
+              agent,
+              task.id,
+              token,
+              wrong ? 'failed' : 'succeeded',
+              '',
+              task.expect === 'fails' ? !wrong : undefined,
+            );
+          },
+          holder,
+        );
       }
     } else if (task.message.trim() === '') {
-      this.#after(0, () => {
-        this.#finish(agent, task.id, token, 'skipped', '');
-      });
+      this.#after(
+        0,
+        () => {
+          this.#finish(agent, task.id, token, 'skipped', '');
+        },
+        holder,
+      );
     } else {
       const to =
         task.target === undefined || task.target === agent
@@ -1433,11 +1564,21 @@ export class RunStore {
           },
         );
       else
-        this.#after(0, () => {
-          this.#finish(agent, task.id, token, 'succeeded', '');
-        });
+        this.#after(
+          0,
+          () => {
+            this.#finish(agent, task.id, token, 'succeeded', '');
+          },
+          holder,
+        );
     }
-    return { current: task.id, status: 'running', outcomes, attempts };
+    return {
+      current: task.id,
+      status: 'running',
+      outcomes,
+      attempts,
+      ...(previous?.paused ? { paused: true } : {}),
+    };
   }
 
   /** Native execution failures take precedence over a declared task verdict. */
@@ -1535,12 +1676,22 @@ export class RunStore {
   ): void {
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
     const sent = { over: false };
+    let ready = this.#io.beforeSend === undefined;
+    let started = false;
     const dispatch = () => {
-      if (sent.over) return;
+      if (sent.over || !ready || started) return;
+      if (
+        origin !== 'user' &&
+        (this.#run.agents[to.id]?.paused || (holder && this.#run.agents[holder.agent]?.paused))
+      )
+        return;
+      if (!this.#run.running && this.#run.paused) return;
+      started = true;
       const withdraw = this.#io.send(
         to,
         text,
         (turn) => {
+          if (sent.over) return;
           sent.over = true;
           this.#sent.delete(sent);
           ended?.(turn);
@@ -1553,29 +1704,44 @@ export class RunStore {
         origin,
         displayText,
       );
-      const pending = () => !sent.over;
-      if (pending()) this.#sent.set(sent, withdraw);
-    };
-    if (this.#io.beforeSend) {
-      this.#sent.set(sent, () => {
+      pending.withdraw = () => {
+        if (sent.over) return;
         sent.over = true;
-      });
+        withdraw();
+      };
+    };
+    const pending: PendingSend = {
+      owner: holder?.agent ?? to.id,
+      destination: to.id,
+      dispatch,
+      withdraw: () => {
+        sent.over = true;
+      },
+    };
+    this.#sent.set(sent, pending);
+    if (this.#io.beforeSend) {
       void Promise.resolve()
         .then(() => this.#io.beforeSend?.())
-        .then(dispatch, (error: unknown) => {
-          if (sent.over) return;
-          sent.over = true;
-          this.#sent.delete(sent);
-          ended?.({
-            failed: true,
-            reply: '',
-            result: {
-              status: 'failed',
-              reason: 'error',
-              message: `The run could not be saved, so the prompt was not sent: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          });
-        });
+        .then(
+          () => {
+            ready = true;
+            dispatch();
+          },
+          (error: unknown) => {
+            if (sent.over) return;
+            sent.over = true;
+            this.#sent.delete(sent);
+            ended?.({
+              failed: true,
+              reply: '',
+              result: {
+                status: 'failed',
+                reason: 'error',
+                message: `The run could not be saved, so the prompt was not sent: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            });
+          },
+        );
     } else dispatch();
   }
 
@@ -1730,12 +1896,12 @@ export class RunStore {
     this.#run = { ...this.#run, agents: { ...this.#run.agents, [agent]: next } };
   }
 
-  #after(ms: number, run: () => void): void {
+  #after(ms: number, run: () => void, holder?: { agent: string; token: object }): void {
     const cancel = this.#io.later(() => {
       this.#timers.delete(cancel);
       run();
     }, ms);
-    this.#timers.add(cancel);
+    this.#timers.set(cancel, holder);
   }
 
   /**
@@ -1745,14 +1911,14 @@ export class RunStore {
    */
   #cancel(): void {
     this.#observed.clear();
-    for (const cancel of this.#timers) cancel();
+    for (const cancel of this.#timers.keys()) cancel();
     this.#timers.clear();
     this.#busy.clear();
     this.#alarm?.cancel();
     this.#alarm = undefined;
     const sent = [...this.#sent.values()];
     this.#sent.clear();
-    for (const withdraw of sent) withdraw();
+    for (const pending of sent) pending.withdraw();
   }
 
   /**

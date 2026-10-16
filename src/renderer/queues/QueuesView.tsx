@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 
 import type { Session } from '../agent/session';
 import { AGENT_ACTIONS, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
@@ -15,6 +15,7 @@ import { useSortable } from '../graph/sortable';
 import { heldAsks } from '../run/asks';
 import type { HeldAsk } from '../run/asks';
 import type { Run } from '../run/runner';
+import { queueControlText } from '../run/controls';
 import { holdText } from '../usage/usage';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
@@ -72,6 +73,7 @@ export function QueuesView({
   onResume,
   onStop,
   onOpenAgent,
+  onAgentContextMenu,
   onClose,
 }: {
   nodes: readonly GraphNode[];
@@ -88,6 +90,7 @@ export function QueuesView({
   onResume?: () => void;
   onStop: () => void;
   onOpenAgent: (agentId: string) => void;
+  onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   onClose: () => void;
 }) {
   const layout = useMemo(() => lanesOf(nodes), [nodes]);
@@ -105,7 +108,9 @@ export function QueuesView({
       // A dropdown, or a usage gauge's panel, closes itself first.
       if (
         event.target instanceof Element &&
-        event.target.closest('.search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]')
+        event.target.closest(
+          '.agent-context-menu, .search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]',
+        )
       ) {
         return;
       }
@@ -204,6 +209,7 @@ export function QueuesView({
    * repeat out of rounds), or to answer its agent, which asks permission in a task.
    */
   const needsYou = (id: string): Needs | undefined => {
+    if (run.agents[id]?.paused && run.agents[id].status !== 'running') return undefined;
     const status = run.running ? run.agents[id]?.status : undefined;
     return status === 'asking'
       ? run.agents[id]?.refused
@@ -220,12 +226,16 @@ export function QueuesView({
     agents.filter(([id, a]) => which(id, a.status)).length;
   const needed = count((id) => needsYou(id) !== undefined);
   const stopped = count((_, status) => status === 'stopped');
+  const paused = count((id) => queueControlText(run, id) === 'Paused');
+  const pausing = count((id) => queueControlText(run, id) === 'Pausing');
   const runStatus = run.running
     ? [
         `${String(count((id, status) => status === 'running' && !needsYou(id)))} working`,
-        `${String(count((_, status) => status === 'waiting'))} waiting`,
+        `${String(count((id, status) => status === 'waiting' && !run.agents[id]?.paused))} waiting`,
         ...(needed > 0 ? [`${String(needed)} need${needed === 1 ? 's' : ''} you`] : []),
         ...(stopped > 0 ? [`${String(stopped)} stopped`] : []),
+        ...(pausing > 0 ? [`${String(pausing)} pausing`] : []),
+        ...(paused > 0 ? [`${String(paused)} paused`] : []),
       ].join(' · ')
     : run.paused
       ? 'Paused'
@@ -324,6 +334,7 @@ export function QueuesView({
                   name={name}
                   status={sessions[lane.agent.id]?.status ?? 'idle'}
                   run={run}
+                  onAgentContextMenu={onAgentContextMenu}
                   needsYou={needsYou(lane.agent.id)}
                   ask={asks.find((ask) => ask.agent.id === lane.agent.id)}
                   focused={lane.agent.id === focus}
@@ -392,6 +403,7 @@ function LaneCells({
   name,
   status,
   run,
+  onAgentContextMenu,
   needsYou,
   ask,
   focused,
@@ -411,6 +423,7 @@ function LaneCells({
   /** Its session's status. */
   status: Session['status'];
   run: Run;
+  onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   /** The run waits on the user: to decide at its hold, to answer its agent, or to switch one. */
   needsYou: Needs | undefined;
   /** What the run holds the agent for, if it does. */
@@ -476,6 +489,10 @@ function LaneCells({
       <div
         className="queues-head"
         data-lane={id}
+        data-agent-menu={id}
+        onContextMenu={(event) => {
+          onAgentContextMenu?.(event, id);
+        }}
         data-agent={agent}
         data-status={status}
         data-run={
@@ -502,6 +519,9 @@ function LaneCells({
           <span className="queues-connection" title={CONNECTION_INFO[connection].description}>
             {CONNECTION_INFO[connection].short}
           </span>
+        )}
+        {queueControlText(run, id) && (
+          <span className="queues-control-state">{queueControlText(run, id)}</span>
         )}
         {needsYou === 'switch' && ask?.refusal && (
           <div className="queues-refused" role="group" aria-label={`${name(id)} needs you`}>

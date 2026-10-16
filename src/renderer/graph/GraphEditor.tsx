@@ -34,6 +34,7 @@ import { queueMarks } from '../queues/marks';
 import { withSubmissions } from '../queues/submissions';
 import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
+import { queueControlText } from '../run/controls';
 import { readRun } from '../run/checkpoint';
 import { RunPersistence } from '../run/persistence';
 import type { RunSource } from '../run/persistence';
@@ -98,6 +99,7 @@ import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
 import type { MenuPlace } from './ConnectMenu';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
+import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
 import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
@@ -260,6 +262,9 @@ function Editor({
       },
     );
     runner = new RunStore({
+      hold: (agent, held) => {
+        sessionStore.holdQueue(agent, held);
+      },
       ...(runSource
         ? {
             beforeSend: () => {
@@ -532,6 +537,25 @@ function Editor({
   const [work, setWork] = useState<{ from: string; to: string }>();
   /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
   const [drawn, setDrawn] = useState<Connection & { at?: MenuPlace }>();
+  const [agentMenu, setAgentMenu] = useState<{ id: string; x: number; y: number }>();
+  const closeAgentMenu = useCallback(() => {
+    setAgentMenu(undefined);
+  }, []);
+  const showAgentMenu = useCallback((event: ReactMouseEvent, id: string) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('input, textarea, [contenteditable="true"]')
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.target instanceof HTMLElement)
+      event.target
+        .closest<HTMLElement>('.react-flow__node, button')
+        ?.focus({ preventScroll: true });
+    setDrawn(undefined);
+    setAgentMenu({ id, x: event.clientX, y: event.clientY });
+  }, []);
   const store = useStoreApi();
   const { screenToFlowPosition, fitView } = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -540,6 +564,7 @@ function Editor({
     front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
+    agentMenu !== undefined ||
     discarding !== undefined ||
     gallery ||
     queues !== undefined;
@@ -602,6 +627,7 @@ function Editor({
 
   const actions = useMemo<GraphActions>(
     () => ({
+      queueState: (id) => queueControlText(run, id),
       editing,
       startEditing: setEditing,
       stopEditing: () => {
@@ -626,7 +652,7 @@ function Editor({
         setWork({ from, to });
       },
     }),
-    [apply, editing, setGraph],
+    [apply, editing, setGraph, run],
   );
 
   const edits = useMemo<QueueEdits>(
@@ -713,6 +739,7 @@ function Editor({
       setOpened({ ids: [] });
       setWork(undefined);
       setDrawn(undefined);
+      setAgentMenu(undefined);
       setProblem(undefined);
     },
     [runStore, sessionStore, documentState],
@@ -1064,7 +1091,29 @@ function Editor({
 
   return (
     <GraphActionsContext value={actions}>
-      <div className="graph-editor" ref={wrapper} inert={restoring} aria-busy={restoring}>
+      <div
+        className="graph-editor"
+        ref={wrapper}
+        inert={restoring}
+        aria-busy={restoring}
+        onKeyDownCapture={(event) => {
+          if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+          if (
+            !(event.target instanceof HTMLElement) ||
+            event.target.closest('input, textarea, [contenteditable="true"]')
+          )
+            return;
+          const target = event.target.closest<HTMLElement>(
+            '[data-agent-menu], .react-flow__node-agent',
+          );
+          const id = target?.dataset.agentMenu ?? target?.dataset.id;
+          if (!target || !id) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const box = target.getBoundingClientRect();
+          setAgentMenu({ id, x: box.left + 16, y: box.bottom });
+        }}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1102,6 +1151,9 @@ function Editor({
           }}
           onEdgeDoubleClick={(_event, edge) => {
             if (edge.type === 'work') setWork({ from: edge.source, to: edge.target });
+          }}
+          onNodeContextMenu={(event, node) => {
+            if (node.type === 'agent') showAgentMenu(event, node.id);
           }}
           isValidConnection={(connection) => canConnect(graph, connection)}
           connectionMode={ConnectionMode.Loose}
@@ -1299,6 +1351,10 @@ function Editor({
           <AgentView
             key={openedNode.id}
             node={openedNode}
+            queueState={queueControlText(run, openedNode.id)}
+            onAgentContextMenu={(event) => {
+              showAgentMenu(event, openedNode.id);
+            }}
             nodes={displayNodes}
             origin={openedCard}
             from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
@@ -1463,6 +1519,7 @@ function Editor({
             onResume={() => {
               runStore.resume();
             }}
+            onAgentContextMenu={showAgentMenu}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1516,6 +1573,26 @@ function Editor({
             onCancel={cancelDrawn}
           />
         )}
+        {agentMenu &&
+          graph.nodes.some((node) => node.type === 'agent' && node.id === agentMenu.id) && (
+            <AgentContextMenu
+              key={agentMenu.id}
+              name={nameOf(agentMenu.id)}
+              at={agentMenu}
+              paused={run.agents[agentMenu.id]?.paused === true}
+              onPause={() => {
+                runStore.pauseAgent(agentMenu.id);
+              }}
+              onKill={() => {
+                runStore.killAgent(agentMenu.id);
+                sessionStore.stop(agentMenu.id);
+              }}
+              onResume={() => {
+                runStore.resumeAgent(agentMenu.id);
+              }}
+              onClose={closeAgentMenu}
+            />
+          )}
       </div>
     </GraphActionsContext>
   );

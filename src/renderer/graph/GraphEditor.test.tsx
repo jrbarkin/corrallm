@@ -69,6 +69,47 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it('holds one agent through its context menu without changing the saved canvas', async () => {
+    const initial: Graph = {
+      nodes: [agentNode('a', 0, 0), agentNode('b', 400, 0), frame],
+      edges: [],
+    };
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(null),
+    };
+    const { node } = setup(initial, files);
+    fireEvent.contextMenu(node('F'));
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.contextMenu(node('a'), { clientX: 100, clientY: 200 });
+    const menu = within(screen.getByRole('menu', { name: 'a controls' }));
+    fireEvent.click(menu.getByRole('menuitem', { name: /^Pause/ }));
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(within(node('a')).getByText('Paused')).toBeTruthy();
+    expect(within(node('b')).queryByText('Paused')).toBeNull();
+    expect(document.title).toBe('Untitled — corrallm');
+    fireEvent.click(button('Save'));
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledOnce();
+    });
+    expect(files.save.mock.calls[0]?.[0]).toBe(toFile(initial));
+    fireEvent.contextMenu(node('a'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
+    expect(within(node('a')).queryByText('Paused')).toBeNull();
+  });
+
+  it('opens agent controls with the keyboard and dismisses without changing the agent', () => {
+    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+    node('a').focus();
+    fireEvent.keyDown(node('a'), { key: 'F10', shiftKey: true });
+    expect(screen.getByRole('menu', { name: 'a controls' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(node('a'));
+    expect(within(node('a')).queryByText('Paused')).toBeNull();
+  });
+
   it('shows manual turns in every queue view without saving or running them again', async () => {
     const sessions = fakeBackend();
     const initial: Graph = {

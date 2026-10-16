@@ -1233,6 +1233,79 @@ input.graph-label {
   opacity: 0.65;
 }
 
+/* Agent runtime controls stay above either the canvas or an open queue/session panel. */
+.agent-context-menu {
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  width: min(290px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+  color: CanvasText;
+  font-size: 14px;
+}
+
+.agent-context-name {
+  overflow: hidden;
+  padding: 5px 10px 7px;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.65;
+}
+
+.agent-context-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-context-menu button:hover,
+.agent-context-menu button:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+}
+
+.agent-context-detail {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.graph-agent-control {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 5px;
+  background: Canvas;
+  color: CanvasText;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.queues-control-state,
+.agent-control-state {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 6px;
+  color: color-mix(in srgb, CanvasText 70%, Canvas);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* The work between two agents: its title, and the part of each agent's queue that makes it. */
 .graph-detail-header h2 {
   flex: 1;

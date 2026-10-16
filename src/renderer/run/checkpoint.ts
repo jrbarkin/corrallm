@@ -58,6 +58,7 @@ function agent(v: unknown): v is AgentRun {
     return false;
   return (
     optional(v, 'current', string) &&
+    optional(v, 'paused', boolean) &&
     optional(v, 'until', number) &&
     optional(v, 'asExpected', (x) => values(x, boolean)) &&
     optional(v, 'changes', (x) => values(x, (notes) => array(notes, string))) &&

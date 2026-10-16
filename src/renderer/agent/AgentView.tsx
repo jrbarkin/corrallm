@@ -152,6 +152,8 @@ export function AgentView({
   marks,
   ask,
   onShowQueues,
+  queueState,
+  onAgentContextMenu,
   session,
   controls,
   onClose,
@@ -196,6 +198,8 @@ export function AgentView({
   ask?: HeldAsk | undefined;
   /** Shows every agent's queue, side by side (QueuesView.tsx). */
   onShowQueues: () => void;
+  queueState?: 'Pausing' | 'Paused' | undefined;
+  onAgentContextMenu?: (event: React.MouseEvent) => void;
   session: Session;
   controls: SessionControls;
   onClose: () => void;
@@ -445,7 +449,11 @@ export function AgentView({
       >
         <div ref={panel} className="agent-panel">
           <div ref={content} className="agent-content">
-            <header className="agent-header">
+            <header
+              className="agent-header"
+              data-agent-menu={node.id}
+              onContextMenu={onAgentContextMenu}
+            >
               <button
                 type="button"
                 className="agent-back"
@@ -464,6 +472,7 @@ export function AgentView({
                   onRename(event.target.value);
                 }}
               />
+              {queueState && <span className="agent-control-state">{queueState}</span>}
               {changed.added + changed.removed > 0 && (
                 <span className="agent-diff" title="Lines changed this session">
                   <span className="agent-added">+{changed.added}</span>{' '}

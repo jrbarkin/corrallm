@@ -165,7 +165,8 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()
   if (!run.running) return [];
   return nodes.flatMap((agent): HeldAsk[] => {
     const at = run.agents[agent.id];
-    if (agent.type !== 'agent' || at?.status !== 'asking' || at.current === undefined) return [];
+    if (agent.type !== 'agent' || at?.paused || at?.status !== 'asking' || at.current === undefined)
+      return [];
     const queue = agent.data.queue ?? [];
     const item = findItem(queue, at.current)?.item;
     if (item && at.problem)
