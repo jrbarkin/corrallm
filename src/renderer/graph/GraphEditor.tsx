@@ -34,7 +34,7 @@ import { queueMarks } from '../queues/marks';
 import { withSubmissions } from '../queues/submissions';
 import { heldAsks } from '../run/asks';
 import { RunStore } from '../run/runner';
-import { queueControlText } from '../run/controls';
+import { groupControlText, groupPaused, individualPaused, queueControlText } from '../run/controls';
 import { readRun } from '../run/checkpoint';
 import { RunPersistence } from '../run/persistence';
 import type { RunSource } from '../run/persistence';
@@ -100,6 +100,7 @@ import { ConnectMenu } from './ConnectMenu';
 import type { MenuPlace } from './ConnectMenu';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
+import { groupMembers as groupAgentIds, isGroup } from './group-members';
 import type { WorkFlowEdge } from './nodes';
 import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
@@ -628,6 +629,7 @@ function Editor({
   const actions = useMemo<GraphActions>(
     () => ({
       queueState: (id) => queueControlText(run, id),
+      groupState: (id) => groupControlText(graph.nodes, run, id),
       editing,
       startEditing: setEditing,
       stopEditing: () => {
@@ -652,7 +654,7 @@ function Editor({
         setWork({ from, to });
       },
     }),
-    [apply, editing, setGraph, run],
+    [apply, editing, setGraph, graph.nodes, run],
   );
 
   const edits = useMemo<QueueEdits>(
@@ -1089,6 +1091,21 @@ function Editor({
     );
   }
 
+  const menuNode = agentMenu && graph.nodes.find((node) => node.id === agentMenu.id);
+  const menuIsGroup = menuNode && isGroup(graph.nodes, menuNode.id);
+  const menuMembers = menuIsGroup ? groupAgentIds(graph.nodes, menuNode.id) : [];
+  const pauseMenuGroup = () => {
+    if (menuNode) runStore.pauseGroup(menuNode.id);
+  };
+  const killMenuGroup = () => {
+    if (!menuNode) return;
+    runStore.killGroup(menuNode.id);
+    for (const id of menuMembers) sessionStore.stop(id);
+  };
+  const resumeMenuGroup = () => {
+    if (menuNode) runStore.resumeGroup(menuNode.id);
+  };
+
   return (
     <GraphActionsContext value={actions}>
       <div
@@ -1103,9 +1120,7 @@ function Editor({
             event.target.closest('input, textarea, [contenteditable="true"]')
           )
             return;
-          const target = event.target.closest<HTMLElement>(
-            '[data-agent-menu], .react-flow__node-agent',
-          );
+          const target = event.target.closest<HTMLElement>('[data-agent-menu], .react-flow__node');
           const id = target?.dataset.agentMenu ?? target?.dataset.id;
           if (!target || !id) return;
           event.preventDefault();
@@ -1153,7 +1168,7 @@ function Editor({
             if (edge.type === 'work') setWork({ from: edge.source, to: edge.target });
           }}
           onNodeContextMenu={(event, node) => {
-            if (node.type === 'agent') showAgentMenu(event, node.id);
+            showAgentMenu(event, node.id);
           }}
           isValidConnection={(connection) => canConnect(graph, connection)}
           connectionMode={ConnectionMode.Loose}
@@ -1573,26 +1588,50 @@ function Editor({
             onCancel={cancelDrawn}
           />
         )}
-        {agentMenu &&
-          graph.nodes.some((node) => node.type === 'agent' && node.id === agentMenu.id) && (
-            <AgentContextMenu
-              key={agentMenu.id}
-              name={nameOf(agentMenu.id)}
-              at={agentMenu}
-              paused={run.agents[agentMenu.id]?.paused === true}
-              onPause={() => {
-                runStore.pauseAgent(agentMenu.id);
-              }}
-              onKill={() => {
-                runStore.killAgent(agentMenu.id);
-                sessionStore.stop(agentMenu.id);
-              }}
-              onResume={() => {
-                runStore.resumeAgent(agentMenu.id);
-              }}
-              onClose={closeAgentMenu}
-            />
-          )}
+        {agentMenu && menuNode && (
+          <AgentContextMenu
+            key={agentMenu.id}
+            name={nameOf(agentMenu.id)}
+            at={agentMenu}
+            scope={menuNode.type === 'frame' ? 'group' : 'agent'}
+            paused={
+              menuNode.type === 'frame'
+                ? groupPaused(run, menuNode.id)
+                : individualPaused(run, menuNode.id)
+            }
+            {...(menuNode.type === 'frame' ? { groupSize: menuMembers.length } : {})}
+            heldByGroups={(run.groupPauses ?? [])
+              .filter((id) => groupAgentIds(graph.nodes, id).includes(menuNode.id))
+              .map(nameOf)}
+            {...(menuNode.type === 'agent' && menuIsGroup
+              ? {
+                  group: {
+                    size: menuMembers.length,
+                    paused: groupPaused(run, menuNode.id),
+                    onPause: pauseMenuGroup,
+                    onKill: killMenuGroup,
+                    onResume: resumeMenuGroup,
+                  },
+                }
+              : {})}
+            onPause={() => {
+              if (menuNode.type === 'frame') pauseMenuGroup();
+              else runStore.pauseAgent(menuNode.id);
+            }}
+            onKill={() => {
+              if (menuNode.type === 'frame') killMenuGroup();
+              else {
+                runStore.killAgent(menuNode.id);
+                sessionStore.stop(menuNode.id);
+              }
+            }}
+            onResume={() => {
+              if (menuNode.type === 'frame') resumeMenuGroup();
+              else runStore.resumeAgent(menuNode.id);
+            }}
+            onClose={closeAgentMenu}
+          />
+        )}
       </div>
     </GraphActionsContext>
   );

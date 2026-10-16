@@ -123,6 +123,8 @@ export function readRun(text: string): SavedRun {
     !record(v.run) ||
     !boolean(v.run.running) ||
     !optional(v.run, 'paused', boolean) ||
+    !optional(v.run, 'individualPauses', (x) => array(x, string)) ||
+    !optional(v.run, 'groupPauses', (x) => array(x, string)) ||
     !values(v.run.agents, agent) ||
     !entries(v.replies, string) ||
     !entries(v.held, boolean) ||

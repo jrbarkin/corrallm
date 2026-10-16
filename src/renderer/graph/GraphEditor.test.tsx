@@ -81,6 +81,8 @@ describe('GraphEditor', () => {
     };
     const { node } = setup(initial, files);
     fireEvent.contextMenu(node('F'));
+    expect(screen.getByRole('menu', { name: 'Group 1 controls' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: /^Pause/ }), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
     fireEvent.contextMenu(node('a'), { clientX: 100, clientY: 200 });
     const menu = within(screen.getByRole('menu', { name: 'a controls' }));
@@ -97,6 +99,58 @@ describe('GraphEditor', () => {
     fireEvent.contextMenu(node('a'));
     fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
     expect(within(node('a')).queryByText('Paused')).toBeNull();
+  });
+
+  it('resumes only a group’s own holds, retaining nested and individual pauses', async () => {
+    const initial: Graph = {
+      nodes: [
+        frame,
+        agentNode('a', 20, 50, { parentId: 'F' }),
+        agentNode('parent', 20, 120, { parentId: 'F' }),
+        agentNode('child', 20, 50, { parentId: 'parent' }),
+      ],
+      edges: [],
+    };
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(null),
+    };
+    const { node } = setup(initial, files);
+    // Let the canvas save its measured group geometry before testing runtime-only controls.
+    fireEvent.click(button('Save'));
+    await waitFor(() => {
+      expect(document.title).toBe('team.corral — corrallm');
+    });
+    const saved = files.save.mock.calls[0]?.[0];
+    fireEvent.contextMenu(node('a'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Pause/ }));
+    node('F').focus();
+    fireEvent.keyDown(node('F'), { key: 'F10', shiftKey: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Pause/ }));
+    expect(within(node('F')).getByText('Paused')).toBeTruthy();
+    expect(within(node('child')).getByText('Paused')).toBeTruthy();
+    fireEvent.contextMenu(node('parent'));
+    const parentMenu = within(screen.getByRole('menu', { name: 'parent controls' }));
+    expect(parentMenu.getByRole('menuitem', { name: /^Pause separately/ })).toBeTruthy();
+    fireEvent.click(parentMenu.getByRole('menuitem', { name: /^Pause group/ }));
+    fireEvent.contextMenu(node('F'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
+    expect(within(node('F')).queryByText('Paused')).toBeNull();
+    expect(within(node('a')).getByText('Paused')).toBeTruthy();
+    expect(within(node('parent')).getByText('Paused')).toBeTruthy();
+    expect(within(node('child')).getByText('Paused')).toBeTruthy();
+    fireEvent.contextMenu(node('parent'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Resume group/ }));
+    expect(within(node('parent')).queryByText('Paused')).toBeNull();
+    expect(within(node('child')).queryByText('Paused')).toBeNull();
+    expect(within(node('a')).getByText('Paused')).toBeTruthy();
+    expect(document.title).toBe('team.corral — corrallm');
+    fireEvent.click(button('Save'));
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledTimes(2);
+    });
+    expect(files.save.mock.calls[1]?.[0]).toBe(saved);
   });
 
   it('opens agent controls with the keyboard and dismisses without changing the agent', () => {

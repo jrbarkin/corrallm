@@ -4,6 +4,7 @@ import { createContext, useContext } from 'react';
 export interface GraphActions {
   /** Runtime queue control, shown beside the agent without changing the saved workflow. */
   queueState?: (id: string) => 'Pausing' | 'Paused' | undefined;
+  groupState?: (id: string) => 'Pausing' | 'Paused' | undefined;
   /** The node whose label is being edited in place, if any. */
   editing: string | undefined;
   startEditing: (id: string) => void;

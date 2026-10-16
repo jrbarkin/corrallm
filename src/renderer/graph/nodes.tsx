@@ -28,8 +28,9 @@ import { isBlank } from './queue';
 export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const hover = useHover();
   const isParent = useStore((state) => state.parentLookup.has(id));
-  const { remove, ungroup, queueState } = useGraphActions();
+  const { remove, ungroup, queueState, groupState } = useGraphActions();
   const state = queueState?.(id);
+  const group = isParent ? groupState?.(id) : undefined;
   return (
     <div className="graph-card" data-agent={data.agent ?? DEFAULT_AGENT} {...hover.target}>
       <Handle type="source" id="top" position={Position.Top} />
@@ -43,6 +44,14 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
           aria-label={`${data.label || 'Unnamed agent'} queue ${state.toLowerCase()}`}
         >
           {state}
+        </span>
+      )}
+      {group && (
+        <span
+          className="graph-group-control"
+          aria-label={`${data.label || 'Unnamed group'} group ${group.toLowerCase()}`}
+        >
+          Group {group.toLowerCase()}
         </span>
       )}
       <Handle type="source" id="bottom" position={Position.Bottom} />
@@ -90,11 +99,20 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
  */
 export function GroupNodeView({ id, data, selected }: NodeProps<GraphNode>) {
   const hover = useHover();
-  const { addParent, remove, ungroup } = useGraphActions();
+  const { addParent, remove, ungroup, groupState } = useGraphActions();
+  const state = groupState?.(id);
   return (
     <>
-      <div className="graph-frame-title" {...hover.target}>
+      <div className="graph-frame-title" data-held={state ? '' : undefined} {...hover.target}>
         <Label id={id} label={data.label} />
+        {state && (
+          <span
+            className="graph-frame-control"
+            aria-label={`${data.label || 'Unnamed group'} group ${state.toLowerCase()}`}
+          >
+            {state}
+          </span>
+        )}
       </div>
       <button
         type="button"

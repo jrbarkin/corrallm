@@ -4,6 +4,7 @@ import type { UsageBackend, UsageReading, UsageState } from '../../shared/usage'
 import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
+import { groupMembers, isGroup } from '../graph/group-members';
 import { agentName } from '../graph/labels';
 import {
   findItem,
@@ -130,6 +131,9 @@ export interface AgentRun {
 }
 
 export interface Run {
+  /** Individual and group hold causes; AgentRun.paused is their current membership projection. */
+  individualPauses?: readonly string[];
+  groupPauses?: readonly string[];
   /** Paused progress can resume; starting again is a separate deliberate action. */
   paused?: boolean;
   /**
@@ -246,6 +250,12 @@ interface PendingSend {
   withdraw: () => void;
 }
 
+interface PauseCauses {
+  individual: string[];
+  groups: string[];
+  recorded: boolean;
+}
+
 /**
  * Runs every agent's queue: each agent works through its queue in order. A message goes to the
  * agent's session (sessions.ts), or, aimed at another agent, to that agent's, and is done when the
@@ -350,7 +360,8 @@ export class RunStore {
 
   restore(text: string): void {
     const saved = readRun(text);
-    for (const [id, at] of Object.entries(saved.run.agents)) if (at.paused) this.#hold(id, true);
+    const causes = this.#pauseCauses(saved.run);
+    for (const id of this.#pausedMembers(causes)) this.#hold(id, true);
     this.#cancel();
     this.#forget();
     for (const [key, value] of saved.replies) this.#replies.set(key, value);
@@ -403,23 +414,32 @@ export class RunStore {
         };
       } else agents[id] = at;
     }
-    this.#set({ running: false, paused: Object.keys(agents).length > 0, agents });
-    for (const id of this.#sessionHolds) if (!agents[id]?.paused) this.#hold(id, false);
+    this.#run = {
+      running: false,
+      paused:
+        Object.keys(agents).length > 0 || causes.individual.length > 0 || causes.groups.length > 0,
+      agents,
+      ...(causes.recorded
+        ? { individualPauses: causes.individual, groupPauses: causes.groups }
+        : {}),
+    };
+    this.#applyPauses();
+    this.#set({ ...this.#run });
   }
 
   /** Runs every queue from the top. */
   start(): void {
-    const paused = Object.entries(this.#run.agents)
-      .filter(([, at]) => at.paused)
-      .map(([id]) => id);
+    const causes = this.#pauseCauses();
     this.#cancel();
     this.#forget();
     this.#run = {
       running: true,
-      agents: Object.fromEntries(
-        paused.map((id) => [id, { paused: true, status: 'waiting', outcomes: {} }]),
-      ),
+      agents: {},
+      ...(causes.recorded
+        ? { individualPauses: causes.individual, groupPauses: causes.groups }
+        : {}),
     };
+    this.#applyPauses();
     this.#settle(true);
   }
 
@@ -455,25 +475,54 @@ export class RunStore {
 
   /** Lets the active task finish, then holds only this agent's queue and future incoming work. */
   pauseAgent(id: string): void {
-    if (!this.#pauseAgent(id)) return;
+    if (!this.#addIndividualPause(id)) return;
     this.#publishControl();
   }
 
   /** Interrupts owned/received tasks, retaining their cancelled holds and the existing console. */
   killAgent(id: string): void {
-    if (!this.#pauseAgent(id)) return;
+    if (!this.#addIndividualPause(id)) return;
+    this.#killMembers(new Set([id]));
+    this.#publishControl();
+  }
+
+  /** Group causes are independent of individual and other containing-group causes. */
+  pauseGroup(id: string): void {
+    if (!this.#addGroupPause(id)) return;
+    this.#publishControl();
+  }
+
+  /** Hold the whole group before any withdrawal can release queued work in another member. */
+  killGroup(id: string): void {
+    if (!this.#addGroupPause(id)) return;
+    this.#killMembers(new Set(groupMembers(this.#nodes, id)));
+    this.#publishControl();
+  }
+
+  resumeGroup(id: string): void {
+    const causes = this.#pauseCauses();
+    if (!causes.groups.includes(id)) return;
+    this.#writePauses(
+      causes.individual,
+      causes.groups.filter((group) => group !== id),
+    );
+    this.#releasePending();
+    this.#publishControl();
+  }
+
+  #killMembers(members: ReadonlySet<string>): void {
     const affected = new Map(
       [...this.#busy].filter(([owner]) => {
-        if (owner === id) return true;
+        if (members.has(owner)) return true;
         const at = this.#run.agents[owner];
         const node = this.#agents().find((node) => node.id === owner);
         const item = at?.current && node && findItem(node.data.queue ?? [], at.current)?.item;
-        return item && isMessage(item) && item.target === id;
+        return item && isMessage(item) && item.target !== undefined && members.has(item.target);
       }),
     );
     this.#interrupt(
       'cancelled',
-      'This agent was killed. Inspect its session before resolving or retrying.',
+      'This task was interrupted by Kill. Inspect its session before resolving or retrying.',
       new Set(affected.keys()),
     );
     for (const owner of affected.keys()) this.#busy.delete(owner);
@@ -486,32 +535,107 @@ export class RunStore {
       }
     }
     for (const [key, pending] of this.#sent) {
-      if (pending.owner === id || pending.destination === id) {
+      if (members.has(pending.owner) || members.has(pending.destination)) {
         this.#sent.delete(key);
         pending.withdraw();
       }
     }
-    this.#publishControl();
   }
 
   /** Releases this agent without replaying interrupted work or resuming a globally paused run. */
   resumeAgent(id: string): void {
-    const at = this.#run.agents[id];
-    if (!at?.paused) return;
-    const next = { ...at };
-    delete next.paused;
-    this.#run = { ...this.#run, agents: { ...this.#run.agents, [id]: next } };
-    this.#hold(id, false);
-    if (this.#run.running) for (const pending of this.#sent.values()) pending.dispatch();
+    const causes = this.#pauseCauses();
+    if (!causes.individual.includes(id)) return;
+    this.#writePauses(
+      causes.individual.filter((agent) => agent !== id),
+      causes.groups,
+    );
+    this.#releasePending();
     this.#publishControl();
   }
 
-  #pauseAgent(id: string): boolean {
+  #addIndividualPause(id: string): boolean {
     if (!this.#agents().some((node) => node.id === id)) return false;
-    const at = this.#run.agents[id] ?? { status: 'waiting' as const, outcomes: {} };
-    this.#run = { ...this.#run, agents: { ...this.#run.agents, [id]: { ...at, paused: true } } };
-    this.#hold(id, true); // Before withdrawing: the session must not drain its queue on interrupt.
+    const causes = this.#pauseCauses();
+    this.#writePauses([...causes.individual, id], causes.groups);
     return true;
+  }
+
+  #addGroupPause(id: string): boolean {
+    if (!isGroup(this.#nodes, id)) return false;
+    const causes = this.#pauseCauses();
+    this.#writePauses(causes.individual, [...causes.groups, id]);
+    return true;
+  }
+
+  #writePauses(individual: readonly string[], groups: readonly string[]): void {
+    this.#run = {
+      ...this.#run,
+      individualPauses: [...new Set(individual)],
+      groupPauses: [...new Set(groups)],
+    };
+    this.#applyPauses();
+  }
+
+  #pauseCauses(run = this.#run): PauseCauses {
+    const present = new Set(this.#agents().map((node) => node.id));
+    const recorded = run.individualPauses !== undefined || run.groupPauses !== undefined;
+    const legacy = recorded
+      ? []
+      : Object.entries(run.agents)
+          .filter(([, at]) => at.paused)
+          .map(([id]) => id);
+    return {
+      individual: [...new Set(run.individualPauses ?? legacy)].filter((id) => present.has(id)),
+      groups: [...new Set(run.groupPauses ?? [])].filter((id) => isGroup(this.#nodes, id)),
+      recorded: recorded || legacy.length > 0,
+    };
+  }
+
+  #pausedMembers(causes: PauseCauses): Set<string> {
+    return new Set([
+      ...causes.individual,
+      ...causes.groups.flatMap((id) => groupMembers(this.#nodes, id)),
+    ]);
+  }
+
+  /** Recompute the aggregate flag from current membership; it is never a hold cause itself. */
+  #applyPauses(): boolean {
+    const previous = this.#run;
+    const before = JSON.stringify(this.#run);
+    const causes = this.#pauseCauses();
+    const paused = this.#pausedMembers(causes);
+    const present = new Set(this.#agents().map((node) => node.id));
+    const agents = Object.fromEntries(
+      Object.entries(this.#run.agents).filter(([id, at]) => !at.paused || present.has(id)),
+    );
+    for (const id of present) {
+      const at = agents[id];
+      if (paused.has(id))
+        agents[id] = { ...(at ?? { status: 'waiting', outcomes: {} }), paused: true };
+      else if (at?.paused) {
+        const next = { ...at };
+        delete next.paused;
+        agents[id] = next;
+      }
+    }
+    this.#run = {
+      ...this.#run,
+      agents,
+      ...(causes.recorded
+        ? { individualPauses: causes.individual, groupPauses: causes.groups }
+        : {}),
+    };
+    // Install all newly inherited holds before releasing any old hold or interrupting a turn.
+    for (const id of present) if (paused.has(id)) this.#hold(id, true);
+    for (const id of this.#sessionHolds) if (!paused.has(id)) this.#hold(id, false);
+    const changed = before !== JSON.stringify(this.#run);
+    if (!changed) this.#run = previous;
+    return changed;
+  }
+
+  #releasePending(): void {
+    if (this.#run.running) for (const pending of this.#sent.values()) pending.dispatch();
   }
 
   #hold(id: string, held: boolean): void {
@@ -647,20 +771,10 @@ export class RunStore {
    */
   update(nodes: readonly GraphNode[]): void {
     this.#nodes = nodes;
-    const present = new Set(this.#agents().map((node) => node.id));
-    for (const id of this.#sessionHolds) if (!present.has(id)) this.#hold(id, false);
-    const removed = Object.entries(this.#run.agents).filter(
-      ([id, at]) => at.paused && !present.has(id),
-    );
-    if (removed.length > 0) {
-      const discarded = new Set(removed.map(([id]) => id));
-      const agents = Object.fromEntries(
-        Object.entries(this.#run.agents).filter(([id]) => !discarded.has(id)),
-      );
-      this.#run = { ...this.#run, agents };
-      if (!this.#run.running) this.#set({ ...this.#run });
-    }
-    if (this.#run.running) this.#settle(this.#unrefuse() || removed.length > 0);
+    const changed = this.#applyPauses();
+    this.#releasePending();
+    if (this.#run.running) this.#settle(this.#unrefuse() || changed);
+    else if (changed) this.#set({ ...this.#run });
   }
 
   /**
@@ -883,7 +997,7 @@ export class RunStore {
     const running =
       this.#busy.size > 0 ||
       Object.values(agents).some((run) => run.status === 'waiting' || run.status === 'asking');
-    if (moved || running !== this.#run.running) this.#set({ running, agents });
+    if (moved || running !== this.#run.running) this.#set({ ...this.#run, running, agents });
     this.#arm(now);
   }
 

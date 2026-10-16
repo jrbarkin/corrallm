@@ -1,11 +1,23 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-/** Runtime controls for one agent, shared by its canvas card and queue heading. */
+interface GroupControls {
+  size: number;
+  paused: boolean;
+  onPause: () => void;
+  onKill: () => void;
+  onResume: () => void;
+}
+
+/** Runtime controls shared by agent cards, groups, queue headings and session headers. */
 export function AgentContextMenu({
   name,
   at,
   paused,
+  scope = 'agent',
+  groupSize,
+  heldByGroups = [],
+  group,
   onPause,
   onKill,
   onResume,
@@ -14,6 +26,10 @@ export function AgentContextMenu({
   name: string;
   at: { x: number; y: number };
   paused: boolean;
+  scope?: 'agent' | 'group';
+  groupSize?: number;
+  heldByGroups?: readonly string[];
+  group?: GroupControls;
   onPause: () => void;
   onKill: () => void;
   onResume: () => void;
@@ -81,6 +97,70 @@ export function AgentContextMenu({
       }}
     >
       <div className="agent-context-name">{name}</div>
+      {scope === 'group' && groupSize !== undefined && (
+        <div className="agent-context-note">
+          {String(groupSize)} {groupSize === 1 ? 'agent' : 'agents'}, including nested groups
+        </div>
+      )}
+      {scope === 'agent' && heldByGroups.length > 0 && (
+        <div className="agent-context-note">Held by group: {heldByGroups.join(', ')}</div>
+      )}
+      <ControlItems
+        scope={scope}
+        paused={paused}
+        separate={scope === 'agent' && heldByGroups.length > 0}
+        onPause={onPause}
+        onKill={onKill}
+        onResume={onResume}
+        onClose={onClose}
+      />
+      {group && (
+        <>
+          <div className="agent-context-name agent-context-group">
+            Group ({String(group.size)} {group.size === 1 ? 'agent' : 'agents'})
+          </div>
+          <ControlItems scope="group" suffix=" group" {...group} onClose={onClose} />
+        </>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+function ControlItems({
+  scope,
+  paused,
+  suffix = '',
+  separate = false,
+  onPause,
+  onKill,
+  onResume,
+  onClose,
+}: {
+  scope: 'agent' | 'group';
+  paused: boolean;
+  suffix?: string;
+  separate?: boolean;
+  onPause: () => void;
+  onKill: () => void;
+  onResume: () => void;
+  onClose: () => void;
+}) {
+  const group = scope === 'group';
+  const label = paused ? 'Resume' : separate ? 'Pause separately' : 'Pause';
+  const detail = group
+    ? paused
+      ? 'Release this group’s holds; keep individual and other group pauses'
+      : 'Finish current tasks, then hold every queue in this group'
+    : paused
+      ? separate
+        ? 'Release the individual pause; group holds still apply'
+        : 'Let this queue continue'
+      : separate
+        ? 'Keep this agent paused after its groups resume'
+        : 'Finish the current task, then hold this queue';
+  return (
+    <>
       <button
         type="button"
         role="menuitem"
@@ -90,10 +170,11 @@ export function AgentContextMenu({
           else onPause();
         }}
       >
-        <span>{paused ? 'Resume' : 'Pause'}</span>
-        <span className="agent-context-detail">
-          {paused ? 'Let this queue continue' : 'Finish the current task, then hold this queue'}
+        <span>
+          {label}
+          {suffix}
         </span>
+        <span className="agent-context-detail">{detail}</span>
       </button>
       <button
         type="button"
@@ -103,10 +184,13 @@ export function AgentContextMenu({
           onKill();
         }}
       >
-        <span>Kill</span>
-        <span className="agent-context-detail">Interrupt now; keep the console open</span>
+        <span>Kill{suffix}</span>
+        <span className="agent-context-detail">
+          {group
+            ? 'Interrupt members now; keep their consoles open'
+            : 'Interrupt now; keep the console open'}
+        </span>
       </button>
-    </div>,
-    document.body,
+    </>
   );
 }

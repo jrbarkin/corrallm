@@ -1,12 +1,19 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentContextMenu } from './AgentContextMenu';
 
-function setup(paused = false) {
+function setup(paused = false, extra: Partial<ComponentProps<typeof AgentContextMenu>> = {}) {
   const actions = { onPause: vi.fn(), onKill: vi.fn(), onResume: vi.fn(), onClose: vi.fn() };
   const view = render(
-    <AgentContextMenu name="Builder" at={{ x: 200, y: 250 }} paused={paused} {...actions} />,
+    <AgentContextMenu
+      name="Builder"
+      at={{ x: 200, y: 250 }}
+      paused={paused}
+      {...actions}
+      {...extra}
+    />,
   );
   return {
     ...actions,
@@ -16,6 +23,49 @@ function setup(paused = false) {
 }
 
 describe('agent context menu', () => {
+  it('explains group-wide actions and preserves other pause causes when resuming', () => {
+    const { menu, onResume, onKill } = setup(true, { scope: 'group', groupSize: 3 });
+    expect(menu.getByText('3 agents, including nested groups')).toBeTruthy();
+    expect(
+      menu.getByText('Release this group’s holds; keep individual and other group pauses'),
+    ).toBeTruthy();
+    fireEvent.click(menu.getByRole('menuitem', { name: /^Resume/ }));
+    expect(onResume).toHaveBeenCalledOnce();
+    expect(onKill).not.toHaveBeenCalled();
+  });
+
+  it('keeps a parent agent’s individual actions separate from its group actions', () => {
+    const group = { size: 2, paused: false, onPause: vi.fn(), onKill: vi.fn(), onResume: vi.fn() };
+    const { menu, onResume, onKill } = setup(true, { group });
+    expect(menu.getByText('Group (2 agents)')).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'End' });
+    expect(document.activeElement).toBe(menu.getByRole('menuitem', { name: /^Kill group/ }));
+    fireEvent.click(menu.getByRole('menuitem', { name: /^Pause group/ }));
+    expect(group.onPause).toHaveBeenCalledOnce();
+    expect(onResume).not.toHaveBeenCalled();
+    expect(onKill).not.toHaveBeenCalled();
+    expect(group.onKill).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'explains a group-held agent’s separate individual pause (%s)',
+    (paused) => {
+      const { menu, onPause, onResume } = setup(paused, { heldByGroups: ['Team', 'Reviewers'] });
+      expect(menu.getByText('Held by group: Team, Reviewers')).toBeTruthy();
+      if (paused) {
+        expect(
+          menu.getByText('Release the individual pause; group holds still apply'),
+        ).toBeTruthy();
+        fireEvent.click(menu.getByRole('menuitem', { name: /^Resume/ }));
+        expect(onResume).toHaveBeenCalledOnce();
+      } else {
+        expect(menu.getByText('Keep this agent paused after its groups resume')).toBeTruthy();
+        fireEvent.click(menu.getByRole('menuitem', { name: /^Pause separately/ }));
+        expect(onPause).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it('offers Pause and Kill with their different effects, acting only on a chosen item', () => {
     const { menu, onPause, onKill, onClose } = setup();
     expect(menu.getByText('Finish the current task, then hold this queue')).toBeTruthy();
