@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { turnResult } from '../../../../shared/session';
+import { turnResult, UNASKING_MODES } from '../../../../shared/session';
 
 import type {
   CodexMode,
@@ -694,7 +694,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
             '',
             ...presets.map(
               ([mode, label, name]) =>
-                `- \`${name}\` ${label}${mode === this.#mode ? ' — current' : ''}`,
+                `- \`${name}\` ${label}${UNASKING_MODES.includes(mode) ? ' (from the mode menu)' : ''}${mode === this.#mode ? ' — current' : ''}`,
             ),
           ].join('\n'),
         ),
@@ -706,6 +706,11 @@ export class AppServerSession implements LiveSession<CodexMode> {
     );
     if (!preset)
       return [notice('warning', `Codex has no ${args} permissions: /permissions lists them.`)];
+    // A message never takes Codex out of its sandbox: it could come from a shared canvas, or from
+    // another agent. The mode menu asks first.
+    if (UNASKING_MODES.includes(preset[0])) {
+      return [notice('warning', `${preset[1]} is chosen from the mode menu, which asks first.`)];
+    }
     this.#mode = preset[0];
     return [{ type: 'mode', mode: preset[0] }, notice('info', `Permissions: ${preset[1]}.`)];
   }

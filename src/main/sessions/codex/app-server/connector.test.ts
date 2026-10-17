@@ -549,10 +549,20 @@ describe('the App Server connection', () => {
     expect(events).toContainEqual({ type: 'model', model: 'gpt-6-luna' });
     expect(events).toContainEqual({ type: 'effort', effort: 'medium' });
 
-    await turn('/permissions full-access', 'p');
-    expect(events).toContainEqual({ type: 'mode', mode: 'full-access' });
+    await turn('/permissions read-only', 'p');
+    expect(events).toContainEqual({ type: 'mode', mode: 'read-only' });
+    // Text never leaves the sandbox: a message in a shared canvas, or another agent's, could say
+    // it. Full access is the mode menu's, which asks first.
+    await turn('/permissions full-access', 'f');
+    expect(events).not.toContainEqual({ type: 'mode', mode: 'full-access' });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'notice',
+        text: expect.stringMatching(/mode menu/) as string,
+      }),
+    );
     await turn('/status', 's');
-    expect(last()).toMatch(/Approvals: never · Sandbox: danger-full-access/);
+    expect(last()).toMatch(/Approvals: on-request · Sandbox: read-only/);
     expect(last()).toMatch(/Login: an API key/);
     await turn('/mcp', 'mcp');
     expect(last()).toMatch(/\*\*docs\*\*: `search`, `fetch`/);

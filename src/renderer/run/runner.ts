@@ -216,6 +216,10 @@ export interface RunIO {
  */
 const ALARM_MS = 60_000;
 
+/** Why the run did not send a message that starts with "!". */
+const SHELL_REFUSED =
+  'Not sent: it starts with "!", which Claude Code and Codex run as a shell command, without asking. Reword it, or type it in the agent\'s terminal yourself.';
+
 /** What the run says when it waits for a usage window's reset that has never been read. */
 const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
   `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
@@ -1756,6 +1760,9 @@ export class RunStore {
       displayText?: string;
     } = {},
   ): void {
+    // What the user typed may be a shell command for its CLI's bash mode; what the run sends of its
+    // own (a canvas's messages, which a shared file may hold) never is.
+    const shell = origin !== 'user' && text.trimStart().startsWith('!');
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
     const sent = { over: false };
     let ready = this.#io.beforeSend === undefined;
@@ -1769,6 +1776,19 @@ export class RunStore {
         return;
       if (!this.#run.running && this.#run.paused) return;
       started = true;
+      if (shell) {
+        this.#after(0, () => {
+          if (sent.over) return;
+          sent.over = true;
+          this.#sent.delete(sent);
+          ended?.({
+            failed: true,
+            reply: '',
+            result: { status: 'failed', reason: 'declined', message: SHELL_REFUSED },
+          });
+        });
+        return;
+      }
       const withdraw = this.#io.send(
         to,
         text,
