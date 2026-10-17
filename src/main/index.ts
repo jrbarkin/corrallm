@@ -5,6 +5,7 @@ import type { MessageBoxOptions, WebContents } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
+import { Closing } from './closing';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
 import { registerIpcHandlers, sendEvent } from './ipc';
@@ -42,6 +43,9 @@ const FORBIDDEN_SWITCHES = [
   'utility-cmd-prefix',
   'browser-subprocess-path',
 ] as const;
+
+/** How long closing without saving waits for the agents' sessions to end. */
+const ABANDON_MS = 5000;
 
 function main(): void {
   // Squirrel.Windows launches the app with --squirrel-* flags on install/update/uninstall.
@@ -213,30 +217,43 @@ function main(): void {
         await sessions.closeEverything();
         await Promise.all([memory.flush(), settings.flush(), links.flush(), usage.flush()]);
       };
-      const failedClose = (error: unknown) => {
-        console.error('Could not save before closing:', error);
-        dialog.showErrorBox(
-          'The run could not be saved',
-          `${error instanceof Error ? error.message : String(error)}\nThe window remains open. Try again after saving.`,
-        );
+      // Closing without saving (the user said to, after it failed): what can be closed, within a
+      // few seconds.
+      const abandon = async () => {
+        await Promise.race([
+          Promise.allSettled([sessions.closeEverything()]).then(() =>
+            Promise.allSettled([memory.flush(), settings.flush(), links.flush(), usage.flush()]),
+          ),
+          new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
+        ]);
       };
-      let quitting = false;
-      let quitApproved = false;
+      const askAnyway =
+        (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
+        async (why: string): Promise<boolean> => {
+          console.error('Could not save before closing:', why);
+          const options: MessageBoxOptions = {
+            type: 'warning',
+            message: 'The run could not be saved',
+            detail: `${why}\n\n${verb} anyway? What wasn't saved is lost, and the agents' sessions end.`,
+            buttons: ['Keep corrallm open', `${verb} anyway`],
+            defaultId: 0,
+            cancelId: 0,
+          };
+          const { response } = await (window
+            ? dialog.showMessageBox(window, options)
+            : dialog.showMessageBox(options));
+          return response === 1;
+        };
+      const quit = new Closing({
+        save: () => persistWindows(BrowserWindow.getAllWindows()),
+        abandon,
+        ask: askAnyway('Quit'),
+        done: () => {
+          app.quit();
+        },
+      });
       app.on('before-quit', (event) => {
-        if (quitApproved) return;
-        event.preventDefault();
-        if (quitting) return;
-        quitting = true;
-        void persistWindows(BrowserWindow.getAllWindows()).then(
-          () => {
-            quitApproved = true;
-            app.quit();
-          },
-          (error: unknown) => {
-            quitting = false;
-            failedClose(error);
-          },
-        );
+        if (!quit.request()) event.preventDefault();
       });
       // macOS window close does not quit the app, but must save/freeze the run all the same.
       app.on('browser-window-created', (_event, window) => {
@@ -256,23 +273,18 @@ function main(): void {
             console.error('Could not close before reload:', error);
           });
         });
-        let approved = false;
-        let closing = false;
+        const close = new Closing({
+          save: () => persistWindows([window]),
+          abandon,
+          ask: askAnyway('Close', window),
+          done: () => {
+            window.close();
+          },
+        });
         window.on('close', (event) => {
-          if (quitApproved || approved) return;
-          event.preventDefault();
-          if (quitting || closing) return;
-          closing = true;
-          void persistWindows([window]).then(
-            () => {
-              approved = true;
-              window.close();
-            },
-            (error: unknown) => {
-              closing = false;
-              failedClose(error);
-            },
-          );
+          if (quit.approved) return;
+          // Quitting saves every window: a close meanwhile waits for it.
+          if (quit.busy || !close.request()) event.preventDefault();
         });
       });
 
