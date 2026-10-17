@@ -5,11 +5,13 @@ import type { UsageBackend, UsageRule, UsageState, UsageWindows } from '../../sh
 import { AGENT_CONNECTIONS, DEFAULT_AGENT } from '../graph/agents';
 import { EXAMPLES } from '../graph/examples';
 import { fromFile } from '../graph/file';
+import { setAgent } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
 import { findItem } from '../graph/queue';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { fillTemplate } from '../graph/templates';
 import { readRun } from './checkpoint';
+import { heldAsks } from './asks';
 import { RunStore } from './runner';
 import type { Refusal, TurnEnd } from './runner';
 
@@ -290,7 +292,7 @@ describe('RunStore', () => {
     });
   });
 
-  it('keeps an unavailable native session unresolved, holding dependents without a fake outcome', () => {
+  it('holds an unavailable agent before sending, keeping dependents unresolved', () => {
     const qwen = agent('a', [{ id: 'inspect', action: 'Read' }]);
     const { store, sent, where, advance, connects } = setup(
       [
@@ -303,24 +305,48 @@ describe('RunStore', () => {
       manual,
     );
     store.start();
-    expect(sent).toHaveLength(1);
-    sent[0]?.refused?.({ text: 'Qwen connections are not available yet. Choose Claude or Codex.' });
+    expect(sent).toHaveLength(0);
     expect(where()).toEqual({ a: 'asking inspect', b: 'waiting wait' });
     expect(store.snapshot().agents.a?.refused).toEqual({
       agent: 'a',
       connection: 'unavailable',
-      text: 'Qwen connections are not available yet. Choose Claude or Codex.',
+      text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
     });
     store.decide('a', 'inspect', { choice: 'switch' });
     advance(60 * MINUTE);
     expect(connects).toEqual([]);
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(0);
     expect(store.snapshot().agents.a?.outcomes).toEqual({});
     expect(store.snapshot().agents.b?.outcomes).toEqual({});
     const resumed = setup([qwen], manual);
     resumed.store.restore(store.checkpoint());
     expect(resumed.store.snapshot()).toMatchObject({ paused: true, running: false });
     expect(resumed.sent).toEqual([]);
+  });
+
+  it('words an unavailable agent’s step only after its type changes to Claude', () => {
+    const node = agent('a', [
+      { id: 'search', action: 'google_web_search', instruction: 'Find references' },
+    ]);
+    const gemini: GraphNode = { ...node, data: { ...node.data, agent: 'Gemini' } };
+    const { store, sent, where, edit, reply } = setup([gemini], manual);
+    store.start();
+    expect(where()).toEqual({ a: 'asking search' });
+    const [ask] = heldAsks([gemini], store.snapshot());
+    expect(ask?.text).toBe(
+      'This agent has no connection; choose Claude or Codex in Agent settings.',
+    );
+    expect(ask?.choices).toEqual([]);
+    expect(sent).toHaveLength(0);
+    edit(setAgent({ nodes: [gemini], edges: [] }, 'a', 'Claude').nodes);
+    expect(where()).toEqual({ a: 'running search' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain('WebSearch');
+    expect(sent[0]?.text).toContain('Find references');
+    expect(sent[0]?.text).not.toContain('google_web_search');
+    reply('a', false, 'SUCCEEDED');
+    expect(where()).toEqual({ a: 'done' });
+    expect(store.snapshot().running).toBe(false);
   });
 
   it.each(['Claude', 'Codex', 'Qwen', 'Gemini'] as const)(
@@ -393,6 +419,73 @@ describe('RunStore', () => {
       notes: 'succeeded',
     });
     expect(store.snapshot().running).toBe(false);
+  });
+
+  it('finishes a paused agent’s last task and releases a later wait for all its work', () => {
+    const { store, reply, where, sent } = setup(
+      [
+        connected('a', [{ id: 'one', message: 'one' }]),
+        connected('c', [
+          { id: 'long', message: 'long' },
+          { id: 'wait', waitFor: [{ agent: 'a' }] },
+          { id: 'after', message: 'after' },
+        ]),
+      ],
+      manual,
+    );
+    store.start();
+    store.pauseAgent('a');
+    reply('a');
+    expect(where()).toEqual({ a: 'done', c: 'running long' });
+    expect(store.snapshot().agents.a?.paused).toBe(true);
+    reply('c');
+    expect(sent.at(-1)?.text).toBe('after');
+    reply('c');
+    expect(where()).toEqual({ a: 'done', c: 'done' });
+    expect(store.snapshot().running).toBe(false);
+  });
+
+  it('keeps a stopped queue stopped when paused, including waits reached later', () => {
+    const { store, reply, where, sent } = setup(
+      [
+        connected('a', [{ id: 'ok', approve: 'the work' }]),
+        connected('c', [
+          { id: 'long', message: 'long' },
+          { id: 'wait', waitFor: [{ agent: 'a' }] },
+          { id: 'after', message: 'after' },
+        ]),
+      ],
+      manual,
+    );
+    store.start();
+    store.decide('a', 'ok', { choice: 'stop' });
+    store.pauseAgent('a');
+    expect(where()).toEqual({ a: 'stopped ok', c: 'running long' });
+    reply('c');
+    expect(where()).toEqual({ a: 'stopped ok', c: 'stopped wait' });
+    expect(sent).toHaveLength(1);
+    expect(store.snapshot().running).toBe(false);
+  });
+
+  it('holds new work added to a finished paused queue until Resume', () => {
+    const a = connected('a', [{ id: 'one', message: 'one' }]);
+    const c = connected('c', [{ id: 'long', message: 'long' }]);
+    const { store, reply, edit, where, sent } = setup([a, c], manual);
+    store.start();
+    store.pauseAgent('a');
+    reply('a');
+    expect(where().a).toBe('done');
+    edit([
+      {
+        ...a,
+        data: { ...a.data, queue: [...(a.data.queue ?? []), { id: 'two', message: 'two' }] },
+      },
+      c,
+    ]);
+    expect(sent).toHaveLength(2);
+    expect(store.snapshot().agents.a?.paused).toBe(true);
+    store.resumeAgent('a');
+    expect(sent.at(-1)?.text).toBe('two');
   });
 
   it('hands a message aimed at another agent to its session, done once that agent’s turn on it ends', () => {
@@ -2016,6 +2109,67 @@ describe('RunStore', () => {
         store.start();
         first?.refused?.({ text: why, switchTo: 'terminal' });
         expect(where()).toEqual({ a: 'running tests' });
+      });
+
+      it.each(['stop', 'pause'] as const)(
+        'retries a refused task after %s and Resume',
+        (control) => {
+          const { store, sent, where } = setup(
+            [connected('a', [{ id: 'tests', action: 'Bash' }])],
+            manual,
+          );
+          store.start();
+          sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
+          store[control]();
+          expect(sent[0]?.withdrawn).toBe(true);
+          store.resume();
+          store.decide('a', 'tests', { choice: 'retry' });
+          expect(sent).toHaveLength(2);
+          expect(sent[1]?.text).toBe(sent[0]?.text);
+          expect(where()).toEqual({ a: 'running tests' });
+          sent[1]?.refused?.({ text: why, switchTo: 'terminal' });
+          expect(where()).toEqual({ a: 'asking tests' });
+          expect(store.snapshot().agents.a?.refused?.text).toBe(why);
+          expect(store.snapshot().agents.a?.problem).toBeUndefined();
+        },
+      );
+
+      it('marks a refused task resolved after Stop and Resume and goes on', () => {
+        const { store, sent, where } = setup(
+          [
+            connected('a', [
+              { id: 'tests', action: 'Bash' },
+              { id: 'next', message: 'Carry on' },
+            ]),
+          ],
+          manual,
+        );
+        store.start();
+        sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
+        store.stop();
+        store.resume();
+        store.decide('a', 'tests', { choice: 'resolve' });
+        expect(where()).toEqual({ a: 'running next' });
+        expect(store.snapshot().agents.a?.outcomes.tests).toBe('succeeded');
+        expect(sent.at(-1)?.text).toBe('Carry on');
+      });
+
+      it('keeps an interrupted refusal held when its connection changes after Resume', () => {
+        const a = connected('a', [{ id: 'tests', action: 'Bash' }]);
+        const { store, sent, where, edit } = setup([a], manual);
+        store.start();
+        sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
+        store.stop();
+        store.resume();
+        edit([{ ...a, data: { ...a.data, connection: 'terminal' } }]);
+        expect(where()).toEqual({ a: 'asking tests' });
+        expect(store.snapshot().agents.a?.refused).toBeUndefined();
+        expect(store.snapshot().agents.a?.problem?.kind).toBe('cancelled');
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.withdrawn).toBe(true);
+        store.decide('a', 'tests', { choice: 'resolve' });
+        expect(where()).toEqual({ a: 'done' });
+        expect(store.snapshot().running).toBe(false);
       });
     });
 

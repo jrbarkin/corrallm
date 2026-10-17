@@ -100,10 +100,9 @@ export interface AgentRun {
    */
   status: 'running' | 'waiting' | 'asking' | 'stopped' | 'done';
   /**
-   * While it asks because the session its task went to would not start (an Agent SDK agent on a
-   * Claude subscription): that session's agent (this one, or the one a message was handed to),
-   * how it ran then, why it would not start, and the connection to switch it to. The message waits
-   * in that session's queue, sent once the agent runs another way; then this one works again.
+   * While its task has no connection, or its session would not start (an Agent SDK agent on a
+   * Claude subscription): the destination, how it ran, why it could not, and a connection to try.
+   * An unavailable task stays unsent; otherwise its message waits in the session's queue.
    */
   refused?: { agent: string; connection: AgentConnection; text: string; switchTo?: Connection };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
@@ -882,7 +881,8 @@ export class RunStore {
       const at = this.#run.agents[agent];
       if (!at?.current) continue;
       this.#endAttempt(agent, at.current, kind, 'interrupted', text);
-      const updated = this.#run.agents[agent] ?? at;
+      const updated = { ...(this.#run.agents[agent] ?? at) };
+      delete updated.refused;
       const node = this.#agents().find((n) => n.id === agent);
       const item = node && findItem(node.data.queue ?? [], at.current)?.item;
       const destination = item && isMessage(item) ? (item.target ?? agent) : agent;
@@ -1009,8 +1009,9 @@ export class RunStore {
     now: number,
   ): AgentRun {
     if (run.paused) {
-      if (run.problem) return run;
-      const next: AgentRun = { ...run, status: 'waiting' };
+      if (run.problem || run.status === 'stopped') return run;
+      const done = (node.data.queue ?? []).every((item) => run.outcomes[item.id] !== undefined);
+      const next: AgentRun = { ...run, status: done ? 'done' : 'waiting' };
       if (run.current && run.outcomes[run.current] !== undefined) delete next.current;
       return next;
     }
@@ -1284,6 +1285,18 @@ export class RunStore {
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
     if (this.#run.agents[destination]?.paused)
       return { current: task.id, status: 'waiting', outcomes };
+    const to = this.#agents().find((n) => n.id === destination);
+    if (to && connectionOf(to.data) === 'unavailable')
+      return {
+        current: task.id,
+        status: 'asking',
+        outcomes,
+        refused: {
+          agent: destination,
+          connection: 'unavailable',
+          text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
+        },
+      };
     const node = this.#agents().find((n) => n.id === agent);
     const backend = node && usageBackendOf(node.data);
     const rule = backend && this.#io.usage?.().rules[backend];
@@ -1872,7 +1885,7 @@ export class RunStore {
 
   /**
    * Agents held because a session would not start work again once its agent runs another way
-   * (or is gone): its session sends what it kept. Whether any did.
+   * (or is gone): its session sends what it kept, or the unsent task can begin. Whether any did.
    */
   #unrefuse(): boolean {
     let changed = false;

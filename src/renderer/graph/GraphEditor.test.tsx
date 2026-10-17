@@ -260,7 +260,10 @@ describe('GraphEditor', () => {
     });
     const row = queues.getByRole('group', { name: 'Legacy: Message “Keep this work pending”' });
     expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
-    expect(within(row).getByText('Not sent')).toBeTruthy();
+    expect(
+      queues.getByText('This agent has no connection; choose Claude or Codex in Agent settings.'),
+    ).toBeTruthy();
+    expect(within(row).queryByText(/attempt/)).toBeNull();
     expect(within(row).queryByText('Running')).toBeNull();
     expect(fake.backend.start).not.toHaveBeenCalled();
     expect(fake.backend.send).not.toHaveBeenCalled();
