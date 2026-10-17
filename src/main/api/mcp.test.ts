@@ -67,13 +67,20 @@ async function connect(token = 'agent-token') {
 
 function post(body: string, headers: Record<string, string> = HEADERS): Promise<number> {
   return new Promise((resolve, reject) => {
+    let status: number | undefined;
     const sent = request(server.url, { method: 'POST', agent: false, headers }, (response) => {
+      status = response.statusCode ?? 0;
       response.resume();
       response.on('end', () => {
-        resolve(response.statusCode ?? 0);
+        resolve(status ?? 0);
       });
     });
-    sent.on('error', reject);
+    // A server that refuses a body answers before it has read all of it, and may close the
+    // connection while the rest is still being written: once it has answered, that's no error.
+    sent.on('error', (error) => {
+      if (status === undefined) reject(error);
+      else resolve(status);
+    });
     sent.write(body);
     sent.end();
   });
