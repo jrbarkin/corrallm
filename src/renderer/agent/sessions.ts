@@ -20,7 +20,7 @@ import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { UnavailableDriver } from './unavailable';
-import { decodeSubmissions, encodeSubmissions } from './submission-state';
+import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
 import { answersOf, conversationOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
   Answer,
@@ -329,7 +329,7 @@ export class SessionStore {
       ...this.#sessions,
       [agentId]: {
         ...session,
-        submissions: [...(session.submissions ?? []), message],
+        submissions: pruneSubmissions([...(session.submissions ?? []), message]),
       },
     };
     this.#notify();
@@ -707,7 +707,7 @@ export class SessionStore {
             ...(message.images?.length ? { images: message.images } : {}),
             ...(after === undefined ? {} : { after }),
           };
-          submissions = [...(submissions ?? []), created];
+          submissions = pruneSubmissions([...(submissions ?? []), created]);
         }
       }
     } else if (action.type === 'refuse') {

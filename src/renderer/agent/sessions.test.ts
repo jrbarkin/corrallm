@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionStore } from './sessions';
+import { NEW_SESSION } from './session';
+import type { SubmittedMessage } from './session';
+import { decodeSubmissions, encodeSubmissions } from './submission-state';
 import { fakeBackend } from '../test-backend';
 
 afterEach(() => {
@@ -525,6 +528,110 @@ describe('SessionStore', () => {
     restored.reset();
   });
 
+  it('saves submission text without images and leaves live images intact', () => {
+    const store = new SessionStore();
+    const images = [{ mediaType: 'image/png', data: 'cGljdHVyZQ==' }] as const;
+    store.recordSubmission('a', 'Check this screenshot', [...images]);
+
+    const serialized = store.serializeSubmissions();
+    expect(serialized).not.toContain('images');
+    expect(serialized).not.toContain(images[0].data);
+    expect(store.of('a').submissions?.[0]?.images).toEqual(images);
+
+    const restored = new SessionStore();
+    restored.restoreSubmissions(serialized);
+    expect(restored.of('a').submissions).toEqual([
+      expect.objectContaining({ text: 'Check this screenshot', status: 'completed' }),
+    ]);
+    expect(restored.of('a').submissions?.[0]?.images).toBeUndefined();
+  });
+
+  it.each([1, 101])(
+    'saves the newest records while retaining %i old queued records and other unresolved work',
+    (queued) => {
+      const protectedRecords: SubmittedMessage[] = [
+        ...Array.from({ length: queued }, (_, index): SubmittedMessage => ({
+          id: `queued-${String(index)}`,
+          text: 'Waiting',
+          status: 'queued',
+        })),
+        { id: 'running', text: 'Working', status: 'running' },
+        { id: 'unresolved', text: 'Inspect this', status: 'cancelled', unresolved: true },
+      ];
+      const settled = Array.from({ length: 2100 }, (_, index): SubmittedMessage => ({
+        id: `settled-${String(index)}`,
+        text: `Message ${String(index)}`,
+        status: (['completed', 'failed', 'cancelled'] as const)[index % 3] ?? 'completed',
+      }));
+      const serialized = encodeSubmissions({
+        a: { ...NEW_SESSION, submissions: [...protectedRecords, ...settled] },
+        b: { ...NEW_SESSION, submissions: settled },
+      });
+      const decoded = decodeSubmissions(serialized);
+      const room = Math.max(0, 100 - protectedRecords.length);
+      expect(decoded.get('a')?.map(({ id }) => id)).toEqual([
+        ...protectedRecords.map(({ id }) => id),
+        ...(room ? settled.slice(-room).map(({ id }) => id) : []),
+      ]);
+      expect(decoded.get('a')?.slice(0, protectedRecords.length)).toEqual(
+        protectedRecords.map(({ id, text }): unknown =>
+          expect.objectContaining({ id, text, unresolved: true }),
+        ),
+      );
+      expect(decoded.get('b')).toEqual(settled.slice(-100));
+    },
+  );
+
+  it('bounds saved submission text across agents even far beyond the file size limit', () => {
+    const text = 'Line with "quotes" あ\n'.repeat(9_000);
+    const submissions = Array.from({ length: 100 }, (_, index): SubmittedMessage => ({
+      id: `message-${String(index)}`,
+      text,
+      status: 'completed',
+    }));
+    const serialized = encodeSubmissions({
+      active: {
+        ...NEW_SESSION,
+        submissions: [{ id: 'active', text, status: 'running' }],
+      },
+      a: { ...NEW_SESSION, submissions },
+      b: { ...NEW_SESSION, submissions },
+    });
+    expect(new TextEncoder().encode(serialized).length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    const restored = new SessionStore();
+    restored.restoreSubmissions(serialized);
+    expect(restored.of('active').submissions).toMatchObject([
+      { id: 'active', text, status: 'cancelled', unresolved: true },
+    ]);
+    const saved = ['a', 'b'].flatMap((id) => restored.of(id).submissions ?? []);
+    expect(saved.length).toBeGreaterThan(0);
+    expect(saved.length).toBeLessThan(submissions.length * 2);
+    for (const id of ['a', 'b']) {
+      const records = restored.of(id).submissions ?? [];
+      expect(records).toEqual(records.length ? submissions.slice(-records.length) : []);
+    }
+  });
+
+  it('keeps saved history readable when many agents reach their record limits', () => {
+    const sessions = Object.fromEntries(
+      Array.from({ length: 21 }, (_, index) => [
+        `agent-${String(index)}`,
+        {
+          ...NEW_SESSION,
+          submissions: Array.from({ length: 100 }, (_, index): SubmittedMessage => ({
+            id: `message-${String(index)}`,
+            text: 'Finished',
+            status: 'completed',
+          })),
+        },
+      ]),
+    );
+    const restored = decodeSubmissions(encodeSubmissions(sessions));
+    const records = [...restored.values()].flat();
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.length).toBeLessThanOrEqual(2000);
+  });
+
   it('records commands handled locally without sending a turn', () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
@@ -752,6 +859,74 @@ describe('SessionStore', () => {
       'Second',
       'Next',
     ]);
+    store.reset();
+  });
+});
+
+describe('submission retention', () => {
+  it('keeps the newest 100 settled records and every queued, running or unresolved record', () => {
+    const { backend } = fakeBackend();
+    const store = new SessionStore(backend);
+    store.restoreSubmissions(
+      JSON.stringify({
+        version: 1,
+        agents: [
+          {
+            id: 'a',
+            submissions: [
+              { id: 'unresolved', text: 'Unresolved', status: 'cancelled', unresolved: true },
+            ],
+          },
+        ],
+      }),
+    );
+    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.send('a', 'Claude', 'Running');
+    store.send('a', 'Claude', 'Queued');
+    store.holdQueue('a', true);
+    for (let index = 0; index < 105; index++)
+      store.recordSubmission('a', `Command ${String(index)}`);
+    expect(store.of('a').submissions).toHaveLength(103);
+    expect(store.of('a').submissions?.slice(0, 3)).toMatchObject([
+      { text: 'Unresolved', status: 'cancelled', unresolved: true },
+      { text: 'Running', status: 'running' },
+      { text: 'Queued', status: 'queued' },
+    ]);
+    expect(
+      store
+        .of('a')
+        .submissions?.slice(3)
+        .map(({ text }) => text),
+    ).toEqual(Array.from({ length: 100 }, (_, index) => `Command ${String(index + 5)}`));
+    store.reset();
+  });
+
+  it('prunes older settled records when a native prompt is added', () => {
+    const { backend, emit } = fakeBackend();
+    const store = new SessionStore(backend);
+    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.open('a');
+    for (let index = 0; index < 105; index++) {
+      const id = `native-${String(index)}`;
+      emit(
+        'a',
+        'terminal',
+        { type: 'user', id, text: `Prompt ${String(index)}` },
+        { type: 'end', messages: [id], seconds: 1, interrupted: false, failed: false },
+      );
+    }
+    emit('a', 'terminal', { type: 'user', id: 'latest', text: 'Still running' });
+    expect(store.of('a').submissions).toHaveLength(101);
+    expect(
+      store
+        .of('a')
+        .submissions?.slice(0, -1)
+        .map(({ text }) => text),
+    ).toEqual(Array.from({ length: 100 }, (_, index) => `Prompt ${String(index + 5)}`));
+    expect(store.of('a').submissions?.at(-1)).toMatchObject({
+      text: 'Still running',
+      status: 'running',
+    });
     store.reset();
   });
 });

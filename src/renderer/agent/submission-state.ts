@@ -11,22 +11,67 @@ import type { Session, SubmittedMessage } from './session';
 
 const MAX_RECORDS = 2000;
 const MAX_BYTES = 32 * 1024 * 1024;
+/** The per-agent history limit; unfinished records are never dropped. */
+const MAX_RECENT_RECORDS = 100;
+/** The saved history budget, below the file reader's limit. */
+const MAX_SAVED_BYTES = 4 * 1024 * 1024;
 const STATUSES = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const;
 const RECORD_KEYS = ['id', 'text', 'images', 'status', 'after', 'result', 'task', 'unresolved'];
 
+/** Keeps the newest settled records and every unfinished submission. */
+export function pruneSubmissions(
+  submissions: readonly SubmittedMessage[],
+  limit = MAX_RECENT_RECORDS,
+): SubmittedMessage[] {
+  let excess = submissions.filter(settled).length - limit;
+  return submissions.filter((message) => !settled(message) || excess-- <= 0);
+}
+
+function settled(message: SubmittedMessage): boolean {
+  return message.status !== 'queued' && message.status !== 'running' && !message.unresolved;
+}
+
 /** Persists queue records, never the native transcript or a full assistant reply. */
 export function encodeSubmissions(sessions: Readonly<Record<string, Session>>): string {
+  const encoder = new TextEncoder();
   const agents = Object.entries(sessions).flatMap(([id, session]) => {
-    const submissions = session.submissions?.map((message) => {
-      const persisted = { ...message };
-      delete persisted.reply;
-      return persisted;
-    });
-    return submissions?.length ? [{ id, submissions }] : [];
+    const records = session.submissions ?? [];
+    const unfinished = records.filter((message) => !settled(message)).length;
+    const submissions = pruneSubmissions(records, Math.max(0, MAX_RECENT_RECORDS - unfinished)).map(
+      (message) => {
+        const persisted = { ...message };
+        delete persisted.reply;
+        delete persisted.images;
+        return { message: persisted, bytes: encoder.encode(JSON.stringify(persisted)).length };
+      },
+    );
+    return submissions.length ? [{ id, submissions }] : [];
   });
-  const serialized = JSON.stringify({ version: 1, agents });
-  decodeSubmissions(serialized);
-  return serialized;
+  let count = 0;
+  let bytes = encoder.encode(
+    JSON.stringify({
+      version: 1,
+      agents: agents.map(({ id }) => ({ id, submissions: [] })),
+    }),
+  ).length;
+  for (const { submissions } of agents) {
+    count += submissions.length;
+    bytes += submissions.reduce((sum, record) => sum + record.bytes, 0) + submissions.length - 1;
+  }
+  const kept = agents.flatMap(({ id, submissions }) => {
+    let remaining = submissions.length;
+    const retained = submissions
+      .filter(({ message, bytes: size }) => {
+        if ((bytes <= MAX_SAVED_BYTES && count <= MAX_RECORDS) || !settled(message)) return true;
+        bytes -= size + (remaining > 1 ? 1 : 0);
+        remaining--;
+        count--;
+        return false;
+      })
+      .map(({ message }) => message);
+    return retained.length ? [{ id, submissions: retained }] : [];
+  });
+  return JSON.stringify({ version: 1, agents: kept });
 }
 
 /** Parses completely before a caller changes any live state. */
