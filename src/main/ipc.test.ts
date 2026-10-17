@@ -76,6 +76,7 @@ function fakeServices() {
       setEffort: vi.fn<IpcServices['sessions']['setEffort']>().mockResolvedValue(undefined),
       stopTask: vi.fn<IpcServices['sessions']['stopTask']>().mockResolvedValue(undefined),
       close: vi.fn<IpcServices['sessions']['close']>().mockResolvedValue(undefined),
+      fresh: vi.fn<IpcServices['sessions']['fresh']>().mockResolvedValue(undefined),
       listSessions: vi.fn<IpcServices['sessions']['listSessions']>().mockResolvedValue([]),
       resumeSession: vi.fn<IpcServices['sessions']['resumeSession']>().mockResolvedValue(undefined),
       mcpServers: vi.fn<IpcServices['sessions']['mcpServers']>().mockResolvedValue([]),
@@ -347,6 +348,8 @@ describe('session:* handlers', () => {
     expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'p3', denied);
     await invoke('session:close', ['a'], sender);
     expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
+    await invoke('session:fresh', ['a', 'codex'], sender);
+    expect(services.sessions.fresh).toHaveBeenCalledWith(sender, 'a', 'codex');
     const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
     await invoke('session:answer', ['a', 'e1', form], sender);
     expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'e1', form);
@@ -538,6 +541,19 @@ describe('session:* handlers', () => {
     ],
     ['session:interrupt', 'no agent', [], /an agent/],
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
+    ['session:fresh', 'no agent', [], /an agent and a CLI/],
+    ['session:fresh', 'no CLI', ['a'], /an agent and a CLI/],
+    ['session:fresh', 'an empty agent id', ['', 'codex'], /agent's id/],
+    ['session:fresh', 'a non-text agent id', [12, 'codex'], /agent's id/],
+    [
+      'session:fresh',
+      'an oversized agent id',
+      ['a'.repeat(MAX_ID_LENGTH + 1), 'codex'],
+      /agent's id/,
+    ],
+    ['session:fresh', 'an unknown CLI', ['a', 'other'], /CLI/],
+    ['session:fresh', 'a non-text CLI', ['a', {}], /CLI/],
+    ['session:fresh', 'an extra argument', ['a', 'codex', 'extra'], /an agent and a CLI/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
     ['session:list', 'no agent', [], /an agent/],

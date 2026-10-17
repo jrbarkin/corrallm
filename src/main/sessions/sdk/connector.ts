@@ -178,7 +178,13 @@ export class SdkConnector implements Connector {
         CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1',
       },
       // Claude Code's own system prompt and settings: without them it is a bare agent.
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        ...(spec.role === undefined ? {} : { append: spec.role }),
+        // Rebuild on resume so an edited or removed role replaces any earlier snapshot.
+        ...(spec.role !== undefined || resume !== null ? { snapshot: false } : {}),
+      },
       settingSources: ['user', 'project', 'local'],
       // Only a mode the user chose: otherwise their own default mode applies, as in a terminal.
       ...(spec.mode === null ? {} : { permissionMode: sdkMode(spec.mode) }),

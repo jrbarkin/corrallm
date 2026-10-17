@@ -62,6 +62,8 @@ export interface CodexTuiOptions {
    * Server composer's), or null for the user's own.
    */
   effort?: string | null;
+  /** Native developer instructions with this process's managed role appended. */
+  developerInstructions?: string;
   platform?: NodeJS.Platform;
   /** Reads its account's usage limits (usage.ts: a private app server). */
   usage?: () => Promise<UsageWindows | undefined>;
@@ -87,6 +89,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   readonly waitsForPrompt = true;
   readonly #trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   readonly #effort: string | null;
+  readonly #developerInstructions: string | undefined;
   readonly #platform: NodeJS.Platform;
   readonly #usage: (() => Promise<UsageWindows | undefined>) | undefined;
   /** The overrides that add its hooks and trust them, once prepared. */
@@ -104,9 +107,16 @@ export class CodexTui implements TerminalCli<CodexMode> {
   /** The model its hooks last said. */
   #model: string | undefined;
 
-  constructor({ trust, effort = null, platform = process.platform, usage }: CodexTuiOptions) {
+  constructor({
+    trust,
+    effort = null,
+    developerInstructions,
+    platform = process.platform,
+    usage,
+  }: CodexTuiOptions) {
     this.#trust = trust;
     this.#effort = effort;
+    this.#developerInstructions = developerInstructions;
     this.#platform = platform;
     this.#usage = usage;
   }
@@ -130,6 +140,9 @@ export class CodexTui implements TerminalCli<CodexMode> {
       'check_for_update_on_startup=false',
       'tui.auto_recap=false',
       ...(this.#effort === null ? [] : [`model_reasoning_effort=${toml(this.#effort)}`]),
+      ...(this.#developerInstructions === undefined
+        ? []
+        : [`developer_instructions=${toml(this.#developerInstructions)}`]),
     ];
     return [
       ...(resume && id !== null ? ['resume', id] : []),

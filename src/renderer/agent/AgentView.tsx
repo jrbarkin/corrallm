@@ -21,8 +21,6 @@ import {
   AGENT_CLI,
   AGENT_CONNECTIONS,
   AgentType,
-  agentLabel,
-  CONNECTION_INFO,
   connectionNames,
   DEFAULT_AGENT,
 } from '../graph/agents';
@@ -36,7 +34,6 @@ import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
 import type { HeldAsk } from '../run/asks';
-import { SearchPicker } from '../search/SearchPicker';
 import type { TerminalBackend } from '../terminal/backend';
 import { TerminalPane } from '../terminal/TerminalPane';
 import { bashCommand, completedCommands, terminalCommand, viewCommand } from './commands';
@@ -52,6 +49,8 @@ import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
 import { SettingsMenu } from './Settings';
+import { AgentChip } from './AgentChip';
+import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
 import { chatStart, conversationOf, rewindPoints, threadTitle } from './session';
@@ -145,6 +144,7 @@ export function AgentView({
   terminal,
   onAgent,
   onSettings,
+  onOpenSettings,
   onContinueInTerminal,
   onAnswer,
   onSimulateQuestion,
@@ -185,6 +185,7 @@ export function AgentView({
   onAgent: (agent: AgentType, connection: AgentConnection) => void;
   /** Sets what it runs with in a CLI (its settings, saved with it). */
   onSettings: (cli: Cli, settings: AgentSettings) => void;
+  onOpenSettings?: () => void;
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
   onContinueInTerminal: (command?: string) => void;
   onAnswer: (questionId: string, answer: string) => void;
@@ -487,7 +488,13 @@ export function AgentView({
               >
                 All queues
               </button>
-              {connection === 'terminal' || connection === 'codex-terminal' ? (
+              {onOpenSettings ? (
+                <AgentSettingsSummary
+                  node={node}
+                  options={controls.settingsOptions}
+                  onOpen={onOpenSettings}
+                />
+              ) : connection === 'terminal' || connection === 'codex-terminal' ? (
                 <SettingsMenu
                   cli={CONNECTION_CLI[connection]}
                   connection={connection}
@@ -907,86 +914,4 @@ function sessionNote(
   return project === null
     ? `Choose a project folder for this canvas (top left of the canvas) to run ${cli} in it, ${how}.`
     : `${cli} works in ${project.name}, ${how}.`;
-}
-
-/** A choice in the agent chip: a type and how it runs, or continuing the conversation in Terminal. */
-interface Choice {
-  agent: AgentType;
-  connection: AgentConnection;
-  continues?: true;
-}
-
-/** Every agent type with each way it runs, as the agent chip offers them. */
-const CHOICES: readonly Choice[] = Object.values(AgentType).flatMap((agent) =>
-  AGENT_CONNECTIONS[agent].map((connection) => ({ agent, connection })),
-);
-
-/**
- * The agent's type and how it runs: a colour-coded chip ("Claude · Terminal") that opens a dropdown
- * of the agent types, each with the ways it can run; for an Agent SDK agent, first, continuing its
- * conversation in Terminal.
- */
-function AgentChip({
-  agent,
-  connection,
-  onChange,
-  onContinueInTerminal,
-}: {
-  agent: AgentType;
-  connection: AgentConnection;
-  onChange: (agent: AgentType, connection: AgentConnection) => void;
-  onContinueInTerminal: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const label = agentLabel(agent, connection);
-  const choices: readonly Choice[] =
-    connection === 'sdk'
-      ? [{ agent, connection: 'terminal', continues: true }, ...CHOICES]
-      : CHOICES;
-  return (
-    <div className="graph-agent-chip">
-      <button
-        type="button"
-        data-agent={agent}
-        data-connection={connection}
-        aria-label={`Agent: ${label}`}
-        aria-expanded={open}
-        title={
-          AGENT_CONNECTIONS[agent].length > 1 ? CONNECTION_INFO[connection].description : undefined
-        }
-        onClick={() => {
-          setOpen(!open);
-        }}
-      >
-        {label}
-      </button>
-      {open && (
-        <SearchPicker
-          label="Agent"
-          options={choices}
-          optionLabel={(choice) =>
-            choice.continues ? 'Continue in Terminal' : agentLabel(choice.agent, choice.connection)
-          }
-          optionDetail={(choice) =>
-            choice.continues
-              ? 'This conversation, in Claude Code’s own terminal'
-              : AGENT_CONNECTIONS[choice.agent].length > 1
-                ? CONNECTION_INFO[choice.connection].description
-                : undefined
-          }
-          optionKey={(choice) =>
-            choice.continues ? 'continue' : `${choice.agent}/${choice.connection}`
-          }
-          onPick={(choice) => {
-            if (choice.continues) onContinueInTerminal();
-            else onChange(choice.agent, choice.connection);
-            setOpen(false);
-          }}
-          onCancel={() => {
-            setOpen(false);
-          }}
-        />
-      )}
-    </div>
-  );
 }

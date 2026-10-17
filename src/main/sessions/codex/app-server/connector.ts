@@ -16,6 +16,7 @@ import type { SpawnAppServer } from '../rpc';
 import { readSkills, slashCommands } from './commands';
 import { runGit } from './diff';
 import type { RunGit } from './diff';
+import { appendRole, readDeveloperInstructions } from './instructions';
 import { Prompts } from './prompts';
 import { modeSettings } from './protocol';
 import { AppServerSession, readModels, resumedHistory } from './session';
@@ -158,6 +159,14 @@ export class AppServerConnector implements Connector<CodexMode> {
       const models = readModels(listed);
       const skills = readSkills(skilled);
 
+      // Request current native config on resume too, including when a role was removed.
+      // Codex 0.162.1 can retain old model-visible context:
+      // https://github.com/openai/codex/issues/19045 (role edits need an explicit new conversation).
+      // A new uncustomized thread keeps Codex's exact defaults.
+      const developerInstructions =
+        spec.role !== undefined || spec.resume !== null
+          ? appendRole(await readDeveloperInstructions(server, spec.cwd), spec.role)
+          : undefined;
       const begin = (mode: CodexMode, model: string | null) => {
         const settings = modeSettings(mode);
         return {
@@ -165,6 +174,7 @@ export class AppServerConnector implements Connector<CodexMode> {
           approvalPolicy: settings.approvalPolicy,
           sandbox: settings.sandbox,
           ...(model === null ? {} : { model }),
+          ...(developerInstructions === undefined ? {} : { developerInstructions }),
         };
       };
       const newThread = async (mode: CodexMode, model: string | null) =>

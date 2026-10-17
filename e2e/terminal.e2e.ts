@@ -285,8 +285,8 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
     'low',
     'plan',
   ]);
-  const settings = view.getByRole('button', { name: /^Settings: / });
-  await expect(settings).toHaveText('Haiku · Low · Plan');
+  const settings = view.getByRole('button', { name: /^Agent settings:/ });
+  await expect(settings).toContainText('Haiku · Low · Plan');
   // A conversation, for a restart to resume.
   await typeIn(terminal, 'hello', 'Enter');
   await expect.poll(prompts).toEqual(['hello']);
@@ -294,13 +294,13 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
 
   // Back to the user's own model and mode: what they are shows.
   await settings.click();
-  const panel = view.getByRole('dialog', { name: 'Claude Code settings' });
+  const panel = page.getByRole('dialog', { name: /^Agent settings:/ });
   await panel.getByRole('button', { name: 'Model: Haiku' }).click();
   await expect(panel.getByRole('menu', { name: 'Model' })).toContainText('Default (Opus)');
   await panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }).click();
   await panel.getByRole('button', { name: 'Mode: Plan' }).click();
   await panel.getByRole('menuitemradio', { name: /^Default \(Auto\)/ }).click();
-  await expect(settings).toHaveText('Opus · Low · Auto');
+  await expect(settings).toContainText('Opus · Low · Auto');
 
   // Restarted with them, resuming its conversation.
   await panel.getByRole('button', { name: 'Restart with these' }).click();
@@ -314,6 +314,7 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
   await expect(panel.getByRole('button', { name: 'Restart with these' })).toHaveCount(0);
 
   // Saved with the agent, in the canvas's file.
+  await panel.getByRole('button', { name: 'Close agent settings' }).click();
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(view).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+s');

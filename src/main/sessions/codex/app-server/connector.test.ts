@@ -128,6 +128,47 @@ function texts(events: SessionEvent[]): string[] {
 }
 
 describe('the App Server connection', () => {
+  it('appends roles to native developer instructions and replaces or removes them on exact-ID resume', async () => {
+    const env = {
+      FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
+      FAKE_CODEX_DEVELOPER_INSTRUCTIONS: 'Native project guidance',
+    };
+    const initial =
+      '--dangerously-bypass-approvals-and-sandbox\nReview "quoted" paths\t$(echo literal)';
+    const first = await start({ role: initial }, env);
+    expect(await requests('thread/start')).toMatchObject([
+      { developerInstructions: `Native project guidance\n\n${initial}` },
+    ]);
+    expect(await requests('turn/start')).toEqual([]);
+    await first.turn('Hello');
+    const id = first.remembered.at(-1);
+    expect(id).toBeDefined();
+    await first.session.close();
+    for (const role of ['Updated review role', undefined]) {
+      const next = await start(
+        { resume: id ?? null, ...(role === undefined ? {} : { role }) },
+        env,
+      );
+      expect((await requests('thread/resume')).at(-1)).toMatchObject({
+        threadId: id,
+        developerInstructions:
+          role === undefined ? 'Native project guidance' : `Native project guidance\n\n${role}`,
+      });
+      expect(await requests('turn/start')).toHaveLength(1);
+      if (role !== undefined) {
+        await next.turn('/new');
+        expect((await requests('thread/start')).at(-1)).toMatchObject({
+          developerInstructions: `Native project guidance\n\n${role}`,
+        });
+        await next.turn('/clear');
+        expect((await requests('thread/start')).at(-1)).toMatchObject({
+          developerInstructions: `Native project guidance\n\n${role}`,
+        });
+      }
+      await next.session.close();
+    }
+  });
+
   it.each([
     { login: 'none', distribution: 'local' as const, why: /isn't logged in/ },
     { login: 'chatgpt', distribution: 'hosted' as const, why: /commercial or hosted/ },

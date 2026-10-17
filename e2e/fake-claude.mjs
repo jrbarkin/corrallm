@@ -59,6 +59,8 @@ if (args[0] === '--help') {
       '  -r, --resume [value]                  Resume a conversation by session ID',
       '  --session-id <uuid>                   Use a specific session ID',
       '  --settings <file-or-json>             Path to a settings JSON file',
+      '  --append-system-prompt <prompt>       Append to the default system prompt',
+      '  --system-prompt-snapshot <on|off>     Record and reuse the system prompt',
       '',
     ].join('\n'),
   );

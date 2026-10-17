@@ -477,3 +477,20 @@
     animation: none !important;
   }
 }
+
+.queues-head:has(.agent-settings-summary) {
+  flex-wrap: wrap;
+}
+
+.queues-head > .agent-settings-summary {
+  flex: 0 0 100%;
+  order: 2;
+  max-width: 100%;
+}
+
+.queues-head .agent-settings-summary button {
+  max-width: 100%;
+  color: color-mix(in srgb, CanvasText 65%, transparent);
+  font-size: 11px;
+  font-weight: 400;
+}

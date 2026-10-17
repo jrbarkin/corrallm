@@ -1,4 +1,5 @@
 import { CONNECTION_CLI, turnResult } from '../../shared/session';
+import { parseRole } from '../../shared/role';
 import type {
   AgentSettings,
   Cli,
@@ -65,6 +66,8 @@ export class SessionStore {
   readonly #connections = new Map<string, AgentConnection>();
   /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
   readonly #settings = new Map<string, Partial<Record<Cli, AgentSettings>>>();
+  /** The authored role is independent of the settings remembered for each CLI. */
+  readonly #roles = new Map<string, string>();
   /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
   readonly #options = new Map<Cli, Promise<SettingsOptions>>();
   /** Each agent's type, as it was last sent a message: what its scripted turns are like. */
@@ -83,6 +86,8 @@ export class SessionStore {
   readonly #turns = new Map<string, string>();
   /** Runtime holds stop automatic queue draining, while allowing fresh manual intervention. */
   readonly #heldQueues = new Set<string>();
+  /** A durable conversation replacement gates new sends until the new driver can start. */
+  readonly #freshening = new Map<string, Promise<void>>();
   /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
   readonly #stopping = new Set<string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
@@ -132,19 +137,25 @@ export class SessionStore {
       id: string;
       connection: AgentConnection;
       settings?: Partial<Record<Cli, AgentSettings>> | undefined;
+      role?: string | undefined;
     }[],
   ): void {
+    const roles = agents.map(({ id, role }) => [id, parseRole(role)] as const);
     const wanted = new Map(agents.map(({ id, connection }) => [id, connection]));
     const known = new Set([
       ...Object.keys(this.#sessions),
       ...this.#drivers.keys(),
       ...this.#heldQueues,
+      ...this.#freshening.keys(),
     ]);
     for (const id of known) if (!wanted.has(id)) this.#forget(id);
     for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
     this.#settings.clear();
+    this.#roles.clear();
     for (const { id, settings } of agents) if (settings) this.#settings.set(id, settings);
+    for (const [id, role] of roles) if (role !== undefined) this.#roles.set(id, role);
     for (const [id, connection] of wanted) {
+      if (this.#connections.get(id) !== connection) this.#freshening.delete(id);
       this.#connections.set(id, connection);
       const driving = this.#drivers.get(id);
       if (driving && driving.connection !== connection) {
@@ -161,6 +172,7 @@ export class SessionStore {
 
   /** Makes sure the agent's session runs, as when its view opens. */
   open(agentId: string): void {
+    if (this.#freshening.has(agentId)) return;
     this.#driver(agentId).open();
   }
 
@@ -186,6 +198,36 @@ export class SessionStore {
     await this.#backend.close(agentId).catch(() => null);
     this.#letGo(agentId);
     this.#driver(agentId).open();
+  }
+
+  /**
+   * Starts a new native conversation with the current role and settings, without a prompt.
+   * Main first durably forgets the selected CLI's remembered id; previous native history and
+   * observed manual rows remain available. Active turns are never interrupted by this action.
+   */
+  fresh(agentId: string): Promise<void> {
+    const existing = this.#freshening.get(agentId);
+    if (existing) return existing;
+    const connection = this.#connections.get(agentId);
+    if (!connection || connection === 'simulated' || this.of(agentId).status !== 'idle') {
+      return Promise.resolve();
+    }
+    const pending = Promise.resolve().then(async () => {
+      try {
+        if (this.#freshening.get(agentId) !== pending) return;
+        await this.#backend.fresh(agentId, CONNECTION_CLI[connection]);
+        if (this.#freshening.get(agentId) !== pending) return;
+        this.#letGo(agentId);
+        this.#dispatch(agentId, { type: 'clear' });
+        this.#driver(agentId).open();
+        this.#freshening.delete(agentId);
+        this.#idle(agentId);
+      } finally {
+        if (this.#freshening.get(agentId) === pending) this.#freshening.delete(agentId);
+      }
+    });
+    this.#freshening.set(agentId, pending);
+    return pending;
   }
 
   /**
@@ -238,7 +280,11 @@ export class SessionStore {
     if (onRefused) this.#onRefused.set(id, onRefused);
     const session = this.of(agentId);
     const held = this.#heldQueues.has(agentId);
-    if (session.status === 'idle' && (held ? origin === 'user' : session.queued.length === 0)) {
+    if (
+      !this.#freshening.has(agentId) &&
+      session.status === 'idle' &&
+      (held ? origin === 'user' : session.queued.length === 0)
+    ) {
       this.#start(agentId, agent, { text, images }, id);
     } else {
       this.#dispatch(agentId, {
@@ -448,6 +494,7 @@ export class SessionStore {
 
   /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
   reset(): void {
+    this.#freshening.clear();
     for (const id of [...this.#drivers.keys()]) this.#letGo(id);
     const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
     for (const id of Object.keys(this.#sessions)) this.#settleSubmissions(id, result);
@@ -461,6 +508,7 @@ export class SessionStore {
     this.#displayTexts.clear();
     this.#onceIn.clear();
     this.#settings.clear();
+    this.#roles.clear();
     this.#options.clear();
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
@@ -514,7 +562,7 @@ export class SessionStore {
 
   /** The session is idle: its next queued message, if any, starts. */
   #idle(agentId: string): void {
-    if (this.#heldQueues.has(agentId)) return;
+    if (this.#heldQueues.has(agentId) || this.#freshening.has(agentId)) return;
     const session = this.of(agentId);
     const [next] = session.queued;
     if (!next || session.status !== 'idle') return;
@@ -556,10 +604,14 @@ export class SessionStore {
         if (current()) this.#dispatch(agentId, action);
       },
       session: () => this.of(agentId),
-      settings: () =>
-        driving.connection === 'simulated'
-          ? {}
-          : (this.#settings.get(agentId)?.[CONNECTION_CLI[driving.connection]] ?? {}),
+      settings: () => {
+        const settings =
+          driving.connection === 'simulated'
+            ? {}
+            : (this.#settings.get(agentId)?.[CONNECTION_CLI[driving.connection]] ?? {});
+        const role = this.#roles.get(agentId);
+        return { ...settings, ...(role === undefined ? {} : { role }) };
+      },
       idle: () => {
         if (current() && !driving.closing) this.#idle(agentId);
       },
@@ -599,7 +651,9 @@ export class SessionStore {
 
   /** The agent is gone: its session ends, and whoever waits on its queued messages hears. */
   #forget(agentId: string): void {
+    this.#freshening.delete(agentId);
     this.#letGo(agentId);
+    this.#roles.delete(agentId);
     this.#heldQueues.delete(agentId);
     this.#onceIn.delete(agentId);
     const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };

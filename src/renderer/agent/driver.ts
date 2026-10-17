@@ -1,4 +1,9 @@
-import type { AgentSettings, MessageImage, SessionAnswer, TurnResult } from '../../shared/session';
+import type {
+  AgentStartSettings,
+  MessageImage,
+  SessionAnswer,
+  TurnResult,
+} from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import type { Mode, Refusal, Session, SessionAction } from './session';
 
@@ -60,7 +65,7 @@ export interface DriverIO {
    * What the agent is set to run with in the CLI of the driver's connection (its settings, saved in
    * the canvas's file), now: what a connected session starts with.
    */
-  settings: () => AgentSettings;
+  settings: () => AgentStartSettings;
   newId: () => string;
   now: () => number;
   /** Runs `run` in `ms`; returns a function that cancels it. */

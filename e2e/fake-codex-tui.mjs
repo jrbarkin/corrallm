@@ -300,9 +300,19 @@ function runTui() {
   }
 
   function key(data) {
-    // Answers to its probes, and focus reports.
-    // eslint-disable-next-line no-control-regex -- they are escape sequences
-    if (/^\x1b(\[\?|\]|\[I|\[O|\[\d+;\d+R)/.test(data)) return;
+    // A PTY may coalesce mouse/focus/query reports with typed text. Consume just the reports,
+    // preserving text after them, standalone Escape, and bracketed paste's own markers.
+    while (
+      data.startsWith('\x1b') &&
+      !data.startsWith('\x1b[200~') &&
+      !data.startsWith('\x1b[201~')
+    ) {
+      // eslint-disable-next-line no-control-regex -- complete CSI/OSC terminal reports
+      const report = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))/.exec(data);
+      if (!report) break;
+      data = data.slice(report[0].length);
+    }
+    if (data === '') return;
     if (screen === 'trust' || screen === 'hooks') {
       if (data === '\r' && screen === 'trust') {
         screen = untrusted.length > 0 ? 'hooks' : 'chat';
@@ -326,8 +336,10 @@ function runTui() {
       return;
     }
     if (data.startsWith('\x1b[200~')) {
-      draft += data.slice(6, data.endsWith('\x1b[201~') ? -6 : undefined);
+      const end = data.indexOf('\x1b[201~', 6);
+      draft += data.slice(6, end < 0 ? undefined : end);
       draw();
+      if (end >= 0 && end + 6 < data.length) key(data.slice(end + 6));
       return;
     }
     if (data.startsWith('\x1b')) return;

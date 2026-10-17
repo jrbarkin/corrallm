@@ -38,6 +38,30 @@ const overrides = (args: readonly string[]) =>
   args.flatMap((arg, i) => (args[i - 1] === '-c' ? [arg] : []));
 
 describe('starting Codex', () => {
+  it('keeps native developer instructions and hostile multiline role text in one config literal', async () => {
+    const role =
+      '--dangerously-bypass-approvals-and-sandbox\nReview "quoted" paths\t$(echo literal) `literal`';
+    const instructions = `Native project guidance\n\n${role}`;
+    const tui = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      developerInstructions: instructions,
+    });
+    await tui.prepare('/tmp/session', HOOKS);
+    for (const launch of [LAUNCH, { ...LAUNCH, id: RECORDED_SESSION, resume: true }]) {
+      const args = tui.args(launch);
+      expect(overrides(args)).toContain(`developer_instructions=${JSON.stringify(instructions)}`);
+      expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(
+        overrides(args).filter((value) => value.startsWith('developer_instructions=')),
+      ).toHaveLength(1);
+    }
+    expect(
+      overrides((await prepared()).args(LAUNCH)).some((value) =>
+        value.startsWith('developer_instructions='),
+      ),
+    ).toBe(false);
+  });
+
   it('runs its own agent in the project folder, with corrallm’s overrides for this session only', async () => {
     const args = (await prepared()).args(LAUNCH);
     expect(args.slice(0, 3)).toEqual(['--no-daemon', '-C', '/work/shop']);

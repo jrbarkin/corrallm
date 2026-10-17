@@ -200,6 +200,8 @@ export interface EffortChoice {
  */
 export interface SessionOptions {
   connection: Connection;
+  /** The agent's authored role, independent of its CLI-specific settings. */
+  role?: string;
   /** The model the agent is set to run, or null: the user's own default (their CLI's settings). */
   model: string | null;
   /**
@@ -223,6 +225,13 @@ export interface AgentSettings {
   effort?: string;
   mode?: SessionMode;
 }
+
+/** What a session starts with; the authored role is shared by every CLI the agent runs. */
+export interface AgentStartSettings extends AgentSettings {
+  role?: string;
+}
+
+export const MAX_ROLE_LENGTH = 16_000;
 
 /**
  * What an agent's settings can be in a CLI, as told without starting a session (or a prompt): the

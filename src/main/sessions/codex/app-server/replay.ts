@@ -69,6 +69,13 @@ export function replay(name: Fixture): Replay {
     };
     createInterface({ input: stdin }).on('line', (text) => {
       const message = JSON.parse(text) as Record<string, unknown>;
+      // Role reconciliation reads current settings before resume. Older captures predate that
+      // read-only request; supply an empty native setting without consuming recorded history.
+      if (message.method === 'config/read' && lines[cursor]?.msg.method !== 'config/read') {
+        sent.push({ method: message.method, params: message.params });
+        stdout.write(`${JSON.stringify({ id: message.id, result: { config: {} } })}\n`);
+        return;
+      }
       // Skip what the recording sent that the client need not (none, so far).
       const expected = lines[cursor];
       if (expected?.dir !== 'out') {

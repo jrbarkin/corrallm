@@ -284,7 +284,7 @@ function AgentTag({ agent, connection }: { agent: AgentType; connection: AgentCo
     <span
       className="graph-agent"
       data-agent={agent}
-      data-connection={connection === 'simulated' ? undefined : CONNECTION_INFO[connection].short}
+      data-connection={CONNECTION_INFO[connection].short}
       title={`Agent: ${agentLabel(agent, connection)}`}
     />
   );

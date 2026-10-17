@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import type { IpcArgs } from '../../shared/ipc';
+import { parseRole } from '../../shared/role';
 import {
   MAX_DROPPED_FILES,
   MAX_DROPPED_PATH,
@@ -52,12 +53,14 @@ import { isSessionId } from './id';
 
 export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
   const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
-  const { connection, model, mode, effort } = record(options, 'the session options', [
+  const { connection, model, mode, effort, role } = record(options, 'the session options', [
     'connection',
     'model',
     'mode',
     'effort',
+    'role',
   ]);
+  const authoredRole = parseRole(role);
   const connected = oneOf(connection, CONNECTIONS, 'connection');
   const parsed: SessionOptions = {
     connection: connected,
@@ -72,6 +75,7 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
             `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
           ),
     ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
+    ...(authoredRole === undefined ? {} : { role: authoredRole }),
   };
   return [parseId(agentId, 'agent'), parsed];
 }
@@ -144,6 +148,12 @@ export function parseOptionsArgs(args: unknown[]): IpcArgs<'session:options'> {
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
+}
+
+/** session:fresh: which CLI's remembered conversation the agent should replace. */
+export function parseFreshArgs(args: unknown[]): IpcArgs<'session:fresh'> {
+  const [agentId, cli] = expect(args, 2, 'an agent and a CLI');
+  return [parseId(agentId, 'agent'), oneOf(cli, CLIS, 'CLI')];
 }
 
 /** terminal:input: an agent, and the keystrokes typed (any characters: they are keys). */

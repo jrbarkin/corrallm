@@ -733,10 +733,11 @@ describe('a Terminal agent’s settings', () => {
     });
     expect(sessions.backend.options).toHaveBeenCalledWith('claude');
     // What it starts with, the user's own where nothing is chosen.
-    const button = () => view.getByRole('button', { name: /^Settings: / });
-    expect(button().textContent).toBe('Haiku · Auto');
+    const button = () => view.getByRole('button', { name: 'Agent settings: a' });
+    expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
     fireEvent.click(button());
-    const panel = within(view.getByRole('dialog', { name: 'Claude Code settings' }));
+    await settle();
+    const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
     expect(panel.getByRole('button', { name: 'Model: Haiku' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Mode: Default (Auto)' })).toBeTruthy();
 
@@ -748,7 +749,7 @@ describe('a Terminal agent’s settings', () => {
     ]);
     fireEvent.click(panel.getByRole('menuitemradio', { name: /^Default \(Opus\)/ }));
     // Back to the user's own: their effort shows too, as Opus has it.
-    expect(button().textContent).toBe('Opus · Extra high · Auto');
+    expect(button().textContent).toContain('Opus · Extra high · Auto');
     fireEvent.click(panel.getByRole('button', { name: 'Effort: Default (Extra high)' }));
     fireEvent.click(panel.getByRole('menuitemradio', { name: /^Low/ }));
     // Never a mode that never asks: that is chosen in its terminal, each time.
@@ -761,7 +762,7 @@ describe('a Terminal agent’s settings', () => {
       'Auto',
     ]);
     fireEvent.click(panel.getByRole('menuitemradio', { name: /^Plan/ }));
-    expect(button().textContent).toBe('Opus · Low · Plan');
+    expect(button().textContent).toContain('Opus · Low · Plan');
     // Saved with the agent, in the canvas's file.
     fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
     const [text] = save.mock.calls.at(-1) ?? [];
@@ -788,8 +789,9 @@ describe('a Terminal agent’s settings', () => {
       data: { connection: 'terminal', settings: { claude: { effort: 'xhigh' } } },
       options: CLAUDE,
     });
-    fireEvent.click(view.getByRole('button', { name: /^Settings: / }));
-    const panel = within(view.getByRole('dialog', { name: 'Claude Code settings' }));
+    fireEvent.click(view.getByRole('button', { name: 'Agent settings: a' }));
+    await settle();
+    const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
     fireEvent.click(panel.getByRole('button', { name: 'Model: Default (Opus)' }));
     fireEvent.click(panel.getByRole('menuitemradio', { name: /^Haiku/ }));
     expect(panel.getByRole('button', { name: 'Effort: Default' })).toBeTruthy();
@@ -815,11 +817,12 @@ describe('a Terminal agent’s settings', () => {
       },
     });
     expect(sessions.backend.options).toHaveBeenCalledWith('codex');
-    const button = view.getByRole('button', { name: /^Settings: / });
+    const button = view.getByRole('button', { name: 'Agent settings: a' });
     // Codex's Default needs no more saying; the model's own effort, its config setting none.
-    expect(button.textContent).toBe('GPT-6.1-Sol · Low · Default');
+    expect(button.textContent).toContain('Codex · Terminal · GPT-6.1-Sol · Low · Default');
     fireEvent.click(button);
-    const panel = within(view.getByRole('dialog', { name: 'Codex settings' }));
+    await settle();
+    const panel = within(screen.getByRole('dialog', { name: 'Agent settings: a' }));
     fireEvent.click(panel.getByRole('button', { name: 'Mode: Default' }));
     // Its Default is the user's own config: no more to choose than Read only.
     expect(items(panel.getByRole('menu', { name: 'Mode' }))).toEqual(['Default', 'Read only']);
@@ -837,9 +840,13 @@ describe('a Terminal agent’s settings', () => {
       model: 'haiku',
       mode: 'plan',
     });
-    const button = view.getByRole('button', { name: /^Settings: / });
-    expect(button.textContent).toBe('haiku · Plan');
+    const button = view.getByRole('button', { name: 'Agent settings: a' });
+    expect(button.textContent).toContain('Claude · Terminal · haiku · Plan');
     fireEvent.click(button);
-    expect(view.getByRole('alert').textContent).toBe('Codex could not list its models');
+    await settle();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Agent settings: a' })).getByRole('alert')
+        .textContent,
+    ).toBe('Codex could not list its models');
   });
 });

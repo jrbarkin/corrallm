@@ -22,6 +22,7 @@ import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { CONNECTION_CLI, TERMINAL_CONNECTIONS, UNASKING_MODES } from '../../shared/session';
 import type { AgentSettings, InstalledClis } from '../../shared/session';
 import { AgentView } from '../agent/AgentView';
+import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { NO_BACKEND } from '../agent/connected';
 import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
@@ -78,6 +79,7 @@ import {
   setConnection,
   setExpect,
   setSettings,
+  setRole,
   setInstruction,
   setTime,
   setWaitFor,
@@ -347,7 +349,14 @@ function Editor({
             sessionStore.sync(
               next.nodes.flatMap((n) =>
                 n.type === 'agent'
-                  ? [{ id: n.id, connection: connectionOf(n.data), settings: n.data.settings }]
+                  ? [
+                      {
+                        id: n.id,
+                        connection: connectionOf(n.data),
+                        settings: n.data.settings,
+                        role: n.data.role,
+                      },
+                    ]
                   : [],
               ),
             );
@@ -434,7 +443,14 @@ function Editor({
     sessionStore.sync(
       graph.nodes.flatMap((n) =>
         n.type === 'agent'
-          ? [{ id: n.id, connection: connectionOf(n.data), settings: n.data.settings }]
+          ? [
+              {
+                id: n.id,
+                connection: connectionOf(n.data),
+                settings: n.data.settings,
+                role: n.data.role,
+              },
+            ]
           : [],
       ),
     );
@@ -538,6 +554,10 @@ function Editor({
   const [work, setWork] = useState<{ from: string; to: string }>();
   /** An edge just drawn between two agents, while its menu asks what it makes; where it ended. */
   const [drawn, setDrawn] = useState<Connection & { at?: MenuPlace }>();
+  const [settingsAgent, setSettingsAgent] = useState<string>();
+  const closeSettings = useCallback(() => {
+    setSettingsAgent(undefined);
+  }, []);
   const [agentMenu, setAgentMenu] = useState<{ id: string; x: number; y: number }>();
   const closeAgentMenu = useCallback(() => {
     setAgentMenu(undefined);
@@ -566,6 +586,7 @@ function Editor({
     work !== undefined ||
     drawn !== undefined ||
     agentMenu !== undefined ||
+    settingsAgent !== undefined ||
     discarding !== undefined ||
     gallery ||
     queues !== undefined;
@@ -739,6 +760,7 @@ function Editor({
       setArranging(false);
       setEditing(undefined);
       setOpened({ ids: [] });
+      setSettingsAgent(undefined);
       setWork(undefined);
       setDrawn(undefined);
       setAgentMenu(undefined);
@@ -1091,6 +1113,9 @@ function Editor({
     );
   }
 
+  const settingsNode = graph.nodes.find(
+    (node) => node.id === settingsAgent && node.type === 'agent',
+  );
   const menuNode = agentMenu && graph.nodes.find((node) => node.id === agentMenu.id);
   const menuIsGroup = menuNode && isGroup(graph.nodes, menuNode.id);
   const menuMembers = menuIsGroup ? groupAgentIds(graph.nodes, menuNode.id) : [];
@@ -1397,6 +1422,9 @@ function Editor({
                 setConnection(setAgent(g, openedNode.id, agent), openedNode.id, connection),
               );
             }}
+            onOpenSettings={() => {
+              setSettingsAgent(openedNode.id);
+            }}
             onSettings={(cli, settings) => {
               setRawGraph((g) => setSettings(g, openedNode.id, cli, settings));
             }}
@@ -1535,6 +1563,8 @@ function Editor({
               runStore.resume();
             }}
             onAgentContextMenu={showAgentMenu}
+            onOpenSettings={setSettingsAgent}
+            settingsOptions={(cli) => sessionStore.settingsOptions(cli)}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1588,6 +1618,37 @@ function Editor({
             onCancel={cancelDrawn}
           />
         )}
+        {settingsNode && (
+          <AgentSettingsPanel
+            key={`settings:${settingsNode.id}`}
+            node={settingsNode}
+            session={sessions[settingsNode.id] ?? NEW_SESSION}
+            options={(cli) => sessionStore.settingsOptions(cli)}
+            onRename={(name) => {
+              setGraph((g) => renameNode(g, settingsNode.id, name));
+            }}
+            onRole={(role) => {
+              setRawGraph((g) => setRole(g, settingsNode.id, role));
+            }}
+            onAgent={(agent, connection) => {
+              setGraph((g) =>
+                setConnection(setAgent(g, settingsNode.id, agent), settingsNode.id, connection),
+              );
+            }}
+            onSettings={(cli, settings) => {
+              setRawGraph((g) => setSettings(g, settingsNode.id, cli, settings));
+            }}
+            onRestart={() => {
+              void sessionStore.restart(settingsNode.id);
+            }}
+            onFresh={() => {
+              void sessionStore.fresh(settingsNode.id).catch((error: unknown) => {
+                sessionStore.notice(settingsNode.id, 'error', ipcErrorMessage(error));
+              });
+            }}
+            onClose={closeSettings}
+          />
+        )}
         {agentMenu && menuNode && (
           <AgentContextMenu
             key={agentMenu.id}
@@ -1600,6 +1661,13 @@ function Editor({
                 : individualPaused(run, menuNode.id)
             }
             {...(menuNode.type === 'frame' ? { groupSize: menuMembers.length } : {})}
+            {...(menuNode.type === 'agent'
+              ? {
+                  onSettings: () => {
+                    setSettingsAgent(menuNode.id);
+                  },
+                }
+              : {})}
             heldByGroups={(run.groupPauses ?? [])
               .filter((id) => groupAgentIds(graph.nodes, id).includes(menuNode.id))
               .map(nameOf)}

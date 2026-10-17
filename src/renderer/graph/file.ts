@@ -1,5 +1,6 @@
 import type { Edge } from '@xyflow/react';
 
+import { parseRole } from '../../shared/role';
 import {
   CLI_MODES,
   CLIS,
@@ -36,7 +37,7 @@ import type {
  *
  *   { "format": "corrallm", "version": 1,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
- *                 "parent"?, "agent"?, "connection"?, "settings"?, "color"?, "queue"? }],
+ *                 "parent"?, "agent"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
@@ -78,6 +79,7 @@ interface FileNode {
   agent?: AgentType;
   connection?: Connection;
   settings?: Partial<Record<Cli, AgentSettings>>;
+  role?: string;
   color?: number;
   queue?: QueueItem[];
 }
@@ -91,6 +93,9 @@ interface FileLink {
 export function toFile(graph: Graph): string {
   const nodes = graph.nodes.map((n): FileNode => {
     const { label, agent, connection, settings, color, queue } = n.data;
+    if (n.type === 'frame' && n.data.role !== undefined)
+      throw new TypeError('A group has no role.');
+    const role = readRole(n.data.role, `${n.id}.role`);
     return {
       id: n.id,
       kind: n.type === 'frame' ? 'group' : 'agent',
@@ -100,6 +105,7 @@ export function toFile(graph: Graph): string {
       ...(agent === undefined ? {} : { agent }),
       ...(connection === undefined ? {} : { connection }),
       ...(settings === undefined ? {} : { settings }),
+      ...(role === undefined ? {} : { role }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     };
@@ -191,6 +197,7 @@ function toGraphNode({
   agent,
   connection,
   settings,
+  role,
   color,
   queue,
 }: FileNode): GraphNode {
@@ -204,6 +211,7 @@ function toGraphNode({
       ...(agent === undefined ? {} : { agent }),
       ...(connection === undefined ? {} : { connection }),
       ...(settings === undefined ? {} : { settings }),
+      ...(role === undefined ? {} : { role }),
       ...(color === undefined ? {} : { color }),
       ...(queue === undefined ? {} : { queue }),
     },
@@ -243,6 +251,10 @@ function readNode(value: unknown, where: string): FileNode {
     if (kind === 'group') throw new Error(`${at}: a group has no settings`);
     return readSettings(v, at);
   });
+  const role = optional(node.role, `${where}.role`, (v, at) => {
+    if (kind === 'group') throw new TypeError(`${at}: a group has no role`);
+    return readRole(v, at);
+  });
   const color = optional(node.color, `${where}.color`, (v, at) => {
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= GROUP_COLORS) {
       throw new Error(`${at} must be a whole number from 0 to ${String(GROUP_COLORS - 1)}`);
@@ -265,9 +277,19 @@ function readNode(value: unknown, where: string): FileNode {
     ...(agent === undefined ? {} : { agent }),
     ...(connection === undefined ? {} : { connection }),
     ...(settings === undefined ? {} : { settings }),
+    ...(role === undefined ? {} : { role }),
     ...(color === undefined ? {} : { color }),
     ...(queue === undefined ? {} : { queue }),
   };
+}
+
+function readRole(value: unknown, where: string): string | undefined {
+  try {
+    return parseRole(value);
+  } catch (error) {
+    const message = `${where}: ${error instanceof Error ? error.message : 'Invalid role.'}`;
+    throw error instanceof RangeError ? new RangeError(message) : new TypeError(message);
+  }
 }
 
 /** An agent's settings, by CLI: undefined if nothing is set. */

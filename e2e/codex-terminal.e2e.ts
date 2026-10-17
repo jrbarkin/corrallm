@@ -229,6 +229,27 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   expect(await starts()).toHaveLength(1);
 });
 
+test('the fake preserves text and bracketed paste coalesced with terminal reports', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view } = await openShop();
+  const reports = '\x1b[<0;4;4M\x1b[I\x1b[1;1R\x1b]10;rgb:ffff/ffff/ffff\x1b\\';
+  const manual = 'Remember the current API';
+  // A PTY can deliver mouse/focus/query responses together with the first typed characters.
+  await page.evaluate((data) => window.api.writeTerminal('shop', data), reports + manual);
+  await page.evaluate(() => window.api.writeTerminal('shop', '\r'));
+  await expect.poll(prompts).toEqual([manual]);
+  await expect(status(view)).toHaveText('Idle');
+  const pasted = 'Keep both lines\nand their text';
+  await page.evaluate(
+    (data) => window.api.writeTerminal('shop', data),
+    reports + '\x1b[200~' + pasted + '\x1b[201~',
+  );
+  await page.evaluate(() => window.api.writeTerminal('shop', '\r'));
+  await expect.poll(prompts).toEqual([manual, pasted]);
+  await expect(status(view)).toHaveText('Idle');
+});
+
 test('the queues’ Run pastes its message into Codex, and hears its turn end', async () => {
   const automated = 'Write the docs\nand the changelog';
   const manual = 'Remember the current API';
@@ -310,21 +331,21 @@ test('starts Codex with the model, effort and mode its agent is set to, from Cod
   await chooseProject();
   const { view } = await openShop();
   // Nothing set: the user's own config, as Codex's app server reads it, with no flags of corrallm's.
-  const settings = view.getByRole('button', { name: /^Settings: / });
-  await expect(settings).toHaveText('GPT-6.1-Sol · Max · Default');
+  const settings = view.getByRole('button', { name: /^Agent settings:/ });
+  await expect(settings).toContainText('GPT-6.1-Sol · Max · Default');
   const [first = []] = await starts();
   expect(first).not.toContain('-m');
   expect(first.some((arg) => arg.startsWith('model_reasoning_effort='))).toBe(false);
 
   await settings.click();
-  const panel = view.getByRole('dialog', { name: 'Codex settings' });
+  const panel = page.getByRole('dialog', { name: /^Agent settings:/ });
   await panel.getByRole('button', { name: 'Model: Default (GPT-6.1-Sol)' }).click();
   await panel.getByRole('menuitemradio', { name: /^GPT-6-Luna/ }).click();
   await panel.getByRole('button', { name: /^Effort: / }).click();
   await panel.getByRole('menuitemradio', { name: /^Low/ }).click();
   await panel.getByRole('button', { name: 'Mode: Default' }).click();
   await panel.getByRole('menuitemradio', { name: /^Read only/ }).click();
-  await expect(settings).toHaveText('GPT-6-Luna · Low · Read only');
+  await expect(settings).toContainText('GPT-6-Luna · Low · Read only');
 
   await panel.getByRole('button', { name: 'Restart with these' }).click();
   await codexReady(2);
@@ -337,6 +358,7 @@ test('starts Codex with the model, effort and mode its agent is set to, from Cod
     '-a',
     'on-request',
   ]);
+  await panel.getByRole('button', { name: 'Close agent settings' }).click();
 });
 
 test('resumes the agent’s Codex session after the app restarts', async () => {

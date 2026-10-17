@@ -180,6 +180,7 @@ async function start(
       runs.push(run);
       return Promise.resolve(run);
     },
+    readInstructions: () => Promise.resolve(undefined),
     tmp: dir,
     timing: {
       ...TIMING,
@@ -219,6 +220,28 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('reconciles captured roles with current native instructions on exact-ID restart, including removal', async () => {
+    const readInstructions = vi.fn(() => Promise.resolve('Native project guidance'));
+    for (const role of ['Review changes\nUse "quotes"', 'Updated role', undefined]) {
+      const session = await start(
+        ['prompts'],
+        {
+          resume: RECORDED_SESSION,
+          ...(role === undefined ? {} : { role }),
+        },
+        { readInstructions },
+      );
+      const run = runs.at(-1);
+      const joined =
+        role === undefined ? 'Native project guidance' : `Native project guidance\n\n${role}`;
+      expect(run?.args).toContain(`developer_instructions=${JSON.stringify(joined)}`);
+      expect(run?.args.slice(0, 2)).toEqual(['resume', RECORDED_SESSION]);
+      expect(run?.written).toEqual([]);
+      await session.close();
+    }
+    expect(readInstructions).toHaveBeenCalledTimes(3);
+  });
+
   it('lets Codex close naturally with Ctrl+C instead of killing its pty', async () => {
     const session = await start(['prompts']);
     const run = runs.at(-1);
@@ -375,11 +398,15 @@ describe('Codex in a terminal, as the real one ran', () => {
   it('starts afresh when the session it resumes is gone', async () => {
     const session = await start(['resume-missing', 'prompts'], {
       resume: '0199a3f0-1234-7000-8000-123456789abc',
+      role: 'Fallback review role',
     });
     await until(() => {
       expect(runs).toHaveLength(2);
     });
     expect(runs[1]?.args[0]).toBe('--no-daemon');
+    expect(
+      runs.map((run) => run.args.includes('developer_instructions="Fallback review role"')),
+    ).toEqual([true, true]);
     await session.send({ id: 'm1', text: 'Say hi in one word.' });
     await until(() => {
       expect(ends()).toBe(1);

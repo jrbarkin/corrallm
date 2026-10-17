@@ -1,6 +1,6 @@
 import { CONNECTION_CLI, DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
 import type {
-  AgentSettings,
+  AgentStartSettings,
   AskedQuestion,
   BackgroundTask,
   Cli,
@@ -293,7 +293,7 @@ export interface Session {
    * What a connected session that runs was started with (the agent's settings then), absent while
    * none runs: its settings may have changed since, which a restart applies.
    */
-  running?: AgentSettings;
+  running?: AgentStartSettings;
   /** The models a connected session offers, once it has started: what the model picker lists. */
   models?: readonly ModelChoice[];
   /** The modes a connected session can switch to, when not all (bypassing turned off). */
@@ -422,7 +422,7 @@ export type SessionAction =
   | { type: 'model'; model: string }
   | { type: 'effort'; effort: string | null }
   /** A connected session runs, started with the agent's settings `settings`; or none (undefined). */
-  | { type: 'running'; settings: AgentSettings | undefined }
+  | { type: 'running'; settings: AgentStartSettings | undefined }
   /**
    * A connected session started: the models (and modes, if not all) it offers, its model and mode,
    * and its effort (where its model offers a choice).

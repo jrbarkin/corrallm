@@ -31,6 +31,8 @@ export interface Launch<M extends SessionMode> {
   model: string | null;
   /** The mode corrallm chose, or null for the user's own default. */
   mode: M | null;
+  /** Standing instructions appended to the native prompt for this process. */
+  role?: string;
   /** The project folder it works in (the process starts there too). */
   cwd: string;
 }

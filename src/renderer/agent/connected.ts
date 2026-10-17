@@ -1,6 +1,6 @@
 import { CONNECTION_CLI, isModeOf, turnResult } from '../../shared/session';
 import type {
-  AgentSettings,
+  AgentStartSettings,
   Cli,
   Connection,
   FilesRewind,
@@ -36,6 +36,8 @@ export interface SessionBackend {
   setEffort(agentId: string, effort: string | null): Promise<null>;
   stopTask(agentId: string, taskId: string): Promise<null>;
   close(agentId: string): Promise<null>;
+  /** Ends the agent's live session and forgets only this CLI's remembered conversation. */
+  fresh(agentId: string, cli: Cli): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
   /** What an agent of `cli` can be set to run with, and the user's own defaults (session:options). */
@@ -76,6 +78,7 @@ export const NO_BACKEND: SessionBackend = (() => {
     setEffort: refuse,
     stopTask: refuse,
     close: refuse,
+    fresh: refuse,
     files: () => Promise.resolve([]),
     options: refuse,
     sessions: refuse,
@@ -478,10 +481,11 @@ export class ConnectedDriver implements SessionDriver {
       // Only a mode of its CLI's (one that asks: settings never hold another).
       const mode =
         settings.mode !== undefined && isModeOf(cli, settings.mode) ? settings.mode : null;
-      const given: AgentSettings = {
+      const given: AgentStartSettings = {
         ...(settings.model === undefined ? {} : { model: settings.model }),
         ...(settings.effort === undefined ? {} : { effort: settings.effort }),
         ...(mode === null ? {} : { mode }),
+        ...(settings.role === undefined ? {} : { role: settings.role }),
       };
       this.#refusal = undefined;
       const running = this.#backend
@@ -491,6 +495,7 @@ export class ConnectedDriver implements SessionDriver {
           model: given.model ?? null,
           mode,
           ...(given.effort === undefined ? {} : { effort: given.effort }),
+          ...(given.role === undefined ? {} : { role: given.role }),
         })
         .then(() => {
           if (this.#running === running) this.#io.dispatch({ type: 'running', settings: given });

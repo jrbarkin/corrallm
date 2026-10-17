@@ -96,16 +96,31 @@ export class TerminalConnector implements Connector {
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#findClaude(spec.env);
-    // An effort it was given, if its claude takes --effort (an older one would not start with it).
-    const effort =
-      spec.effort != null && (await this.#flags(claude, spec.env)).has('--effort')
-        ? spec.effort
-        : null;
+    // Older CLIs predate prompt snapshots; never give them a flag they cannot parse. A default
+    // new conversation needs no optional flags and keeps its existing startup path.
+    const needsPromptOptions = spec.role !== undefined || spec.resume !== null;
+    const flags =
+      needsPromptOptions || spec.effort != null
+        ? await this.#flags(claude, spec.env)
+        : new Set<string>();
+    if (needsPromptOptions && flags.size === 0) {
+      throw new Error('Could not read Claude Code options; retry or update Claude Code.');
+    }
+    if (spec.role !== undefined && !flags.has('--append-system-prompt')) {
+      throw new Error('Update Claude Code to use an agent role.');
+    }
+    const effort = spec.effort != null && flags.has('--effort') ? spec.effort : null;
     // Claude Code trusts a folder by its real path.
     const folder = await realpath(spec.cwd).catch(() => spec.cwd);
     const session = new TerminalSession(spec, host, {
       executable: claude,
-      cli: new ClaudeCode({ cwd: spec.cwd, home: this.#home, env: spec.env, effort }),
+      cli: new ClaudeCode({
+        cwd: spec.cwd,
+        home: this.#home,
+        env: spec.env,
+        effort,
+        promptSnapshot: flags.has('--system-prompt-snapshot'),
+      }),
       spawn: this.#spawn,
       hooks: this.#hooks,
       tmp: this.#tmp,

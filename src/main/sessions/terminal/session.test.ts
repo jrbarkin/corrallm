@@ -53,7 +53,12 @@ beforeEach(async () => {
   remembered = [];
   sessions = [];
   readings = [];
-  help = '  --effort <level>  Effort level for the current session\n  --model <model>  Model';
+  help = [
+    '  --effort <level>  Effort level for the current session',
+    '  --model <model>  Model',
+    '  --append-system-prompt <prompt>  Append native instructions',
+    '  --system-prompt-snapshot <on|off>  Record and reuse the system prompt',
+  ].join('\n');
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -141,6 +146,79 @@ const last = <T extends SessionEvent['type']>(type: T) =>
   events.findLast((event): event is Extract<SessionEvent, { type: T }> => event.type === type);
 
 describe('a Terminal session', () => {
+  it('does not pass a modern snapshot flag to an older CLI on role launch or resume', async () => {
+    help = '  --model <model>  Model\n  --append-system-prompt <prompt>  Append instructions';
+    const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    fake.transcripts = [id];
+    for (const role of ['Review changes', undefined]) {
+      const session = await start({ resume: id, ...(role === undefined ? {} : { role }) });
+      expect(claude().args).toContain(`--resume=${id}`);
+      expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+      if (role !== undefined) expect(claude().args).toContain(`--append-system-prompt=${role}`);
+      expect(claude().prompts).toEqual([]);
+      await session.close();
+    }
+  });
+
+  it('refuses unverified role or resume capabilities with a retry message before spawning', async () => {
+    help = '';
+    const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    await expect(start({ role: 'Review changes' })).rejects.toThrow(
+      /read Claude Code.*retry|retry.*Claude Code/i,
+    );
+    await expect(start({ resume })).rejects.toThrow(/read Claude Code.*retry|retry.*Claude Code/i);
+    expect(runs).toEqual([]);
+  });
+
+  it('refuses a role when the CLI cannot append native instructions', async () => {
+    help = '  --model <model>  Model';
+    await expect(start({ role: 'Review changes' })).rejects.toThrow(/update Claude Code/i);
+    expect(runs).toEqual([]);
+  });
+
+  it('starts a default new conversation without querying optional capabilities', async () => {
+    const flags = vi.fn(() => Promise.reject(new Error('Must not read optional flags')));
+    await start(
+      {},
+      {
+        using: new TerminalConnector({
+          findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
+          flags,
+          spawn: (file, args, options) => {
+            const run = new FakeClaude(file, args, options, fake);
+            runs.push(run);
+            return Promise.resolve(run);
+          },
+          tmp: dir,
+          timing: TIMING,
+        }),
+      },
+    );
+    expect(flags).not.toHaveBeenCalled();
+    expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+  });
+
+  it('carries the captured role through native startup and exact-ID resume without sending a prompt', async () => {
+    const role = 'Review changes\nKeep project conventions';
+    const first = await start({ role });
+    const id = claude().arg('--session-id');
+    if (id === undefined) throw new Error('No native session ID');
+    expect(claude().args).toContain(`--append-system-prompt=${role}`);
+    expect(claude().args).toContain('--system-prompt-snapshot=off');
+    expect(claude().prompts).toEqual([]);
+    await first.close();
+    const second = await start({ resume: id, role: 'Updated role' });
+    expect(claude().args).toContain(`--resume=${id}`);
+    expect(claude().args).toContain('--append-system-prompt=Updated role');
+    expect(claude().prompts).toEqual([]);
+    await second.close();
+    await start({ resume: id });
+    expect(claude().args).toContain(`--resume=${id}`);
+    expect(claude().args).toContain('--system-prompt-snapshot=off');
+    expect(claude().args.some((arg) => arg.startsWith('--append-system-prompt='))).toBe(false);
+    expect(claude().prompts).toEqual([]);
+  });
+
   it('runs claude in the project folder, as a terminal, with its hooks and a new session id', async () => {
     await start();
     const run = claude();
@@ -259,7 +337,7 @@ describe('a Terminal session', () => {
     expect(claude().arg('--resume')).toBe(kept);
     expect(claude().args).toContain(`--resume=${kept}`);
 
-    await start({ resume: gone });
+    await start({ resume: gone, role: 'Fallback review role' });
     await until(() => {
       expect(claude().arg('--session-id')).toBe(gone);
     });
@@ -268,6 +346,9 @@ describe('a Terminal session', () => {
       gone,
       gone,
     ]);
+    expect(
+      runs.slice(-2).map((run) => run.args.includes('--append-system-prompt=Fallback review role')),
+    ).toEqual([true, true]);
     expect(seen()).not.toContain('closed');
   });
 
@@ -468,16 +549,28 @@ describe('a Terminal session', () => {
   it('lists what its hooks tell until the turn ends, without status reports', async () => {
     fake.reports = false;
     const session = await start();
+    const shown: TerminalEvent[] = [];
+    const hide = session.terminal?.show((event) => shown.push(event));
     await session.send({ id: 'm1', text: 'ask to run the tests' });
     await until(() => {
       expect(last('asking')?.asks).toHaveLength(1);
     });
     expect(last('asking')?.asks[0]).toMatchObject({ kind: 'permission', summary: 'echo hello' });
+    // The hook reaches main before the CLI receives its HTTP response and draws the choices.
+    // Answer only once the native prompt is visible, as a person at the console would.
+    await until(() => {
+      expect(
+        shown.some(
+          (event) => event.type !== 'exit' && event.data.includes('Do you want to proceed?'),
+        ),
+      ).toBe(true);
+    });
     session.terminal?.input('1');
     await until(() => {
       expect(last('end')).toBeDefined();
     });
     expect(last('asking')?.asks).toEqual([]);
+    hide?.();
   });
 
   it('is interrupted with Escape: the turn ends, interrupted', async () => {

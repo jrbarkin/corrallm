@@ -869,6 +869,12 @@ input.on('line', (line) => {
   if (message.type === 'control_request') {
     const { subtype } = message.request;
     if (subtype === 'initialize') {
+      if (process.env.FAKE_CLAUDE_INITIALIZE) {
+        appendFileSync(
+          process.env.FAKE_CLAUDE_INITIALIZE,
+          `${JSON.stringify({ sessionId, request: message.request })}\n`,
+        );
+      }
       suggestions = message.request.promptSuggestions === true;
       respond(message.request_id, {
         commands: COMMANDS,

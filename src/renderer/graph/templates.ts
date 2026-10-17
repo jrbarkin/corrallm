@@ -1,3 +1,4 @@
+import { parseRole } from '../../shared/role';
 import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
 import type { AgentConnection, AgentType } from './agents';
 import type { Graph } from './graph';
@@ -5,7 +6,7 @@ import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue'
 import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
 
 /**
- * A blank in a template, written `{{key}}` in its agents' names, messages, steps' instructions,
+ * A blank in a template, written `{{key}}` in its agents' names, roles, messages, steps' instructions,
  * conditions (a repeat's too) and OKs: what the gallery asks for (`label`) before it opens the
  * canvas, starting from the template's own example.
  */
@@ -33,7 +34,11 @@ function textsOf(graph: Graph): string[] {
             : isMessage(item)
               ? [item.message]
               : [item.instruction ?? ''];
-  return graph.nodes.flatMap((n) => [n.data.label, ...(n.data.queue ?? []).flatMap(ofItem)]);
+  return graph.nodes.flatMap((n) => [
+    n.data.label,
+    ...(n.type === 'agent' && n.data.role !== undefined ? [n.data.role] : []),
+    ...(n.data.queue ?? []).flatMap(ofItem),
+  ]);
 }
 
 /** The placeholders a canvas uses, by key, in the order they first appear. */
@@ -66,14 +71,19 @@ export function fillTemplate(graph: Graph, values: Readonly<Record<string, strin
             : fillStep(item);
   return {
     ...graph,
-    nodes: graph.nodes.map((node) => ({
-      ...node,
-      data: {
+    nodes: graph.nodes.map((node) => {
+      const data = {
         ...node.data,
         label: fill(node.data.label),
         ...(node.data.queue ? { queue: node.data.queue.map(fillItem) } : {}),
-      },
-    })),
+      };
+      if (node.type === 'agent' && node.data.role !== undefined) {
+        const role = parseRole(fill(node.data.role));
+        if (role === undefined) delete data.role;
+        else data.role = role;
+      }
+      return { ...node, data };
+    }),
   };
 }
 

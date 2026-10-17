@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type {
   AgentSettings,
   Cli,
+  Connection,
   ModelChoice,
   SessionMode,
   SettingsOptions,
@@ -10,8 +11,7 @@ import type {
 import type { AgentType } from '../graph/agents';
 import { ipcErrorMessage } from '../ipc-error';
 import { ChoiceMenu } from './ChoiceMenu';
-import { modeOf, STARTING_MODES } from './session';
-import type { TerminalConnection } from './session';
+import { cycledModes, modeOf, STARTING_MODES } from './session';
 
 /** How each CLI is named, and where the user's own defaults come from. */
 const CLI_WORDS: Readonly<Record<Cli, { name: string; yours: string; its: string }>> = {
@@ -45,9 +45,14 @@ export function SettingsMenu({
   working,
   onChange,
   onRestart,
+  inline = false,
+  onOpen,
+  label,
+  prefix,
+  suffix,
 }: {
   cli: Cli;
-  connection: TerminalConnection;
+  connection: Connection;
   agent: AgentType;
   settings: AgentSettings;
   /** What the CLI's agents can be set to, and the user's own defaults (asked of main once). */
@@ -56,8 +61,14 @@ export function SettingsMenu({
   running: AgentSettings | undefined;
   /** Whether the agent is in a turn (a restart would end it). */
   working: boolean;
-  onChange: (settings: AgentSettings) => void;
-  onRestart: () => void;
+  onChange?: (settings: AgentSettings) => void;
+  onRestart?: () => void;
+  /** The shared agent settings sheet embeds the choices, without another popover. */
+  inline?: boolean;
+  onOpen?: () => void;
+  label?: string;
+  prefix?: string;
+  suffix?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [read, setRead] = useState<{ options?: SettingsOptions; problem?: string }>({});
@@ -88,7 +99,10 @@ export function SettingsMenu({
   /** The model it runs, chosen or not, if known: whose efforts it offers. */
   const runs = named(settings.model ?? defaults.model);
   const efforts = runs?.efforts ?? [];
-  const startable = STARTING_MODES[connection];
+  const startable =
+    connection === 'terminal' || connection === 'codex-terminal'
+      ? STARTING_MODES[connection]
+      : cycledModes(agent);
   const chosenMode =
     settings.mode !== undefined && startable.includes(settings.mode) ? settings.mode : undefined;
 
@@ -136,15 +150,15 @@ export function SettingsMenu({
     const next = withSetting(settings, key, given);
     const offered = named(next.model ?? defaults.model)?.efforts;
     if (key === 'model' && offered && !offered.some((e) => e.value === next.effort)) {
-      onChange(withSetting(next, 'effort', undefined));
-    } else onChange(next);
+      onChange?.(withSetting(next, 'effort', undefined));
+    } else onChange?.(next);
   };
 
   return (
     <div
-      className="agent-settings"
+      className={inline ? 'agent-settings-inline' : 'agent-settings'}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+        if (!inline && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
       }}
       onKeyDown={(event) => {
         // Esc closes the panel, not the view.
@@ -154,20 +168,29 @@ export function SettingsMenu({
         }
       }}
     >
-      <button
-        type="button"
-        className="agent-settings-button"
-        aria-label={`Settings: ${summary}`}
-        aria-expanded={open}
-        title={`What ${words.name} starts with`}
-        onClick={() => {
-          setOpen(!open);
-        }}
-      >
-        {summary}
-      </button>
-      {open && (
-        <div className="agent-settings-panel" role="dialog" aria-label={`${words.name} settings`}>
+      {!inline && (
+        <button
+          type="button"
+          className="agent-settings-button"
+          aria-label={label ?? `Settings: ${summary}`}
+          aria-expanded={open}
+          title={`What ${words.name} starts with`}
+          onClick={() => {
+            if (onOpen) onOpen();
+            else setOpen(!open);
+          }}
+        >
+          {prefix}
+          {summary}
+          {suffix}
+        </button>
+      )}
+      {(inline || open) && (
+        <div
+          className={inline ? 'agent-settings-fields' : 'agent-settings-panel'}
+          role={inline ? 'group' : 'dialog'}
+          aria-label={`${words.name} settings`}
+        >
           <p className="agent-settings-title">{words.name} starts with</p>
           <div className="agent-settings-row">
             <span>Model</span>

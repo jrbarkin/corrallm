@@ -39,6 +39,7 @@ const sessionBackend: SessionBackend = {
   setEffort: (agentId, effort) => window.api.setSessionEffort(agentId, effort),
   stopTask: (agentId, taskId) => window.api.stopSessionTask(agentId, taskId),
   close: (agentId) => window.api.closeSession(agentId),
+  fresh: (agentId, cli) => window.api.freshSession(agentId, cli),
   files: (query) => window.api.findProjectFiles(query),
   options: (cli) => window.api.settingsOptions(cli),
   sessions: (agentId) => window.api.listSessions(agentId),

@@ -9,7 +9,10 @@ import { spawnPty } from '../../terminal/pty';
 import type { SpawnPty } from '../../terminal/pty';
 import { TerminalSession, TIMING } from '../../terminal/session';
 import type { TerminalTiming } from '../../terminal/session';
+import { appendRole } from '../app-server/instructions';
 import { checkVersion, codexVersion, requireCodex } from '../codex';
+import { nativeDeveloperInstructions } from './instructions';
+import type { InstructionsContext } from './instructions';
 import { HookTruster } from './trust';
 import { CodexTui } from './tui';
 import { UsageReader } from './usage';
@@ -78,6 +81,8 @@ export interface CodexTerminalConnectorOptions {
   reader?: UsageReader;
   /** Takes the usage readings its sessions report (main's UsageReadings). */
   usage?: (backend: UsageBackend, windows: UsageWindows) => void;
+  /** Reads effective native developer instructions without starting a thread. */
+  readInstructions?: (context: InstructionsContext) => Promise<string | undefined>;
   /** Where sessions' own folders go. */
   tmp?: string;
   timing?: Partial<TerminalTiming>;
@@ -91,6 +96,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
   readonly #truster: HookTruster;
   readonly #reader: UsageReader;
   readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
+  readonly #readInstructions: (context: InstructionsContext) => Promise<string | undefined>;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #platform: NodeJS.Platform;
@@ -104,6 +110,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     truster = new HookTruster(),
     reader = new UsageReader(),
     usage,
+    readInstructions = nativeDeveloperInstructions,
     tmp = tmpdir(),
     timing = {},
     platform = process.platform,
@@ -114,6 +121,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     this.#truster = truster;
     this.#reader = reader;
     this.#usage = usage;
+    this.#readInstructions = readInstructions;
     this.#tmp = tmp;
     this.#timing = { ...TIMING, ...CODEX_TIMING, ...timing };
     this.#platform = platform;
@@ -126,12 +134,19 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     if (old !== undefined) throw new Error(old);
     // The folder as Codex resolves it, so that the folder it trusts is the one it works in.
     const cwd = await realpath(spec.cwd).catch(() => spec.cwd);
+    // Native resume can retain old model-visible role context in Codex 0.162.1:
+    // https://github.com/openai/codex/issues/19045 (role edits need a new conversation).
+    const developerInstructions =
+      spec.role !== undefined || spec.resume !== null
+        ? appendRole(await this.#readInstructions({ codex, cwd, env: spec.env }), spec.role)
+        : undefined;
     const usage = this.#usage;
     const session = new TerminalSession<CodexMode>({ ...spec, cwd }, host, {
       executable: codex,
       cli: new CodexTui({
         trust: (hooks) => this.#truster.trust(hooks, { codex, version, cwd, env: spec.env }),
         effort: spec.effort ?? null,
+        ...(developerInstructions === undefined ? {} : { developerInstructions }),
         platform: this.#platform,
         usage: () => this.#reader.read({ codex, cwd, env: spec.env }),
       }),

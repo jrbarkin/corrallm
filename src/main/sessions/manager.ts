@@ -118,6 +118,8 @@ export class SessionManager {
   readonly #ending = new WeakMap<Agent, Promise<void>>();
   /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
   readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
+  /** Changes synchronously when a canvas transition begins, before native shutdown can wait. */
+  readonly #canvasGeneration = new WeakMap<WebContents, object>();
   /** Renderers whose going is watched for. */
   readonly #watched = new WeakSet<WebContents>();
   /** The conversations each renderer was last listed (session:list): the only ones it may open. */
@@ -380,8 +382,26 @@ export class SessionManager {
     if (agent) await this.#end(contents, agentId, agent, false);
   }
 
+  /** Ends this agent and forgets only the chosen CLI's ID; native history remains untouched. */
+  async fresh(contents: WebContents, agentId: string, cli: Cli): Promise<void> {
+    const generation = this.#canvasGeneration.get(contents);
+    await this.#settled(contents);
+    if (generation !== this.#canvasGeneration.get(contents)) {
+      throw new Error('The canvas changed before its conversation could be cleared.');
+    }
+    const ids = this.#idsOf(contents);
+    await this.close(contents, agentId);
+    if (generation !== this.#canvasGeneration.get(contents) || ids !== this.#ids.get(contents)) {
+      throw new Error('The canvas changed before its conversation could be cleared.');
+    }
+    await this.#forget(contents, cli, agentId);
+    // A failed durable clear must not be reported as a successful fresh conversation.
+    await this.#deps.memory.flush();
+  }
+
   /** A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load. */
   async canvasOpened(contents: WebContents): Promise<void> {
+    this.#canvasGeneration.set(contents, {});
     await this.#endAll(contents, true);
     const file = this.#deps.canvasOf(contents);
     const remembered = file === undefined ? undefined : await this.#deps.memory.get(file);
@@ -393,6 +413,7 @@ export class SessionManager {
 
   /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
   async canvasForgotten(contents: WebContents): Promise<void> {
+    this.#canvasGeneration.set(contents, {});
     await this.#endAll(contents, true);
     this.#ids.set(contents, noIds());
   }
@@ -412,6 +433,7 @@ export class SessionManager {
 
   /** The canvas has a new project folder: its sessions end and are forgotten, to start afresh there. */
   async projectChanged(contents: WebContents): Promise<void> {
+    this.#canvasGeneration.set(contents, {});
     await this.#endAll(contents, true);
     this.#ids.set(contents, noIds());
     await this.canvasSaved(contents);
@@ -427,7 +449,7 @@ export class SessionManager {
     contents: WebContents,
     agentId: string,
     cwd: string,
-    { connection, model, mode, effort }: SessionOptions,
+    { connection, model, mode, effort, role }: SessionOptions,
     current: () => boolean,
   ): Promise<LiveSession<SessionMode>> {
     const connector = this.#deps.connectors[connection];
@@ -447,7 +469,16 @@ export class SessionManager {
       },
     };
     return connector.start(
-      { agentId, cwd, env, model, mode, ...(effort === undefined ? {} : { effort }), resume },
+      {
+        agentId,
+        cwd,
+        env,
+        model,
+        mode,
+        ...(effort === undefined ? {} : { effort }),
+        ...(role === undefined ? {} : { role }),
+        resume,
+      },
       host,
     );
   }

@@ -97,6 +97,152 @@ afterEach(async () => {
 });
 
 describe('SessionManager', () => {
+  it('captures the configured role only on launch and clears it on an exact-ID restart', async () => {
+    const sessions = manager();
+    const contents = window();
+    await sessions.start(contents, 'a', { ...OPTIONS, role: 'Review changes' });
+    expect(fake.started.at(-1)).toMatchObject({ role: 'Review changes' });
+    await sessions.start(contents, 'a', { ...OPTIONS, role: 'Pending role' });
+    expect(fake.started).toHaveLength(1);
+    await sessions.close(contents, 'a');
+    await sessions.start(contents, 'a', { ...OPTIONS, role: 'Updated role' });
+    expect(fake.started.at(-1)).toMatchObject({ role: 'Updated role' });
+    const resume = fake.started.at(-1)?.resume;
+    expect(resume).not.toBeNull();
+    await sessions.close(contents, 'a');
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBe(resume);
+    expect(fake.started.at(-1)).not.toHaveProperty('role');
+  });
+
+  it('starts a fresh native conversation only for the chosen CLI, preserving other agents and histories', async () => {
+    const codex = new FakeConnector({ cli: 'codex' });
+    const sessions = manager({ 'app-server': codex });
+    const contents = window('/work/team.corral');
+    const options = { connection: 'app-server', model: null, mode: 'auto' } as const;
+    await sessions.start(contents, 'a', OPTIONS);
+    const claudeId = fake.ids[0];
+    await sessions.start(contents, 'a', options);
+    const oldCodexId = codex.ids[0];
+    await sessions.start(contents, 'b', options);
+    const otherCodexId = codex.ids[1];
+    // Even a different live connection for this agent closes; its ID is retained.
+    await sessions.start(contents, 'a', OPTIONS);
+    await sessions.fresh(contents, 'a', 'codex');
+    await expect(sessions.send(contents, 'a', { id: 'm', text: 'Hello' })).rejects.toThrow(
+      /not running/,
+    );
+    const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
+    expect(await disk.get('/work/team.corral')).toEqual({
+      sessions: { a: claudeId },
+      threads: { b: otherCodexId },
+    });
+    // No launch or synthetic turn is part of fresh; the explicit next start supplies the new role.
+    expect(codex.started).toHaveLength(2);
+    await sessions.start(contents, 'a', { ...options, role: 'Updated review role' });
+    expect(codex.started.at(-1)).toMatchObject({ resume: null, role: 'Updated review role' });
+    expect(codex.ids.at(-1)).not.toBe(oldCodexId);
+    await sessions.start(contents, 'a', OPTIONS);
+    expect(fake.started.at(-1)?.resume).toBe(claudeId);
+    await sessions.close(contents, 'b');
+    await sessions.start(contents, 'b', options);
+    expect(codex.started.at(-1)?.resume).toBe(otherCodexId);
+  });
+
+  it('waits for graceful close before forgetting a native conversation, even if it was already closing', async () => {
+    let release: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const close = vi.fn(() => closed);
+    const sessions = manager({
+      terminal: {
+        start: async (spec, host) => {
+          const session = await terminal.start(spec, host);
+          session.close = close;
+          return session;
+        },
+      },
+    });
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+    const id = terminal.ids[0];
+    await memory.flush();
+    const closing = sessions.close(contents, 'a');
+    const fresh = sessions.fresh(contents, 'a', 'claude');
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledOnce();
+    });
+    expect((await memory.get('/work/team.corral')).sessions.a).toBe(id);
+    release?.();
+    await Promise.all([closing, fresh]);
+    expect(
+      (await new CanvasMemory(path.join(dir, 'canvases.json')).get('/work/team.corral')).sessions,
+    ).toEqual({});
+  });
+
+  it.each(['open', 'new', 'project'] as const)(
+    'does not forget another canvas after %s changes while native shutdown is pending',
+    async (change) => {
+      let release: (() => void) | undefined;
+      const closed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const close = vi.fn(() => closed);
+      const sessions = manager({
+        terminal: {
+          start: async (spec, host) => {
+            const session = await terminal.start(spec, host);
+            session.close = close;
+            return session;
+          },
+        },
+      });
+      const contents = window('/work/team.corral');
+      await sessions.start(contents, 'a', { ...OPTIONS, connection: 'terminal' });
+      const oldId = terminal.ids[0];
+      const newId = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';
+      await memory.update('/work/new.corral', () => ({ sessions: { a: newId } }));
+      const fresh = sessions.fresh(contents, 'a', 'claude');
+      const refused = expect(fresh).rejects.toThrow(/canvas changed/i);
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledOnce();
+      });
+      let changing: Promise<void>;
+      if (change === 'open') {
+        canvases.set(contents, '/work/new.corral');
+        changing = sessions.canvasOpened(contents);
+      } else if (change === 'new') {
+        canvases.delete(contents);
+        changing = sessions.canvasForgotten(contents);
+      } else {
+        projects.set(contents, '/work/other');
+        changing = sessions.projectChanged(contents);
+      }
+      release?.();
+      await Promise.all([changing, refused]);
+      const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
+      expect((await disk.get('/work/new.corral')).sessions.a).toBe(newId);
+      // New/Open preserve the old canvas's native ID; changing its project intentionally clears it.
+      expect((await disk.get('/work/team.corral')).sessions).toEqual(
+        change === 'project' ? {} : { a: oldId },
+      );
+      await sessions.start(contents, 'a', OPTIONS);
+      expect(fake.started.at(-1)?.resume).toBe(change === 'open' ? newId : null);
+    },
+  );
+
+  it('surfaces a failed durable conversation clear before any fresh launch', async () => {
+    const sessions = manager();
+    const contents = window('/work/team.corral');
+    await sessions.start(contents, 'a', OPTIONS);
+    await memory.flush();
+    const flush = vi.spyOn(memory, 'flush').mockRejectedValueOnce(new Error('Disk unavailable'));
+    await expect(sessions.fresh(contents, 'a', 'claude')).rejects.toThrow('Disk unavailable');
+    expect(fake.started).toHaveLength(1);
+    flush.mockRestore();
+  });
+
   it('starts a session in the canvas’s project folder; its events go to the renderer that started it', async () => {
     const sessions = manager();
     const one = window();

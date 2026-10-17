@@ -21,6 +21,7 @@ export function AgentContextMenu({
   onPause,
   onKill,
   onResume,
+  onSettings,
   onClose,
 }: {
   name: string;
@@ -33,6 +34,7 @@ export function AgentContextMenu({
   onPause: () => void;
   onKill: () => void;
   onResume: () => void;
+  onSettings?: () => void;
   onClose: () => void;
 }) {
   const menu = useRef<HTMLDivElement>(null);
@@ -114,6 +116,18 @@ export function AgentContextMenu({
         onResume={onResume}
         onClose={onClose}
       />
+      {scope === 'agent' && onSettings && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            onSettings();
+          }}
+        >
+          Settings…
+        </button>
+      )}
       {group && (
         <>
           <div className="agent-context-name agent-context-group">

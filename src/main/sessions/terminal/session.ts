@@ -429,6 +429,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       model,
       mode,
       cwd,
+      ...(this.#spec.role === undefined ? {} : { role: this.#spec.role }),
     });
     const pty = await this.#deps.spawn(this.#deps.executable, args, {
       cwd: this.#spec.cwd,

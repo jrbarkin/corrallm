@@ -1,5 +1,6 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
+import { parseRole } from '../../shared/role';
 import type { AgentSettings, Cli, Connection } from '../../shared/session';
 import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
 import type { AgentConnection, AgentType } from './agents';
@@ -46,6 +47,8 @@ export type GraphNode = Node<
     agent?: AgentType;
     connection?: Connection;
     settings?: Partial<Record<Cli, AgentSettings>>;
+    /** Authored instructions shared by every CLI this agent runs. */
+    role?: string;
     queue?: QueueItem[];
     questions?: Question[];
     color?: number;
@@ -271,6 +274,21 @@ export function setSettings(graph: Graph, id: string, cli: Cli, settings: AgentS
         ? { ...n, data: Object.keys(kept).length === 0 ? data : { ...data, settings: kept } }
         : n,
     ),
+  };
+}
+
+/** Sets the authored role without changing the agent's per-CLI settings or active session. */
+export function setRole(graph: Graph, id: string, role: string | undefined): Graph {
+  const node = graph.nodes.find((node) => node.id === id);
+  if (node?.type !== 'agent') return graph;
+  const parsed = parseRole(role);
+  if (node.data.role === parsed) return graph;
+  const data = { ...node.data };
+  if (parsed === undefined) delete data.role;
+  else data.role = parsed;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((entry) => (entry === node ? { ...entry, data } : entry)),
   };
 }
 

@@ -84,6 +84,8 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
     await api.closeSession('a');
     expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
+    await api.freshSession('a', 'codex');
+    expect(invoke).toHaveBeenLastCalledWith('session:fresh', 'a', 'codex');
     await api.listSessions('a');
     expect(invoke).toHaveBeenLastCalledWith('session:list', 'a');
     await api.previewRewind('a', 'm');

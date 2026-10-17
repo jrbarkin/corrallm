@@ -500,6 +500,10 @@ function handle({ method, id, params }) {
       return reply(ACCOUNTS[process.env.FAKE_CODEX_LOGIN ?? 'apikey'] ?? ACCOUNTS.apikey);
     case 'account/rateLimits/read':
       return reply({ rateLimits: LIMITS, rateLimitsByLimitId: { codex: LIMITS } });
+    case 'config/read':
+      return reply({
+        config: { developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null },
+      });
     case 'model/list':
       return reply({ data: MODELS, nextCursor: null });
     case 'skills/list':

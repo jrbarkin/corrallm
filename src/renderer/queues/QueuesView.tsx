@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 
+import type { Cli, SettingsOptions } from '../../shared/session';
+import { AgentSettingsSummary } from '../agent/AgentSettings';
 import type { Session } from '../agent/session';
 import { AGENT_ACTIONS, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
@@ -74,6 +76,8 @@ export function QueuesView({
   onStop,
   onOpenAgent,
   onAgentContextMenu,
+  onOpenSettings,
+  settingsOptions,
   onClose,
 }: {
   nodes: readonly GraphNode[];
@@ -91,6 +95,8 @@ export function QueuesView({
   onStop: () => void;
   onOpenAgent: (agentId: string) => void;
   onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
+  onOpenSettings?: ((id: string) => void) | undefined;
+  settingsOptions?: ((cli: Cli) => Promise<SettingsOptions>) | undefined;
   onClose: () => void;
 }) {
   const layout = useMemo(() => lanesOf(nodes), [nodes]);
@@ -104,12 +110,12 @@ export function QueuesView({
   // a dropdown open in a lane closes itself first.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || document.querySelector('.agent-settings-sheet')) return;
       // A dropdown, or a usage gauge's panel, closes itself first.
       if (
         event.target instanceof Element &&
         event.target.closest(
-          '.agent-context-menu, .search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]',
+          '.agent-settings-sheet, .agent-context-menu, .search-picker, .usage-panel, .usage-gauge[aria-expanded="true"]',
         )
       ) {
         return;
@@ -351,6 +357,8 @@ export function QueuesView({
                       : undefined
                   }
                   onOpenAgent={onOpenAgent}
+                  onOpenSettings={onOpenSettings}
+                  settingsOptions={settingsOptions}
                 />
                 {i < lanes.length - 1 && (
                   <div
@@ -404,6 +412,8 @@ function LaneCells({
   status,
   run,
   onAgentContextMenu,
+  onOpenSettings,
+  settingsOptions,
   needsYou,
   ask,
   focused,
@@ -436,6 +446,8 @@ function LaneCells({
   onChoose: (choice: StepChoice) => void;
   picking: Picking | undefined;
   onOpenAgent: (agentId: string) => void;
+  onOpenSettings?: ((id: string) => void) | undefined;
+  settingsOptions?: ((cli: Cli) => Promise<SettingsOptions>) | undefined;
 }) {
   const { agent: node } = lane;
   const id = node.id;
@@ -515,10 +527,19 @@ function LaneCells({
         >
           {name(id)}
         </button>
-        {connection !== 'simulated' && (
+        {(!onOpenSettings || !settingsOptions) && (
           <span className="queues-connection" title={CONNECTION_INFO[connection].description}>
             {CONNECTION_INFO[connection].short}
           </span>
+        )}
+        {onOpenSettings && settingsOptions && (
+          <AgentSettingsSummary
+            node={node}
+            options={settingsOptions}
+            onOpen={() => {
+              onOpenSettings(id);
+            }}
+          />
         )}
         {queueControlText(run, id) && (
           <span className="queues-control-state">{queueControlText(run, id)}</span>

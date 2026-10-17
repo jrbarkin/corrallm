@@ -20,6 +20,7 @@ import {
   parseAnswerArgs,
   parseEffortArgs,
   parseFilesArgs,
+  parseFreshArgs,
   parseMcpChangeArgs,
   parseModeArgs,
   parseModelArgs,
@@ -70,6 +71,7 @@ export interface IpcServices {
     | 'setEffort'
     | 'stopTask'
     | 'close'
+    | 'fresh'
     | 'listSessions'
     | 'resumeSession'
     | 'mcpServers'
@@ -340,6 +342,13 @@ function createHandlers({
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
         await sessions.close(contents, agentId);
+        return null;
+      },
+    },
+    'session:fresh': {
+      parseArgs: parseFreshArgs,
+      handler: async ({ contents }, agentId, cli) => {
+        await sessions.fresh(contents, agentId, cli);
         return null;
       },
     },

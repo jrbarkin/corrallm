@@ -64,6 +64,8 @@ export interface ClaudeCodeOptions {
   env: Readonly<Record<string, string>>;
   /** The effort to start at (one of Claude Code's levels), or null for the user's own. */
   effort?: string | null;
+  /** Whether its --help advertises --system-prompt-snapshot (older CLIs have no snapshots). */
+  promptSnapshot?: boolean;
   /** Where its managed settings are (the organization's): the OS's folder for them by default. */
   managed?: string;
 }
@@ -97,6 +99,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly #env: Readonly<Record<string, string>>;
   /** Its effort, if it was given one of Claude Code's levels. */
   readonly #effort: string | undefined;
+  readonly #promptSnapshot: boolean;
   readonly #managed: string;
   /** Why corrallm can't hear it, once its settings were read (they turn its hooks off). */
   #unheard: string | undefined;
@@ -106,11 +109,13 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     home,
     env,
     effort = null,
+    promptSnapshot = false,
     managed = managedSettingsFolder(),
   }: ClaudeCodeOptions) {
     this.#places = { cwd, home };
     this.#env = env;
     this.#effort = effort !== null && Object.hasOwn(CLAUDE_EFFORTS, effort) ? effort : undefined;
+    this.#promptSnapshot = promptSnapshot;
     this.#managed = managed;
   }
 
@@ -145,12 +150,17 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     return this.#unheard;
   }
 
-  args({ dir, id, resume, model, mode }: Launch<PermissionMode>): string[] {
+  args({ dir, id, resume, model, mode, role }: Launch<PermissionMode>): string[] {
     if (id !== null && !isSessionId(id)) throw new TypeError('Expected a UUID session id');
     return [
       '--settings',
       path.join(dir, SETTINGS),
       ...(id === null ? [] : resume ? [`--resume=${id}`] : ['--session-id', id]),
+      // Rebuild on resume too: removing a managed role must not revive a recorded prompt.
+      ...(this.#promptSnapshot && (role !== undefined || resume)
+        ? ['--system-prompt-snapshot=off']
+        : []),
+      ...(role === undefined ? [] : [`--append-system-prompt=${role}`]),
       // Only what corrallm was given: otherwise the user's own default model, effort and mode apply.
       ...(model === null || model === 'default' ? [] : ['--model', model]),
       ...(this.#effort === undefined ? [] : ['--effort', this.#effort]),

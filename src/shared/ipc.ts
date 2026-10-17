@@ -105,6 +105,8 @@ export interface IpcContract {
   'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
+  /** Forgets only this CLI's remembered conversation, keeping its native history. */
+  'session:fresh': { args: [agentId: string, cli: Cli]; result: null };
   /**
    * The conversations Claude Code kept for the canvas's project folder, most recent first, as
    * /resume lists them, saying which is the agent's own. Rejects without a project folder.
@@ -249,6 +251,7 @@ export interface InvokeApi {
   setSessionEffort(...args: IpcArgs<'session:effort'>): Promise<IpcResult<'session:effort'>>;
   stopSessionTask(...args: IpcArgs<'session:stopTask'>): Promise<IpcResult<'session:stopTask'>>;
   closeSession(...args: IpcArgs<'session:close'>): Promise<IpcResult<'session:close'>>;
+  freshSession(...args: IpcArgs<'session:fresh'>): Promise<IpcResult<'session:fresh'>>;
   listSessions(...args: IpcArgs<'session:list'>): Promise<IpcResult<'session:list'>>;
   resumeSession(...args: IpcArgs<'session:resume'>): Promise<IpcResult<'session:resume'>>;
   previewRewind(
@@ -303,6 +306,7 @@ export const API_CHANNELS = {
   setSessionEffort: 'session:effort',
   stopSessionTask: 'session:stopTask',
   closeSession: 'session:close',
+  freshSession: 'session:fresh',
   listSessions: 'session:list',
   resumeSession: 'session:resume',
   previewRewind: 'session:rewind-preview',

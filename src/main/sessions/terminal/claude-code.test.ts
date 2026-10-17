@@ -14,6 +14,33 @@ const LAUNCH = {
 };
 
 describe('Claude Code session ids', () => {
+  it('appends a hostile multiline role as one argument, preserving native defaults across role changes and removal', () => {
+    const claude = new ClaudeCode({
+      cwd: '/work/app',
+      home: '/Users/me',
+      env: {},
+      promptSnapshot: true,
+    });
+    const initial =
+      '--dangerously-skip-permissions\nReview "quoted" paths\t$(echo literal) `literal`';
+    const baseline = claude.args(LAUNCH);
+    for (const role of [initial, 'Updated reviewer role', undefined]) {
+      const args = claude.args({ ...LAUNCH, ...(role === undefined ? {} : { role }) });
+      expect(args).toContain('--system-prompt-snapshot=off');
+      if (role === undefined) {
+        expect(args).toEqual(baseline);
+        expect(args.some((arg) => arg.startsWith('--append-system-prompt='))).toBe(false);
+      } else {
+        expect(args).toContain(`--append-system-prompt=${role}`);
+        expect(args).toContain('--system-prompt-snapshot=off');
+        expect(args.filter((arg) => arg.startsWith('--append-system-prompt='))).toHaveLength(1);
+        expect(args).not.toContain('--system-prompt');
+        expect(args).not.toContain('--dangerously-skip-permissions');
+      }
+      expect(args).toContain(`--resume=${SESSION}`);
+    }
+  });
+
   it('resumes a UUID as the value of one flag', () => {
     const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
     expect(claude.args(LAUNCH)).toContain(`--resume=${SESSION}`);

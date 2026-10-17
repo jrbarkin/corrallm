@@ -48,6 +48,8 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
    * absent for the model's default.
    */
   effort?: string | null;
+  /** Standing instructions captured at launch, appended to native defaults without a user turn. */
+  role?: string;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
 }

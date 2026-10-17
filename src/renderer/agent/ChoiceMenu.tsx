@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 /**
  * A button showing a choice ("Mode: Manual"; what it shows may say more: `shown`), opening a menu
@@ -24,6 +24,7 @@ export function ChoiceMenu({
   below?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <div
       className="agent-choice"
@@ -35,10 +36,12 @@ export function ChoiceMenu({
         if (open && event.key === 'Escape') {
           event.stopPropagation();
           setOpen(false);
+          button.current?.focus();
         }
       }}
     >
       <button
+        ref={button}
         type="button"
         aria-label={`${label}: ${value}`}
         aria-haspopup="menu"
@@ -66,6 +69,7 @@ export function ChoiceMenu({
               onClick={() => {
                 setOpen(false);
                 onChoose(choice.key);
+                button.current?.focus();
               }}
             >
               <span>{choice.label}</span>

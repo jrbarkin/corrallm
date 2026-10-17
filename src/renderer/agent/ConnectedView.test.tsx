@@ -298,7 +298,9 @@ describe('a connected agent', () => {
 
     fireEvent.click(view.getByRole('button', { name: 'All queues' }));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
-    expect(queues.getByText('SDK').getAttribute('title')).toMatch(/Agent SDK/);
+    expect(queues.getByRole('button', { name: 'Agent settings: a' }).textContent).toContain(
+      'Agent SDK',
+    );
     fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
 
     // Another type of agent, simulated: the session closes.
