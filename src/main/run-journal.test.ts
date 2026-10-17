@@ -114,6 +114,8 @@ describe('RunJournal', () => {
       project: '/work/project',
       sessions: { a: '11111111-1111-4111-8111-111111111111' },
       threads: { a: '11111111-1111-4111-8111-111111111111' },
+      sessionRoles: { a: 'a'.repeat(64) },
+      threadRoles: { a: 'none' },
     }));
     await runs.save(window, token, checkpoint);
 
@@ -124,7 +126,7 @@ describe('RunJournal', () => {
     expect(await memory.get(identity)).toEqual(current);
   });
 
-  it('recovers backed-up native IDs when the canvas memory record is absent', async () => {
+  it('recovers backed-up native IDs and role fingerprints when canvas memory is absent', async () => {
     const runs = journal();
     const window = contents();
     const { token } = await runs.get(window);
@@ -134,8 +136,14 @@ describe('RunJournal', () => {
       project: '/work/project',
       sessions: { a: '11111111-1111-4111-8111-111111111111' },
       threads: { b: '22222222-2222-4222-8222-222222222222' },
+      sessionRoles: { a: 'a'.repeat(64) },
+      threadRoles: { b: 'none' },
     };
-    await memory.update(identity, () => remembered);
+    await memory.update(identity, () => ({
+      ...remembered,
+      sessionRoles: { ...remembered.sessionRoles, orphan: 'none' },
+      threadRoles: { ...remembered.threadRoles, orphan: 'Review changes' },
+    }));
     await runs.save(window, token, checkpoint);
     await rm(path.join(directory, 'memory.json'));
     memory = new CanvasMemory(path.join(directory, 'memory.json'));
@@ -144,10 +152,19 @@ describe('RunJournal', () => {
     expect(await memory.get(identity)).toEqual(remembered);
   });
 
-  it('copies checkpoints on Save As and rejects the previous generation', async () => {
+  it('copies checkpoints and native metadata on Save As and rejects the previous generation', async () => {
     const runs = journal();
     const window = contents();
     const before = await runs.get(window);
+    const identity = runs.identity(window);
+    if (identity === undefined) throw new Error('No draft identity');
+    const remembered = {
+      sessions: { a: '11111111-1111-4111-8111-111111111111' },
+      threads: { b: '22222222-2222-4222-8222-222222222222' },
+      sessionRoles: { a: 'a'.repeat(64) },
+      threadRoles: { b: 'none' },
+    };
+    await memory.update(identity, () => remembered);
     await runs.save(window, before.token, checkpoint);
     const target = path.join(directory, 'copy.corral');
     await writeFile(target, '{}');
@@ -155,6 +172,7 @@ describe('RunJournal', () => {
     await runs.saved(window);
     const after = await runs.get(window);
     expect(after.checkpoint).toEqual(checkpoint);
+    expect(await memory.get(target)).toEqual(remembered);
     expect(after.token).not.toBe(before.token);
     await expect(runs.save(window, before.token, { ...checkpoint, state: '{}' })).rejects.toThrow(
       /earlier canvas/,

@@ -151,7 +151,11 @@ describe('a Terminal session', () => {
     const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
     fake.transcripts = [id];
     for (const role of ['Review changes', undefined]) {
-      const session = await start({ resume: id, ...(role === undefined ? {} : { role }) });
+      const session = await start({
+        resume: id,
+        roleChanged: true,
+        ...(role === undefined ? {} : { role }),
+      });
       expect(claude().args).toContain(`--resume=${id}`);
       expect(claude().args).not.toContain('--system-prompt-snapshot=off');
       if (role !== undefined) expect(claude().args).toContain(`--append-system-prompt=${role}`);
@@ -160,13 +164,15 @@ describe('a Terminal session', () => {
     }
   });
 
-  it('refuses unverified role or resume capabilities with a retry message before spawning', async () => {
+  it('refuses unverified role or changed-role capabilities with a retry message before spawning', async () => {
     help = '';
     const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
     await expect(start({ role: 'Review changes' })).rejects.toThrow(
       /read Claude Code.*retry|retry.*Claude Code/i,
     );
-    await expect(start({ resume })).rejects.toThrow(/read Claude Code.*retry|retry.*Claude Code/i);
+    await expect(start({ resume, roleChanged: true })).rejects.toThrow(
+      /read Claude Code.*retry|retry.*Claude Code/i,
+    );
     expect(runs).toEqual([]);
   });
 
@@ -176,27 +182,46 @@ describe('a Terminal session', () => {
     expect(runs).toEqual([]);
   });
 
-  it('starts a default new conversation without querying optional capabilities', async () => {
-    const flags = vi.fn(() => Promise.reject(new Error('Must not read optional flags')));
-    await start(
-      {},
-      {
-        using: new TerminalConnector({
-          findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
-          flags,
-          spawn: (file, args, options) => {
-            const run = new FakeClaude(file, args, options, fake);
-            runs.push(run);
-            return Promise.resolve(run);
-          },
-          tmp: dir,
-          timing: TIMING,
-        }),
-      },
-    );
-    expect(flags).not.toHaveBeenCalled();
-    expect(claude().args).not.toContain('--system-prompt-snapshot=off');
-  });
+  it.each([null, '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'])(
+    'starts a default conversation without querying optional capabilities (resume: %s)',
+    async (resume) => {
+      const flags = vi.fn(() => Promise.reject(new Error('Must not read optional flags')));
+      if (resume !== null) fake.transcripts = [resume];
+      await start(
+        { resume, ...(resume === null ? {} : { roleChanged: false }) },
+        {
+          using: new TerminalConnector({
+            findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
+            flags,
+            spawn: (file, args, options) => {
+              const run = new FakeClaude(file, args, options, fake);
+              runs.push(run);
+              return Promise.resolve(run);
+            },
+            tmp: dir,
+            timing: TIMING,
+          }),
+        },
+      );
+      expect(flags).not.toHaveBeenCalled();
+      expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+      if (resume !== null) expect(claude().args).toContain(`--resume=${resume}`);
+    },
+  );
+
+  it.each([{ effort: 'low' }, { role: 'Review changes' }])(
+    'keeps the prompt snapshot when resuming with unchanged settings %j',
+    async (settings) => {
+      const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+      fake.transcripts = [resume];
+      await start({ resume, roleChanged: false, ...settings });
+      expect(claude().args).toContain(`--resume=${resume}`);
+      expect(claude().args).not.toContain('--system-prompt-snapshot=off');
+      if (settings.role !== undefined) {
+        expect(claude().args).toContain(`--append-system-prompt=${settings.role}`);
+      }
+    },
+  );
 
   it('carries the captured role through native startup and exact-ID resume without sending a prompt', async () => {
     const role = 'Review changes\nKeep project conventions';
@@ -204,15 +229,16 @@ describe('a Terminal session', () => {
     const id = claude().arg('--session-id');
     if (id === undefined) throw new Error('No native session ID');
     expect(claude().args).toContain(`--append-system-prompt=${role}`);
-    expect(claude().args).toContain('--system-prompt-snapshot=off');
+    expect(claude().args).not.toContain('--system-prompt-snapshot=off');
     expect(claude().prompts).toEqual([]);
     await first.close();
-    const second = await start({ resume: id, role: 'Updated role' });
+    const second = await start({ resume: id, role: 'Updated role', roleChanged: true });
     expect(claude().args).toContain(`--resume=${id}`);
     expect(claude().args).toContain('--append-system-prompt=Updated role');
+    expect(claude().args).toContain('--system-prompt-snapshot=off');
     expect(claude().prompts).toEqual([]);
     await second.close();
-    await start({ resume: id });
+    await start({ resume: id, roleChanged: true });
     expect(claude().args).toContain(`--resume=${id}`);
     expect(claude().args).toContain('--system-prompt-snapshot=off');
     expect(claude().args.some((arg) => arg.startsWith('--append-system-prompt='))).toBe(false);

@@ -22,7 +22,8 @@
 // Its environment: FAKE_CODEX_LOGIN (chatgpt, apikey or none: what account/read says; apikey by
 // default), FAKE_CODEX_FAIL (it prints that on stderr and exits 1 at once), FAKE_CODEX_STATE (a
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
-// it appends each request it gets to, one JSON line each).
+// it appends each request it gets to, one JSON line each), FAKE_CODEX_CONFIG_FAIL (config/read
+// fails with that message).
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -501,6 +502,8 @@ function handle({ method, id, params }) {
     case 'account/rateLimits/read':
       return reply({ rateLimits: LIMITS, rateLimitsByLimitId: { codex: LIMITS } });
     case 'config/read':
+      if (process.env.FAKE_CODEX_CONFIG_FAIL)
+        return fail(-32000, process.env.FAKE_CODEX_CONFIG_FAIL);
       return reply({
         config: { developer_instructions: process.env.FAKE_CODEX_DEVELOPER_INSTRUCTIONS ?? null },
       });

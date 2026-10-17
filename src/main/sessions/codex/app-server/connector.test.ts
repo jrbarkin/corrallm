@@ -128,6 +128,24 @@ function texts(events: SessionEvent[]): string[] {
 }
 
 describe('the App Server connection', () => {
+  it('resumes without a role without reading native instructions, even if the read would fail', async () => {
+    const env = {
+      FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
+      FAKE_CODEX_CONFIG_FAIL: 'Could not read config',
+    };
+    const first = await start({}, env);
+    await first.turn('Hello');
+    const id = first.remembered.at(-1);
+    expect(id).toBeDefined();
+    await first.session.close();
+
+    const next = await start({ resume: id ?? null, roleChanged: false }, env);
+    expect(await requests('config/read')).toEqual([]);
+    expect((await requests('thread/resume')).at(-1)).toMatchObject({ threadId: id });
+    expect((await requests('thread/resume')).at(-1)).not.toHaveProperty('developerInstructions');
+    expect(next.events[0]).toMatchObject({ type: 'started' });
+  });
+
   it('appends roles to native developer instructions and replaces or removes them on exact-ID resume', async () => {
     const env = {
       FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
@@ -144,9 +162,13 @@ describe('the App Server connection', () => {
     const id = first.remembered.at(-1);
     expect(id).toBeDefined();
     await first.session.close();
-    for (const role of ['Updated review role', undefined]) {
+    for (const { role, roleChanged } of [
+      { role: initial, roleChanged: false },
+      { role: 'Updated review role', roleChanged: true },
+      { role: undefined, roleChanged: true },
+    ]) {
       const next = await start(
-        { resume: id ?? null, ...(role === undefined ? {} : { role }) },
+        { resume: id ?? null, roleChanged, ...(role === undefined ? {} : { role }) },
         env,
       );
       expect((await requests('thread/resume')).at(-1)).toMatchObject({

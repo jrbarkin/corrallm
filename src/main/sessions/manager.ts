@@ -21,6 +21,7 @@ import type {
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory, Remembered } from '../memory';
+import { roleFingerprint } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { KeptConversation } from './sdk/conversations';
 import { droppedPaste } from './terminal/drop';
@@ -96,9 +97,9 @@ interface Agent {
 
 /** Where each CLI's session ids are remembered (memory.ts). */
 const REMEMBERED = {
-  claude: { ids: 'sessions' },
-  codex: { ids: 'threads' },
-} as const satisfies Record<Cli, { ids: keyof Remembered }>;
+  claude: { ids: 'sessions', roles: 'sessionRoles' },
+  codex: { ids: 'threads', roles: 'threadRoles' },
+} as const satisfies Record<Cli, { ids: keyof Remembered; roles: keyof Remembered }>;
 
 /**
  * Every connected session, by the renderer whose canvas it belongs to and the agent's id. It
@@ -118,6 +119,8 @@ export class SessionManager {
   readonly #ending = new WeakMap<Agent, Promise<void>>();
   /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
   readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
+  /** The role fingerprints belonging to those ids, captured when their sessions launched. */
+  readonly #roles = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
   /** Changes synchronously when a canvas transition begins, before native shutdown can wait. */
   readonly #canvasGeneration = new WeakMap<WebContents, object>();
   /** Renderers whose going is watched for. */
@@ -409,6 +412,10 @@ export class SessionManager {
       claude: new Map(Object.entries(remembered?.sessions ?? {})),
       codex: new Map(Object.entries(remembered?.threads ?? {})),
     });
+    this.#roles.set(contents, {
+      claude: new Map(Object.entries(remembered?.sessionRoles ?? {})),
+      codex: new Map(Object.entries(remembered?.threadRoles ?? {})),
+    });
   }
 
   /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
@@ -416,6 +423,7 @@ export class SessionManager {
     this.#canvasGeneration.set(contents, {});
     await this.#endAll(contents, true);
     this.#ids.set(contents, noIds());
+    this.#roles.delete(contents);
   }
 
   /** The canvas was saved (maybe to a new file): the file remembers its agents' sessions. */
@@ -423,10 +431,15 @@ export class SessionManager {
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
     const ids = this.#idsOf(contents);
+    const roles = this.#rolesOf(contents);
     await this.#deps.memory.update(file, (remembered) => {
       const next: Remembered = { ...remembered, sessions: Object.fromEntries(ids.claude) };
       if (ids.codex.size > 0) next.threads = Object.fromEntries(ids.codex);
       else delete next.threads;
+      if (roles.claude.size > 0) next.sessionRoles = Object.fromEntries(roles.claude);
+      else delete next.sessionRoles;
+      if (roles.codex.size > 0) next.threadRoles = Object.fromEntries(roles.codex);
+      else delete next.threadRoles;
       return next;
     });
   }
@@ -436,6 +449,7 @@ export class SessionManager {
     this.#canvasGeneration.set(contents, {});
     await this.#endAll(contents, true);
     this.#ids.set(contents, noIds());
+    this.#roles.delete(contents);
     await this.canvasSaved(contents);
   }
 
@@ -456,6 +470,8 @@ export class SessionManager {
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
     const cli = CONNECTION_CLI[connection];
     const resume = this.#idsOf(contents)[cli].get(agentId) ?? null;
+    const fingerprint = roleFingerprint(role);
+    const roleChanged = this.#rolesOf(contents)[cli].get(agentId) !== fingerprint;
     const env = await this.#deps.environment();
     // A session replaced (by another connection, or after it closed) is no longer heard.
     const host: SessionHost = {
@@ -465,7 +481,7 @@ export class SessionManager {
         this.#deps.emit(contents, agentId, connection, event);
       },
       remember: (sessionId) => {
-        if (current()) void this.#remember(contents, cli, agentId, sessionId);
+        if (current()) void this.#remember(contents, cli, agentId, sessionId, fingerprint);
       },
     };
     return connector.start(
@@ -478,6 +494,7 @@ export class SessionManager {
         ...(effort === undefined ? {} : { effort }),
         ...(role === undefined ? {} : { role }),
         resume,
+        ...(resume === null ? {} : { roleChanged }),
       },
       host,
     );
@@ -486,13 +503,17 @@ export class SessionManager {
   /** Forgets the agent's session in `cli`: it starts afresh next time. */
   async #forget(contents: WebContents, cli: Cli, agentId: string): Promise<void> {
     this.#idsOf(contents)[cli].delete(agentId);
+    this.#rolesOf(contents)[cli].delete(agentId);
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
-    const field = REMEMBERED[cli].ids;
+    const { ids, roles } = REMEMBERED[cli];
     await this.#deps.memory.update(file, (remembered): Remembered => ({
       ...remembered,
-      [field]: Object.fromEntries(
-        Object.entries(remembered[field] ?? {}).filter(([agent]) => agent !== agentId),
+      [ids]: Object.fromEntries(
+        Object.entries(remembered[ids] ?? {}).filter(([agent]) => agent !== agentId),
+      ),
+      [roles]: Object.fromEntries(
+        Object.entries(remembered[roles] ?? {}).filter(([agent]) => agent !== agentId),
       ),
     }));
   }
@@ -502,14 +523,24 @@ export class SessionManager {
     cli: Cli,
     agentId: string,
     sessionId: string,
+    fingerprint?: string,
   ): Promise<void> {
     this.#idsOf(contents)[cli].set(agentId, sessionId);
+    const launched = this.#rolesOf(contents)[cli];
+    if (fingerprint === undefined) launched.delete(agentId);
+    else launched.set(agentId, fingerprint);
     const file = this.#deps.canvasOf(contents);
     if (file === undefined) return;
-    const field = REMEMBERED[cli].ids;
+    const { ids, roles } = REMEMBERED[cli];
     await this.#deps.memory.update(file, (remembered): Remembered => ({
       ...remembered,
-      [field]: { ...remembered[field], [agentId]: sessionId },
+      [ids]: { ...remembered[ids], [agentId]: sessionId },
+      [roles]: {
+        ...Object.fromEntries(
+          Object.entries(remembered[roles] ?? {}).filter(([agent]) => agent !== agentId),
+        ),
+        ...(fingerprint === undefined ? {} : { [agentId]: fingerprint }),
+      },
     }));
   }
 
@@ -628,6 +659,15 @@ export class SessionManager {
       this.#ids.set(contents, ids);
     }
     return ids;
+  }
+
+  #rolesOf(contents: WebContents): Record<Cli, Map<string, string>> {
+    let roles = this.#roles.get(contents);
+    if (!roles) {
+      roles = { claude: new Map(), codex: new Map() };
+      this.#roles.set(contents, roles);
+    }
+    return roles;
   }
 
   /** A renderer that goes, crashes, or loads another page takes its sessions with it. */

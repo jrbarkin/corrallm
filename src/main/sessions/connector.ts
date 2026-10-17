@@ -52,6 +52,8 @@ export interface SessionSpec<M extends SessionMode = PermissionMode> {
   role?: string;
   /** The id of the session to resume (it was given to `remember`), or null to start a new one. */
   resume: string | null;
+  /** Whether the resumed conversation's role changed; an unknown previous role counts as changed. */
+  roleChanged?: boolean;
 }
 
 /** Where a session reports to. */

@@ -220,13 +220,27 @@ const seen = () =>
 const ends = () => events.filter((event) => event.type === 'end').length;
 
 describe('Codex in a terminal, as the real one ran', () => {
+  it('resumes without a role without reading native instructions, even if the read would fail', async () => {
+    const readInstructions = vi.fn(() => Promise.reject(new Error('Could not read config')));
+    await start(['resume'], { resume: RECORDED_SESSION, roleChanged: false }, { readInstructions });
+    expect(readInstructions).not.toHaveBeenCalled();
+    expect(runs[0]?.args.slice(0, 2)).toEqual(['resume', RECORDED_SESSION]);
+    expect(runs[0]?.args.some((arg) => arg.startsWith('developer_instructions='))).toBe(false);
+    expect(events[0]).toMatchObject({ type: 'started' });
+  });
+
   it('reconciles captured roles with current native instructions on exact-ID restart, including removal', async () => {
     const readInstructions = vi.fn(() => Promise.resolve('Native project guidance'));
-    for (const role of ['Review changes\nUse "quotes"', 'Updated role', undefined]) {
+    for (const { role, roleChanged } of [
+      { role: 'Review changes\nUse "quotes"', roleChanged: false },
+      { role: 'Updated role', roleChanged: true },
+      { role: undefined, roleChanged: true },
+    ]) {
       const session = await start(
         ['prompts'],
         {
           resume: RECORDED_SESSION,
+          roleChanged,
           ...(role === undefined ? {} : { role }),
         },
         { readInstructions },

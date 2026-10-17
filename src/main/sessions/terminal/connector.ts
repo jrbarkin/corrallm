@@ -96,9 +96,9 @@ export class TerminalConnector implements Connector {
 
   async start(spec: SessionSpec, host: SessionHost): Promise<LiveSession> {
     const claude = await this.#findClaude(spec.env);
-    // Older CLIs predate prompt snapshots; never give them a flag they cannot parse. A default
-    // new conversation needs no optional flags and keeps its existing startup path.
-    const needsPromptOptions = spec.role !== undefined || spec.resume !== null;
+    // Older CLIs predate prompt snapshots; never give them a flag they cannot parse.
+    const roleChanged = spec.resume !== null && spec.roleChanged === true;
+    const needsPromptOptions = spec.role !== undefined || roleChanged;
     const flags =
       needsPromptOptions || spec.effort != null
         ? await this.#flags(claude, spec.env)
@@ -119,7 +119,7 @@ export class TerminalConnector implements Connector {
         home: this.#home,
         env: spec.env,
         effort,
-        promptSnapshot: flags.has('--system-prompt-snapshot'),
+        resetPromptSnapshot: roleChanged && flags.has('--system-prompt-snapshot'),
       }),
       spawn: this.#spawn,
       hooks: this.#hooks,

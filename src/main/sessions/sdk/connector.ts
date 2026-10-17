@@ -182,8 +182,8 @@ export class SdkConnector implements Connector {
         type: 'preset',
         preset: 'claude_code',
         ...(spec.role === undefined ? {} : { append: spec.role }),
-        // Rebuild on resume so an edited or removed role replaces any earlier snapshot.
-        ...(spec.role !== undefined || resume !== null ? { snapshot: false } : {}),
+        // Rebuild only when an edited or removed role replaces an earlier snapshot.
+        ...(resume !== null && spec.roleChanged === true ? { snapshot: false } : {}),
       },
       settingSources: ['user', 'project', 'local'],
       // Only a mode the user chose: otherwise their own default mode applies, as in a terminal.

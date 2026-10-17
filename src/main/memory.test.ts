@@ -17,6 +17,36 @@ afterEach(async () => {
 });
 
 describe('CanvasMemory', () => {
+  it('reads only role fingerprints that belong to valid conversation ids, for each CLI', async () => {
+    const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    const fingerprint = 'a'.repeat(64);
+    const roles = {
+      role: fingerprint,
+      absent: 'none',
+      text: 'Review changes',
+      short: 'abc',
+      upper: 'A'.repeat(64),
+      wrongType: 42,
+      orphan: fingerprint,
+      badId: fingerprint,
+    };
+    const ids = Object.fromEntries(Object.keys(roles).map((agent) => [agent, id]));
+    delete ids.orphan;
+    ids.badId = '--resume';
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        canvases: {
+          '/team.corral': { sessions: ids, threads: ids, sessionRoles: roles, threadRoles: roles },
+        },
+      }),
+    );
+    const remembered = await new CanvasMemory(file).get('/team.corral');
+    expect(remembered.sessionRoles).toEqual({ role: fingerprint, absent: 'none' });
+    expect(remembered.threadRoles).toEqual({ role: fingerprint, absent: 'none' });
+  });
+
   it('drops hostile and malformed session ids read from canvases.json for either CLI', async () => {
     const valid = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
     const ids = {

@@ -137,7 +137,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
     // Native resume can retain old model-visible role context in Codex 0.162.1:
     // https://github.com/openai/codex/issues/19045 (role edits need a new conversation).
     const developerInstructions =
-      spec.role !== undefined || spec.resume !== null
+      spec.role !== undefined || (spec.resume !== null && spec.roleChanged === true)
         ? appendRole(await this.#readInstructions({ codex, cwd, env: spec.env }), spec.role)
         : undefined;
     const usage = this.#usage;

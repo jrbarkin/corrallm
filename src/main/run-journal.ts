@@ -8,9 +8,8 @@ import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { associateCanvas, canvasFile, forgetCanvas } from './canvas';
-import { writeWhole } from './memory';
+import { readRemembered, writeWhole } from './memory';
 import type { CanvasMemory, Remembered } from './memory';
-import { isSessionId } from './sessions/id';
 
 interface Entry {
   identity: string;
@@ -248,7 +247,7 @@ export class RunJournal {
       if (text === undefined) throw new Error('The saved run is too large');
       const value: unknown = JSON.parse(text);
       if (!isRecord(value) || value.version !== 1) throw new Error('The saved run is invalid');
-      const memory = remembered(value.remembered);
+      const memory = readRemembered(value.remembered);
       return {
         checkpoint: parseRunCheckpoint(value.checkpoint),
         ...(memory === undefined ? {} : { remembered: memory }),
@@ -309,21 +308,6 @@ async function canvasText(file: string): Promise<string> {
   if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('The saved canvas is too large');
   return readFile(file, 'utf8');
 }
-function remembered(value: unknown): Remembered | undefined {
-  if (!isRecord(value)) return undefined;
-  const ids = (record: unknown) =>
-    Object.fromEntries(
-      Object.entries(isRecord(record) ? record : {}).filter((entry): entry is [string, string] =>
-        isSessionId(entry[1]),
-      ),
-    );
-  return {
-    sessions: ids(value.sessions),
-    threads: ids(value.threads),
-    ...(typeof value.project === 'string' ? { project: value.project } : {}),
-  };
-}
-
 function isLast(value: unknown): value is { version: 1; identity: string; canvas?: string } {
   return (
     isRecord(value) &&

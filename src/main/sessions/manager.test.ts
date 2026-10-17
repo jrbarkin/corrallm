@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -97,21 +98,105 @@ afterEach(async () => {
 });
 
 describe('SessionManager', () => {
+  it.each([
+    ['sdk', 'terminal', 'sessionRoles'],
+    ['app-server', 'codex-terminal', 'threadRoles'],
+  ] as const)(
+    'remembers the launched role for %s and shares it across its connections',
+    async (connection, other, field) => {
+      const codex = new FakeConnector({ cli: 'codex' });
+      const sessions = manager({ 'app-server': codex, 'codex-terminal': codex });
+      const connector = connection === 'sdk' ? fake : codex;
+      const contents = window('/work/team.corral');
+      const role = 'Review changes';
+      const fingerprint = createHash('sha256').update(role).digest('hex');
+      await sessions.start(contents, 'a', { ...OPTIONS, connection, role });
+      expect(connector.started.at(-1)).not.toHaveProperty('roleChanged');
+      await memory.flush();
+      expect((await memory.get('/work/team.corral'))[field]).toEqual({ a: fingerprint });
+      expect(await readFile(path.join(dir, 'canvases.json'), 'utf8')).not.toContain(role);
+
+      await sessions.start(contents, 'a', { ...OPTIONS, connection: other, role });
+      const next = connection === 'sdk' ? terminal : codex;
+      expect(next.started.at(-1)).toMatchObject({ resume: connector.ids[0], roleChanged: false });
+      await sessions.closeEverything();
+
+      // Load the fingerprint from disk, as after an app restart.
+      memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+      const after = manager({ 'app-server': codex });
+      await after.canvasOpened(contents);
+      for (const [currentRole, changed] of [
+        [role, false],
+        ['Updated role', true],
+        [undefined, true],
+        [undefined, false],
+      ] as const) {
+        await after.start(contents, 'a', {
+          ...OPTIONS,
+          connection,
+          ...(currentRole === undefined ? {} : { role: currentRole }),
+        });
+        expect(connector.started.at(-1)).toMatchObject({
+          resume: connector.ids[0],
+          roleChanged: changed,
+        });
+        await after.close(contents, 'a');
+      }
+      await memory.flush();
+      expect((await memory.get('/work/team.corral'))[field]).toEqual({ a: 'none' });
+    },
+  );
+
+  it.each(['sdk', 'app-server'] as const)(
+    'treats a legacy %s id with no role fingerprint as changed once',
+    async (connection) => {
+      const id = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+      const field = connection === 'sdk' ? 'sessions' : 'threads';
+      await memory.update('/work/team.corral', () => ({ sessions: {}, [field]: { a: id } }));
+      const codex = new FakeConnector({ cli: 'codex' });
+      const sessions = manager({ 'app-server': codex });
+      const connector = connection === 'sdk' ? fake : codex;
+      const contents = window('/work/team.corral');
+      await sessions.canvasOpened(contents);
+      await sessions.start(contents, 'a', { ...OPTIONS, connection });
+      expect(connector.started.at(-1)).toMatchObject({ resume: id, roleChanged: true });
+      await sessions.close(contents, 'a');
+      await sessions.start(contents, 'a', { ...OPTIONS, connection });
+      expect(connector.started.at(-1)).toMatchObject({ resume: id, roleChanged: false });
+    },
+  );
+
   it('captures the configured role only on launch and clears it on an exact-ID restart', async () => {
-    const sessions = manager();
-    const contents = window();
+    let host: SessionHost | undefined;
+    const sessions = manager({
+      sdk: {
+        start: (spec, given) => {
+          host = given;
+          return fake.start(spec, given);
+        },
+      },
+    });
+    const contents = window('/work/team.corral');
     await sessions.start(contents, 'a', { ...OPTIONS, role: 'Review changes' });
     expect(fake.started.at(-1)).toMatchObject({ role: 'Review changes' });
     await sessions.start(contents, 'a', { ...OPTIONS, role: 'Pending role' });
     expect(fake.started).toHaveLength(1);
+    const cleared = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+    host?.remember(cleared);
+    await memory.flush();
+    expect(await memory.get('/work/team.corral')).toMatchObject({
+      sessions: { a: cleared },
+      sessionRoles: { a: createHash('sha256').update('Review changes').digest('hex') },
+    });
     await sessions.close(contents, 'a');
     await sessions.start(contents, 'a', { ...OPTIONS, role: 'Updated role' });
-    expect(fake.started.at(-1)).toMatchObject({ role: 'Updated role' });
+    expect(fake.started.at(-1)).toMatchObject({ role: 'Updated role', roleChanged: true });
     const resume = fake.started.at(-1)?.resume;
     expect(resume).not.toBeNull();
     await sessions.close(contents, 'a');
     await sessions.start(contents, 'a', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBe(resume);
+    expect(fake.started.at(-1)).toHaveProperty('roleChanged', true);
     expect(fake.started.at(-1)).not.toHaveProperty('role');
   });
 
@@ -136,6 +221,8 @@ describe('SessionManager', () => {
     expect(await disk.get('/work/team.corral')).toEqual({
       sessions: { a: claudeId },
       threads: { b: otherCodexId },
+      sessionRoles: { a: 'none' },
+      threadRoles: { b: 'none' },
     });
     // No launch or synthetic turn is part of fresh; the explicit next start supplies the new role.
     expect(codex.started).toHaveLength(2);
@@ -143,10 +230,10 @@ describe('SessionManager', () => {
     expect(codex.started.at(-1)).toMatchObject({ resume: null, role: 'Updated review role' });
     expect(codex.ids.at(-1)).not.toBe(oldCodexId);
     await sessions.start(contents, 'a', OPTIONS);
-    expect(fake.started.at(-1)?.resume).toBe(claudeId);
+    expect(fake.started.at(-1)).toMatchObject({ resume: claudeId, roleChanged: false });
     await sessions.close(contents, 'b');
     await sessions.start(contents, 'b', options);
-    expect(codex.started.at(-1)?.resume).toBe(otherCodexId);
+    expect(codex.started.at(-1)).toMatchObject({ resume: otherCodexId, roleChanged: false });
   });
 
   it('waits for graceful close before forgetting a native conversation, even if it was already closing', async () => {
@@ -343,7 +430,10 @@ describe('SessionManager', () => {
     await after.start(reopened, 'a', OPTIONS);
     expect(fake.started.at(-1)).toMatchObject({ model: null, mode: null, effort: null });
     await memory.flush();
-    expect(Object.keys(await memory.get('/work/team.corral'))).toEqual(['sessions']);
+    expect(Object.keys(await memory.get('/work/team.corral'))).toEqual([
+      'sessions',
+      'sessionRoles',
+    ]);
   });
 
   it('never starts an agent bypassing permissions because it did before', async () => {
@@ -378,6 +468,8 @@ describe('SessionManager', () => {
     expect(await memory.get('/work/team.corral')).toEqual({
       sessions: { a: fake.ids[0] },
       threads: { a: codex.ids[0] },
+      sessionRoles: { a: 'none' },
+      threadRoles: { a: 'none' },
     });
 
     // After a restart, each is resumed by its own CLI.
@@ -415,6 +507,7 @@ describe('SessionManager', () => {
     canvases.set(contents, '/work/saved.corral');
     await sessions.canvasSaved(contents);
     expect(Object.keys((await memory.get('/work/saved.corral')).sessions)).toEqual(['a']);
+    expect((await memory.get('/work/saved.corral')).sessionRoles).toEqual({ a: 'none' });
   });
 
   it('passes the user’s requests on to the session, and rejects them for an agent without one', async () => {
@@ -562,6 +655,9 @@ describe('SessionManager', () => {
     await sessions.canvasForgotten(contents);
     expect(types(contents).at(-1)).toBe('a:closed');
     await expect(sessions.interrupt(contents, 'a')).rejects.toThrow(/not running/);
+    canvases.set(contents, '/work/new.corral');
+    await sessions.canvasSaved(contents);
+    expect(await memory.get('/work/new.corral')).toEqual({ sessions: {} });
   });
 
   it('forgets the sessions when the project folder changes: they start afresh in the new one', async () => {
@@ -571,7 +667,7 @@ describe('SessionManager', () => {
     projects.set(contents, '/work/other');
     await sessions.projectChanged(contents);
     expect(types(contents).at(-1)).toBe('a:closed');
-    expect((await memory.get('/work/team.corral')).sessions).toEqual({});
+    expect(await memory.get('/work/team.corral')).toEqual({ sessions: {} });
     await sessions.start(contents, 'a', OPTIONS);
     expect(fake.started.at(-1)).toMatchObject({ cwd: '/work/other', resume: null });
   });
@@ -860,11 +956,13 @@ describe('SessionManager and kept conversations', () => {
     await sessions.start(contents, 'a', OPTIONS);
     await sessions.listSessions(contents, 'a');
     await sessions.resumeSession(contents, 'a', 'kept-1');
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).sessionRoles?.a).toBeUndefined();
     await expect(sessions.send(contents, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
       /not running/,
     );
     await sessions.start(contents, 'a', OPTIONS);
-    expect(fake.started.at(-1)?.resume).toBe('kept-1');
+    expect(fake.started.at(-1)).toMatchObject({ resume: 'kept-1', roleChanged: true });
     // And after a restart.
     await memory.flush();
     expect((await memory.get('/work/team.corral')).sessions).toEqual({ a: 'kept-1' });
@@ -913,13 +1011,15 @@ describe('SessionManager rewinding a session', () => {
       },
     };
     const started: (string | null)[] = [];
+    const specs: SessionSpec[] = [];
     const sdk: Connector = {
       start: (spec, host) => {
         started.push(spec.resume);
+        specs.push(spec);
         return connector.start(spec, host);
       },
     };
-    return { sessions: manager({ sdk }), rewindFiles, close, started };
+    return { sessions: manager({ sdk }), rewindFiles, close, started, specs };
   }
 
   it('previews and restores the files alone, leaving the conversation as it is', async () => {
@@ -940,7 +1040,7 @@ describe('SessionManager rewinding a session', () => {
   });
 
   it('rewinds the conversation to a copy up to before the message, which it resumes next', async () => {
-    const { sessions, close, started } = rewinding();
+    const { sessions, close, started, specs } = rewinding();
     const contents = window('/work/team.corral');
     await sessions.start(contents, 'a', OPTIONS);
     await expect(sessions.rewind(contents, 'a', 'u2', 'both')).resolves.toMatchObject({
@@ -950,8 +1050,11 @@ describe('SessionManager rewinding a session', () => {
     expect(before).toHaveBeenCalledWith('/work/app', 'conversation', 'u2');
     expect(fork).toHaveBeenCalledWith('/work/app', 'conversation', 'reply-1');
     expect(close).toHaveBeenCalled();
+    await memory.flush();
+    expect((await memory.get('/work/team.corral')).sessionRoles?.a).toBeUndefined();
     await sessions.start(contents, 'a', OPTIONS);
     expect(started).toEqual([null, 'forked']);
+    expect(specs.at(-1)).toHaveProperty('roleChanged', true);
     await memory.flush();
     expect((await memory.get('/work/team.corral')).sessions).toEqual({ a: 'forked' });
   });
@@ -965,6 +1068,7 @@ describe('SessionManager rewinding a session', () => {
     expect(fork).not.toHaveBeenCalled();
     await memory.flush();
     expect((await memory.get('/work/team.corral')).sessions).toEqual({});
+    expect((await memory.get('/work/team.corral')).sessionRoles?.a).toBeUndefined();
     await sessions.start(contents, 'a', OPTIONS);
     expect(started).toEqual([null, null]);
   });

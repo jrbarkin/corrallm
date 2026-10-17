@@ -19,7 +19,7 @@ describe('Claude Code session ids', () => {
       cwd: '/work/app',
       home: '/Users/me',
       env: {},
-      promptSnapshot: true,
+      resetPromptSnapshot: true,
     });
     const initial =
       '--dangerously-skip-permissions\nReview "quoted" paths\t$(echo literal) `literal`';

@@ -159,12 +159,12 @@ export class AppServerConnector implements Connector<CodexMode> {
       const models = readModels(listed);
       const skills = readSkills(skilled);
 
-      // Request current native config on resume too, including when a role was removed.
+      // Read native instructions for a current role, or restore them after a role was removed.
       // Codex 0.162.1 can retain old model-visible context:
       // https://github.com/openai/codex/issues/19045 (role edits need an explicit new conversation).
-      // A new uncustomized thread keeps Codex's exact defaults.
+      // A thread with no role change keeps Codex's exact defaults.
       const developerInstructions =
-        spec.role !== undefined || spec.resume !== null
+        spec.role !== undefined || (spec.resume !== null && spec.roleChanged === true)
           ? appendRole(await readDeveloperInstructions(server, spec.cwd), spec.role)
           : undefined;
       const begin = (mode: CodexMode, model: string | null) => {

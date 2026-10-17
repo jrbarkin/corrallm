@@ -174,13 +174,13 @@ function turn(fixture: Fixture, index: number): SDKMessage[] {
 }
 
 describe('SdkConnector', () => {
-  it('appends standing roles to the native preset on exact-ID resume, with snapshotting off and no synthetic turn', async () => {
+  it('appends changed roles to the native preset on exact-ID resume, with snapshotting off and no synthetic turn', async () => {
     const { sdk, host, query } = connector();
     const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
     const initial = '--dangerously-skip-permissions\nReview "quoted" paths\t$(echo literal)';
     for (const role of [initial, 'Updated review role', undefined]) {
       const session = await sdk.start(
-        { ...SPEC, resume, ...(role === undefined ? {} : { role }) },
+        { ...SPEC, resume, roleChanged: true, ...(role === undefined ? {} : { role }) },
         host,
       );
       expect(query().options.systemPrompt).toEqual({
@@ -195,6 +195,26 @@ describe('SdkConnector', () => {
       await session.close();
     }
   });
+
+  it.each([undefined, 'Review changes'])(
+    'keeps the native prompt snapshot for an unchanged role %j on resume',
+    async (role) => {
+      const { sdk, host, query } = connector();
+      const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
+      const session = await sdk.start(
+        { ...SPEC, resume, roleChanged: false, ...(role === undefined ? {} : { role }) },
+        host,
+      );
+      expect(query().options.systemPrompt).toEqual({
+        type: 'preset',
+        preset: 'claude_code',
+        ...(role === undefined ? {} : { append: role }),
+      });
+      expect(query().options.resume).toBe(resume);
+      expect(query().sent).toEqual([]);
+      await session.close();
+    },
+  );
 
   it('runs the user’s claude as Claude Code, in the project folder, with their settings', async () => {
     const { sdk, host, query } = connector();
@@ -792,11 +812,14 @@ describe('SdkConnector', () => {
         }
       },
     });
-    await sdk.start({ ...SPEC, resume: 'broken', role: 'Fallback review role' }, host);
+    await sdk.start(
+      { ...SPEC, resume: 'broken', role: 'Fallback review role', roleChanged: true },
+      host,
+    );
     expect(queries.map((q) => q.options.resume)).toEqual(['broken', undefined]);
     expect(queries.map((q) => q.options.systemPrompt)).toEqual([
       { type: 'preset', preset: 'claude_code', append: 'Fallback review role', snapshot: false },
-      { type: 'preset', preset: 'claude_code', append: 'Fallback review role', snapshot: false },
+      { type: 'preset', preset: 'claude_code', append: 'Fallback review role' },
     ]);
     expect(queries[0]?.close).toHaveBeenCalled();
     expect(events).toContainEqual(
