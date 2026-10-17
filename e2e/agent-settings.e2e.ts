@@ -309,12 +309,11 @@ test('a role is native startup context; edits wait through active work and an ex
   await expect.poll(initializations).toEqual([
     {
       sessionId: initial?.sessionId,
-      request: expect.objectContaining({
-        appendSystemPrompt: originalRole,
-        systemPromptSnapshot: false,
-      }),
+      request: expect.objectContaining({ appendSystemPrompt: originalRole }),
     },
   ]);
+  // A new conversation keeps its prompt snapshot: only a changed role, resumed, rebuilds it.
+  expect((await initializations())[0]?.request).not.toHaveProperty('systemPromptSnapshot');
   await expect(transcript.getByText(/^0 1 /)).toBeVisible();
 
   const settings = await settingsFrom(view, 'Builder');
