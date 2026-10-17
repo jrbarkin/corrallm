@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { WebContents } from 'electron';
@@ -51,11 +51,17 @@ export class RunJournal {
     return this.#entries.has(contents);
   }
 
-  async get(contents: WebContents): Promise<RunContext> {
-    const entry = await this.#entry(contents);
+  /** Waits for restoration, old sessions and queued writes without changing the canvas. */
+  async ready(contents: WebContents): Promise<void> {
+    await this.#entry(contents);
     await this.#deps.settled?.(contents);
     await this.flush();
-    const record = await this.#read(entry.identity);
+  }
+
+  async get(contents: WebContents): Promise<RunContext> {
+    await this.ready(contents);
+    const entry = await this.#entry(contents);
+    const record = await this.#read(entry);
     const folder = this.#deps.projectOf(contents);
     let savedText: string | undefined;
     if (entry.canvas !== undefined) {
@@ -117,19 +123,17 @@ export class RunJournal {
     const canvas = canvasFile(contents);
     if (canvas === undefined) return;
     if (before?.identity === canvas) return;
-    let migration: Promise<void> | undefined;
     try {
       await this.flush();
-      const record = before === undefined ? undefined : await this.#read(before.identity);
+      const record = before === undefined ? undefined : await this.#read(before);
       const remembered =
         before === undefined ? undefined : await this.#deps.memory.get(before.identity);
       const entry = { identity: canvas, canvas, token: randomUUID() };
       if (remembered !== undefined) await this.#deps.memory.update(canvas, () => remembered);
-      migration = this.#serialize(async () => {
+      await this.#serialize(async () => {
         if (record !== undefined) await this.#write(canvas, record);
         await this.#last(entry);
       });
-      await migration;
       this.#entries.set(contents, entry);
     } catch (error) {
       // The target canvas file may already exist, but a failed metadata migration must keep the
@@ -138,10 +142,6 @@ export class RunJournal {
       else this.#entries.set(contents, before);
       if (before?.canvas === undefined) forgetCanvas(contents);
       else associateCanvas(contents, before.canvas);
-      // This migration's error reaches its caller; it must not poison reads of the intact old run.
-      if (migration !== undefined && this.#writing === migration) {
-        this.#writing = migration.catch(() => undefined);
-      }
       throw error;
     }
   }
@@ -192,16 +192,8 @@ export class RunJournal {
       }
     }
     this.#entries.set(contents, entry);
-    if (entry.canvas !== undefined) {
-      try {
-        await canvasText(entry.canvas);
-        associateCanvas(contents, entry.canvas);
-      } catch (error) {
-        if (!missing(error)) throw error;
-        await this.#toDraft(contents, entry);
-      }
-    }
-    const record = await this.#read(entry.identity);
+    if (entry.canvas !== undefined) associateCanvas(contents, entry.canvas);
+    const record = await this.#read(entry);
     if (record?.remembered !== undefined) {
       const backup = record.remembered;
       // A present record is authoritative, including IDs intentionally cleared by a project
@@ -216,10 +208,15 @@ export class RunJournal {
   }
 
   async #toDraft(contents: WebContents, entry: Entry): Promise<void> {
-    const record = await this.#read(entry.identity);
+    const record = await this.#read(entry);
     const remembered = await this.#deps.memory.get(entry.identity);
     Object.assign(entry, draft(), {
-      warning: 'The saved canvas is missing. Its run was restored as an unsaved canvas.',
+      warning: [
+        entry.warning,
+        'The saved canvas is missing. Its run was restored as an unsaved canvas.',
+      ]
+        .filter(Boolean)
+        .join(' '),
     });
     delete entry.canvas;
     forgetCanvas(contents);
@@ -237,21 +234,30 @@ export class RunJournal {
     );
   }
 
-  async #read(identity: string): Promise<RecordFile | undefined> {
+  async #read(entry: Entry): Promise<RecordFile | undefined> {
+    const file = this.#file(entry.identity);
+    let text: string | undefined;
     try {
-      const file = this.#file(identity);
-      if ((await stat(file)).size > MAX_RUN_BYTES * 2)
-        throw new Error('The saved run is too large');
-      const value: unknown = JSON.parse(await readFile(file, 'utf8'));
+      if ((await stat(file)).size <= MAX_RUN_BYTES * 2) text = await readFile(file, 'utf8');
+    } catch (error) {
+      // A read that fails (not a record that is wrong) may work next time: it is not set aside.
+      if (missing(error)) return undefined;
+      throw error;
+    }
+    try {
+      if (text === undefined) throw new Error('The saved run is too large');
+      const value: unknown = JSON.parse(text);
       if (!isRecord(value) || value.version !== 1) throw new Error('The saved run is invalid');
       const memory = remembered(value.remembered);
       return {
         checkpoint: parseRunCheckpoint(value.checkpoint),
         ...(memory === undefined ? {} : { remembered: memory }),
       };
-    } catch (error) {
-      if (missing(error)) return undefined;
-      throw error;
+    } catch {
+      const rejected = file.replace(/\.json$/, `.rejected-${randomUUID()}.json`);
+      await rename(file, rejected);
+      entry.warning = `The run progress could not be restored and its record was moved to ${rejected}.`;
+      return undefined;
     }
   }
 
@@ -284,8 +290,8 @@ export class RunJournal {
   }
 
   #serialize(operation: () => Promise<void>): Promise<void> {
-    const writing = this.#writing.catch(() => undefined).then(operation);
-    this.#writing = writing;
+    const writing = this.#writing.then(operation);
+    this.#writing = writing.catch(() => undefined);
     return writing;
   }
 }

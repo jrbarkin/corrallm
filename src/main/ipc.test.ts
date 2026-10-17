@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Unit tests never load the real 'electron' module (importing it would download the binary).
-const { handle, openCanvas } = vi.hoisted(() => ({
+const { handle, openCanvas, saveCanvas } = vi.hoisted(() => ({
   openCanvas: vi.fn<() => Promise<{ name: string; text: string } | null>>(),
+  saveCanvas: vi.fn<typeof Canvas.saveCanvas>(),
   handle:
     vi.fn<(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void>(),
 }));
@@ -14,6 +15,7 @@ vi.mock('electron', () => ({
 vi.mock('./canvas', async (importOriginal) => ({
   ...(await importOriginal<typeof Canvas>()),
   openCanvas,
+  saveCanvas,
 }));
 
 import type * as Canvas from './canvas';
@@ -41,6 +43,7 @@ function frame(origin: string, overrides: Record<string, unknown> = {}) {
 function fakeServices() {
   return {
     runs: {
+      ready: vi.fn<IpcServices['runs']['ready']>().mockResolvedValue(undefined),
       get: vi
         .fn<IpcServices['runs']['get']>()
         .mockResolvedValue({ token: 'canvas-token', checkpoint: null, name: null }),
@@ -139,6 +142,7 @@ const pingListener = () => listenerFor('app:ping');
 beforeEach(() => {
   handle.mockReset();
   openCanvas.mockReset();
+  saveCanvas.mockReset();
   services = fakeServices();
 });
 
@@ -238,6 +242,48 @@ describe('canvas replacement after a failed restore', () => {
     expect(services.runs.opened).toHaveBeenCalledWith(sender);
     expect(services.sessions.canvasOpened).toHaveBeenCalledWith(sender);
   });
+});
+
+describe('journal barriers', () => {
+  it.each([
+    { channel: 'canvas:save', args: ['{}', true], action: 'save' },
+    { channel: 'project:choose', args: [], action: 'choose' },
+    {
+      channel: 'session:start',
+      args: ['a', { connection: 'terminal', model: null, mode: null }],
+      action: 'start',
+    },
+  ])(
+    '$channel waits for ready without restoring the renderer again',
+    async ({ channel, args, action }) => {
+      const sender = {};
+      const ready = Promise.withResolvers<undefined>();
+      services.runs.ready.mockReturnValue(ready.promise);
+      services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
+      saveCanvas.mockResolvedValue('rescued.corral');
+      const called =
+        action === 'save'
+          ? saveCanvas
+          : action === 'choose'
+            ? services.projects.choose
+            : services.sessions.start;
+      const result = Promise.resolve(invoke(channel, args, sender)).then(
+        (value: unknown) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      expect(services.runs.ready).toHaveBeenCalledWith(sender);
+      expect(called).not.toHaveBeenCalled();
+      ready.resolve(undefined);
+      expect(await result).toEqual({ value: action === 'save' ? 'rescued.corral' : null });
+      expect(called).toHaveBeenCalledOnce();
+      expect(called.mock.calls[0]?.[0]).toBe(sender);
+      expect(services.runs.get).not.toHaveBeenCalled();
+      if (action === 'save') {
+        expect(saveCanvas).toHaveBeenCalledWith(sender, '{}', true);
+        expect(services.runs.saved).toHaveBeenCalledWith(sender);
+      }
+    },
+  );
 });
 
 describe('canvas:save handler', () => {

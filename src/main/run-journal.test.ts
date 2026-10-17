@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: {}, dialog: {} }));
 
+import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { associateCanvas, canvasFile, forgetCanvas, saveCanvas } from './canvas';
+import * as canvasMemory from './memory';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
 
@@ -36,6 +38,7 @@ beforeEach(async () => {
   restored = vi.fn().mockResolvedValue(undefined);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await memory.flush();
   await rm(directory, { recursive: true, force: true });
 });
@@ -236,6 +239,35 @@ describe('RunJournal', () => {
     expect(returned).toBe(true);
   });
 
+  it('waits for restoration and old native sessions before ready returns', async () => {
+    const restore = Promise.withResolvers<undefined>();
+    const closed = Promise.withResolvers<undefined>();
+    restored.mockReturnValue(restore.promise);
+    const settled = vi.fn().mockReturnValue(closed.promise);
+    const runs = new RunJournal(path.join(directory, 'runs'), {
+      memory,
+      projectOf: () => undefined,
+      restored,
+      settled,
+    });
+    const window = contents();
+    const returned = vi.fn();
+    const ready = runs.ready(window).then(returned);
+    await vi.waitFor(() => {
+      expect(restored).toHaveBeenCalledWith(window);
+    });
+    expect(settled).not.toHaveBeenCalled();
+    expect(returned).not.toHaveBeenCalled();
+    restore.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(settled).toHaveBeenCalledWith(window);
+    });
+    expect(returned).not.toHaveBeenCalled();
+    closed.resolve(undefined);
+    await ready;
+    expect(returned).toHaveBeenCalledOnce();
+  });
+
   it('New rotates identity and prevents a delayed old save from overwriting the new draft', async () => {
     const runs = journal();
     const window = contents();
@@ -266,14 +298,91 @@ describe('RunJournal', () => {
     expect(canvasFile(next)).toBeUndefined();
   });
 
-  it('surfaces write failure and allows a later retry instead of swallowing it', async () => {
+  it('keeps the token valid through ready after the canvas file disappears', async () => {
+    const runs = journal();
+    const window = contents();
+    const file = path.join(directory, 'gone.corral');
+    await writeFile(file, '{}');
+    associateCanvas(window, file);
+    const { token } = await runs.get(window);
+    await runs.save(window, token, checkpoint);
+    await rm(file);
+
+    await runs.ready(window);
+    expect(canvasFile(window)).toBe(file);
+    expect(runs.identity(window)).toBe(file);
+    const next = { ...checkpoint, updatedAt: 456 };
+    await runs.save(window, token, next);
+    const context = await runs.get(window);
+    expect(context).toMatchObject({ checkpoint: next, name: null });
+    expect(context.warning).toContain('missing');
+    expect(context.token).not.toBe(token);
+    expect(canvasFile(window)).toBeUndefined();
+    await runs.save(window, context.token, next);
+    await expect(runs.save(window, token, checkpoint)).rejects.toThrow(/earlier canvas/);
+  });
+
+  it('leaves a missing named canvas associated until get supplies a draft token', async () => {
+    const runs = journal();
+    const window = contents();
+    const file = path.join(directory, 'gone.corral');
+    await writeFile(file, '{}');
+    associateCanvas(window, file);
+    await runs.save(window, (await runs.get(window)).token, checkpoint);
+    await rm(file);
+
+    const reopened = contents();
+    const next = journal();
+    await next.ready(reopened);
+    expect(canvasFile(reopened)).toBe(file);
+    expect(next.identity(reopened)).toBe(file);
+    const context = await next.get(reopened);
+    expect(context).toMatchObject({
+      checkpoint,
+      name: null,
+    });
+    expect(context.warning).toContain('missing');
+    expect(canvasFile(reopened)).toBeUndefined();
+  });
+
+  it('reports a failed write without blocking reads, ready or the next save', async () => {
+    const runs = journal();
+    const window = contents();
+    const { token } = await runs.get(window);
+    await runs.save(window, token, checkpoint);
+    const writing = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    vi.spyOn(canvasMemory, 'writeWhole').mockImplementationOnce(async () => {
+      writing.resolve(undefined);
+      await release.promise;
+      throw new Error('Disk full');
+    });
+    const failed = runs
+      .save(window, token, { ...checkpoint, updatedAt: 456 })
+      .catch((error: unknown) => error);
+    await writing.promise;
+    const returned = vi.fn();
+    const ready = runs.ready(window).then(returned);
+    const context = runs.get(window);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(returned).not.toHaveBeenCalled();
+    release.resolve(undefined);
+    expect(await failed).toEqual(new Error('Disk full'));
+    await ready;
+    expect(await context).toMatchObject({ token, checkpoint });
+    const next = { ...checkpoint, updatedAt: 789 };
+    await runs.save(window, token, next);
+    expect((await runs.get(window)).checkpoint).toEqual(next);
+  });
+
+  it('surfaces write failure and allows a later retry', async () => {
     const runs = journal();
     const window = contents();
     const { token } = await runs.get(window);
     await rm(path.join(directory, 'runs'), { recursive: true });
     await writeFile(path.join(directory, 'runs'), 'blocks directory');
     await expect(runs.save(window, token, checkpoint)).rejects.toThrow();
-    await expect(runs.flush()).rejects.toThrow();
+    await expect(runs.flush()).resolves.toBeUndefined();
     await rm(path.join(directory, 'runs'));
     await runs.save(window, token, checkpoint);
     expect((await runs.get(window)).checkpoint).toEqual(checkpoint);
@@ -282,23 +391,71 @@ describe('RunJournal', () => {
     ).toHaveProperty('version', 1);
   });
 
-  it('keeps an unreadable journal unchanged when New starts a fresh draft', async () => {
+  it.each([
+    { reason: 'malformed JSON', text: '{unreadable journal' },
+    { reason: 'an invalid version', text: '{"version":2}' },
+    {
+      reason: 'an invalid checkpoint',
+      text: JSON.stringify({ version: 1, checkpoint: { ...checkpoint, state: 'invalid' } }),
+    },
+    { reason: 'an oversized record', text: 'too large', size: MAX_RUN_BYTES * 2 + 1 },
+  ])('sets aside a journal with $reason and opens without progress', async ({ text, size }) => {
     const runs = journal();
     const window = contents();
-    const context = await runs.get(window);
-    await runs.save(window, context.token, checkpoint);
+    const canvas = path.join(directory, 'team.corral');
+    await writeFile(canvas, '{"saved":true}');
+    associateCanvas(window, canvas);
+    await runs.save(window, (await runs.get(window)).token, checkpoint);
     const folder = path.join(directory, 'runs');
     const file = (await readdir(folder)).find((name) => name !== 'last.json');
     if (!file) throw new Error('No journal file');
-    const rejected = '{unreadable journal';
-    await writeFile(path.join(folder, file), rejected);
+    await writeFile(path.join(folder, file), text);
+    if (size !== undefined) await truncate(path.join(folder, file), size);
+    await runs.ready(window);
+    expect((await stat(path.join(folder, file))).size).toBe(size ?? Buffer.byteLength(text));
     const next = journal();
     const reopened = contents();
-    await expect(next.get(reopened)).rejects.toThrow();
+    const context = await next.get(reopened);
+    expect(context).toMatchObject({
+      checkpoint: null,
+      name: 'team.corral',
+      savedText: '{"saved":true}',
+    });
+    const preserved = (await readdir(folder)).filter((name) => name.includes('.rejected-'));
+    expect(preserved).toHaveLength(1);
+    const [preservedFile] = preserved;
+    if (!preservedFile) throw new Error('Rejected journal was not preserved');
+    const rejected = path.join(folder, preservedFile);
+    expect(context.warning).toMatch(/progress.*not.*restored/i);
+    expect(context.warning).toContain(rejected);
+    expect((await stat(rejected)).size).toBe(size ?? Buffer.byteLength(text));
+    if (size === undefined) expect(await readFile(rejected, 'utf8')).toBe(text);
+    await expect(stat(path.join(folder, file))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await next.get(reopened)).checkpoint).toBeNull();
+    await next.save(reopened, context.token, checkpoint);
     await next.forgotten(reopened);
     const recovered = await next.get(reopened);
     await next.save(reopened, recovered.token, checkpoint);
-    expect(await readFile(path.join(folder, file), 'utf8')).toBe(rejected);
+    expect((await stat(rejected)).size).toBe(size ?? Buffer.byteLength(text));
+  });
+
+  it('leaves a record it could not read for another reason where it is, and says why', async () => {
+    // Only a record that can't be parsed or checked is set aside: a read that fails (here, the
+    // record's path is a folder) may work next time.
+    const runs = journal();
+    const window = contents();
+    const canvas = path.join(directory, 'team.corral');
+    await writeFile(canvas, '{"saved":true}');
+    associateCanvas(window, canvas);
+    await runs.save(window, (await runs.get(window)).token, checkpoint);
+    const folder = path.join(directory, 'runs');
+    const file = (await readdir(folder)).find((name) => name !== 'last.json');
+    if (!file) throw new Error('No journal file');
+    await rm(path.join(folder, file));
+    await mkdir(path.join(folder, file));
+    await expect(journal().get(contents())).rejects.toMatchObject({ code: 'EISDIR' });
+    expect((await readdir(folder)).filter((name) => name.includes('.rejected-'))).toEqual([]);
+    expect((await stat(path.join(folder, file))).isDirectory()).toBe(true);
   });
 
   it('preserves malformed last-canvas metadata before New replaces it', async () => {

@@ -54,7 +54,7 @@ export type IpcHandler<C extends IpcChannel> = (
  * project files to show), sessions, the CLIs the user has, and usage.
  */
 export interface IpcServices {
-  runs: Pick<RunJournal, 'get' | 'save' | 'opened' | 'saved' | 'forgotten'>;
+  runs: Pick<RunJournal, 'ready' | 'get' | 'save' | 'opened' | 'saved' | 'forgotten'>;
   shutdown: Pick<RunShutdown, 'ready'>;
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
@@ -242,7 +242,7 @@ function createHandlers({
     'canvas:save': {
       parseArgs: parseSaveArgs,
       handler: async ({ contents }, text, choose) => {
-        await runs.get(contents);
+        await runs.ready(contents);
         const name = await saveCanvas(contents, text, choose);
         if (name !== null) {
           await runs.saved(contents);
@@ -266,7 +266,7 @@ function createHandlers({
     'project:choose': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
-        await runs.get(contents);
+        await runs.ready(contents);
         const before = projects.of(contents);
         const chosen = await projects.choose(contents);
         if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
@@ -283,7 +283,7 @@ function createHandlers({
     'session:start': {
       parseArgs: parseStartArgs,
       handler: async ({ contents }, agentId, options) => {
-        await runs.get(contents);
+        await runs.ready(contents);
         await sessions.start(contents, agentId, options);
         return null;
       },
