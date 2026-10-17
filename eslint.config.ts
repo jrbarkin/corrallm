@@ -13,14 +13,7 @@ const NODE_BUILTINS = builtinModules.flatMap((name) =>
 );
 
 export default defineConfig(
-  globalIgnores([
-    '.vite/',
-    '.delegate/',
-    'out/',
-    'coverage/',
-    'playwright-report/',
-    'test-results/',
-  ]),
+  globalIgnores(['.vite/', 'out/', 'coverage/', 'playwright-report/', 'test-results/']),
   {
     name: 'app/typescript',
     files: ['**/*.{ts,tsx,mts,cts}'],

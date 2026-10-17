@@ -18,7 +18,6 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm make`      | Installers for the current OS in `out/make/`                                                           |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
-- `pnpm delegate -- --cwd <folder> <task…>` hands a task to Codex, for developing corrallm from a terminal or from Claude Code: one turn of a Codex thread in that folder (a worktree of its own, best), through the App Server connector, in Codex's sandbox. It prints what Codex does on stderr and a report on stdout (what it said, its thread, what changed), and exits 0 if the turn completed, 1 if it failed, 2 if Codex stopped to ask something (`--yes` approves instead), 3 if it was stopped or ran out of time. `--resume <thread>` continues the thread, `--models` lists Codex's models, `--chatgpt-plan` lets it use a ChatGPT plan, `--help` says the rest. It is no part of the app: vite.delegate.config.mts bundles it to `.delegate/`.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` (note `pnpm dev` overwrites it). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - `CORRALLM_CLAUDE_PATH=/path/to/claude` makes connected agents run that `claude` instead of the user's own, and only that one: main looks nowhere else, even if nothing can run there (the e2e tests point it at a fake: `e2e/fake-claude.mjs` for Terminal agents, `src/main/sessions/sdk/fake-claude.mjs` for the Agent SDK). `CORRALLM_CODEX_PATH` does the same for `codex`. Set empty, the user's own are found as usual.
 - `CORRALLM_DISTRIBUTION=commercial` (or `hosted`) when building (`pnpm package`, `pnpm make`) makes a build for a commercial or hosted product, whose App Server connection refuses a ChatGPT login (see Codex); the default is `local`.
@@ -110,10 +109,6 @@ src/main/sessions/codex/app-server/  The App Server connection (see Codex below)
                 are its slash commands (and /diff's git), protocol.ts what corrallm sends.
                 recorded.ts reads fixtures/; replay.ts replays one as an app server, for tests.
 src/main/files.ts   The project folder's files for @-mentions (project:files): git's list, or a walk.
-src/main/delegate/  The `delegate` command (see Commands): delegate.ts runs one turn of a Codex thread
-                through the App Server connector, with no one to answer what Codex asks (the turn
-                stops there, unless told yes ahead); cli.ts reads its arguments and words the
-                report; bin.ts is its entry.
 src/main/native-selftest.ts, selftest.ts, selftest-claude.mjs  The packaged app's self-test (see Commands).
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts

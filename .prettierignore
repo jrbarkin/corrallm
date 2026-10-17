@@ -1,6 +1,5 @@
 pnpm-lock.yaml
 .vite/
-.delegate/
 out/
 coverage/
 playwright-report/

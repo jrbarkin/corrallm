@@ -24,7 +24,6 @@
     "test:e2e": "playwright test",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "delegate": "vite build --config vite.delegate.config.mts && node .delegate/delegate.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
