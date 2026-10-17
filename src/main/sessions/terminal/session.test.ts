@@ -808,6 +808,9 @@ describe('a Terminal session', () => {
       'notice:error:Limit reached',
       'end:failed',
     ]);
+    expect(last('end')).toMatchObject({
+      result: { status: 'failed', reason: 'usage-limit', message: 'Limit reached' },
+    });
   });
 
   it('works without status reports (an older Claude Code): its prompt and hooks tell', async () => {

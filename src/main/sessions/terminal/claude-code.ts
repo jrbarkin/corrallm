@@ -11,6 +11,7 @@ import {
 import { CLAUDE_EFFORTS } from '../sdk/session';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
+import { claudeFailure } from '../claude-errors';
 import { isSessionId } from '../id';
 import { askedQuestions } from '../sdk/prompts';
 import { proposedDetail, property, text as textOf, toolSummary } from '../sdk/tools';
@@ -201,6 +202,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
           {
             kind: 'failed',
             why: text('error_details') ?? text('last_assistant_message') ?? text('error'),
+            reason: claudeFailure(text('error') ?? 'unknown'),
           },
           { kind: 'state', state: 'error' },
         );

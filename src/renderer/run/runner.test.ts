@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Connection, MessageImage } from '../../shared/session';
+import type { Connection, MessageImage, TurnResult } from '../../shared/session';
 import type { UsageBackend, UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import { AGENT_CONNECTIONS, DEFAULT_AGENT } from '../graph/agents';
 import { EXAMPLES } from '../graph/examples';
@@ -158,12 +158,12 @@ function setup(
     }
     clock = until;
   };
-  const reply = (to: string, failed = false, text = '') => {
+  const reply = (to: string, failed = false, text = '', result?: TurnResult) => {
     const turn = sent.find((s) => s.agent === to && s.done);
     if (!turn?.done) throw new Error(`no turn for ${to}`);
     const { done } = turn;
     delete turn.done;
-    done({ failed, reply: text });
+    done({ failed, reply: text, ...(result === undefined ? {} : { result }) });
   };
   /** Each agent's task (or `done`), and whether it runs it or waits. */
   const where = () =>
@@ -1396,6 +1396,44 @@ describe('RunStore', () => {
       expect(store.snapshot().agents.a?.outcomes['green-loop']).toBe('succeeded');
       expect(sent.map((s) => s.text)).not.toContain('The new tests pass already: make them fail');
       expect(told).toEqual([]);
+    });
+
+    it.each([
+      ['usage-limit', 'You have hit your usage limit.'],
+      ['auth', 'Not logged in.'],
+      ['api', 'The API is overloaded.'],
+    ] as const)(
+      'holds a step that failed natively (%s) for the user, rather than going down If it failed',
+      (reason, message) => {
+        // Only the step's own FAILED is a failure its queue was written for: the tests never ran.
+        const a = connected('a', [
+          { id: 'tests', action: 'Bash' },
+          { id: 'red', if: { kind: 'failed' }, then: [{ id: 'fix', message: 'Fix the tests' }] },
+        ]);
+        const { store, reply, where, sent } = setup([a], manual);
+        store.start();
+        reply('a', true, '', { status: 'failed', reason, message });
+        expect(where()).toEqual({ a: 'asking tests' });
+        expect(store.snapshot().agents.a?.problem).toMatchObject({ kind: 'failed', reason });
+        expect(sent.map((turn) => turn.text)).not.toContain('Fix the tests');
+      },
+    );
+
+    it('holds a step that failed natively in a repeat, rather than going round again', () => {
+      const a = connected('a', [
+        {
+          id: 'loop',
+          repeat: [{ id: 'tests', action: 'Bash' }],
+          until: { kind: 'succeeded' },
+          rounds: 3,
+          otherwise: 'ask',
+        },
+      ]);
+      const { store, reply, where, sent } = setup([a], manual);
+      store.start();
+      reply('a', true, '', { status: 'failed', reason: 'usage-limit' });
+      expect(where()).toEqual({ a: 'asking tests' });
+      expect(sent).toHaveLength(1);
     });
 
     it('never sends a message a terminal CLI would run as a shell command', () => {

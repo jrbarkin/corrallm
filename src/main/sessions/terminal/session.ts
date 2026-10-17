@@ -6,6 +6,7 @@ import type {
   PermissionMode,
   SessionMode,
   TerminalAsk,
+  TurnResult,
   UserMessage,
 } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
@@ -123,6 +124,8 @@ interface Turn {
   ran: boolean;
   interrupted: boolean;
   failed: boolean;
+  /** Why it failed, where the CLI said (its StopFailure hook: a usage limit, a login, the API). */
+  result?: TurnResult;
   /** Whether the user was told why it failed, or that they must log in. */
   told: boolean;
   /** The status last sent. */
@@ -642,12 +645,14 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#notified = undefined;
     this.#list();
     const interrupted = turn.interrupted || (turn.ran && this.#state === 'idle');
+    const failed = !interrupted && (turn.failed || (turn.ran && this.#state === 'error'));
     this.#host.emit({
       type: 'end',
       messages: turn.messages,
       seconds: Math.max(1, Math.round((Date.now() - turn.started) / 1000)),
       interrupted,
-      failed: !interrupted && (turn.failed || (turn.ran && this.#state === 'error')),
+      failed,
+      ...(failed && turn.result !== undefined ? { result: turn.result } : {}),
     });
     this.#readUsage();
   }
@@ -850,7 +855,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         return;
       case 'failed':
         if (this.#turn) {
-          this.#tell(this.#turn, 'error', signal.why ?? `${this.#cli.name} stopped with an error.`);
+          const why = signal.why ?? `${this.#cli.name} stopped with an error.`;
+          if (signal.reason !== undefined) {
+            this.#turn.result = { status: 'failed', reason: signal.reason, message: why };
+          }
+          this.#tell(this.#turn, 'error', why);
         }
         return;
       case 'state':

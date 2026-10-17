@@ -1,4 +1,4 @@
-import type { SessionMode, TerminalAsk } from '../../../shared/session';
+import type { SessionMode, TerminalAsk, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
 import type { Screen } from './screen';
@@ -47,8 +47,8 @@ export type TerminalSignal<M extends SessionMode> =
   | { kind: 'prompt'; text: string }
   /** The turn's last reply. */
   | { kind: 'reply'; text: string }
-  /** The turn failed, and why (when it says). */
-  | { kind: 'failed'; why: string | undefined }
+  /** The turn failed, and why (when it says): what it said, and the reason, when it gives one. */
+  | { kind: 'failed'; why: string | undefined; reason?: TurnReason }
   /**
    * Its state, for a CLI whose screen does not report it (an older one): ignored once the screen
    * has reported, which says it better.

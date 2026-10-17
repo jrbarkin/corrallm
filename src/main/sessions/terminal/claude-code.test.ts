@@ -80,6 +80,25 @@ describe('Claude Code session ids', () => {
   });
 });
 
+describe('a turn Claude Code could not finish', () => {
+  it.each([
+    ['rate_limit', 'usage-limit'],
+    ['authentication_failed', 'auth'],
+    ['billing_error', 'auth'],
+    ['overloaded', 'api'],
+    ['something_new', 'api'],
+  ])('says why, from its StopFailure hook (%s)', (error, reason) => {
+    const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+    const signals = claude.hook({
+      hook_event_name: 'StopFailure',
+      session_id: SESSION,
+      error,
+      error_details: 'What the API said',
+    });
+    expect(signals).toContainEqual({ kind: 'failed', why: 'What the API said', reason });
+  });
+});
+
 /** What Claude Code asks, as its PermissionRequest hook tells it for `tool` with `input`. */
 function asked(tool: string, input: Record<string, unknown>): TerminalAsk | undefined {
   const claude = new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });

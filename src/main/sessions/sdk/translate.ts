@@ -20,6 +20,7 @@ import type {
   ToolStatus,
   TurnResult,
 } from '../../../shared/session';
+import { claudeFailure, isLoginError } from '../claude-errors';
 import { notice, resetTime } from '../transcript';
 import type { Places } from './tools';
 import { output, property, resultDetail, resultText, text, toolSummary } from './tools';
@@ -39,13 +40,6 @@ import { output, property, resultDetail, resultText, text, toolSummary } from '.
 const PROMPT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 /** Tools that keep a to-do list: shown as the list, not as tool lines. */
 const TODO_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate']);
-/** Errors that mean Claude Code is not logged in, or its login no longer works. */
-const LOGIN_ERRORS = new Set([
-  'authentication_failed',
-  'oauth_org_not_allowed',
-  'cloud_credential_error',
-  'verification_required',
-]);
 /** How Claude Code words a hook's non-blocking failure, before what it printed. */
 const NON_BLOCKING = 'Failed with non-blocking status code: ';
 const LOGIN_HELP =
@@ -321,11 +315,7 @@ export class Translator {
       if (parent === undefined)
         this.#turnFailure = {
           status: 'failed',
-          reason: LOGIN_ERRORS.has(message.error)
-            ? 'auth'
-            : message.error === 'rate_limit'
-              ? 'usage-limit'
-              : 'api',
+          reason: claudeFailure(message.error),
           message: why,
           ...(message.error === 'rate_limit' && this.#reset
             ? { resetsAt: this.#reset.at * 1000 }
@@ -724,7 +714,7 @@ export class Translator {
 
   /** What an API error says, with what to do about it. */
   #errorText(error: string, said: string): string {
-    if (LOGIN_ERRORS.has(error)) {
+    if (isLoginError(error)) {
       return `${said === '' ? 'Claude Code is not logged in.' : said} ${LOGIN_HELP}`;
     }
     if (error === 'rate_limit' && this.#reset && !/reset/i.test(said)) {

@@ -907,7 +907,7 @@ export class RunStore {
     }
   }
 
-  /** Authored branches/repeats keep their recovery semantics for known failures. */
+  /** Whether the queue was written for task `item` failing: an If it failed after it, or a repeat. */
   #handlesFailure(agent: string, item: string): boolean {
     const queue = this.#agents().find((n) => n.id === agent)?.data.queue ?? [];
     const found = findItem(queue, item);
@@ -1966,7 +1966,9 @@ export class RunStore {
       problem?.reason,
       problem?.text,
     );
-    if (problem && (problem.kind !== 'failed' || !this.#handlesFailure(agent, task))) {
+    // Only a task's own failure is one its queue was written for (an If it failed, a repeat's next
+    // round): a native one (a usage limit, a login) holds for the user, as cancelling does.
+    if (problem && (problem.reason !== 'task-failed' || !this.#handlesFailure(agent, task))) {
       const at = this.#run.agents[agent];
       if (at)
         this.#run = {
