@@ -1083,7 +1083,7 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
   expect(Math.abs(claude.y - codex.y)).toBeLessThanOrEqual(1);
   expect(codex.x).toBeGreaterThan(claude.x + claude.width);
   const judging = view.getByRole('group', {
-    name: 'Judge: Repeat until the output contains “WINNER” (up to 2 rounds)',
+    name: 'Judge: Repeat until the output contains “WINNER” on a line of its own (up to 2 rounds)',
   });
   await expect(judging).toBeVisible();
 
