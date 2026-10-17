@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
+import { AGENT_ACTIONS, AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
@@ -14,6 +14,13 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
   it('is a canvas, written just as corrallm writes one', () => {
     expect(toFile(graph)).toBe(example.text);
+  });
+
+  it('pins roles only to agent types with a connection', () => {
+    for (const agent of agents.values()) {
+      if (agent.data.agent !== undefined)
+        expect(AGENT_CONNECTIONS[agent.data.agent], agent.data.label).not.toHaveLength(0);
+    }
   });
 
   it("aims only at its own agents, and uses only each agent's own actions", () => {

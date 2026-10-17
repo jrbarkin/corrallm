@@ -26,6 +26,17 @@ const connected = (id: string, queue: QueueItem[] = [], connection: Connection =
   return { ...node, data: { ...node.data, connection } };
 };
 
+const exampleNodes = (name: string) => {
+  const example = EXAMPLES.find((e) => e.name === name);
+  const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
+  return fillTemplate(fromFile(example?.text ?? ''), values).nodes.map((node) => {
+    const connection = AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT][0];
+    return node.type === 'agent' && connection
+      ? { ...node, data: { ...node.data, connection } }
+      : node;
+  });
+};
+
 /** Explicit native turns stay under the test's control instead of the scripted callback fixture. */
 const manual = Symbol('manual turn callbacks');
 type FixtureResult = boolean | { succeeded: boolean; reply: string };
@@ -199,6 +210,86 @@ function setup(
 }
 
 describe('RunStore', () => {
+  describe('built-in templates', () => {
+    it.each([
+      ['tests', 'Ran the suite: 10 failed', false],
+      ['tests', 'Ran the suite.\n0 failed\nSUCCEEDED', true],
+      ['fixer', 'Ran the suite: 10 failed', false],
+      ['fixer', 'Ran the full suite.\n0 failed', true],
+    ] as const)(
+      'Release checks requires a zero-failure line from %s: %s',
+      (source, output, releases) => {
+        const { store, reply, where, sent } = setup(exampleNodes('Release checks'), manual);
+        store.start();
+        reply('releaser');
+        if (source === 'tests') {
+          reply('releaser', false, output);
+          // Resolve the missing tool verdict so the condition reads this reply.
+          if (!releases) store.decide('releaser', 'tests', { choice: 'resolve' });
+        } else {
+          reply('releaser', false, 'Ran the suite: 10 failed\nFAILED');
+          store.decide('releaser', 'tests', { choice: 'continue' });
+          expect(where().releaser).toBe('running fix');
+          reply('fixer', false, output);
+        }
+        expect(where().releaser).toBe(releases ? 'running audit' : 'done');
+        if (releases) {
+          reply('releaser');
+          expect(where().releaser).toBe('running tag');
+          reply('releaser');
+        }
+        expect(sent.filter((turn) => turn.agent === 'releaser')).toHaveLength(releases ? 4 : 2);
+        expect(store.snapshot().agents.releaser?.outcomes.green).toBe(
+          releases ? 'succeeded' : 'skipped',
+        );
+      },
+    );
+
+    it.each([
+      ['No clear WINNER yet.', false],
+      ['Version A wins.\r\nWINNER\r\n', true],
+    ] as const)('Head to head ends the repeat only on a WINNER line: %s', (output, ends) => {
+      const { store, reply, where, sent } = setup(exampleNodes('Head to head'), manual);
+      store.start();
+      reply('claude', false, 'SUCCEEDED');
+      reply('codex');
+      reply('claude');
+      reply('codex');
+      reply('judge', false, output);
+      expect(store.snapshot().agents.judge?.rounds).toEqual({
+        judging: { round: ends ? 1 : 2 },
+      });
+      expect(where().judge).toBe(ends ? 'running merge' : 'waiting built');
+      expect(sent.filter((turn) => turn.agent === 'judge')).toHaveLength(ends ? 2 : 1);
+    });
+
+    it('Fan-out research sends each search only after its question turn ends', () => {
+      const { store, reply, sent } = setup(exampleNodes('Fan-out research'), manual);
+      store.start();
+      for (const researcher of ['r1', 'r2', 'r3']) {
+        expect(sent.filter((turn) => turn.agent === researcher)).toHaveLength(1);
+        reply(researcher);
+        expect(sent.filter((turn) => turn.agent === researcher)).toHaveLength(2);
+        expect(store.snapshot().agents[researcher]?.current).toBe('search');
+      }
+    });
+
+    it('Fan-out research sends the Writer its task only after all three report turns end', () => {
+      const { store, reply, sent } = setup(exampleNodes('Fan-out research'), manual);
+      const writerTurns = () => sent.filter((turn) => turn.agent === 'writer');
+      store.start();
+      expect(writerTurns()).toHaveLength(0);
+      for (const researcher of ['r1', 'r2', 'r3']) reply(researcher);
+      for (const [index, researcher] of ['r1', 'r2', 'r3'].entries()) {
+        reply(researcher, false, 'Found sources.\nSUCCEEDED');
+        expect(writerTurns()).toHaveLength(index + 1);
+        reply('writer');
+        expect(writerTurns()).toHaveLength(index === 2 ? 4 : index + 1);
+      }
+      expect(store.snapshot().agents.writer?.current).toBe('write');
+    });
+  });
+
   it('keeps an unavailable native session unresolved, holding dependents without a fake outcome', () => {
     const qwen = agent('a', [{ id: 'inspect', action: 'Read' }]);
     const { store, sent, where, advance, connects } = setup(

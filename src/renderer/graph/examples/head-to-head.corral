@@ -113,12 +113,13 @@
             },
             {
               "id": "judge",
-              "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md. If one version is clearly better, say WINNER."
+              "message": "Two agents just built this, on the branches compete/claude and compete/codex:\n\n{{task}}\n\nJudge them blind: call them Version A and Version B in a random order (`echo $((RANDOM % 2))`), and don't look at which is which until you've scored. Score each from 0 to 100 for how well it does what was asked, its design, and its code. Then write what each should improve to .compete/feedback-claude.md and .compete/feedback-codex.md. If one version is clearly better, say WINNER on a line of its own."
             }
           ],
           "until": {
             "kind": "outputContains",
-            "text": "WINNER"
+            "text": "WINNER",
+            "wholeLine": true
           },
           "rounds": 2,
           "otherwise": "goOn"

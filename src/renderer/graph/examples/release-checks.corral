@@ -19,7 +19,7 @@
         {
           "id": "tests",
           "action": "Bash",
-          "instruction": "Run the full test suite, then say how many tests failed, as “N failed”."
+          "instruction": "Run the full test suite, then say how many tests failed as “N failed” on a line of its own."
         },
         {
           "id": "red",
@@ -29,7 +29,7 @@
           "then": [
             {
               "id": "fix",
-              "message": "The tests fail on main: find out why, and fix it.",
+              "message": "The tests fail on main: find out why, and fix it. Then run the full test suite and end your reply with “N failed” on a line of its own, giving the number of tests that failed.",
               "target": "fixer"
             }
           ]
@@ -38,7 +38,8 @@
           "id": "green",
           "if": {
             "kind": "outputContains",
-            "text": "0 failed"
+            "text": "0 failed",
+            "wholeLine": true
           },
           "then": [
             {

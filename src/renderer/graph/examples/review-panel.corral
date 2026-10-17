@@ -88,7 +88,6 @@
         "x": 720,
         "y": 240
       },
-      "agent": "Gemini",
       "queue": [
         {
           "id": "built",

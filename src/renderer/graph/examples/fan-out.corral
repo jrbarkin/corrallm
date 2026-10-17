@@ -14,17 +14,17 @@
       "queue": [
         {
           "id": "q1",
-          "message": "How do other coding agents sandbox the shell commands they run?",
+          "message": "Your question, to research in your next step: How do other coding agents sandbox the shell commands they run?",
           "target": "r1"
         },
         {
           "id": "q2",
-          "message": "Which of those sandboxes work on Windows?",
+          "message": "Your question, to research in your next step: Which of those sandboxes work on Windows?",
           "target": "r2"
         },
         {
           "id": "q3",
-          "message": "What do people complain about in each of them?",
+          "message": "Your question, to research in your next step: What do people complain about in each of them?",
           "target": "r3"
         }
       ]
@@ -51,6 +51,15 @@
       "agent": "Claude",
       "queue": [
         {
+          "id": "question",
+          "waitFor": [
+            {
+              "agent": "lead",
+              "item": "q1"
+            }
+          ]
+        },
+        {
           "id": "search",
           "action": "WebSearch",
           "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-1.md, with a link to each source."
@@ -74,6 +83,15 @@
       "agent": "Codex",
       "queue": [
         {
+          "id": "question",
+          "waitFor": [
+            {
+              "agent": "lead",
+              "item": "q2"
+            }
+          ]
+        },
+        {
           "id": "search",
           "action": "web_search",
           "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-2.md, with a link to each source."
@@ -94,11 +112,19 @@
         "y": 52
       },
       "parent": "research",
-      "agent": "Gemini",
       "queue": [
         {
+          "id": "question",
+          "waitFor": [
+            {
+              "agent": "lead",
+              "item": "q3"
+            }
+          ]
+        },
+        {
           "id": "search",
-          "action": "google_web_search",
+          "action": "WebSearch",
           "instruction": "Search the web for the answer to the question Lead asked you, and write what you find to NOTES-3.md, with a link to each source."
         },
         {
@@ -119,8 +145,25 @@
       "agent": "Claude",
       "queue": [
         {
+          "id": "reports",
+          "waitFor": [
+            {
+              "agent": "r1",
+              "item": "report"
+            },
+            {
+              "agent": "r2",
+              "item": "report"
+            },
+            {
+              "agent": "r3",
+              "item": "report"
+            }
+          ]
+        },
+        {
           "id": "write",
-          "message": "Once all three have reported, combine their notes into REPORT.md."
+          "message": "Combine the three researchers' notes, NOTES-1.md to NOTES-3.md, into REPORT.md."
         }
       ]
     }
