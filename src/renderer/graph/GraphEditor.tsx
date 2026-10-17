@@ -21,6 +21,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { CONNECTION_CLI, TERMINAL_CONNECTIONS, UNASKING_MODES } from '../../shared/session';
 import type { AgentSettings, InstalledClis } from '../../shared/session';
+import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { NO_BACKEND } from '../agent/connected';
@@ -218,8 +219,22 @@ function Editor({
   /** How many canvases have been loaded: the view fits each one, once React Flow has its nodes. */
   const [loads, setLoads] = useState(0);
   /** Every backend's usage reading and rule (main's: one per backend, for every canvas). */
-  const [usageStore] = useState(() => new UsageStore(usageSource));
-  const usage = useSyncExternalStore(usageStore.subscribe, usageStore.snapshot);
+  const usageStore = useRef<UsageStore | undefined>(undefined);
+  const usage = useSyncExternalStore(
+    useCallback(
+      (changed: () => void) => {
+        const store = new UsageStore(usageSource);
+        usageStore.current = store;
+        const unsubscribe = store.subscribe(changed);
+        return () => {
+          unsubscribe();
+          store.dispose();
+        };
+      },
+      [usageSource],
+    ),
+    useCallback(() => usageStore.current?.snapshot() ?? NO_USAGE, []),
+  );
   /**
    * Every agent's queue, run: messages go to the agents' sessions, and so do connected agents'
    * steps and questions through their native connections. An agent whose session would not
@@ -293,7 +308,7 @@ function Editor({
       },
       // The real clock, read when asked: delays and time limits use the real clock.
       now: () => Date.now(),
-      usage: () => usageStore.snapshot(),
+      usage: () => usageStore.current?.snapshot() ?? NO_USAGE,
       unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
     });
     const runStore = runner;
@@ -462,12 +477,6 @@ function Editor({
   useEffect(() => {
     runStore.usageChanged();
   }, [usage, runStore]);
-  useEffect(
-    () => () => {
-      usageStore.dispose();
-    },
-    [usageStore],
-  );
   /** A usage gauge for each backend the agents use, with its rule and Simulate usage…. */
   const backends = useMemo(
     () => backendsOf(graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data] : []))),
@@ -478,10 +487,10 @@ function Editor({
       backends={backends}
       usage={usage}
       onRule={(backend, rule) => {
-        usageStore.setRule(backend, rule);
+        usageStore.current?.setRule(backend, rule);
       }}
       onSimulate={(backend, windows) => {
-        usageStore.simulate(backend, windows);
+        usageStore.current?.simulate(backend, windows);
       }}
     />
   );

@@ -5,7 +5,7 @@ import { RunPersistence } from './persistence';
 import type { RunSource } from './persistence';
 
 function setup() {
-  let stopping: ((request: string) => void) | undefined;
+  const stopping = new Set<(request: string) => void>();
   let snapshot = 'running';
   const context: RunContext = { token: 'original', checkpoint: null, name: null };
   const source: RunSource = {
@@ -13,9 +13,9 @@ function setup() {
     save: vi.fn().mockResolvedValue(null),
     ready: vi.fn().mockResolvedValue(null),
     onStopping: (listener) => {
-      stopping = listener;
+      stopping.add(listener);
       return () => {
-        stopping = undefined;
+        stopping.delete(listener);
       };
     },
   };
@@ -38,7 +38,10 @@ function setup() {
     persistence,
     source,
     owner,
-    stop: () => stopping?.('quit-1'),
+    stop: () => {
+      for (const listener of stopping) listener('quit-1');
+    },
+    listeners: () => stopping.size,
     change: (value: string) => {
       snapshot = value;
     },
@@ -46,6 +49,98 @@ function setup() {
 }
 
 describe('run persistence coordinator', () => {
+  it('does not answer stop requests until started', () => {
+    const { source, owner, stop, listeners } = setup();
+    stop();
+    expect(listeners()).toBe(0);
+    expect(source.get).not.toHaveBeenCalled();
+    expect(source.ready).not.toHaveBeenCalled();
+    expect(owner.freeze).not.toHaveBeenCalled();
+  });
+
+  it.each(['before restart', 'after restart'])(
+    'restores once when loading finishes %s after cleanup',
+    async (when) => {
+      const { persistence, source, owner, listeners } = setup();
+      let loaded: ((context: RunContext) => void) | undefined;
+      vi.mocked(source.get).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            loaded = resolve;
+          }),
+      );
+      const first = persistence.initialize();
+      persistence.dispose();
+      expect(listeners()).toBe(0);
+      const context = { token: 'restored', checkpoint: null, name: null };
+      if (when === 'before restart') {
+        loaded?.(context);
+        await first;
+        expect(owner.restore).not.toHaveBeenCalled();
+      }
+      const restarted = persistence.initialize();
+      loaded?.(context);
+      await Promise.all([first, restarted]);
+      expect(owner.restore).toHaveBeenCalledExactlyOnceWith(context);
+      expect(source.get).toHaveBeenCalledOnce();
+      await persistence.flush();
+      expect(source.save).toHaveBeenCalledWith('restored', expect.any(Object));
+    },
+  );
+
+  it('saves changes and answers shutdown once after starting again without restoring over edits', async () => {
+    const { persistence, source, owner, stop, change, listeners } = setup();
+    await persistence.initialize();
+    await persistence.flush();
+    persistence.dispose();
+    persistence.dispose();
+    stop();
+    change('edited');
+    persistence.changed();
+    await expect(persistence.flush()).rejects.toThrow('The run storage is not available.');
+    expect(source.save).toHaveBeenCalledOnce();
+    expect(source.ready).not.toHaveBeenCalled();
+    await persistence.initialize();
+    await persistence.initialize();
+    expect(owner.restore).toHaveBeenCalledOnce();
+    expect(listeners()).toBe(1);
+    persistence.changed();
+    await vi.waitFor(() => {
+      expect(source.save).toHaveBeenLastCalledWith(
+        'original',
+        expect.objectContaining({ state: '{"snapshot":"edited"}' }),
+      );
+    });
+    stop();
+    await vi.waitFor(() => {
+      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit-1', null);
+    });
+    expect(owner.freeze).toHaveBeenCalledOnce();
+    expect(source.save).toHaveBeenLastCalledWith(
+      'original',
+      expect.objectContaining({ state: '{"snapshot":"paused"}' }),
+    );
+    persistence.dispose();
+    expect(listeners()).toBe(0);
+  });
+
+  it('keeps a rejected restore blocked after starting again', async () => {
+    const { persistence, source, owner, stop, change } = setup();
+    owner.restore.mockImplementationOnce(() => {
+      throw new Error('Invalid saved run');
+    });
+    await expect(persistence.initialize()).rejects.toThrow('Invalid saved run');
+    persistence.dispose();
+    await expect(persistence.initialize()).rejects.toThrow('Invalid saved run');
+    expect(owner.restore).toHaveBeenCalledOnce();
+    change('edited after failure');
+    stop();
+    await vi.waitFor(() => {
+      expect(source.ready).toHaveBeenCalledWith('quit-1', expect.stringContaining('New or Open'));
+    });
+    expect(source.save).not.toHaveBeenCalled();
+  });
+
   it('freezes and durably saves before acknowledging shutdown', async () => {
     const { persistence, source, owner, stop } = setup();
     let release: (() => void) | undefined;

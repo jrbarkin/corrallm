@@ -18,6 +18,7 @@ interface Owner {
 /** Serial checkpoint writes and an acknowledged freeze before main closes native sessions. */
 export class RunPersistence {
   #token: string | undefined;
+  #context: Promise<RunContext> | undefined;
   #loading: Promise<RunContext> | undefined;
   #writes: Promise<unknown> = Promise.resolve();
   #disposed = false;
@@ -27,12 +28,19 @@ export class RunPersistence {
   #failedBaseline: string | undefined;
   readonly #source: RunSource;
   readonly #owner: Owner;
-  readonly #unsubscribe: () => void;
+  #unsubscribe: (() => void) | undefined;
 
   constructor(source: RunSource, owner: Owner) {
     this.#source = source;
     this.#owner = owner;
-    this.#unsubscribe = source.onStopping((request) => {
+  }
+
+  /** Starts hearing main again after cleanup, without restoring over current work. */
+  initialize(): Promise<RunContext> {
+    this.#disposed = false;
+    const source = this.#source;
+    const owner = this.#owner;
+    this.#unsubscribe ??= source.onStopping((request) => {
       if (this.#failedInitialization) {
         const unchanged = this.#failedBaseline === contentsKey(owner.capture());
         const error = unchanged
@@ -53,21 +61,26 @@ export class RunPersistence {
         )
         .catch(owner.error);
     });
+    return this.#load();
   }
 
-  initialize(): Promise<RunContext> {
-    this.#loading ??= this.#source
-      .get()
+  #load(): Promise<RunContext> {
+    this.#loading ??= (this.#context ??= this.#source.get())
       .then((context) => {
-        if (this.#disposed) return context;
+        if (this.#disposed) {
+          this.#loading = undefined;
+          return context;
+        }
         this.#owner.restore(context);
         this.#token = context.token;
         this.#last = '';
         return context;
       })
       .catch((error: unknown) => {
-        this.#failedInitialization = true;
-        this.#failedBaseline = contentsKey(this.#owner.capture());
+        if (!this.#failedInitialization) {
+          this.#failedInitialization = true;
+          this.#failedBaseline = contentsKey(this.#owner.capture());
+        }
         throw error;
       });
     return this.#loading;
@@ -95,7 +108,7 @@ export class RunPersistence {
     if (restore) this.#owner.restore(context);
     this.#token = context.token;
     this.#last = '';
-    this.#loading = Promise.resolve(context);
+    this.#context = this.#loading = Promise.resolve(context);
     this.#failedInitialization = false;
     this.#failedBaseline = undefined;
     return context;
@@ -107,7 +120,7 @@ export class RunPersistence {
   }
 
   async flush(): Promise<void> {
-    await this.initialize();
+    await this.#load();
     while (this.#changing) await this.#changing;
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
@@ -161,7 +174,7 @@ export class RunPersistence {
           const recovered = await this.#source.get();
           this.#token = recovered.token;
           this.#last = '';
-          this.#loading = Promise.resolve(recovered);
+          this.#context = this.#loading = Promise.resolve(recovered);
           this.#failedInitialization = false;
           this.#failedBaseline = undefined;
         }
@@ -169,7 +182,7 @@ export class RunPersistence {
       }
       this.#token = context.token;
       this.#last = '';
-      this.#loading = Promise.resolve(context);
+      this.#context = this.#loading = Promise.resolve(context);
       this.#failedInitialization = false;
       this.#failedBaseline = undefined;
       return result;
@@ -181,7 +194,8 @@ export class RunPersistence {
 
   dispose(): void {
     this.#disposed = true;
-    this.#unsubscribe();
+    this.#unsubscribe?.();
+    this.#unsubscribe = undefined;
   }
 }
 

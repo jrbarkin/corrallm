@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasFile } from '../../shared/ipc';
+import type { RunCheckpoint } from '../../shared/run';
+import type { UsageState } from '../../shared/usage';
+import { readRun } from '../run/checkpoint';
+import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../test-backend';
+import type { UsageSource } from '../usage/store';
 import { fromFile, toFile } from './file';
 import { GraphEditor } from './GraphEditor';
 import type { CanvasFiles } from './GraphEditor';
@@ -74,6 +80,164 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it('restores, saves and sends under StrictMode, and answers shutdown from the shown canvas once', async () => {
+    const saved: Graph = {
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'Restored',
+            connection: 'sdk',
+            queue: [
+              { id: 'done', message: 'Already finished' },
+              { id: 'planned', message: 'Continue saved work' },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    const checkpoint: RunCheckpoint = {
+      version: 1,
+      workflow: toFile(saved),
+      state: JSON.stringify({
+        version: 1,
+        run: {
+          running: false,
+          agents: { a: { status: 'waiting', current: 'planned', outcomes: { done: 'succeeded' } } },
+        },
+        replies: [],
+        held: [],
+        arrived: [],
+        ended: [],
+        past: [],
+        due: [],
+        usageDecided: [],
+        warned: [],
+      }),
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    };
+    const stopping = new Set<(request: string) => void>();
+    const source = {
+      get: vi.fn<RunSource['get']>().mockResolvedValue({
+        token: 'saved',
+        name: 'saved.corral',
+        checkpoint,
+      }),
+      save: vi.fn<RunSource['save']>().mockResolvedValue(null),
+      ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
+      onStopping: (listener: (request: string) => void) => {
+        stopping.add(listener);
+        return () => {
+          stopping.delete(listener);
+        };
+      },
+    };
+    const sessions = fakeBackend();
+    const { container, unmount } = render(
+      <StrictMode>
+        <GraphEditor runSource={source} sessionBackend={sessions.backend} />
+      </StrictMode>,
+    );
+    const card = await screen.findByLabelText('Restored, Claude · SDK');
+    expect(source.get).toHaveBeenCalledOnce();
+    expect(sessions.backend.send).not.toHaveBeenCalled();
+    fireEvent.click(card);
+    fireEvent.keyDown(document.body, { key: 'F2' });
+    fireEvent.change(labelInput(), { target: { value: 'Shown' } });
+    fireEvent.keyDown(labelInput(), { key: 'Enter' });
+    await waitFor(() => {
+      const saved = source.save.mock.calls.at(-1)?.[1];
+      expect(saved && fromFile(saved.workflow).nodes[0]?.data.label).toBe('Shown');
+    });
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => {
+      expect(sessions.backend.send).toHaveBeenCalledOnce();
+    });
+    expect(sessions.backend.send.mock.calls[0]?.[1].text).toBe('Continue saved work');
+    act(() => {
+      for (const listener of stopping) listener('quit');
+    });
+    await waitFor(() => {
+      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
+    });
+    const stopped = source.save.mock.calls.at(-1)?.[1];
+    expect(stopped && fromFile(stopped.workflow).nodes[0]?.data.label).toBe('Shown');
+    expect(stopped && readRun(stopped.state).run).toMatchObject({
+      running: false,
+      paused: true,
+      agents: { a: { outcomes: { done: 'succeeded' }, current: 'planned' } },
+    });
+    expect(container.textContent).not.toContain('The run storage is not available.');
+    unmount();
+    expect(stopping.size).toBe(0);
+  });
+
+  it('hears usage changes and applies their rules after StrictMode cleanup', async () => {
+    const changed = new Set<(state: UsageState) => void>();
+    const usageSource: UsageSource = {
+      get: vi.fn<UsageSource['get']>().mockResolvedValue({ readings: [], rules: {} }),
+      setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue(null),
+      simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue(null),
+      onChanged: (listener) => {
+        changed.add(listener);
+        return () => {
+          changed.delete(listener);
+        };
+      },
+    };
+    const sessions = fakeBackend();
+    const { unmount } = render(
+      <StrictMode>
+        <GraphEditor
+          initialGraph={{
+            nodes: [
+              agentNode('a', 0, 0, {
+                data: {
+                  label: 'a',
+                  agent: 'Codex',
+                  connection: 'app-server',
+                  queue: [{ id: 'work', message: 'Held work' }],
+                },
+              }),
+            ],
+            edges: [],
+          }}
+          sessionBackend={sessions.backend}
+          usageSource={usageSource}
+        />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      for (const listener of changed)
+        listener({
+          readings: [
+            {
+              backend: 'Codex',
+              at: Date.now(),
+              windows: {
+                fiveHour: { usedPercent: 95, resetsAt: Date.now() + 60_000 },
+              },
+            },
+          ],
+          rules: { Codex: { window: 'fiveHour', percent: 80, action: 'ask' } },
+        });
+    });
+    expect(screen.getByRole('button', { name: /^Codex usage: 95%/ })).toBeTruthy();
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    expect(queues.getByRole('button', { name: 'Wait for the reset' })).toBeTruthy();
+    expect(sessions.backend.send).not.toHaveBeenCalled();
+    unmount();
+    expect(changed.size).toBe(0);
+  });
+
   it('keeps legacy unsupported work unsent and offers a real connection without fabricating completion', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { fake } = setup({
