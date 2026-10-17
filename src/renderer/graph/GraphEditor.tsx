@@ -290,7 +290,8 @@ function Editor({
           },
           images && [...images],
           refused,
-          origin ?? 'queue',
+          // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
+          origin === 'user' ? 'run' : 'queue',
           displayText,
         ),
       tell: (agent, text) => {

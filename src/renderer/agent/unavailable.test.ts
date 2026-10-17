@@ -114,7 +114,15 @@ describe('sessions without placeholder execution', () => {
     const store = new SessionStore(backend);
     store.sync([{ id: 'a', connection: 'unavailable' }]);
     const refused = vi.fn<(refusal: Refusal) => void>();
-    store.send('a', 'Qwen', 'Wait for the supported connection', undefined, undefined, refused);
+    store.send(
+      'a',
+      'Qwen',
+      'Wait for the supported connection',
+      undefined,
+      undefined,
+      refused,
+      'queue',
+    );
     store.holdQueue('a', true);
     store.sync([{ id: 'a', connection: 'sdk' }]);
     await settle();

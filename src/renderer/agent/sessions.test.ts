@@ -11,6 +11,31 @@ afterEach(() => {
 });
 
 describe('SessionStore', () => {
+  it('shows what the run sends in the user’s words as theirs, without taking it for a correction', async () => {
+    // An OK's "ask for changes", a repeat's "try this": the run knows which task they are for.
+    const { backend, emit, sent } = fakeBackend();
+    const submitted = vi.fn();
+    const store = new SessionStore(backend, undefined, { submitted });
+    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.send('a', 'Claude', 'Use tabs, please', undefined, undefined, undefined, 'run');
+    await Promise.resolve();
+    await Promise.resolve();
+    const id = sent();
+    emit('a', 'sdk', { type: 'user', id, text: 'Use tabs, please' });
+    emit('a', 'sdk', {
+      type: 'end',
+      messages: [id],
+      seconds: 1,
+      interrupted: false,
+      failed: false,
+    });
+    expect(store.of('a').submissions).toMatchObject([
+      { text: 'Use tabs, please', status: 'completed' },
+    ]);
+    expect(submitted).not.toHaveBeenCalled();
+    store.reset();
+  });
+
   describe('held queues', () => {
     it.each(['reset', 'remove', 'rehold'] as const)(
       'does not dispatch a released queue if %s supersedes it in the same call stack',
@@ -44,7 +69,7 @@ describe('SessionStore', () => {
       },
     );
 
-    it('finishes the active turn, permits a fresh manual intervention, then resumes waiting messages once in order', async () => {
+    it('finishes the active turn, still sends what the user queued, in order, and holds the run’s own until released', async () => {
       const { backend, emit, sent } = fakeBackend();
       const submitted = vi.fn();
       const store = new SessionStore(backend, undefined, { submitted });
@@ -59,73 +84,56 @@ describe('SessionStore', () => {
       store.send('a', 'Claude', 'Next automated task', undefined, undefined, undefined, 'queue');
       store.holdQueue('a', true);
       expect(backend.interrupt).not.toHaveBeenCalled();
-      emit('a', 'sdk', {
-        type: 'end',
-        messages: [first],
-        seconds: 1,
-        interrupted: false,
-        failed: false,
-      });
+      const end = (id: string) => {
+        emit('a', 'sdk', {
+          type: 'end',
+          messages: [id],
+          seconds: 1,
+          interrupted: false,
+          failed: false,
+        });
+      };
+      end(first);
       await Promise.resolve();
       await Promise.resolve();
+      // Held, the session still sends what the user typed, and only the run's own waits.
       expect(firstDone).toHaveBeenCalledOnce();
-      expect(backend.send).toHaveBeenCalledTimes(1);
-      expect(store.of('a').queued.map(({ text }) => text)).toEqual([
-        'Earlier manual message',
-        'Next automated task',
-      ]);
+      expect(backend.send).toHaveBeenLastCalledWith(
+        'a',
+        expect.objectContaining({ text: 'Earlier manual message' }),
+      );
+      expect(store.of('a').queued.map(({ text }) => text)).toEqual(['Next automated task']);
+      const earlier = sent();
 
       store.send('a', 'Claude', 'A fresh correction');
+      end(earlier);
       await Promise.resolve();
       await Promise.resolve();
+      expect(queuedDone).toHaveBeenCalledOnce();
       expect(backend.send).toHaveBeenLastCalledWith(
         'a',
         expect.objectContaining({ text: 'A fresh correction' }),
       );
       const correction = sent();
-      emit('a', 'sdk', {
-        type: 'end',
-        messages: [correction],
-        seconds: 1,
-        interrupted: false,
-        failed: false,
-      });
+      end(correction);
       await Promise.resolve();
       await Promise.resolve();
       expect(store.of('a').submissions).toMatchObject([
-        { text: 'Earlier manual message', status: 'queued' },
+        { text: 'Earlier manual message', status: 'completed' },
         { text: 'A fresh correction', status: 'completed' },
       ]);
       expect(submitted).toHaveBeenCalledTimes(2);
-      expect(backend.send).toHaveBeenCalledTimes(2);
+      expect(backend.send).toHaveBeenCalledTimes(3);
 
       store.holdQueue('a', false);
       store.holdQueue('a', false);
       await Promise.resolve();
       await Promise.resolve();
-      const manual = sent();
-      expect(backend.send).toHaveBeenCalledTimes(3);
-      emit('a', 'sdk', {
-        type: 'end',
-        messages: [manual],
-        seconds: 1,
-        interrupted: false,
-        failed: false,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      const automated = sent();
-      emit('a', 'sdk', {
-        type: 'end',
-        messages: [automated],
-        seconds: 1,
-        interrupted: false,
-        failed: false,
-      });
+      end(sent());
       expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
         'Active work',
-        'A fresh correction',
         'Earlier manual message',
+        'A fresh correction',
         'Next automated task',
       ]);
       expect(queuedDone).toHaveBeenCalledOnce();

@@ -85,12 +85,22 @@ export class SessionStore {
   readonly #turns = new Map<string, string>();
   /** Runtime holds stop automatic queue draining, while allowing fresh manual intervention. */
   readonly #heldQueues = new Set<string>();
+  /**
+   * What the user had queued when they stopped an agent the run holds (Kill): set aside until the
+   * hold is released, as an interrupt in Claude Code sends nothing it had queued.
+   */
+  readonly #setAside = new Map<string, ReadonlySet<string>>();
   /** A durable conversation replacement gates new sends until the new driver can start. */
   readonly #freshening = new Map<string, Promise<void>>();
   /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
   readonly #stopping = new Set<string>();
   /** Automation already has a queue row; its prompt and native echoes must not create another. */
   readonly #queueMessages = new Set<string>();
+  /**
+   * What the user typed that the run sent (an OK's changes, a repeat's next try): a Message row
+   * like any of theirs, but the run's own attempt, never taken for a correction typed in.
+   */
+  readonly #runMessages = new Set<string>();
   readonly #displayTexts = new Map<string, string>();
   readonly #observer: SubmissionObserver;
   readonly #position: (agentId: string) => string | undefined;
@@ -180,6 +190,7 @@ export class SessionStore {
     if (held) this.#heldQueues.add(agentId);
     else {
       this.#heldQueues.delete(agentId);
+      this.#setAside.delete(agentId);
       // A canvas reset may release its run holds immediately before forgetting these sessions.
       // Re-check the live queue and hold after that same-stack transition has completed.
       queueMicrotask(() => {
@@ -268,12 +279,13 @@ export class SessionStore {
     onDone?: (interrupted: boolean, reply: string, result?: TurnResult) => void,
     images?: MessageImage[],
     onRefused?: (refusal: Refusal) => void,
-    origin: 'user' | 'queue' = 'user',
+    origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
   ): () => void {
     this.#types.set(agentId, agent);
     const id = crypto.randomUUID();
     if (origin === 'queue') this.#queueMessages.add(id);
+    else if (origin === 'run') this.#runMessages.add(id);
     if (displayText !== undefined) this.#displayTexts.set(id, displayText);
     if (onDone) this.#onDone.set(id, onDone);
     if (onRefused) this.#onRefused.set(id, onRefused);
@@ -282,7 +294,7 @@ export class SessionStore {
     if (
       !this.#freshening.has(agentId) &&
       session.status === 'idle' &&
-      (held ? origin === 'user' : session.queued.length === 0)
+      (held ? origin !== 'queue' : session.queued.length === 0)
     ) {
       this.#start(agentId, agent, { text, images }, id);
     } else {
@@ -454,6 +466,9 @@ export class SessionStore {
     const driver = this.#drivers.get(agentId)?.driver;
     if (!driver) return;
     this.#stopping.add(agentId);
+    if (this.#heldQueues.has(agentId)) {
+      this.#setAside.set(agentId, new Set(this.of(agentId).queued.map(({ id }) => id)));
+    }
     driver.stop();
   }
 
@@ -504,6 +519,8 @@ export class SessionStore {
     this.#heldQueues.clear();
     this.#stopping.clear();
     this.#queueMessages.clear();
+    this.#runMessages.clear();
+    this.#setAside.clear();
     this.#displayTexts.clear();
     this.#onceIn.clear();
     this.#settings.clear();
@@ -570,9 +587,14 @@ export class SessionStore {
 
   /** The session is idle: its next queued message, if any, starts. */
   #idle(agentId: string): void {
-    if (this.#heldQueues.has(agentId) || this.#freshening.has(agentId)) return;
+    if (this.#freshening.has(agentId)) return;
     const session = this.of(agentId);
-    const [next] = session.queued;
+    // While the run holds the agent, what the user typed still goes; only the run's own waits,
+    // and what a Stop set aside.
+    const aside = this.#setAside.get(agentId);
+    const next = this.#heldQueues.has(agentId)
+      ? session.queued.find(({ id }) => !this.#queueMessages.has(id) && aside?.has(id) !== true)
+      : session.queued[0];
     if (!next || session.status !== 'idle') return;
     this.#dispatch(agentId, { type: 'unqueue', id: next.id });
     this.#start(
@@ -740,9 +762,11 @@ export class SessionStore {
       },
     };
     this.#notify();
-    if (created) this.#observer.submitted?.(agentId, created);
-    for (const message of ended)
+    if (created && !this.#runMessages.has(created.id)) this.#observer.submitted?.(agentId, created);
+    for (const message of ended) {
+      if (this.#runMessages.has(message.id)) continue;
       this.#observer.ended?.(agentId, message.id, message.reply ?? '', message.result);
+    }
   }
 
   /** Ends outstanding submissions without inventing a native reply. */
