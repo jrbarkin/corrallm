@@ -66,9 +66,6 @@ function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
     connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
-    chance: () => {
-      throw new Error('No simulated work');
-    },
     ...extra,
   });
   store.update(nodes);

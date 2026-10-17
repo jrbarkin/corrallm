@@ -292,7 +292,7 @@ describe('spawnAgent', () => {
     expectValid(linked);
   });
 
-  it('runs the new agent as the agent runs: connected or simulated, set as it is', () => {
+  it('runs a spawned agent with its parent’s native connection and settings', () => {
     const settings = { claude: { model: 'haiku' } };
     const g = graphOf([
       agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings } }),
@@ -689,7 +689,7 @@ describe('setAgent', () => {
 });
 
 describe('setConnection', () => {
-  it('connects a Claude agent, or makes it simulated again; groups and other types stay as they are', () => {
+  it('switches real connections; unavailable types and groups cannot be connected', () => {
     const g = graphOf([
       agentNode('a', 0, 0),
       agentNode('b', 0, 100, { data: { label: 'b', agent: AgentType.Gemini } }),
@@ -698,8 +698,11 @@ describe('setConnection', () => {
     const sdk = setConnection(g, 'a', 'sdk');
     expect(get(sdk, 'a').data.connection).toBe('sdk');
     expect(setConnection(sdk, 'a', 'sdk')).toBe(sdk);
-    // Simulated is the default: it leaves no trace.
-    expect(get(setConnection(sdk, 'a', 'simulated'), 'a').data).toEqual({ label: 'a' });
+    expect(get(setConnection(sdk, 'a', 'terminal'), 'a').data).toEqual({
+      label: 'a',
+      connection: 'terminal',
+    });
+    expect(setConnection(sdk, 'a', 'unavailable')).toBe(sdk);
     expect(setConnection(g, 'b', 'terminal')).toBe(g);
     expect(setConnection(g, 'F', 'terminal')).toBe(g);
   });

@@ -55,7 +55,7 @@ export function turnResult(end: {
 export type InstalledClis = Readonly<Record<Cli, boolean>>;
 
 /**
- * How an agent can be connected, besides simulated: each names what runs its session. Claude Code
+ * The real native agent connections: each names what runs its session. Claude Code
  * in a terminal ('terminal') or through the Agent SDK ('sdk'); Codex in a terminal
  * ('codex-terminal') or through its app server ('app-server', JSON-RPC over stdio).
  */

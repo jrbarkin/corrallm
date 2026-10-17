@@ -12,7 +12,6 @@ import {
 import type { AgentSettings, Cli, Connection } from '../../shared/session';
 import { USAGE_BACKENDS, USAGE_WINDOWS } from '../../shared/usage';
 import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
-import type { AgentConnection } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
@@ -41,7 +40,7 @@ import type {
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
  * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
- * how it runs, if not simulated (a Claude agent's "terminal" or "sdk", a Codex agent's
+ * how it runs, or its native Terminal default when omitted (a Claude agent's "terminal" or "sdk", a Codex agent's
  * "codex-terminal" or "app-server": agents.ts); where it runs (the project
  * folder) is not in the file, which main remembers per file instead. An agent's settings are what
  * it is set to run with in each CLI it has run, { "claude"?: { "model"?, "effort"?, "mode"? },
@@ -235,17 +234,19 @@ function readNode(value: unknown, where: string): FileNode {
   });
   const connection = optional(node.connection, `${where}.connection`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
-    const all: readonly AgentConnection[] = ['simulated', ...CONNECTIONS];
+    // Compatibility only: the removed placeholder becomes the type's native default.
+    if (v === 'simulated') return undefined;
+    const all = CONNECTIONS;
     const found = all.find((c) => c === v);
     if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
     const type = agent ?? DEFAULT_AGENT;
     const offered = AGENT_CONNECTIONS[type];
+    if (offered.length === 0) throw new Error(`${at}: ${type} has no connector yet`);
     if (!offered.includes(found)) {
       const ways = `${offered.slice(0, -1).join(', ')}${offered.length > 1 ? ' or ' : ''}${offered.at(-1) ?? ''}`;
       throw new Error(`${at}: ${type} agents run only ${ways}`);
     }
-    // Simulated is the default, kept as no connection at all.
-    return found === 'simulated' ? undefined : found;
+    return found;
   });
   const settings = optional(node.settings, `${where}.settings`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no settings`);

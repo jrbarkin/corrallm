@@ -148,7 +148,7 @@ export interface HeldAsk extends Answers {
    * Held because a session would not start: whose (this agent's, or one it handed a message to),
    * and the connection Switch (`{ choice: 'switch' }`) runs it with.
    */
-  refusal?: { agent: string; switchTo: Connection };
+  refusal?: { agent: string; switchTo?: Connection };
   /** A task's known failure, cancellation, or uncertain result, awaiting a human decision. */
   problem?: TaskProblem;
 }
@@ -183,21 +183,24 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()
     if (item && at.refused) {
       const { agent: to, text, switchTo } = at.refused;
       const name = agentName(nodes, to);
-      const how = CONNECTION_INFO[switchTo].label;
+      const how = switchTo === undefined ? undefined : CONNECTION_INFO[switchTo].label;
       return [
         {
           agent,
           item,
           text,
           detail: `${taskLabel(nodes, item)} waits until ${name} can start`,
-          choices: [
-            {
-              key: 'switch',
-              label: to === agent.id ? `Switch to ${how}` : `Switch ${name} to ${how}`,
-              primary: true,
-            },
-          ],
-          refusal: { agent: to, switchTo },
+          choices:
+            how === undefined
+              ? []
+              : [
+                  {
+                    key: 'switch',
+                    label: to === agent.id ? `Switch to ${how}` : `Switch ${name} to ${how}`,
+                    primary: true,
+                  },
+                ],
+          refusal: { agent: to, ...(switchTo === undefined ? {} : { switchTo }) },
         },
       ];
     }

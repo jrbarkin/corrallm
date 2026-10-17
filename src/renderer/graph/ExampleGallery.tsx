@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { CONNECTION_CLI } from '../../shared/session';
 import type { InstalledClis } from '../../shared/session';
 import {
   AGENT_CONNECTIONS,
@@ -35,7 +36,7 @@ type Chosen = Omit<TemplateChoices, 'connections'> & {
  * agents, in its type's colour, or hollow where the template leaves the agent open). Picking one
  * shows what it asks: its blanks, each starting from the template's own example, and each agent's
  * type, which the user may change or leave to the default agent, and how it runs: in a Terminal
- * where the user has its CLI (`installed`, as main found them), else simulated, unless the user
+ * by default, with missing CLIs shown explicitly, unless the user
  * picks another way its type runs. Then it opens as a new canvas, or (`canInsert`, when the canvas
  * has something on it) is inserted into this one as a group. Escape steps back from that, then
  * closes the gallery, as do the close button and a click outside.
@@ -59,7 +60,7 @@ export function ExampleGallery({
   const [chosen, setChosen] = useState<{ example: Example } & Chosen>();
   /** How an agent of the template picked runs: as chosen, or its type's default. */
   const connectionOf = (id: string): AgentConnection =>
-    chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT, installed);
+    chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT);
   useEffect(() => {
     panel.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -178,7 +179,11 @@ export function ExampleGallery({
                   >
                     <option value="">Default ({DEFAULT_AGENT})</option>
                     {Object.values(AgentType).map((type) => (
-                      <option key={type} value={type}>
+                      <option
+                        key={type}
+                        value={type}
+                        disabled={AGENT_CONNECTIONS[type].length === 0}
+                      >
                         {type}
                       </option>
                     ))}
@@ -187,6 +192,7 @@ export function ExampleGallery({
                     role={role.label}
                     agent={chosen.agents[role.id] ?? DEFAULT_AGENT}
                     value={connectionOf(role.id)}
+                    installed={installed}
                     onChange={(connection) => {
                       setChosen({
                         ...chosen,
@@ -256,18 +262,20 @@ export function ExampleGallery({
 }
 
 /**
- * How a template's agent runs: the ways its type runs (Terminal first; Simulated last), each
- * explained in its title. A type that can only be simulated says so, and offers nothing else.
+ * How a template's agent runs: the real ways its type runs (Terminal first), each
+ * explained in its title. An unsupported legacy type says Not connected until another CLI is chosen.
  */
 function ConnectionSelect({
   role,
   agent,
   value,
+  installed,
   onChange,
 }: {
   role: string;
   agent: AgentType;
   value: AgentConnection;
+  installed: InstalledClis | undefined;
   onChange: (connection: AgentConnection) => void;
 }) {
   const ways = AGENT_CONNECTIONS[agent];
@@ -275,16 +283,18 @@ function ConnectionSelect({
     <select
       aria-label={`How ${role} runs`}
       value={value}
-      disabled={ways.length === 1}
+      disabled={ways.length <= 1}
       title={CONNECTION_INFO[value].description}
       onChange={(event) => {
         const way = ways.find((connection) => connection === event.target.value);
         if (way !== undefined) onChange(way);
       }}
     >
+      {ways.length === 0 && <option value="unavailable">Not connected</option>}
       {ways.map((connection) => (
         <option key={connection} value={connection} title={CONNECTION_INFO[connection].description}>
           {CONNECTION_INFO[connection].label}
+          {installed?.[CONNECTION_CLI[connection]] === false ? ' (CLI not found)' : ''}
         </option>
       ))}
     </select>

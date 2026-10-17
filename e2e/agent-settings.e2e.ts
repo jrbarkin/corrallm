@@ -193,10 +193,10 @@ function option(args: string[], name: string) {
 test('the shared panel saves role, name and startup settings while manual Message rows stay outside the authored file', async () => {
   await launch();
   const planned = { id: 'planned', message: 'Only planned work belongs in the file' };
-  await openCanvas([{ id: 'builder', label: 'Builder', queue: [planned] }]);
+  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'sdk', queue: [planned] }]);
   let view = await openAgent('Builder');
   const settings = await settingsFrom(view, 'Builder');
-  await expect(settings).toContainText('Simulated');
+  await expect(settings).toContainText('Agent SDK');
   await settings.getByRole('textbox', { name: 'Name', exact: true }).fill('Reviewer');
   const role = 'Review changes carefully.\nExplain any risk and verify the result.';
   await settings.getByRole('textbox', { name: 'Role', exact: true }).fill(role);
@@ -250,18 +250,19 @@ test('the shared panel saves role, name and startup settings while manual Messag
   await expect(panel().getByRole('button', { name: 'Mode: Plan', exact: true })).toBeVisible();
 });
 
-test('All queues and the canvas open the same settings; a role survives CLI changes and clearing removes it', async () => {
-  await launch();
-  await openCanvas([{ id: 'builder', label: 'Builder' }]);
+test('All queues and the canvas open native settings; a role survives CLI changes and clearing removes it', async () => {
+  await launch('codex');
+  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'sdk' }]);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   const summary = queues.getByRole('button', { name: 'Agent settings: Builder', exact: true });
-  await expect(summary).toContainText('Simulated');
+  await expect(summary).toContainText('Agent SDK');
   const settings = await settingsFrom(queues, 'Builder');
   const role = 'Document the public behavior and examples.';
   await settings.getByRole('textbox', { name: 'Role', exact: true }).fill(role);
   await settings.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('qwen');
+  await expect(settings.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
+  await page.keyboard.type('codex app server');
   await page.keyboard.press('Enter');
   await expect(settings.getByRole('textbox', { name: 'Role', exact: true })).toHaveValue(role);
   await page.keyboard.press('Escape');
@@ -269,7 +270,7 @@ test('All queues and the canvas open the same settings; a role survives CLI chan
   await expect(queues).toBeVisible();
   await expect(summary).toBeFocused();
   await expect(summary).toContainText(role);
-  await expect(summary).toContainText('Simulated');
+  await expect(summary).toContainText('App Server');
   await queues.getByRole('button', { name: 'Back', exact: true }).click();
 
   const builder = page.locator('.react-flow__node-agent[data-id="builder"]');
@@ -279,13 +280,13 @@ test('All queues and the canvas open the same settings; a role survives CLI chan
     .getByRole('menuitem', { name: /^Settings/ })
     .click();
   await expect(panel().getByRole('textbox', { name: 'Role', exact: true })).toHaveValue(role);
-  await expect(panel()).toContainText('Qwen');
+  await expect(panel()).toContainText('Codex');
   await panel().getByRole('textbox', { name: 'Role', exact: true }).fill('  \n ');
   await panel().getByRole('button', { name: 'Close agent settings' }).click();
   await page.keyboard.press('ControlOrMeta+s');
   await expect
     .poll(async () => JSON.parse(await readFile(canvas, 'utf8')) as { nodes: CanvasNode[] })
-    .toMatchObject({ nodes: [{ agent: 'Qwen' }] });
+    .toMatchObject({ nodes: [{ agent: 'Codex', connection: 'app-server' }] });
   const saved = JSON.parse(await readFile(canvas, 'utf8')) as { nodes: CanvasNode[] };
   expect(saved.nodes[0]).not.toHaveProperty('role');
 });

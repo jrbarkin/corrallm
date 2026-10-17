@@ -6,6 +6,7 @@ import { AGENT_CONNECTIONS, DEFAULT_AGENT } from '../graph/agents';
 import { EXAMPLES } from '../graph/examples';
 import { fromFile } from '../graph/file';
 import type { GraphNode } from '../graph/graph';
+import { findItem } from '../graph/queue';
 import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
 import { fillTemplate } from '../graph/templates';
 import { readRun } from './checkpoint';
@@ -25,23 +26,26 @@ const connected = (id: string, queue: QueueItem[] = [], connection: Connection =
   return { ...node, data: { ...node.data, connection } };
 };
 
-/** The chance a run must never take: a connected agent's run decides nothing by chance. */
-const never = () => {
-  throw new Error('took a chance for a connected agent');
-};
+/** Explicit native turns stay under the test's control instead of the scripted callback fixture. */
+const manual = Symbol('manual turn callbacks');
+type FixtureResult = boolean | { succeeded: boolean; reply: string };
 
 const MINUTE = 60_000;
 
 /**
  * A run over `nodes`, with time and sessions under the test's control: `tick()` fires every timer
- * set (steps finish) without moving the clock, `advance(ms)` moves the clock, firing the timers
+ * set and pending native fixture callbacks without moving the clock. `advance(ms)` moves the clock, firing run timers
  * due on the way, and `reply(agent)` ends the turn of the oldest message sent to that agent, as it
  * went (`failed`) with what the agent replied (`text`). A message the run took back is marked
  * `withdrawn`; what the run told the user in an agent's session is `told`.
  */
-function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<string> = new Set()) {
+function setup(
+  initial: GraphNode[],
+  results: typeof manual | (() => FixtureResult) = () => true,
+  unheard: ReadonlySet<string> = new Set(),
+) {
   let clock = 0;
-  let timers: { run: () => void; at: number }[] = [];
+  let timers: { run: () => void; at: number; native?: boolean }[] = [];
   /** How long each timer set was for. */
   const armed: number[] = [];
   const sent: {
@@ -68,9 +72,39 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
         withdrawn: false,
         ...(origin === undefined ? {} : { origin }),
       };
-      sent.push(message);
+      // Scheduler-only tests use deterministic native callbacks for implicit-default tool steps.
+      // Explicitly connected fixtures and Message turns stay manual and appear in `sent`.
+      const fixture =
+        results !== manual && to.data.connection === undefined && text.startsWith('Use ');
+      if (!fixture) sent.push(message);
+      const timer = fixture
+        ? {
+            native: true,
+            at: clock,
+            run: () => {
+              if (message.withdrawn) return;
+              const result = results();
+              const succeeded = typeof result === 'boolean' ? result : result.succeeded;
+              const current = store.snapshot().agents[to.id]?.current;
+              const item = findItem(to.data.queue ?? [], current ?? '')?.item;
+              const expectsFailure = item !== undefined && 'expect' in item;
+              const verdict = succeeded !== expectsFailure ? 'SUCCEEDED' : 'FAILED';
+              done({
+                failed: false,
+                reply: `${typeof result === 'boolean' ? '' : result.reply}\n${verdict}`,
+              });
+              // These scheduler fixtures explicitly continue known failures; native recovery tests
+              // below exercise the unresolved/inspection path with manual callbacks.
+              const at = store.snapshot().agents[to.id];
+              if (at?.problem?.kind === 'failed' && at.current)
+                store.decide(to.id, at.current, { choice: 'continue' });
+            },
+          }
+        : undefined;
+      if (timer) timers.push(timer);
       return () => {
         message.withdrawn = true;
+        if (timer) timers = timers.filter((queued) => queued !== timer);
       };
     },
     tell: (to, text) => {
@@ -88,7 +122,6 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
       };
     },
     now: () => clock,
-    chance,
     usage: () => usage,
     unheard: (to) => unheard.has(to.id),
   });
@@ -102,7 +135,7 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
     const until = clock + ms;
     for (;;) {
       const next = timers
-        .filter((t) => t.at <= until)
+        .filter((t) => !t.native && t.at <= until)
         .reduce<(typeof timers)[number] | undefined>(
           (a, t) => (a && a.at <= t.at ? a : t),
           undefined,
@@ -166,6 +199,81 @@ function setup(initial: GraphNode[], chance = () => 0.9, unheard: ReadonlySet<st
 }
 
 describe('RunStore', () => {
+  it('keeps an unavailable native session unresolved, holding dependents without a fake outcome', () => {
+    const qwen = agent('a', [{ id: 'inspect', action: 'Read' }]);
+    const { store, sent, where, advance, connects } = setup(
+      [
+        { ...qwen, data: { ...qwen.data, agent: 'Qwen' } },
+        agent('b', [
+          { id: 'wait', waitFor: [{ agent: 'a', item: 'inspect' }] },
+          { id: 'next', message: 'Publish' },
+        ]),
+      ],
+      manual,
+    );
+    store.start();
+    expect(sent).toHaveLength(1);
+    sent[0]?.refused?.({ text: 'Qwen connections are not available yet. Choose Claude or Codex.' });
+    expect(where()).toEqual({ a: 'asking inspect', b: 'waiting wait' });
+    expect(store.snapshot().agents.a?.refused).toEqual({
+      agent: 'a',
+      connection: 'unavailable',
+      text: 'Qwen connections are not available yet. Choose Claude or Codex.',
+    });
+    store.decide('a', 'inspect', { choice: 'switch' });
+    advance(60 * MINUTE);
+    expect(connects).toEqual([]);
+    expect(sent).toHaveLength(1);
+    expect(store.snapshot().agents.a?.outcomes).toEqual({});
+    expect(store.snapshot().agents.b?.outcomes).toEqual({});
+    const resumed = setup([qwen], manual);
+    resumed.store.restore(store.checkpoint());
+    expect(resumed.store.snapshot()).toMatchObject({ paused: true, running: false });
+    expect(resumed.sent).toEqual([]);
+  });
+
+  it.each(['Claude', 'Codex', 'Qwen', 'Gemini'] as const)(
+    'migrates a legacy placeholder refusal using the %s workflow type without replaying',
+    (type) => {
+      const queue: QueueItem[] = [{ id: 'inspect', action: 'Read' }];
+      const authored = { ...agent('a', queue), data: { label: 'A', agent: type, queue } };
+      const first = setup([authored], manual);
+      first.store.start();
+      first.sent[0]?.refused?.({
+        text: 'Earlier connection could not start.',
+        switchTo: 'terminal',
+      });
+      const saved = readRun(first.store.checkpoint());
+      const refused = saved.run.agents.a?.refused;
+      if (!refused) throw new Error('No refusal');
+      Object.assign(refused, { connection: 'simulated' });
+      const second = setup([authored], manual);
+      second.store.restore(JSON.stringify(saved));
+      expect(second.sent).toEqual([]);
+      expect(second.store.snapshot()).toMatchObject({ paused: true, running: false });
+      expect(second.store.snapshot().agents.a?.refused?.connection).toBe(
+        type === 'Claude' ? 'terminal' : type === 'Codex' ? 'codex-terminal' : 'unavailable',
+      );
+      if (type === 'Qwen' || type === 'Gemini')
+        expect(second.store.snapshot().agents.a?.refused).not.toHaveProperty('switchTo');
+    },
+  );
+
+  it('dispatches a default agent step to its native session and waits for its actual verdict', () => {
+    const { store, sent, pending, advance, reply } = setup(
+      [agent('a', [{ id: 'inspect', action: 'Read', instruction: 'Inspect the release' }])],
+      manual,
+    );
+    store.start();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain('Inspect the release');
+    expect(pending()).toBe(0);
+    advance(60 * MINUTE);
+    expect(store.snapshot().agents.a?.outcomes).toEqual({});
+    reply('a', false, 'SUCCEEDED');
+    expect(store.snapshot().agents.a?.outcomes.inspect).toBe('succeeded');
+  });
+
   it('runs each queue in order, a wait holding until what it waits for is done', () => {
     const a = agent('a', [
       { id: 'research', action: 'Workflow' },
@@ -236,11 +344,11 @@ describe('RunStore', () => {
       },
       { id: 'after', action: 'Read' },
     ];
-    // The tests fail (chance under a quarter) for a, and pass for b.
+    // The tests fail (the native callback reports FAILED) for a, and pass for b.
     let draws = 0;
     const { store, tick, reply, where } = setup(
       [agent('a', queue('a')), agent('b', queue('b'))],
-      () => (draws++ === 0 ? 0.1 : 0.9),
+      () => (draws++ === 0 ? false : true),
     );
     store.start();
     tick();
@@ -266,10 +374,10 @@ describe('RunStore', () => {
         then: [{ id: `redo-${id}`, message: 'They pass already: make them fail' }],
       },
     ];
-    // a's step goes as expected: it fails. b's goes wrong (under a quarter): it passes.
+    // a reports FAILED as expected; b unexpectedly reports SUCCEEDED.
     let draws = 0;
     const { store, tick, where } = setup([agent('a', queue('a')), agent('b', queue('b'))], () =>
-      draws++ === 0 ? 0.9 : 0.1,
+      draws++ === 0 ? true : false,
     );
     store.start();
     tick();
@@ -331,14 +439,14 @@ describe('RunStore', () => {
 
   describe('delays', () => {
     it('holds an agent until its time has come, the If after it checking the step before', () => {
-      // The Edit fails (chance under a quarter); so "If the previous step failed" holds after the delay.
+      // The Edit fails (the native callback reports FAILED); so "If the previous step failed" holds after the delay.
       const a = agent('a', [
         { id: 'build', action: 'Edit' },
         { id: 'pause', delay: { seconds: 600 } },
         { id: 'broken', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit' }] },
       ]);
       let draws = 0;
-      const { store, tick, advance, where } = setup([a], () => (draws++ === 0 ? 0.1 : 0.9));
+      const { store, tick, advance, where } = setup([a], () => (draws++ === 0 ? false : true));
       store.start();
       tick();
       expect(where()).toEqual({ a: 'waiting pause' });
@@ -433,7 +541,7 @@ describe('RunStore', () => {
   });
 
   it('fails a wait for a step that failed, or for an agent whose last task that ran failed', () => {
-    // a's tests fail (chance under a quarter); its empty message after them is skipped.
+    // a's tests fail (the native callback reports FAILED); its empty message after them is skipped.
     const retry = (id: string): QueueItem => ({
       id: 'retry',
       if: { kind: 'failed' },
@@ -446,7 +554,7 @@ describe('RunStore', () => {
     const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'tests' }] }, retry('fix-b')]);
     const c = agent('c', [{ id: 'w', waitFor: [{ agent: 'a' }] }, retry('fix-c')]);
     let draws = 0;
-    const { store, tick, where } = setup([a, b, c], () => (draws++ === 0 ? 0.1 : 0.9));
+    const { store, tick, where } = setup([a, b, c], () => (draws++ === 0 ? false : true));
     store.start();
     tick();
     expect(where()).toEqual({ a: 'running note', b: 'running fix-b', c: 'waiting w' });
@@ -516,13 +624,13 @@ describe('RunStore', () => {
       let draws = 0;
       const { store, tick, advance, reply, where } = setup([a, b], () => {
         draws += 1;
-        return 0.9;
+        return true;
       });
       store.start();
       reply('a');
       expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
       expect(store.snapshot().running).toBe(true);
-      // Only the user moves it on: not time, and not chance.
+      // Only the user moves it on; elapsed time starts no native turn.
       advance(60 * MINUTE);
       tick();
       expect(where()).toEqual({ a: 'asking ok', b: 'waiting w' });
@@ -536,14 +644,14 @@ describe('RunStore', () => {
     });
 
     it('passes over an approved OK: an If after it checks the task before it', () => {
-      // The tests fail (chance under a quarter).
+      // The tests fail (the native callback reports FAILED).
       const a = agent('a', [
         { id: 'tests', action: 'Bash' },
         ok('ok', ''),
         { id: 'broken', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit' }] },
       ]);
       let draws = 0;
-      const { store, tick, where } = setup([a], () => (draws++ === 0 ? 0.1 : 0.9));
+      const { store, tick, where } = setup([a], () => (draws++ === 0 ? false : true));
       store.start();
       tick();
       expect(where()).toEqual({ a: 'asking ok' });
@@ -767,17 +875,17 @@ describe('RunStore', () => {
     const fix: RepeatedItem = { id: 'fix', message: 'Make the tests pass' };
     const tests: RepeatedItem = { id: 'tests', action: 'Bash' };
     const next: QueueItem = { id: 'next', action: 'Read' };
-    /** Chance as listed, then 0.9: a step fails under a quarter, a condition holds under a half. */
+    /** Deterministic native results as listed, then a successful verdict. */
     const draws =
-      (...values: number[]) =>
+      (...values: FixtureResult[]) =>
       () =>
-        values.shift() ?? 0.9;
+        values.shift() ?? true;
 
     it('runs its steps in rounds until its last step succeeds, then goes on', () => {
       // The tests fail in the first round, and pass in the second.
       const { store, tick, reply, where, sent } = setup(
         [agent('a', [loop([fix, tests]), next])],
-        draws(0.1),
+        draws(false),
       );
       store.start();
       expect(where()).toEqual({ a: 'running fix' });
@@ -825,7 +933,7 @@ describe('RunStore', () => {
         { id: 'stuck', if: { kind: 'failed' }, then: [{ id: 'help', message: 'Ask for help' }] },
       ]);
       // The tests always fail.
-      const { store, tick, where } = setup([a], () => 0.1);
+      const { store, tick, where } = setup([a], () => false);
       store.start();
       tick();
       expect(store.snapshot().agents.a?.rounds).toEqual({ loop: { round: 2 } });
@@ -842,7 +950,7 @@ describe('RunStore', () => {
       });
 
       it('one more round, what to try next, or to go on', () => {
-        // The output never contains it (chance over a half).
+        // The actual reply lacks APPROVED.
         const { store, reply, where, sent } = setup([agent('a', [approved, next])]);
         store.start();
         reply('a');
@@ -919,7 +1027,7 @@ describe('RunStore', () => {
     it('counts a delay inside it afresh each round, ends it on Go on now, and starts over on Run', () => {
       // The tests fail in the first round, and pass after.
       const a = agent('a', [loop([{ id: 'pause', delay: { seconds: 600 } }, tests]), next]);
-      const { store, tick, advance, where } = setup([a], draws(0.1));
+      const { store, tick, advance, where } = setup([a], draws(false));
       store.start();
       expect(store.snapshot().agents.a?.until).toBe(10 * MINUTE);
       advance(10 * MINUTE);
@@ -950,7 +1058,10 @@ describe('RunStore', () => {
               { id: 'ready', waitFor: [{ agent: 'coder', item: 'implement' }] },
               { id: 'review', action: 'Read' },
             ],
-            { id: 'reviewing', until: { kind: 'outputContains', text: 'APPROVED' } },
+            {
+              id: 'reviewing',
+              until: { kind: 'outputContains', text: 'APPROVED', wholeLine: true },
+            },
           ),
         ]);
         const coder = agent('coder', [
@@ -965,7 +1076,10 @@ describe('RunStore', () => {
         // Every step succeeds; the first review is not approved, the second is.
         const { store, tick, where } = setup(
           [reviewer, coder],
-          draws(0.9, 0.9, 0.9, 0.9, 0.9, 0.1),
+          draws(true, { succeeded: true, reply: 'NOT APPROVED' }, true, {
+            succeeded: true,
+            reply: 'APPROVED',
+          }),
         );
         store.start();
         expect(where()).toEqual({ reviewer: 'waiting ready', coder: 'running implement' });
@@ -992,7 +1106,7 @@ describe('RunStore', () => {
         const a = agent('a', [loop([{ id: 'build', action: 'Edit' }])]);
         const b = agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'build' }] }, next]);
         // b first: it sees how round 1 went before a goes round.
-        const { store, tick, where } = setup([b, a], draws(0.1));
+        const { store, tick, where } = setup([b, a], draws(false));
         store.start();
         tick();
         expect(where()).toEqual({ a: 'running build', b: 'waiting w' });
@@ -1013,7 +1127,7 @@ describe('RunStore', () => {
           }),
           next,
         ]);
-        const { store, tick, where } = setup([a, b], () => 0.1);
+        const { store, tick, where } = setup([a, b], () => false);
         store.start();
         tick();
         expect(where()).toEqual({ a: 'running build', b: 'waiting w' });
@@ -1102,11 +1216,11 @@ describe('RunStore', () => {
       const t = connected('t', [{ id: 'tree', action: 'EnterWorktree' }], 'terminal');
       const { store, reply, where, sent, pending } = setup(
         [a, agent('b', [], 'Builder'), t],
-        never,
+        manual,
       );
       store.start();
       expect(where()).toEqual({ a: 'running review', b: 'done', t: 'running tree' });
-      // Nothing simulated: no step is timed.
+      // No native step is timed by the run engine.
       expect(pending()).toBe(0);
       reply('a');
       reply('a', true);
@@ -1138,16 +1252,16 @@ describe('RunStore', () => {
       expect(store.snapshot().agents.t?.outcomes).toEqual({ tree: 'failed' });
     });
 
-    it('says what a step is to do, in your words; a simulated agent ignores them', () => {
+    it('sends authored instructions for both explicit and default native connections', () => {
       const a = connected('a', [{ id: 'tests', action: 'Bash', instruction: 'run npm test' }]);
-      const s = agent('s', [{ id: 'sim', action: 'Bash', instruction: 'run npm test' }]);
-      const { store, sent, pending } = setup([a, s], () => 0.9);
+      const s = agent('s', [{ id: 'default', action: 'Bash', instruction: 'run npm test' }]);
+      const { store, sent, pending } = setup([a, s], manual);
       store.start();
       expect(sent.map((m) => [m.agent, m.text])).toEqual([
         ['a', `Use the Bash tool for this step: run npm test\n\n${VERDICT.trim()}`],
+        ['s', `Use the Bash tool for this step: run npm test\n\n${VERDICT.trim()}`],
       ]);
-      // The simulated step is timed, as any other.
-      expect(pending()).toBe(1);
+      expect(pending()).toBe(0);
     });
 
     it('takes how a step went from what its reply says last, not from its turn alone', () => {
@@ -1170,7 +1284,7 @@ describe('RunStore', () => {
           otherwise: 'ask',
         },
       ]);
-      const { store, reply, where, sent, told } = setup([a], never);
+      const { store, reply, where, sent, told } = setup([a], manual);
       store.start();
       // The tests fail, as they should yet: the step failed, though its turn ended well.
       reply('a', false, 'All 12 tests fail: wc.js is missing, as expected.\n\nFAILED');
@@ -1198,7 +1312,7 @@ describe('RunStore', () => {
         { id: 'tests', action: 'Bash' },
         { id: 'review', action: '/code-review' },
       ]);
-      const { store, reply, where, sent, told } = setup([a], never);
+      const { store, reply, where, sent, told } = setup([a], manual);
       store.start();
       reply('a', false, 'Ran them: 2 tests failed.');
       expect(where()).toEqual({ a: 'asking tests' });
@@ -1236,7 +1350,7 @@ describe('RunStore', () => {
       it('turns its verdict round, asking the agent just the same', () => {
         const { store, reply, where, sent, told } = setup(
           [connected('a', [red, early('redo-a')]), connected('b', [red, early('redo-b')])],
-          never,
+          manual,
         );
         store.start();
         // Whether it succeeded, as for any step: what the agent says is turned round after.
@@ -1263,7 +1377,7 @@ describe('RunStore', () => {
           // A slash command's turn is how it went: turned round too.
           { id: 'review', action: '/code-review', expect: 'fails' },
         ]);
-        const { store, reply, told } = setup([a], never);
+        const { store, reply, told } = setup([a], manual);
         store.start();
         // An execution error does not establish that the tests failed as expected.
         reply('a', true, 'API failed before the tests ran');
@@ -1296,7 +1410,7 @@ describe('RunStore', () => {
             otherwise: 'ask',
           },
         ]);
-        const { store, reply, where } = setup([a], never);
+        const { store, reply, where } = setup([a], manual);
         store.start();
         reply('a');
         reply('a', false, 'It passes already.\nSUCCEEDED');
@@ -1318,9 +1432,7 @@ describe('RunStore', () => {
           const example = EXAMPLES.find((e) => e.name === name);
           const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
           const nodes = fillTemplate(fromFile(example?.text ?? ''), values).nodes.map((n) => {
-            const connection = AGENT_CONNECTIONS[n.data.agent ?? DEFAULT_AGENT].find(
-              (c) => c !== 'simulated',
-            );
+            const connection = AGENT_CONNECTIONS[n.data.agent ?? DEFAULT_AGENT][0];
             return n.type === 'agent' && connection ? { ...n, data: { ...n.data, connection } } : n;
           });
           const red = nodes.flatMap((n) =>
@@ -1332,7 +1444,7 @@ describe('RunStore', () => {
           const { agent: tester = '', step = '' } = red[0] ?? {};
           /** Runs to the red step (every turn before it ends well, every OK given), then says how it went. */
           const run = (verdict: string) => {
-            const { store, reply, sent } = setup(nodes, never);
+            const { store, reply, sent } = setup(nodes, manual);
             store.start();
             for (let turn = 0; turn < 20; turn++) {
               const { agents } = store.snapshot();
@@ -1363,7 +1475,7 @@ describe('RunStore', () => {
 
       it('holds an unheard result until resolved, without judging whether it failed as expected', () => {
         const a = connected('a', [red, early('redo')], 'terminal');
-        const { store, reply, where, told } = setup([a], never, new Set(['a']));
+        const { store, reply, where, told } = setup([a], manual, new Set(['a']));
         store.start();
         // Its hooks are off: its turn ends, with no reply heard.
         reply('a');
@@ -1399,7 +1511,7 @@ describe('RunStore', () => {
         ],
         'terminal',
       );
-      const { store, reply, where, sent, told } = setup([a], never, new Set(['a']));
+      const { store, reply, where, sent, told } = setup([a], manual, new Set(['a']));
       store.start();
       // Its hooks are off: its turn ends, with no reply heard.
       reply('a');
@@ -1441,7 +1553,7 @@ describe('RunStore', () => {
       };
       const { store, reply, sent } = setup(
         [node('c', 'app-server'), node('d', 'codex-terminal')],
-        never,
+        manual,
       );
       store.start();
       expect(sent.map((m) => m.text)).toEqual([
@@ -1481,7 +1593,7 @@ describe('RunStore', () => {
         },
         { id: 'none', if: { kind: 'outputContains', text: 'all pass' }, then: [] },
       ]);
-      const { store, reply, where, sent } = setup([a, agent('b')], never);
+      const { store, reply, where, sent } = setup([a, agent('b')], manual);
       store.start();
       reply('a', false, 'Ran 12 tests: 0 failed.\nSUCCEEDED');
       expect(where()).toEqual({ a: 'running tag', b: 'done' });
@@ -1510,7 +1622,7 @@ describe('RunStore', () => {
           connection: node.data.agent === 'Codex' ? ('app-server' as const) : ('sdk' as const),
         },
       }));
-      const { store, reply, where, sent } = setup(nodes, never);
+      const { store, reply, where, sent } = setup(nodes, manual);
       store.start();
       reply('coder');
       reply('reviewer', false, 'NOT APPROVED');
@@ -1538,7 +1650,7 @@ describe('RunStore', () => {
           otherwise: 'ask',
         },
       ]);
-      const { store, reply, where } = setup([a], never);
+      const { store, reply, where } = setup([a], manual);
       store.start();
       // As written: "not approved" is not it.
       reply('a', false, 'Built. Not approved yet.');
@@ -1573,7 +1685,7 @@ describe('RunStore', () => {
           then: [{ id: 'post', message: 'Post it' }],
         },
       ]);
-      const { store, reply, where, sent, told } = setup([a], never);
+      const { store, reply, where, sent, told } = setup([a], manual);
       store.start();
       reply('a', false, 'Ran them.\nSUCCEEDED');
       // After the step it checks, a plain question, then its turn's answer decides.
@@ -1620,7 +1732,7 @@ describe('RunStore', () => {
         },
         { id: 'next', message: 'Publish it' },
       ]);
-      const { store, reply, where, sent } = setup([a], never);
+      const { store, reply, where, sent } = setup([a], manual);
       store.start();
       reply('a');
       expect(where()).toEqual({ a: 'running loop' });
@@ -1645,7 +1757,7 @@ describe('RunStore', () => {
         { id: 'next', action: 'Read' },
       ]);
       const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }]);
-      const { store, reply, where, sent } = setup([a, b], never);
+      const { store, reply, where, sent } = setup([a, b], manual);
       store.start();
       reply('a', false, 'Tests passed.\nSUCCEEDED');
       expect(where()).toEqual({ a: 'running next', b: 'running hand' });
@@ -1703,7 +1815,7 @@ describe('RunStore', () => {
             connection,
           );
           const a = { ...node, data: { ...node.data, agent: type } };
-          const { store, sent, where, connects, reply, edit } = setup([a], never);
+          const { store, sent, where, connects, reply, edit } = setup([a], manual);
           store.start();
           sent[0]?.refused?.({ text: reason, switchTo });
           expect(where()).toEqual({ a: 'asking tests' });
@@ -1736,7 +1848,7 @@ describe('RunStore', () => {
       it('holds the agent that handed it the message, and switches the one that would not start', () => {
         const a = connected('a', []);
         const b = agent('b', [{ id: 'hand', message: 'Review it', target: 'a' }], 'Builder');
-        const { store, sent, where, connects } = setup([a, b], never);
+        const { store, sent, where, connects } = setup([a, b], manual);
         store.start();
         sent[0]?.refused?.({ text: why, switchTo: 'terminal' });
         expect(where()).toEqual({ a: 'done', b: 'asking hand' });
@@ -1747,7 +1859,7 @@ describe('RunStore', () => {
 
       it('takes the message back on Stop, and hears no refusal from a run before', () => {
         const a = connected('a', [{ id: 'tests', action: 'Bash' }]);
-        const { store, sent, where, connects } = setup([a], never);
+        const { store, sent, where, connects } = setup([a], manual);
         store.start();
         const first = sent[0];
         first?.refused?.({ text: why, switchTo: 'terminal' });
@@ -1774,7 +1886,7 @@ describe('RunStore', () => {
           otherwise: 'ask',
         },
       ]);
-      const { store, reply, where, sent } = setup([a], never);
+      const { store, reply, where, sent } = setup([a], manual);
       store.start();
       reply('a', false, 'Layout built.\nSUCCEEDED');
       store.decide('a', 'ok', { reply: ' Match this ', images: [png] });
@@ -1813,7 +1925,7 @@ describe('RunStore', () => {
         },
         { id: 'work', message: 'Go on' },
       ];
-      const run = setup([connected('a', queue), agent('b')], never);
+      const run = setup([connected('a', queue), agent('b')], manual);
       run.reading(fiveHour(85));
       run.store.start();
       expect(run.sent.map((s) => s.agent)).toEqual(['b']);
@@ -1824,7 +1936,7 @@ describe('RunStore', () => {
 
       // Not over (or no reading, or a window that has reset): skipped.
       for (const windows of [fiveHour(80), null, fiveHour(99, run.now())]) {
-        const again = setup([connected('a', queue), agent('b')], never);
+        const again = setup([connected('a', queue), agent('b')], manual);
         again.reading(windows);
         again.store.start();
         expect(again.store.snapshot().agents.a?.outcomes.high).toBe('skipped');
@@ -1856,7 +1968,7 @@ describe('RunStore', () => {
     });
 
     it('holds every agent on the backend, and Go on goes on for all until the window resets', () => {
-      const gemini = agent('g', [{ id: 'four', action: 'Edit' }]);
+      const otherBackend = agent('g', [{ id: 'four', action: 'exec_command' }]);
       const run = setup([
         agent('a', [
           { id: 'one', action: 'Edit' },
@@ -1864,8 +1976,8 @@ describe('RunStore', () => {
           { id: 'two', action: 'Bash' },
         ]),
         agent('b', [{ id: 'three', message: 'Write the docs' }]),
-        // Not on it: Gemini's usage is not read, and an Agent SDK agent runs on an API key.
-        { ...gemini, data: { ...gemini.data, agent: 'Gemini' } },
+        // Codex has its own usage backend; Agent SDK runs on an API key.
+        { ...otherBackend, data: { ...otherBackend.data, agent: 'Codex' } },
         connected('s', [{ id: 'five', message: 'Review' }], 'sdk'),
       ]);
       run.rule(ask);
@@ -1880,7 +1992,8 @@ describe('RunStore', () => {
       run.store.decide('a', 'one', { choice: 'goOn' });
       expect(run.where()).toMatchObject({ a: 'running one', b: 'running three' });
 
-      // Once the window resets, a new reading over the share asks again.
+      // Finish the actual native turn; once the window resets, a new reading asks again.
+      run.tick();
       run.advance(2 * HOUR);
       expect(run.where()).toMatchObject({ a: 'waiting later' });
       run.reading(fiveHour(95, 7 * HOUR));
@@ -2051,7 +2164,7 @@ describe('RunStore', () => {
         { id: 'reset', delay: { resets: 'fiveHour', backend: 'Claude' } },
         { id: 'big', message: 'Start the big refactor' },
       ];
-      const run = setup([connected('a', queue, 'terminal')], never);
+      const run = setup([connected('a', queue, 'terminal')], manual);
       run.reading(fiveHour(30));
       run.store.start();
       expect(run.where()).toEqual({ a: 'waiting reset' });
@@ -2089,7 +2202,7 @@ describe('RunStore', () => {
         { id: 'reset', delay: { resets: 'weekly', backend: 'Claude' } },
         { id: 'big', message: 'Start the big refactor' },
       ];
-      const run = setup([connected('a', queue, 'terminal')], never);
+      const run = setup([connected('a', queue, 'terminal')], manual);
       run.store.start();
       expect(run.sent.map((s) => s.text)).toEqual(['Start the big refactor']);
       run.tick();

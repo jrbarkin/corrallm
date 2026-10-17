@@ -3,7 +3,7 @@ import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, UNASKING_MODES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
-import { AgentType } from '../graph/agents';
+import type { AgentType } from '../graph/agents';
 import { ChoiceMenu } from './ChoiceMenu';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
@@ -45,14 +45,6 @@ interface Choice {
   detail?: string;
 }
 
-/** The models each simulated agent offers (the Claude 5 family for Claude; others not listed). */
-const MODELS: Record<AgentType, readonly string[]> = {
-  [AgentType.Claude]: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'],
-  [AgentType.Codex]: ['Default model'],
-  [AgentType.Qwen]: ['Default model'],
-  [AgentType.Gemini]: ['Default model'],
-};
-
 /** What a connected session offers before it has said: its CLI's default model. */
 const DEFAULT_MODEL: readonly ModelChoice[] = [{ value: 'default', label: 'Default model' }];
 
@@ -79,7 +71,6 @@ const DEFAULT_EFFORT = 'default';
 export function Composer({
   agentName,
   agent,
-  connected,
   session,
   controls,
   field,
@@ -90,8 +81,6 @@ export function Composer({
 }: {
   agentName: string;
   agent: AgentType;
-  /** Whether it runs the real CLI (connected.ts) rather than a scripted session. */
-  connected: boolean;
   session: Session;
   controls: ComposerControls;
   /** Its text box, which the view focuses again after the user answers a prompt. */
@@ -126,11 +115,7 @@ export function Composer({
     findFiles.current = controls.findFiles;
   });
   const working = session.status !== 'idle';
-  const models =
-    session.models ??
-    (connected
-      ? DEFAULT_MODEL
-      : MODELS[agent].map((name): ModelChoice => ({ value: name, label: name })));
+  const models = session.models ?? DEFAULT_MODEL;
   const model = models.find((m) => m.value === session.model) ?? models[0];
   const mode = modeOf(agent, session.mode);
   /** The modes it can switch to: its CLI's, unless the session said otherwise. */
@@ -146,7 +131,7 @@ export function Composer({
     field.current?.focus();
   };
   const confirmed = confirming === undefined ? undefined : modeOf(agent, confirming);
-  const efforts = connected && controls.setEffort ? (model?.efforts ?? []) : [];
+  const efforts = controls.setEffort ? (model?.efforts ?? []) : [];
   /** The effort it reasons at: the one chosen, else its model's default (where its CLI says it). */
   const effort = session.effort ?? model?.defaultEffort ?? null;
   const effortName = efforts.find((e) => e.value === effort)?.label ?? effort ?? 'Default';
@@ -164,7 +149,7 @@ export function Composer({
     return texts;
   }, [session.entries]);
 
-  const at: Completing | undefined = connected ? completing(draft, caret) : undefined;
+  const at: Completing | undefined = completing(draft, caret);
   const mention = at?.kind === 'file' ? at.query : undefined;
   const choices: Choice[] =
     at?.kind === 'command'
@@ -271,7 +256,7 @@ export function Composer({
 
   return (
     <div className="agent-composer">
-      {connected && controls.stopTask && tasks.length > 0 && (
+      {controls.stopTask && tasks.length > 0 && (
         <BackgroundTasks tasks={tasks} onStop={controls.stopTask} />
       )}
       {session.queued.length > 0 && (
@@ -345,10 +330,10 @@ export function Composer({
       <div
         className="agent-input"
         onDragOver={(event: DragEvent) => {
-          if (connected && imagesIn(event.dataTransfer).length > 0) event.preventDefault();
+          if (imagesIn(event.dataTransfer).length > 0) event.preventDefault();
         }}
         onDrop={(event: DragEvent) => {
-          const dropped = connected ? imagesIn(event.dataTransfer) : [];
+          const dropped = imagesIn(event.dataTransfer);
           if (dropped.length === 0) return;
           event.preventDefault();
           attach(dropped);
@@ -412,8 +397,8 @@ export function Composer({
           autoFocus
           rows={1}
           aria-label={`Message ${agentName}`}
-          aria-autocomplete={connected ? 'list' : undefined}
-          aria-expanded={connected ? menu.length > 0 : undefined}
+          aria-autocomplete="list"
+          aria-expanded={menu.length > 0}
           aria-controls={menu.length > 0 ? listId : undefined}
           aria-activedescendant={menu.length > 0 ? `${listId}-${String(picked)}` : undefined}
           placeholder={
@@ -430,7 +415,7 @@ export function Composer({
             setCaret(event.currentTarget.selectionStart);
           }}
           onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
-            const pasted = connected ? imagesIn(event.clipboardData) : [];
+            const pasted = imagesIn(event.clipboardData);
             if (pasted.length === 0) return;
             // An image is attached; text pasted with it still goes into the box.
             if (event.clipboardData.getData('text/plain') === '') event.preventDefault();

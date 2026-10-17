@@ -37,7 +37,7 @@ import { sameTime } from './time';
 export type NodeKind = 'agent' | 'frame';
 /**
  * `agent`: the coding agent an item runs (frames have none), and `connection`, how it runs when not
- * simulated (agents.ts); `settings`, what it is set to run with in each CLI it has run (its model,
+ * the native default (agents.ts); `settings`, what it is set to run with in each CLI it has run (its model,
  * effort and starting mode: src/shared/session.ts). `color`: a group's colour, an index into the
  * GROUP_COLORS palette (GraphEditor.css).
  */
@@ -292,13 +292,14 @@ export function setRole(graph: Graph, id: string, role: string | undefined): Gra
   };
 }
 
-/** Sets how an agent runs, if its type offers that: simulated (the default) or connected. */
+/** Sets the native connection, if its agent type offers it. */
 export function setConnection(graph: Graph, id: string, connection: AgentConnection): Graph {
   const node = graph.nodes.find((n) => n.id === id);
   if (
     node?.type !== 'agent' ||
+    connection === 'unavailable' ||
     !AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection) ||
-    (node.data.connection ?? 'simulated') === connection
+    node.data.connection === connection
   ) {
     return graph;
   }
@@ -306,9 +307,7 @@ export function setConnection(graph: Graph, id: string, connection: AgentConnect
   delete data.connection;
   return {
     ...graph,
-    nodes: graph.nodes.map((n) =>
-      n === node ? { ...n, data: connection === 'simulated' ? data : { ...data, connection } } : n,
-    ),
+    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...data, connection } } : n)),
   };
 }
 

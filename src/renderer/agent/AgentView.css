@@ -222,6 +222,34 @@
   min-width: 0;
 }
 
+.agent-unavailable {
+  align-items: flex-start;
+  gap: 16px;
+  overflow: auto;
+  padding: 32px;
+}
+
+.agent-unavailable .agent-session-note {
+  max-width: 56ch;
+  margin: 0;
+  line-height: 1.5;
+  color: color-mix(in srgb, CanvasText 75%, Canvas);
+}
+
+.agent-unavailable > button {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-unavailable > button:hover {
+  background: color-mix(in srgb, CanvasText 5%, Canvas);
+}
+
 /* The agent's questions and queue, left of the session. */
 .agent-side {
   flex-shrink: 0;

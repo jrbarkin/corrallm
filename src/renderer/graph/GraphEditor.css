@@ -1125,19 +1125,6 @@ input.graph-label {
   background: color-mix(in srgb, #f59e0b 8%, Canvas);
 }
 
-.graph-simulate {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  text-decoration: underline;
-  opacity: 0.55;
-  cursor: pointer;
-}
-
 /* A link between agents that can talk to each other: dashed, with no direction. */
 .react-flow__edge.graph-link .react-flow__edge-path {
   stroke-dasharray: 6 5;

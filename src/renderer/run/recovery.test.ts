@@ -26,7 +26,6 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
     connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
-    chance: () => 0.9,
     ...overrides,
   };
   const node: GraphNode = {

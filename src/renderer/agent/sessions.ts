@@ -14,12 +14,12 @@ import type {
   SettingsOptions,
   TurnResult,
 } from '../../shared/session';
-import { DEFAULT_AGENT } from '../graph/agents';
+import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection, AgentType } from '../graph/agents';
 import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
-import { ScriptedDriver } from './scripted';
+import { UnavailableDriver } from './unavailable';
 import { decodeSubmissions, encodeSubmissions } from './submission-state';
 import { answersOf, conversationOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
@@ -48,9 +48,8 @@ interface Driving {
 /**
  * Every agent's session, by agent id, outside React (components read it with
  * useSyncExternalStore), so that turns keep playing while their agent's view is closed. Each
- * agent's session is driven by a driver (driver.ts) as the agent runs: scripted when simulated
- * (scripted.ts), or connected to a session in the main process (connected.ts, through
- * `backend`). A message sent while an agent works is queued, and sent once the turn ends,
+ * agent's session is driven by a driver (driver.ts) connected to a session in the main process
+ * (connected.ts, through `backend`). A message sent while an agent works is queued, and sent once the turn ends,
  * interrupted or not. Whoever sends a message can hear when the turn it starts ends, and what the
  * agent replied in it, and can take the message back (the queues' run, run/runner.ts). A session
  * that would not start (an Agent SDK agent on a Claude subscription) keeps its messages queued,
@@ -70,7 +69,7 @@ export class SessionStore {
   readonly #roles = new Map<string, string>();
   /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
   readonly #options = new Map<Cli, Promise<SettingsOptions>>();
-  /** Each agent's type, as it was last sent a message: what its scripted turns are like. */
+  /** Each agent's type, as it was last sent a message: its default connection and queue sends. */
   readonly #types = new Map<string, AgentType>();
   /**
    * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
@@ -209,7 +208,7 @@ export class SessionStore {
     const existing = this.#freshening.get(agentId);
     if (existing) return existing;
     const connection = this.#connections.get(agentId);
-    if (!connection || connection === 'simulated' || this.of(agentId).status !== 'idle') {
+    if (!connection || connection === 'unavailable' || this.of(agentId).status !== 'idle') {
       return Promise.resolve();
     }
     const pending = Promise.resolve().then(async () => {
@@ -525,8 +524,8 @@ export class SessionStore {
   ): void {
     const pasted = images === undefined || images.length === 0 ? {} : { images };
     this.#turns.set(agentId, id);
-    // Sent in the conversation the agent is on: its CLI's, or its simulated session's.
-    const conversation = conversationOf(this.#connections.get(agentId) ?? 'simulated');
+    // An unsupported submission stays separate from native conversation history.
+    const conversation = conversationOf(this.#connection(agentId));
     this.#dispatch(agentId, {
       type: 'start',
       entry: { id, kind: 'user', text, ...pasted, conversation },
@@ -557,7 +556,16 @@ export class SessionStore {
   #refused(agentId: string, id: string, refusal: Refusal): void {
     this.#dispatch(agentId, { type: 'refuse', id });
     if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
-    for (const queued of this.of(agentId).queued) this.#onRefused.get(queued.id)?.(refusal);
+    const ids = this.of(agentId).queued.map(({ id }) => id);
+    const driving = this.#drivers.get(agentId);
+    // Native starts are asynchronous. Keep the same ordering for unavailable connections, so
+    // a runner can publish its held task before hearing the refusal. A same-stack switch or
+    // removal may already have dispatched/withdrawn these messages before this notification.
+    queueMicrotask(() => {
+      if (this.#drivers.get(agentId) !== driving) return;
+      const queued = new Set(this.of(agentId).queued.map(({ id }) => id));
+      for (const id of ids) if (queued.has(id)) this.#onRefused.get(id)?.(refusal);
+    });
   }
 
   /** The session is idle: its next queued message, if any, starts. */
@@ -575,16 +583,24 @@ export class SessionStore {
     );
   }
 
+  /** Missing runtime configuration follows the same native default as an authored agent. */
+  #connection(agentId: string): AgentConnection {
+    return (
+      this.#connections.get(agentId) ??
+      connectionOf({ agent: this.#types.get(agentId) ?? DEFAULT_AGENT })
+    );
+  }
+
   /** The agent's driver, made as the agent runs if it has none. */
   #driver(agentId: string): SessionDriver {
     const existing = this.#drivers.get(agentId);
     if (existing) return existing.driver;
-    const connection = this.#connections.get(agentId) ?? 'simulated';
+    const connection = this.#connection(agentId);
     // The driver's io needs its entry, and the driver its io.
     const driving = { connection, closing: false } as Driving;
     const io = this.#io(agentId, driving);
-    if (connection === 'simulated') {
-      driving.driver = new ScriptedDriver(io);
+    if (connection === 'unavailable') {
+      driving.driver = new UnavailableDriver(io);
     } else {
       this.#listen();
       driving.driver = new ConnectedDriver(agentId, connection, this.#backend, io);
@@ -606,7 +622,7 @@ export class SessionStore {
       session: () => this.of(agentId),
       settings: () => {
         const settings =
-          driving.connection === 'simulated'
+          driving.connection === 'unavailable'
             ? {}
             : (this.#settings.get(agentId)?.[CONNECTION_CLI[driving.connection]] ?? {});
         const role = this.#roles.get(agentId);
@@ -620,12 +636,6 @@ export class SessionStore {
       },
       newId: () => crypto.randomUUID(),
       now: () => Date.now(),
-      later: (run, ms) => {
-        const timer = setTimeout(run, ms);
-        return () => {
-          clearTimeout(timer);
-        };
-      },
     };
   }
 

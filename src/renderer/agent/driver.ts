@@ -10,8 +10,8 @@ import type { Mode, Refusal, Session, SessionAction } from './session';
 /*
  * What drives an agent's session. The store (sessions.ts) keeps every session and what is queued,
  * and decides when a turn starts; a driver plays each turn onto the session through `dispatch`:
- * the scripted driver (scripted.ts) for a simulated agent, the connected driver (connected.ts) for
- * one that runs the real CLI in the main process. Whatever drives a turn, it ends with an 'end'
+ * the connected driver (connected.ts) runs the real CLI in the main process; an unavailable
+ * driver refuses unsupported connections without inventing work. Whatever drives a turn, it ends with an 'end'
  * action, then `idle()`, then the turn's `done`; unless its session would not start, when the
  * driver tells `refused` instead, and the turn never was.
  */
@@ -68,6 +68,4 @@ export interface DriverIO {
   settings: () => AgentStartSettings;
   newId: () => string;
   now: () => number;
-  /** Runs `run` in `ms`; returns a function that cancels it. */
-  later: (run: () => void, ms: number) => () => void;
 }

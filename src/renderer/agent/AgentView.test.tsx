@@ -1,9 +1,46 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GraphEditor } from '../graph/GraphEditor';
+import { useState } from 'react';
+import type { ComponentProps } from 'react';
+
+import { GraphEditor as NativeGraphEditor } from '../graph/GraphEditor';
+import { automaticBackend } from '../test-backend';
 import type { Graph, GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat } from '../graph/queue';
+
+/** Native session events from a test backend; production never fabricates replies. */
+function GraphEditor(props: ComponentProps<typeof NativeGraphEditor>) {
+  const [backend] = useState(() => automaticBackend().backend);
+  const initialGraph = props.initialGraph && {
+    ...props.initialGraph,
+    nodes: props.initialGraph.nodes.map((node) =>
+      node.type === 'agent'
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              connection:
+                node.data.connection ??
+                (node.data.agent === 'Codex' ? ('app-server' as const) : ('sdk' as const)),
+            },
+          }
+        : node,
+    ),
+  };
+  return (
+    <NativeGraphEditor
+      {...props}
+      {...(initialGraph ? { initialGraph } : {})}
+      sessionBackend={backend}
+    />
+  );
+}
+
+vi.mock('../terminal/screen', async () => {
+  const { fakeScreens } = await import('../terminal/test-screen');
+  return { createScreen: fakeScreens.create };
+});
 
 const agent = (id: string, extra: Partial<GraphNode> = {}): GraphNode => ({
   id,
@@ -37,7 +74,7 @@ const stacked = () =>
     .queryAllByRole('button', { name: /^Switch to / })
     .map((button) => button.getAttribute('aria-label'));
 
-/** Lets the scripted session play for `ms`. */
+/** Advances the native test backend’s turn timers. */
 const play = (ms = 10_000) => {
   act(() => {
     vi.advanceTimersByTime(ms);
@@ -56,35 +93,6 @@ describe('the agent view', () => {
     const { view } = open();
     fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
     expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('plays a scripted turn: its reply, tool calls, and permission prompts', () => {
-    const { send, transcript } = open();
-    send('Add rate limiting');
-    expect(transcript.getByText('Add rate limiting')).toBeTruthy();
-    play();
-    expect(transcript.getByRole('button', { name: /^Read src\/index\.ts/ })).toBeTruthy();
-
-    // Manual mode asks before an edit, then before a command.
-    const edit = within(transcript.getByRole('group', { name: 'Edit file: src/index.ts' }));
-    fireEvent.click(edit.getByRole('button', { name: 'Yes' }));
-    play();
-    expect(transcript.getByRole('button', { name: /^Edit src\/index\.ts \+4 −1/ })).toBeTruthy();
-    const command = within(transcript.getByRole('group', { name: 'Bash command: npm test' }));
-    fireEvent.click(command.getByRole('button', { name: "Yes, and don't ask again for npm test" }));
-    play();
-    expect(transcript.getByText(/^Worked for \d+s$/)).toBeTruthy();
-    expect(transcript.getAllByText(/scripted session/).length).toBeGreaterThan(0);
-
-    // Next turn: it asks about the edit again, but not the command.
-    send('Again');
-    play();
-    const [, again] = transcript.getAllByRole('group', { name: 'Edit file: src/index.ts' });
-    if (!again) throw new Error('no second edit prompt');
-    fireEvent.click(within(again).getByRole('button', { name: 'Yes' }));
-    play();
-    expect(transcript.getAllByRole('group', { name: 'Bash command: npm test' })).toHaveLength(1);
-    expect(transcript.getAllByText(/^Worked for \d+s$/)).toHaveLength(2);
   });
 
   it('adds to the queue from its sidebar, or from right above the message box', () => {
@@ -144,18 +152,6 @@ describe('the agent view', () => {
     expect(transcript.getByText(/^Interrupted/)).toBeTruthy();
     expect(transcript.getByText('Second')).toBeTruthy();
     expect(view.queryByRole('list', { name: 'Queued messages' })).toBeNull();
-  });
-
-  it('switches mode with Shift+Tab: Accept edits does not ask before editing', () => {
-    const { view, composer, send, transcript } = open();
-    const mode = () => view.getByRole('button', { name: /^Mode: / }).getAttribute('aria-label');
-    expect(mode()).toBe('Mode: Manual');
-    fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true });
-    expect(mode()).toBe('Mode: Accept edits');
-    send('Go');
-    play();
-    expect(transcript.queryByRole('group', { name: 'Edit file: src/index.ts' })).toBeNull();
-    expect(transcript.getByRole('group', { name: 'Bash command: npm test' })).toBeTruthy();
   });
 
   it('never switches into bypassing permissions with Shift+Tab', () => {
@@ -468,11 +464,11 @@ describe('the agent view', () => {
       // The new agent is shown, and on the canvas: a Codex agent in a's group, not linked to a.
       const next = shown('Agent 1');
       expect(screen.queryByRole('dialog', { name: 'a' })).toBeNull();
-      const card = screen.getByRole('group', { name: 'Agent 1, Codex' });
+      const card = screen.getByRole('group', { name: 'Agent 1, Codex · App Server' });
       expect(card.classList.contains('group-color-3')).toBe(true);
       expect(card.classList.contains('selected')).toBe(true);
       expect(container.querySelectorAll('.react-flow__edge')).toHaveLength(0);
-      expect(next.getByRole('button', { name: 'Agent: Codex · Simulated' })).toBeTruthy();
+      expect(next.getByRole('button', { name: 'Agent: Codex · App Server' })).toBeTruthy();
       // a waits on top of the stack, still working.
       expect(stacked()).toEqual(['Switch to a']);
       expect(next.getByRole('button', { name: 'Switch to a' }).dataset.status).toBe('working');
@@ -515,9 +511,9 @@ describe('the agent view', () => {
       fireEvent.click(shown('Agent 1').getByRole('button', { name: 'Back to the canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       // The agent shown last has the keyboard on the canvas.
-      expect(document.activeElement?.getAttribute('aria-label')).toBe('Agent 1, Claude');
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Agent 1, Claude · SDK');
 
-      fireEvent.doubleClick(screen.getByRole('group', { name: 'a, Claude' }));
+      fireEvent.doubleClick(screen.getByRole('group', { name: 'a, Claude · SDK' }));
       expect(stacked()).toEqual([]);
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(screen.queryByRole('dialog')).toBeNull();

@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import nativePath from 'node:path';
+
 import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
@@ -16,14 +20,25 @@ let app: ElectronApplication;
 let closeApp: () => Promise<void>;
 let page: Page;
 let problems: string[];
+let dir: string;
 
 test.beforeEach(async () => {
-  ({ app, close: closeApp } = await launchApp());
+  dir = await mkdtemp(nativePath.join(tmpdir(), 'corrallm-graph-'));
+  const folder = nativePath.join(dir, 'project');
+  await mkdir(folder);
+  ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } }));
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, folder);
   page = await app.firstWindow();
   problems = [];
   // Warnings too: the only React Flow diagnostic left in a production build is a console.warn
   // ("Parent node … not found": a child placed before its parent in the nodes array).
   page.on('console', (message) => {
+    // Native Terminal views warm xterm's glyph cache; this is its existing timing diagnostic.
+    if (/^task queue exceeded allotted deadline by \d+ms$/.test(message.text())) return;
     if (message.type() === 'error' || message.type() === 'warning') {
       problems.push(`${message.type()}: ${message.text()}`);
     }
@@ -35,6 +50,7 @@ test.beforeEach(async () => {
   await page.waitForLoadState('load');
   await page.reload();
   await expect(pane()).toBeVisible();
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
   // The tests use fixed canvas offsets that need the 1200×800 window at page zoom 1.
   const { width, height } = await box(pane());
   expect(
@@ -45,6 +61,7 @@ test.beforeEach(async () => {
 
 test.afterEach(async () => {
   await closeApp();
+  await rm(dir, { recursive: true, force: true });
   expect(problems).toEqual([]);
 });
 
@@ -68,6 +85,17 @@ const selectionActions = () =>
   page.locator('.react-flow__node-toolbar', {
     has: page.getByRole('button', { name: 'Group', exact: true }),
   });
+
+async function createTemplate() {
+  const gallery = page.getByRole('dialog', { name: 'Templates' });
+  for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
+    const selected = await choice.inputValue();
+    if (selected === 'terminal') await choice.selectOption('sdk');
+    else if (selected === 'codex-terminal') await choice.selectOption('app-server');
+  }
+  await gallery.getByRole('button', { name: 'Create canvas' }).click();
+  await page.getByRole('button', { name: 'Choose a project folder' }).click();
+}
 
 async function box(locator: Locator) {
   const b = await locator.boundingBox();
@@ -626,29 +654,26 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   expect(opened.width).toBeGreaterThan(editor.width * 0.95);
   expect(opened.height).toBeGreaterThan(editor.height * 0.9);
 
-  // The composer has the keyboard: type, Enter sends. Manual mode asks before the edit and the
-  // command; each is answered from its prompt.
-  await page.keyboard.type('Add rate limiting');
+  // This fixture drives a native structured connection through main's test connector.
+  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
   await page.keyboard.press('Enter');
+  const composer = view.getByRole('textbox', { name: 'Message Agent 1', exact: true });
+  await composer.fill('Add rate limiting');
+  await composer.press('Enter');
   const transcript = view.getByRole('log', { name: 'Transcript' });
-  await transcript
-    .getByRole('group', { name: 'Edit file: src/index.ts' })
-    .getByRole('button', { name: 'Yes', exact: true })
-    .click();
-  // Answering gives the keyboard back to the composer: what is typed now is queued.
-  await page.keyboard.type('Then update the docs');
-  await page.keyboard.press('Enter');
+  const permission = transcript.getByRole('group', { name: 'Bash command: echo hello' });
+  await expect(permission).toBeVisible();
+  await composer.fill('Then update the docs');
+  await composer.press('Enter');
   await expect(view.getByRole('list', { name: 'Queued messages' })).toHaveText(
     'Then update the docs',
   );
-  await transcript
-    .getByRole('group', { name: 'Bash command: npm test' })
-    .getByRole('button', { name: 'Yes', exact: true })
-    .click();
+  await permission.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(transcript.getByText(/^Worked for \d+s$/)).toBeVisible();
-  // The queued message goes next.
   await expect(transcript.getByText('Then update the docs', { exact: true })).toBeVisible();
-  await expect(view.getByText('+4', { exact: true }).first()).toBeVisible();
+  await permission.nth(1).getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect(transcript.getByText(/^Worked for \d+s$/)).toHaveCount(2);
 
   // A ⊕ that adds to the queue sits right above the message box.
   const [plus, input] = await Promise.all([
@@ -660,9 +685,9 @@ test('opens an agent as a full Claude Code-style session, and goes back to the c
   expect(plus.x).toBeGreaterThanOrEqual(input.x);
   expect(plus.x + plus.width).toBeLessThanOrEqual(input.x + input.width);
 
-  // A tool call's line opens its diff.
-  await transcript.getByRole('button', { name: /^Edit src\/index\.ts/ }).click();
-  await expect(transcript.getByText(/retries: options\.retries \?\? 3/)).toBeVisible();
+  // A native tool call's line opens its output.
+  await transcript.getByRole('button', { name: 'Bash echo hello', exact: true }).first().click();
+  await expect(transcript.getByText('hello', { exact: true }).first()).toBeVisible();
 
   // Back to the canvas; the session is still there when the agent opens again.
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
@@ -685,7 +710,7 @@ test('spawns an agent from the agent view, minimizing the first into its rail', 
     box(view),
     box(panel),
     box(view.getByRole('complementary', { name: 'Questions and queue' })),
-    box(view.getByRole('log', { name: 'Transcript' })),
+    box(view.getByRole('region', { name: 'Session', exact: true })),
     box(view.getByRole('navigation', { name: 'Agents' })),
   ]);
   expect(queue.x + queue.width).toBeLessThanOrEqual(transcript.x + 1);
@@ -844,7 +869,7 @@ test('shows every queue side by side, a wait below what it waits for and linked 
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
-  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await createTemplate();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
 
@@ -871,7 +896,7 @@ test('edits a queue in its lane by dragging, and animates the task each queue is
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Feature crew/ })
     .click();
-  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await createTemplate();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
   const builder = () =>
@@ -918,7 +943,7 @@ test('limits a wait, counts it down while it holds, and goes on from it now', as
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Feature crew/ })
     .click();
-  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await createTemplate();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
 
@@ -978,6 +1003,12 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   const agent = await addAgentAt('Agent 1', 400, 300);
   await agent.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
+  await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await page.keyboard.type('agent sdk');
+  await page.keyboard.press('Enter');
+  await expect(panel.getByRole('button', { name: 'Model: Default', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: /^Mode:/ }).click();
+  await panel.getByRole('menuitemradio', { name: /^Auto/ }).click();
   // Its queue: a step, your OK on it, and another step (no empty message to start).
   await panel.getByRole('button', { name: 'Remove Message' }).click();
   const field = panel.getByRole('combobox');
@@ -1040,7 +1071,7 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Head to head/ })
     .click();
-  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await createTemplate();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
   const task = (lane: string, item: string) => view.locator(`[data-at='["${lane}","${item}"]']`);
@@ -1114,28 +1145,31 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   expect(await stripe('Agent 1')).toBe(claude);
   await a.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
-  await panel.getByRole('button', { name: 'Agent: Claude' }).click();
+  await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
   // Its dropdown fits in the panel, which does not scroll to show it.
   await expect(panel.getByRole('listbox', { name: 'Agent' })).toBeVisible();
   expect(await panel.evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth])).toEqual([
     0, 0,
   ]);
-  // Simulated: a connected agent's questions are its CLI's own (and it would start its CLI).
-  await page.keyboard.type('codex');
-  await panel.getByRole('option', { name: /^Codex · Simulated/ }).click();
+  await expect(panel.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
+  await page.keyboard.type('codex app server');
+  await panel.getByRole('option', { name: /^Codex · App Server/ }).click();
   await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Codex');
   expect(await tagColor('Agent 1')).not.toBe(claude);
   expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
 
-  // An agent asks a question (simulated until agents are connected): it glows, and a sidebar
-  // lists the question, labelled by agent, until it is answered there.
-  await panel.getByRole('button', { name: 'Simulate a question' }).click();
-  await page.keyboard.press('Escape');
+  // A connector's native question glows and appears on the canvas until answered.
+  await expect(panel.getByRole('button', { name: 'Simulate a question' })).toHaveCount(0);
+  const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
+  await composer.fill('/question');
+  await composer.press('Enter');
+  await expect(panel.getByRole('group', { name: 'Questions for you' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
-  await sidebar.getByRole('button', { name: 'Fix them first' }).click();
+  await sidebar.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(sidebar).toHaveCount(0);
   await expect(a).not.toHaveClass(/asking/);
 });
@@ -1242,7 +1276,7 @@ test('opens each example from the gallery, drawing its agents and the work betwe
     if ((await gallery.count()) === 0)
       await page.getByRole('button', { name: 'Templates…' }).click();
     await gallery.getByRole('button', { name: new RegExp(`^${name}`) }).click();
-    await gallery.getByRole('button', { name: 'Create canvas' }).click();
+    await createTemplate();
     await expect(gallery).toHaveCount(0);
     await expect(nodes().nth(1), name).toBeVisible();
     // Attached rather than visible: a straight vertical edge has no width.
@@ -1260,7 +1294,7 @@ test('keeps work both ways readable, gives messages room, and shows the menus of
     .getByRole('dialog', { name: 'Templates' })
     .getByRole('button', { name: /^Independent cross-check/ })
     .click();
-  await page.getByRole('button', { name: 'Create canvas' }).click();
+  await createTemplate();
 
   // Work both ways between two agents: each arrow's count stays clear of the other's, and of the
   // agents' cards.

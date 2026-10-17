@@ -108,10 +108,10 @@ describe('starting a fresh native conversation', () => {
     },
   );
 
-  it('does nothing for simulated or unknown agents', async () => {
+  it('does nothing for unsupported or unknown agents', async () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'simulated', role: 'A role' }]);
+    store.sync([{ id: 'a', connection: 'unavailable', role: 'A role' }]);
     await store.fresh('a');
     await store.fresh('missing');
     expect(backend.fresh).not.toHaveBeenCalled();

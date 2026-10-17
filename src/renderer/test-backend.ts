@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import type { Connection, SessionEvent } from '../shared/session';
+import type { Connection, SessionEvent, SessionMode } from '../shared/session';
 import type { SessionBackend } from './agent/connected';
 
 /**
@@ -59,4 +59,98 @@ export function fakeBackend() {
       return message.id;
     },
   };
+}
+
+/**
+ * Explicit test-only native events for UI tests that do not need to script every backend turn.
+ * Production sessions never import this module. Special cases can override the returned mocks.
+ */
+export function automaticBackend() {
+  const fake = fakeBackend();
+  const sessions = new Map<string, { connection: Connection; mode: SessionMode }>();
+  const turns = new Map<string, { id: string; timer: ReturnType<typeof setTimeout> }>();
+  const finish = (agentId: string, interrupted: boolean) => {
+    const session = sessions.get(agentId);
+    const turn = turns.get(agentId);
+    if (!session || !turn) return;
+    clearTimeout(turn.timer);
+    turns.delete(agentId);
+    if (!interrupted)
+      fake.emit(agentId, session.connection, {
+        type: 'text',
+        id: crypto.randomUUID(),
+        text: 'SUCCEEDED',
+      });
+    fake.emit(agentId, session.connection, {
+      type: 'end',
+      messages: [turn.id],
+      seconds: 1,
+      interrupted,
+      failed: false,
+      result: {
+        status: interrupted ? 'cancelled' : 'completed',
+        reason: interrupted ? 'interrupted' : 'completed',
+      },
+    });
+  };
+  fake.backend.start.mockImplementation((agentId, options) => {
+    const mode =
+      options.mode ??
+      (options.connection === 'app-server' || options.connection === 'codex-terminal'
+        ? 'auto'
+        : 'manual');
+    sessions.set(agentId, { connection: options.connection, mode });
+    fake.emit(agentId, options.connection, {
+      type: 'started',
+      model: options.model,
+      mode,
+      models: [],
+    });
+    return Promise.resolve(null);
+  });
+  fake.backend.send.mockImplementation((agentId, message) => {
+    const session = sessions.get(agentId);
+    if (!session) return Promise.reject(new Error('Test session was not started'));
+    fake.emit(
+      agentId,
+      session.connection,
+      { type: 'user', id: message.id, text: message.text },
+      { type: 'status', status: 'working' },
+    );
+    turns.set(agentId, {
+      id: message.id,
+      timer: setTimeout(() => {
+        finish(agentId, false);
+      }, 1000),
+    });
+    return Promise.resolve(null);
+  });
+  fake.backend.interrupt.mockImplementation((agentId) => {
+    finish(agentId, true);
+    return Promise.resolve(null);
+  });
+  fake.backend.close.mockImplementation((agentId) => {
+    finish(agentId, true);
+    sessions.delete(agentId);
+    return Promise.resolve(null);
+  });
+  fake.backend.setMode.mockImplementation((agentId, mode) => {
+    const session = sessions.get(agentId);
+    if (session) {
+      session.mode = mode;
+      fake.emit(agentId, session.connection, { type: 'mode', mode });
+    }
+    return Promise.resolve(null);
+  });
+  fake.backend.setModel.mockImplementation((agentId, model) => {
+    const session = sessions.get(agentId);
+    if (session) fake.emit(agentId, session.connection, { type: 'model', model });
+    return Promise.resolve(null);
+  });
+  fake.backend.setEffort.mockImplementation((agentId, effort) => {
+    const session = sessions.get(agentId);
+    if (session) fake.emit(agentId, session.connection, { type: 'effort', effort });
+    return Promise.resolve(null);
+  });
+  return fake;
 }

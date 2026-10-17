@@ -50,8 +50,7 @@ export type {
  * An agent's session, as its view shows it: a transcript of turns (the user's message, then what
  * the agent does: thinking, text, tool calls, prompts for the user, a to-do list, notices), whether
  * it is working, messages queued while it works, and the tools the user always allows. A driver
- * plays turns onto it (driver.ts): the scripted one (scripted.ts), or a connected one fed by the
- * real CLI (connected.ts).
+ * plays native turns onto it (driver.ts, connected.ts); unsupported connections keep work unsent.
  */
 
 /**
@@ -142,14 +141,14 @@ export function modeOf(agent: AgentType, mode: Mode): ModeInfo {
 
 /**
  * Which conversation the transcript's messages are of: an agent's CLI's (main resumes one per CLI,
- * whichever of its connections runs it), or its simulated session's. An agent that runs another
+ * whichever of its connections runs it), or an unsupported submission's. An agent that runs another
  * way keeps its transcript, so it may hold several.
  */
-export type Conversation = Cli | 'simulated';
+export type Conversation = Cli | 'unavailable';
 
 /** The conversation an agent that runs as `connection` is on. */
 export function conversationOf(connection: AgentConnection): Conversation {
-  return connection === 'simulated' ? 'simulated' : CONNECTION_CLI[connection];
+  return connection === 'unavailable' ? 'unavailable' : CONNECTION_CLI[connection];
 }
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
@@ -254,7 +253,7 @@ export type Entry =
  */
 export interface Refusal {
   text: string;
-  switchTo: Connection;
+  switchTo?: Connection;
 }
 
 /** An entry the user answers while the turn waits. */

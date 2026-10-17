@@ -198,28 +198,25 @@ describe('withConnections', () => {
   it('runs each agent as chosen, if its type runs that way; others keep theirs', () => {
     const run = withConnections(crew, {
       a: 'terminal',
-      b: 'simulated',
+      b: 'codex-terminal',
       c: 'terminal',
       d: 'codex-terminal',
     });
     expect(run.nodes.map((n) => n.data.connection)).toEqual([
       'terminal',
-      undefined,
+      'codex-terminal',
       // An agent left to the default agent (Claude) runs as Claude does.
       'terminal',
-      // Gemini can only be simulated.
+      // Gemini has no connector yet; an invalid connection never makes it runnable.
       undefined,
     ]);
     expect(withConnections(crew, { a: 'sdk' }).nodes[1]?.data.connection).toBe('app-server');
   });
 
-  it('runs an agent in a Terminal by default where the user has its CLI, else simulated', () => {
-    const has = { claude: true, codex: false };
-    expect(defaultConnection('Claude', has)).toBe('terminal');
-    expect(defaultConnection('Codex', has)).toBe('simulated');
-    expect(defaultConnection('Codex', { claude: false, codex: true })).toBe('codex-terminal');
-    expect(defaultConnection('Gemini', { claude: true, codex: true })).toBe('simulated');
-    // Not known yet (main has not said): simulated.
-    expect(defaultConnection('Claude', undefined)).toBe('simulated');
+  it('defaults to real terminals and keeps unsupported types unavailable', () => {
+    expect(defaultConnection('Claude')).toBe('terminal');
+    expect(defaultConnection('Codex')).toBe('codex-terminal');
+    expect(defaultConnection('Qwen')).toBe('unavailable');
+    expect(defaultConnection('Gemini')).toBe('unavailable');
   });
 });

@@ -116,7 +116,11 @@ async function claudeReady(count = 1) {
 }
 
 /** A canvas with one Terminal agent, Shop, whose queue holds `queue`, set as `settings` say. */
-async function canvasFile(queue: { id: string; message: string }[] = [], settings?: unknown) {
+async function canvasFile(
+  queue: { id: string; message: string }[] = [],
+  settings?: unknown,
+  connection: 'terminal' | 'sdk' = 'terminal',
+) {
   const file = path.join(dir, 'team.corral');
   await writeFile(
     file,
@@ -130,7 +134,7 @@ async function canvasFile(queue: { id: string; message: string }[] = [], setting
           label: 'Shop',
           position: { x: 0, y: 0 },
           agent: 'Claude',
-          connection: 'terminal',
+          connection,
           ...(settings === undefined ? {} : { settings }),
           ...(queue.length > 0 ? { queue } : {}),
         },
@@ -141,7 +145,7 @@ async function canvasFile(queue: { id: string; message: string }[] = [], setting
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    'Shop, Claude · Terminal',
+    connection === 'terminal' ? 'Shop, Claude · Terminal' : 'Shop, Claude · SDK',
   );
 }
 
@@ -172,16 +176,80 @@ async function typeIn(terminal: Locator, ...keys: string[]) {
 const status = (view: Locator) => view.locator('.agent-terminal-status');
 const submissions = (view: Locator) => view.locator('.graph-queue-message[data-submission]');
 
-test('runs Claude Code itself in a terminal in the project folder, and follows its turns', async () => {
+test('legacy omitted and simulated connections migrate to native Terminal without starting or replaying their queues', async () => {
+  const file = path.join(dir, 'team.corral');
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 1,
+      nodes: [
+        {
+          id: 'omitted',
+          kind: 'agent',
+          label: 'Omitted',
+          agent: 'Claude',
+          position: { x: 0, y: 0 },
+          queue: [{ id: 'work', message: 'Legacy omitted connection work' }],
+        },
+        {
+          id: 'scripted',
+          kind: 'agent',
+          label: 'Legacy',
+          agent: 'Claude',
+          connection: 'simulated',
+          position: { x: 350, y: 0 },
+          queue: [{ id: 'work', message: 'Legacy explicit connection work' }],
+        },
+      ],
+      links: [],
+    }),
+  );
+  await page.keyboard.press('ControlOrMeta+o');
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
+  for (const [id, name] of [
+    ['omitted', 'Omitted'],
+    ['scripted', 'Legacy'],
+  ] as const) {
+    await expect(page.locator(`.react-flow__node-agent[data-id="${id}"]`)).toHaveAttribute(
+      'aria-label',
+      `${name}, Claude · Terminal`,
+    );
+  }
+  await chooseProject();
+  expect(await starts()).toEqual([]);
+  expect(await prompts()).toEqual([]);
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
+  await expect(queues.getByRole('status')).toHaveText('');
+  await expect(queues.locator('[data-at][data-run]')).toHaveCount(0);
+  await queues.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 15_000 });
+  expect((await prompts()).sort()).toEqual(
+    ['Legacy omitted connection work', 'Legacy explicit connection work'].sort(),
+  );
+  await queues.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(() => readFile(file, 'utf8')).not.toContain('simulated');
+  await page.reload();
+  await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Show all queues' }).click();
+  await expect(queues.locator('[data-at][data-run="succeeded"]')).toHaveCount(2);
+  expect((await prompts()).sort()).toEqual(
+    ['Legacy omitted connection work', 'Legacy explicit connection work'].sort(),
+  );
+});
+
+test('a new canvas agent defaults to real Claude Code in its Terminal, without a simulated choice or placeholder reply', async () => {
   await writeFile(path.join(folder, '.fake-claude-untrusted'), '');
   await chooseProject();
-  // An agent, run in a Terminal from its chip.
+  // A new canvas agent runs Claude Code directly in its default native Terminal.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Agent 1' });
   await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('terminal');
-  await page.keyboard.press('Enter');
+  await expect(view.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await expect(view.getByRole('button', { name: 'Agent: Claude · Terminal' })).toBeVisible();
   const terminal = view.locator('.agent-terminal');
   await expect(terminal).toHaveAttribute('data-state', 'live');
@@ -385,13 +453,11 @@ test('a template’s Claude agents run in their terminals, asked once whether to
 });
 
 test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {
+  // Start this refusal fixture on its authored SDK connection; new agents use Terminal directly.
+  await canvasFile([], undefined, 'sdk');
   await chooseProject();
-  await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
   await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = page.getByRole('dialog', { name: 'Shop' });
   await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
   const transcript = view.getByRole('log', { name: 'Transcript' });
   const refusal = transcript.getByRole('alert');
@@ -399,7 +465,7 @@ test('an Agent SDK agent on a Claude subscription says why it can’t run, and r
     "Claude Code is logged in with your Claude subscription, which Anthropic doesn't allow other products to use through the Agent SDK",
   );
   // A message sent meanwhile never reaches Claude: it is kept, queued, not a turn that failed.
-  await view.getByRole('textbox', { name: 'Message Agent 1' }).fill('Fix the login bug');
+  await view.getByRole('textbox', { name: 'Message Shop' }).fill('Fix the login bug');
   await page.keyboard.press('Enter');
   await expect(view.getByRole('list', { name: 'Queued messages' })).toContainText(
     'Fix the login bug',

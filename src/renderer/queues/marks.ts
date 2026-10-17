@@ -104,6 +104,7 @@ export function queueMarks(
       'data-problem-reason': problem?.reason,
       'data-problem-agent': problem?.agent,
       'data-problem-condition': problem?.conditionKey,
+      'data-refused': at?.current === item && at.refused ? '' : undefined,
       'data-attempts': attempts?.length ? JSON.stringify(attempts) : undefined,
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,

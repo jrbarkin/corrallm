@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Connection, SessionEvent } from '../../shared/session';
 import { fakeBackend } from '../test-backend';
 import { rewindPoints } from './session';
+import type { Refusal } from './session';
 import { SessionStore } from './sessions';
 
 /** Lets pending promises (IPC replies) settle. */
@@ -48,7 +49,7 @@ describe('a connected session', () => {
         },
       },
     ]);
-    // A model the user picked while it was simulated is not what it is set to: not passed on.
+    // A model the user picked before the session started is not what it is set to: not passed on.
     store.setModel('a', 'Opus 5.5');
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
@@ -470,23 +471,25 @@ describe('a connected session', () => {
     store.send('a', 'Claude', 'Go', done);
     store.send('a', 'Claude', 'Then this');
     await settle();
-    store.sync([{ id: 'a', connection: 'simulated' }]);
+    store.sync([{ id: 'a', connection: 'unavailable' }]);
     expect(backend.close).toHaveBeenCalledWith('a');
     expect(done).toHaveBeenCalledWith(true, '', {
       status: 'cancelled',
       reason: 'connection-closed',
     });
-    // The queued message goes on, to the scripted session.
-    expect(store.of('a').queued).toEqual([]);
+    // Unsupported connections keep remaining work unsent.
+    expect(store.of('a').queued).toMatchObject([{ text: 'Then this' }]);
     expect(
       store
         .of('a')
         .entries.filter((e) => e.kind === 'user')
         .map((e) => e.text),
-    ).toEqual(['Go', 'Then this']);
+    ).toEqual(['Go']);
 
     store.sync([{ id: 'a', connection: 'sdk' }]);
     store.open('a');
+    await settle();
+    expect(backend.send).toHaveBeenCalledTimes(2);
     store.sync([]);
     expect(backend.close).toHaveBeenCalledTimes(2);
     expect(store.of('a').entries).toEqual([]);
@@ -764,7 +767,7 @@ describe('a connected session that would not start', () => {
     async ({ connection, switchTo, agent, reason }) => {
       const { store, backend } = refused(connection, switchTo, reason);
       const done = vi.fn<(interrupted: boolean, reply: string) => void>();
-      const held = vi.fn<(refusal: { text: string; switchTo: string }) => void>();
+      const held = vi.fn<(refusal: Refusal) => void>();
       store.send('a', agent, 'Fix the bug', done, undefined, held);
       await settle();
       expect(held).toHaveBeenCalledExactlyOnceWith({ text: reason, switchTo });

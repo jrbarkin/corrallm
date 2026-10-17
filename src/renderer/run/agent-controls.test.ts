@@ -5,11 +5,11 @@ import type { QueueItem, QueueMessage, QueueStep } from '../graph/queue';
 import { RunStore } from './runner';
 import type { RunIO, TurnEnd } from './runner';
 
-const node = (id: string, queue: QueueItem[], connected = true): GraphNode => ({
+const node = (id: string, queue: QueueItem[]): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, queue, ...(connected ? { connection: 'sdk' as const } : {}) },
+  data: { label: id, queue, connection: 'sdk' },
 });
 const task = (id: string): QueueStep => ({ id, action: 'Read' });
 const message = (id: string): QueueMessage => ({ id, message: id });
@@ -44,7 +44,6 @@ function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
       };
     },
     now: () => 1234,
-    chance: () => 0.9,
     ...extra,
   });
   store.update(nodes);
@@ -93,16 +92,16 @@ describe('per-agent run controls', () => {
     expect(sent.at(-1)?.text).toBe('next');
   });
 
-  it('cancels only the killed agent’s simulated timer', () => {
-    const { store, tick, pendingTimers } = setup([
-      node('a', [task('one')], false),
-      node('b', [task('other')], false),
+  it('withdraws only the killed agent’s native turn and lets an unrelated callback finish', () => {
+    const { store, sent, reply, pendingTimers } = setup([
+      node('a', [task('one')]),
+      node('b', [task('other')]),
     ]);
     store.start();
-    expect(pendingTimers()).toBe(2);
+    expect(pendingTimers()).toBe(0);
     store.killAgent('a');
-    expect(pendingTimers()).toBe(1);
-    tick();
+    expect(sent.map(({ withdrawn }) => withdrawn)).toEqual([true, false]);
+    reply('b');
     expect(store.snapshot().agents.a?.problem?.kind).toBe('cancelled');
     expect(store.snapshot().agents.b?.outcomes.other).toBe('succeeded');
   });
@@ -221,19 +220,19 @@ describe('per-agent run controls', () => {
   });
 
   it('kills only its own task and timers, holding before withdrawing and never taking If failed for cancellation', () => {
-    const { store, sent, events, reply, tick } = setup([
+    const { store, sent, events, reply } = setup([
       node('a', [
         task('one'),
         { id: 'failed', if: { kind: 'failed' }, then: [message('wrong')] },
         message('next'),
       ]),
       node('b', [message('other'), message('more')]),
-      node('c', [task('simulated')], false),
+      node('c', [task('parallel')]),
     ]);
     store.start();
     store.killAgent('a');
     expect(events.slice(0, 2)).toEqual(['hold:a:true', 'withdraw:a']);
-    expect(sent.map(({ withdrawn }) => withdrawn)).toEqual([true, false]);
+    expect(sent.map(({ withdrawn }) => withdrawn)).toEqual([true, false, false]);
     expect(store.snapshot().agents.a).toMatchObject({
       paused: true,
       problem: { kind: 'cancelled' },
@@ -241,8 +240,8 @@ describe('per-agent run controls', () => {
     });
     reply('a'); // Its late end is ignored.
     reply('b');
-    tick();
-    expect(store.snapshot().agents.c?.outcomes.simulated).toBe('succeeded');
+    reply('c');
+    expect(store.snapshot().agents.c?.outcomes.parallel).toBe('succeeded');
     expect(sent.at(-1)?.text).toBe('more');
     store.resumeAgent('a');
     expect(sent.some(({ text }) => text === 'wrong')).toBe(false);

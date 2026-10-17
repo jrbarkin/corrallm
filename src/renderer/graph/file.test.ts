@@ -334,7 +334,7 @@ describe('fromFile', () => {
     const ways = ['terminal', 'sdk', 'codex-terminal', 'app-server'];
     expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual(ways);
     expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual(ways);
-    // Simulated is the default: written, it reads as no connection at all.
+    // Removed placeholder files remain readable and now resolve to the native default.
     const simulated = structuredClone(saved);
     Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
     expect(fromFile(JSON.stringify(simulated)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
@@ -411,12 +411,12 @@ describe('fromFile', () => {
     [
       'an unknown connection',
       (f) => Object.assign(f.nodes[2] ?? {}, { connection: 'ssh' }),
-      /^nodes\[2\]\.connection must be one of: simulated, terminal, sdk, codex-terminal, app-server$/,
+      /^nodes\[2\]\.connection must be one of: terminal, sdk, codex-terminal, app-server$/,
     ],
     [
       'a connection its agent type does not offer',
       (f) => Object.assign(f.nodes[1] ?? {}, { connection: 'terminal' }),
-      /^nodes\[1\]\.connection: Codex agents run only codex-terminal, app-server or simulated$/,
+      /^nodes\[1\]\.connection: Codex agents run only codex-terminal or app-server$/,
     ],
     [
       'a group with a connection',

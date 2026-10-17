@@ -32,7 +32,7 @@ export function AgentSettingsSummary({
   const suffix = ` · ${role ?? 'No role'}`;
   return (
     <div className="agent-settings-summary" title={node.data.role}>
-      {connection === 'simulated' ? (
+      {connection === 'unavailable' ? (
         <button
           type="button"
           className="agent-settings-button"
@@ -93,12 +93,12 @@ export function AgentSettingsPanel({
   const agent = node.data.agent ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
   const settings =
-    connection === 'simulated' ? {} : (node.data.settings?.[CONNECTION_CLI[connection]] ?? {});
+    connection === 'unavailable' ? {} : (node.data.settings?.[CONNECTION_CLI[connection]] ?? {});
   const running = session.running;
   const codex = connection === 'codex-terminal' || connection === 'app-server';
   const changedRole = running !== undefined && running.role !== node.data.role;
   const pending =
-    connection !== 'simulated' &&
+    connection !== 'unavailable' &&
     running !== undefined &&
     (running.role !== node.data.role ||
       running.model !== settings.model ||
@@ -239,7 +239,7 @@ export function AgentSettingsPanel({
             {problem}
           </p>
         )}
-        {connection !== 'simulated' && (
+        {connection !== 'unavailable' && (
           <SettingsMenu
             inline
             cli={CONNECTION_CLI[connection]}

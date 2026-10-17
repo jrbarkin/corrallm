@@ -16,15 +16,8 @@ import type {
   RewindResult,
   SettingsOptions,
 } from '../../shared/session';
-import {
-  AGENT_ACTIONS,
-  AGENT_CLI,
-  AGENT_CONNECTIONS,
-  AgentType,
-  connectionNames,
-  DEFAULT_AGENT,
-} from '../graph/agents';
-import type { AgentConnection } from '../graph/agents';
+import { AGENT_ACTIONS, AGENT_CLI, DEFAULT_AGENT } from '../graph/agents';
+import type { AgentConnection, AgentType } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -103,7 +96,7 @@ export interface SessionControls extends ComposerControls {
  * Spawning or switching minimizes the panel into the top of the stack, where its card appears; the
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
- * The agent chip sets its type and how it runs (`connection`): simulated, or connected to the real
+ * The agent chip sets its type and how it runs (`connection`): a real connection to the
  * CLI. Beside it, a Terminal agent's settings (Settings.tsx): the model, effort and mode its CLI
  * starts with (a structured session's composer sets them). A session connected through a
  * structured interface (Claude's Agent SDK, Codex's app server)
@@ -147,7 +140,6 @@ export function AgentView({
   onOpenSettings,
   onContinueInTerminal,
   onAnswer,
-  onSimulateQuestion,
   edits,
   marks,
   ask,
@@ -175,7 +167,7 @@ export function AgentView({
   /** Shows agent `id` from the stack in its place, growing from `from`. */
   onSwitch: (id: string, from: DOMRect) => void;
   onRename: (label: string) => void;
-  /** How it runs: simulated, or connected to the real CLI. */
+  /** How it runs: a real connection to the CLI. */
   connection: AgentConnection;
   /** The folder the canvas's agents work in, if one was chosen. */
   project: ProjectFolder | null;
@@ -189,8 +181,6 @@ export function AgentView({
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
   onContinueInTerminal: (command?: string) => void;
   onAnswer: (questionId: string, answer: string) => void;
-  /** A stand-in for an agent asking, until agents are connected. */
-  onSimulateQuestion: () => void;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (queues/marks.ts). */
@@ -423,7 +413,7 @@ export function AgentView({
       setOffer(text.trim());
       return;
     }
-    if (ask?.reply && !(connection !== 'simulated' && isCommand(text, session.commands))) {
+    if (ask?.reply && !(connection !== 'unavailable' && isCommand(text, session.commands))) {
       own.onDecide(ask.item.id, {
         reply: text,
         ...(images === undefined || images.length === 0 ? {} : { images }),
@@ -530,12 +520,6 @@ export function AgentView({
                       }}
                     />
                   ))}
-                  {connection === 'simulated' && (
-                    // A connected agent's questions are its CLI's own.
-                    <button type="button" className="graph-simulate" onClick={onSimulateQuestion}>
-                      Simulate a question
-                    </button>
-                  )}
                 </section>
                 <h2 className="agent-side-title">Queue</h2>
                 {firstMessage && (session.submissions?.length ?? 0) === 0 && (
@@ -577,7 +561,16 @@ export function AgentView({
                   }}
                 />
               )}
-              {connection !== 'simulated' && TERMINAL_CONNECTIONS.includes(connection) ? (
+              {connection === 'unavailable' ? (
+                <section className="agent-session agent-unavailable" aria-label="Session">
+                  <p className="agent-session-note">{sessionNote(agent, connection, project)}</p>
+                  {onOpenSettings && (
+                    <button type="button" onClick={onOpenSettings}>
+                      Choose a connected agent
+                    </button>
+                  )}
+                </section>
+              ) : TERMINAL_CONNECTIONS.includes(connection) ? (
                 <TerminalPane
                   agentId={node.id}
                   cli={AGENT_CLI[agent]}
@@ -655,7 +648,6 @@ export function AgentView({
                     initialDraft={draft.text}
                     agentName={name}
                     agent={agent}
-                    connected={connection !== 'simulated'}
                     session={session}
                     commands={commands}
                     controls={{ ...controls, send }}
@@ -714,9 +706,7 @@ export function AgentView({
                             ask={ask}
                             // Its transcript says why its own session would not start.
                             said={ask.refusal?.agent === node.id}
-                            {...(ask.reply && connection !== 'simulated'
-                              ? { hint: COMMAND_HINT }
-                              : {})}
+                            {...(ask.reply ? { hint: COMMAND_HINT } : {})}
                             onChoose={(choice) => {
                               own.onDecide(ask.item.id, { choice });
                             }}
@@ -903,10 +893,8 @@ function sessionNote(
   project: ProjectFolder | null,
 ): string {
   const cli = AGENT_CLI[agent];
-  if (connection === 'simulated') {
-    return AGENT_CONNECTIONS[agent].length > 1
-      ? `This session is simulated: nothing here really runs. Connect ${cli} from the agent chip (${agent === AgentType.Claude ? 'Terminal, or Agent SDK with an API key' : connectionNames(agent)}) to run it.`
-      : `This session is simulated: corrallm isn't connected to ${cli} yet.`;
+  if (connection === 'unavailable') {
+    return `${cli} has no connector yet. Choose Claude Code or Codex in Agent settings.`;
   }
   const how = TERMINAL_CONNECTIONS.includes(connection)
     ? 'in a terminal'

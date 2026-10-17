@@ -44,9 +44,6 @@ function setup(graph = nodes) {
     connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
-    chance: () => {
-      throw new Error('Connected task must not be simulated');
-    },
   });
   store.update(graph);
   return { store, sent };

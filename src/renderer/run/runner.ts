@@ -105,7 +105,7 @@ export interface AgentRun {
    * how it ran then, why it would not start, and the connection to switch it to. The message waits
    * in that session's queue, sent once the agent runs another way; then this one works again.
    */
-  refused?: { agent: string; connection: AgentConnection; text: string; switchTo: Connection };
+  refused?: { agent: string; connection: AgentConnection; text: string; switchTo?: Connection };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /**
@@ -153,7 +153,7 @@ export type Answer = { choice: string } | { reply: string; images?: readonly Mes
 /** Why an agent's session would not start, as it said, and the connection that would. */
 export interface Refusal {
   text: string;
-  switchTo: Connection;
+  switchTo?: Connection;
 }
 
 /**
@@ -198,11 +198,6 @@ export interface RunIO {
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
   now: () => number;
   /**
-   * A random number from 0 up to 1, for a simulated agent: whether a step fails, or whether a
-   * condition holds that only a real agent could judge. Never taken for a connected agent.
-   */
-  chance: () => number;
-  /**
    * Every backend's latest usage reading and its usage rule (main's: src/main/usage.ts), read when
    * the run needs them: an If on usage, a wait for a usage window's reset, and the rules, checked
    * between tasks (and again whenever main tells a new reading: RunStore.usageChanged).
@@ -215,19 +210,11 @@ export interface RunIO {
   unheard?: (agent: GraphNode) => boolean;
 }
 
-/** How long a simulated agent's step takes, at least and at most. */
-const STEP_MS = [1500, 3500] as const;
 /**
  * The longest the run sleeps before it looks at the clock again while a delay or a time limit
  * holds an agent: a timer can fire late (a sleeping laptop) and the clock can be changed.
  */
 const ALARM_MS = 60_000;
-/**
- * How likely a simulated agent's step is to fail, and a condition only a real agent could judge
- * (its output, or the user's own words) to hold.
- */
-const FAILS = 0.25;
-const HOLDS = 0.5;
 
 /** What the run says when it waits for a usage window's reset that has never been read. */
 const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
@@ -259,17 +246,17 @@ interface PauseCauses {
 /**
  * Runs every agent's queue: each agent works through its queue in order. A message goes to the
  * agent's session (sessions.ts), or, aimed at another agent, to that agent's, and is done when the
- * turn it starts ends (failed, if that turn failed or was interrupted). A connected agent's step
+ * turn it starts ends (failed, if that turn failed or was interrupted). Each agent's step
  * goes to its session too (turns.ts words it: a slash command as it is, a tool as an instruction
  * to use it that asks how it went), done when its turn ends, failed if the agent says so (a turn
- * that ends well may run tests that fail); a simulated agent's step takes a few seconds and may
- * fail. A step expected to fail (QueueStep.expect) is turned round once judged: failing is its
- * success, passing its failure (a tool's turn that fails is no verdict: it fails all the same).
+ * that ends well may run tests that fail). A step expected to fail (QueueStep.expect) is turned
+ * round once judged: failing is its success, passing its failure (a tool's turn that fails is no
+ * verdict: it fails all the same).
  * A wait holds until what it waits for is done (a step, or all of an agent's work), or its time
  * limit passes; a delay holds until its time has come; an if-then runs its steps only if its
  * condition holds of the task before it. A connected agent's conditions are its own: whether the
  * output contains something is read from what it replied in that task's turn, and a condition in
- * the user's words is asked of it, in its session, yes or no; a simulated agent's are by chance.
+ * the user's words is asked of it, in its session, yes or no.
  * Delays and time limits are the run's own, on the real clock (`now`): no agent is asked to wait.
  * An OK holds until the user decides (`decide`): the queue goes on, the agent makes the changes
  * asked for and it asks again, or the queue stops there, and with it whatever waits on it. A
@@ -359,7 +346,7 @@ export class RunStore {
   }
 
   restore(text: string): void {
-    const saved = readRun(text);
+    const saved = readRun(text, this.#nodes);
     const causes = this.#pauseCauses(saved.run);
     for (const id of this.#pausedMembers(causes)) this.#hold(id, true);
     this.#cancel();
@@ -699,7 +686,12 @@ export class RunStore {
     if (at.refused) {
       const { refused } = at;
       const to = this.#agents().find((n) => n.id === refused.agent);
-      if (to && 'choice' in answer && answer.choice === 'switch') {
+      if (
+        to &&
+        refused.switchTo !== undefined &&
+        'choice' in answer &&
+        answer.choice === 'switch'
+      ) {
         this.#io.connect(to, refused.switchTo);
       }
       return;
@@ -1051,7 +1043,7 @@ export class RunStore {
       // Stopped at an OK: nothing after it runs.
       if (outcomes[item.id] === 'stopped') return { current: item.id, status: 'stopped', outcomes };
       if (outcomes[item.id] !== undefined) continue;
-      // Only the user moves the queue on from an OK (decide): no time, and no chance.
+      // Only the user moves the queue on from an OK (decide).
       if (isApproval(item)) return { current: item.id, status: 'asking', outcomes };
       const at = isRepeat(item)
         ? this.#rounds(node, item, queue.slice(0, index), outcomes, rounds, agents, now)
@@ -1396,8 +1388,7 @@ export class RunStore {
 
   /**
    * Whether a condition holds of the task `checked` (undefined: none ran) in an agent's queue,
-   * decided once (by `key`). Of how that task went; or, for a simulated agent, by chance where only
-   * a real one could judge; or, for a connected one, whether the output contains it is read from
+   * decided once (by `key`). Of how that task went; whether the output contains it is read from
    * what it replied in that task's turn, and a condition in the user's words is asked of it, in its
    * session (while it is, it is busy `at` its If or repeat: an AgentRun).
    */
@@ -1423,25 +1414,19 @@ export class RunStore {
         held = previous === 'timedOut';
         break;
       case 'outputContains':
-        if (isConnected(node) && this.#unheard(node)) return this.#unheardCondition(node, key, at);
-        held = isConnected(node)
-          ? replyContains(
-              this.#replyOf(node.id, checked, at.outcomes),
-              condition.text,
-              condition.wholeLine,
-            )
-          : this.#io.chance() < HOLDS;
+        if (this.#unheard(node)) return this.#unheardCondition(node, key, at);
+        held = replyContains(
+          this.#replyOf(node.id, checked, at.outcomes),
+          condition.text,
+          condition.wholeLine,
+        );
         break;
       case 'freeText':
-        if (isConnected(node)) {
-          // Never asked when its answer can't be heard.
-          if (!this.#unheard(node)) return this.#ask(node, key, condition.text, at);
-          return this.#unheardCondition(node, key, at);
-        }
-        held = this.#io.chance() < HOLDS;
-        break;
+        // Never ask when its answer cannot be heard.
+        if (!this.#unheard(node)) return this.#ask(node, key, condition.text, at);
+        return this.#unheardCondition(node, key, at);
       case 'usageAbove': {
-        // Its backend's latest reading, simulated agent or not: no chance about it.
+        // Its backend’s latest reading.
         const window = windowNow(
           this.#readingOf(condition.backend),
           condition.window,
@@ -1600,9 +1585,9 @@ export class RunStore {
   /**
    * Starts a task: the agent is busy with it until it finishes. A message, or a connected agent's
    * step, finishes when the turn it starts ends (a message aimed at another agent, that agent's
-   * turn): a connected agent's tool step as its exact last-line SUCCEEDED or FAILED verdict says;
-   * a simulated agent's step, after a while. Expected failure inverts a verified verdict. Native
-   * errors and cancellations hold for inspection; missing or unreadable verdicts stay uncertain.
+   * turn): a tool step as its exact last-line SUCCEEDED or FAILED verdict says. Expected failure
+   * inverts a verified verdict. Native errors and cancellations hold for inspection; missing or
+   * unreadable verdicts stay uncertain.
    */
   #begin(
     agent: string,
@@ -1620,7 +1605,7 @@ export class RunStore {
     const node = this.#agents().find((n) => n.id === agent);
     const holder = { agent, token };
     if (!isMessage(task)) {
-      if (node && isConnected(node)) {
+      if (node) {
         const original = this.#stepMessage(node, task);
         const text = correction
           ? `${correction.note}\n\nContinue this original task and report its result:\n${original}`
@@ -1632,23 +1617,6 @@ export class RunStore {
             ? { origin: 'user', displayText: correction.note, images: correction.images }
             : {}),
         });
-      } else {
-        const [least, most] = STEP_MS;
-        this.#after(
-          least + (hash(task.id) % (most - least)),
-          () => {
-            const wrong = this.#io.chance() < FAILS;
-            this.#finish(
-              agent,
-              task.id,
-              token,
-              wrong ? 'failed' : 'succeeded',
-              '',
-              task.expect === 'fails' ? !wrong : undefined,
-            );
-          },
-          holder,
-        );
       }
     } else if (task.message.trim() === '') {
       this.#after(
@@ -1870,7 +1838,12 @@ export class RunStore {
   ): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || this.#busy.get(agent) !== token || !at) return;
-    const refused = { agent: to.id, connection: connectionOf(to.data), text, switchTo };
+    const refused = {
+      agent: to.id,
+      connection: connectionOf(to.data),
+      text,
+      ...(switchTo === undefined ? {} : { switchTo }),
+    };
     this.#set({
       ...this.#run,
       agents: { ...this.#run.agents, [agent]: { ...at, status: 'asking', refused } },
@@ -2106,20 +2079,8 @@ function lastRan(
   });
 }
 
-/** Whether an agent runs the real CLI (connected), rather than a simulated session. */
-function isConnected(node: GraphNode): boolean {
-  return connectionOf(node.data) !== 'simulated';
-}
-
 /** Images sent with changes asked for, as the run records them: "[Image]", "[2 images]". */
 function imagesText(images: readonly MessageImage[]): string {
   if (images.length === 0) return '';
   return images.length === 1 ? '[Image]' : `[${String(images.length)} images]`;
-}
-
-/** A number from a string, the same each time: steps take their own, steady time. */
-function hash(text: string): number {
-  let h = 0;
-  for (const char of text) h = (h * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
-  return h;
 }

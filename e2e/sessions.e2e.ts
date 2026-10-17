@@ -58,6 +58,25 @@ async function answerDialogs(folder: string, canvas: string) {
   );
 }
 
+/** Save the intended native connection before a view can start its default Terminal. */
+async function openConnectedAgent(
+  agent: 'Claude' | 'Codex',
+  connection: 'Agent SDK' | 'App Server',
+) {
+  const card = page.locator('.react-flow__node-agent');
+  await card.click({ button: 'right' });
+  await page
+    .getByRole('menu', { name: 'Agent 1 controls', exact: true })
+    .getByRole('menuitem', { name: /^Settings/ })
+    .click();
+  const settings = page.getByRole('dialog', { name: 'Agent settings: Agent 1', exact: true });
+  await settings.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await settings.getByRole('option', { name: new RegExp(`^${agent} · ${connection}`) }).click();
+  await settings.getByRole('button', { name: 'Close agent settings' }).click();
+  await card.dblclick();
+  return page.getByRole('dialog', { name: 'Agent 1', exact: true });
+}
+
 test('runs a connected agent in the project folder, answering its prompts through main', async () => {
   const folder = path.join(dir, 'shop');
   await mkdir(folder);
@@ -67,13 +86,9 @@ test('runs a connected agent in the project folder, answering its prompts throug
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
-  // An agent, connected through the Agent SDK from its chip.
+  // An agent authored for the Agent SDK before its native session starts.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openConnectedAgent('Claude', 'Agent SDK');
   await expect(view.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeVisible();
   await expect(view.getByText('Claude Code works in shop, through the Agent SDK.')).toBeVisible();
   // Its session started: it offers its models.
@@ -233,11 +248,7 @@ test('runs a Codex agent through its app server, in Codex’s own modes', async 
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('codex app server');
-  await page.keyboard.press('Enter');
+  const view = await openConnectedAgent('Codex', 'App Server');
   await expect(view.getByRole('button', { name: 'Agent: Codex · App Server' })).toBeVisible();
   await expect(view.getByText('Codex CLI works in shop, through its app server.')).toBeVisible();
   await expect(page.locator('.react-flow__node')).toHaveAttribute(

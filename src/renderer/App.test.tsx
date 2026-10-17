@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
 
+vi.mock('./terminal/screen', async () => {
+  const { fakeScreens } = await import('./terminal/test-screen');
+  return { createScreen: fakeScreens.create };
+});
+
 /** Stubs window.api: the usage functions the canvas reads at once, and `api`. */
 function stubApi(api: Partial<AppApi>) {
   const usage: Partial<AppApi> = {

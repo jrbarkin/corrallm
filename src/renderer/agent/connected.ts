@@ -609,7 +609,6 @@ function replay(events: readonly SessionEvent[], agentId: string, connection: Co
     refused: () => undefined,
     newId: () => crypto.randomUUID(),
     now: () => 0,
-    later: () => () => undefined,
   });
   for (const event of events) if (event.type !== 'history') driver.receive(event);
   return session.entries;

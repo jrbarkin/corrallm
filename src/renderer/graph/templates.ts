@@ -114,7 +114,7 @@ export function withAgents(
 }
 
 /**
- * A template's agents run as chosen (`connections`, by agent id): connected, or simulated. A way
+ * A template's agents use the chosen native connections (`connections`, by agent id). A way
  * its type cannot run leaves the agent as it was; agents not in `connections` keep theirs.
  */
 export function withConnections(
@@ -126,10 +126,13 @@ export function withConnections(
     nodes: graph.nodes.map((node) => {
       const connection = connections[node.id];
       if (node.type !== 'agent' || connection === undefined) return node;
-      if (!AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection)) return node;
+      if (
+        connection === 'unavailable' ||
+        !AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection)
+      )
+        return node;
       const data = { ...node.data };
-      if (connection === 'simulated') delete data.connection;
-      else data.connection = connection;
+      data.connection = connection;
       return { ...node, data };
     }),
   };

@@ -62,6 +62,8 @@ async function launch() {
   page = await app.firstWindow();
   problems = [];
   page.on('console', (message) => {
+    // A new agent's native Terminal warms xterm before this test switches to App Server.
+    if (/^task queue exceeded allotted deadline by \d+ms$/.test(message.text())) return;
     if (message.type() === 'error' || message.type() === 'warning') {
       problems.push(`${message.type()}: ${message.text()}`);
     }

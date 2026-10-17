@@ -1,15 +1,22 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { automaticBackend } from '../test-backend';
+
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import type { QueueItem } from '../graph/queue';
+
+vi.mock('../terminal/screen', async () => {
+  const { fakeScreens } = await import('../terminal/test-screen');
+  return { createScreen: fakeScreens.create };
+});
 
 const agent = (id: string, y: number, queue: QueueItem[] = []): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y },
-  data: { label: id, queue },
+  data: { label: id, connection: 'sdk', queue },
 });
 
 /** a researches and hands b a message; b builds, waits for a's research, then checks. */
@@ -29,14 +36,17 @@ const graph: Graph = {
 };
 
 function setup(initial: Graph = graph) {
-  const { container } = render(<GraphEditor initialGraph={initial} />);
+  const fake = automaticBackend();
+  const { container } = render(
+    <GraphEditor initialGraph={initial} sessionBackend={fake.backend} />,
+  );
   const card = (id: string) => {
     const element = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
     if (!element) throw new Error(`no node ${id}`);
     return element;
   };
   const queues = () => screen.getByRole('dialog', { name: 'All queues' });
-  return { card, queues };
+  return { card, queues, fake };
 }
 
 afterEach(() => {
@@ -179,8 +189,8 @@ describe('the queues view', () => {
     expect(own.closest('[data-run]')?.getAttribute('data-run')).toBe('running');
   });
 
-  it('shows when the run needs the user: an agent asks permission, and the lane opens it', () => {
-    const { queues } = setup({
+  it('shows when the run needs the user: an agent asks permission, and the lane opens it', async () => {
+    const { queues, fake } = setup({
       nodes: [agent('a', 0, [{ id: 'fix', message: 'Fix the flaky test' }])],
       edges: [],
     });
@@ -188,9 +198,16 @@ describe('the queues view', () => {
     const view = within(queues());
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.click(view.getByRole('button', { name: 'Run' }));
-    // The message's turn plays in a's session until it asks before editing (manual mode).
+    await act(async () => {
+      await Promise.resolve();
+    });
     act(() => {
-      vi.advanceTimersByTime(60_000);
+      fake.emit(
+        'a',
+        'sdk',
+        { type: 'permission', id: 'approve', tool: 'Bash', summary: 'npm test', always: null },
+        { type: 'status', status: 'waiting' },
+      );
     });
     const task = view.getByRole('group', { name: 'a: Message “Fix the flaky test”' });
     expect(task.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
@@ -199,10 +216,8 @@ describe('the queues view', () => {
     expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
   });
 
-  it('shows how a step expected to fail went: failed as expected, or passed', () => {
-    // A simulated step goes as expected three times in four (the run takes its chance as it starts).
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
-    const { queues } = setup({
+  it('shows how a step expected to fail went from explicit native verdicts', async () => {
+    const { queues, fake } = setup({
       nodes: [
         agent('a', 0, [
           { id: 'red', action: 'Bash', instruction: 'Run the new tests.', expect: 'fails' },
@@ -219,21 +234,34 @@ describe('the queues view', () => {
       within(task()).getByRole('button', { name: /is expected to do: fail$/ }).textContent,
     ).toBe('expect: fails');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    // Here, it fails.
+    fake.backend.send.mockResolvedValue(null);
+    const end = async (verdict: string) => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      act(() => {
+        fake.emit(
+          'a',
+          'sdk',
+          { type: 'text', id: crypto.randomUUID(), text: verdict },
+          {
+            type: 'end',
+            messages: [fake.sent()],
+            seconds: 1,
+            interrupted: false,
+            failed: false,
+          },
+        );
+      });
+    };
     fireEvent.click(view.getByRole('button', { name: 'Run' }));
     expect(within(task()).queryByText(/as expected|was expected/)).toBeNull();
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
+    await end('FAILED');
     expect(run()).toBe('succeeded');
     expect(within(task()).getByText('failed, as expected')).toBeTruthy();
-    // Here, it passes: its failure.
-    random.mockReturnValue(0.1);
     fireEvent.click(view.getByRole('button', { name: 'Run' }));
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(run()).toBe('failed');
+    await end('SUCCEEDED');
+    expect(run()).toBe('asking');
     expect(within(task()).getByText('passed, but was expected to fail')).toBeTruthy();
     expect(within(task()).queryByText('failed, as expected')).toBeNull();
   });
@@ -325,14 +353,14 @@ describe('the queues view', () => {
     const OK = 'a: Your OK on the spec in SPEC.md';
 
     /** Runs `asking` in All queues until a holds for your OK. */
-    function held() {
+    async function held() {
       const { queues } = setup(asking);
       fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
       const view = within(queues());
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       fireEvent.click(view.getByRole('button', { name: 'Run' }));
-      act(() => {
-        vi.advanceTimersByTime(4000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
       });
       const row = (name: string) => {
         const found = view.getByRole('group', { name }).querySelector<HTMLElement>('[data-at]');
@@ -342,8 +370,8 @@ describe('the queues view', () => {
       return { queues, view, row, ok: within(view.getByRole('group', { name: OK })) };
     }
 
-    it('holds for your OK, which the lane head finds, and goes on once you approve', () => {
-      const { queues, view, row, ok } = held();
+    it('holds for your OK, which the lane head finds, and goes on once you approve', async () => {
+      const { queues, view, row, ok } = await held();
       expect(row(OK).dataset.run).toBe('asking');
       expect(row(OK).dataset.mark).toBe('ok');
       expect(row('b: Wait for a: Your OK on the spec in SPEC.md').dataset.run).toBe('waiting');
@@ -369,8 +397,8 @@ describe('the queues view', () => {
       expect(view.queryByRole('button', { name: 'Decide for a' })).toBeNull();
     });
 
-    it('asks the agent for changes in your words, at the OK', () => {
-      const { view, row, ok } = held();
+    it('asks the agent for changes in your words, at the OK', async () => {
+      const { view, row, ok } = await held();
       fireEvent.click(ok.getByRole('button', { name: 'Ask for changes…' }));
       const note = ok.getByRole('textbox', { name: 'What should change?' });
       fireEvent.change(note, { target: { value: 'Cover the empty state too' } });
@@ -390,8 +418,8 @@ describe('the queues view', () => {
       expect(transcript.getByText('Cover the empty state too')).toBeTruthy();
     });
 
-    it('stops the queue at the OK, and the wait for it', () => {
-      const { queues, view, row, ok } = held();
+    it('stops the queue at the OK, and the wait for it', async () => {
+      const { queues, view, row, ok } = await held();
       const stop = ok.getByRole('button', { name: 'Stop here' });
       expect(stop.title).toBe('Stop this queue here, and whatever waits on it');
       fireEvent.click(stop);
@@ -405,9 +433,8 @@ describe('the queues view', () => {
     });
   });
 
-  it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', () => {
-    // Steps succeed, and the output never contains it (the run's chance is Math.random).
-    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+  it('shows a repeat as one card, its round in a pill, and asks once it is out of rounds', async () => {
+    // The native fixture explicitly succeeds and never emits APPROVED.
     const { queues } = setup({
       nodes: [
         agent('a', 0, [
@@ -439,8 +466,8 @@ describe('the queues view', () => {
     fireEvent.click(view.getByRole('button', { name: 'Run' }));
     expect(card().dataset.round).toBe('Round 1 of 1');
     expect(step()?.dataset.run).toBe('running');
-    act(() => {
-      vi.advanceTimersByTime(4000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
     });
 
     // Out of rounds: it asks, as an OK does.

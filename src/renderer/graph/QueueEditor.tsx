@@ -980,7 +980,10 @@ function TaskResult({
     : [];
   if (!problem && attempts.length === 0) return null;
   const latest = attempts.at(-1);
-  const label = (status: string) => status.charAt(0).toUpperCase() + status.slice(1);
+  const label = (status: string) =>
+    status === 'running' && marks['data-refused'] !== undefined
+      ? 'Not sent'
+      : status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <div className="graph-queue-result">
       {problem && <p className="graph-queue-problem">{problem.text}</p>}

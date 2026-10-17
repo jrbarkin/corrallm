@@ -40,10 +40,10 @@ describe('the conversations a transcript holds', () => {
     reached: true,
     conversation,
   });
-  // A Codex thread's history (put ahead), a simulated chat, then Claude Code's, cleared once.
+  // A Codex thread's history (put ahead), a unsupported submission, then Claude Code's, cleared once.
   const entries: Entry[] = [
     said('Review it', 'codex'),
-    said('Sketch it', 'simulated'),
+    said('Sketch it', 'unavailable'),
     said('Fix it', 'claude'),
     { id: 'c1', kind: 'cleared', conversation: 'claude' },
     said('Document it', 'claude'),
@@ -53,7 +53,7 @@ describe('the conversations a transcript holds', () => {
   it('names a chat by the first message of its conversation since its last /clear', () => {
     expect(chatStart(entries, 'claude')?.text).toBe('Document it');
     expect(chatStart(entries, 'codex')?.text).toBe('Review it');
-    expect(chatStart(entries, 'simulated')?.text).toBe('Sketch it');
+    expect(chatStart(entries, 'unavailable')?.text).toBe('Sketch it');
     expect(chatStart(entries.slice(0, 4), 'claude')).toBeUndefined();
   });
 

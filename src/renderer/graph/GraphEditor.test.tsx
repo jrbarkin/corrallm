@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasFile } from '../../shared/ipc';
-import { fakeBackend } from '../test-backend';
+import { automaticBackend, fakeBackend } from '../test-backend';
 import { fromFile, toFile } from './file';
 import { GraphEditor } from './GraphEditor';
 import type { CanvasFiles } from './GraphEditor';
@@ -39,8 +39,13 @@ const frame: GraphNode = {
 };
 
 function setup(initialGraph?: Graph, files?: CanvasFiles) {
+  const fake = automaticBackend();
   const { container } = render(
-    <GraphEditor {...(initialGraph ? { initialGraph } : {})} {...(files ? { files } : {})} />,
+    <GraphEditor
+      sessionBackend={fake.backend}
+      {...(initialGraph ? { initialGraph } : {})}
+      {...(files ? { files } : {})}
+    />,
   );
   const nodes = (selector = '.react-flow__node') => [
     ...container.querySelectorAll<HTMLElement>(selector),
@@ -52,7 +57,7 @@ function setup(initialGraph?: Graph, files?: CanvasFiles) {
   };
   const pane = container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('no pane');
-  return { container, nodes, node, pane };
+  return { container, nodes, node, pane, fake };
 }
 
 const button = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name });
@@ -69,6 +74,48 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it('keeps legacy unsupported work unsent and offers a real connection without fabricating completion', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { fake } = setup({
+      nodes: [
+        agentNode('legacy', 0, 0, {
+          data: {
+            label: 'Legacy',
+            agent: 'Qwen',
+            queue: [{ id: 'work', message: 'Keep this work pending' }],
+          },
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    const row = queues.getByRole('group', { name: 'Legacy: Message “Keep this work pending”' });
+    expect(row.querySelector('[data-run]')?.getAttribute('data-run')).toBe('asking');
+    expect(within(row).getByText('Not sent')).toBeTruthy();
+    expect(within(row).queryByText('Running')).toBeNull();
+    expect(fake.backend.start).not.toHaveBeenCalled();
+    expect(fake.backend.send).not.toHaveBeenCalled();
+    fireEvent.click(queues.getByRole('button', { name: 'Open Legacy' }));
+    const view = within(screen.getByRole('dialog', { name: 'Legacy' }));
+    expect(view.getByText(/Qwen Code has no connector yet/)).toBeTruthy();
+    expect(view.queryByRole('textbox', { name: 'Message Legacy' })).toBeNull();
+    expect(view.queryByText(/scripted session|SUCCEEDED/)).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Choose a connected agent' }));
+    const settings = within(screen.getByRole('dialog', { name: 'Agent settings: Legacy' }));
+    fireEvent.click(settings.getByRole('button', { name: /^Agent:/ }));
+    expect(
+      settings
+        .getAllByRole('option')
+        .map((option) => option.textContent)
+        .join(' '),
+    ).not.toMatch(/Simulated|Qwen|Gemini/);
+  });
+
   it('holds one agent through its context menu without changing the saved canvas', async () => {
     const initial: Graph = {
       nodes: [agentNode('a', 0, 0), agentNode('b', 400, 0), frame],
@@ -843,7 +890,7 @@ describe('GraphEditor', () => {
     ]);
   });
 
-  it('asks for your OK on the canvas while the run holds an agent at one', () => {
+  it('asks for your OK on the canvas while the run holds an agent at one', async () => {
     const queue = (approve: string) => [
       { id: 'spec', action: 'Read' },
       { id: 'ok', approve },
@@ -861,8 +908,8 @@ describe('GraphEditor', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    act(() => {
-      vi.advanceTimersByTime(4000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
     });
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
@@ -1085,14 +1132,16 @@ describe('GraphEditor', () => {
     });
     const tag = (id: string) => node(id).querySelector('.graph-agent')?.getAttribute('data-agent');
     expect([tag('a'), tag('b')]).toEqual(['Codex', 'Claude']);
-    expect(node('a').getAttribute('aria-label')).toBe('a, Codex');
+    expect(node('a').getAttribute('aria-label')).toBe('a, Codex · Terminal');
 
     fireEvent.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex · Simulated' }));
-    fireEvent.click(panel.getByRole('option', { name: 'Qwen' }));
-    expect(tag('a')).toBe('Qwen');
-    expect(panel.getByRole('button', { name: 'Agent: Qwen' })).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex · Terminal' }));
+    expect(panel.queryByRole('option', { name: 'Qwen' })).toBeNull();
+    expect(panel.queryByRole('option', { name: /Simulated/ })).toBeNull();
+    fireEvent.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
+    expect(tag('a')).toBe('Claude');
+    expect(panel.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
   });
 
   it('lets agents ask questions: they glow, a sidebar lists them by agent, answering clears them', () => {
@@ -1117,11 +1166,18 @@ describe('GraphEditor', () => {
     expect(node('a').classList.contains('asking')).toBe(false);
   });
 
-  it("answers in an agent's panel, where a question can be simulated until agents are connected", () => {
-    const { node } = setup({ nodes: [agentNode('a', 0, 0)], edges: [] });
+  it("answers an existing question in an agent's panel without generating a simulated question", () => {
+    const { node } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: { label: 'a', questions: [{ id: 'q', text: 'What should change?' }] },
+        }),
+      ],
+      edges: [],
+    });
     fireEvent.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Simulate a question' }));
+    expect(panel.queryByRole('button', { name: 'Simulate a question' })).toBeNull();
     const reply = panel.getByRole('textbox', { name: 'Your answer' });
     fireEvent.change(reply, { target: { value: 'Use the new API' } });
     fireEvent.keyDown(reply, { key: 'Enter' });
@@ -1624,7 +1680,7 @@ describe('GraphEditor', () => {
       ]);
     });
 
-    it('runs a template’s agents as chosen: in a Terminal by default where the user has the CLI', async () => {
+    it('runs a template’s agents through native connections even before their CLI is installed', async () => {
       const sessions = fakeBackend();
       sessions.backend.installed.mockResolvedValue({ claude: true, codex: false });
       const { container } = render(
@@ -1636,28 +1692,25 @@ describe('GraphEditor', () => {
       const how = (role: string) =>
         gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);
-      // The user has Claude Code: its roles run in a Terminal. Not Codex: simulated, until chosen.
+      // Missing CLIs never substitute a scripted runtime: each role keeps a native connection.
       await waitFor(() => {
         expect(how('Implementer').value).toBe('terminal');
       });
-      expect(options('Implementer')).toEqual(['Terminal', 'Agent SDK', 'Simulated']);
-      expect(how('Tester').value).toBe('simulated');
-      expect(options('Tester')).toEqual(['Terminal', 'App Server', 'Simulated']);
+      expect(options('Implementer')).toEqual(['Terminal', 'Agent SDK']);
+      expect(how('Tester').value).toBe('codex-terminal');
+      expect(options('Tester')).toEqual(['Terminal (CLI not found)', 'App Server (CLI not found)']);
       // Another type runs as that type does by default.
       fireEvent.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
         target: { value: 'Claude' },
       });
       expect(how('Tester').value).toBe('terminal');
       fireEvent.change(how('Refactorer'), { target: { value: 'app-server' } });
-      // A type that can only be simulated says so.
-      fireEvent.change(gallery.getByRole('combobox', { name: "Implementer's agent" }), {
-        target: { value: 'Gemini' },
-      });
-      expect(how('Implementer').value).toBe('simulated');
-      expect(how('Implementer').disabled).toBe(true);
-      fireEvent.change(gallery.getByRole('combobox', { name: "Implementer's agent" }), {
-        target: { value: 'Claude' },
-      });
+      expect(
+        [
+          ...gallery.getByRole<HTMLSelectElement>('combobox', { name: "Implementer's agent" })
+            .options,
+        ].find((option) => option.value === 'Gemini')?.disabled,
+      ).toBe(true);
 
       fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
       const cards = () =>

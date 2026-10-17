@@ -55,7 +55,6 @@ import {
   addToQueue,
   answerQuestion,
   areLinked,
-  askUser,
   autosize,
   canConnect,
   connect,
@@ -104,7 +103,6 @@ import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
 import { groupMembers as groupAgentIds, isGroup } from './group-members';
 import type { WorkFlowEdge } from './nodes';
-import type { Question } from './queue';
 import { QuestionsSidebar } from './Questions';
 import type { CardQuestion } from './Questions';
 import { workEdges } from './work';
@@ -119,16 +117,6 @@ const PAN_BUTTONS = [1, 2];
 const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
 
 type Command = Exclude<KeyAction, 'rename'>;
-
-/** Stand-ins for what agents will ask, until agents are connected (see "Simulate a question"). */
-const SAMPLE_QUESTIONS: readonly Omit<Question, 'id'>[] = [
-  {
-    text: 'Two tests fail after my change. Should I fix them before going on?',
-    options: ['Fix them first', 'Go on'],
-  },
-  { text: 'Which branch should the pull request target?', options: ['main', 'develop'] },
-  { text: 'What should the new module be called?' },
-];
 
 /** The graph operation behind a shortcut or button. New ids are made here, not in updaters. */
 function operation(command: Command): (graph: Graph) => Graph {
@@ -234,7 +222,7 @@ function Editor({
   const usage = useSyncExternalStore(usageStore.subscribe, usageStore.snapshot);
   /**
    * Every agent's queue, run: messages go to the agents' sessions, and so do connected agents'
-   * steps and questions; a simulated agent's steps are simulated. An agent whose session would not
+   * steps and questions through their native connections. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
   const [{ sessionStore, runStore, persistence, documentState }] = useState(() => {
@@ -303,9 +291,8 @@ function Editor({
           clearTimeout(timer);
         };
       },
-      // The real clock, read when asked: delays and time limits are real, even simulated.
+      // The real clock, read when asked: delays and time limits use the real clock.
       now: () => Date.now(),
-      chance: Math.random,
       usage: () => usageStore.snapshot(),
       unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
     });
@@ -623,14 +610,14 @@ function Editor({
 
   /**
    * Changes what a connected agent is set to run with in the CLI it runs now (its settings, saved
-   * with it). What it runs with changes nothing laid out; a simulated agent has none to change.
+   * with it). What it runs with changes nothing laid out; an unavailable connector has none to change.
    */
   const updateSettings = useCallback(
     (id: string, change: (settings: AgentSettings) => AgentSettings) => {
       setRawGraph((g) => {
         const node = g.nodes.find((n) => n.id === id);
-        const connection = node ? connectionOf(node.data) : 'simulated';
-        if (!node || connection === 'simulated') return g;
+        const connection = node ? connectionOf(node.data) : 'unavailable';
+        if (!node || connection === 'unavailable') return g;
         const cli = CONNECTION_CLI[connection];
         return setSettings(g, id, cli, change(node.data.settings?.[cli] ?? {}));
       });
@@ -993,7 +980,7 @@ function Editor({
   const inTerminal = graph.nodes.flatMap((agent) => {
     const connection = connectionOf(agent.data);
     return agent.type === 'agent' &&
-      connection !== 'simulated' &&
+      connection !== 'unavailable' &&
       TERMINAL_CONNECTIONS.includes(connection)
       ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
       : [];
@@ -1443,13 +1430,6 @@ function Editor({
             }}
             onAnswer={(questionId, answer) => {
               setGraph((g) => answerQuestion(g, openedNode.id, questionId, answer));
-            }}
-            onSimulateQuestion={() => {
-              const asked = openedNode.data.questions?.length ?? 0;
-              const sample = SAMPLE_QUESTIONS[asked % SAMPLE_QUESTIONS.length];
-              if (!sample) return;
-              const question = { ...sample, id: crypto.randomUUID() };
-              setGraph((g) => askUser(g, openedNode.id, question));
             }}
             edits={edits}
             marks={marks}

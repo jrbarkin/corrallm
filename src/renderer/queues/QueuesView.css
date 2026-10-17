@@ -234,7 +234,7 @@
   background: var(--queues-held);
 }
 
-/* How a connected agent runs (a simulated one says nothing). */
+/* The native connection or unavailable connector status. */
 .queues-connection {
   flex: none;
   padding: 0 7px;

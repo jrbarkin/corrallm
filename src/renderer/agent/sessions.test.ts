@@ -296,35 +296,6 @@ describe('SessionStore', () => {
       expect(backend.interrupt).toHaveBeenCalledTimes(2);
       store.reset();
     });
-
-    it('also holds simulated turns after completion and after interruption', async () => {
-      vi.useFakeTimers();
-      const store = new SessionStore();
-      store.setMode('a', 'bypassPermissions');
-      const done = vi.fn();
-      store.send('a', 'Claude', 'First', done);
-      store.send('a', 'Claude', 'Second', done);
-      store.holdQueue('a', true);
-      vi.runAllTimers();
-      expect(done).toHaveBeenCalledOnce();
-      expect(store.of('a').queued).toMatchObject([{ text: 'Second' }]);
-      store.send('a', 'Claude', 'Intervention', done);
-      store.stop('a');
-      store.stop('a');
-      expect(done).toHaveBeenCalledTimes(2);
-      expect(store.of('a').queued).toMatchObject([{ text: 'Second' }]);
-      store.holdQueue('a', false);
-      await Promise.resolve();
-      vi.runAllTimers();
-      expect(done).toHaveBeenCalledTimes(3);
-      expect(
-        store
-          .of('a')
-          .entries.filter((entry) => entry.kind === 'user')
-          .map((entry) => entry.text),
-      ).toEqual(['First', 'Intervention', 'Second']);
-      store.reset();
-    });
   });
 
   it('observes the human correction while delivering its wrapped objective, including after queueing', async () => {
@@ -598,10 +569,10 @@ describe('SessionStore', () => {
     expect(backend.send).toHaveBeenCalledTimes(1);
     store.reset();
   });
-  it('records each manual submission once, including queued images and cancellation', () => {
-    vi.useFakeTimers();
-    const store = new SessionStore(undefined, () => 'held-step');
-    store.setMode('a', 'bypassPermissions');
+  it('records each manual submission once, including queued images and cancellation', async () => {
+    const { backend, emit, sent } = fakeBackend();
+    const store = new SessionStore(backend, () => 'held-step');
+    store.sync([{ id: 'a', connection: 'sdk' }]);
     store.send('a', 'Claude', 'First');
     store.send('a', 'Claude', '', undefined, [{ mediaType: 'image/png', data: 'picture' }]);
     const cancel = store.send('a', 'Claude', 'First');
@@ -611,7 +582,17 @@ describe('SessionStore', () => {
       { text: '', status: 'queued', images: [{ data: 'picture' }] },
       { text: 'First', status: 'cancelled' },
     ]);
-    vi.runAllTimers();
+    for (let turn = 0; turn < 2; turn++) {
+      await Promise.resolve();
+      await Promise.resolve();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+    }
     expect(store.of('a').submissions?.map(({ status }) => status)).toEqual([
       'completed',
       'completed',
@@ -619,7 +600,16 @@ describe('SessionStore', () => {
     ]);
     expect(new Set(store.of('a').submissions?.map(({ id }) => id)).size).toBe(3);
     store.send('a', 'Claude', 'Interrupted');
+    await Promise.resolve();
+    await Promise.resolve();
     store.stop('a');
+    emit('a', 'sdk', {
+      type: 'end',
+      messages: [sent()],
+      seconds: 1,
+      interrupted: true,
+      failed: false,
+    });
     expect(store.of('a').submissions?.at(-1)?.status).toBe('cancelled');
     store.reset();
     expect(store.of('a').submissions).toBeUndefined();
@@ -684,11 +674,10 @@ describe('SessionStore', () => {
       store.reset();
     },
   );
-  it('tells whoever sent a message when the turn it starts ends, queued or not', () => {
-    vi.useFakeTimers();
-    const store = new SessionStore();
-    // Never asks for permission, so every turn plays to its end.
-    store.setMode('a', 'bypassPermissions');
+  it('tells whoever sent a message when the native turn it starts ends, queued or not', async () => {
+    const { backend, emit, sent } = fakeBackend();
+    const store = new SessionStore(backend);
+    store.sync([{ id: 'a', connection: 'sdk' }]);
     const heard: string[] = [];
     const tell = (text: string) => (interrupted: boolean) => {
       heard.push(`${text}${interrupted ? ' (interrupted)' : ''}`);
@@ -696,16 +685,34 @@ describe('SessionStore', () => {
     store.send('a', 'Claude', 'First', tell('First'));
     store.send('a', 'Claude', 'Second', tell('Second'));
     store.send('a', 'Claude', 'Third', tell('Third'));
-    // Taken off the queue before it is sent: it never runs.
     const third = store.of('a').queued[1];
     if (!third) throw new Error('Third is not queued');
     store.unqueue('a', third.id);
-    vi.runAllTimers();
+    for (let turn = 0; turn < 2; turn++) {
+      await Promise.resolve();
+      await Promise.resolve();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+    }
     expect(heard).toEqual(['Third (interrupted)', 'First', 'Second']);
-    // Stopped mid-turn.
     store.send('a', 'Claude', 'Fourth', tell('Fourth'));
+    await Promise.resolve();
+    await Promise.resolve();
     store.stop('a');
+    emit('a', 'sdk', {
+      type: 'end',
+      messages: [sent()],
+      seconds: 1,
+      interrupted: true,
+      failed: false,
+    });
     expect(heard.at(-1)).toBe('Fourth (interrupted)');
+    store.reset();
   });
 
   it('tells the user what the run says, in the agent’s session', () => {
@@ -721,16 +728,30 @@ describe('SessionStore', () => {
     expect(store.of('a').status).toBe('idle');
   });
 
-  it('sends a message sent as a turn ends after the ones already queued', () => {
-    vi.useFakeTimers();
-    const store = new SessionStore();
-    store.setMode('a', 'bypassPermissions');
+  it('sends a message sent as a native turn ends after the ones already queued', async () => {
+    const { backend, emit, sent } = fakeBackend();
+    const store = new SessionStore(backend);
+    store.sync([{ id: 'a', connection: 'sdk' }]);
     store.send('a', 'Claude', 'First', () => {
       store.send('a', 'Claude', 'Next');
     });
     store.send('a', 'Claude', 'Second');
-    vi.runAllTimers();
-    const asked = store.of('a').entries.flatMap((e) => (e.kind === 'user' ? [e.text] : []));
-    expect(asked).toEqual(['First', 'Second', 'Next']);
+    for (let turn = 0; turn < 3; turn++) {
+      await Promise.resolve();
+      await Promise.resolve();
+      emit('a', 'sdk', {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        interrupted: false,
+        failed: false,
+      });
+    }
+    expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+      'First',
+      'Second',
+      'Next',
+    ]);
+    store.reset();
   });
 });

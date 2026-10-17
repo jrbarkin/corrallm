@@ -33,9 +33,6 @@ function setup(queue: QueueItem[], unheard = false) {
     connect: () => undefined,
     later: () => () => undefined,
     now: () => 1234,
-    chance: () => {
-      throw new Error('Connected conditions must not use chance');
-    },
     unheard: () => unheard,
   });
   const node: GraphNode = {

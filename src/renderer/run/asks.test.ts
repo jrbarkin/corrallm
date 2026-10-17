@@ -132,6 +132,27 @@ describe('a session that would not start', () => {
     expect(ask?.refusal).toEqual({ agent: 'c', switchTo: 'terminal' });
   });
 
+  it('explains an unavailable agent without offering a nonexistent connection', () => {
+    const run: Run = {
+      running: true,
+      agents: {
+        c: {
+          ...at('tests', 'asking'),
+          refused: {
+            agent: 'c',
+            connection: 'unavailable',
+            text: 'Choose Claude or Codex; Qwen is not available yet.',
+          },
+        },
+      },
+    };
+    const [ask] = heldAsks([coder], run);
+    expect(ask?.text).toBe('Choose Claude or Codex; Qwen is not available yet.');
+    expect(ask?.detail).toBe('Bash waits until Coder can start');
+    expect(ask?.choices).toEqual([]);
+    expect(ask?.refusal).toEqual({ agent: 'c' });
+  });
+
   it('names the agent to switch when it is another one, sent a message', () => {
     const run: Run = {
       running: true,

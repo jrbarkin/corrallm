@@ -5,7 +5,7 @@ import type { SubmittedMessage } from '../agent/session';
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
  * one to the node whose queue it is in. `instruction`: what it is to do, in the user's words (what
  * to run, what to read); a connected agent is told it with the step (a slash command takes it as
- * its arguments: run/turns.ts), a simulated one ignores it. `expect`: 'fails' for a step meant to
+ * its arguments: run/turns.ts). `expect`: 'fails' for a step meant to
  * fail (tests written to fail first: red before green), which the run turns round (run/runner.ts):
  * failing is its success, passing its failure, so what reads how it went (an If, a repeat, a
  * wait) reads whether it went as expected. What the agent is asked does not change.

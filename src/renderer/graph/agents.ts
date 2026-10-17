@@ -1,5 +1,4 @@
-import { CONNECTION_CLI } from '../../shared/session';
-import type { Connection, InstalledClis } from '../../shared/session';
+import type { Connection } from '../../shared/session';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
 import type { QueueItem, RepeatedItem } from './queue';
 
@@ -24,37 +23,31 @@ export const AGENT_CLI: Record<AgentType, string> = {
   Gemini: 'Gemini CLI',
 };
 
-/**
- * How an agent's session runs: simulated (scripted in corrallm, nothing really runs), or
- * connected to the real CLI (src/shared/session.ts): Claude Code in a terminal or through the
- * Agent SDK, Codex in a terminal or through its app server.
- */
-export type AgentConnection = 'simulated' | Connection;
+/** A real native connection, or an unavailable connector for a legacy agent type. */
+export type AgentConnection = Connection | 'unavailable';
 
-/**
- * The ways each agent type can run, in the order the agent chip offers them: Claude and Codex can
- * be connected (others not yet), in a Terminal first, since that works with any login (a Claude
- * subscription, a ChatGPT plan); Claude through the Agent SDK only with an API key or a cloud
- * provider (Anthropic doesn't allow other products to use subscription logins through it); Codex
- * through its app server with an API key, or on a ChatGPT plan once the user allows it (local
- * builds only: codex/login.ts). An agent is simulated until it is connected.
- */
-export const AGENT_CONNECTIONS: Record<AgentType, readonly AgentConnection[]> = {
-  Claude: ['terminal', 'sdk', 'simulated'],
-  Codex: ['codex-terminal', 'app-server', 'simulated'],
-  Qwen: ['simulated'],
-  Gemini: ['simulated'],
+/** Terminal works with the CLI's own login; structured connections are an explicit choice. */
+export const AGENT_CONNECTIONS: Record<AgentType, readonly Connection[]> = {
+  Claude: ['terminal', 'sdk'],
+  Codex: ['codex-terminal', 'app-server'],
+  Qwen: [],
+  Gemini: [],
 };
+
+/** Agent types with working connectors, offered when choosing an agent. */
+export const CONNECTED_AGENTS: readonly AgentType[] = Object.values(AgentType).filter(
+  (agent) => AGENT_CONNECTIONS[agent].length > 0,
+);
 
 /** How each connection is named (`short`: on an agent's card) and explained. */
 export const CONNECTION_INFO: Record<
   AgentConnection,
   { label: string; short: string; description: string }
 > = {
-  simulated: {
-    label: 'Simulated',
-    short: 'Simulated',
-    description: 'A scripted session: nothing really runs',
+  unavailable: {
+    label: 'Not connected',
+    short: 'Not connected',
+    description: 'This CLI has no connector yet. Choose Claude Code or Codex',
   },
   terminal: {
     label: 'Terminal',
@@ -79,51 +72,36 @@ export const CONNECTION_INFO: Record<
   },
 };
 
-/**
- * How an agent of `agent`'s type runs unless told otherwise, as a template's agents do: in a
- * Terminal (its first connection, which works with any login) where the user has its CLI
- * (`installed`, as main found them; undefined while not known), otherwise simulated.
- */
-export function defaultConnection(
-  agent: AgentType,
-  installed: InstalledClis | undefined,
-): AgentConnection {
-  const [first = 'simulated'] = AGENT_CONNECTIONS[agent];
-  return first !== 'simulated' && installed?.[CONNECTION_CLI[first]] === true ? first : 'simulated';
+/** New and legacy agents use a real terminal; missing CLIs fail visibly instead of simulating. */
+export function defaultConnection(agent: AgentType): AgentConnection {
+  return AGENT_CONNECTIONS[agent][0] ?? 'unavailable';
 }
 
-/** The ways an agent type can be connected, as a sentence names them ("Terminal or Agent SDK"). */
+/** The ways an agent type can be connected, as a sentence names them. */
 export function connectionNames(agent: AgentType): string {
-  const names = AGENT_CONNECTIONS[agent]
-    .filter((connection) => connection !== 'simulated')
-    .map((connection) => CONNECTION_INFO[connection].label);
+  const names = AGENT_CONNECTIONS[agent].map((connection) => CONNECTION_INFO[connection].label);
   return names.length <= 1
     ? (names[0] ?? '')
     : `${names.slice(0, -1).join(', ')} or ${names.at(-1) ?? ''}`;
 }
 
-/** How an agent runs: its connection if its type offers it, otherwise simulated. */
+/** An omitted connection (including old placeholder workflows) uses the native default. */
 export function connectionOf(data: {
   agent?: AgentType;
   connection?: Connection;
 }): AgentConnection {
-  const { connection } = data;
-  return connection !== undefined &&
-    AGENT_CONNECTIONS[data.agent ?? DEFAULT_AGENT].includes(connection)
-    ? connection
-    : 'simulated';
+  const agent = data.agent ?? DEFAULT_AGENT;
+  return data.connection !== undefined && AGENT_CONNECTIONS[agent].includes(data.connection)
+    ? data.connection
+    : defaultConnection(agent);
 }
 
-/**
- * An agent type with how it runs, as the agent chip names it ("Claude · Terminal"); a type that
- * can only be simulated is named alone. `short`: as its card names it, where simulated goes unsaid.
- */
+/** An agent's type and real connection, or its unavailable connector status. */
 export function agentLabel(
   agent: AgentType,
   connection: AgentConnection,
   { short = false }: { short?: boolean } = {},
 ): string {
-  if (AGENT_CONNECTIONS[agent].length === 1 || (short && connection === 'simulated')) return agent;
   const info = CONNECTION_INFO[connection];
   return `${agent} · ${short ? info.short : info.label}`;
 }

@@ -21,7 +21,7 @@ const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => 
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, ...data },
+  data: { label: id, connection: data.agent === 'Codex' ? 'app-server' : 'sdk', ...data },
 });
 
 /** Lets IPC replies (promises) settle. */
@@ -102,9 +102,9 @@ const MODELS = [
 
 describe('a connected Codex agent', () => {
   it('runs in a terminal or through its app server, as its chip says', async () => {
-    const { backend, card, view } = await open({ agent: 'Codex' });
+    const { backend, card, view } = await open({ agent: 'Codex', connection: 'app-server' });
     const chip = () => view.getByRole('button', { name: /^Agent: / });
-    expect(chip().getAttribute('aria-label')).toBe('Agent: Codex · Simulated');
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Codex · App Server');
     fireEvent.click(chip());
     expect(view.getByRole('option', { name: /^Codex · Terminal/ }).textContent).toMatch(
       /Codex itself, in a terminal/,
@@ -278,10 +278,10 @@ describe('a Codex agent’s reasoning effort', () => {
 describe('a connected agent', () => {
   it('is connected from its agent chip: shown on its card, its chip and its lane in All queues', async () => {
     const { backend, card, view } = await open();
-    expect(backend.start).not.toHaveBeenCalled();
+    expect(backend.start).toHaveBeenCalledWith('a', { connection: 'sdk', model: null, mode: null });
     const chip = () => view.getByRole('button', { name: /^Agent: / });
-    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Simulated');
-    expect(card().getAttribute('aria-label')).toBe('a, Claude');
+    expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Agent SDK');
+    expect(card().getAttribute('aria-label')).toBe('a, Claude · SDK');
 
     fireEvent.click(chip());
     fireEvent.click(view.getByRole('option', { name: /^Claude · Agent SDK/ }));
@@ -303,27 +303,21 @@ describe('a connected agent', () => {
     );
     fireEvent.click(queues.getByRole('button', { name: 'Open a' }));
 
-    // Another type of agent, simulated: the session closes.
+    // Switching CLI closes the old session and opens the selected native connection.
     fireEvent.click(chip());
-    fireEvent.click(screen.getByRole('option', { name: /^Codex · Simulated/ }));
-    expect(card().getAttribute('aria-label')).toBe('a, Codex');
+    fireEvent.click(screen.getByRole('option', { name: /^Codex · App Server/ }));
+    expect(card().getAttribute('aria-label')).toBe('a, Codex · App Server');
     expect(backend.close).toHaveBeenCalledWith('a');
   });
 
-  it('offers to simulate a question only while simulated: a connected agent asks its own', async () => {
-    const { view } = await open();
-    const simulate = () => view.queryByRole('button', { name: 'Simulate a question' });
-    expect(simulate()).toBeTruthy();
-    const chip = () => view.getByRole('button', { name: /^Agent: / });
-    for (const connection of [/^Claude · Agent SDK/, /^Claude · Terminal/]) {
-      fireEvent.click(chip());
-      fireEvent.click(view.getByRole('option', { name: connection }));
-      await settle();
-      expect(simulate()).toBeNull();
-    }
-    fireEvent.click(chip());
-    fireEvent.click(view.getByRole('option', { name: /^Claude · Simulated/ }));
-    expect(simulate()).toBeTruthy();
+  it('offers only native connections and never a generated question or scripted reply', async () => {
+    const { view, transcript } = await open();
+    expect(view.queryByRole('button', { name: 'Simulate a question' })).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
+    const choices = view.getAllByRole('option').map((item) => item.textContent);
+    expect(choices).toHaveLength(5);
+    expect(choices.join(' ')).not.toMatch(/Simulated|Qwen|Gemini/);
+    expect(transcript.queryByText(/scripted session/)).toBeNull();
   });
 
   it('retains each submitted message once across clear and CLI changes, without recording history', async () => {
@@ -354,8 +348,8 @@ describe('a connected agent', () => {
     expect(first).toBeDefined();
     expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
-    // Through the Agent SDK: Claude Code's own conversation, with no message yet.
-    await runAs(/^Claude · Agent SDK/);
+    emit({ type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false });
+    // The native conversation continues with every submission represented once.
     expect(messages()).toEqual(['Sketch the plan']);
     await turn('Fix the tests');
     expect(messages()).toEqual(['Sketch the plan', 'Fix the tests']);
@@ -383,10 +377,10 @@ describe('a connected agent', () => {
     expect(side.queryByText('Review the pull request')).toBeNull();
     expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
-    // Back to Claude Code's conversation, and to the simulated chat.
+    // Back to Claude Code's conversation and its native terminal.
     await runAs(/^Claude · Agent SDK/);
     expect(messages()).toEqual(submitted);
-    await runAs(/^Claude · Simulated/);
+    await runAs(/^Claude · Terminal/);
     expect(messages()).toEqual(submitted);
     expect(rows()[0]?.dataset.submission).toBe(first);
     expect(new Set(rows().map((row) => row.dataset.submission)).size).toBe(4);
@@ -497,10 +491,9 @@ describe('a connected agent', () => {
     const { view } = await open();
     fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
     const options = view.getAllByRole('option').map((option) => option.textContent);
-    expect(options.slice(0, 3)).toEqual([
+    expect(options.filter((option) => option.startsWith('Claude'))).toEqual([
       expect.stringMatching(/^Claude · Terminal.*works with your Claude login/),
       expect.stringMatching(/^Claude · Agent SDK.*needs an API key or a cloud provider/),
-      expect.stringMatching(/^Claude · Simulated/),
     ]);
   });
 

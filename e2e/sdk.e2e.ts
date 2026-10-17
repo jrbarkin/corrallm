@@ -37,6 +37,7 @@ test.beforeEach(async () => {
   page = await app.firstWindow();
   problems = [];
   page.on('console', (message) => {
+    if (/^task queue exceeded allotted deadline by \d+ms$/.test(message.text())) return;
     if (message.type() === 'error' || message.type() === 'warning') {
       problems.push(`${message.type()}: ${message.text()}`);
     }
@@ -53,6 +54,22 @@ test.afterEach(async () => {
   expect(problems).toEqual([]);
 });
 
+/** Author the SDK connection before opening a view, so no Terminal session starts first. */
+async function openSdkAgent(name: string) {
+  const card = page.locator('.react-flow__node-agent').filter({ hasText: name });
+  await card.click({ button: 'right' });
+  await page
+    .getByRole('menu', { name: `${name} controls`, exact: true })
+    .getByRole('menuitem', { name: /^Settings/ })
+    .click();
+  const settings = page.getByRole('dialog', { name: `Agent settings: ${name}`, exact: true });
+  await settings.getByRole('button', { name: /^Agent: Claude/ }).click();
+  await settings.getByRole('option', { name: /^Claude · Agent SDK/ }).click();
+  await settings.getByRole('button', { name: 'Close agent settings' }).click();
+  await card.dblclick();
+  return page.getByRole('dialog', { name, exact: true });
+}
+
 test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, an interrupt', async () => {
   const folder = path.join(dir, 'shop');
   await mkdir(folder);
@@ -66,11 +83,7 @@ test('runs a Claude agent through the Agent SDK: a turn, a prompt, completions, 
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
 
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openSdkAgent('Agent 1');
   // The session started: the CLI's models are offered.
   await expect(view.getByRole('button', { name: 'Model: Default (recommended)' })).toBeVisible();
 
@@ -138,11 +151,7 @@ test('opens a link in a reply in the browser once main has asked, and not again 
       .then(({ asked, opened }) => ({ asked, opened }));
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openSdkAgent('Agent 1');
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   await composer.fill('markdown, please');
   await composer.press('Enter');
@@ -172,17 +181,13 @@ test('opens another conversation of the project folder in an agent with /resume'
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   const connect = async (name: string) => {
-    const view = page.getByRole('dialog', { name });
-    await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-    await page.keyboard.type('agent sdk');
-    await page.keyboard.press('Enter');
+    const view = await openSdkAgent(name);
     await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
     return view;
   };
 
   // Agent 1 has a conversation.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 300, y: 300 } });
-  await page.locator('.react-flow__node').first().dblclick();
   const first = await connect('Agent 1');
   await first.getByRole('textbox', { name: 'Message Agent 1' }).fill('Remember the shop');
   await first.getByRole('textbox', { name: 'Message Agent 1' }).press('Enter');
@@ -193,7 +198,6 @@ test('opens another conversation of the project folder in an agent with /resume'
 
   // Agent 2 opens it.
   await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 420 } });
-  await page.locator('.react-flow__node').nth(1).dblclick();
   const second = await connect('Agent 2');
   const composer = second.getByRole('textbox', { name: 'Message Agent 2' });
   await composer.fill('/resume');
@@ -221,11 +225,7 @@ test('shows an agent’s MCP servers with /mcp, and a form one of them asks for'
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openSdkAgent('Agent 1');
   await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
 
@@ -268,11 +268,7 @@ test('rewinds the code and the conversation to before a message', async () => {
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openSdkAgent('Agent 1');
   await expect(view.getByRole('button', { name: /^Model: / })).toBeVisible();
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   const transcript = view.getByRole('log', { name: 'Transcript' });
@@ -318,11 +314,7 @@ test('stops work in the background, answers with the keyboard, and sets the effo
   }, folder);
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await page.locator('.react-flow__pane').dblclick({ position: { x: 400, y: 300 } });
-  await page.locator('.react-flow__node').dblclick();
-  const view = page.getByRole('dialog', { name: 'Agent 1' });
-  await view.getByRole('button', { name: /^Agent: Claude/ }).click();
-  await page.keyboard.type('agent sdk');
-  await page.keyboard.press('Enter');
+  const view = await openSdkAgent('Agent 1');
   const composer = view.getByRole('textbox', { name: 'Message Agent 1' });
   const transcript = view.getByRole('log', { name: 'Transcript' });
 
