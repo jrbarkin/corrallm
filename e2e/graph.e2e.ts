@@ -993,9 +993,10 @@ test('limits a wait, counts it down while it holds, and goes on from it now', as
   });
   expect(badge).toEqual({ content: '"!"', background: 'rgb(245, 158, 11)' });
   await expect(timer).toHaveCount(0);
+  // The wait went on: the review has started (its agent may already be asking a permission).
   await expect(
     view.getByRole('group', { name: 'Reviewer: /code-review' }).locator('[data-run]'),
-  ).toHaveAttribute('data-run', 'running');
+  ).toHaveAttribute('data-run', /^(running|asking)$/);
   await view.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
