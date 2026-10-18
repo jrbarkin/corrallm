@@ -1,6 +1,38 @@
 # corrallm
 
-Cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron Forge, Vite, React and TypeScript.
+**An orchestrator for coding agents that can adopt any agentic workflow, and combine them.**
+
+Coding agents such as Claude Code, Codex, Gemini CLI and Qwen Code keep getting better, and the ways people organize them change just as fast: test-first relays, spec-driven plans, review panels, races judged blind, swarms. Most tools build in one of these ways of working, or leave you to script your own orchestration. corrallm is GUI-first and takes that busy work away: pick a workflow off the shelf, say what to build, and go; or adapt it, and run several side by side as parts of one larger effort.
+
+- **A canvas of agents.** Each agent is one of those CLIs, with its own session and a queue of work.
+- **Queues you can read.** Steps (the agent's own actions, with what to do in your words, and expected to fail when they should, as tests written first are), messages, if-thens, and waits on other agents' work make the order and hand-offs of a workflow explicit, and editable.
+- **Templates.** A workflow, say a TDD relay where Codex writes the tests, Claude makes them pass and Codex refactors, is a template. Start a canvas from it, or insert it into a larger one as one group among others, so a single effort can mix a spec-driven planning group, two racing builders and a review panel. A template can name the CLI for each role, or leave a role open for whichever agent you choose; Claude and Codex roles use their real terminals by default, or an explicitly chosen structured connection.
+- **See it run.** All queues shows every agent's queue side by side: the task each is on, and where one waits for another.
+- **Intervene when work needs you.** Failed or uncertain tasks wait in Needs you. Inspect the console, give a correction, retry, or resolve the task explicitly; each attempt stays with the original task. What you type appears as a Message in the queue.
+- **Pick up where you left off.** Queue progress and unsaved canvases survive a restart. Reopen paused, reconnect to the same native conversations, and Resume when ready; submitted prompts are never automatically replayed.
+- **Control agents and groups.** Right-click an agent’s canvas card, queue heading or session header: Pause finishes its current task and holds the queue; Kill interrupts immediately and keeps the console open. A group offers the same controls for all its members, including nested groups. Resume releases only the chosen pause, preserving individual and other group holds. Other agents keep working, and manual console instructions appear as Message rows.
+- **Usage you can plan around.** A gauge per backend shows how much of its 5-hour and weekly windows is used, and when they reset. A usage rule says what happens past a share ("if Claude hits 80%"): warn you, pause and ask, or finish the task and wait for the reset; a queue can also check usage in an If, or wait until a window resets.
+
+As models change, the workflows that work best change with them. corrallm is where you build, mix and run them.
+
+> **Status:** early, but the agents are real. A Claude or Codex agent runs the CLI itself (your own `claude` or `codex`, with its login and settings) in the canvas's project folder, connected one of two ways:
+>
+> - **Claude · Terminal:** all of Claude Code, in a terminal in the agent view, with any login (a Claude subscription included). corrallm types the queue's messages in and follows each turn. What Claude Code asks you (a permission, with the command or the diff it shows; a question; a plan; whether to trust a folder it has never run in) is also listed in Needs you, to answer in the terminal. In a folder Claude Code has yet to trust, one agent's Claude Code starts first and the others once you have trusted the folder there, so you are asked once. Cmd-click a file it links to (Ctrl-click on Windows and Linux) to show it in your file manager, if it's in the project folder.
+> - **Claude · Agent SDK:** a real Claude Code session in corrallm's own transcript and composer, close to Claude Code's own: questions, permissions, plans, live progress, background work you can stop, slash commands, `/resume`, `/mcp`, rewind, and the effort beside the model. It needs an API key or a cloud provider, since Anthropic doesn't allow other products to use subscription logins through the Agent SDK: on a subscription it says so, offers to switch the agent to Terminal, and keeps what was sent to it for the terminal. It can also continue its conversation in Terminal at any time, as it does for Claude Code's own screens (`/permissions`, `/login`…) and its bash mode (`!npm test`).
+> - **Codex · Terminal:** all of Codex, in a terminal, with any login (a ChatGPT plan included). In either terminal, the CLI starts only when you open its agent or something is sent to it, files you drop are pasted as their paths, and on a Mac, Option works as Meta on a US-like keyboard layout.
+> - **Codex · App Server:** a real Codex thread in corrallm's transcript and composer, with Codex's modes, models, reasoning efforts, approvals, plans and slash commands. It runs on an API key or, in a build you run yourself, on your ChatGPT plan once you allow it (once, or always), as OpenAI allows for local apps and never for commercial or hosted ones: a build made for those refuses a ChatGPT login, holds the queued work, and offers Switch to Codex · Terminal.
+>
+> What stays true while an agent runs (its name, role, model, effort, mode, usage rule) is a setting; what happens in order is a queue item. Open **Agent settings** from its header summary, its summary in All queues, or Settings… in its right-click menu. It sets name, CLI/connection, standing instructions (Role), and startup model, effort and mode, saved with the workflow. New agents use real Terminal connections; a missing CLI reports an actionable error. Older Qwen/Gemini nodes remain unavailable until you choose a connected CLI. A role change saves without interrupting work; Claude can restart when idle and resume the same conversation. Codex currently keeps its original role when resuming, so the panel offers an explicit new conversation to apply a changed role, preserving the earlier conversation in Codex’s history. The agent chip and structured composer still offer quick connection and live model/effort/mode controls; modes that never ask are confirmed each time.
+>
+> The queues' Run drives connected agents for real. Steps (with what each is to do, in your words) and messages are turns of the agent's session. A step succeeds or fails as the agent says at the end of its reply, so tests that fail fail it; a step you expect to fail, as tests written first should, is turned round: failing is its success, and passing its failure. A tool step needs SUCCEEDED or FAILED on its final line; a missing verdict or unclear condition answer waits for you. Native cancellation and execution errors stay distinct from that task verdict. An If reads what the agent replied, or asks it, yes or no, about a condition in your own words. Stop interrupts what the run started and pauses the run; Resume continues from its place, while Run again starts fresh. If your or your organization's Claude Code settings turn hooks off, corrallm can't read a Terminal agent's replies, and says so in the agent's bar and in the run.
+>
+> Links open in your browser once you say so, asked once per site ("Always for this site"); a few known sites open at once. Usage is read for real: Claude's from a Terminal agent's status line (yours still shows), Codex's from its app server (which spends no usage), and either can be simulated to try its rule.
+
+> Queue state, concise attempt records and manual Message metadata are stored locally for named and unsaved canvases. The native CLIs keep their conversation history; full transcript and terminal-screen snapshots are deferred to V2.
+
+## Development
+
+corrallm is a cross-platform (macOS, Windows, Linux) Electron desktop app built with Electron Forge, Vite, React and TypeScript.
 
 ## Prerequisites
 
@@ -88,18 +120,20 @@ What happens when you save a file while `pnpm dev` is running:
 
 To try the production build, run `pnpm package` and open the app in `out/` (for example `open out/corrallm-darwin-arm64/corrallm.app`).
 
+To check a packaged build without opening it, run it with `CORRALLM_NATIVE_SELFTEST=1` (for example `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`): it checks that node-pty, the terminal's screen copy and the Agent SDK work in it (the SDK against a fake `claude` of its own, run with the `node` on your PATH; no login needed), and exits with 0.
+
 ## Common scripts
 
-| Script           | What it does                                               |
-| ---------------- | ---------------------------------------------------------- |
-| `pnpm dev`       | Run the app in development mode                            |
-| `pnpm typecheck` | Type-check all TypeScript projects                         |
-| `pnpm lint`      | ESLint (type-aware rules)                                  |
-| `pnpm format`    | Format all files with Prettier                             |
-| `pnpm test`      | Unit tests (Vitest) for main, preload and renderer         |
-| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright smoke test |
-| `pnpm package`   | Package the app for the current OS into `out/`             |
-| `pnpm make`      | Build installers for the current OS into `out/make/`       |
+| Script           | What it does                                          |
+| ---------------- | ----------------------------------------------------- |
+| `pnpm dev`       | Run the app in development mode                       |
+| `pnpm typecheck` | Type-check all TypeScript projects                    |
+| `pnpm lint`      | ESLint (type-aware rules)                             |
+| `pnpm format`    | Format all files with Prettier                        |
+| `pnpm test`      | Unit tests (Vitest) for main, preload and renderer    |
+| `pnpm test:e2e`  | Build the app (unsigned) and run the Playwright tests |
+| `pnpm package`   | Package the app for the current OS into `out/`        |
+| `pnpm make`      | Build installers for the current OS into `out/make/`  |
 
 ## Debugging
 

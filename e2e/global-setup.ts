@@ -3,13 +3,17 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
+import { makeAgentElectron } from './agent-electron';
+
 /**
  * Builds the production bundles the tests launch (`.vite/`), via `electron-forge package`
  * (Forge has no build-only command). Signing is skipped. `pnpm dev` replaces `.vite/` with a
- * dev build, so the suite always rebuilds unless E2E_SKIP_BUILD=1.
+ * dev build, so the suite always rebuilds unless E2E_SKIP_BUILD=1. On macOS it also makes the
+ * Electron copy the tests launch so that no Dock icon appears (agent-electron.ts).
  */
 export default function globalSetup(): void {
   const projectDir = path.dirname(import.meta.dirname);
+  makeAgentElectron();
 
   if (process.env.E2E_SKIP_BUILD === '1') {
     const renderer = path.join(projectDir, '.vite/renderer/main_window/index.html');

@@ -1,0 +1,69 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "releaser",
+      "kind": "agent",
+      "label": "Releaser",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "brief",
+          "message": "Get main ready to release."
+        },
+        {
+          "id": "tests",
+          "action": "Bash",
+          "instruction": "Run the full test suite, then say how many tests failed as “N failed” on a line of its own."
+        },
+        {
+          "id": "red",
+          "if": {
+            "kind": "failed"
+          },
+          "then": [
+            {
+              "id": "fix",
+              "message": "The tests fail on main: find out why, and fix it. Then run the full test suite and end your reply with “N failed” on a line of its own, giving the number of tests that failed.",
+              "target": "fixer"
+            }
+          ]
+        },
+        {
+          "id": "green",
+          "if": {
+            "kind": "outputContains",
+            "text": "0 failed",
+            "wholeLine": true
+          },
+          "then": [
+            {
+              "id": "audit",
+              "action": "/security-review"
+            },
+            {
+              "id": "tag",
+              "message": "Tag the release and write its notes."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fixer",
+      "kind": "agent",
+      "label": "Fixer",
+      "position": {
+        "x": 360,
+        "y": 160
+      },
+      "agent": "Codex"
+    }
+  ],
+  "links": []
+}

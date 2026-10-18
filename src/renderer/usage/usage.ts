@@ -1,0 +1,134 @@
+import { USAGE_BACKENDS, WINDOW_NAMES } from '../../shared/usage';
+import type {
+  UsageAction,
+  UsageBackend,
+  UsageReading,
+  UsageRule,
+  UsageState,
+  UsageWindow,
+} from '../../shared/usage';
+import type { Connection } from '../../shared/session';
+import { AgentType, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+
+/*
+ * Usage readings and rules as the renderer shows and runs them (src/shared/usage.ts): which
+ * backend an agent spends, and how readings, holds and rules read.
+ */
+
+/**
+ * The backend whose usage limits an agent spends, which its usage rule applies to: its type's, if
+ * corrallm reads that backend's usage. An Agent SDK agent spends none: it runs on an API key
+ * (decided Oct 12, 2026), which has no usage windows.
+ */
+export function usageBackendOf(data: {
+  agent?: AgentType;
+  connection?: Connection;
+}): UsageBackend | undefined {
+  if (connectionOf(data) === 'sdk') return undefined;
+  return backendOfType(data.agent ?? DEFAULT_AGENT);
+}
+
+/** The backend an agent type is, if corrallm reads its usage. */
+export function backendOfType(agent: AgentType): UsageBackend | undefined {
+  return USAGE_BACKENDS.find((backend) => backend === agent);
+}
+
+/** The backends the agents on a canvas use (by their types), in the order backends are listed. */
+export function backendsOf(agents: readonly { agent?: AgentType }[]): UsageBackend[] {
+  const types = new Set(agents.map((data) => data.agent ?? DEFAULT_AGENT));
+  return USAGE_BACKENDS.filter((backend) => types.has(AgentType[backend]));
+}
+
+/** A backend's latest reading, if it has one. */
+export function readingOf(state: UsageState, backend: UsageBackend): UsageReading | undefined {
+  return state.readings.find((reading) => reading.backend === backend);
+}
+
+/** A share used, as a gauge shows it: "42%", or "<1%" for a little. */
+export function percentText(used: number): string {
+  if (used > 0 && used < 1) return '<1%';
+  return `${String(Math.round(used))}%`;
+}
+
+/**
+ * When a window resets, as a gauge says it: "3:40 PM" today, "Thu 9:00 AM" within a week, or the
+ * date further off (in `locale`'s way).
+ */
+export function resetTime(at: number, now: number, locale?: string): string {
+  const day = new Date(at);
+  const today = new Date(now);
+  const clock = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' })
+    .format(day)
+    // Some locales put a narrow no-break space before AM and PM.
+    .replace(/\s/gu, ' ');
+  if (day.toDateString() === today.toDateString()) return clock;
+  const days = (at - now) / 86_400_000;
+  const date =
+    days > 0 && days < 6.5
+      ? new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day)
+      : new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(day);
+  return `${date} ${clock}`;
+}
+
+/** How long ago a reading was taken: "just now", "4 min ago", "3 h ago", "2 days ago". */
+export function ageText(at: number, now: number): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${String(minutes)} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)} h ago`;
+  const days = Math.floor(hours / 24);
+  return `${String(days)} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** How a window is named on its own: "5-hour window". */
+export const windowText = (window: UsageWindow): string => `${WINDOW_NAMES[window]} window`;
+
+/** What each action of a usage rule is called, and what it does. */
+export const ACTION_INFO: Readonly<Record<UsageAction, { label: string; detail: string }>> = {
+  warn: { label: 'Warn me', detail: 'Say so in the agent’s session, and carry on' },
+  ask: {
+    label: 'Pause and ask me',
+    detail: 'Hold each agent before its next task until you say (Needs you)',
+  },
+  waitForReset: {
+    label: 'Finish the task, then wait for the reset',
+    detail: 'Let the task going on finish, then hold until the window resets',
+  },
+};
+
+/** A rule in words: "Over 80% of the 5-hour window: pause and ask me". */
+export function ruleText(rule: UsageRule): string {
+  const action = ACTION_INFO[rule.action].label;
+  return `Over ${String(rule.percent)}% of the ${windowText(rule.window)}: ${action.charAt(0).toLowerCase()}${action.slice(1)}`;
+}
+
+/**
+ * Where a usage rule holds an agent, before its next task (run/runner.ts AgentRun.usage): whose
+ * usage, which window, the rule's share, how much was used then and when the window resets.
+ */
+export interface UsageHold {
+  backend: UsageBackend;
+  window: UsageWindow;
+  /** The rule's share. */
+  percent: number;
+  /** The share used, by the reading that held it. */
+  used: number;
+  /** When the window resets (epoch ms), if the reading says. */
+  resetsAt: number | null;
+}
+
+/** What a usage rule's hold says: "Claude has used 84% of its 5-hour window (over 80%)". */
+export function holdText({ backend, window, percent, used }: UsageHold): string {
+  return `${backend} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
+}
+
+/**
+ * What a usage rule's warning says, in the agent's session: "Claude has used 84% of its 5-hour
+ * window (over 80%). It resets at 3:40 PM."
+ */
+export function warningText(hold: UsageHold, now: number, locale?: string): string {
+  const reset =
+    hold.resetsAt === null ? '' : ` It resets at ${resetTime(hold.resetsAt, now, locale)}.`;
+  return `${holdText(hold)}.${reset}`;
+}

@@ -1,0 +1,399 @@
+import path from 'node:path';
+
+import type { IpcArgs } from '../../shared/ipc';
+import { parseRole } from '../../shared/role';
+import {
+  MAX_DROPPED_FILES,
+  MAX_DROPPED_PATH,
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_INPUT,
+  MAX_TERMINAL_ROWS,
+} from '../../shared/terminal';
+import {
+  CLI_MODES,
+  CLIS,
+  CODEX_MODES,
+  CONNECTION_CLI,
+  CONNECTIONS,
+  ELICITATION_ACTIONS,
+  EFFORT_PATTERN,
+  IMAGE_TYPES,
+  MAX_ANSWER_LENGTH,
+  MAX_FILE_QUERY_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_IMAGE_BYTES,
+  MAX_FORM_FIELDS,
+  MAX_IMAGES,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MESSAGE_LENGTH,
+  MAX_QUESTIONS,
+  MCP_CHANGES,
+  MODEL_PATTERN,
+  PERMISSION_MODES,
+  PLAN_MODES,
+  REWIND_RESTORES,
+} from '../../shared/session';
+import type {
+  FormValue,
+  Cli,
+  MessageImage,
+  PlanAnswer,
+  SessionAnswer,
+  SessionMode,
+  SessionOptions,
+  UserMessage,
+} from '../../shared/session';
+import { isSessionId } from './id';
+
+/*
+ * Parsers for the session:* channels' arguments, which come from an untrusted renderer: each
+ * checks every value (type, length, allowed values) and builds the contract's tuple afresh, or
+ * throws. Nothing the renderer sent is passed on as it came.
+ */
+
+export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
+  const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
+  const { connection, model, mode, effort, role } = record(options, 'the session options', [
+    'connection',
+    'model',
+    'mode',
+    'effort',
+    'role',
+  ]);
+  const authoredRole = parseRole(role);
+  const connected = oneOf(connection, CONNECTIONS, 'connection');
+  const parsed: SessionOptions = {
+    connection: connected,
+    model: model === null ? null : parseModel(model),
+    // One of its CLI's modes, or null for the user's own.
+    mode:
+      mode === null
+        ? null
+        : oneOf(
+            mode,
+            CLI_MODES[CONNECTION_CLI[connected]],
+            `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
+          ),
+    ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
+    ...(authoredRole === undefined ? {} : { role: authoredRole }),
+  };
+  return [parseId(agentId, 'agent'), parsed];
+}
+
+/** How messages name each CLI. */
+const CLI_NAMES: Record<Cli, string> = { claude: 'Claude Code', codex: 'Codex' };
+
+export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
+  const [agentId, message] = expect(args, 2, 'an agent and a message');
+  const { id, text, images } = record(message, 'the message', ['id', 'text', 'images']);
+  const pasted = images === undefined ? [] : parseImages(images);
+  // A message may be only an image.
+  if (typeof text !== 'string' || (text.trim() === '' && pasted.length === 0)) {
+    throw new TypeError('Expected the message to have text');
+  }
+  if (text.length > MAX_MESSAGE_LENGTH) throw new RangeError('The message is too long');
+  const parsed: UserMessage = {
+    id: parseId(id, 'message'),
+    text,
+    ...(pasted.length === 0 ? {} : { images: pasted }),
+  };
+  return [parseId(agentId, 'agent'), parsed];
+}
+
+/** project:files: what to search the project folder's files for. */
+export function parseFilesArgs(args: unknown[]): IpcArgs<'project:files'> {
+  const [query] = expect(args, 1, 'what to search for');
+  if (typeof query !== 'string' || query.length > MAX_FILE_QUERY_LENGTH) {
+    throw new TypeError('Expected what to search for');
+  }
+  return [query];
+}
+
+/** The longest base64 an image of the largest size takes. */
+const MAX_IMAGE_BASE64 = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Images pasted into a message: a few, of the kinds Claude reads, base64-encoded, not too large. */
+function parseImages(value: unknown): MessageImage[] {
+  if (!Array.isArray(value) || value.length > MAX_IMAGES) {
+    throw new TypeError(`Expected at most ${String(MAX_IMAGES)} images`);
+  }
+  return value.map((image): MessageImage => {
+    const { mediaType, data } = record(image, 'an image', ['mediaType', 'data']);
+    if (
+      typeof data !== 'string' ||
+      data.length === 0 ||
+      data.length % 4 !== 0 ||
+      !BASE64.test(data)
+    ) {
+      throw new TypeError('Expected an image, base64-encoded');
+    }
+    if (data.length > MAX_IMAGE_BASE64) throw new RangeError('The image is too large');
+    return { mediaType: oneOf(mediaType, IMAGE_TYPES, 'kind of image'), data };
+  });
+}
+
+export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
+  const [agentId, promptId, answer] = expect(args, 3, 'an agent, a prompt and an answer');
+  return [parseId(agentId, 'agent'), parseId(promptId, 'prompt'), parseAnswer(answer)];
+}
+
+/** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
+/** session:options: one of the CLIs corrallm runs. */
+export function parseOptionsArgs(args: unknown[]): IpcArgs<'session:options'> {
+  const [cli] = expect(args, 1, 'a CLI');
+  return [oneOf(cli, CLIS, 'CLI')];
+}
+
+export function parseAgentArgs(args: unknown[]): [agentId: string] {
+  const [agentId] = expect(args, 1, 'an agent');
+  return [parseId(agentId, 'agent')];
+}
+
+/** session:fresh: which CLI's remembered conversation the agent should replace. */
+export function parseFreshArgs(args: unknown[]): IpcArgs<'session:fresh'> {
+  const [agentId, cli] = expect(args, 2, 'an agent and a CLI');
+  return [parseId(agentId, 'agent'), oneOf(cli, CLIS, 'CLI')];
+}
+
+/** terminal:input: an agent, and the keystrokes typed (any characters: they are keys). */
+export function parseTerminalInputArgs(args: unknown[]): IpcArgs<'terminal:input'> {
+  const [agentId, data] = expect(args, 2, 'an agent and what was typed');
+  if (typeof data !== 'string' || data === '' || data.length > MAX_TERMINAL_INPUT) {
+    throw new TypeError('Expected what was typed');
+  }
+  return [parseId(agentId, 'agent'), data];
+}
+
+/**
+ * terminal:drop: an agent, and the paths of the files dropped on its terminal (read from the files
+ * by the preload): a few, each absolute, not too long, with no control characters.
+ */
+export function parseTerminalDropArgs(args: unknown[]): IpcArgs<'terminal:drop'> {
+  const [agentId, paths] = expect(args, 2, 'an agent and the files dropped');
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_DROPPED_FILES) {
+    throw new TypeError(`Expected 1 to ${String(MAX_DROPPED_FILES)} files dropped`);
+  }
+  const files = paths.map((file: unknown) => {
+    if (
+      typeof file !== 'string' ||
+      file.length > MAX_DROPPED_PATH ||
+      !path.isAbsolute(file) ||
+      // eslint-disable-next-line no-control-regex
+      /[\u0000-\u001f\u007f]/.test(file)
+    ) {
+      throw new TypeError('Expected the path of a file dropped');
+    }
+    return file;
+  });
+  return [parseId(agentId, 'agent'), files];
+}
+
+/** terminal:resize: an agent, and its terminal's columns and rows. */
+export function parseTerminalResizeArgs(args: unknown[]): IpcArgs<'terminal:resize'> {
+  const [agentId, cols, rows] = expect(args, 3, 'an agent and a size');
+  const count = (value: unknown, max: number) => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
+      throw new TypeError(
+        `Expected a terminal size of up to ${String(MAX_TERMINAL_COLS)}×${String(MAX_TERMINAL_ROWS)}`,
+      );
+    }
+    return value;
+  };
+  return [
+    parseId(agentId, 'agent'),
+    count(cols, MAX_TERMINAL_COLS),
+    count(rows, MAX_TERMINAL_ROWS),
+  ];
+}
+
+/** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */
+export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
+  const [agentId, sessionId] = expect(args, 2, 'an agent and a conversation');
+  if (!isSessionId(sessionId)) {
+    throw new TypeError("Expected the conversation's id");
+  }
+  return [parseId(agentId, 'agent'), sessionId];
+}
+
+/** session:rewind-preview: an agent, and one of its messages. */
+export function parseRewindPreviewArgs(args: unknown[]): IpcArgs<'session:rewind-preview'> {
+  const [agentId, messageId] = expect(args, 2, 'an agent and a message');
+  return [parseId(agentId, 'agent'), parseId(messageId, 'message')];
+}
+
+/** session:rewind: an agent, one of its messages, and what to restore to before it. */
+export function parseRewindArgs(args: unknown[]): IpcArgs<'session:rewind'> {
+  const [agentId, messageId, restore] = expect(args, 3, 'an agent, a message and what to restore');
+  return [
+    parseId(agentId, 'agent'),
+    parseId(messageId, 'message'),
+    oneOf(restore, REWIND_RESTORES, 'thing to restore'),
+  ];
+}
+
+/** session:mcp-change: an agent, one of its MCP servers by name, and what to do to it. */
+export function parseMcpChangeArgs(args: unknown[]): IpcArgs<'session:mcp-change'> {
+  const [agentId, server, change] = expect(args, 3, 'an agent, an MCP server and a change');
+  if (
+    typeof server !== 'string' ||
+    server === '' ||
+    server.length > MAX_MCP_NAME_LENGTH ||
+    /\p{Cc}/u.test(server)
+  ) {
+    throw new TypeError('Expected the MCP server’s name');
+  }
+  return [parseId(agentId, 'agent'), server, oneOf(change, MCP_CHANGES, 'change to an MCP server')];
+}
+
+export function parseModeArgs(args: unknown[]): IpcArgs<'session:mode'> {
+  const [agentId, mode] = expect(args, 2, 'an agent and a mode');
+  return [parseId(agentId, 'agent'), parseMode(mode)];
+}
+
+export function parseModelArgs(args: unknown[]): IpcArgs<'session:model'> {
+  const [agentId, model] = expect(args, 2, 'an agent and a model');
+  return [parseId(agentId, 'agent'), parseModel(model)];
+}
+
+/** session:effort: an agent, and a reasoning effort (null: its model's default). */
+export function parseEffortArgs(args: unknown[]): IpcArgs<'session:effort'> {
+  const [agentId, effort] = expect(args, 2, 'an agent and a reasoning effort');
+  return [parseId(agentId, 'agent'), parseEffort(effort)];
+}
+
+/** session:stopTask: an agent, and the id of a task its session runs (main checks it does). */
+export function parseStopTaskArgs(args: unknown[]): IpcArgs<'session:stopTask'> {
+  const [agentId, taskId] = expect(args, 2, 'an agent and a task');
+  return [parseId(agentId, 'agent'), parseId(taskId, 'task')];
+}
+
+function parseAnswer(value: unknown): SessionAnswer {
+  const kind = isRecord(value) ? value.kind : undefined;
+  switch (kind) {
+    case 'permission': {
+      const { answer, feedback } = record(value, 'the answer', ['kind', 'answer', 'feedback']);
+      const given = oneOf(answer, ['once', 'always', 'deny'] as const, 'permission answer');
+      if (feedback === undefined) return { kind, answer: given };
+      // "No, and tell Claude what to do differently".
+      if (typeof feedback !== 'string' || feedback.length > MAX_ANSWER_LENGTH) {
+        throw new TypeError('Expected what to do instead, as text');
+      }
+      if (given !== 'deny') throw new TypeError('What to do instead goes only with a no');
+      return { kind, answer: given, feedback };
+    }
+    case 'question': {
+      const { answers } = record(value, 'the answer', ['kind', 'answers']);
+      if (
+        !Array.isArray(answers) ||
+        answers.length === 0 ||
+        answers.length > MAX_QUESTIONS ||
+        !answers.every((a): a is string => typeof a === 'string' && a.length <= MAX_ANSWER_LENGTH)
+      ) {
+        throw new TypeError('Expected an answer to each question');
+      }
+      return { kind, answers: [...answers] };
+    }
+    case 'plan': {
+      const { answer } = record(value, 'the answer', ['kind', 'answer']);
+      return { kind, answer: parsePlanAnswer(answer) };
+    }
+    case 'elicitation': {
+      const { action, values } = record(value, 'the answer', ['kind', 'action', 'values']);
+      const parsed = oneOf(action, ELICITATION_ACTIONS, 'answer to an MCP server');
+      return values === undefined
+        ? { kind, action: parsed }
+        : { kind, action: parsed, values: parseFormValues(values) };
+    }
+    default:
+      throw new TypeError('Expected a permission, question, plan or MCP server answer');
+  }
+}
+
+/**
+ * A form's values, by field: text, numbers, yes or no, or choices, within the limits. Whether they
+ * are what the form asks is the session's to check (it has the form).
+ */
+function parseFormValues(value: unknown): Record<string, FormValue> {
+  const fail = () => new TypeError('Expected the form’s values');
+  if (!isRecord(value)) throw fail();
+  const entries = Object.entries(value);
+  if (entries.length > MAX_FORM_FIELDS) throw fail();
+  const text = (item: unknown): item is string =>
+    typeof item === 'string' && item.length <= MAX_ANSWER_LENGTH;
+  return Object.fromEntries(
+    entries.map(([name, given]): [string, FormValue] => {
+      if (name === '' || name.length > MAX_ID_LENGTH) throw fail();
+      if (text(given) || typeof given === 'boolean') return [name, given];
+      if (typeof given === 'number' && Number.isFinite(given)) return [name, given];
+      if (Array.isArray(given) && given.length <= MAX_FORM_FIELDS && given.every(text)) {
+        return [name, [...given]];
+      }
+      throw fail();
+    }),
+  );
+}
+
+function parsePlanAnswer(value: unknown): PlanAnswer {
+  if (isRecord(value) && value.approve === true) {
+    const { mode } = record(value, 'the plan answer', ['approve', 'mode']);
+    return { approve: true, mode: oneOf(mode, PLAN_MODES, 'mode to carry out the plan in') };
+  }
+  const { approve, feedback } = record(value, 'the plan answer', ['approve', 'feedback']);
+  if (approve !== false || typeof feedback !== 'string' || feedback.length > MAX_ANSWER_LENGTH) {
+    throw new TypeError('Expected the plan approved, or what to change in it');
+  }
+  return { approve: false, feedback };
+}
+
+/** Any CLI's mode: the manager checks it is one of the running session's CLI. */
+function parseMode(value: unknown): SessionMode {
+  return oneOf<SessionMode>(value, [...PERMISSION_MODES, ...CODEX_MODES], 'mode');
+}
+
+/** A reasoning effort ('high'), or null for the model's default. */
+function parseEffort(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !EFFORT_PATTERN.test(value)) {
+    throw new TypeError('Expected a reasoning effort');
+  }
+  return value;
+}
+
+function parseModel(value: unknown): string {
+  if (typeof value !== 'string' || !MODEL_PATTERN.test(value)) {
+    throw new TypeError('Expected a model');
+  }
+  return value;
+}
+
+/** An id the renderer gives an agent, a message or a prompt: short, non-empty text. */
+function parseId(value: unknown, what: string): string {
+  if (typeof value !== 'string' || value === '' || value.length > MAX_ID_LENGTH) {
+    throw new TypeError(`Expected the ${what}'s id`);
+  }
+  return value;
+}
+
+function expect(args: unknown[], count: number, what: string): unknown[] {
+  if (args.length !== count) throw new TypeError(`Expected ${what}`);
+  return args;
+}
+
+/** `value` as an object with only the keys `keys` (any of them may be missing). */
+function record(value: unknown, what: string, keys: readonly string[]): Record<string, unknown> {
+  if (!isRecord(value) || !Object.keys(value).every((key) => keys.includes(key))) {
+    throw new TypeError(`Expected ${what}`);
+  }
+  return value;
+}
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: string): T {
+  const found = allowed.find((one) => one === value);
+  if (found === undefined) throw new TypeError(`Expected a ${what}: ${allowed.join(', ')}`);
+  return found;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

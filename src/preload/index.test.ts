@@ -1,27 +1,242 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppApi } from '../shared/ipc';
+import type { SessionEvent } from '../shared/session';
 
-const { exposeInMainWorld, invoke } = vi.hoisted(() => ({
+type Listener = (event: unknown, ...args: unknown[]) => void;
+const { exposeInMainWorld, invoke, on, removeListener, getPathForFile } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn<(key: string, api: unknown) => void>(),
   invoke: vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>(),
+  on: vi.fn<(channel: string, listener: Listener) => void>(),
+  removeListener: vi.fn<(channel: string, listener: Listener) => void>(),
+  getPathForFile: vi.fn<(file: File) => string>(),
 }));
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld },
-  ipcRenderer: { invoke },
+  ipcRenderer: { invoke, on, removeListener },
+  webUtils: { getPathForFile },
 }));
+
+// Each test loads the preload afresh: Vitest clears mock calls between tests.
+beforeEach(() => {
+  vi.resetModules();
+});
+
+/** The api the preload exposed. */
+async function exposed(): Promise<AppApi> {
+  await import('./index');
+  expect(exposeInMainWorld).toHaveBeenCalledOnce();
+  const [key, api] = exposeInMainWorld.mock.calls[0] ?? [];
+  expect(key).toBe('api');
+  return api as AppApi;
+}
 
 describe('preload', () => {
   it('exposes window.api, whose ping() invokes app:ping', async () => {
-    // Import inside the test: Vitest clears mock calls recorded at module load between tests.
-    await import('./index');
-
-    expect(exposeInMainWorld).toHaveBeenCalledOnce();
-    const [key, api] = exposeInMainWorld.mock.calls[0] ?? [];
-    expect(key).toBe('api');
+    const api = await exposed();
 
     invoke.mockResolvedValue('corrallm 0.1.0');
-    await expect((api as AppApi).ping()).resolves.toBe('corrallm 0.1.0');
+    await expect(api.ping()).resolves.toBe('corrallm 0.1.0');
     expect(invoke).toHaveBeenCalledWith('app:ping');
+
+    // The canvas file functions invoke their channels with their arguments.
+    await api.openCanvas();
+    expect(invoke).toHaveBeenLastCalledWith('canvas:open');
+    await api.saveCanvas('{}', true);
+    expect(invoke).toHaveBeenLastCalledWith('canvas:save', '{}', true);
+    await api.forgetCanvas();
+    expect(invoke).toHaveBeenLastCalledWith('canvas:forget');
+    await api.chooseProject();
+    expect(invoke).toHaveBeenLastCalledWith('project:choose');
+    await api.findProjectFiles('src/ma');
+    expect(invoke).toHaveBeenLastCalledWith('project:files', 'src/ma');
+  });
+
+  it('invokes the session channels with their arguments', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(null);
+    const options = { connection: 'sdk', model: null, mode: 'manual' } as const;
+    await api.startSession('a', options);
+    expect(invoke).toHaveBeenLastCalledWith('session:start', 'a', options);
+    await api.sendToSession('a', { id: 'm', text: 'Hi' });
+    expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
+    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
+    await api.sendToSession('a', { id: 'm2', text: '', images: [image] });
+    expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', {
+      id: 'm2',
+      text: '',
+      images: [image],
+    });
+    await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
+    expect(invoke).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
+      kind: 'permission',
+      answer: 'deny',
+    });
+    await api.interruptSession('a');
+    expect(invoke).toHaveBeenLastCalledWith('session:interrupt', 'a');
+    await api.setSessionMode('a', 'plan');
+    expect(invoke).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
+    await api.setSessionModel('a', 'opus');
+    expect(invoke).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
+    await api.setSessionEffort('a', 'high');
+    expect(invoke).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
+    await api.stopSessionTask('a', 'b1');
+    expect(invoke).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
+    await api.closeSession('a');
+    expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
+    await api.freshSession('a', 'codex');
+    expect(invoke).toHaveBeenLastCalledWith('session:fresh', 'a', 'codex');
+    await api.listSessions('a');
+    expect(invoke).toHaveBeenLastCalledWith('session:list', 'a');
+    await api.previewRewind('a', 'm');
+    expect(invoke).toHaveBeenLastCalledWith('session:rewind-preview', 'a', 'm');
+    await api.rewindSession('a', 'm', 'both');
+    expect(invoke).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
+    await api.mcpServers('a');
+    expect(invoke).toHaveBeenLastCalledWith('session:mcp', 'a');
+    await api.settingsOptions('claude');
+    expect(invoke).toHaveBeenLastCalledWith('session:options', 'claude');
+    await api.changeMcpServer('a', 'github', 'disable');
+    expect(invoke).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
+    await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
+    expect(invoke).toHaveBeenLastCalledWith(
+      'session:resume',
+      'a',
+      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
+    );
+  });
+
+  it('passes session events on without Electron’s event object, until told to stop', async () => {
+    const api = await exposed();
+    const heard = vi.fn<Parameters<AppApi['onSessionEvent']>[0]>();
+    const stop = api.onSessionEvent(heard);
+    const [channel, receive] = on.mock.calls[0] ?? [];
+    expect(channel).toBe('session:event');
+    if (!receive) throw new Error('not listening');
+
+    const event: SessionEvent = { type: 'status', status: 'working' };
+    receive({ sender: 'the ipcRenderer event' }, 'a', 'sdk', event);
+    expect(heard).toHaveBeenCalledWith('a', 'sdk', event);
+
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('session:event', receive);
+  });
+
+  it('invokes the terminal channels with their arguments', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(null);
+    await api.attachTerminal('a');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:attach', 'a');
+    await api.writeTerminal('a', 'ls\r');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:input', 'a', 'ls\r');
+    await api.resizeTerminal('a', 120, 40);
+    expect(invoke).toHaveBeenLastCalledWith('terminal:resize', 'a', 120, 40);
+    await api.detachTerminal('a');
+    expect(invoke).toHaveBeenLastCalledWith('terminal:detach', 'a');
+  });
+
+  it('asks main to open a link, with only its URL', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(true);
+    await expect(api.openLink('https://docs.example.com/a')).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
+  });
+
+  it('asks main to show a file:// link’s file in the file manager, with only the link', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(true);
+    await expect(api.revealFile('file:///work/app/notes.txt')).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('link:reveal', 'file:///work/app/notes.txt');
+  });
+
+  it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue(null);
+    const shot = new File(['png'], 'Screen Shot.png');
+    const made = new File(['made by the page'], 'made.txt');
+    getPathForFile.mockImplementation((file) => (file === shot ? '/Users/me/Screen Shot.png' : ''));
+    await api.dropOnTerminal('a', [shot, made]);
+    expect(invoke).toHaveBeenLastCalledWith('terminal:drop', 'a', ['/Users/me/Screen Shot.png']);
+    // Files that are not on disk (made by the page) name no path: nothing is sent.
+    invoke.mockClear();
+    await expect(api.dropOnTerminal('a', [made])).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('passes terminal events on without Electron’s event object, until told to stop', async () => {
+    const api = await exposed();
+    const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();
+    const stop = api.onTerminalEvent(heard);
+    const [channel, receive] = on.mock.calls[0] ?? [];
+    expect(channel).toBe('terminal:event');
+    if (!receive) throw new Error('not listening');
+
+    receive({ sender: 'the ipcRenderer event' }, 'a', { type: 'output', data: 'hi' });
+    expect(heard).toHaveBeenCalledWith('a', { type: 'output', data: 'hi' });
+
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
+  });
+
+  it('asks main which CLIs the user has', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue({ claude: true, codex: true });
+    await expect(api.installedClis()).resolves.toEqual({ claude: true, codex: true });
+    expect(invoke).toHaveBeenLastCalledWith('session:clis');
+  });
+
+  it('invokes the usage channels with their arguments', async () => {
+    const api = await exposed();
+    invoke.mockResolvedValue({ readings: [], rules: {} });
+    await expect(api.getUsage()).resolves.toEqual({ readings: [], rules: {} });
+    expect(invoke).toHaveBeenLastCalledWith('usage:get');
+    const rule = { window: 'weekly', percent: 90, action: 'warn' } as const;
+    await api.setUsageRule('Claude', rule);
+    expect(invoke).toHaveBeenLastCalledWith('usage:rule', 'Claude', rule);
+    const windows = { fiveHour: { usedPercent: 85, resetsAt: null } };
+    await api.simulateUsage('Claude', windows);
+    expect(invoke).toHaveBeenLastCalledWith('usage:simulate', 'Claude', windows);
+  });
+
+  it('passes usage changes on without Electron’s event object, until told to stop', async () => {
+    const api = await exposed();
+    const heard = vi.fn<Parameters<AppApi['onUsageChanged']>[0]>();
+    const stop = api.onUsageChanged(heard);
+    const [channel, receive] = on.mock.calls[0] ?? [];
+    expect(channel).toBe('usage:changed');
+    if (!receive) throw new Error('not listening');
+
+    const state = { readings: [], rules: {} };
+    receive({ sender: 'the ipcRenderer event' }, state);
+    expect(heard).toHaveBeenCalledWith(state);
+
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('usage:changed', receive);
+  });
+});
+
+describe('run persistence preload', () => {
+  it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
+    const api = await exposed();
+    const checkpoint = {
+      version: 1,
+      workflow: '{}',
+      state: '{}',
+      messages: '[]',
+      updatedAt: 1,
+    } as const;
+    await api.getRun();
+    expect(invoke).toHaveBeenLastCalledWith('run:get');
+    await api.saveRun('token', checkpoint);
+    expect(invoke).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
+    await api.runReady('request', null);
+    expect(invoke).toHaveBeenLastCalledWith('run:ready', 'request', null);
+    const listener = vi.fn();
+    const stop = api.onRunStopping(listener);
+    const call = on.mock.calls.find(([channel]) => channel === 'run:stopping');
+    call?.[1]({}, 'request');
+    expect(listener).toHaveBeenCalledWith('request');
+    stop();
+    expect(removeListener).toHaveBeenCalledWith('run:stopping', call?.[1]);
   });
 });

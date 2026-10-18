@@ -1,0 +1,1724 @@
+/* The agent view: almost the whole editor, over the blurred canvas: the agent's panel, its rail. */
+.agent-view {
+  position: absolute;
+  inset: 16px;
+  display: flex;
+  gap: 8px;
+  color: CanvasText;
+}
+
+.agent-view:focus {
+  outline: none;
+}
+
+.agent-panel {
+  position: relative;
+  /* Over the rail while it grows out of it or shrinks into it. */
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-top: 4px solid var(--agent-color, CanvasText);
+  border-radius: 16px;
+  background: Canvas;
+  box-shadow: 0 24px 64px color-mix(in srgb, black 25%, transparent);
+  /* AgentView animates it from and to a card: the agent's on the canvas, or one in the rail. */
+  transform-origin: 0 0;
+}
+
+.agent-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 14px;
+}
+
+/* Back, the agent's name, the lines it changed, its type. */
+.agent-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.agent-back {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.agent-back::before {
+  content: '←';
+}
+
+.agent-back:hover,
+.agent-back:focus-visible {
+  border-color: color-mix(in srgb, CanvasText 20%, transparent);
+  opacity: 1;
+}
+
+.agent-title {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.agent-title:hover,
+.agent-title:focus {
+  border-color: color-mix(in srgb, CanvasText 25%, transparent);
+}
+
+.agent-queues {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-queues:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-diff {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/*
+ * A Terminal agent's settings (Settings.tsx): what its CLI starts with, beside its chip, and the
+ * panel that chooses them.
+ */
+.agent-settings {
+  position: relative;
+  min-width: 0;
+}
+
+.agent-settings-button {
+  max-width: 300px;
+  padding: 4px 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-settings-button:hover,
+.agent-settings-button[aria-expanded='true'] {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-settings-panel {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+  font-size: 13px;
+}
+
+.agent-settings-title {
+  margin: 0 0 2px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.agent-settings-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-settings-problem {
+  margin: 0;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.agent-settings-restart {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 2px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  font-size: 12px;
+}
+
+.agent-settings-restart button {
+  padding: 2px 10px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: var(--graph-accent, #2563eb);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-settings-restart button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-added {
+  color: #16a34a;
+}
+
+.agent-removed {
+  color: #dc2626;
+}
+
+.agent-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-session {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-unavailable {
+  align-items: flex-start;
+  gap: 16px;
+  overflow: auto;
+  padding: 32px;
+}
+
+.agent-unavailable .agent-session-note {
+  max-width: 56ch;
+  margin: 0;
+  line-height: 1.5;
+  color: color-mix(in srgb, CanvasText 75%, Canvas);
+}
+
+.agent-unavailable > button {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-unavailable > button:hover {
+  background: color-mix(in srgb, CanvasText 5%, Canvas);
+}
+
+/* The agent's questions and queue, left of the session. */
+.agent-side {
+  flex-shrink: 0;
+  width: 340px;
+  overflow: auto;
+  padding: 16px;
+  border-right: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  background: color-mix(in srgb, CanvasText 2%, Canvas);
+}
+
+.agent-side .graph-detail-questions {
+  width: 100%;
+  margin: 0;
+}
+
+.agent-side-title {
+  margin: 20px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+/* The queue itself, not an if-then's steps inside it (those stay indented within their if-then). */
+.agent-side > .graph-queue {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* The transcript: one centred column, newest at the bottom. */
+.agent-transcript {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 24px max(24px, calc((100% - 760px) / 2));
+}
+
+.agent-empty {
+  margin: auto;
+  text-align: center;
+}
+
+.agent-empty p {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.agent-empty .agent-empty-note {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: normal;
+  opacity: 0.6;
+}
+
+.agent-user {
+  align-self: flex-end;
+  max-width: 80%;
+}
+
+.agent-user p {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, CanvasText 7%, Canvas);
+  white-space: pre-wrap;
+}
+
+.agent-text {
+  line-height: 1.6;
+}
+
+.agent-text p,
+.agent-text ul,
+.agent-text ol {
+  margin: 0 0 8px;
+}
+
+.agent-text ul,
+.agent-text ol {
+  padding-left: 22px;
+}
+
+.agent-text code,
+.agent-permission-summary {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-family: ui-monospace, monospace;
+  font-size: 0.92em;
+}
+
+.agent-thinking summary {
+  font-size: 13px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.agent-thinking p {
+  margin: 6px 0 0 14px;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* A tool call: one line, opening onto its diff or output. */
+.agent-tool > button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-tool > button:disabled {
+  cursor: default;
+}
+
+.agent-tool > button:enabled:hover {
+  background: color-mix(in srgb, CanvasText 6%, transparent);
+}
+
+.agent-tool-status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #16a34a;
+}
+
+.agent-tool[data-status='running'] .agent-tool-status {
+  background: var(--agent-color, #d97757);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+
+.agent-tool[data-status='failed'] .agent-tool-status {
+  background: #dc2626;
+}
+
+.agent-tool[data-status='interrupted'] .agent-tool-status {
+  background: color-mix(in srgb, CanvasText 35%, transparent);
+}
+
+.agent-tool-name {
+  font-weight: 600;
+}
+
+.agent-tool-summary {
+  overflow: hidden;
+  font-family: ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+/* How a tool call is going: how long it has run; what a subagent does, and has used. */
+.agent-tool-progress {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+/* A tool call running in the background: a Stop at the end of its line. */
+.agent-tool {
+  position: relative;
+}
+
+.agent-tool[data-background] > button {
+  padding-right: 64px;
+}
+
+.agent-tool-actions {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+
+.agent-tool-actions button,
+.agent-tasks button {
+  padding: 1px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-tool-actions button:hover,
+.agent-tasks button:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.agent-tool-detail {
+  margin: 4px 0 0 22px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-diff-lines [data-line='add'] {
+  color: #16a34a;
+}
+
+.agent-diff-lines [data-line='remove'] {
+  color: #dc2626;
+}
+
+/* A prompt: permission to run a tool, the agent's questions, a plan to approve. */
+.agent-permission,
+.agent-questions,
+.agent-plan {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--agent-color, CanvasText) 45%, transparent);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--agent-color, CanvasText) 6%, Canvas);
+}
+
+.agent-permission p,
+.agent-plan p {
+  margin: 6px 0;
+}
+
+:is(.agent-permission, .agent-plan) .agent-permission-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.agent-permission-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-permission-choices button {
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 8px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-permission-choices button:first-child {
+  border-color: transparent;
+  background: var(--agent-color, CanvasText);
+  color: white;
+}
+
+/* An answer's number: typing it answers, as in Claude Code. */
+.agent-key {
+  margin-right: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.agent-permission-instead {
+  margin-top: 8px;
+}
+
+.agent-permission-choices button:hover {
+  filter: brightness(0.95);
+}
+
+.agent-permission-answer {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+.agent-permission-answer code {
+  font-family: ui-monospace, monospace;
+}
+
+.agent-permission-answer[data-answer='deny'] {
+  color: #dc2626;
+  opacity: 0.85;
+}
+
+/* The agent's questions: corrallm's question cards, the first without its rule. */
+.agent-questions .graph-question:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.agent-questions .graph-question:last-child {
+  padding-bottom: 0;
+}
+
+.agent-plan-text {
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: Canvas;
+}
+
+.agent-plan .graph-question-reply {
+  margin-top: 8px;
+}
+
+/* A subagent's work, under the call that started it. */
+.agent-subagent {
+  margin-left: 18px;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+/* What a session tells the user: compaction, a retry, a usage limit, a login problem. */
+.agent-notice {
+  margin: 0;
+  padding: 6px 12px;
+  /* A command's output, a hook's error: their lines as written. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 3px solid color-mix(in srgb, CanvasText 30%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, CanvasText 4%, transparent);
+  font-size: 13px;
+}
+
+.agent-notice[data-level='warning'] {
+  border-left-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 10%, transparent);
+}
+
+.agent-notice[data-level='error'] {
+  border-left-color: #dc2626;
+  background: color-mix(in srgb, #dc2626 9%, transparent);
+}
+
+/* The connection a notice offers instead (Terminal, for an Agent SDK agent on a subscription). */
+.agent-notice-switch {
+  display: block;
+  margin-top: 8px;
+  padding: 3px 12px;
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 999px;
+  background: var(--graph-accent, #2563eb);
+  color: Canvas;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-notice-switch:hover {
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 82%, black);
+}
+
+.agent-end[data-failed] {
+  color: #dc2626;
+  opacity: 0.85;
+}
+
+/* Where /clear cleared the conversation: a rule across, saying so. */
+.agent-cleared {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.agent-cleared::before,
+.agent-cleared::after {
+  flex: 1;
+  border-top: 1px dashed color-mix(in srgb, CanvasText 40%, transparent);
+  content: '';
+}
+
+.agent-todos ul {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.agent-todos li::before {
+  display: inline-block;
+  width: 1.4em;
+  content: '○';
+}
+
+.agent-todos li[data-status='active']::before {
+  content: '◐';
+}
+
+.agent-todos li[data-status='done'] {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+
+.agent-todos li[data-status='done']::before {
+  content: '✓';
+}
+
+.agent-end,
+.agent-working {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+.agent-working {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.agent-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--agent-color, CanvasText);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+
+.agent-working-hint {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-spinner,
+  .agent-tool[data-status='running'] .agent-tool-status,
+  .agent-tasks-kind::before {
+    animation: none;
+  }
+}
+
+/* The composer: queued messages, then the box with mode, model and Send under it. */
+.agent-composer {
+  padding: 8px max(24px, calc((100% - 760px) / 2)) 18px;
+}
+
+/* The work a session runs in the background, above the box: each with a Stop. */
+.agent-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-tasks li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--agent-color, CanvasText) 35%, transparent);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.agent-tasks-kind {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
+.agent-tasks-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tasks-kind::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--agent-color, #d97757);
+  animation: agent-pulse 1s ease-in-out infinite;
+  content: '';
+}
+
+.agent-queued {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-queued li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.agent-queued button {
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-queued button::before {
+  content: '×';
+}
+
+.agent-input {
+  padding: 10px 12px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 16px;
+  background: Canvas;
+  box-shadow: 0 2px 8px color-mix(in srgb, black 6%, transparent);
+}
+
+.agent-input:focus-within {
+  border-color: color-mix(in srgb, var(--agent-color, CanvasText) 60%, transparent);
+}
+
+.agent-input textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2lh;
+  max-height: 12lh;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  field-sizing: content;
+  resize: none;
+}
+
+.agent-input-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.agent-choice {
+  position: relative;
+}
+
+/* What a connected session has used: its cost, and how full its context is. */
+.agent-usage {
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+.agent-choice > button {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-choice-menu {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 260px;
+  /* A connected session can offer many models. */
+  max-height: min(60vh, 480px);
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+}
+
+/* A menu that opens down (in a panel), from its button's right edge. */
+.agent-choice-menu[data-below] {
+  top: calc(100% + 6px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+.agent-choice-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-choice-menu button:hover,
+.agent-choice-menu button[aria-checked='true'] {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.agent-choice-detail {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.agent-send,
+.agent-stop {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--agent-color, CanvasText);
+  color: white;
+  cursor: pointer;
+}
+
+.agent-send::before {
+  font-size: 18px;
+  font-weight: 700;
+  content: '↑';
+}
+
+.agent-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.agent-stop::before {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  content: '';
+}
+
+/*
+ * What the queues' run holds the agent for the user to decide (an OK), right above the message box,
+ * amber like an agent asking on the canvas: what is written below answers it, or a choice.
+ */
+/* Bypassing permissions, picked from the mode menu: confirmed first. */
+.agent-bypass {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #dc2626 55%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #dc2626 8%, Canvas);
+  font-size: 13px;
+}
+
+.agent-bypass p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.agent-bypass button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-bypass button[data-danger] {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: white;
+}
+
+.agent-bypass button[data-danger]:hover {
+  background: color-mix(in srgb, #dc2626 80%, black);
+}
+
+/*
+ * A panel above the message box, in the accent colour: Terminal offered for a command only its
+ * terminal runs; the MCP servers (/mcp); a rewind to confirm.
+ */
+.agent-offer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 7%, Canvas);
+  font-size: 13px;
+}
+
+.agent-offer p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.agent-offer button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-offer button:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-offer button[data-primary] {
+  border-color: var(--graph-accent, #2563eb);
+  background: var(--graph-accent, #2563eb);
+  color: white;
+}
+
+.agent-offer button[data-primary]:hover {
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 82%, black);
+  color: white;
+}
+
+.agent-offer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-ok {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #f59e0b 60%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 10%, Canvas);
+  font-size: 13px;
+}
+
+.agent-ok button {
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-ok button:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.agent-ok button[data-primary] {
+  border-color: var(--queue-handoff, #22a35a);
+  background: var(--queue-handoff, #22a35a);
+  color: white;
+}
+
+.agent-ok button[data-primary]:hover {
+  background: color-mix(in srgb, var(--queue-handoff, #22a35a) 80%, black);
+  color: white;
+}
+
+.agent-ok button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-ok button:disabled:hover {
+  border-color: color-mix(in srgb, CanvasText 22%, transparent);
+  color: inherit;
+}
+
+/* What else typing below does while it asks (a slash command runs): a quieter line of its own. */
+.agent-ok-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Where there is no composer below (a Terminal agent's bar): the reply's own box, and its button. */
+.agent-ok-reply {
+  display: inline-flex;
+  flex: 1 1 260px;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.agent-ok-reply input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+}
+
+.agent-ok-reply input:focus-visible {
+  border-color: var(--graph-accent, #2563eb);
+  outline: none;
+}
+
+/* The queue's ⊕, right above the message box; its menus open upwards. */
+.agent-composer .graph-queue-add {
+  justify-content: flex-start;
+  margin: 0 0 6px;
+}
+
+.agent-composer .graph-queue-plus {
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+}
+
+.agent-composer .graph-queue-add.up .search-picker {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  transform: none;
+}
+
+/* The chat itself, as the queue's current item. */
+.agent-thread {
+  margin-top: 12px;
+  border-color: color-mix(in srgb, var(--agent-color, CanvasText) 45%, transparent);
+  background: color-mix(in srgb, var(--agent-color, CanvasText) 6%, Canvas);
+}
+
+.agent-thread-status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, CanvasText 35%, transparent);
+}
+
+.agent-thread:not([data-status='idle']) .agent-thread-status {
+  background: var(--agent-color, CanvasText);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+
+.agent-thread-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thread .agent-thread-status {
+    animation: none;
+  }
+}
+
+/*
+ * Another agent's queue right of this one, between it and the session, with a gap between the two
+ * queues for the lines that link them.
+ */
+.agent-body {
+  position: relative;
+}
+
+.agent-peer {
+  margin-left: 56px;
+  border-left: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.agent-peer-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-peer-header .agent-side-title {
+  margin: 0;
+}
+
+.agent-peer-hint {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* A wait whose target is being picked, and that target. */
+.graph-queue-wait.choosing,
+.graph-queue-waited.choosing {
+  border-color: var(--graph-accent, #2563eb);
+}
+
+.graph-queue-waited-pick {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-queue-waited-pick:hover {
+  color: var(--graph-accent, #2563eb);
+}
+
+/* The lines between the two queues. */
+.agent-links {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.agent-links path[data-link] {
+  fill: none;
+  stroke: var(--graph-accent, #2563eb);
+  stroke-width: 1.5;
+}
+
+.agent-links marker path {
+  fill: var(--graph-accent, #2563eb);
+}
+
+/* The rail, at the right edge: ⊕ for a new agent, then the stack of the others opened from here. */
+.agent-rail {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 14px;
+  align-items: center;
+  box-sizing: border-box;
+  width: 64px;
+  padding: 10px 0;
+  border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, Canvas 80%, transparent);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 16%, transparent);
+}
+
+/* The ⊕ over its ▾, one button split in two, in the colour of the agent a new one would be. */
+.agent-rail-new {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 44px;
+  border-radius: 12px;
+  background: var(--agent-color, CanvasText);
+  box-shadow: 0 2px 8px color-mix(in srgb, black 18%, transparent);
+  color: white;
+}
+
+.agent-rail-plus,
+.agent-rail-more {
+  display: grid;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-rail-plus {
+  height: 38px;
+  border-radius: 12px 12px 0 0;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.agent-rail-plus::before {
+  content: '+';
+}
+
+.agent-rail-more {
+  height: 16px;
+  border-top: 1px solid color-mix(in srgb, white 35%, transparent);
+  border-radius: 0 0 12px 12px;
+  font-size: 9px;
+}
+
+.agent-rail-more::before {
+  content: '▾';
+}
+
+.agent-rail-plus:hover,
+.agent-rail-more:hover,
+.agent-rail-more[aria-expanded='true'] {
+  background: color-mix(in srgb, white 18%, transparent);
+}
+
+.agent-rail-plus:focus-visible,
+.agent-rail-more:focus-visible,
+.agent-stack-card:focus-visible {
+  outline: 2px solid var(--graph-accent, #2563eb);
+  outline-offset: 2px;
+}
+
+/* Its menu opens to the left, over the panel. */
+.agent-rail .agent-choice-menu {
+  z-index: 2;
+  top: 0;
+  right: calc(100% + 12px);
+  bottom: auto;
+  left: auto;
+  min-width: 220px;
+  color: CanvasText;
+}
+
+/* The stack: each agent a small card, like its panel minimized, the most recent on top. */
+.agent-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  margin: 0;
+  /* Room for the cards' shadows and focus rings, which it would clip as it scrolls. */
+  padding: 4px 8px 8px;
+  overflow: auto;
+  list-style: none;
+}
+
+.agent-stack-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 48px;
+  height: 56px;
+  padding: 6px 4px 4px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-top: 3px solid var(--agent-color, CanvasText);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 2px 6px color-mix(in srgb, black 12%, transparent);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-stack-card:hover {
+  border-color: color-mix(in srgb, var(--agent-color, CanvasText) 60%, transparent);
+  border-top-color: var(--agent-color, CanvasText);
+}
+
+.agent-stack-name {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* A dot in its corner while its session works. */
+.agent-stack-status {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--agent-color, CanvasText);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+
+.agent-stack-card[data-status='waiting'] .agent-stack-status {
+  background: #f59e0b;
+}
+
+.agent-stack-card[data-status='idle'] .agent-stack-status {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-stack-status {
+    animation: none;
+  }
+}
+
+/* What the composer completes: slash commands, and files to mention, above the box. */
+.agent-input {
+  position: relative;
+}
+
+.agent-completions {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+}
+
+.agent-completions [role='option'] {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-completions [role='option'][aria-selected='true'],
+.agent-completions [role='option']:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.agent-completion-label {
+  flex: none;
+  font-family: ui-monospace, monospace;
+}
+
+.agent-completion-detail {
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+/* Images pasted into a message: in the box before it goes, then in the transcript. */
+.agent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-attachments li {
+  position: relative;
+}
+
+.agent-attachments img,
+.agent-user-images img {
+  display: block;
+  max-width: 160px;
+  max-height: 120px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.agent-attachments button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: CanvasText;
+  color: Canvas;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.agent-attachments button::before {
+  content: '×';
+}
+
+.agent-attachment-problem {
+  margin: 0 0 6px;
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.agent-user-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.agent-queued-images {
+  opacity: 0.7;
+}
+
+/* Markdown in replies: headings, code blocks, quotes, tables, rules. */
+.agent-text .agent-md-heading {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.agent-text h3.agent-md-heading {
+  font-size: 17px;
+}
+
+.agent-text .agent-md-code {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, CanvasText 6%, transparent);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-text .agent-md-code code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.agent-text blockquote {
+  margin: 0 0 8px;
+  padding: 0 0 0 12px;
+  border-left: 3px solid color-mix(in srgb, CanvasText 20%, transparent);
+  opacity: 0.85;
+}
+
+.agent-text hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+}
+
+.agent-text li > ul,
+.agent-text li > ol {
+  margin: 2px 0;
+}
+
+.agent-text a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, CanvasText 40%, transparent);
+}
+
+.agent-md-table {
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.agent-md-table table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agent-md-table th,
+.agent-md-table td {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+}
+
+.agent-md-table th {
+  background: color-mix(in srgb, CanvasText 5%, transparent);
+  font-weight: 600;
+}
+
+/* /resume's picker: the search field and its list, as wide as the composer. */
+.agent-resume .search-picker {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}
+
+/* /mcp: its servers, a row each: the name, how it is, what can be done to it. */
+.agent-mcp-servers {
+  display: grid;
+  flex-basis: 100%;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-mcp-servers li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.agent-mcp-name {
+  font-weight: 600;
+}
+
+.agent-mcp-status {
+  opacity: 0.75;
+}
+
+.agent-mcp-status[data-status='failed'] {
+  color: #dc2626;
+  opacity: 1;
+}
+
+.agent-mcp-status[data-status='needs-auth'] {
+  color: #b45309;
+  opacity: 1;
+}
+
+.agent-mcp-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* An MCP server's form, in the transcript: a field a line, its label above it. */
+.agent-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+
+.agent-form-field legend {
+  padding: 0;
+}
+
+.agent-form-field input,
+.agent-form-field select {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 6px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+}
+
+.agent-form-check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.agent-form-note {
+  flex-basis: 100%;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.agent-form .agent-permission-choices button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* "Rewind to here", under each of the user's messages: shown where the pointer or keyboard is. */
+.agent-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.agent-rewind-here {
+  margin-top: 2px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.agent-user:hover .agent-rewind-here,
+.agent-rewind-here:focus-visible {
+  opacity: 0.65;
+}
+
+.agent-rewind-here:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+  opacity: 1;
+}
+
+/* Which message to rewind to: the search field and its list, as wide as the composer. */
+.agent-rewind .search-picker {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}

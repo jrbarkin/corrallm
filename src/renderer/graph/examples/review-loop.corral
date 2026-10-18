@@ -1,0 +1,81 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "coder",
+      "kind": "agent",
+      "label": "Coder",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "work",
+          "repeat": [
+            {
+              "id": "implement",
+              "message": "Implement the feature described in ISSUE.md, with tests. If REVIEW.md is there, fix what it asks for first."
+            },
+            {
+              "id": "reviewed",
+              "waitFor": [
+                {
+                  "agent": "reviewer",
+                  "item": "review"
+                }
+              ]
+            }
+          ],
+          "until": {
+            "kind": "repeatEnds",
+            "agent": "reviewer",
+            "item": "reviewing"
+          },
+          "rounds": 3,
+          "otherwise": "goOn"
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "kind": "agent",
+      "label": "Reviewer",
+      "position": {
+        "x": 360,
+        "y": 160
+      },
+      "agent": "Codex",
+      "queue": [
+        {
+          "id": "reviewing",
+          "repeat": [
+            {
+              "id": "ready",
+              "waitFor": [
+                {
+                  "agent": "coder",
+                  "item": "implement"
+                }
+              ]
+            },
+            {
+              "id": "review",
+              "message": "Review the change: look for bugs and missing tests. If nothing must change, say APPROVED on a line of its own; otherwise write what must change to REVIEW.md and say NOT APPROVED on a line of its own."
+            }
+          ],
+          "until": {
+            "kind": "outputContains",
+            "text": "APPROVED",
+            "wholeLine": true
+          },
+          "rounds": 3,
+          "otherwise": "ask"
+        }
+      ]
+    }
+  ],
+  "links": []
+}

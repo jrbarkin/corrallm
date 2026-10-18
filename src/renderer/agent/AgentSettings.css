@@ -1,0 +1,139 @@
+.agent-settings-summary {
+  min-width: 0;
+  max-width: 360px;
+}
+
+.agent-settings-summary .agent-settings-button {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #0008;
+  backdrop-filter: blur(3px);
+}
+
+.agent-settings-sheet {
+  box-sizing: border-box;
+  width: min(480px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 14px;
+  color: CanvasText;
+  background: Canvas;
+  box-shadow: 0 24px 80px #0008;
+  font-size: 13px;
+}
+
+.agent-settings-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.agent-settings-sheet h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.agent-settings-close {
+  border: 0;
+  padding: 0 5px;
+  color: color-mix(in srgb, CanvasText 60%, transparent);
+  background: transparent;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.agent-settings-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+  font-weight: 500;
+}
+
+.agent-settings-field input,
+.agent-settings-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 6px;
+  padding: 10px;
+  color: inherit;
+  background: color-mix(in srgb, CanvasText 3%, Canvas);
+  font: inherit;
+  font-weight: 400;
+}
+
+.agent-settings-field textarea {
+  min-height: 110px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.agent-settings-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-settings-help {
+  margin: -6px 0 20px;
+  color: color-mix(in srgb, CanvasText 60%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-settings-connection + .agent-settings-help {
+  margin-top: 9px;
+}
+
+.agent-settings-fields {
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.agent-settings-fields .agent-settings-row {
+  margin-top: 12px;
+}
+
+.agent-settings-pending {
+  margin-top: 20px;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  padding-top: 8px;
+  color: CanvasText;
+  line-height: 1.5;
+}
+
+.agent-settings-pending button {
+  border: 1px solid var(--graph-accent, #2563eb);
+  border-radius: 5px;
+  padding: 6px 10px;
+  color: inherit;
+  background: color-mix(in srgb, var(--graph-accent, #2563eb) 8%, Canvas);
+  cursor: pointer;
+}
+
+.agent-settings-pending button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.agent-settings-sheet :focus-visible {
+  outline: 2px solid var(--graph-accent, #2563eb);
+  outline-offset: 2px;
+}

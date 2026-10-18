@@ -1,0 +1,496 @@
+/*
+ * All queues, task by task: each lane a pane of its agent's queue (the queue's own rows, edited in
+ * place), with ribbons in the gaps between the lanes joining tasks that sit in front of each other.
+ */
+.queues-problem {
+  margin: 6px 0;
+  font-size: 0.85em;
+  font-weight: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.queues-view {
+  --queues-wait: var(--queue-wait);
+  --queues-handoff: var(--queue-handoff);
+  --queues-stuck: var(--queue-stuck);
+  --queues-held: color-mix(in srgb, CanvasText 45%, Canvas);
+  --queues-asking: #f59e0b;
+
+  position: absolute;
+  inset: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 16px;
+  background: Canvas;
+  box-shadow: 0 24px 64px color-mix(in srgb, black 25%, transparent);
+  color: CanvasText;
+  font-size: 14px;
+}
+
+.queues-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Run (a ▶) or Stop (a ■), and how the run is going. */
+.queues-run {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.queues-run::before {
+  width: 0;
+  height: 0;
+  border-block: 5px solid transparent;
+  border-left: 8px solid currentcolor;
+  content: '';
+}
+
+.queues-run[data-running]::before {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 1px;
+  background: currentcolor;
+}
+
+.queues-run:hover {
+  border-color: var(--graph-accent, #2563eb);
+  color: var(--graph-accent, #2563eb);
+}
+
+.queues-run-status {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.queues-legend {
+  display: flex;
+  gap: 16px;
+  margin: 0 0 0 auto;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.queues-key::before {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 1px solid var(--mark);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--mark) 25%, transparent);
+  content: '';
+}
+
+.queues-choosing {
+  margin: 0;
+  padding: 8px 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--queues-wait) 30%, transparent);
+  background: color-mix(in srgb, var(--queues-wait) 10%, Canvas);
+  font-size: 13px;
+}
+
+.queues-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+  padding: 0 28px 16px;
+}
+
+.queues-empty {
+  opacity: 0.6;
+}
+
+.queues-grid {
+  display: grid;
+  flex: 1 0 auto;
+  row-gap: 10px;
+}
+
+/* Layers, bottom up: lanes and where agents wait; ribbons; tasks; the heads, kept in view. */
+.queues-lane,
+.queues-idle {
+  position: relative;
+  z-index: 0;
+}
+
+.queues-gap {
+  position: relative;
+  z-index: 1;
+}
+
+.queues-cell,
+.queues-end-cell {
+  position: relative;
+  z-index: 2;
+  align-self: start;
+  min-width: 0;
+}
+
+/* A dropdown open in a task shows over the tasks below. */
+.queues-cell:focus-within,
+.queues-end-cell:focus-within {
+  z-index: 4;
+}
+
+.queues-head {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+}
+
+/* A lane: a pane a little wider than its tasks, so ribbons leave from their sides. */
+.queues-lane {
+  margin: 0 -12px;
+  border-radius: 0 0 12px 12px;
+  background: color-mix(in srgb, CanvasText 3%, transparent);
+}
+
+.queues-lane[data-focus] {
+  outline: 2px solid color-mix(in srgb, var(--graph-accent, #2563eb) 45%, transparent);
+}
+
+.queues-lane[data-picking] {
+  outline: 2px solid color-mix(in srgb, var(--queues-wait) 55%, transparent);
+}
+
+.queues-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 -12px;
+  padding: 14px 14px 8px;
+  border-bottom: 3px solid var(--agent-color, CanvasText);
+  background: Canvas;
+  box-shadow: 0 -16px 0 Canvas;
+}
+
+.queues-head button {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.queues-head button:hover {
+  color: var(--graph-accent, #2563eb);
+}
+
+.queues-status {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, CanvasText 30%, transparent);
+}
+
+.queues-head:not([data-status='idle']) .queues-status {
+  background: var(--agent-color, CanvasText);
+}
+
+.queues-head[data-run='running'] .queues-status {
+  background: var(--graph-accent, #2563eb);
+  animation: queues-blink 1.2s ease-in-out infinite;
+}
+
+.queues-head[data-run='waiting'] .queues-status {
+  background: var(--queues-held);
+  animation: queues-blink 2.4s ease-in-out infinite;
+}
+
+.queues-head[data-run='done'] .queues-status {
+  background: var(--queues-handoff);
+}
+
+.queues-head[data-run='asking'] .queues-status {
+  background: var(--queues-asking);
+  animation: queues-blink 1.2s ease-in-out infinite;
+}
+
+/* Stopped at an OK, or waiting on what was: grey, and still. */
+.queues-head[data-run='stopped'] .queues-status {
+  background: var(--queues-held);
+}
+
+/* The native connection or unavailable connector status. */
+.queues-connection {
+  flex: none;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--agent-color, CanvasText);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+/*
+ * An agent the run needs: it waits for the user's decision (an OK), which this takes them to; or
+ * it asks permission, which opening the agent answers.
+ */
+.queues-head .queues-needs {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 9px;
+  border: 1px solid var(--queues-asking);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--queues-asking) 14%, Canvas);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.queues-head .queues-needs:hover {
+  background: color-mix(in srgb, var(--queues-asking) 28%, Canvas);
+}
+
+/* Why the agent's session would not start, on a line of its own, and the switch that gets past it. */
+.queues-head:has(.queues-refused) {
+  flex-wrap: wrap;
+}
+
+.queues-refused {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--queues-asking);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--queues-asking) 10%, Canvas);
+  font-size: 12px;
+}
+
+.queues-refused p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.queues-head .queues-refused button {
+  padding: 2px 10px;
+  border: 1px solid var(--queues-asking);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--queues-asking) 22%, Canvas);
+  font-size: 12px;
+}
+
+.queues-head .queues-refused button:hover {
+  color: inherit;
+  background: color-mix(in srgb, var(--queues-asking) 36%, Canvas);
+}
+
+/* Tasks: every queue's own cards (GraphEditor.css); a lane's end sits at the top of its row. */
+.queues-cell.dragging :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat) {
+  box-shadow: 0 6px 18px color-mix(in srgb, black 18%, transparent);
+}
+
+.queues-end-cell .graph-queue-end {
+  margin-top: 0;
+}
+
+.queues-end-cell .graph-queue-plus:not(:hover, :focus-visible, [aria-expanded='true']) {
+  opacity: 0.5;
+}
+
+/*
+ * A repeat: one cell over the rows of what it holds. The cell, its card and the list in it are
+ * subgrids of the lanes' rows, so each item it holds sits in the row lanes.ts gives it, level with
+ * the other lanes (ribbons meet it there); its ⊕ sits in the card's foot.
+ */
+.queues-cell[data-repeat],
+.queues-cell[data-repeat] > .graph-queue-repeat,
+.queues-cell[data-repeat] .graph-queue-rounds {
+  display: grid;
+  grid-template-rows: subgrid;
+  row-gap: normal;
+}
+
+.queues-cell[data-repeat] > .graph-queue-repeat {
+  grid-row: 1 / -1;
+  padding-bottom: 38px;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat-head {
+  grid-row: 1;
+  align-self: start;
+}
+
+.queues-cell[data-repeat] .graph-queue-rounds {
+  grid-row: 2 / -1;
+  margin-top: 0;
+}
+
+.queues-cell[data-repeat] .graph-queue-rounds > li {
+  align-self: start;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat > .graph-queue-add {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  margin: 0;
+  transform: translateX(-50%);
+}
+
+/* Who goes round with it, above its ⊕. */
+.queues-cell[data-repeat] > .graph-queue-repeat:has(> .graph-queue-repeat-foot) {
+  padding-bottom: 74px;
+}
+
+.queues-cell[data-repeat] .graph-queue-repeat > .graph-queue-repeat-foot {
+  position: absolute;
+  right: 14px;
+  bottom: 36px;
+  left: 28px;
+  margin: 0;
+}
+
+/* Where an agent has nothing to do, waiting: its stripes run while the run holds it there. */
+.queues-idle {
+  border-radius: 10px;
+  background: linear-gradient(
+      -45deg,
+      transparent 0 46%,
+      color-mix(in srgb, CanvasText 9%, transparent) 46% 54%,
+      transparent 54%
+    )
+    0 0 / 10px 10px;
+}
+
+.queues-idle[data-held] {
+  background-image: linear-gradient(
+    -45deg,
+    transparent 0 42%,
+    color-mix(in srgb, var(--queues-held) 40%, transparent) 42% 58%,
+    transparent 58%
+  );
+  animation: queues-stripes 0.8s linear infinite;
+}
+
+/* Ribbons: filled, with their top and bottom edges drawn; flowing while their wait is held. */
+.queues-gap svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.queues-ribbon {
+  fill: color-mix(in srgb, var(--mark) 20%, transparent);
+}
+
+.queues-ribbon-edges {
+  fill: none;
+  stroke: color-mix(in srgb, var(--mark) 75%, transparent);
+  stroke-width: 1;
+}
+
+.queues-ribbon-arrow {
+  fill: var(--mark);
+}
+
+/* A wait with a time limit may go on without what it waits for: its ribbon's edges are dashed. */
+.queues-gap g[data-timed] .queues-ribbon-edges {
+  stroke-dasharray: 6 4;
+}
+
+.queues-gap g[data-flow] .queues-ribbon {
+  animation: queues-breathe 1.8s ease-in-out infinite;
+}
+
+.queues-gap g[data-flow] .queues-ribbon-edges {
+  stroke-dasharray: 5 4;
+  animation: queues-flow 0.9s linear infinite;
+}
+
+/* Pointing at a task or a ribbon shows its links over the rest. */
+.queues-grid[data-pointing] .queues-gap g:not([data-active]) {
+  opacity: 0.15;
+}
+
+.queues-grid[data-pointing] .queues-gap g[data-active] .queues-ribbon {
+  fill: color-mix(in srgb, var(--mark) 34%, transparent);
+}
+
+.queues-grid[data-pointing] [data-at][data-active] {
+  outline: 2px solid color-mix(in srgb, CanvasText 40%, transparent);
+  outline-offset: 1px;
+}
+
+@keyframes queues-blink {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+
+@keyframes queues-stripes {
+  to {
+    background-position: 10px 0;
+  }
+}
+
+@keyframes queues-breathe {
+  50% {
+    fill: color-mix(in srgb, var(--mark) 38%, transparent);
+  }
+}
+
+@keyframes queues-flow {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queues-view *,
+  .queues-view *::after {
+    animation: none !important;
+  }
+}
+
+.queues-head:has(.agent-settings-summary) {
+  flex-wrap: wrap;
+}
+
+.queues-head > .agent-settings-summary {
+  flex: 0 0 100%;
+  order: 2;
+  max-width: 100%;
+}
+
+.queues-head .agent-settings-summary button {
+  max-width: 100%;
+  color: color-mix(in srgb, CanvasText 65%, transparent);
+  font-size: 11px;
+  font-weight: 400;
+}

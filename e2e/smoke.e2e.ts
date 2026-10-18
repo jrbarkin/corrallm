@@ -1,8 +1,12 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+import { expect, test } from '@playwright/test';
+
+import { launchApp } from './launch';
 
 test('launches, renders the window and round-trips app:ping', async () => {
-  // '.' resolves package.json "main" (.vite/build/main.cjs).
-  const app = await electron.launch({ args: ['.'] });
+  const { app, close } = await launchApp();
   try {
     const page = await app.firstWindow();
 
@@ -20,7 +24,18 @@ test('launches, renders the window and round-trips app:ping', async () => {
       process: 'process' in globalThis,
     }));
     expect(leaked).toEqual({ require: false, process: false });
+
+    // The window under test stays hidden: it never pops up on screen or meets the real mouse.
+    expect(
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().map((window) => window.isVisible()),
+      ),
+    ).toEqual([false]);
+
+    // A throwaway profile: state the real app saved (such as a page zoom) must not leak in.
+    const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'));
+    expect(userData.startsWith(realpathSync(tmpdir()))).toBe(true);
   } finally {
-    await app.close();
+    await close();
   }
 });

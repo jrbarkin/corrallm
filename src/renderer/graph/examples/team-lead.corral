@@ -1,0 +1,109 @@
+{
+  "format": "corrallm",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "planner",
+      "kind": "agent",
+      "label": "Planner",
+      "position": {
+        "x": 210,
+        "y": 0
+      },
+      "agent": "Claude",
+      "queue": [
+        {
+          "id": "plan",
+          "message": "Write a plan for moving the app to the new API, in PLAN.md."
+        },
+        {
+          "id": "approved",
+          "approve": "the plan in PLAN.md"
+        },
+        {
+          "id": "brief",
+          "message": "Carry out PLAN.md with your team.",
+          "target": "lead"
+        }
+      ]
+    },
+    {
+      "id": "lead",
+      "kind": "agent",
+      "label": "Lead",
+      "position": {
+        "x": 0,
+        "y": 140
+      },
+      "agent": "Claude",
+      "color": 1,
+      "queue": [
+        {
+          "id": "go",
+          "waitFor": [
+            {
+              "agent": "planner",
+              "item": "brief"
+            }
+          ]
+        },
+        {
+          "id": "split",
+          "message": "Read PLAN.md. Frontend will build the screens, Backend the API changes, and Tester the end-to-end tests."
+        },
+        {
+          "id": "ui",
+          "message": "Build the screens PLAN.md describes.",
+          "target": "frontend"
+        },
+        {
+          "id": "api",
+          "message": "Build the API changes PLAN.md describes.",
+          "target": "backend"
+        },
+        {
+          "id": "e2e",
+          "message": "Write end-to-end tests for what PLAN.md describes.",
+          "target": "tester"
+        },
+        {
+          "id": "check",
+          "message": "Check Frontend's, Backend's and Tester's work against PLAN.md, and report any gaps."
+        }
+      ]
+    },
+    {
+      "id": "frontend",
+      "kind": "agent",
+      "label": "Frontend",
+      "position": {
+        "x": 20,
+        "y": 69
+      },
+      "parent": "lead",
+      "agent": "Codex"
+    },
+    {
+      "id": "backend",
+      "kind": "agent",
+      "label": "Backend",
+      "position": {
+        "x": 210,
+        "y": 69
+      },
+      "parent": "lead",
+      "agent": "Claude"
+    },
+    {
+      "id": "tester",
+      "kind": "agent",
+      "label": "Tester",
+      "position": {
+        "x": 400,
+        "y": 69
+      },
+      "parent": "lead"
+    }
+  ],
+  "links": []
+}

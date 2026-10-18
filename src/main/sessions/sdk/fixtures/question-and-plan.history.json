@@ -1,0 +1,419 @@
+[
+  {
+    "type": "user",
+    "uuid": "f3528ad6-09b1-4552-a06c-41c82d613e0e",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": "First use the AskUserQuestion tool to ask me whether the new file should be named a.txt or b.txt. Then write a one-step plan to create that file containing the word hi, and present the plan for approval. After approval, do it. Keep replies very short."
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:17.318Z",
+    "origin": {
+      "kind": "human"
+    }
+  },
+  {
+    "type": "assistant",
+    "uuid": "f111863d-68b2-4a81-96da-e0f8dd2a9ee7",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfyhTmMTxHDAr7DJRSx1X",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01KfF8V1ijeyNsPd8vxDjdCn",
+          "name": "AskUserQuestion",
+          "input": {
+            "questions": [
+              {
+                "question": "Should the new file be named a.txt or b.txt?",
+                "header": "File name",
+                "multiSelect": false,
+                "options": [
+                  {
+                    "label": "a.txt",
+                    "description": "Create a.txt"
+                  },
+                  {
+                    "label": "b.txt",
+                    "description": "Create b.txt"
+                  }
+                ]
+              }
+            ]
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:20.442Z"
+  },
+  {
+    "type": "user",
+    "uuid": "69f677cd-7639-48e1-b2ec-e3de92bcb296",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "content": "Your questions have been answered: \"Should the new file be named a.txt or b.txt?\"=\"a.txt\". You can now continue with these answers in mind.",
+          "tool_use_id": "toolu_01KfF8V1ijeyNsPd8vxDjdCn"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:20.478Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "eddae060-c979-4093-aa80-4dacba8d5438",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfyhU25VBV8MbSViG2Gjw",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "Since I'm in plan mode, I should write the plan file first, then look up ExitPlanMode via tool search before calling it.\n\n",
+          "signature": "signature"
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:23.853Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "64e2bd8a-ca17-4f37-91b6-ab03cbba0b14",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfyhU25VBV8MbSViG2Gjw",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01GsZnhYsTW185yxN7NmV8qQ",
+          "name": "Write",
+          "input": {
+            "file_path": "/home/user/.claude/plans/first-use-the-askuserquestion-validated-sunset.md",
+            "content": "# Plan\n\n## Context\nCreate a new file `a.txt` (name chosen by user) containing the word \"hi\".\n\n## Step\n1. Create `/home/user/shop/a.txt` with content `hi`.\n\n## Verification\nRead the file back and confirm it contains `hi`.\n"
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:23.866Z"
+  },
+  {
+    "type": "user",
+    "uuid": "013ee8cd-ad4d-4746-b1db-e8e7363909cf",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_01GsZnhYsTW185yxN7NmV8qQ",
+          "type": "tool_result",
+          "content": "File created successfully at: /home/user/.claude/plans/first-use-the-askuserquestion-validated-sunset.md (file state is current in your context — no need to Read it back)"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:23.907Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "1bb46cab-43c1-40c0-8d6b-d5e70df9733c",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfyhU25VBV8MbSViG2Gjw",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01LoSkc6ycypQnMxkC6JZHjW",
+          "name": "ToolSearch",
+          "input": {
+            "query": "select:ExitPlanMode",
+            "max_results": 1
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:23.945Z"
+  },
+  {
+    "type": "user",
+    "uuid": "aa7f075a-43eb-4ff0-b9ce-16e0eb5e73cb",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01LoSkc6ycypQnMxkC6JZHjW",
+          "content": [
+            {
+              "type": "tool_reference",
+              "tool_name": "ExitPlanMode"
+            }
+          ]
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:23.967Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "9265203a-cc31-4646-a69f-58b1ec7c096d",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfyhUHA6TaksugPGXmFBn",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_014GtCEwwsqinMn1txjtWDeb",
+          "name": "ExitPlanMode",
+          "input": {
+            "plan": "# Plan\n\n## Context\nCreate a new file `a.txt` (name chosen by user) containing the word \"hi\".\n\n## Step\n1. Create `/home/user/shop/a.txt` with content `hi`.\n\n## Verification\nRead the file back and confirm it contains `hi`.\n",
+            "planFilePath": "/home/user/.claude/plans/first-use-the-askuserquestion-validated-sunset.md"
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:25.591Z"
+  },
+  {
+    "type": "user",
+    "uuid": "bf2f443c-b657-48bd-b175-41054b8546aa",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "content": "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: /home/user/.claude/plans/first-use-the-askuserquestion-validated-sunset.md\nYou can refer back to it if needed during implementation.\n\n## Approved Plan:\n# Plan\n\n## Context\nCreate a new file `a.txt` (name chosen by user) containing the word \"hi\".\n\n## Step\n1. Create `/home/user/shop/a.txt` with content `hi`.\n\n## Verification\nRead the file back and confirm it contains `hi`.\n",
+          "tool_use_id": "toolu_014GtCEwwsqinMn1txjtWDeb"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:25.649Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "dd37a6d1-93ac-42f8-9d13-80c9bb452f27",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-haiku-5-5",
+      "id": "msg_011CfyhUNeVZBTDG6BXYi8bg",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "With the plan approved, I'll create a.txt with \"hi\" in the scratchpad directory using Write, since it's not a git repo so no commit is needed.\n\n",
+          "signature": "signature"
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:29.612Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "05f28613-ad57-40d2-84c8-835a9adb6dd9",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-haiku-5-5",
+      "id": "msg_011CfyhUNeVZBTDG6BXYi8bg",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01JyffrJE7jw7yYmjfjwqiP2",
+          "name": "Write",
+          "input": {
+            "file_path": "/home/user/shop/a.txt",
+            "content": "hi\n"
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:29.626Z"
+  },
+  {
+    "type": "user",
+    "uuid": "595f0434-9732-4a15-b7bf-99f292edfa30",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_01JyffrJE7jw7yYmjfjwqiP2",
+          "type": "tool_result",
+          "content": "File created successfully at: /home/user/shop/a.txt (file state is current in your context — no need to Read it back)"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:29.664Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "56384733-2054-4009-8ee2-cc3ed25a1ac3",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-haiku-5-5",
+      "id": "msg_011CfyhUfnsKbk2K5ekwGfDd",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01Geg4f9yZwn6jsiKuNusWgJ",
+          "name": "Read",
+          "input": {
+            "file_path": "/home/user/shop/a.txt"
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:34.862Z"
+  },
+  {
+    "type": "user",
+    "uuid": "8f753a36-c080-495e-aab2-22bf804ce623",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_01Geg4f9yZwn6jsiKuNusWgJ",
+          "type": "tool_result",
+          "content": "1\thi\n2\t"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:34.922Z"
+  },
+  {
+    "type": "assistant",
+    "uuid": "98c3b28c-1b38-44a3-b86f-e49eb58994fa",
+    "session_id": "09774dca-ec08-40f8-bad7-b8f37e5be9d8",
+    "message": {
+      "model": "claude-haiku-5-5",
+      "id": "msg_011CfyhV4MS1NrncPatJTC3U",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Created `a.txt` in the run-b scratchpad directory with the word `hi`, and read it back to confirm."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "input_transformations": [],
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "parent_agent_id": null,
+    "timestamp": "2026-10-13T05:39:36.287Z"
+  }
+]

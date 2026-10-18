@@ -2,7 +2,14 @@ import path from 'node:path';
 
 import { BrowserWindow } from 'electron';
 
-export async function createMainWindow(url: string, options: { devTools: boolean }) {
+/**
+ * `hidden`: the window is never shown, but keeps rendering at full speed. For e2e tests, so the app
+ * neither pops up on screen nor picks up the real mouse.
+ */
+export async function createMainWindow(
+  url: string,
+  options: { devTools: boolean; hidden: boolean },
+) {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -21,11 +28,14 @@ export async function createMainWindow(url: string, options: { devTools: boolean
       webviewTag: false,
       navigateOnDragDrop: false,
       devTools: options.devTools,
+      backgroundThrottling: !options.hidden,
     },
   });
-  window.once('ready-to-show', () => {
-    window.show();
-  });
+  if (!options.hidden) {
+    window.once('ready-to-show', () => {
+      window.show();
+    });
+  }
   await window.loadURL(url);
   return window;
 }

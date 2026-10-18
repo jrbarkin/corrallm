@@ -1,0 +1,63 @@
+/* SearchPicker: a dropdown card with a search field over a list of matches. */
+.search-picker {
+  box-sizing: border-box;
+  width: 280px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 24px color-mix(in srgb, black 18%, transparent);
+  color: CanvasText;
+  font-size: 14px;
+}
+
+/* Its search field, or the text box of a card that asks for text instead. */
+.search-picker input,
+.search-picker textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.search-picker textarea {
+  display: block;
+  min-height: 3lh;
+  max-height: 12lh;
+  field-sizing: content;
+  resize: none;
+}
+
+.search-picker ul {
+  max-height: 240px;
+  margin: 6px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.search-picker li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.search-picker li:hover,
+.search-picker li[aria-selected='true'] {
+  background: color-mix(in srgb, CanvasText 10%, transparent);
+}
+
+.search-picker-empty {
+  margin: 6px 8px;
+  opacity: 0.6;
+}
+
+.search-picker-detail {
+  display: block;
+  font-size: 12px;
+  opacity: 0.65;
+}

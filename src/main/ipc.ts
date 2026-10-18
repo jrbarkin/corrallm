@@ -1,13 +1,98 @@
 import { app, ipcMain } from 'electron';
+import type { WebContents } from 'electron';
 
-import type { IpcArgs, IpcChannel, IpcResult } from '../shared/ipc';
+import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
+import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
+import { parseRunCheckpoint } from '../shared/run';
+import type { RunJournal } from './run-journal';
+import type { RunShutdown } from './run-shutdown';
+import { MAX_FILE_MATCHES } from '../shared/session';
+import type { InstalledClis } from '../shared/session';
+import { parseBackend, parseRule, parseWindows } from '../shared/usage';
+import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
+import type { ProjectFiles } from './files';
+import type { LinkOpener } from './links';
+import type { ProjectFolders } from './project';
+import type { FileRevealer } from './reveal';
 import { isTrustedSender } from './security';
+import {
+  parseAgentArgs,
+  parseAnswerArgs,
+  parseEffortArgs,
+  parseFilesArgs,
+  parseFreshArgs,
+  parseMcpChangeArgs,
+  parseModeArgs,
+  parseModelArgs,
+  parseOptionsArgs,
+  parseResumeArgs,
+  parseRewindArgs,
+  parseRewindPreviewArgs,
+  parseSendArgs,
+  parseStartArgs,
+  parseStopTaskArgs,
+  parseTerminalDropArgs,
+  parseTerminalInputArgs,
+  parseTerminalResizeArgs,
+} from './sessions/args';
+import type { SessionManager } from './sessions/manager';
+import type { UsageReadings } from './usage';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends IpcChannel> = (args: unknown[]) => IpcArgs<C>;
+/** Who sent a message: the renderer's web contents (whose window a dialog belongs to). */
+export interface IpcCaller {
+  contents: WebContents;
+}
 export type IpcHandler<C extends IpcChannel> = (
+  caller: IpcCaller,
   ...args: IpcArgs<C>
 ) => IpcResult<C> | Promise<IpcResult<C>>;
+
+/**
+ * What the handlers act on besides canvas files: project folders, their files, links to open (and
+ * project files to show), sessions, the CLIs the user has, and usage.
+ */
+export interface IpcServices {
+  runs: Pick<RunJournal, 'ready' | 'get' | 'save' | 'opened' | 'saved' | 'forgotten'>;
+  shutdown: Pick<RunShutdown, 'ready'>;
+  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
+  files: Pick<ProjectFiles, 'find'>;
+  links: Pick<LinkOpener, 'open'>;
+  reveal: Pick<FileRevealer, 'reveal'>;
+  sessions: Pick<
+    SessionManager,
+    | 'start'
+    | 'send'
+    | 'answer'
+    | 'interrupt'
+    | 'setMode'
+    | 'setModel'
+    | 'setEffort'
+    | 'stopTask'
+    | 'close'
+    | 'fresh'
+    | 'listSessions'
+    | 'resumeSession'
+    | 'mcpServers'
+    | 'changeMcpServer'
+    | 'settingsOptions'
+    | 'previewRewind'
+    | 'rewind'
+    | 'canvasOpened'
+    | 'canvasForgotten'
+    | 'canvasSaved'
+    | 'projectChanged'
+    | 'attachTerminal'
+    | 'detachTerminal'
+    | 'inputTerminal'
+    | 'resizeTerminal'
+    | 'dropOnTerminal'
+  >;
+  /** Which CLIs the user has (sessions/installed.ts). */
+  clis: { installed: () => Promise<InstalledClis> };
+  usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
+}
 
 /**
  * Returns a typed `handle()` bound to the renderer's origin. Before any handler runs, every
@@ -26,9 +111,18 @@ export function createIpcHandle(trustedOrigin: string) {
       if (!isTrustedSender(event.senderFrame, trustedOrigin)) {
         throw new Error(`Rejected ${channel}: untrusted sender`);
       }
-      return handler(...parseArgs(rawArgs));
+      return handler({ contents: event.sender }, ...parseArgs(rawArgs));
     });
   };
+}
+
+/** Sends an event to a renderer, if it is still there. Only main sends events. */
+export function sendEvent<E extends IpcEvent>(
+  contents: WebContents,
+  event: E,
+  ...args: IpcEventArgs<E>
+): void {
+  if (!contents.isDestroyed()) contents.send(event, ...args);
 }
 
 /** `ArgsParser` for channels that take no arguments. */
@@ -50,9 +144,308 @@ type HandlerTable = {
   [C in IpcChannel]: { parseArgs: ArgsParser<C>; handler: IpcHandler<C> };
 };
 
-const handlers: HandlerTable = {
-  'app:ping': { parseArgs: noArgs, handler: getVersionString },
-};
+/** `ArgsParser` for canvas:save: the canvas's text (within the size limit), and `choose`. */
+export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
+  const [text, choose] = args;
+  if (args.length !== 2 || typeof text !== 'string' || typeof choose !== 'boolean') {
+    throw new TypeError('Expected the canvas text and whether to choose a file');
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_CANVAS_BYTES) {
+    throw new RangeError('The canvas is too large to save');
+  }
+  return [text, choose];
+}
+
+/**
+ * `ArgsParser` for link:open and link:reveal: the URL clicked, a string within MAX_LINK_LENGTH.
+ * Whether it may open (or its file be shown), and how, is main's to decide (links.ts, reveal.ts),
+ * never the renderer's.
+ */
+export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open' | 'link:reveal'> {
+  const [url] = args;
+  if (args.length !== 1 || typeof url !== 'string') throw new TypeError('Expected a link');
+  if (url.length > MAX_LINK_LENGTH) throw new RangeError('The link is too long');
+  return [url];
+}
+
+/** `ArgsParser` for usage:rule: a backend whose usage corrallm reads, and a rule or null. */
+export function parseUsageRuleArgs(args: unknown[]): IpcArgs<'usage:rule'> {
+  const [backend, rule] = args;
+  if (args.length !== 2) throw new TypeError('Expected a backend and a rule (or null)');
+  return [parseBackend(backend), rule === null ? null : parseRule(rule)];
+}
+
+/** `ArgsParser` for usage:simulate: a backend, and its windows (checked as a reading's) or null. */
+export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
+  const [backend, windows] = args;
+  if (args.length !== 2) throw new TypeError('Expected a backend and its windows (or null)');
+  return [parseBackend(backend), windows === null ? null : parseWindows(windows, Date.now())];
+}
+
+function createHandlers({
+  runs,
+  shutdown,
+  projects,
+  files,
+  links,
+  reveal,
+  sessions,
+  clis,
+  usage,
+}: IpcServices): HandlerTable {
+  return {
+    'app:ping': { parseArgs: noArgs, handler: getVersionString },
+    'run:get': { parseArgs: noArgs, handler: ({ contents }) => runs.get(contents) },
+    'run:save': {
+      parseArgs: (args) => {
+        if (args.length !== 2 || typeof args[0] !== 'string' || args[0].length > 100) {
+          throw new TypeError('Expected a canvas token and run checkpoint');
+        }
+        return [args[0], args[1] === null ? null : parseRunCheckpoint(args[1])];
+      },
+      handler: async ({ contents }, token, checkpoint) => {
+        await runs.save(contents, token, checkpoint);
+        return null;
+      },
+    },
+    'run:ready': {
+      parseArgs: (args) => {
+        const [id, error] = args;
+        if (
+          args.length !== 2 ||
+          typeof id !== 'string' ||
+          id.length > 100 ||
+          !(error === null || (typeof error === 'string' && error.length <= 4096))
+        ) {
+          throw new TypeError('Expected a shutdown request and error (or null)');
+        }
+        return [id, error];
+      },
+      handler: ({ contents }, id, error) => {
+        shutdown.ready(contents, id, error);
+        return null;
+      },
+    },
+    'canvas:open': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        // Explicit replacement must also work when the previous journal cannot be read.
+        const file = await openCanvas(contents);
+        if (file === null) return null;
+        await runs.opened(contents);
+        // Another canvas: the old one's sessions end, and the new one's folder comes back.
+        await sessions.canvasOpened(contents);
+        const project = await projects.restore(contents);
+        return project ? { ...file, project } : file;
+      },
+    },
+    'canvas:save': {
+      parseArgs: parseSaveArgs,
+      handler: async ({ contents }, text, choose) => {
+        await runs.ready(contents);
+        const name = await saveCanvas(contents, text, choose);
+        if (name !== null) {
+          await runs.saved(contents);
+          await projects.remember(contents);
+          await sessions.canvasSaved(contents);
+        }
+        return name;
+      },
+    },
+    'canvas:forget': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        // New preserves the old journal and starts a fresh identity, even after a bad restore.
+        forgetCanvas(contents);
+        await runs.forgotten(contents);
+        projects.forget(contents);
+        await sessions.canvasForgotten(contents);
+        return null;
+      },
+    },
+    'project:choose': {
+      parseArgs: noArgs,
+      handler: async ({ contents }) => {
+        await runs.ready(contents);
+        const before = projects.of(contents);
+        const chosen = await projects.choose(contents);
+        if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
+        return chosen;
+      },
+    },
+    'project:files': {
+      parseArgs: parseFilesArgs,
+      handler: async ({ contents }, query) => {
+        const folder = projects.of(contents);
+        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
+      },
+    },
+    'session:start': {
+      parseArgs: parseStartArgs,
+      handler: async ({ contents }, agentId, options) => {
+        await runs.ready(contents);
+        await sessions.start(contents, agentId, options);
+        return null;
+      },
+    },
+    'session:clis': { parseArgs: noArgs, handler: () => clis.installed() },
+    'session:send': {
+      parseArgs: parseSendArgs,
+      handler: async ({ contents }, agentId, message) => {
+        await sessions.send(contents, agentId, message);
+        return null;
+      },
+    },
+    'session:answer': {
+      parseArgs: parseAnswerArgs,
+      handler: async ({ contents }, agentId, promptId, answer) => {
+        await sessions.answer(contents, agentId, promptId, answer);
+        return null;
+      },
+    },
+    'session:interrupt': {
+      parseArgs: parseAgentArgs,
+      handler: async ({ contents }, agentId) => {
+        await sessions.interrupt(contents, agentId);
+        return null;
+      },
+    },
+    'session:mode': {
+      parseArgs: parseModeArgs,
+      handler: async ({ contents }, agentId, mode) => {
+        await sessions.setMode(contents, agentId, mode);
+        return null;
+      },
+    },
+    'session:model': {
+      parseArgs: parseModelArgs,
+      handler: async ({ contents }, agentId, model) => {
+        await sessions.setModel(contents, agentId, model);
+        return null;
+      },
+    },
+    'session:effort': {
+      parseArgs: parseEffortArgs,
+      handler: async ({ contents }, agentId, effort) => {
+        await sessions.setEffort(contents, agentId, effort);
+        return null;
+      },
+    },
+    'session:stopTask': {
+      parseArgs: parseStopTaskArgs,
+      handler: async ({ contents }, agentId, taskId) => {
+        await sessions.stopTask(contents, agentId, taskId);
+        return null;
+      },
+    },
+    'session:close': {
+      parseArgs: parseAgentArgs,
+      handler: async ({ contents }, agentId) => {
+        await sessions.close(contents, agentId);
+        return null;
+      },
+    },
+    'session:fresh': {
+      parseArgs: parseFreshArgs,
+      handler: async ({ contents }, agentId, cli) => {
+        await sessions.fresh(contents, agentId, cli);
+        return null;
+      },
+    },
+    'session:list': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => sessions.listSessions(contents, agentId),
+    },
+    'session:resume': {
+      parseArgs: parseResumeArgs,
+      handler: async ({ contents }, agentId, sessionId) => {
+        await sessions.resumeSession(contents, agentId, sessionId);
+        return null;
+      },
+    },
+    'session:rewind-preview': {
+      parseArgs: parseRewindPreviewArgs,
+      handler: ({ contents }, agentId, messageId) =>
+        sessions.previewRewind(contents, agentId, messageId),
+    },
+    'session:rewind': {
+      parseArgs: parseRewindArgs,
+      handler: ({ contents }, agentId, messageId, restore) =>
+        sessions.rewind(contents, agentId, messageId, restore),
+    },
+    'session:options': {
+      parseArgs: parseOptionsArgs,
+      handler: ({ contents }, cli) => sessions.settingsOptions(contents, cli),
+    },
+    'session:mcp': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => sessions.mcpServers(contents, agentId),
+    },
+    'session:mcp-change': {
+      parseArgs: parseMcpChangeArgs,
+      handler: ({ contents }, agentId, server, change) =>
+        sessions.changeMcpServer(contents, agentId, server, change),
+    },
+    'terminal:attach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.attachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:detach': {
+      parseArgs: parseAgentArgs,
+      handler: ({ contents }, agentId) => {
+        sessions.detachTerminal(contents, agentId);
+        return null;
+      },
+    },
+    'terminal:input': {
+      parseArgs: parseTerminalInputArgs,
+      handler: async ({ contents }, agentId, data) => {
+        await sessions.inputTerminal(contents, agentId, data);
+        return null;
+      },
+    },
+    'link:open': {
+      parseArgs: parseLinkArgs,
+      handler: ({ contents }, url) => links.open(contents, url),
+    },
+    'link:reveal': {
+      parseArgs: parseLinkArgs,
+      handler: ({ contents }, url) => reveal.reveal(contents, url),
+    },
+    'terminal:resize': {
+      parseArgs: parseTerminalResizeArgs,
+      handler: async ({ contents }, agentId, cols, rows) => {
+        await sessions.resizeTerminal(contents, agentId, cols, rows);
+        return null;
+      },
+    },
+    'terminal:drop': {
+      parseArgs: parseTerminalDropArgs,
+      handler: async ({ contents }, agentId, paths) => {
+        await sessions.dropOnTerminal(contents, agentId, paths);
+        return null;
+      },
+    },
+    'usage:get': { parseArgs: noArgs, handler: () => usage.state() },
+    'usage:rule': {
+      parseArgs: parseUsageRuleArgs,
+      handler: (_caller, backend, rule) => {
+        usage.setRule(backend, rule);
+        return null;
+      },
+    },
+    'usage:simulate': {
+      parseArgs: parseSimulateArgs,
+      handler: (_caller, backend, windows) => {
+        usage.simulate(backend, windows);
+        return null;
+      },
+    },
+  };
+}
 
 // Generic so each channel's parser and handler types stay linked while iterating the table.
 function register<C extends IpcChannel>(
@@ -64,8 +457,9 @@ function register<C extends IpcChannel>(
 }
 
 /** Registers every channel in the IPC contract. Call once, after the app is ready. */
-export function registerIpcHandlers(trustedOrigin: string): void {
+export function registerIpcHandlers(trustedOrigin: string, services: IpcServices): void {
   const handle = createIpcHandle(trustedOrigin);
+  const handlers = createHandlers(services);
   for (const channel of Object.keys(handlers) as IpcChannel[]) {
     register(handle, channel, handlers[channel]);
   }

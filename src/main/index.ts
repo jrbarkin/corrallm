@@ -1,14 +1,30 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, dialog, session, shell } from 'electron';
+import type { MessageBoxOptions, WebContents } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
+import { Closing } from './closing';
 import { PROD_CSP } from './csp';
-import { registerIpcHandlers } from './ipc';
+import { ProjectFiles } from './files';
+import { registerIpcHandlers, sendEvent } from './ipc';
+import { LinkOpener } from './links';
+import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
+import { ProjectFolders } from './project';
+import { FileRevealer } from './reveal';
+import { RunJournal } from './run-journal';
+import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
+import { planConsent, Settings } from './settings';
+import { createConnectors, createOptions } from './sessions/connectors';
+import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
+import { installedClis } from './sessions/installed';
+import { SessionManager } from './sessions/manager';
+import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
+import { UsageReadings } from './usage';
 import { createMainWindow } from './window';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
@@ -28,6 +44,9 @@ const FORBIDDEN_SWITCHES = [
   'browser-subprocess-path',
 ] as const;
 
+/** How long closing without saving waits for the agents' sessions to end. */
+const ABANDON_MS = 5000;
+
 function main(): void {
   // Squirrel.Windows launches the app with --squirrel-* flags on install/update/uninstall.
   if (squirrelStartup) {
@@ -45,6 +64,19 @@ function main(): void {
     return;
   }
 
+  // Only one instance may write this profile's state or resume its agents' conversations.
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
+
+  // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden, and connected
+  // sessions with a fake connector instead of Claude Code. Never in packaged builds.
+  const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';
+  const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
+  // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
+  if (hidden && process.platform === 'darwin') app.setActivationPolicy('accessory');
+
   // TODO(auto-update): call updateElectronApp() (update-electron-app) here when app.isPackaged.
   // Works with the Squirrel.Windows and macOS ZIP makers; needs published releases and a
   // Developer ID-signed macOS build. Linux deb/rpm updates come from the package manager.
@@ -58,7 +90,7 @@ function main(): void {
   app.enableSandbox();
   installNavigationGuards(trustedOrigin);
 
-  const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged });
+  const openMainWindow = () => createMainWindow(rendererUrl, { devTools: !app.isPackaged, hidden });
 
   void app
     .whenReady()
@@ -71,7 +103,191 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      registerIpcHandlers(trustedOrigin);
+      // What main remembers of canvas files, their project folders, and their agents' sessions.
+      const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
+      // What the user chose for the app as a whole.
+      const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
+      const reloading = new WeakMap<WebContents, Promise<void>>();
+      const runs: RunJournal = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
+        memory,
+        projectOf: (contents) => projects.of(contents),
+        settled: async (contents) => {
+          await reloading.get(contents);
+        },
+        restored: async (contents) => {
+          await sessions.canvasOpened(contents);
+          await projects.restore(contents);
+        },
+      });
+      const projects: ProjectFolders = new ProjectFolders(memory, (contents) =>
+        runs.identity(contents),
+      );
+      const shutdown = new RunShutdown((contents, requestId) => {
+        sendEvent(contents, 'run:stopping', requestId);
+      });
+      // Every backend's usage, read from its agents' CLIs: every window hears each change.
+      const usage = new UsageReadings({ file: path.join(app.getPath('userData'), 'usage.json') });
+      await usage.load();
+      usage.subscribe((state) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendEvent(window.webContents, 'usage:changed', state);
+        }
+      });
+      let environment: Promise<Record<string, string>> | undefined;
+      // Resolved once, when the first session starts.
+      const agentsEnvironment = () =>
+        (environment ??= fakeSessions
+          ? Promise.resolve(agentEnvironment(process.env))
+          : loginShellEnvironment().then(agentEnvironment));
+      const sessions = new SessionManager({
+        connectors: createConnectors({
+          fake: fakeSessions,
+          clientApp: `${app.getName()}/${app.getVersion()}`,
+          distribution: CORRALLM_DISTRIBUTION,
+          consent: planConsent(settings),
+          usage: (backend, windows) => {
+            usage.take(backend, windows);
+          },
+        }),
+        environment: agentsEnvironment,
+        options: createOptions({ fake: fakeSessions }),
+        // The conversations Claude Code kept, whichever connection ran them.
+        conversations: new Conversations(),
+        projectOf: (contents) => projects.of(contents),
+        canvasOf: (contents) => runs.identity(contents),
+        memory,
+        emit: (contents, agentId, connection, event) => {
+          sendEvent(contents, 'session:event', agentId, connection, event);
+        },
+        terminal: (contents, agentId, event) => {
+          sendEvent(contents, 'terminal:event', agentId, event);
+        },
+      });
+      const files = new ProjectFiles({ environment: agentsEnvironment });
+      const links = new LinkOpener({
+        file: path.join(app.getPath('userData'), 'links.json'),
+        ask: async (contents, host, url) => {
+          const options: MessageBoxOptions = {
+            type: 'question',
+            message: `Open ${host} in your browser?`,
+            detail: url.length > 300 ? `${url.slice(0, 300)}…` : url,
+            buttons: ['Open', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+            checkboxLabel: 'Always for this site',
+            noLink: true,
+          };
+          const window = BrowserWindow.fromWebContents(contents);
+          const { response, checkboxChecked } = await (window
+            ? dialog.showMessageBox(window, options)
+            : dialog.showMessageBox(options));
+          return { open: response === 0, always: response === 0 && checkboxChecked };
+        },
+        openExternal: (url) => shell.openExternal(url),
+      });
+      // Which CLIs the user has, for the templates' agents.
+      const clis = { installed: async () => installedClis(await agentsEnvironment()) };
+      // file:// links in a terminal: shown in the file manager, if in the project folder.
+      const reveal = new FileRevealer({
+        folderOf: (contents) => projects.of(contents),
+        show: (file) => {
+          shell.showItemInFolder(file);
+        },
+      });
+      registerIpcHandlers(trustedOrigin, {
+        runs,
+        shutdown,
+        projects,
+        files,
+        links,
+        reveal,
+        sessions,
+        clis,
+        usage,
+      });
+
+      // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.
+      const persistWindows = async (windows: BrowserWindow[]) => {
+        await Promise.all(
+          windows.map((window) =>
+            runs.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
+          ),
+        );
+        await runs.flush();
+        await sessions.closeEverything();
+        await Promise.all([memory.flush(), settings.flush(), links.flush(), usage.flush()]);
+      };
+      // Closing without saving (the user said to, after it failed): what can be closed, within a
+      // few seconds.
+      const abandon = async () => {
+        await Promise.race([
+          Promise.allSettled([sessions.closeEverything()]).then(() =>
+            Promise.allSettled([memory.flush(), settings.flush(), links.flush(), usage.flush()]),
+          ),
+          new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
+        ]);
+      };
+      const askAnyway =
+        (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
+        async (why: string): Promise<boolean> => {
+          console.error('Could not save before closing:', why);
+          const options: MessageBoxOptions = {
+            type: 'warning',
+            message: 'The run could not be saved',
+            detail: `${why}\n\n${verb} anyway? What wasn't saved is lost, and the agents' sessions end.`,
+            buttons: ['Keep corrallm open', `${verb} anyway`],
+            defaultId: 0,
+            cancelId: 0,
+          };
+          const { response } = await (window
+            ? dialog.showMessageBox(window, options)
+            : dialog.showMessageBox(options));
+          return response === 1;
+        };
+      const quit = new Closing({
+        save: () => persistWindows(BrowserWindow.getAllWindows()),
+        abandon,
+        ask: askAnyway('Quit'),
+        done: () => {
+          app.quit();
+        },
+      });
+      app.on('before-quit', (event) => {
+        if (!quit.request()) event.preventDefault();
+      });
+      // macOS window close does not quit the app, but must save/freeze the run all the same.
+      app.on('browser-window-created', (_event, window) => {
+        window.webContents.on('did-start-navigation', (event) => {
+          if (
+            !event.isMainFrame ||
+            event.isSameDocument ||
+            originKey(event.url) !== trustedOrigin ||
+            !runs.has(window.webContents)
+          )
+            return;
+          // Reload keeps this canvas identity but ends its old native processes. New run:get
+          // waits for their graceful exit and for queued journal writes before restoring.
+          const closing = sessions.closeEverything();
+          reloading.set(window.webContents, closing);
+          void closing.catch((error: unknown) => {
+            console.error('Could not close before reload:', error);
+          });
+        });
+        const close = new Closing({
+          save: () => persistWindows([window]),
+          abandon,
+          ask: askAnyway('Close', window),
+          done: () => {
+            window.close();
+          },
+        });
+        window.on('close', (event) => {
+          if (quit.approved) return;
+          // Quitting saves every window: a close meanwhile waits for it.
+          if (quit.busy || !close.request()) event.preventDefault();
+        });
+      });
+
       await openMainWindow();
 
       // macOS: re-create a window when the dock icon is clicked and none are open.
