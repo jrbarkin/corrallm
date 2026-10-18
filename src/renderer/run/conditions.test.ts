@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
-import { RunStore } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
 import type { TurnEnd } from './runner';
 import { conditionQuestion } from './turns';
+
+afterEach(expectRestorable);
 
 const before = { id: 'before', message: 'Inspect the source' };
 const branch = { id: 'branch', message: 'Publish it' };
@@ -23,7 +25,7 @@ const engine = runCatalog();
 function setup(queue: QueueItem[], unheard = false) {
   const sent: { text: string; done?: (turn: TurnEnd) => void; withdrawn: boolean }[] = [];
   const notices: string[] = [];
-  const store = new RunStore(engine, {
+  const store = liveRun(engine, {
     send: (_node, text, done) => {
       const message = { text, done, withdrawn: false };
       sent.push(message);

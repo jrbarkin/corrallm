@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentNode } from '../../shared/model/canvas';
 import { runCatalog } from '../graph/agents';
-import { RunStore } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
 import type { TurnEnd } from './runner';
+
+afterEach(expectRestorable);
 
 /** The run's catalog, as the app gives it. */
 const engine = runCatalog();
@@ -39,7 +41,7 @@ const nodes: AgentNode[] = [
 
 function setup(graph = nodes) {
   const sent: { text: string; done: (turn: TurnEnd) => void }[] = [];
-  const store = new RunStore(engine, {
+  const store = liveRun(engine, {
     send: (_agent, text, done) => {
       sent.push({ text, done });
       return () => undefined;

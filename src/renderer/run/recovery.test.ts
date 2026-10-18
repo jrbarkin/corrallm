@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
-import { RunStore } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
 import type { RunIO, TurnEnd } from './runner';
+
+afterEach(expectRestorable);
 
 /** The run's catalog, as the app gives it. */
 const engine = runCatalog();
@@ -38,7 +40,7 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
     position: { x: 0, y: 0 },
     data: { label: 'A', connection: 'claude-code.sdk', queue },
   };
-  const store = new RunStore(engine, io);
+  const store = liveRun(engine, io);
   store.update([node]);
   return {
     store,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AgentNode } from '../../shared/model/canvas';
 import type { UsageState } from '../../shared/usage';
@@ -6,8 +6,10 @@ import { catalog } from '../catalog';
 import { MADE_UP } from '../test-made-up';
 import { heldAsks } from './asks';
 import { engineCatalog } from './catalog';
-import { RunStore } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
 import type { RunIO } from './runner';
+
+afterEach(expectRestorable);
 
 /** The catalog main declares, read with Claude Code as the agent a node without one runs. */
 const engine = engineCatalog(catalog(), 'claude-code');
@@ -99,7 +101,7 @@ describe('engineCatalog', () => {
 
   it('runs a queue with whatever adapter the catalog declares, wording steps from it', () => {
     const sent: [string, string][] = [];
-    const store = new RunStore(engineCatalog(MADE_UP, 'zed'), {
+    const store = liveRun(engineCatalog(MADE_UP, 'zed'), {
       send: (to, text) => {
         sent.push([to.id, text]);
         return () => undefined;
@@ -183,14 +185,14 @@ describe('engineCatalog', () => {
         data: { label: 'Zed', queue: [{ id: 'run', action: 'shell' }] },
       },
     ];
-    const warned = new RunStore(zed, io);
+    const warned = liveRun(zed, io);
     warned.update(nodes);
     warned.start();
     for (const run of timers.splice(0)) run();
     expect(told).toEqual(['Zed has used 85% of its 5-hour window (over 80%).']);
 
     usage = { ...usage, rules: { zed: { window: 'fiveHour', percent: 80, action: 'ask' } } };
-    const asking = new RunStore(zed, io);
+    const asking = liveRun(zed, io);
     asking.update(nodes);
     asking.start();
     const [ask] = heldAsks(nodes, asking.snapshot(), zed);

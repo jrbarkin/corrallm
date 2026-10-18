@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentNode, CanvasNode, FrameNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
 import { groupControlText, groupPaused, individualPaused } from './controls';
-import { RunStore } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
 import type { RunIO, TurnEnd } from './runner';
+
+afterEach(expectRestorable);
 
 /** The run's catalog, as the app gives it. */
 const engine = runCatalog();
@@ -54,7 +56,7 @@ function setup(nodes: CanvasNode[], extra: Partial<RunIO> = {}) {
     done?: (turn: TurnEnd) => void;
     withdrawn: boolean;
   }[] = [];
-  const store = new RunStore(engine, {
+  const store = liveRun(engine, {
     send: (node, text, done) => {
       const entry = { agent: node.id, text, done, withdrawn: false };
       sent.push(entry);

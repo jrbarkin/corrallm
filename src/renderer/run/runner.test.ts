@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { MessageImage, TurnResult } from '../../shared/session';
 import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
@@ -14,8 +14,10 @@ import type { QueueItem, QueueRepeat, RepeatedItem } from '../../shared/model/qu
 import { fillTemplate } from '../graph/templates';
 import { readRun } from './checkpoint';
 import { heldAsks } from './asks';
-import { RunStore } from './runner';
 import type { Refusal, TurnEnd } from './runner';
+import { expectRestorable, liveRun } from './test-restore';
+
+afterEach(expectRestorable);
 
 /** The run's catalog, as the app gives it. */
 const engine = runCatalog();
@@ -85,7 +87,7 @@ function setup(
   /** The connections the run switched agents to, as the user chose. */
   const connects: [string, ConnectionId][] = [];
   let usage: UsageState = { readings: [], rules: {} };
-  const store = new RunStore(engine, {
+  const store = liveRun(engine, {
     send: (to, text, done, images, refused, origin) => {
       const message: (typeof sent)[number] = {
         agent: to.id,
@@ -594,6 +596,16 @@ describe('RunStore', () => {
     expect(store.snapshot().agents.c?.problem?.kind).toBe('cancelled');
     store.reset();
     expect(store.snapshot()).toEqual({ running: false, agents: {} });
+  });
+
+  it('leaves a run that has done nothing with nothing to resume when it is paused or stopped', () => {
+    const { store, sent } = setup([agent('a', [{ id: 'hi', message: 'Hello' }])], manual);
+    for (const hold of ['pause', 'stop'] as const) {
+      store[hold]();
+      expect(store.snapshot()).toEqual({ running: false, agents: {} });
+      store.resume();
+      expect(sent).toEqual([]);
+    }
   });
 
   it('follows the queues as they change: a removed step no longer holds, new work is run', () => {

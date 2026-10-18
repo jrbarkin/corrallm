@@ -425,8 +425,7 @@ export class RunStore {
     }
     this.#run = {
       running: false,
-      paused:
-        Object.keys(agents).length > 0 || causes.individual.length > 0 || causes.groups.length > 0,
+      ...(resumable(agents, causes) ? { paused: true } : {}),
       agents,
       ...(causes.recorded
         ? { individualPauses: causes.individual, groupPauses: causes.groups }
@@ -462,7 +461,7 @@ export class RunStore {
       'The run was stopped. Inspect the session before retrying this task.',
     );
     this.#cancel();
-    this.#set({ ...this.#run, running: false, paused: true });
+    this.#halt();
   }
 
   /** Quitting/reloading holds in-flight work as unresolved, never as an automatic retry. */
@@ -472,7 +471,13 @@ export class RunStore {
       'The session was interrupted. Inspect its native conversation before resolving or retrying.',
     );
     this.#cancel();
-    this.#set({ ...this.#run, running: false, paused: true });
+    this.#halt();
+  }
+
+  /** The run goes no further: paused, if it holds anything to resume (as a restored run is). */
+  #halt(): void {
+    const paused = resumable(this.#run.agents, this.#pauseCauses());
+    this.#set({ ...this.#run, running: false, ...(paused ? { paused } : {}) });
   }
 
   resume(): void {
@@ -2093,6 +2098,14 @@ export function taskState(run: Run, agent: string, item: string | null): string 
   if (item === null) return at.status === 'done' ? 'reached' : undefined;
   if (at.current === item && at.status !== 'done') return run.running ? at.status : 'stopped';
   return at.outcomes[item];
+}
+
+/**
+ * Whether a run holds anything to resume: an agent it reached, or a pause set on an agent or a
+ * group. A run that has done nothing has nothing to pause: Resume would only start it.
+ */
+function resumable(agents: Readonly<Record<string, AgentRun>>, causes: PauseCauses): boolean {
+  return Object.keys(agents).length > 0 || causes.individual.length > 0 || causes.groups.length > 0;
 }
 
 /** The judgment a structural item was making when its native query was interrupted. */
