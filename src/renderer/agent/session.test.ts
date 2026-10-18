@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { catalog } from '../catalog';
 import {
   answersOf,
   chatStart,
+  cycledModes,
   modeOf,
   modesOf,
   NEW_SESSION,
@@ -76,6 +78,18 @@ describe('modes', () => {
       'bypassPermissions',
       'auto',
     ]);
+  });
+
+  it('offers each adapter the modes the catalog declares, as it declares them', () => {
+    for (const adapter of catalog().adapters) {
+      expect(modesOf(adapter.id)).toEqual(
+        adapter.modes.map(({ id, label, description }) => ({ mode: id, label, description })),
+      );
+      // Shift+Tab never cycles into a mode that never asks.
+      expect(cycledModes(adapter.id)).toEqual(
+        adapter.modes.flatMap(({ id, asks }) => (asks ? [id] : [])),
+      );
+    }
   });
 
   it('shows a mode its agent has, or else the one it starts in', () => {
