@@ -1223,6 +1223,8 @@ describe('a restart', () => {
     await vi.waitFor(async () => {
       expect((await find(hello))?.state).toBe('replied');
     });
+    // Its records all come after the broken line: it still waits, for certain.
+    const later = await send('builder', 'Second');
     const { next } = await ok<{ next: string }>('status', {});
     await core?.close();
     core = undefined;
@@ -1242,6 +1244,12 @@ describe('a restart', () => {
         turn: expect.objectContaining({ status: 'failed', reason: 'error' }) as unknown,
       }),
     ]);
+    expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
+    expect((await find(later))?.state).toBe('pending');
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(later))?.state).toBe('replied');
+    });
     expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
   });
 

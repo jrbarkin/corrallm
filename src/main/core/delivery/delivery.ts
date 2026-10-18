@@ -133,8 +133,8 @@ export class Delivery {
   /**
    * Starts delivering, as the canvas opens: a message that was being delivered, or delivered with
    * no turn end, when the core last stopped is unresolved (its sender told so), and never sent
-   * again, and so is one that waited in a log the store set aside as broken (it may have gone);
-   * what was waiting goes once it can.
+   * again, and so is one that waited in a log the store set aside as broken with no record read
+   * after the broken line (it may have gone); what was waiting goes once it can.
    */
   async start(): Promise<void> {
     const { store } = this.#deps;

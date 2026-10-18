@@ -134,8 +134,9 @@ describe('the message store', () => {
       /^The canvas’s messages could not all be read, and were moved to /,
     );
     expect(again.all().map(({ id }) => id)).toEqual([waiting.id, reply.id, last.id]);
-    // What became of a message that waited is unknown: it is never sent.
-    expect([...again.doubtful]).toEqual([waiting.id, last.id]);
+    // What became of a message that waited before the broken line is unknown: it is never sent.
+    // One whose last record comes after it still waits, for certain.
+    expect([...again.doubtful]).toEqual([waiting.id]);
     // Its order goes on from the log's, so a cursor into it still reads what comes next.
     const next = again.add(draft('outside:orchestrator', 'agent:builder'));
     expect(again.seqOf(next.id)).toBeGreaterThan(again.seqOf(last.id) ?? Infinity);
