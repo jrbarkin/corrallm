@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -126,7 +127,8 @@ async function canvasFile(
     file,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'shop',
@@ -176,13 +178,14 @@ async function typeIn(terminal: Locator, ...keys: string[]) {
 const status = (view: Locator) => view.locator('.agent-terminal-status');
 const submissions = (view: Locator) => view.locator('.graph-queue-message[data-submission]');
 
-test('legacy omitted and simulated connections migrate to native Terminal without starting or replaying their queues', async () => {
+test('an omitted connection runs in the native Terminal as a chosen one does, without starting or replaying its queue', async () => {
   const file = path.join(dir, 'team.corral');
   await writeFile(
     file,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'omitted',
@@ -190,16 +193,16 @@ test('legacy omitted and simulated connections migrate to native Terminal withou
           label: 'Omitted',
           agent: 'Claude',
           position: { x: 0, y: 0 },
-          queue: [{ id: 'work', message: 'Legacy omitted connection work' }],
+          queue: [{ id: 'work', message: 'Omitted connection work' }],
         },
         {
-          id: 'scripted',
+          id: 'chosen',
           kind: 'agent',
-          label: 'Legacy',
+          label: 'Chosen',
           agent: 'Claude',
-          connection: 'simulated',
+          connection: 'terminal',
           position: { x: 350, y: 0 },
-          queue: [{ id: 'work', message: 'Legacy explicit connection work' }],
+          queue: [{ id: 'work', message: 'Chosen connection work' }],
         },
       ],
       links: [],
@@ -209,7 +212,7 @@ test('legacy omitted and simulated connections migrate to native Terminal withou
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
   for (const [id, name] of [
     ['omitted', 'Omitted'],
-    ['scripted', 'Legacy'],
+    ['chosen', 'Chosen'],
   ] as const) {
     await expect(page.locator(`.react-flow__node-agent[data-id="${id}"]`)).toHaveAttribute(
       'aria-label',
@@ -226,17 +229,23 @@ test('legacy omitted and simulated connections migrate to native Terminal withou
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(queues.getByRole('status')).toHaveText('All done', { timeout: 15_000 });
   expect((await prompts()).sort()).toEqual(
-    ['Legacy omitted connection work', 'Legacy explicit connection work'].sort(),
+    ['Omitted connection work', 'Chosen connection work'].sort(),
   );
   await queues.getByRole('button', { name: 'Back', exact: true }).click();
   await page.keyboard.press('ControlOrMeta+s');
-  await expect.poll(() => readFile(file, 'utf8')).not.toContain('simulated');
+  await expect
+    .poll(async () =>
+      (JSON.parse(await readFile(file, 'utf8')) as { nodes: { connection?: string }[] }).nodes.map(
+        (node) => node.connection,
+      ),
+    )
+    .toEqual([undefined, 'terminal']);
   await page.reload();
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   await expect(queues.locator('[data-at][data-run="succeeded"]')).toHaveCount(2);
   expect((await prompts()).sort()).toEqual(
-    ['Legacy omitted connection work', 'Legacy explicit connection work'].sort(),
+    ['Omitted connection work', 'Chosen connection work'].sort(),
   );
 });
 

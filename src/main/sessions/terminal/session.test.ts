@@ -355,6 +355,20 @@ describe('a Terminal session', () => {
     });
   });
 
+  it('pauses Claude Code while its screen copy is behind, so a flood of output never overflows it', async () => {
+    // xterm.js throws away writes (throwing in main) once more than 5e7 characters are pending.
+    await start();
+    await until(() => {
+      expect(claude().written).toContain('\x1b]7501;?\x1b\\');
+    });
+    const chunk = 'x'.repeat(1 << 20);
+    for (let i = 0; i < 60; i += 1) claude().print(chunk);
+    expect(claude().pauses).toBeGreaterThan(0);
+    await until(() => {
+      expect(claude().drained).toBe(true);
+    }, 30_000);
+  }, 60_000);
+
   it('resumes the session it had; one with no transcript starts afresh under its id', async () => {
     const kept = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';
     const gone = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12';

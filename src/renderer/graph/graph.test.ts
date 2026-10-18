@@ -7,9 +7,7 @@ import {
   addAgent,
   addParent,
   addToQueue,
-  answerQuestion,
   areLinked,
-  askUser,
   autosize,
   canConnect,
   canUngroup,
@@ -28,7 +26,6 @@ import {
   moveInQueue,
   nextLabel,
   PADDING,
-  pendingQuestions,
   removeFromQueue,
   renameNode,
   retarget,
@@ -292,18 +289,20 @@ describe('spawnAgent', () => {
     expectValid(linked);
   });
 
-  it('runs a spawned agent with its parent’s native connection and settings', () => {
+  it('runs a spawned agent with its parent’s native connection, settings and role', () => {
     const settings = { claude: { model: 'haiku' } };
+    const role = 'Review every change before it lands.';
     const g = graphOf([
-      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings } }),
+      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings, role } }),
     ]);
     expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data).toMatchObject({
       connection: 'terminal',
       settings,
+      role,
     });
-    expect(
-      get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data,
-    ).not.toHaveProperty('connection');
+    const plain = get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data;
+    expect(plain).not.toHaveProperty('connection');
+    expect(plain).not.toHaveProperty('role');
   });
 
   it('spawns only from an agent', () => {
@@ -593,34 +592,6 @@ describe('queues', () => {
         Object.keys(repeatOf(setRepeat(filled, 'a', 'r1', { otherwise: 'goOn' })) ?? {}),
       ).toEqual(['id', 'repeat', 'until', 'rounds', 'otherwise']);
     });
-  });
-});
-
-describe('questions', () => {
-  const g = graphOf([agentNode('a', 0, 0, { data: { label: 'Planner' } }), agentNode('b', 0, 100)]);
-  const asked = askUser(
-    askUser(g, 'a', { id: 'q1', text: 'Which branch?', options: ['main', 'dev'] }),
-    'b',
-    { id: 'q2', text: 'May I delete the cache?' },
-  );
-
-  it('lists the questions agents are waiting on, by agent', () => {
-    expect(
-      pendingQuestions(asked.nodes).map(({ agent, question }) => [agent.id, question.id]),
-    ).toEqual([
-      ['a', 'q1'],
-      ['b', 'q2'],
-    ]);
-    expect(askUser(g, 'missing', { id: 'x', text: '?' })).toBe(g);
-  });
-
-  it('records an answer, which takes the question off the list', () => {
-    const answered = answerQuestion(asked, 'a', 'q1', 'dev');
-    expect(get(answered, 'a').data.questions).toEqual([
-      { id: 'q1', text: 'Which branch?', options: ['main', 'dev'], answer: 'dev' },
-    ]);
-    expect(pendingQuestions(answered.nodes).map(({ question }) => question.id)).toEqual(['q2']);
-    expect(answerQuestion(asked, 'a', 'missing', 'x')).toBe(asked);
   });
 });
 

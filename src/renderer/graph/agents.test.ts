@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { CONNECTIONS } from '../../shared/session';
 import { AGENT_CONNECTIONS, CONNECTED_AGENTS, connectionOf, defaultConnection } from './agents';
 import { fromFile, toFile } from './file';
@@ -8,7 +9,8 @@ import { addAgent, EMPTY_GRAPH, setAgent, spawnAgent } from './graph';
 const legacy = (agent: 'Claude' | 'Codex' | 'Qwen' | 'Gemini', connection?: string) =>
   JSON.stringify({
     format: 'corrallm',
-    version: 1,
+    version: 2,
+    id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b',
     nodes: [
       {
         id: 'worker',
@@ -43,27 +45,25 @@ describe('native agent defaults', () => {
   });
 
   it.each(['Claude', 'Codex'] as const)(
-    'reads old %s placeholder workflows as native without changing their work',
+    'refuses the removed placeholder connection for %s agents',
     (agent) => {
-      const absent = fromFile(legacy(agent));
-      const explicit = fromFile(legacy(agent, 'simulated'));
-      expect(explicit).toEqual(absent);
-      expect(connectionOf(explicit.nodes[0]?.data ?? {})).toBe(defaultConnection(agent));
-      expect(explicit.nodes[0]?.data.queue).toEqual([
-        { id: 'work', message: 'Keep the authored work.' },
-      ]);
-      expect(toFile(explicit)).not.toContain('simulated');
+      expect(() => fromFile(legacy(agent, 'simulated'))).toThrow('nodes[0].connection');
     },
   );
 
   it.each(['Qwen', 'Gemini'] as const)(
     'retains legacy %s nodes as unavailable without offering a pretend connection',
     (agent) => {
-      const graph = fromFile(legacy(agent, 'simulated'));
+      const graph = fromFile(legacy(agent));
       expect(graph.nodes[0]?.data.agent).toBe(agent);
       expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('unavailable');
       expect(AGENT_CONNECTIONS[agent]).toEqual([]);
-      expect(toFile(graph)).not.toContain('simulated');
+      expect(graph.nodes[0]?.data.queue).toEqual([
+        { id: 'work', message: 'Keep the authored work.' },
+      ]);
+      expect(toFile(graph, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId)).toContain(
+        `"agent": "${agent}"`,
+      );
     },
   );
 });

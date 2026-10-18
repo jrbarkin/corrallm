@@ -1,5 +1,7 @@
 import type { Edge } from '@xyflow/react';
 
+import { CANVAS_VERSION, canvasHeader } from '../../shared/canvas';
+import type { CanvasId } from '../../shared/canvas';
 import { parseRole } from '../../shared/role';
 import {
   CLI_MODES,
@@ -31,10 +33,12 @@ import type {
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
- * That is its agents and groups (where they are, what holds them, their queues) and the links
- * between agents. Selection, sizes (groups fit what they hold) and agents' questions are left out.
+ * That is its id (a UUID: what main remembers of it is kept by it, src/shared/canvas.ts), its
+ * agents and groups (where they are, what holds them, their queues) and the links between agents.
+ * Selection and sizes (groups fit what they hold) are left out. A file of another version is
+ * refused.
  *
- *   { "format": "corrallm", "version": 1,
+ *   { "format": "corrallm", "version": 2, "id",
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
  *                 "parent"?, "agent"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
@@ -64,7 +68,6 @@ import type {
  * ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
-const VERSION = 1;
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
 const DOTS = ['top', 'bottom'];
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -88,8 +91,8 @@ interface FileLink {
   dots?: [string, string];
 }
 
-/** The canvas as the text of a `.corral` file. */
-export function toFile(graph: Graph): string {
+/** Canvas `id`'s graph as the text of a `.corral` file. */
+export function toFile(graph: Graph, id: CanvasId): string {
   const nodes = graph.nodes.map((n): FileNode => {
     const { label, agent, connection, settings, color, queue } = n.data;
     if (n.type === 'frame' && n.data.role !== undefined)
@@ -113,12 +116,12 @@ export function toFile(graph: Graph): string {
     agents: [e.source, e.target],
     ...(e.sourceHandle && e.targetHandle ? { dots: [e.sourceHandle, e.targetHandle] } : {}),
   }));
-  return `${JSON.stringify({ format: FORMAT, version: VERSION, nodes, links }, null, 2)}\n`;
+  return `${JSON.stringify({ format: FORMAT, version: CANVAS_VERSION, id, nodes, links }, null, 2)}\n`;
 }
 
 /**
- * The canvas a `.corral` file holds. Throws, saying what is wrong and where, for anything that is
- * not a canvas this version can read.
+ * The graph a `.corral` file holds (its id is main's to read: canvasIdOf). Throws, saying what is
+ * wrong and where, for anything that is not a canvas this version can read.
  */
 export function fromFile(text: string): Graph {
   let file: unknown;
@@ -127,12 +130,8 @@ export function fromFile(text: string): Graph {
   } catch {
     throw new Error(NOT_A_CANVAS);
   }
-  if (!isRecord(file) || file.format !== FORMAT) throw new Error(NOT_A_CANVAS);
-  const { version } = file;
-  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
-    throw new Error('version must be a whole number');
-  }
-  if (version > VERSION) throw new Error('This canvas was made by a newer version of corrallm');
+  if (!isRecord(file)) throw new Error(NOT_A_CANVAS);
+  canvasHeader(file);
 
   const nodes = list(file.nodes, 'nodes', readNode);
   const byId = new Map<string, FileNode>();
@@ -234,8 +233,6 @@ function readNode(value: unknown, where: string): FileNode {
   });
   const connection = optional(node.connection, `${where}.connection`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
-    // Compatibility only: the removed placeholder becomes the type's native default.
-    if (v === 'simulated') return undefined;
     const all = CONNECTIONS;
     const found = all.find((c) => c === v);
     if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
@@ -470,9 +467,8 @@ function readTime(value: unknown, where: string): Time {
   return { seconds };
 }
 
-/** `{ "agent", "item"? }`, or (as older files have it) just an agent's id. */
+/** `{ "agent", "item"? }`. */
 function readTarget(value: unknown, where: string): WaitTarget {
-  if (typeof value === 'string') return { agent: name(value, where) };
   const target = record(value, where);
   const item = optional(target.item, `${where}.item`, name);
   return { agent: name(target.agent, `${where}.agent`), ...(item === undefined ? {} : { item }) };

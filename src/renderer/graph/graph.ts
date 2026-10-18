@@ -19,7 +19,6 @@ import type {
   QueueItem,
   QueueMessage,
   QueueRepeat,
-  Question,
   QueueStep,
   Time,
   WaitTarget,
@@ -50,7 +49,6 @@ export type GraphNode = Node<
     /** Authored instructions shared by every CLI this agent runs. */
     role?: string;
     queue?: QueueItem[];
-    questions?: Question[];
     color?: number;
   },
   NodeKind
@@ -138,8 +136,8 @@ export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
 }
 
 /**
- * Adds an agent spawned from agent `from` in its agent view: of the same type, in the same group,
- * and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
+ * Adds an agent spawned from agent `from` in its agent view: of the same type, connection,
+ * settings and role, in the same group, and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
  * right. A `linked` one is linked to it, as drawing from its bottom dot lets two agents talk, and
  * goes below it, where the canvas's top-to-bottom layout puts what an agent links to (layout.ts),
  * in a row that starts under its left edge. Along its row it steps right past every card and group
@@ -197,6 +195,7 @@ export function spawnAgent(
         ...newAgent(id, source.data.agent),
         ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
         ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
+        ...(source.data.role === undefined ? {} : { role: source.data.role }),
       },
       selected: true,
     },
@@ -481,51 +480,6 @@ export function setExpect(
     else step.expect = expect;
     return step;
   });
-}
-
-/** Adds a question an agent asks the user. */
-export function askUser(graph: Graph, id: string, question: Question): Graph {
-  return updateQuestions(graph, id, (questions) => [...questions, question]);
-}
-
-/** Records the user's answer to an agent's question. */
-export function answerQuestion(
-  graph: Graph,
-  id: string,
-  questionId: string,
-  answer: string,
-): Graph {
-  return updateQuestions(graph, id, (questions) =>
-    questions.map((q) => (q.id === questionId ? { ...q, answer } : q)),
-  );
-}
-
-/** The questions agents are waiting on, in graph order: each with the agent that asked it. */
-export function pendingQuestions(
-  nodes: readonly GraphNode[],
-): { agent: GraphNode; question: Question }[] {
-  return nodes.flatMap((agent) =>
-    (agent.data.questions ?? [])
-      .filter((question) => question.answer === undefined)
-      .map((question) => ({ agent, question })),
-  );
-}
-
-function updateQuestions(
-  graph: Graph,
-  id: string,
-  update: (questions: Question[]) => Question[],
-): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (!node) return graph;
-  const before = node.data.questions ?? [];
-  const questions = update(before);
-  if (questions.length === before.length && questions.every((q, i) => q === before[i]))
-    return graph;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, questions } } : n)),
-  };
 }
 
 /** Sets what an if-then checks. */

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -119,7 +120,8 @@ async function openCanvas(nodes: CanvasNode[]) {
     canvas,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: nodes.map((node, index) => ({
         ...node,
         kind: 'agent',

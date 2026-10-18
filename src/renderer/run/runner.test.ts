@@ -349,32 +349,19 @@ describe('RunStore', () => {
     expect(store.snapshot().running).toBe(false);
   });
 
-  it.each(['Claude', 'Codex', 'Qwen', 'Gemini'] as const)(
-    'migrates a legacy placeholder refusal using the %s workflow type without replaying',
-    (type) => {
-      const queue: QueueItem[] = [{ id: 'inspect', action: 'Read' }];
-      const authored = { ...agent('a', queue), data: { label: 'A', agent: type, queue } };
-      const first = setup([authored], manual);
-      first.store.start();
-      first.sent[0]?.refused?.({
-        text: 'Earlier connection could not start.',
-        switchTo: 'terminal',
-      });
-      const saved = readRun(first.store.checkpoint());
-      const refused = saved.run.agents.a?.refused;
-      if (!refused) throw new Error('No refusal');
-      Object.assign(refused, { connection: 'simulated' });
-      const second = setup([authored], manual);
+  it('refuses a checkpoint whose refusal names the removed placeholder connection', () => {
+    const queue: QueueItem[] = [{ id: 'inspect', action: 'Read' }];
+    const first = setup([agent('a', queue)], manual);
+    first.store.start();
+    first.sent[0]?.refused?.({ text: 'Earlier connection could not start.', switchTo: 'terminal' });
+    const saved = readRun(first.store.checkpoint());
+    Object.assign(saved.run.agents.a?.refused ?? {}, { connection: 'simulated' });
+    const second = setup([agent('a', queue)], manual);
+    expect(() => {
       second.store.restore(JSON.stringify(saved));
-      expect(second.sent).toEqual([]);
-      expect(second.store.snapshot()).toMatchObject({ paused: true, running: false });
-      expect(second.store.snapshot().agents.a?.refused?.connection).toBe(
-        type === 'Claude' ? 'terminal' : type === 'Codex' ? 'codex-terminal' : 'unavailable',
-      );
-      if (type === 'Qwen' || type === 'Gemini')
-        expect(second.store.snapshot().agents.a?.refused).not.toHaveProperty('switchTo');
-    },
-  );
+    }).toThrow('invalid or unsupported');
+    expect(second.sent).toEqual([]);
+  });
 
   it('dispatches a default agent step to its native session and waits for its actual verdict', () => {
     const { store, sent, pending, advance, reply } = setup(

@@ -37,7 +37,6 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
       <Label id={id} label={data.label} />
       <AgentTag agent={data.agent ?? DEFAULT_AGENT} connection={connectionOf(data)} />
       <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
-      <QuestionCount count={data.questions?.filter((q) => q.answer === undefined).length ?? 0} />
       {state && (
         <span
           className="graph-agent-control"
@@ -286,18 +285,6 @@ function AgentTag({ agent, connection }: { agent: AgentType; connection: AgentCo
       data-agent={agent}
       data-connection={CONNECTION_INFO[connection].short}
       title={`Agent: ${agentLabel(agent, connection)}`}
-    />
-  );
-}
-
-/** How many questions the agent is waiting on the user for, drawn by CSS like the queue count. */
-function QuestionCount({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span
-      className="graph-question-count"
-      data-count={count}
-      title={`${String(count)} question${count === 1 ? '' : 's'} for you`}
     />
   );
 }

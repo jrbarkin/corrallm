@@ -1160,7 +1160,6 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
 
   // A connector's native question glows and appears on the canvas until answered.
-  await expect(panel.getByRole('button', { name: 'Simulate a question' })).toHaveCount(0);
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
   await composer.fill('/question');
   await composer.press('Enter');

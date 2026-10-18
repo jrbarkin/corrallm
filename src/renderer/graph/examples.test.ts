@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { canvasIdOf } from '../../shared/canvas';
 import { AGENT_ACTIONS, AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
@@ -13,7 +14,7 @@ describe.each(EXAMPLES)('the $name example', (example) => {
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
   it('is a canvas, written just as corrallm writes one', () => {
-    expect(toFile(graph)).toBe(example.text);
+    expect(toFile(graph, canvasIdOf(example.text))).toBe(example.text);
   });
 
   it('pins roles only to agent types with a connection', () => {
@@ -81,5 +82,12 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
   it('shows work passing between its agents', () => {
     expect(workEdges(graph.nodes).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the examples', () => {
+  it('each have an id of their own', () => {
+    const ids = EXAMPLES.map((example) => canvasIdOf(example.text));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

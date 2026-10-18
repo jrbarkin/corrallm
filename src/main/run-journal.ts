@@ -1,39 +1,53 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { WebContents } from 'electron';
-
+import { isCanvasId, newCanvasId } from '../shared/canvas';
+import type { CanvasId } from '../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
-import { associateCanvas, canvasFile, forgetCanvas } from './canvas';
+import { mintTrustedPath } from './core/host';
+import type { TrustedPath } from './core/host';
 import { readRemembered, writeWhole } from './memory';
 import type { CanvasMemory, Remembered } from './memory';
 
+/** What the journal keeps of a canvas a window shows: its generation's token, and what to say. */
 interface Entry {
-  identity: string;
-  canvas?: string;
   token: string;
   warning?: string;
 }
+/** A canvas's run record, as written (runs/<id>/record.json). */
 interface RecordFile {
   checkpoint: RunCheckpoint;
+  /** The canvas's file, and what memory has of it besides: recovered if memory lost it. */
+  file?: TrustedPath;
   remembered?: Remembered;
 }
 interface JournalDeps {
   memory: CanvasMemory;
-  projectOf(contents: WebContents): string | undefined;
-  restored(contents: WebContents): Promise<void>;
-  settled?(contents: WebContents): Promise<void>;
+  projectOf(canvas: CanvasId): string | undefined;
 }
 
-/** Atomic per-canvas journals plus the profile's last active named canvas or durable draft. */
+const VERSION = 2;
+const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
+
+/**
+ * Each canvas's run, journaled atomically by the canvas's id, and the canvas the profile had open
+ * last:
+ *
+ *   runs/<canvas id>/record.json  { "version": 2, "id", "file"?, "checkpoint", "remembered"? }
+ *   runs/last.json                { "version": 2, "canvas" }
+ *
+ * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
+ * canvas memory lost it. A window's renderer saves with the token of the canvas it showed: a save
+ * meant for a canvas it has since replaced (or opened again) is refused. A record that can't be
+ * read as one is set aside, saying where; a last canvas of another version reads as none.
+ */
 export class RunJournal {
   readonly #directory: string;
   readonly #deps: JournalDeps;
-  readonly #entries = new WeakMap<WebContents, Entry>();
-  readonly #opening = new WeakMap<WebContents, Promise<Entry>>();
+  readonly #entries = new Map<CanvasId, Entry>();
   #writing: Promise<void> = Promise.resolve();
 
   constructor(directory: string, deps: JournalDeps) {
@@ -41,200 +55,129 @@ export class RunJournal {
     this.#deps = deps;
   }
 
-  /** Internal memory key: drafts have durable identities but never masquerade as saved files. */
-  identity(contents: WebContents): string | undefined {
-    return canvasFile(contents) ?? this.#entries.get(contents)?.identity;
+  /**
+   * The canvas the profile had open last, its memory recovered from its record if it lost it: a new
+   * draft if there is none. Rejects, keeping it, if what says which it was can't be read.
+   */
+  async last(): Promise<CanvasId> {
+    let last: unknown;
+    try {
+      last = JSON.parse(await readFile(this.#lastFile(), 'utf8'));
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    const canvas = isLast(last) ? last.canvas : newCanvasId();
+    const record = await this.#read(canvas, this.#entry(canvas));
+    if (record !== undefined) {
+      const { file, remembered } = record;
+      // A present memory is authoritative, including conversations cleared by a project change or
+      // a rewind: the record only recovers a canvas memory lost.
+      await this.#deps.memory.update(canvas, (current, known) =>
+        known ? current : { ...(remembered ?? { conversations: {} }), ...(file ? { file } : {}) },
+      );
+    }
+    await this.#serialize(() => this.#last(canvas));
+    return canvas;
   }
 
-  has(contents: WebContents): boolean {
-    return this.#entries.has(contents);
-  }
-
-  /** Waits for restoration, old sessions and queued writes without changing the canvas. */
-  async ready(contents: WebContents): Promise<void> {
-    await this.#entry(contents);
-    await this.#deps.settled?.(contents);
+  /** What a window showing `canvas` restores: its run, its file's name and text, its folder. */
+  async get(canvas: CanvasId): Promise<RunContext> {
     await this.flush();
-  }
-
-  async get(contents: WebContents): Promise<RunContext> {
-    await this.ready(contents);
-    const entry = await this.#entry(contents);
-    const record = await this.#read(entry);
-    const folder = this.#deps.projectOf(contents);
+    const entry = this.#entry(canvas);
+    const record = await this.#read(canvas, entry);
+    const { file } = await this.#deps.memory.get(canvas);
     let savedText: string | undefined;
-    if (entry.canvas !== undefined) {
+    if (file !== undefined) {
       try {
-        savedText = await canvasText(entry.canvas);
+        savedText = await canvasText(file);
       } catch (error) {
         if (!missing(error)) throw error;
-        await this.#toDraft(contents, entry);
+        // Its file is gone: it goes on unsaved, as the same canvas.
+        entry.warning = [entry.warning, MISSING].filter(Boolean).join(' ');
+        await this.#deps.memory.setFile(canvas, undefined);
       }
     }
+    const folder = this.#deps.projectOf(canvas);
     return {
+      id: canvas,
       token: entry.token,
       checkpoint: record?.checkpoint ?? null,
-      name: entry.canvas === undefined ? null : path.basename(entry.canvas),
+      name: file === undefined || savedText === undefined ? null : path.basename(file),
       ...(folder === undefined ? {} : { project: { name: path.basename(folder), path: folder } }),
       ...(savedText === undefined ? {} : { savedText }),
       ...(entry.warning === undefined ? {} : { warning: entry.warning }),
     };
   }
 
-  async save(
-    contents: WebContents,
-    token: string,
-    checkpoint: RunCheckpoint | null,
-  ): Promise<void> {
-    const entry = await this.#entry(contents);
-    if (this.#entries.get(contents) !== entry || entry.token !== token) {
-      throw new Error('This run belongs to an earlier canvas');
-    }
+  /** Journals a canvas's run (null: none), for the renderer whose token is its canvas's. */
+  async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
+    const entry = this.#entry(canvas);
+    if (entry.token !== token) throw new Error('This run belongs to an earlier canvas');
     if (checkpoint !== null) {
       parseRunCheckpoint(checkpoint);
       if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
         throw new RangeError('The run checkpoint is too large');
       }
     }
-    const remembered = await this.#deps.memory.get(entry.identity);
     return this.#serialize(async () => {
-      if (this.#entries.get(contents) !== entry || entry.token !== token) {
+      if (this.#entries.get(canvas) !== entry || entry.token !== token) {
         throw new Error('This run belongs to an earlier canvas');
       }
-      if (checkpoint === null) await rm(this.#file(entry.identity), { force: true });
-      else await this.#write(entry.identity, { checkpoint, remembered });
-      await this.#last(entry);
+      if (checkpoint === null) await rm(this.#recordFile(canvas), { force: true });
+      else await this.#write(canvas, checkpoint);
+      await this.#last(canvas);
     });
   }
 
-  /** Call after a successful Open; the old generation can no longer save to this canvas. */
-  async opened(contents: WebContents): Promise<void> {
-    const canvas = canvasFile(contents);
-    if (canvas === undefined) throw new Error('No canvas was opened');
-    const entry = { identity: canvas, canvas, token: randomUUID() };
-    this.#entries.set(contents, entry);
-    await this.#serialize(() => this.#last(entry));
+  /**
+   * A window opened `canvas` (saying `warning` once, as why it opened as a copy): a new generation,
+   * so the renderer's earlier token no longer saves.
+   */
+  async opened(canvas: CanvasId, warning?: string): Promise<void> {
+    this.#entries.set(canvas, { token: randomUUID(), ...(warning ? { warning } : {}) });
+    await this.#serialize(() => this.#last(canvas));
   }
 
-  /** Save As copies metadata and IDs; the original named canvas keeps its own journal. */
-  async saved(contents: WebContents): Promise<void> {
-    const before = this.#entries.get(contents);
-    const canvas = canvasFile(contents);
-    if (canvas === undefined) return;
-    if (before?.identity === canvas) return;
-    try {
-      await this.flush();
-      const record = before === undefined ? undefined : await this.#read(before);
-      const remembered =
-        before === undefined ? undefined : await this.#deps.memory.get(before.identity);
-      const entry = { identity: canvas, canvas, token: randomUUID() };
-      if (remembered !== undefined) await this.#deps.memory.update(canvas, () => remembered);
-      await this.#serialize(async () => {
-        if (record !== undefined) await this.#write(canvas, record);
-        await this.#last(entry);
-      });
-      this.#entries.set(contents, entry);
-    } catch (error) {
-      // The target canvas file may already exist, but a failed metadata migration must keep the
-      // renderer's old token usable and its next ordinary Save pointed at the original canvas.
-      if (before === undefined) this.#entries.delete(contents);
-      else this.#entries.set(contents, before);
-      if (before?.canvas === undefined) forgetCanvas(contents);
-      else associateCanvas(contents, before.canvas);
-      throw error;
-    }
+  /** New: a new draft, its id. The canvas before keeps its record. */
+  async draft(): Promise<CanvasId> {
+    const canvas = newCanvasId();
+    this.#entries.set(canvas, { token: randomUUID() });
+    await this.#serialize(() => this.#last(canvas));
+    return canvas;
   }
 
-  /** New intentionally starts a new durable draft; named journals remain available. */
-  async forgotten(contents: WebContents): Promise<void> {
-    const entry = draft();
-    this.#entries.set(contents, entry);
-    await this.#serialize(() => this.#last(entry));
+  /** A canvas was saved (Save As too, which keeps its id): its record names its file now. */
+  async saved(canvas: CanvasId): Promise<void> {
+    const record = await this.#read(canvas, this.#entry(canvas));
+    await this.#serialize(async () => {
+      if (record !== undefined) await this.#write(canvas, record.checkpoint);
+      await this.#last(canvas);
+    });
   }
 
   flush(): Promise<void> {
     return this.#writing;
   }
 
-  #entry(contents: WebContents): Promise<Entry> {
-    let opening = this.#opening.get(contents);
-    if (opening !== undefined) return opening;
-    const entry = this.#entries.get(contents);
-    if (entry !== undefined) return Promise.resolve(entry);
-    opening = this.#restore(contents);
-    this.#opening.set(contents, opening);
-    void opening.finally(() => this.#opening.delete(contents)).catch(() => undefined);
-    return opening;
-  }
-
-  async #restore(contents: WebContents): Promise<Entry> {
-    let entry: Entry;
-    const canvas = canvasFile(contents);
-    if (canvas !== undefined) entry = { identity: canvas, canvas, token: randomUUID() };
-    else {
-      let last: unknown;
-      try {
-        last = JSON.parse(await readFile(path.join(this.#directory, 'last.json'), 'utf8'));
-      } catch (error) {
-        if (!missing(error)) throw error;
-      }
-      if (last === undefined) entry = draft();
-      else {
-        if (!isLast(last)) {
-          throw new Error('The saved run context is invalid');
-        }
-        entry = {
-          identity: last.identity,
-          token: randomUUID(),
-          ...(typeof last.canvas === 'string' ? { canvas: last.canvas } : {}),
-        };
-      }
+  #entry(canvas: CanvasId): Entry {
+    let entry = this.#entries.get(canvas);
+    if (entry === undefined) {
+      entry = { token: randomUUID() };
+      this.#entries.set(canvas, entry);
     }
-    this.#entries.set(contents, entry);
-    if (entry.canvas !== undefined) associateCanvas(contents, entry.canvas);
-    const record = await this.#read(entry);
-    if (record?.remembered !== undefined) {
-      const backup = record.remembered;
-      // A present record is authoritative, including IDs intentionally cleared by a project
-      // change or rewind. The checkpoint backup only recovers missing canvas memory.
-      await this.#deps.memory.update(entry.identity, (current, known) =>
-        known ? current : backup,
-      );
-    }
-    await this.#deps.restored(contents);
-    await this.#serialize(() => this.#last(entry));
     return entry;
   }
 
-  async #toDraft(contents: WebContents, entry: Entry): Promise<void> {
-    const record = await this.#read(entry);
-    const remembered = await this.#deps.memory.get(entry.identity);
-    Object.assign(entry, draft(), {
-      warning: [
-        entry.warning,
-        'The saved canvas is missing. Its run was restored as an unsaved canvas.',
-      ]
-        .filter(Boolean)
-        .join(' '),
-    });
-    delete entry.canvas;
-    forgetCanvas(contents);
-    await this.#deps.memory.update(entry.identity, () => remembered);
-    await this.#serialize(async () => {
-      if (record !== undefined) await this.#write(entry.identity, record);
-      await this.#last(entry);
-    });
+  #recordFile(canvas: CanvasId): string {
+    return path.join(this.#directory, canvas, 'record.json');
   }
 
-  #file(identity: string): string {
-    return path.join(
-      this.#directory,
-      `${createHash('sha256').update(identity).digest('hex')}.json`,
-    );
+  #lastFile(): string {
+    return path.join(this.#directory, 'last.json');
   }
 
-  async #read(entry: Entry): Promise<RecordFile | undefined> {
-    const file = this.#file(entry.identity);
+  async #read(canvas: CanvasId, entry: Entry): Promise<RecordFile | undefined> {
+    const file = this.#recordFile(canvas);
     let text: string | undefined;
     try {
       if ((await stat(file)).size <= MAX_RUN_BYTES * 2) text = await readFile(file, 'utf8');
@@ -246,11 +189,17 @@ export class RunJournal {
     try {
       if (text === undefined) throw new Error('The saved run is too large');
       const value: unknown = JSON.parse(text);
-      if (!isRecord(value) || value.version !== 1) throw new Error('The saved run is invalid');
-      const memory = readRemembered(value.remembered);
+      if (!isRecord(value) || value.version !== VERSION || value.id !== canvas) {
+        throw new Error('The saved run is invalid');
+      }
+      if (value.file !== undefined && !isAbsolute(value.file)) {
+        throw new Error('The saved run is invalid');
+      }
+      const remembered = readRemembered(value.remembered);
       return {
         checkpoint: parseRunCheckpoint(value.checkpoint),
-        ...(memory === undefined ? {} : { remembered: memory }),
+        ...(value.file === undefined ? {} : { file: mintTrustedPath(value.file) }),
+        ...(remembered === undefined ? {} : { remembered }),
       };
     } catch {
       const rejected = file.replace(/\.json$/, `.rejected-${randomUUID()}.json`);
@@ -260,32 +209,37 @@ export class RunJournal {
     }
   }
 
-  async #write(identity: string, record: RecordFile): Promise<void> {
-    await mkdir(this.#directory, { recursive: true });
-    await writeWhole(this.#file(identity), JSON.stringify({ version: 1, ...record }));
+  async #write(canvas: CanvasId, checkpoint: RunCheckpoint): Promise<void> {
+    const { file, ...remembered } = await this.#deps.memory.get(canvas);
+    await mkdir(path.dirname(this.#recordFile(canvas)), { recursive: true });
+    await writeWhole(
+      this.#recordFile(canvas),
+      JSON.stringify({
+        version: VERSION,
+        id: canvas,
+        ...(file === undefined ? {} : { file }),
+        checkpoint,
+        remembered,
+      }),
+    );
   }
 
-  async #last(entry: Entry): Promise<void> {
+  async #last(canvas: CanvasId): Promise<void> {
     await mkdir(this.#directory, { recursive: true });
-    const lastFile = path.join(this.#directory, 'last.json');
     let rejected = false;
     try {
-      rejected = !isLast(JSON.parse(await readFile(lastFile, 'utf8')));
+      JSON.parse(await readFile(this.#lastFile(), 'utf8'));
     } catch (error) {
       if (error instanceof SyntaxError) rejected = true;
       else if (!missing(error)) throw error;
     }
     if (rejected) {
-      await copyFile(lastFile, path.join(this.#directory, `last.rejected-${randomUUID()}.json`));
+      await copyFile(
+        this.#lastFile(),
+        path.join(this.#directory, `last.rejected-${randomUUID()}.json`),
+      );
     }
-    await writeWhole(
-      path.join(this.#directory, 'last.json'),
-      JSON.stringify({
-        version: 1,
-        identity: entry.identity,
-        ...(entry.canvas === undefined ? {} : { canvas: entry.canvas }),
-      }),
-    );
+    await writeWhole(this.#lastFile(), JSON.stringify({ version: VERSION, canvas }));
   }
 
   #serialize(operation: () => Promise<void>): Promise<void> {
@@ -295,11 +249,11 @@ export class RunJournal {
   }
 }
 
-function draft(): Entry {
-  return { identity: `draft:${randomUUID()}`, token: randomUUID() };
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function isAbsolute(value: unknown): value is string {
+  return typeof value === 'string' && path.isAbsolute(value);
 }
 function missing(error: unknown): boolean {
   return isRecord(error) && error.code === 'ENOENT';
@@ -308,13 +262,7 @@ async function canvasText(file: string): Promise<string> {
   if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('The saved canvas is too large');
   return readFile(file, 'utf8');
 }
-function isLast(value: unknown): value is { version: 1; identity: string; canvas?: string } {
-  return (
-    isRecord(value) &&
-    value.version === 1 &&
-    typeof value.identity === 'string' &&
-    (value.identity.startsWith('draft:') || path.isAbsolute(value.identity)) &&
-    (value.canvas === undefined ||
-      (typeof value.canvas === 'string' && path.isAbsolute(value.canvas)))
-  );
+/** What says which canvas was open last: of this version, else none. */
+function isLast(value: unknown): value is { version: 2; canvas: CanvasId } {
+  return isRecord(value) && value.version === VERSION && isCanvasId(value.canvas);
 }

@@ -2,9 +2,8 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { WebContents } from 'electron';
-
-import { MAX_LINK_LENGTH } from '../shared/ipc';
+import type { CanvasId } from '../../shared/canvas';
+import { MAX_LINK_LENGTH } from '../../shared/ipc';
 
 /*
  * file:// links the user Cmd-clicks in a terminal (Claude Code prints the files it names as OSC 8
@@ -16,8 +15,8 @@ import { MAX_LINK_LENGTH } from '../shared/ipc';
  */
 
 export interface FileRevealerDeps {
-  /** The project folder of the renderer's canvas, if one was chosen (project.ts). */
-  folderOf: (contents: WebContents) => string | undefined;
+  /** The project folder of a canvas, if one was chosen (project.ts). */
+  folderOf: (canvas: CanvasId) => string | undefined;
   /** Shows a file or folder in the OS file manager, selected (shell.showItemInFolder). */
   show: (file: string) => void;
 }
@@ -29,9 +28,9 @@ export class FileRevealer {
     this.#deps = deps;
   }
 
-  /** Shows the file a renderer's user clicked, if it may. Resolves with whether it was shown. */
-  async reveal(contents: WebContents, raw: string): Promise<boolean> {
-    const folder = this.#deps.folderOf(contents);
+  /** Shows the file the user clicked in a canvas's agent, if it may. Resolves with whether it was shown. */
+  async reveal(canvas: CanvasId, raw: string): Promise<boolean> {
+    const folder = this.#deps.folderOf(canvas);
     if (folder === undefined) return false;
     const file = await revealTarget(raw, folder);
     if (file === null) return false;

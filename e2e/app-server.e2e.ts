@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -100,7 +101,8 @@ async function canvasFile(queue: { id: string; message: string }[] = []) {
     path.join(dir, 'team.corral'),
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'shop',

@@ -2,8 +2,8 @@ import { readFile } from 'node:fs/promises';
 
 import type { WebContents } from 'electron';
 
-import { writeWhole } from './memory';
-import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
+import { writeWhole } from '../memory';
+import { EXTERNAL_URL_ALLOWLIST, linkTarget } from '../url-policy';
 
 /*
  * Links the user clicks in the app (a transcript's Markdown, a terminal's links) open in their

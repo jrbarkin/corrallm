@@ -869,28 +869,6 @@ input.graph-label {
   }
 }
 
-.graph-question-count {
-  position: absolute;
-  top: -8px;
-  right: 18px;
-  box-sizing: border-box;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: #f59e0b;
-  color: black;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
-  pointer-events: none;
-}
-
-.graph-question-count::after {
-  content: '?' attr(data-count);
-}
-
 /* The floating list of what needs the user: what the run holds for them, then agents' questions. */
 .graph-questions {
   box-sizing: border-box;
@@ -1107,22 +1085,6 @@ input.graph-label {
 .graph-question-terminal button:hover,
 .graph-question-terminal button:focus-visible {
   background: color-mix(in srgb, var(--graph-accent, #2563eb) 85%, black);
-}
-
-/* An agent's own questions, at the top of its panel, each in a callout. */
-.graph-detail-questions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(420px, 100%);
-  margin: 12px auto 0;
-}
-
-.graph-detail-questions .graph-question {
-  padding: 10px 12px;
-  border: 1px solid #f59e0b;
-  border-radius: 10px;
-  background: color-mix(in srgb, #f59e0b 8%, Canvas);
 }
 
 /* A link between agents that can talk to each other: dashed, with no direction. */

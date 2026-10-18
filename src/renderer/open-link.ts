@@ -6,8 +6,8 @@ import type { AppApi } from '../shared/ipc';
  * Opens a link the user clicked (a transcript's Markdown, a terminal's links): an http(s) link in
  * their browser, a file:// link (a file Claude Code names in its terminal) by showing its file in
  * the OS file manager. The main process decides whether: it asks before opening a site, unless the
- * site is allowlisted or the user said to always open it (src/main/links.ts), and shows a file
- * only if it is in the canvas's project folder (src/main/reveal.ts). The renderer never opens a
+ * site is allowlisted or the user said to always open it (src/main/host/links.ts), and shows a file
+ * only if it is in the canvas's project folder (src/main/host/reveal.ts). The renderer never opens a
  * link itself: in-app navigation and new windows are blocked.
  */
 export type OpenLink = (url: string) => void;

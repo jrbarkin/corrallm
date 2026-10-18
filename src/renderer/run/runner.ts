@@ -219,6 +219,14 @@ const ALARM_MS = 60_000;
 const SHELL_REFUSED =
   'Not sent: it starts with "!", which Claude Code and Codex run as a shell command, without asking. Reword it, or type it in the agent\'s terminal yourself.';
 
+/**
+ * What a correction the user typed sends: their note, then what it corrects. A note that starts
+ * with "!" is a shell command for the CLI's bash mode, sent alone: the canvas's text after it
+ * would be run as part of it.
+ */
+const corrected = (note: string, task: string) =>
+  note.trimStart().startsWith('!') ? note : `${note}\n\n${task}`;
+
 /** What the run says when it waits for a usage window's reset that has never been read. */
 const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
   `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
@@ -334,7 +342,7 @@ export class RunStore {
 
   checkpoint(): string {
     const saved: SavedRun = {
-      version: 1,
+      version: 2,
       run: this.#run,
       replies: [...this.#replies],
       held: [...this.#held],
@@ -349,7 +357,7 @@ export class RunStore {
   }
 
   restore(text: string): void {
-    const saved = readRun(text, this.#nodes);
+    const saved = readRun(text);
     const causes = this.#pauseCauses(saved.run);
     for (const id of this.#pausedMembers(causes)) this.#hold(id, true);
     this.#cancel();
@@ -569,16 +577,10 @@ export class RunStore {
 
   #pauseCauses(run = this.#run): PauseCauses {
     const present = new Set(this.#agents().map((node) => node.id));
-    const recorded = run.individualPauses !== undefined || run.groupPauses !== undefined;
-    const legacy = recorded
-      ? []
-      : Object.entries(run.agents)
-          .filter(([, at]) => at.paused)
-          .map(([id]) => id);
     return {
-      individual: [...new Set(run.individualPauses ?? legacy)].filter((id) => present.has(id)),
+      individual: [...new Set(run.individualPauses ?? [])].filter((id) => present.has(id)),
       groups: [...new Set(run.groupPauses ?? [])].filter((id) => isGroup(this.#nodes, id)),
-      recorded: recorded || legacy.length > 0,
+      recorded: run.individualPauses !== undefined || run.groupPauses !== undefined,
     };
   }
 
@@ -1625,7 +1627,10 @@ export class RunStore {
       if (node) {
         const original = this.#stepMessage(node, task);
         const text = correction
-          ? `${correction.note}\n\nContinue this original task and report its result:\n${original}`
+          ? corrected(
+              correction.note,
+              `Continue this original task and report its result:\n${original}`,
+            )
           : original;
         this.#send(node, text, {
           ended,
@@ -1652,7 +1657,7 @@ export class RunStore {
         this.#send(
           to,
           correction
-            ? `${correction.note}\n\nContinue the original task: ${task.message}`
+            ? corrected(correction.note, `Continue the original task: ${task.message}`)
             : task.message,
           {
             ended,

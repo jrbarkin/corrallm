@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { newCanvasId } from '../../shared/canvas';
 import type { RunCheckpoint, RunContext } from '../../shared/run';
 import { RunPersistence } from './persistence';
 import type { RunSource } from './persistence';
@@ -7,7 +8,12 @@ import type { RunSource } from './persistence';
 function setup() {
   const stopping = new Set<(request: string) => void>();
   let snapshot = 'running';
-  const context: RunContext = { token: 'original', checkpoint: null, name: null };
+  const context: RunContext = {
+    id: newCanvasId(),
+    token: 'original',
+    checkpoint: null,
+    name: null,
+  };
   const source: RunSource = {
     get: vi.fn().mockResolvedValue(context),
     save: vi.fn().mockResolvedValue(null),
@@ -21,7 +27,7 @@ function setup() {
   };
   const owner = {
     capture: (): RunCheckpoint => ({
-      version: 1,
+      version: 2,
       workflow: '{}',
       state: JSON.stringify({ snapshot }),
       messages: '{}',
@@ -72,7 +78,7 @@ describe('run persistence coordinator', () => {
       const first = persistence.initialize();
       persistence.dispose();
       expect(listeners()).toBe(0);
-      const context = { token: 'restored', checkpoint: null, name: null };
+      const context = { id: newCanvasId(), token: 'restored', checkpoint: null, name: null };
       if (when === 'before restart') {
         loaded?.(context);
         await first;
@@ -186,6 +192,7 @@ describe('run persistence coordinator', () => {
       finish = resolve;
     });
     vi.mocked(source.get).mockResolvedValue({
+      id: newCanvasId(),
       token: 'new',
       checkpoint: null,
       name: 'Saved.corral',
@@ -253,7 +260,7 @@ describe('run persistence coordinator', () => {
     });
     let token = 'original';
     vi.mocked(source.get).mockImplementation(() =>
-      Promise.resolve({ token, checkpoint: null, name: null }),
+      Promise.resolve({ id: newCanvasId(), token, checkpoint: null, name: null }),
     );
     const first = persistence.transition(async () => {
       await firstAction;
@@ -282,8 +289,13 @@ describe('run persistence coordinator', () => {
   it('recovers a rejected restore as a draft before allowing the original canvas to save', async () => {
     const { persistence, source, owner } = setup();
     await persistence.initialize();
-    const invalid = { token: 'invalid-file', checkpoint: null, name: 'invalid.corral' };
-    const draft = { token: 'recovered-draft', checkpoint: null, name: null };
+    const invalid = {
+      id: newCanvasId(),
+      token: 'invalid-file',
+      checkpoint: null,
+      name: 'invalid.corral',
+    };
+    const draft = { id: newCanvasId(), token: 'recovered-draft', checkpoint: null, name: null };
     vi.mocked(source.get).mockResolvedValueOnce(invalid).mockResolvedValue(draft);
     owner.restore.mockImplementationOnce(() => {
       throw new Error('Invalid canvas');

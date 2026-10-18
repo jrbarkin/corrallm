@@ -1,3 +1,4 @@
+import type { CanvasId } from './canvas';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
   Connection,
@@ -43,21 +44,23 @@ export interface IpcContract {
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
   /**
-   * Asks for a canvas file to open (the Open dialog). Resolves with it, or null if cancelled. Its
-   * agents' sessions end, and its project folder, if one was chosen for it, comes back.
+   * Asks for a canvas file to open (the Open dialog). Resolves with it, or null if cancelled. The
+   * canvas before's agents' sessions end, and the opened one's project folder, if one was chosen
+   * for it, comes back.
    */
   'canvas:open': { args: []; result: CanvasFile | null };
   /**
-   * Saves a canvas (its file's text) to the file it was opened from or last saved to, or, when it
-   * has none or `choose` is true, to one picked in the Save dialog. Resolves with the file's name,
-   * or null if cancelled. The file remembers the canvas's project folder and its agents' sessions.
+   * Saves a canvas (its file's text, holding its id) to the file it was opened from or last saved
+   * to, or, when it has none or `choose` is true, to one picked in the Save dialog (Save As, which
+   * keeps its id, and so its project folder and its agents' conversations). Resolves with the
+   * file's name, or null if cancelled.
    */
   'canvas:save': { args: [text: string, choose: boolean]; result: string | null };
   /**
-   * Forgets the canvas's file, for a new canvas: its next save asks where. Its project folder is
-   * forgotten and its agents' sessions end. Resolves with null.
+   * Begins a new canvas, a draft with an id of its own: its first save asks where. The canvas
+   * before is kept as it was, and its agents' sessions end. Resolves with the new canvas's id.
    */
-  'canvas:forget': { args: []; result: null };
+  'canvas:forget': { args: []; result: CanvasId };
   /**
    * Asks for the folder the canvas's agents work in (a folder dialog). Resolves with it, or null if
    * cancelled. Choosing another folder ends the agents' sessions: they start afresh in it.
@@ -164,7 +167,7 @@ export interface IpcContract {
   /**
    * Shows the file or folder a file:// link the user Cmd-clicked in a terminal names in the OS file
    * manager (Finder), selected, never opened: only if it is in the canvas's project folder, links
-   * resolved (src/main/reveal.ts). Resolves with whether it was shown.
+   * resolved (src/main/host/reveal.ts). Resolves with whether it was shown.
    */
   'link:reveal': { args: [url: string]; result: boolean };
   /**
@@ -199,8 +202,12 @@ export interface IpcEvents {
   'usage:changed': [state: UsageState];
 }
 
-/** A canvas file: its name (without folders) and its text (src/renderer/graph/file.ts). */
+/**
+ * A canvas file opened: its canvas's id (its own, or a new one for a copy of a canvas kept in
+ * another file), its name (without folders) and its text (src/renderer/graph/file.ts).
+ */
 export interface CanvasFile {
+  id: CanvasId;
   name: string;
   text: string;
   /** The folder its agents work in, when one was chosen for it and is still there. */

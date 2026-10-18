@@ -374,29 +374,6 @@ describe('group scheduler controls', () => {
     expect(second.texts()).toEqual(['a:one']);
   });
 
-  it('migrates legacy paused flags to individual causes and clears all causes on reset', () => {
-    const first = setup([frame('g'), agent('a', 'g')]);
-    first.store.pauseAgent('a');
-    const saved = JSON.parse(first.store.checkpoint()) as {
-      run: { individualPauses?: string[]; groupPauses?: string[] };
-    };
-    delete saved.run.individualPauses;
-    delete saved.run.groupPauses;
-    const second = setup([frame('g'), agent('a', 'g')]);
-    second.store.restore(JSON.stringify(saved));
-    expect(second.store.snapshot().individualPauses).toEqual(['a']);
-    second.store.resumeGroup('g');
-    second.store.resume();
-    expect(second.texts()).toEqual([]);
-    second.store.resumeAgent('a');
-    expect(second.texts()).toEqual(['a:one']);
-    second.store.pauseGroup('g');
-    second.store.reset();
-    expect(second.store.snapshot()).toEqual({ running: false, agents: {} });
-    second.store.start();
-    expect(second.texts().at(-1)).toBe('a:one');
-  });
-
   it.each(['individualPauses', 'groupPauses'] as const)(
     'rejects invalid %s without discarding current state',
     (field) => {

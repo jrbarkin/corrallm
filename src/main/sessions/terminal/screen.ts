@@ -27,6 +27,12 @@ export interface Snapshot {
 const SCROLLBACK = 2000;
 /** Device Attributes (DA1): what xterm.js answers, a VT100 with advanced video. */
 const DEVICE_ATTRIBUTES = '\x1b[?1;2c';
+/**
+ * Characters written and not yet on the screen above which its CLI is paused, and below which it
+ * goes on: xterm.js throws writes away (throwing) once 5e7 are pending.
+ */
+const HIGH_WATER = 1_000_000;
+const LOW_WATER = 100_000;
 /** Claude Code's prompt mark, and the rules above and below its prompt box. */
 const PROMPT = '❯';
 const RULE = '─'.repeat(8);
@@ -42,6 +48,8 @@ export interface ScreenOptions {
   title?: (title: string) => void;
   /** Whether this screen answers terminal queries itself (no view's terminal does). */
   answersQueries: () => boolean;
+  /** Its CLI should stop printing (true) until the screen has caught up with it (false). */
+  flow?: (paused: boolean) => void;
 }
 
 export class Screen {
@@ -49,8 +57,13 @@ export class Screen {
   readonly #serialize = new SerializeAddon();
   /** Whether the cursor shows (DECTCEM): a CLI shows it where it takes typing. */
   #cursorShown = true;
+  readonly #flow: ((paused: boolean) => void) | undefined;
+  /** Characters written and not yet on the screen, and whether its CLI was paused for them. */
+  #pending = 0;
+  #paused = false;
 
-  constructor({ cols, rows, reply, status, title, answersQueries }: ScreenOptions) {
+  constructor({ cols, rows, reply, status, title, answersQueries, flow }: ScreenOptions) {
+    this.#flow = flow;
     this.#terminal = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
     // The addons are written for the browser's Terminal; the headless one has the same API.
     this.#terminal.loadAddon(new Unicode11Addon());
@@ -94,9 +107,20 @@ export class Screen {
     return this.#terminal.modes.bracketedPasteMode;
   }
 
-  /** Something the CLI printed. */
+  /** Something the CLI printed. While too much is still to be parsed, the CLI is paused. */
   write(data: string): void {
-    this.#terminal.write(data);
+    this.#pending += data.length;
+    this.#terminal.write(data, () => {
+      this.#pending -= data.length;
+      if (this.#paused && this.#pending < LOW_WATER) {
+        this.#paused = false;
+        this.#flow?.(false);
+      }
+    });
+    if (!this.#paused && this.#pending > HIGH_WATER) {
+      this.#paused = true;
+      this.#flow?.(true);
+    }
   }
 
   resize(cols: number, rows: number): void {

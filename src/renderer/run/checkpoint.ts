@@ -1,13 +1,11 @@
 import { CONNECTIONS } from '../../shared/session';
-import { connectionOf } from '../graph/agents';
-import type { GraphNode } from '../graph/graph';
 import type { AgentRun, Outcome, Run, TaskAttempt } from './runner';
 
 /** Queue state and the minimal result evidence needed by conditions; no session transcript.
  * TODO(V2): full transcript and terminal-screen snapshots, if native CLI history is insufficient.
  */
 export interface SavedRun {
-  version: 1;
+  version: 2;
   run: Run;
   replies: [string, string][];
   held: [string, boolean][];
@@ -94,7 +92,7 @@ function agent(v: unknown): v is AgentRun {
         record(x) &&
         string(x.agent) &&
         string(x.text) &&
-        oneOf(x.connection, ['simulated', 'unavailable', ...CONNECTIONS]) &&
+        oneOf(x.connection, ['unavailable', ...CONNECTIONS]) &&
         optional(x, 'switchTo', (value) => oneOf(value, CONNECTIONS)),
     ) &&
     optional(
@@ -112,7 +110,7 @@ function agent(v: unknown): v is AgentRun {
 }
 
 /** Reject malformed checkpoints before changing any live state. */
-export function readRun(text: string, nodes: readonly GraphNode[] = []): SavedRun {
+export function readRun(text: string): SavedRun {
   let v: unknown;
   try {
     v = JSON.parse(text);
@@ -121,7 +119,7 @@ export function readRun(text: string, nodes: readonly GraphNode[] = []): SavedRu
   }
   if (
     !record(v) ||
-    v.version !== 1 ||
+    v.version !== 2 ||
     !record(v.run) ||
     !boolean(v.run.running) ||
     !optional(v.run, 'paused', boolean) ||
@@ -142,15 +140,5 @@ export function readRun(text: string, nodes: readonly GraphNode[] = []): SavedRu
     !array(v.warned, string)
   )
     throw new Error('The saved run has an invalid or unsupported format.');
-  // Legacy placeholder refusals follow the authored agent type; restoration itself stays paused.
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  for (const at of Object.values(v.run.agents)) {
-    if (!record(at)) continue;
-    const refused = at.refused;
-    if (!record(refused) || refused.connection !== 'simulated') continue;
-    const to = typeof refused.agent === 'string' ? byId.get(refused.agent) : undefined;
-    refused.connection = connectionOf(to?.data ?? {});
-    if (refused.connection === 'unavailable') delete refused.switchTo;
-  }
   return v as unknown as SavedRun;
 }

@@ -219,7 +219,7 @@ describe('run persistence preload', () => {
   it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
     const api = await exposed();
     const checkpoint = {
-      version: 1,
+      version: 2,
       workflow: '{}',
       state: '{}',
       messages: '[]',

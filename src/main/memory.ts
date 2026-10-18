@@ -1,23 +1,33 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
+import { isCanvasId } from '../shared/canvas';
+import type { CanvasId } from '../shared/canvas';
+import { mintTrustedPath } from './core/host';
+import type { TrustedPath } from './core/host';
 import { isSessionId } from './sessions/id';
 
+/** A native conversation an agent runs in a CLI: its id, and the role it launched with. */
+export interface Conversation {
+  id: string;
+  /**
+   * The role's fingerprint as the conversation launched with it (roleFingerprint). Absent when it
+   * is not known (one picked with /resume, or a rewind's copy): a changed role, once.
+   */
+  role?: string;
+}
+
 /**
- * What main remembers of a canvas file: its project folder, and its agents' sessions' ids (Claude
- * Code's sessions, Codex's threads). What its agents are set to run with (their models, efforts,
- * modes and role text) is in the canvas's file itself.
+ * What main remembers of a canvas: the file it was opened from or saved to (none for a draft),
+ * the folder its agents work in, and its agents' conversations, by adapter and then by agent
+ * (each CLI's: the one every connection of it resumes). What its agents are set to run with (their
+ * models, efforts, modes and role text) is in the canvas's file itself.
  */
 export interface Remembered {
-  project?: string;
-  /** The id of each agent's Claude Code session, by agent id: resumed when the agent starts. */
-  sessions: Readonly<Record<string, string>>;
-  /** The id of each agent's Codex thread (Codex's sessions), by agent id, likewise. */
-  threads?: Readonly<Record<string, string>>;
-  /** The role fingerprint each remembered Claude Code session launched with, by agent id. */
-  sessionRoles?: Readonly<Record<string, string>>;
-  /** The role fingerprint each remembered Codex thread launched with, by agent id, likewise. */
-  threadRoles?: Readonly<Record<string, string>>;
+  file?: TrustedPath;
+  project?: TrustedPath;
+  conversations: Readonly<Record<string, Readonly<Record<string, Conversation>>>>;
 }
 
 /** The role a conversation launched with, without keeping its text; 'none' means no role. */
@@ -25,26 +35,29 @@ export function roleFingerprint(role: string | undefined): string {
   return role === undefined ? 'none' : createHash('sha256').update(role).digest('hex');
 }
 
-const NOTHING: Remembered = { sessions: {} };
+const NOTHING: Remembered = { conversations: {} };
 /** How many canvases it remembers: the ones used most recently. */
 const LIMIT = 200;
-const VERSION = 1;
+const VERSION = 2;
+/** What names an adapter: never a key an object has of its own (as `__proto__`). */
+const ADAPTER = /^[A-Za-z][A-Za-z0-9._-]{0,31}$/;
 
 /**
- * What main remembers of each canvas file between runs, by the file's path, in a JSON file in the
- * app's user data. The canvas file itself only holds what the canvas means (src/renderer/graph/
- * file.ts), so it can be shared: where it runs on this machine is kept here.
+ * What main remembers of each canvas between runs, by the canvas's id, in a JSON file in the app's
+ * user data. The canvas file itself only holds what the canvas means (src/renderer/graph/file.ts),
+ * so it can be shared: where it is and where it runs on this machine is kept here.
  *
- *   { "version": 1, "canvases": { "<canvas path>": { "project"?, "sessions": { "<agent>": id },
- *       "threads"?: { "<agent>": id }, "sessionRoles"?: { "<agent>": fingerprint },
- *       "threadRoles"?: { "<agent>": fingerprint } } } }
+ *   { "version": 2, "canvases": { "<canvas id>": { "file"?, "project"?,
+ *       "conversations": { "<adapter>": { "<agent>": { "id", "role"? } } } } } }
  *
- * Updates are applied one at a time, in order, and written whole (beside it, then moved over it).
+ * A file belongs to one canvas at most. Updates are applied one at a time, in order, and written
+ * whole (beside it, then moved over it). The paths it reads back are trusted: it wrote them, from
+ * the app's dialogs. A file of another version reads as empty.
  */
 export class CanvasMemory {
   readonly #file: string;
   readonly #limit: number;
-  #canvases: Promise<Map<string, Remembered>> | undefined;
+  #canvases: Promise<Map<CanvasId, Remembered>> | undefined;
   #writing: Promise<void> = Promise.resolve();
   #writeError: Error | undefined;
 
@@ -53,8 +66,19 @@ export class CanvasMemory {
     this.#limit = limit;
   }
 
-  async get(canvas: string): Promise<Remembered> {
+  /** What it remembers of a canvas, with every update asked for so far. */
+  async get(canvas: CanvasId): Promise<Remembered> {
+    await this.#writing;
     return (await this.#load()).get(canvas) ?? NOTHING;
+  }
+
+  /** The canvas whose file `file` is, if any. */
+  async canvasWithFile(file: string): Promise<CanvasId | undefined> {
+    await this.#writing;
+    for (const [canvas, remembered] of await this.#load()) {
+      if (remembered.file === file) return canvas;
+    }
+    return undefined;
   }
 
   /**
@@ -62,27 +86,31 @@ export class CanvasMemory {
    * `known` distinguishes an intentionally empty record from one absent from memory.
    */
   update(
-    canvas: string,
+    canvas: CanvasId,
     change: (remembered: Remembered, known: boolean) => Remembered,
   ): Promise<void> {
-    const run = async () => {
-      const canvases = await this.#load();
+    return this.#change((canvases) => {
       const next = change(canvases.get(canvas) ?? NOTHING, canvases.has(canvas));
       canvases.delete(canvas);
       canvases.set(canvas, next);
-      for (const oldest of canvases.keys()) {
-        if (canvases.size <= this.#limit) break;
-        canvases.delete(oldest);
-      }
-      await this.#write(canvases);
-      this.#writeError = undefined;
-    };
-    // Ordinary metadata updates remain nonfatal, but shutdown must not lose native resume IDs.
-    this.#writing = this.#writing.then(run).catch((error: unknown) => {
-      this.#writeError = error instanceof Error ? error : new Error(String(error));
-      console.error('Could not remember the canvas:', error);
     });
-    return this.#writing;
+  }
+
+  /**
+   * Sets the file a canvas is opened from and saved to (undefined: none, a draft's). Another canvas
+   * that had that file has it no more.
+   */
+  setFile(canvas: CanvasId, file: TrustedPath | undefined): Promise<void> {
+    return this.#change((canvases) => {
+      for (const [other, remembered] of canvases) {
+        if (other !== canvas && file !== undefined && remembered.file === file) {
+          canvases.set(other, withFile(remembered, undefined));
+        }
+      }
+      const next = withFile(canvases.get(canvas) ?? NOTHING, file);
+      canvases.delete(canvas);
+      canvases.set(canvas, next);
+    });
   }
 
   /** Resolves once every update so far is written; rejects a still-unrecovered write failure. */
@@ -91,17 +119,44 @@ export class CanvasMemory {
     if (this.#writeError !== undefined) throw this.#writeError;
   }
 
-  #load(): Promise<Map<string, Remembered>> {
+  #change(apply: (canvases: Map<CanvasId, Remembered>) => void): Promise<void> {
+    const run = async () => {
+      const canvases = await this.#load();
+      apply(canvases);
+      for (const oldest of canvases.keys()) {
+        if (canvases.size <= this.#limit) break;
+        canvases.delete(oldest);
+      }
+      await this.#write(canvases);
+      this.#writeError = undefined;
+    };
+    // Ordinary updates remain nonfatal, but shutdown must not lose native resume IDs.
+    this.#writing = this.#writing.then(run).catch((error: unknown) => {
+      this.#writeError = error instanceof Error ? error : new Error(String(error));
+      console.error('Could not remember the canvas:', error);
+    });
+    return this.#writing;
+  }
+
+  #load(): Promise<Map<CanvasId, Remembered>> {
     this.#canvases ??= readFile(this.#file, 'utf8').then(parse, () => new Map());
     return this.#canvases;
   }
 
-  async #write(canvases: Map<string, Remembered>): Promise<void> {
+  async #write(canvases: Map<CanvasId, Remembered>): Promise<void> {
     await writeWhole(
       this.#file,
       `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`,
     );
   }
+}
+
+/** `remembered` with its file set (undefined: none). */
+function withFile(remembered: Remembered, file: TrustedPath | undefined): Remembered {
+  const next = { ...remembered };
+  if (file === undefined) delete next.file;
+  else next.file = file;
+  return next;
 }
 
 /**
@@ -120,8 +175,8 @@ export async function writeWhole(file: string, text: string): Promise<void> {
 }
 
 /** The canvases a memory file holds; entries that are not right are left out. */
-function parse(text: string): Map<string, Remembered> {
-  const canvases = new Map<string, Remembered>();
+function parse(text: string): Map<CanvasId, Remembered> {
+  const canvases = new Map<CanvasId, Remembered>();
   let file: unknown;
   try {
     file = JSON.parse(text);
@@ -131,48 +186,46 @@ function parse(text: string): Map<string, Remembered> {
   if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     const remembered = readRemembered(value);
-    if (remembered !== undefined) canvases.set(canvas, remembered);
+    if (isCanvasId(canvas) && remembered !== undefined) canvases.set(canvas, remembered);
   }
   return canvases;
 }
 
-/** Reads remembered metadata, leaving out malformed ids and their role fingerprints. */
+/**
+ * What is remembered of a canvas, as written (in canvases.json, or a run record's copy of it):
+ * undefined if it is not right. Conversations whose ids are not ids are left out, and role
+ * fingerprints that are not fingerprints.
+ */
 export function readRemembered(value: unknown): Remembered | undefined {
   if (!isRecord(value)) return undefined;
-  const { project, sessionRoles, threadRoles } = value;
-  if (project !== undefined && typeof project !== 'string') return undefined;
-  const sessions = ids(value.sessions);
-  const threads = ids(value.threads);
+  const { file, project, conversations } = value;
+  if (file !== undefined && !isAbsolute(file)) return undefined;
+  if (project !== undefined && !isAbsolute(project)) return undefined;
   return {
-    ...(project === undefined ? {} : { project }),
-    sessions,
-    ...(isRecord(value.threads) ? { threads } : {}),
-    ...(isRecord(sessionRoles) ? { sessionRoles: fingerprints(sessionRoles, sessions) } : {}),
-    ...(isRecord(threadRoles) ? { threadRoles: fingerprints(threadRoles, threads) } : {}),
+    ...(file === undefined ? {} : { file: mintTrustedPath(file) }),
+    ...(project === undefined ? {} : { project: mintTrustedPath(project) }),
+    conversations: Object.fromEntries(
+      Object.entries(isRecord(conversations) ? conversations : {}).flatMap(([adapter, agents]) =>
+        ADAPTER.test(adapter) && isRecord(agents) ? [[adapter, readConversations(agents)]] : [],
+      ),
+    ),
   };
 }
 
-function fingerprints(
-  value: Record<string, unknown>,
-  sessions: Record<string, string>,
-): Record<string, string> {
+/** An adapter's agents' conversations; those that are not right are left out. */
+function readConversations(agents: Record<string, unknown>): Record<string, Conversation> {
   return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, string] =>
-        Object.hasOwn(sessions, entry[0]) &&
-        typeof entry[1] === 'string' &&
-        (entry[1] === 'none' || /^[a-f0-9]{64}$/.test(entry[1])),
-    ),
+    Object.entries(agents).flatMap(([agent, value]) => {
+      if (!isRecord(value) || !isSessionId(value.id)) return [];
+      const { role } = value;
+      const known = typeof role === 'string' && (role === 'none' || /^[a-f0-9]{64}$/.test(role));
+      return [[agent, { id: value.id, ...(known ? { role } : {}) }]];
+    }),
   );
 }
 
-/** The ids in a record of them, by agent; values that are not ids are left out. */
-function ids(value: unknown): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(isRecord(value) ? value : {}).filter((entry): entry is [string, string] =>
-      isSessionId(entry[1]),
-    ),
-  );
+function isAbsolute(value: unknown): value is string {
+  return typeof value === 'string' && path.isAbsolute(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

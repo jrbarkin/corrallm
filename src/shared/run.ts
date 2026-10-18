@@ -1,14 +1,20 @@
+import type { CanvasId } from './canvas';
+
 /** Queue/run metadata only. Native CLIs remain the source of conversation history. */
 export interface RunCheckpoint {
-  version: 1;
+  version: 2;
   workflow: string;
   state: string;
   messages: string;
   updatedAt: number;
 }
 
-/** Main owns the canvas path and supplies a generation token, never a writable path. */
+/**
+ * What a window restores: main owns the canvas's path and gives its id and a generation token,
+ * never a writable path.
+ */
 export interface RunContext {
+  id: CanvasId;
   token: string;
   checkpoint: RunCheckpoint | null;
   name: string | null;
@@ -30,7 +36,7 @@ export function parseRunCheckpoint(value: unknown): RunCheckpoint {
     Object.keys(record).some(
       (key) => !['version', 'workflow', 'state', 'messages', 'updatedAt'].includes(key),
     ) ||
-    record.version !== 1 ||
+    record.version !== 2 ||
     typeof record.updatedAt !== 'number' ||
     !Number.isSafeInteger(record.updatedAt) ||
     record.updatedAt < 0

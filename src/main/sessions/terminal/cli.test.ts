@@ -194,6 +194,14 @@ class FakeTitled implements Pty {
     // Nothing to redraw.
   }
 
+  pause(): void {
+    // It never prints enough to fill the screen's buffer.
+  }
+
+  resume(): void {
+    // Likewise.
+  }
+
   kill(): void {
     this.exit(0);
   }

@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { newCanvasId } from '../shared/canvas';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
 
@@ -14,7 +15,7 @@ function stubApi(api: Partial<AppApi>) {
   const usage: Partial<AppApi> = {
     getRun: vi
       .fn<AppApi['getRun']>()
-      .mockResolvedValue({ token: 'test', checkpoint: null, name: null }),
+      .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
     saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),

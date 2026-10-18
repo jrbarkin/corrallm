@@ -249,14 +249,6 @@ export function isBlank(item: QueueItem): boolean {
   return isMessage(item) && item.message.trim() === '';
 }
 
-/** A question an agent asks the user; `options`, if any, are the answers it suggests. */
-export interface Question {
-  id: string;
-  text: string;
-  options?: string[];
-  answer?: string;
-}
-
 /** The conditions an if-then can check, as the dropdown offers them (besides free text). */
 export const CONDITIONS = [
   { kind: 'succeeded', label: 'the previous step succeeded' },

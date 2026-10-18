@@ -12,6 +12,45 @@ const NODE_BUILTINS = builtinModules.flatMap((name) =>
   name.startsWith('node:') ? [name] : [name, `node:${name}`],
 );
 
+/** An import of an adapter's folder: what is particular to one CLI (src/main/sessions/{sdk,codex}/). */
+const ADAPTER_FOLDERS = {
+  regex: '^(?:\\.{1,2}/)+(?:sessions/)?(?:sdk|codex)/',
+  message:
+    'Platform code must not import an adapter’s folder (src/main/sessions/sdk/, src/main/sessions/codex/): reach the CLI through its connector.',
+};
+/**
+ * What may import adapters' folders: the adapters themselves, Claude's own files outside its folder,
+ * and the platform files that import them today, each to go as adapters move behind the registry.
+ */
+const ADAPTER_IMPORTERS = [
+  'src/main/sessions/sdk/**',
+  'src/main/sessions/codex/**',
+  'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
+  'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
+  'src/main/{index,forge-env.d}.ts',
+  'src/main/core/selftest.ts',
+  'src/main/sessions/{manager,installed,connectors}.ts',
+  '**/*.test.ts',
+];
+
+/**
+ * The core's side of main, which runs wherever it is hosted (main, the core process, plain Node;
+ * src/main/core/host.ts): its folders, and the Electron-free services it uses. It never imports
+ * Electron or the host (src/main/host/): what needs the desktop is a HostServices request.
+ */
+const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
+const CORE_SERVICES = 'src/main/{memory,settings,usage,files,git,canvas,project,run-journal}.ts';
+const ELECTRON = {
+  group: ['electron', 'electron/*'],
+  message:
+    'The core never imports Electron: what needs the desktop is a HostServices request (src/main/core/host.ts).',
+};
+/** An import of the host's folder (`regex`: as written from a folder below main, or from main). */
+const host = (regex: string) => ({
+  regex,
+  message: 'The core never imports the host (src/main/host/): it asks it through HostServices.',
+});
+
 export default defineConfig(
   globalIgnores([
     '.vite/',
@@ -102,6 +141,33 @@ export default defineConfig(
             },
           ],
         },
+      ],
+    },
+  },
+  {
+    name: 'app/adapters',
+    files: ['src/main/**/*.ts'],
+    ignores: ADAPTER_IMPORTERS,
+    rules: { 'no-restricted-imports': ['error', { patterns: [ADAPTER_FOLDERS] }] },
+  },
+  // typescript-eslint's rule, so that it applies beside app/adapters' (`import type` included).
+  {
+    name: 'app/boundaries-core',
+    files: [CORE_FOLDERS],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [ELECTRON, host('^(?:\\.\\./)+host/')] },
+      ],
+    },
+  },
+  {
+    name: 'app/boundaries-core-services',
+    files: [CORE_SERVICES],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [ELECTRON, host('^\\./host/')] },
       ],
     },
   },
