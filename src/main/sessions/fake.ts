@@ -40,6 +40,8 @@ export class FakeConnector implements Connector<SessionMode> {
   /** Every session it started, as it was started, and the id each one remembered. */
   readonly started: SessionSpec<SessionMode>[] = [];
   readonly ids: string[] = [];
+  /** Every session it started, each with the messages it was sent. */
+  readonly sessions: FakeSession[] = [];
   readonly #pause: number;
   readonly #adapter: keyof typeof DEFAULT_MODES;
 
@@ -70,7 +72,9 @@ export class FakeConnector implements Connector<SessionMode> {
       models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
       ...(codex ? { effort: spec.effort ?? null } : {}),
     });
-    return Promise.resolve(new FakeSession(mode, host, this.#pause));
+    const session = new FakeSession(mode, host, this.#pause);
+    this.sessions.push(session);
+    return Promise.resolve(session);
   }
 }
 
@@ -88,6 +92,8 @@ interface Turn {
 const ASKING: readonly SessionMode[] = ['manual', 'plan', 'read-only'];
 
 class FakeSession implements LiveSession<SessionMode> {
+  /** Every message it was sent, in order. */
+  readonly sent: UserMessage[] = [];
   #mode: SessionMode;
   readonly #host: SessionHost;
   readonly #pause: number;
@@ -101,6 +107,7 @@ class FakeSession implements LiveSession<SessionMode> {
   }
 
   send(message: UserMessage): Promise<void> {
+    this.sent.push(message);
     const turn: Turn = { stopped: false, tool: undefined, prompt: undefined };
     this.#turn = turn;
     void this.#play(message, turn);

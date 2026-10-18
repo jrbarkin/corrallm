@@ -1,0 +1,166 @@
+import { needs, withoutChoices } from '../../../shared/engine/needs';
+import type { NeedsInput } from '../../../shared/engine/needs';
+import { isOpen } from '../../../shared/model/session';
+import type { CanvasId } from '../../../shared/canvas';
+import type { NeedsItem } from '../../../shared/model/needs';
+import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
+import { OpFailure } from '../call';
+import type { OpContext } from '../call';
+import { partyIdOf } from '../caller';
+import { DeliveryError } from '../delivery/delivery';
+import { cursorOf, readCursor } from '../delivery/messages';
+import type { OpenCanvas } from '../engines';
+import { agentsReached } from '../reach';
+import { agentOf, openCanvas, reachFor } from './open';
+import type { Implementations, OpServices } from '.';
+
+/** How many of a list a page holds when a call doesn't say. */
+const PAGE = 50;
+
+/** Conversation (Core Server §4 H; API Spec §7.2). */
+export function conversationOps(
+  services: OpServices,
+): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
+  const { engines, isLead, locale } = services;
+  const lead = (canvas: CanvasId, { caller }: OpContext) =>
+    caller.kind === 'agent' && isLead(canvas, caller.agent);
+
+  /** The agents of an open canvas the caller reaches for `op`, in their order. */
+  const reached = (open: OpenCanvas, op: Parameters<typeof reachFor>[0], ctx: OpContext) =>
+    agentsReached(open.document, ctx.caller, reachFor(op, ctx), lead(open.document.id, ctx));
+
+  /**
+   * What waits on an open canvas for the caller: yours, with their choices, for you; for anyone
+   * else, yours on the agents it reaches without them, and an agent's team's prompts too.
+   */
+  const waiting = (open: OpenCanvas, ctx: OpContext, reach: readonly string[]): NeedsItem[] => {
+    const items = needs(needsInput(open, locale));
+    if (ctx.caller.kind === 'human') return items;
+    const { caller } = ctx;
+    const team = caller.kind === 'agent' ? teamOf(open.document.nodes, caller.agent) : [];
+    return items
+      .filter(
+        (item) =>
+          item.agent !== undefined &&
+          (reach.includes(item.agent) || (item.kind === 'prompt' && team.includes(item.agent))),
+      )
+      .map(withoutChoices);
+  };
+
+  return {
+    agents: ({ canvas }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const { document, engine } = open;
+      const reach = reached(open, 'agents', ctx);
+      return {
+        agents: reach.map((id) => {
+          const node = agentOf(open, id);
+          return {
+            id,
+            name: agentName(document.nodes, id),
+            adapter: node.data.adapter ?? engine.catalog.defaultAdapter,
+            connection: engine.catalog.connectionOf(node.data),
+            state: stateOf(open, id),
+            prompts: promptsOf(open, id),
+            linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
+            api: false,
+          };
+        }),
+      };
+    },
+    status: ({ canvas }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const reach = reached(open, 'status', ctx);
+      return {
+        agents: reach.map((id) => {
+          const session = open.engine.sessions.of(id);
+          return {
+            id,
+            state: stateOf(open, id),
+            message: open.delivery.current(id) ?? null,
+            model: session.model,
+            effort: session.effort ?? null,
+          };
+        }),
+        waitingForYou: waiting(open, ctx, reach).map(withoutChoices),
+        next: cursorOf({ [open.document.id]: open.messages.end() }),
+      };
+    },
+    needs: ({ canvas }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      return { items: waiting(open, ctx, reached(open, 'needs', ctx)) };
+    },
+    messages: ({ canvas, with: other, after, limit = PAGE }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      const id = open.document.id;
+      const from = after === undefined ? 0 : readCursor(after)?.[id];
+      if (after !== undefined && from === undefined) {
+        throw new OpFailure('invalid', 'That cursor isn’t one this canvas gave.');
+      }
+      const party = partyIdOf(ctx.caller);
+      const items = open.messages
+        .all()
+        .filter(
+          (message) =>
+            (ctx.caller.kind === 'human' || message.from === party || message.to === party) &&
+            (other === undefined || message.from === other || message.to === other) &&
+            (open.messages.seqOf(message.id) ?? 0) > (from ?? 0),
+        )
+        .slice(0, limit);
+      const last = items.at(-1);
+      const next = last === undefined ? (from ?? 0) : (open.messages.seqOf(last.id) ?? 0);
+      return { items, next: cursorOf({ [id]: next }) };
+    },
+    message: async ({ canvas, to, body, replyTo }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      agentOf(open, to);
+      if (replyTo !== undefined && !open.messages.get(replyTo)) {
+        throw new OpFailure('not-found', `There is no message ${replyTo}.`);
+      }
+      const sent = await open.delivery.send(partyIdOf(ctx.caller), to, body, replyTo);
+      return { id: sent.id };
+    },
+    withdraw: ({ canvas, id }, ctx) => {
+      const open = openCanvas(engines, canvas);
+      try {
+        open.delivery.withdraw(id, partyIdOf(ctx.caller));
+      } catch (error) {
+        if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
+        throw error;
+      }
+      return {};
+    },
+  };
+}
+
+/** What an open canvas's needs are worded from. */
+export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsInput {
+  const { document, engine, delivery } = open;
+  return {
+    canvas: document.id,
+    nodes: document.nodes,
+    run: engine.run.snapshot(),
+    sessions: engine.sessions.snapshot(),
+    catalog: engine.catalog,
+    now: Date.now(),
+    stuck: delivery.stuck(),
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/** How an agent is now: waiting for you, working, paused, or idle. */
+export function stateOf(
+  { engine }: OpenCanvas,
+  id: string,
+): 'waiting' | 'working' | 'paused' | 'idle' {
+  const session = engine.sessions.of(id);
+  if (session.status === 'waiting' || (session.asking?.length ?? 0) > 0) return 'waiting';
+  if (session.status === 'working') return 'working';
+  return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';
+}
+
+/** How many prompts of its own an agent waits on an answer to: its session's, and its terminal's. */
+export function promptsOf({ engine }: OpenCanvas, id: string): number {
+  const session = engine.sessions.of(id);
+  return session.entries.filter(isOpen).length + (session.asking?.length ?? 0);
+}

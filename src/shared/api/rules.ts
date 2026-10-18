@@ -16,4 +16,15 @@ export interface RuleRow {
 }
 
 /** Each rule key some operation carries. */
-export const RULES = {} as const satisfies Partial<Record<Rule, RuleRow>>;
+export const RULES = {
+  'shell-text': {
+    kind: 'argument',
+    sentence:
+      'Only you may send an agent text its connection runs as a shell command (its shell prefix).',
+  },
+  sticky: {
+    kind: 'argument',
+    sentence:
+      'A token releases only the pauses its own party set; yours stay until you release them.',
+  },
+} as const satisfies Partial<Record<Rule, RuleRow>>;

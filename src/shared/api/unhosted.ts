@@ -8,5 +8,18 @@ import type { OpName } from './surface';
  */
 export const UNHOSTED: Partial<Record<OpName, 'B8' | 'B11'>> = {
   'app.info': 'B8',
+  'catalog.get': 'B8',
+  agents: 'B11',
+  status: 'B11',
+  needs: 'B11',
+  messages: 'B11',
+  message: 'B11',
+  withdraw: 'B11',
+  'session.get': 'B11',
+  'session.transcript': 'B11',
+  'session.interrupt': 'B11',
+  'run.pause': 'B11',
+  'run.kill': 'B11',
+  'run.unpause': 'B11',
   'usage.get': 'B8',
 };

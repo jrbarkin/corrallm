@@ -2,30 +2,84 @@
   "gui": [],
   "mcp": {
     "lead": [
+      "agents",
       "app_info",
-      "usage_get"
+      "catalog_get",
+      "message",
+      "messages",
+      "needs",
+      "run_kill",
+      "run_pause",
+      "run_unpause",
+      "session_get",
+      "session_interrupt",
+      "session_transcript",
+      "status",
+      "usage_get",
+      "withdraw"
     ],
     "worker": [
+      "agents",
       "app_info",
-      "usage_get"
+      "catalog_get",
+      "message",
+      "messages",
+      "needs",
+      "session_get",
+      "session_transcript",
+      "usage_get",
+      "withdraw"
     ],
     "outside-read": [
+      "agents",
       "app_info",
+      "catalog_get",
+      "messages",
+      "needs",
+      "session_get",
+      "session_transcript",
+      "status",
       "usage_get"
     ],
     "outside-write": [
+      "agents",
       "app_info",
-      "usage_get"
+      "catalog_get",
+      "message",
+      "messages",
+      "needs",
+      "run_kill",
+      "run_pause",
+      "run_unpause",
+      "session_get",
+      "session_interrupt",
+      "session_transcript",
+      "status",
+      "usage_get",
+      "withdraw"
     ]
   },
   "counts": {
-    "lead": 2,
-    "worker": 2,
-    "outside-read": 2,
-    "outside-write": 2
+    "lead": 15,
+    "worker": 10,
+    "outside-read": 9,
+    "outside-write": 15
   },
   "unhosted": {
     "app.info": "B8",
+    "catalog.get": "B8",
+    "agents": "B11",
+    "status": "B11",
+    "needs": "B11",
+    "messages": "B11",
+    "message": "B11",
+    "withdraw": "B11",
+    "session.get": "B11",
+    "session.transcript": "B11",
+    "session.interrupt": "B11",
+    "run.pause": "B11",
+    "run.kill": "B11",
+    "run.unpause": "B11",
     "usage.get": "B8"
   },
   "deviations": {},
@@ -33,6 +87,58 @@
     "app.info": {
       "input": "e5fa5cc18e054cdd",
       "output": "fb1ca6c18e59cdb2"
+    },
+    "catalog.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "a617933cd2efbe50"
+    },
+    "agents": {
+      "input": "41356bc15da6df1b",
+      "output": "0fc1468ebef7a324"
+    },
+    "status": {
+      "input": "41356bc15da6df1b",
+      "output": "0d451a03231be3a6"
+    },
+    "needs": {
+      "input": "41356bc15da6df1b",
+      "output": "3609199c5dce2217"
+    },
+    "messages": {
+      "input": "51de826ffbc94c78",
+      "output": "2859df59d378560b"
+    },
+    "message": {
+      "input": "2fcad0392e13265b",
+      "output": "cd9ed4fd3afce36e"
+    },
+    "withdraw": {
+      "input": "c0fce69c0611e40f",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "session.get": {
+      "input": "c804536f3eb2a39b",
+      "output": "a11b283e249859f0"
+    },
+    "session.transcript": {
+      "input": "b0a50f8eb22508f9",
+      "output": "7829214b75976c1d"
+    },
+    "session.interrupt": {
+      "input": "dafe7f6753754290",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "run.pause": {
+      "input": "a85fe9cb1eb6d55a",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "run.kill": {
+      "input": "a85fe9cb1eb6d55a",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "run.unpause": {
+      "input": "a85fe9cb1eb6d55a",
+      "output": "e5fa5cc18e054cdd"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",

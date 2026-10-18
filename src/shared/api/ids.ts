@@ -36,6 +36,25 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
 export const NeedId = brandedId('NeedId', z.uuid());
 export type NeedId = z.infer<typeof NeedId>;
 
+/** A canvas, by its stable id (src/shared/canvas.ts). */
+export const CanvasId = brandedId('CanvasId', z.uuid());
+export type CanvasId = z.infer<typeof CanvasId>;
+
+/** How long a node's id may be: an agent's or a group's, unique within its canvas. */
+const MAX_NODE_ID = 256;
+
+/** An agent of a canvas, by its node's id. */
+export const AgentId = brandedId('AgentId', z.string().min(1).max(MAX_NODE_ID));
+export type AgentId = z.infer<typeof AgentId>;
+
+/** A node of a canvas (an agent or a group), by its id. */
+export const NodeId = brandedId('NodeId', z.string().min(1).max(MAX_NODE_ID));
+export type NodeId = z.infer<typeof NodeId>;
+
+/** A message (API Spec §5.2), by the id the core minted. */
+export const MessageId = brandedId('MessageId', z.uuid());
+export type MessageId = z.infer<typeof MessageId>;
+
 /** A branded id found in an op's arguments: its brand, its value, and where it was. */
 export interface IdRef {
   brand: Brand;

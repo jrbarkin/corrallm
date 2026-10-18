@@ -5,7 +5,7 @@ import type { OpDef } from '../../shared/api/define';
 import { brandedId, idsIn, NeedId } from '../../shared/api/ids';
 import type { Brand, IdRef } from '../../shared/api/ids';
 import { PARTIES } from '../../shared/api/surface';
-import type { OpName, Party, Reach, Rule, Surface } from '../../shared/api/surface';
+import type { Party, Reach, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Dispatcher, Implementation, OpContext, Registry, RuleCheck } from './call';
 import { asHuman } from './caller';
@@ -284,8 +284,25 @@ export const CALLERS: Readonly<Record<Party, Caller>> = {
  */
 export interface OpFixture {
   valid: readonly unknown[];
+  /**
+   * Valid arguments only some parties may pass (naming ids only they reach, as a message they
+   * sent), by party: each party listed takes these instead of `valid`.
+   */
+  by?: Readonly<Partial<Record<Party, readonly unknown[]>>>;
   invalid: readonly unknown[];
   meetsRule?: Partial<Record<Rule, unknown>>;
+  /** The result's fields each call mints anew (a message's id): alike between parties by kind only. */
+  fresh?: readonly string[];
+}
+
+/** The valid arguments `party` calls an op with. */
+export function validFor(fixture: OpFixture, party: Party): readonly unknown[] {
+  return fixture.by?.[party] ?? fixture.valid;
+}
+
+/** Every valid argument list of an op's fixture, whoever passes it. */
+export function allValid(fixture: OpFixture): unknown[] {
+  return [...fixture.valid, ...Object.values(fixture.by ?? {}).flat()];
 }
 
 /**
@@ -323,7 +340,7 @@ export function unreachableCalls(
     const reach = party === 'you' ? undefined : surface.access[party];
     if (reach === undefined) return [];
     const caller = CALLERS[party] as TokenCaller;
-    return fixture.valid.flatMap((args) =>
+    return validFor(fixture, party).flatMap((args) =>
       idsIn(def.input, args).flatMap((ref) =>
         (world[ref.brand]?.(caller, reach) ?? []).map((id) => ({
           party,
@@ -375,7 +392,7 @@ export const TEST_FIXTURES: Readonly<Record<Exclude<Name, 'test.hold'>, OpFixtur
   },
   'test.stop': {
     valid: [{ canvas: CANVAS, agent: 'peer' }],
-    invalid: [{ agent: 'peer' }],
+    invalid: [{ canvas: CANVAS }],
   },
 };
 
@@ -399,15 +416,6 @@ export const TEST_OUT_OF_REACH: OutOfReach = {
   AgentId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
 };
-
-/** What the generated tests call each of the registry's operations with. */
-export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
-  'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
-  'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
-};
-
-/** What each token party doesn't reach in the core the registry runs on: no op takes an id yet. */
-export const REAL_OUT_OF_REACH: OutOfReach = {};
 
 /** A host with no desktop: every dialog is cancelled. */
 export const NO_DESKTOP: HostServices = {

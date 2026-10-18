@@ -1,7 +1,3 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -15,23 +11,22 @@ import { listTools } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { TokenCaller } from './caller';
-import { createCore } from './core';
 import {
+  allValid,
   CALLERS,
   CANVAS,
   isLead,
-  NO_DESKTOP,
   OTHER_CANVAS,
   pipedRegistry,
-  REAL_FIXTURES,
-  REAL_OUT_OF_REACH,
   RESOLVERS,
   TEST_FIXTURES,
   TEST_OUT_OF_REACH,
   testRegistry,
   unreachableCalls,
+  validFor,
 } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
+import { REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld } from './test-world';
 
 const trim = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
 
@@ -58,30 +53,7 @@ const REGISTRIES: [
   OutOfReach,
   () => Promise<Setup>,
 ][] = [
-  [
-    'the registry',
-    REAL_FIXTURES,
-    REAL_OUT_OF_REACH,
-    async () => {
-      const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-callers-'));
-      const core = await createCore(
-        {
-          profile,
-          app: { name: 'corrallm', version: '1.0.0' },
-          check: true,
-          distribution: 'local',
-        },
-        NO_DESKTOP,
-      );
-      return {
-        core,
-        close: async () => {
-          await core.close();
-          await rm(profile, { recursive: true, force: true });
-        },
-      };
-    },
-  ],
+  ['the registry', REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld],
   [
     'the test registry',
     TEST_FIXTURES,
@@ -117,7 +89,7 @@ function reachGaps(
     const brands = [...new Set(brandsIn(def.input))];
     if (brands.length === 0) return [];
     const named = new Set(
-      fixture.valid.flatMap((args) => idsIn(def.input, args).map(({ brand }) => brand)),
+      allValid(fixture).flatMap((args) => idsIn(def.input, args).map(({ brand }) => brand)),
     );
     const calls = unreachableCalls(core, name, fixture, world);
     return [
@@ -184,10 +156,21 @@ describe('T3b’s reach', () => {
   });
 });
 
-/** `result`'s value without the fields that may differ by who calls. */
-function invariant(result: OpResult<unknown>, varies: readonly string[]): unknown {
+/**
+ * `result`'s value without the fields that may differ by who calls, and with those each call mints
+ * anew (`fresh`) as only their kind.
+ */
+function invariant(
+  result: OpResult<unknown>,
+  varies: readonly string[],
+  fresh: readonly string[] = [],
+): unknown {
   if (!result.ok || typeof result.value !== 'object' || result.value === null) return result;
-  return Object.fromEntries(Object.entries(result.value).filter(([key]) => !varies.includes(key)));
+  return Object.fromEntries(
+    Object.entries(result.value)
+      .filter(([key]) => !varies.includes(key))
+      .map(([key, value]) => [key, fresh.includes(key) ? typeof value : value]),
+  );
 }
 
 describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
@@ -237,8 +220,16 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
     it('answers every party in its audience alike, but for the fields it says vary', async () => {
       const varies = surfaceOf(name).varies ?? [];
       const proposes = (surfaceOf(name).rules ?? []).some((rule) => PROPOSING_RULES.includes(rule));
-      // Each party's answer against the first's: yours, where you are in the audience.
-      const [first, ...others] = PARTIES.filter((p) => inAudience(name, p));
+      const audience = PARTIES.filter((p) => inAudience(name, p));
+      // A party with arguments of its own takes them, and is answered.
+      for (const party of audience.filter((p) => fixture.by?.[p] !== undefined)) {
+        for (const args of validFor(fixture, party)) {
+          const theirs = await setup.core.call(name, args, CALLERS[party]);
+          expect(theirs.ok, `${party}: ${JSON.stringify(theirs)}`).toBe(true);
+        }
+      }
+      // Each other party's answer against the first's: yours, where you are in the audience.
+      const [first, ...others] = audience.filter((p) => fixture.by?.[p] === undefined);
       if (first === undefined) return;
       for (const args of fixture.valid) {
         const firsts = await setup.core.call(name, args, CALLERS[first]);
@@ -247,7 +238,9 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
           const theirs = await setup.core.call(name, args, CALLERS[party]);
           // A token's call that came to you as a proposal is its rule's to check, below.
           if (proposes && theirs.ok && 'proposed' in (theirs.value as object)) continue;
-          expect(invariant(theirs, varies), party).toEqual(invariant(firsts, varies));
+          expect(invariant(theirs, varies, fixture.fresh), party).toEqual(
+            invariant(firsts, varies, fixture.fresh),
+          );
         }
       }
     });
@@ -265,8 +258,7 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
 
     it('refuses a token’s call meeting each of its rules (or makes it a proposal), and applies yours', async () => {
       for (const [rule, args] of Object.entries(fixture.meetsRule ?? {})) {
-        const yours = await setup.core.call(name, args, CALLERS.you);
-        expect(yours.ok && !('proposed' in (yours.value as object)), rule).toBe(true);
+        // The tokens first: yours may change what the rule reads (a pause you set, released).
         for (const party of TOKEN_PARTIES.filter((p) => inAudience(name, p))) {
           const theirs = await setup.core.call(name, args, CALLERS[party]);
           if (PROPOSING_RULES.includes(rule as Rule)) {
@@ -280,6 +272,8 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
             });
           }
         }
+        const yours = await setup.core.call(name, args, CALLERS.you);
+        expect(yours.ok && !('proposed' in (yours.value as object)), rule).toBe(true);
       }
     });
 

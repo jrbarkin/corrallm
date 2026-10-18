@@ -3,6 +3,10 @@ import { z } from 'zod';
 import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
 import { appOps } from './ops/app';
+import { catalogOps } from './ops/catalog';
+import { conversationOps } from './ops/conversation';
+import { runOps } from './ops/run';
+import { sessionOps } from './ops/session';
 import { usageOps } from './ops/usage';
 import type { OpName, Party, Surface } from './surface';
 
@@ -12,7 +16,14 @@ import type { OpName, Party, Surface } from './surface';
  * the surface doesn't list.
  */
 
-export const OPS = { ...appOps, ...usageOps } satisfies Record<OpName, OpDef>;
+export const OPS = {
+  ...appOps,
+  ...catalogOps,
+  ...conversationOps,
+  ...sessionOps,
+  ...runOps,
+  ...usageOps,
+} satisfies Record<OpName, OpDef>;
 
 /** What op `N` takes, once parsed. */
 export type ArgsOf<N extends OpName> = z.output<(typeof OPS)[N]['input']>;
