@@ -5,7 +5,8 @@
 // requests without params, as the real one does.
 //
 // A turn reasons (a summary, streamed), then replies "You said: <text>" (streamed), and reports
-// its token usage and the account's limits. What the message starts with makes it do more:
+// its token usage and the account's limits. What the message starts with (after the first line
+// corrallm frames a message from anyone but you with) makes it do more:
 // - "run": runs `npm test`, asking first in a read-only sandbox (its default), as Codex does
 //   (item/commandExecution/requestApproval, Yes, a rule for `npm test`, or No: cancel);
 // - "edit": patches hello.txt (a fileChange), asking first in a read-only sandbox;
@@ -233,7 +234,9 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     turn: { id: turnId, items: [], status: 'inProgress', error: null },
   });
   const text = input.map((part) => (part.type === 'text' ? part.text : '')).join('');
-  if (text.startsWith('crash')) {
+  // What it is asked to do: the message, after the first line corrallm frames a party's with.
+  const wanted = text.replace(/^\[corrallm\] [^\n]*\n/, '');
+  if (wanted.startsWith('crash')) {
     process.stderr.write('Error: it crashed\n');
     process.exit(3);
   }
@@ -280,7 +283,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     );
     return finish('completed');
   }
-  if (text.startsWith('fail')) {
+  if (wanted.startsWith('fail')) {
     const error = {
       message: 'You’ve hit your usage limit.',
       codexErrorInfo: 'usageLimitExceeded',
@@ -289,7 +292,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     notify('error', { error, willRetry: false, threadId, turnId });
     return finish('failed', error);
   }
-  if (text.startsWith('todo')) {
+  if (wanted.startsWith('todo')) {
     notify('turn/plan/updated', {
       ...where,
       explanation: null,
@@ -299,7 +302,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
       ],
     });
   }
-  if (text.startsWith('run')) {
+  if (wanted.startsWith('run')) {
     const command = {
       type: 'commandExecution',
       id: `exec-${randomUUID()}`,
@@ -363,7 +366,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     items.push(done);
     if (decision === 'cancel') return finish('interrupted');
   }
-  if (text.startsWith('edit')) {
+  if (wanted.startsWith('edit')) {
     const change = {
       type: 'fileChange',
       id: `call_${randomUUID()}`,
@@ -396,7 +399,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     if (!accepted) return finish('interrupted');
   }
   let said = `You said: ${text}`;
-  if (text.startsWith('ask')) {
+  if (wanted.startsWith('ask')) {
     const { id, answer } = await ask('item/tool/requestUserInput', {
       ...where,
       itemId: `call_${randomUUID()}`,
@@ -420,7 +423,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     if (state.interrupted) return finish('interrupted');
     said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
   }
-  if (text.startsWith('slow')) {
+  if (wanted.startsWith('slow')) {
     const command = {
       type: 'commandExecution',
       id: `exec-${randomUUID()}`,

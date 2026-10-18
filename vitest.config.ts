@@ -11,6 +11,8 @@ export default defineConfig({
           name: 'main',
           environment: 'node',
           include: ['src/main/**/*.test.ts', 'src/shared/**/*.test.ts'],
+          // Builds the CLI bundle the tests of `corrallm serve` run.
+          globalSetup: ['./src/main/cli/global-setup.ts'],
         },
       },
       {
