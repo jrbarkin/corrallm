@@ -135,6 +135,27 @@ describe('task recovery', () => {
     expect(sent.at(-1)?.text).toBe('Ship it');
   });
 
+  it.each([
+    { task: 'a step', queue: [step, next] },
+    { task: 'a message', queue: [{ id: 'build', message: 'Run the tests' }, next] },
+  ])(
+    'sends a correction to $task that starts with "!" alone, never with the canvas’s text',
+    ({ queue }) => {
+      // Claude Code and Codex run a message that starts with "!" as a shell command: the canvas's
+      // text after the user's own would be run as part of it.
+      const { store, sent, reply } = setup(queue);
+      store.start();
+      reply('FAILED', true);
+      expect(store.snapshot().agents.a?.problem).toBeDefined();
+      store.decide('a', 'build', { reply: ' !npm test ' });
+      expect(sent.at(-1)).toMatchObject({
+        text: '!npm test',
+        origin: 'user',
+        displayText: '!npm test',
+      });
+    },
+  );
+
   it('adopts a direct terminal correction without sending it again', () => {
     const { store, sent, reply } = setup([step, next]);
     store.start();

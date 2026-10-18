@@ -219,6 +219,14 @@ const ALARM_MS = 60_000;
 const SHELL_REFUSED =
   'Not sent: it starts with "!", which Claude Code and Codex run as a shell command, without asking. Reword it, or type it in the agent\'s terminal yourself.';
 
+/**
+ * What a correction the user typed sends: their note, then what it corrects. A note that starts
+ * with "!" is a shell command for the CLI's bash mode, sent alone: the canvas's text after it
+ * would be run as part of it.
+ */
+const corrected = (note: string, task: string) =>
+  note.trimStart().startsWith('!') ? note : `${note}\n\n${task}`;
+
 /** What the run says when it waits for a usage window's reset that has never been read. */
 const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
   `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
@@ -1625,7 +1633,10 @@ export class RunStore {
       if (node) {
         const original = this.#stepMessage(node, task);
         const text = correction
-          ? `${correction.note}\n\nContinue this original task and report its result:\n${original}`
+          ? corrected(
+              correction.note,
+              `Continue this original task and report its result:\n${original}`,
+            )
           : original;
         this.#send(node, text, {
           ended,
@@ -1652,7 +1663,7 @@ export class RunStore {
         this.#send(
           to,
           correction
-            ? `${correction.note}\n\nContinue the original task: ${task.message}`
+            ? corrected(correction.note, `Continue the original task: ${task.message}`)
             : task.message,
           {
             ended,
