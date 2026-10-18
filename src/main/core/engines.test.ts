@@ -190,4 +190,40 @@ describe('the core runs each canvas’s engine', () => {
     await expect((await start(codex)).engines.open(CANVAS)).rejects.toThrow(/project folder/);
     expect(codex.started).toEqual([]);
   });
+
+  it('refuses an unsaved canvas, though its run was journaled and its folder kept', async () => {
+    await journalRun();
+    // A draft: the profile keeps its folder and its run, and no file.
+    await writeFile(
+      path.join(profile, 'canvases.json'),
+      JSON.stringify({ version: 2, canvases: { [CANVAS]: { project, conversations: {} } } }),
+    );
+    await expect(
+      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
+    ).rejects.toThrow(/isn’t saved/);
+  });
+
+  it('refuses a canvas whose file holds another canvas now, though its run was journaled', async () => {
+    await journalRun();
+    const another = (await readFile(FIXTURE, 'utf8')).replace(
+      CANVAS,
+      '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a',
+    );
+    await writeFile(path.join(profile, 'worker.corral'), another);
+    await expect(
+      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
+    ).rejects.toThrow(/another canvas/);
+  });
 });
+
+/** Keeps the fixture's canvas, runs its queue to the end and closes the core: its run journaled. */
+async function journalRun(): Promise<void> {
+  await keepCanvas();
+  const engine = await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
+  engine.run.start();
+  await vi.waitFor(() => {
+    expect(engine.run.snapshot().agents.worker?.status).toBe('done');
+  });
+  await core?.close();
+  core = undefined;
+}

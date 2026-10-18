@@ -82,8 +82,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 Electron-free services, kept in a profile folder (in milestone 1, only in tests and,
                 from B7, under `corrallm serve`); engines.ts the canvases it runs (core.engines),
                 each opened by its id from what the profile keeps (canvases.json: its file and the
-                project folder picked in the app; its run as journaled, restored paused) with the
-                shared Engine, its agents' sessions run by the core's own SessionManager in this
+                project folder picked in the app; its edits and run as journaled, restored paused;
+                never a draft, nor a canvas whose file holds another now) with the shared Engine, its agents' sessions run by the core's own SessionManager in this
                 process (a SessionBackend), its run journaled by the RunJournal (run-journal.ts) at
                 most once per 250 ms and before every message the run sends; test-registry.ts is a registry for the core's
                 tests, with an op for every check core.call makes, fixtures for every op, and what

@@ -1,4 +1,5 @@
 import type { Catalog, ConnectionId } from '../../shared/adapter';
+import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { EngineCatalog } from '../../shared/engine/catalog';
 import { Engine } from '../../shared/engine/engine';
@@ -20,7 +21,8 @@ import type { UsageReadings } from '../usage';
  * sessions it sends to, the sessions run by the core's own SessionManager, in the same process.
  * A canvas opens by its id, from what the profile keeps of it: its file and its project folder,
  * which the user picked in the app (canvases.json), and its run as the journal last kept it
- * (runs/<id>/record.json), restored paused. Whatever its engine does is journaled again: at most
+ * (runs/<id>/record.json), restored paused. A draft, which has no file, never opens, nor does a
+ * canvas whose file holds another canvas. Whatever its engine does is journaled again: at most
  * one write per COALESCE_MS, and one before every message the run sends, so a sent message's
  * record is always on disk first.
  */
@@ -73,7 +75,7 @@ export class Engines {
   /**
    * The canvas's engine, opening it if it isn't yet: its document and run as the journal last kept
    * them (else its file), restored paused. Rejects, saying why, for a canvas the profile keeps no
-   * project folder or file for.
+   * project folder or file for, or whose file holds another canvas now.
    */
   open(canvas: CanvasId): Promise<Engine> {
     let running = this.#running.get(canvas);
@@ -122,9 +124,16 @@ export class Engines {
     const { projects, journal } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
-    const text = context.checkpoint?.workflow ?? context.savedText;
-    if (text === undefined) throw new Error(NO_FILE);
-    const document = fromFile(text, this.#deps.catalog, this.#deps.engineCatalog.defaultAdapter);
+    // Only a canvas saved in the file canvases.json names for it, while that file still holds it:
+    // never a draft, though the journal keeps one's run.
+    if (context.savedText === undefined) throw new Error(NO_FILE);
+    if (canvasIdOf(context.savedText) !== canvas) throw new Error(ANOTHER);
+    // With its edits since, as the app journaled them.
+    const document = fromFile(
+      context.checkpoint?.workflow ?? context.savedText,
+      this.#deps.catalog,
+      this.#deps.engineCatalog.defaultAdapter,
+    );
     if (document.id !== canvas) throw new Error(ANOTHER);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
