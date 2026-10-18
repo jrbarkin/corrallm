@@ -877,7 +877,7 @@ describe('the shell prefix', () => {
 
 describe('usage', () => {
   /** A Codex usage reading over its rule's share, resetting at `resetsAt`. */
-  async function overRule(action: string, resetsAt: number): Promise<void> {
+  async function overRule(action: string, resetsAt: number | null): Promise<void> {
     await writeFile(
       path.join(profile, 'usage.json'),
       JSON.stringify({
@@ -915,6 +915,32 @@ describe('usage', () => {
         { timeout: 3000 },
       );
       expect((await inbox()).filter((message) => message.kind === 'notice')).toHaveLength(1);
+    },
+  );
+
+  it.each(['ask', 'waitForReset'])(
+    'delivers a party’s message over a rule (%s) whose window’s reset isn’t known, warning its agent',
+    async (action) => {
+      // Headless, nothing would read its usage again while the message waited: it never resets.
+      await overRule(action, null);
+      await keepCanvas();
+      const engine = await (await start()).engines.open(CANVAS);
+      const id = await send('builder', 'Say hello');
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      expect(await notices()).toEqual([]);
+      await vi.waitFor(() => {
+        expect(
+          engine.sessions
+            .of('builder')
+            .entries.filter((entry) => entry.kind === 'notice' && entry.level === 'warning'),
+        ).toEqual([
+          expect.objectContaining({
+            text: expect.stringMatching(/^Codex has used 80% of its 5-hour window/) as string,
+          }),
+        ]);
+      });
     },
   );
 

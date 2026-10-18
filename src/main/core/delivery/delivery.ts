@@ -56,7 +56,7 @@ type Hold =
   | { kind: 'busy' }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
-  | { kind: 'usage'; hold: UsageHold };
+  | { kind: 'usage'; hold: UsageHold; until: number };
 
 /**
  * Why a session would not start, the connection it would not start on, when it refused, and
@@ -356,16 +356,12 @@ export class Delivery {
           );
         }
         if (hold.kind === 'usage') {
-          const until = hold.hold.resetsAt;
-          if (until !== null) alarm = Math.min(alarm ?? until, until);
+          const { until } = hold;
+          alarm = Math.min(alarm ?? until, until);
           this.#tell(
             `usage:${node.id}:${String(until)}:${message.from}`,
             message,
-            `${holdText(hold.hold, engine.catalog)}, so your message to ${this.#name(node.id)} waits until ${
-              until === null
-                ? 'its usage is read again'
-                : `it resets at ${resetTime(until, this.#deps.now(), this.#deps.locale)}`
-            }.`,
+            `${holdText(hold.hold, engine.catalog)}, so your message to ${this.#name(node.id)} waits until it resets at ${resetTime(until, this.#deps.now(), this.#deps.locale)}.`,
           );
         }
       }
@@ -434,17 +430,36 @@ export class Delivery {
     }
     // A usage hold the run set (AgentRun.usage) is this rule, with your Go on or Wait for the reset,
     // read now: so one a stopped run left, or whose window has reset, holds nothing.
-    const rule = engine.run.usageRule(node.id, this.#deps.now());
-    if (!rule || rule.action === 'warn') return undefined;
+    const rule = this.#holdingRule(node);
     // With no one to ask headless, a rule that asks holds the message until the window resets.
-    return { kind: 'usage', hold: rule.hold };
+    return rule === undefined
+      ? undefined
+      : { kind: 'usage', hold: rule.hold, until: rule.hold.resetsAt };
   }
 
-  /** Warns agent `node`, once a window, as a party's message starts over its rule's share. */
+  /**
+   * The usage rule that holds a party's message to agent `node` now, if one does: one over its
+   * share that doesn't only warn, whose window's reset is known. Headless, nothing reads a
+   * backend's usage again while its agents' messages wait (only a running session reads it), so a
+   * window whose reset isn't known would hold them for good: such a rule warns instead.
+   */
+  #holdingRule(node: AgentNode): { hold: UsageHold & { resetsAt: number } } | undefined {
+    const rule = this.#deps.engine.run.usageRule(node.id, this.#deps.now());
+    if (rule === undefined || rule.action === 'warn') return undefined;
+    const { hold } = rule;
+    return hold.resetsAt === null ? undefined : { hold: { ...hold, resetsAt: hold.resetsAt } };
+  }
+
+  /**
+   * Warns agent `node`, once a window, as a party's message starts over its rule's share: a rule
+   * set to warn, or one whose window's reset isn't known (#holdingRule).
+   */
   #warnUsage(node: AgentNode): void {
     const { engine } = this.#deps;
     const rule = engine.run.usageRule(node.id, this.#deps.now());
-    if (rule?.action === 'warn') engine.run.warnUsage(node.id, rule.hold, this.#deps.now());
+    if (rule !== undefined && this.#holdingRule(node) === undefined) {
+      engine.run.warnUsage(node.id, rule.hold, this.#deps.now());
+    }
   }
 
   /**
