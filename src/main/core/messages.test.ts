@@ -1267,6 +1267,32 @@ describe('a restart', () => {
     expect(await notices()).toHaveLength(1);
   });
 
+  it('tells a sender anew when a session that started after a restart won’t start again', async () => {
+    await keepCanvas();
+    await start({ appServer: REFUSING });
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    let refuse = false;
+    const engine = await (
+      await restart({
+        appServer: { start: (spec, host) => (refuse ? REFUSING : appServer).start(spec, host) },
+      })
+    ).engines.open(CANVAS);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    // Its session ends, and won't start again: its sender's next message waits, and it is told.
+    refuse = true;
+    await engine.sessions.restart('builder');
+    const second = await send('builder', 'Second');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(2);
+    });
+    expect((await notices()).map(({ replyTo }) => replyTo)).toEqual([first, second]);
+  });
+
   it('withdraws what waited for an agent no longer on the canvas, telling each sender', async () => {
     await keepCanvas();
     await start();
@@ -1419,6 +1445,41 @@ describe('pauses', () => {
         body: 'Builder is paused by you on its group "Team", so your message waits until it is released: only the party that set a pause, or you, can release it.',
       }),
     ]);
+  });
+
+  it('tells a party anew when the agent it messages is paused again', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const second = await send('builder', 'Second');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(2);
+    });
+    expect((await notices()).map(({ replyTo }) => replyTo)).toEqual([first, second]);
+  });
+
+  it('forgets only what was told of the agent released, whatever its id holds', async () => {
+    await keepCanvas([BUILDER_AGENT, { ...BUILDER_AGENT, id: 'builder:two', label: 'Two' }], []);
+    await start();
+    for (const agent of ['builder', 'builder:two']) {
+      await ok('run.pause', { target: { agent } }, YOU);
+      await send(agent, `To ${agent}`);
+    }
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(2);
+    });
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await notices()).toHaveLength(2);
   });
 
   it('refuses a token releasing another token’s pause', async () => {

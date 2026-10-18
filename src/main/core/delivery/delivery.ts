@@ -325,8 +325,10 @@ export class Delivery {
     this.#tellWaiting(messages);
     let alarm: number | undefined;
     for (const node of this.#deps.nodes()) {
+      if (node.type !== 'agent') continue;
+      this.#forgetReleased(node);
       const waits = waiting.get(node.id);
-      if (node.type !== 'agent' || !waits || this.#writing.has(node.id)) continue;
+      if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
       // holds a party's message holds every party's behind it.
       const holds = {
@@ -343,14 +345,14 @@ export class Delivery {
         if (hold.kind === 'paused') {
           const causes = hold.holding.map(({ id, by }) => `${id}/${by}`).join(',');
           this.#tell(
-            `paused:${node.id}:${causes}:${message.from}`,
+            holdKey('paused', node.id, causes, message.from),
             message,
             `${this.#name(node.id)} is paused by ${pausesText(this.#deps.nodes(), node.id, hold.holding)}, so your message waits until it is released: ${RELEASES}`,
           );
         }
         if (hold.kind === 'stuck') {
           this.#tell(
-            `stuck:${node.id}:${message.from}`,
+            holdKey('stuck', node.id, message.from),
             message,
             `${this.#name(node.id)} can’t start, so your message waits: ${threadTitle(hold.text, REASON)} ${hold.clears}`,
           );
@@ -359,7 +361,7 @@ export class Delivery {
           const { until } = hold;
           alarm = Math.min(alarm ?? until, until);
           this.#tell(
-            `usage:${node.id}:${String(until)}:${message.from}`,
+            holdKey('usage', node.id, String(until), message.from),
             message,
             `${holdText(hold.hold, engine.catalog)}, so your message to ${this.#name(node.id)} waits until it resets at ${resetTime(until, this.#deps.now(), this.#deps.locale)}.`,
           );
@@ -479,10 +481,27 @@ export class Delivery {
     }
     // It runs another way now, or started after all: what waited on it goes.
     this.#stuck.delete(node.id);
-    for (const key of [...this.#told]) {
-      if (key.startsWith(`stuck:${node.id}:`)) this.#told.delete(key);
-    }
+    this.#forget('stuck', node.id);
     return undefined;
+  }
+
+  /**
+   * Forgets what senders were told of a hold on agent `node` that is gone, so that they are told
+   * again should it hold again: a pause, once nothing pauses it; a session that wouldn't start, once
+   * it has started (after a restart too, when only the notices kept say it refused).
+   */
+  #forgetReleased(node: AgentNode): void {
+    const { engine } = this.#deps;
+    if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
+    if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
+  }
+
+  /** Forgets what each sender was told of a hold of `kind` on agent `agent`. */
+  #forget(kind: HoldKind, agent: string): void {
+    const prefix = holdKey(kind, agent, '');
+    for (const key of [...this.#told]) {
+      if (key.startsWith(prefix)) this.#told.delete(key);
+    }
   }
 
   /**
@@ -781,6 +800,18 @@ export class Delivery {
   #nameOf(party: PartyId): string {
     return partyText(this.#deps.nodes(), party);
   }
+}
+
+/** The kinds of hold a sender is told of, by the agent they hold. */
+type HoldKind = 'paused' | 'stuck' | 'usage';
+
+/**
+ * The key of what a sender is told of a hold of `kind` on agent `agent`, and what it is told of
+ * (`rest`): the agent's id escaped, so that the keys of one agent's holds start alike, and no other
+ * agent's do.
+ */
+function holdKey(kind: HoldKind, agent: string, ...rest: string[]): string {
+  return [kind, encodeURIComponent(agent), ...rest].join(':');
 }
 
 /** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
