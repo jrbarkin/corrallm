@@ -364,8 +364,10 @@ export class Delivery {
     void this.#deps.store.durable().then(
       () => {
         this.#writing.delete(node.id);
-        if (this.#closed || this.#deps.store.get(message.id)?.state !== 'delivering') return;
-        this.#hand(node, message, as);
+        if (this.#closed) return;
+        // Taken back while it was journaled, it is never sent: what waits behind it goes.
+        if (this.#deps.store.get(message.id)?.state !== 'delivering') this.schedule();
+        else this.#hand(node, message, as);
       },
       (error: unknown) => {
         this.#writing.delete(node.id);
