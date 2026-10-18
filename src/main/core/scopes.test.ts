@@ -113,6 +113,81 @@ describe('Scopes', () => {
     ]);
   });
 
+  it('runs preempting ops that overlap one at a time, in the order they came, before what is queued', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    let running = 0;
+    let most = 0;
+    const counted =
+      <T>(op: (signal: AbortSignal) => Promise<T>) =>
+      async (signal: AbortSignal) => {
+        most = Math.max(most, ++running);
+        try {
+          return await op(signal);
+        } finally {
+          running--;
+        }
+      };
+    const path = ['app', 'c', 'a'];
+    const slow = controlled(log, 'slow');
+    const stop = controlled(log, 'stop');
+    const kill = controlled(log, 'kill');
+    const queued = controlled(log, 'queued');
+    const results = [scopes.run(path, false, undefined, counted(slow.op))];
+    await slow.started;
+    // Both come while the slow op unwinds.
+    results.push(scopes.run(path, true, undefined, counted(stop.op)));
+    results.push(scopes.run(path, true, undefined, counted(kill.op)));
+    results.push(scopes.run(path, false, undefined, counted(queued.op)));
+    await stop.started;
+    await tick();
+    expect(log).toEqual(['slow started', 'slow aborted', 'stop started']);
+    // A preempting op never aborts another: each does what it came for.
+    stop.release();
+    await kill.started;
+    await tick();
+    expect(log).toEqual([
+      'slow started',
+      'slow aborted',
+      'stop started',
+      'stop done',
+      'kill started',
+    ]);
+    kill.release();
+    await queued.started;
+    queued.release();
+    expect(await Promise.all(results)).toEqual(['slow', 'stop', 'kill', 'queued']);
+    expect(log.at(-1)).toBe('queued done');
+    expect(most).toBe(1);
+  });
+
+  it('drops a preempting op whose caller gave up while it waited, leaving the scope to the queue', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const path = ['app', 'c', 'a'];
+    const slow = controlled(log, 'slow');
+    const stop = controlled(log, 'stop');
+    const queued = controlled(log, 'queued');
+    // An op that takes a while to unwind once aborted.
+    const unwound = Promise.withResolvers<undefined>();
+    const running = scopes.run(path, false, undefined, async (signal) => {
+      const result = await slow.op(signal);
+      await unwound.promise;
+      return result;
+    });
+    await slow.started;
+    const caller = new AbortController();
+    const stopping = scopes.run(path, true, caller.signal, stop.op);
+    const next = scopes.run(path, false, undefined, queued.op);
+    caller.abort(new Error('gone'));
+    unwound.resolve(undefined);
+    await expect(stopping).rejects.toThrow('gone');
+    await queued.started;
+    queued.release();
+    expect(await Promise.all([running, next])).toEqual(['slow', 'queued']);
+    expect(log).toEqual(['slow started', 'slow aborted', 'queued started', 'queued done']);
+  });
+
   it('lets a preempting op abort what runs in the scopes beneath its own', async () => {
     const scopes = new Scopes();
     const log: string[] = [];
