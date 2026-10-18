@@ -28,12 +28,21 @@
 // With CLAUDE_CONFIG_DIR set (never otherwise, so that it never writes into the user's own
 // ~/.claude), it keeps each conversation's transcript there, as the CLI does: the user's messages
 // and its replies, chained by parentUuid, under projects/<the folder's path, dashed>/<id>.jsonl, so
-// that the Agent SDK's listSessions, getSessionMessages and forkSession read them.
+// that the Agent SDK's listSessions, getSessionMessages and forkSession read them. The folder's
+// path is its real path, as the CLI keeps it and the SDK looks for it: as the system resolves it,
+// which on Windows also spells out a folder given by its short name (RUNNER~1, in a temp folder).
 //
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
@@ -106,7 +115,7 @@ let cost = 0;
 
 /** Where it keeps the conversation's transcript, if anywhere. */
 const transcript = process.env.CLAUDE_CONFIG_DIR
-  ? `${process.env.CLAUDE_CONFIG_DIR}/projects/${process.cwd().replace(/[^a-zA-Z0-9]/g, '-')}/${sessionId}.jsonl`
+  ? `${process.env.CLAUDE_CONFIG_DIR}/projects/${realpathSync.native(process.cwd()).replace(/[^a-zA-Z0-9]/g, '-')}/${sessionId}.jsonl`
   : undefined;
 /** The last entry of the transcript: what the next one follows. */
 let leaf = (() => {
