@@ -130,6 +130,8 @@ export const SURFACE = {
     scope: 'none',
     reads: 'session',
     self: 'allowed',
+    // An MCP server's link (a sign-in) is yours alone (R3).
+    varies: ['entries'],
   },
   'session.interrupt': {
     access: L,

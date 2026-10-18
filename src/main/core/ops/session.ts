@@ -40,7 +40,7 @@ export function sessionOps({
         reply: lastTurn === undefined ? null : turnReply(session, lastTurn.id) || null,
       };
     },
-    'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }) => {
+    'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }, { caller }) => {
       const open = openCanvas(engines, canvas);
       agentOf(open, agent);
       const { entries } = open.engine.sessions.of(agent);
@@ -48,7 +48,11 @@ export function sessionOps({
       if (start === 0 && after !== undefined) {
         throw new OpFailure('not-found', 'That entry isn’t in its transcript (any more).');
       }
-      const page = pageOf(entries.slice(start, start + limit).map(shown), fitted);
+      const yours = caller.kind === 'human';
+      const page = pageOf(
+        entries.slice(start, start + limit).map((entry) => shown(entry, yours)),
+        fitted,
+      );
       return { entries: page, next: page.at(-1)?.id ?? after ?? null };
     },
     'session.interrupt': ({ canvas, agent }) => {
@@ -60,9 +64,17 @@ export function sessionOps({
   };
 }
 
-/** An entry as a transcript gives it: a message's pasted images only counted. */
-function shown(entry: Entry): TranscriptEntry {
-  if (entry.kind !== 'user') return entry as TranscriptEntry;
+/**
+ * An entry as a transcript gives it: a message's pasted images only counted; and an MCP server's
+ * link (often a sign-in) left out for anyone but you (`yours`), as Needs leaves out its form: a
+ * link form is yours alone (Core Server R3).
+ */
+function shown(entry: Entry, yours: boolean): TranscriptEntry {
+  if (entry.kind !== 'user') {
+    const seen: Entry = { ...entry };
+    if (seen.kind === 'elicitation' && !yours) delete seen.url;
+    return seen as TranscriptEntry;
+  }
   const { images, ...rest } = entry;
   return images === undefined || images.length === 0 ? rest : { ...rest, images: images.length };
 }

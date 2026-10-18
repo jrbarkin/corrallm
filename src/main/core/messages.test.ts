@@ -1478,6 +1478,57 @@ describe('reads', () => {
     expect(read).toEqual(ids);
   });
 
+  it('shows an MCP server’s link in a transcript only to you', async () => {
+    // A turn whose MCP server asks the user to sign in, at a link.
+    const signIn: Connector<SessionMode> = {
+      start: (_spec, host) => {
+        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        const idle = () => Promise.resolve();
+        return Promise.resolve({
+          send: (message) => {
+            host.emit({ type: 'user', id: message.id, text: message.text });
+            host.emit({ type: 'status', status: 'working' });
+            host.emit({
+              type: 'elicitation',
+              id: 'sign-in',
+              server: 'tracker',
+              message: 'Sign in to the tracker',
+              url: 'https://tracker.example/sign-in?code=secret',
+            });
+            host.emit({ type: 'status', status: 'waiting' });
+            return idle();
+          },
+          answer: idle,
+          interrupt: idle,
+          setMode: idle,
+          setModel: idle,
+          close: idle,
+        });
+      },
+    };
+    await keepCanvas();
+    await start({ appServer: signIn });
+    await send('builder', 'Look up the ticket');
+    interface Entries {
+      entries: { kind: string; url?: string; server?: string }[];
+    }
+    const shown = async (caller: Caller) =>
+      (await ok<Entries>('session.transcript', { agent: 'builder' }, caller)).entries.find(
+        ({ kind }) => kind === 'elicitation',
+      );
+    await vi.waitFor(async () => {
+      expect(await shown(YOU)).toMatchObject({
+        server: 'tracker',
+        url: 'https://tracker.example/sign-in?code=secret',
+      });
+    });
+    for (const caller of [OUTSIDE, READER]) {
+      const theirs = await shown(caller);
+      expect(theirs).toMatchObject({ server: 'tracker', message: 'Sign in to the tracker' });
+      expect(theirs).not.toHaveProperty('url');
+    }
+  });
+
   it('gives the catalog to every party', async () => {
     await keepCanvas();
     await start();
