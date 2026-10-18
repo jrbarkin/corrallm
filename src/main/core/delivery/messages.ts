@@ -19,7 +19,8 @@ import type { Message, PartyId } from '../../../shared/model/messages';
  * unresolved one, dropping the oldest settled first, and writes its log anew once it has grown past
  * what it keeps. It never throws: what it can't write it says on the console, except where a
  * caller asks for its record on disk (`durable`), which rejects then. A torn last line of its log is
- * left out; a log broken before that is set aside, and the store starts empty.
+ * left out, and written out of the log as it loads; a log broken before that is set aside, and the
+ * store starts empty.
  */
 
 /** Where the store's log is written: the run journal's, by canvas. */
@@ -65,13 +66,18 @@ export class MessageStore {
     this.#now = now;
   }
 
-  /** Reads what the log keeps of the canvas's messages. */
+  /**
+   * Reads what the log keeps of the canvas's messages. A last line torn as it was written (or that
+   * lost its newline) is written out of the log before anything is appended after it, which would
+   * otherwise join it on one line.
+   */
   async load(): Promise<void> {
     const text = await this.#log.readMessages(this.canvas);
     if (text === undefined) return;
     const lines = text.split('\n');
     if (lines.at(-1) === '') lines.pop();
     const read = new Map<string, Kept>();
+    let torn = text !== '' && !text.endsWith('\n');
     for (const [i, line] of lines.entries()) {
       const kept = this.#record(line);
       if (kept) {
@@ -82,11 +88,19 @@ export class MessageStore {
         this.warning = `The canvas’s messages could not be read, and were moved to ${where}.`;
         this.#seq = 0;
         return;
+      } else {
+        torn = true;
       }
     }
     this.#kept = new Map([...read].sort(([, a], [, b]) => a.seq - b.seq));
-    this.#grown = Buffer.byteLength(text);
     this.#prune();
+    if (!torn) {
+      this.#grown = Buffer.byteLength(text);
+      return;
+    }
+    const whole = this.#whole();
+    this.#grown = Buffer.byteLength(whole);
+    await this.#log.rewriteMessages(this.canvas, whole);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -167,12 +181,17 @@ export class MessageStore {
       await this.#log.appendMessages(this.canvas, text, durable);
       return;
     }
-    const whole = [...this.#kept.values()]
-      .map(({ seq, message }) => `${JSON.stringify({ seq, message })}\n`)
-      .join('');
+    const whole = this.#whole();
     this.#grown = Buffer.byteLength(whole);
     await this.#log.rewriteMessages(this.canvas, whole);
     if (durable) await this.#log.appendMessages(this.canvas, '', true);
+  }
+
+  /** The log as the store keeps it now: a line for each message. */
+  #whole(): string {
+    return [...this.#kept.values()]
+      .map(({ seq, message }) => `${JSON.stringify({ seq, message })}\n`)
+      .join('');
   }
 
   /**

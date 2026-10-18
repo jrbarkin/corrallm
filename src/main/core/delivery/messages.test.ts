@@ -84,6 +84,31 @@ describe('the message store', () => {
     expect((await store()).all().map(({ id }) => id)).toEqual([added.id]);
   });
 
+  it.each([
+    ['a torn last line', (log: string) => `${log}{"seq":9,"mess`],
+    ['a last line that lost its newline', (log: string) => log.trimEnd()],
+    ['a last line that isn’t a record', (log: string) => `${log}{"seq":9}\n`],
+  ])('appends what comes next on a line of its own after %s', async (_, tear) => {
+    const messages = await store();
+    const first = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    await messages.durable();
+    await writeFile(logFile(), tear(await readFile(logFile(), 'utf8')));
+    const torn = await store();
+    const second = torn.add(draft('outside:orchestrator', 'agent:checker'));
+    torn.update(first.id, { state: 'delivering', delivery: { at: 1000, as: 'as-1', attempt: 1 } });
+    await torn.durable();
+    // Read back as written, however often.
+    for (let i = 0; i < 2; i++) {
+      const again = await store();
+      expect(again.all().map(({ id, state }) => ({ id, state }))).toEqual([
+        { id: first.id, state: 'delivering' },
+        { id: second.id, state: 'pending' },
+      ]);
+      expect(again.warning).toBeUndefined();
+    }
+    expect(await readdir(path.join(profile, 'runs', CANVAS))).toEqual(['messages.jsonl']);
+  });
+
   it('sets aside a log corrupt in the middle, and starts empty', async () => {
     const messages = await store();
     messages.add(draft('outside:orchestrator', 'agent:builder'));
