@@ -5,15 +5,16 @@ import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/engine/needs';
 import type { NeedsInput } from '../../../shared/engine/needs';
 import type { Engine } from '../../../shared/engine/engine';
+import type { PauseCause } from '../../../shared/engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
-import { agentName } from '../../../shared/model/queries';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
 import type { TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
+import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
 import type { MessageStore } from './messages';
 
 /*
@@ -52,7 +53,8 @@ interface Unstartable {
 
 /** What holds a message to an agent, if anything does. */
 type Hold =
-  | { kind: 'paused' | 'busy' }
+  | { kind: 'busy' }
+  | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'usage'; hold: UsageHold };
 
@@ -319,6 +321,14 @@ export class Delivery {
           next ??= message;
           continue;
         }
+        if (hold.kind === 'paused') {
+          const causes = hold.holding.map(({ id, by }) => `${id}/${by}`).join(',');
+          this.#tell(
+            `paused:${node.id}:${causes}:${message.from}`,
+            message,
+            `${this.#name(node.id)} is paused by ${pausesText(this.#deps.nodes(), node.id, hold.holding)}, so your message waits until it is released: ${RELEASES}`,
+          );
+        }
         if (hold.kind === 'stuck') {
           this.#tell(
             `stuck:${node.id}:${message.from}`,
@@ -364,8 +374,8 @@ export class Delivery {
   /** What holds a message from a party (anyone but you) to agent `node` now, if anything. */
   #holdOf(node: AgentNode): Hold | undefined {
     const { engine } = this.#deps;
-    const at = engine.run.snapshot().agents[node.id];
-    if (at?.paused) return { kind: 'paused' };
+    const holding = engine.run.holding({ agent: node.id });
+    if (holding.length > 0) return { kind: 'paused', holding };
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     const session = engine.sessions.of(node.id);
@@ -469,7 +479,10 @@ export class Delivery {
       undefined,
       yours
         ? { id: as }
-        : { id: as, from: { party: message.from, name: this.#sender(message.from) } },
+        : {
+            id: as,
+            from: { party: message.from, name: partyName(this.#deps.nodes(), message.from) },
+          },
     );
     this.#sent.set(message.id, takeBack);
   }
@@ -682,21 +695,12 @@ export class Delivery {
 
   /** An agent's name, as a notice or a frame quotes it: on one line, capped. */
   #name(agent: string): string {
-    return threadTitle(agentName(this.#deps.nodes(), agent), TITLE);
+    return nameOf(this.#deps.nodes(), agent);
   }
 
-  /** A party, as a notice names it: an outside orchestrator's name in quotes, as a frame has it. */
+  /** A party, as a notice names it. */
   #nameOf(party: PartyId): string {
-    return outsideOf(party) === undefined ? this.#sender(party) : `"${this.#sender(party)}"`;
-  }
-
-  /**
-   * A party's name, as its session's CLI is told who sent a message: an agent's (on one line,
-   * capped), an outside orchestrator's, or "you" or "corrallm".
-   */
-  #sender(party: PartyId): string {
-    const agent = agentOf(party);
-    return agent === undefined ? (outsideOf(party) ?? party) : this.#name(agent);
+    return partyText(this.#deps.nodes(), party);
   }
 }
 

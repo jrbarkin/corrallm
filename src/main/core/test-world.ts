@@ -272,7 +272,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     invalid: [{ canvas: CANVAS, target: { agent: 'helper', group: 'lead' } }],
   },
   'run.unpause': {
-    valid: TARGETS.map((args, i) => ({ ...args, request: request(60 + i) })),
+    // The group first: once its pauses are released, none holds the helper but its own, so every
+    // party's release of it says nothing holds it still.
+    valid: TARGETS.toReversed().map((args, i) => ({ ...args, request: request(60 + i) })),
     invalid: [{ canvas: CANVAS }],
     // The lead's pause is yours.
     meetsRule: { sticky: { canvas: CANVAS, target: { agent: 'lead' }, request: request(70) } },

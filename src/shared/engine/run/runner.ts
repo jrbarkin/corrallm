@@ -4,7 +4,7 @@ import type { ConnectionId, UsageBackendId } from '../../adapter';
 import type { AgentNode, CanvasNode } from '../../model/canvas';
 import type { PartyId } from '../../model/messages';
 import type { UsageAction, UsageHold, UsageReading, UsageState } from '../../usage';
-import { agentName, groupMembers, isGroup } from '../../model/queries';
+import { agentName, containersOf, groupMembers, isGroup } from '../../model/queries';
 import {
   findItem,
   isApproval,
@@ -537,12 +537,29 @@ export class RunStore {
     this.#publishControl();
   }
 
-  /** The parties whose pauses hold `target` now (an agent's own, or a group's), oldest first. */
+  /**
+   * The parties whose pauses are on `target` now (an agent's own, or a group's), oldest first:
+   * those its release lets go.
+   */
   pausedBy(target: PauseTarget): PartyId[] {
     const causes = this.#pauseCauses();
     const [id, held] =
       'agent' in target ? [target.agent, causes.individual] : [target.group, causes.groups];
     return held.flatMap((cause) => (cause.id === id ? [cause.by] : []));
+  }
+
+  /**
+   * Every pause that holds `target` now, oldest first: one on it, or on a group it is in (an
+   * agent's groups, or the groups a group is nested in).
+   */
+  holding(target: PauseTarget): PauseCause[] {
+    const causes = this.#pauseCauses();
+    const id = 'agent' in target ? target.agent : target.group;
+    const groups = new Set([id, ...containersOf(this.#nodes, id)]);
+    return [
+      ...('agent' in target ? causes.individual.filter((cause) => cause.id === id) : []),
+      ...causes.groups.filter((cause) => groups.has(cause.id)),
+    ];
   }
 
   #killMembers(members: ReadonlySet<string>): void {

@@ -1,3 +1,4 @@
+import type { PauseTarget } from '../../../shared/engine/run/runner';
 import { groupMembers, isGroup } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import { partyIdOf } from '../caller';
@@ -5,13 +6,11 @@ import type { OpenCanvas } from '../engines';
 import { agentOf, openCanvas } from './open';
 import type { Implementations, OpServices } from '.';
 
-/** What a pause, a kill or a release is aimed at. */
-type Target = { agent: string } | { group: string };
-
 /**
  * The run (Core Server §4 F): pausing, killing and releasing an agent or a group, whether or not a
  * run is going. Each pause and kill is stamped with the party that set it: a token releases only
- * its own (Core Server rule R9, checked in core.call), you any.
+ * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
+ * target still (another party's pause, or one on a group it is in).
  */
 export function runOps({
   engines,
@@ -44,15 +43,16 @@ export function runOps({
     'run.unpause': ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);
       const by = partyIdOf(caller);
-      if ('agent' in target) open.engine.run.resumeAgent(agentOf(open, target.agent).id, by);
-      else open.engine.run.resumeGroup(groupOf(open, target), by);
-      return {};
+      const { run } = open.engine;
+      if ('agent' in target) run.resumeAgent(agentOf(open, target.agent).id, by);
+      else run.resumeGroup(groupOf(open, target), by);
+      return { held: run.holding(target).map(({ id, by: party }) => ({ by: party, on: id })) };
     },
   };
 }
 
 /** The group a target names: not-found if it names none. */
-function groupOf(open: OpenCanvas, target: Target): string {
+function groupOf(open: OpenCanvas, target: PauseTarget): string {
   const id = 'group' in target ? target.group : target.agent;
   if (!isGroup(open.document.nodes, id))
     throw new OpFailure('not-found', `There is no group ${id}.`);

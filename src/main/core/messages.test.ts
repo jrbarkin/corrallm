@@ -49,6 +49,8 @@ interface AgentSpec {
   connection: string;
   settings?: Record<string, unknown>;
   queue?: unknown[];
+  /** The group it is in. */
+  parent?: string;
 }
 
 /** Builder, on Codex's App Server. */
@@ -104,8 +106,15 @@ function ahead(ms: number): void {
   vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ms);
 }
 
-/** A profile keeping a canvas of `agents`, as the app would once its folder was picked. */
-async function keepCanvas(agents = AGENTS, links = LINKS): Promise<void> {
+/**
+ * A profile keeping a canvas of `agents` (and `groups` of them), as the app would once its folder
+ * was picked.
+ */
+async function keepCanvas(
+  agents = AGENTS,
+  links = LINKS,
+  groups: { id: string; label: string }[] = [],
+): Promise<void> {
   const file = path.join(profile, 'canvas.corral');
   await writeFile(
     file,
@@ -113,16 +122,20 @@ async function keepCanvas(agents = AGENTS, links = LINKS): Promise<void> {
       format: 'corrallm',
       version: 2,
       id: CANVAS,
-      nodes: agents.map(({ id, label, connection, settings, queue }, i) => ({
-        id,
-        kind: 'agent',
-        label,
-        position: { x: 0, y: i * 100 },
-        adapter: 'codex',
-        connection,
-        ...(settings ? { settings } : {}),
-        ...(queue ? { queue } : {}),
-      })),
+      nodes: [
+        ...groups.map(({ id, label }) => ({ id, kind: 'group', label, position: { x: 0, y: 0 } })),
+        ...agents.map(({ id, label, connection, settings, queue, parent }, i) => ({
+          id,
+          kind: 'agent',
+          label,
+          position: { x: 0, y: i * 100 },
+          adapter: 'codex',
+          connection,
+          ...(settings ? { settings } : {}),
+          ...(queue ? { queue } : {}),
+          ...(parent === undefined ? {} : { parent }),
+        })),
+      ],
       links: links.map((agents) => ({ agents })),
     }),
   );
@@ -976,9 +989,9 @@ describe('a restart', () => {
     await start();
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
     const waited = await send('builder', 'First');
-    await send('helper', 'Hello');
+    const hello = await send('helper', 'Hello');
     await vi.waitFor(async () => {
-      expect((await inbox()).some(({ replyTo }) => replyTo !== undefined)).toBe(true);
+      expect((await find(hello))?.state).toBe('replied');
     });
     const { next } = await ok<{ next: string }>('status', {});
     await core?.close();
@@ -989,17 +1002,16 @@ describe('a restart', () => {
 
     await start();
     expect(await find(waited)).toMatchObject({ state: 'unresolved' });
-    const told = await notices();
-    expect(told).toEqual([
+    // Its sender is told, after the cursor status gave before: a cursor reads on from it.
+    const after = await ok<{ items: Message[] }>('messages', { after: next });
+    expect(after.items).toEqual([
       expect.objectContaining({
+        kind: 'notice',
         replyTo: waited,
         body: 'Your message to Builder couldn’t be read back when corrallm opened the canvas, so it won’t be sent.',
         turn: expect.objectContaining({ status: 'failed', reason: 'error' }) as unknown,
       }),
     ]);
-    // What comes after the cursor status gave before is read from it.
-    const after = await ok<{ items: Message[] }>('messages', { after: next });
-    expect(after.items.map(({ id }) => id)).toEqual([told[0]?.id]);
     expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
   });
 
@@ -1037,6 +1049,65 @@ describe('a restart', () => {
 });
 
 describe('pauses', () => {
+  /** Builder and Helper in the group Team. */
+  const TEAM = AGENTS.map((agent) =>
+    agent.id === 'builder' || agent.id === 'helper' ? { ...agent, parent: 'team' } : agent,
+  );
+
+  it('says what still holds an agent a token unpauses, and a party’s message to it still waits', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    await ok('run.pause', { target: { agent: 'builder' } });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
+      held: [{ by: 'you', on: 'builder' }],
+    });
+    const id = await send('builder', 'Still paused?');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await find(id))?.state).toBe('pending');
+    // Yours released too, it runs again.
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({ held: [] });
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+  });
+
+  it('refuses to unpause an agent only another party’s pauses hold, naming who set them', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    await ok('run.pause', { target: { group: 'team' } }, YOU);
+    await ok('run.pause', { target: { agent: 'builder' } }, OTHER);
+    expect(
+      await core?.call('run.unpause', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence:
+          'Builder stays paused by "other" and by you on its group "Team": only the party that set a pause, or you, can release it.',
+      },
+    });
+    // You release only Builder's own pauses; its group's still holds it.
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
+      held: [{ by: 'you', on: 'team' }],
+    });
+  });
+
+  it('tells a party once that its message waits on a pause, naming who set it', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    await ok('run.pause', { target: { group: 'team' } }, YOU);
+    const first = await send('builder', 'First');
+    await send('builder', 'Second');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await notices()).toEqual([
+      expect.objectContaining({
+        replyTo: first,
+        body: 'Builder is paused by you on its group "Team", so your message waits until it is released: only the party that set a pause, or you, can release it.',
+      }),
+    ]);
+  });
+
   it('lets a token release only the pauses its own party set', async () => {
     await keepCanvas();
     await start();
@@ -1215,7 +1286,7 @@ describe('reads', () => {
       });
       expect(Buffer.byteLength(JSON.stringify(page.items))).toBeLessThanOrEqual(MAX_PAGE_BYTES);
       expect(page.items.length).toBeGreaterThan(0);
-      read.push(...page.items.map(({ id }) => id));
+      read.push(...page.items.filter(({ kind }) => kind === 'text').map(({ id }) => id));
       after = page.next;
     }
     expect(read).toEqual(ids);

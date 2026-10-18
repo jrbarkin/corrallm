@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasNode } from './canvas';
-import { groupMembers, isGroup, managerOf, teamOf } from './queries';
+import { containersOf, groupMembers, isGroup, managerOf, teamOf } from './queries';
 
 const node = (id: string, type: 'agent' | 'frame', parentId?: string): CanvasNode => ({
   id,
@@ -88,5 +88,12 @@ describe('who manages whom', () => {
     expect(teamOf(nodes, 'lead')).toEqual(['worker', 'helper']);
     expect(teamOf(nodes, 'worker')).toEqual(['helper']);
     expect(teamOf(nodes, 'loose')).toEqual([]);
+  });
+
+  it('lists what a node is nested inside, nearest first, stopping at a loop', () => {
+    expect(containersOf(nodes, 'helper')).toEqual(['worker', 'box', 'lead']);
+    expect(containersOf(nodes, 'lead')).toEqual([]);
+    const looped = [node('a', 'frame', 'b'), node('b', 'frame', 'a'), node('c', 'agent', 'a')];
+    expect(containersOf(looped, 'c')).toEqual(['a', 'b']);
   });
 });
