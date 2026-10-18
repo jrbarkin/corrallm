@@ -19,11 +19,11 @@ import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
  * delivering, with the id it will send under, forces that to disk, and only then sends. A fake fs
  * records each record appended to the message log (its message, state and delivery id) and each
  * fsync, and the agent's session each message it is sent, in one list; and holds every fsync while
- * a test holds its gate.
+ * a test holds its gate, or fails it while the gate says so.
  */
 
 const events = vi.hoisted(() => [] as string[]);
-const gate = vi.hoisted(() => ({ held: undefined as Promise<void> | undefined }));
+const gate = vi.hoisted(() => ({ held: undefined as Promise<void> | undefined, fails: false }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
@@ -46,6 +46,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       const sync = handle.sync.bind(handle);
       handle.sync = async () => {
         await gate.held;
+        if (gate.fails) throw new Error('EIO: i/o error, fsync');
         await sync();
         events.push(`fsync ${file}`);
       };
@@ -66,6 +67,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   gate.held = undefined;
+  gate.fails = false;
   await core?.close();
   core = undefined;
   await rm(profile, { recursive: true, force: true });
@@ -176,4 +178,26 @@ it('delivers the next message once one taken back while it was journaled is with
   expect(codex.sessions.flatMap((session) => session.sent.map(({ text }) => text))).toEqual([
     expect.stringMatching(/Second$/) as string,
   ]);
+});
+
+it('refuses a message whose record can’t be forced to disk, and never sends it', async () => {
+  const codex = new FakeConnector({ adapter: 'codex' });
+  const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
+  gate.fails = true;
+  expect(
+    await core?.call('message', { canvas: CANVAS, to: 'builder', body: 'Lost' }, OUTSIDE),
+  ).toEqual({ ok: false, error: { code: 'unavailable', sentence: 'EIO: i/o error, fsync' } });
+  gate.fails = false;
+  // What comes next goes; the refused one never does, though the disk works again.
+  const next = await ok<{ id: string }>('message', { to: 'builder', body: 'Next' });
+  await vi.waitFor(() => {
+    expect(messages?.get(next.id)?.state).toBe('replied');
+  });
+  expect(codex.sessions.flatMap((session) => session.sent.map(({ text }) => text))).toEqual([
+    expect.stringMatching(/Next$/) as string,
+  ]);
+  expect(messages?.all().find(({ body }) => body === 'Lost')).toMatchObject({
+    state: 'unresolved',
+    turn: { status: 'failed', reason: 'error', message: 'EIO: i/o error, fsync' },
+  });
 });

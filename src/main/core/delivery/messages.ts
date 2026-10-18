@@ -18,9 +18,13 @@ import type { Message, PartyId } from '../../../shared/model/messages';
  * STORE_SETTLED_PER_PARTY settled messages of each party within STORE_BYTES, and every pending and
  * unresolved one, dropping the oldest settled first, and writes its log anew once it has grown past
  * what it keeps. It never throws: what it can't write it says on the console, except where a
- * caller asks for its record on disk (`durable`), which rejects then. A torn last line of its log is
- * left out, and written out of the log as it loads; a log broken before that is set aside, and the
- * store starts empty.
+ * caller asks for its record on disk (`durable`), which rejects then; and once a write fails, the
+ * next writes the log anew, whole (a line a failed append tore included). A torn last line of its
+ * log is left out, and written out of the log as it loads (or with the next write, if that fails);
+ * a log broken before that is set aside, and the store starts empty. A log it can't read, or a
+ * broken one it can't set aside, is left as it is, for corrallm to read when it opens the canvas
+ * again: the store starts empty and journals nothing meanwhile, so `durable` rejects, and nothing is
+ * sent without its record.
  */
 
 /** Where the store's log is written: the run journal's, by canvas. */
@@ -52,12 +56,20 @@ export class MessageStore {
   /** Records changed since the log was last written to, in order. */
   #pending: string[] = [];
   #scheduled = false;
+  /** Each write, after the one before it. */
+  #writing: Promise<void> = Promise.resolve();
   /** How many bytes the log has had appended since it was last written whole. */
   #grown = 0;
   /** Whether something was written to the log since it was last forced to disk. */
   #unsynced = false;
+  /** Whether the log may lack what the store keeps, or hold a torn line: written whole next. */
+  #broken = false;
+  /** Why the store journals nothing, if it can't: its log is left as it was. */
+  #unjournaled: string | undefined;
+  /** Whether anything changed that wasn't journaled, as the store journals nothing. */
+  #lost = false;
   readonly #listeners = new Set<() => void>();
-  /** Why the store started empty, if its log was set aside as it loaded. */
+  /** Why the store started empty, if it couldn't read its log as it loaded. */
   warning: string | undefined;
 
   constructor(canvas: CanvasId, log: MessageLog, now: () => number) {
@@ -69,10 +81,16 @@ export class MessageStore {
   /**
    * Reads what the log keeps of the canvas's messages. A last line torn as it was written (or that
    * lost its newline) is written out of the log before anything is appended after it, which would
-   * otherwise join it on one line.
+   * otherwise join it on one line. Never rejects.
    */
   async load(): Promise<void> {
-    const text = await this.#log.readMessages(this.canvas);
+    let text: string | undefined;
+    try {
+      text = await this.#log.readMessages(this.canvas);
+    } catch (error) {
+      this.#journalNothing(`The canvas’s messages could not be read (${reason(error)})`);
+      return;
+    }
     if (text === undefined) return;
     const lines = text.split('\n');
     if (lines.at(-1) === '') lines.pop();
@@ -84,9 +102,15 @@ export class MessageStore {
         read.set(kept.message.id, kept);
         this.#seq = Math.max(this.#seq, kept.seq);
       } else if (i < lines.length - 1) {
-        const where = await this.#log.setAsideMessages(this.canvas);
-        this.warning = `The canvas’s messages could not be read, and were moved to ${where}.`;
         this.#seq = 0;
+        try {
+          const where = await this.#log.setAsideMessages(this.canvas);
+          this.warning = `The canvas’s messages could not be read, and were moved to ${where}.`;
+        } catch (error) {
+          this.#journalNothing(
+            `The canvas’s messages could not be read, nor moved aside (${reason(error)})`,
+          );
+        }
         return;
       } else {
         torn = true;
@@ -99,8 +123,13 @@ export class MessageStore {
       return;
     }
     const whole = this.#whole();
-    this.#grown = Buffer.byteLength(whole);
-    await this.#log.rewriteMessages(this.canvas, whole);
+    try {
+      await this.#log.rewriteMessages(this.canvas, whole);
+      this.#grown = Buffer.byteLength(whole);
+    } catch (error) {
+      console.error('Could not write the canvas’s messages anew:', error);
+      this.#broken = true;
+    }
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -167,24 +196,50 @@ export class MessageStore {
     for (const listener of this.#listeners) listener();
   }
 
+  /** Writes out what changed, once every write before it is done. */
+  #write(durable: boolean): Promise<void> {
+    const write = this.#writing.then(() => this.#flush(durable));
+    this.#writing = write.catch(() => undefined);
+    return write;
+  }
+
   /**
    * Writes out what changed: appended to the log (forced to disk if `durable`), or, once the log
-   * has grown past what the store keeps, the log written anew with only that.
+   * has grown past what the store keeps or a write before failed, the log written anew, whole. A
+   * store that journals nothing writes nothing, and rejects `durable` once anything has changed.
    */
-  async #write(durable: boolean): Promise<void> {
+  async #flush(durable: boolean): Promise<void> {
     const text = this.#pending.join('');
     this.#pending = [];
-    if (text === '' && (!durable || !this.#unsynced)) return;
-    this.#unsynced = !durable;
-    this.#grown += Buffer.byteLength(text);
-    if (this.#grown <= STORE_BYTES) {
-      await this.#log.appendMessages(this.canvas, text, durable);
+    if (this.#unjournaled !== undefined) {
+      this.#lost ||= text !== '';
+      if (durable && this.#lost) throw new Error(this.#unjournaled);
       return;
     }
-    const whole = this.#whole();
-    this.#grown = Buffer.byteLength(whole);
-    await this.#log.rewriteMessages(this.canvas, whole);
-    if (durable) await this.#log.appendMessages(this.canvas, '', true);
+    if (!this.#broken && text === '' && (!durable || !this.#unsynced)) return;
+    try {
+      if (!this.#broken && this.#grown + Buffer.byteLength(text) <= STORE_BYTES) {
+        await this.#log.appendMessages(this.canvas, text, durable);
+        this.#grown += Buffer.byteLength(text);
+      } else {
+        const whole = this.#whole();
+        await this.#log.rewriteMessages(this.canvas, whole);
+        this.#grown = Buffer.byteLength(whole);
+        if (durable) await this.#log.appendMessages(this.canvas, '', true);
+        this.#broken = false;
+      }
+      this.#unsynced = !durable;
+    } catch (error) {
+      // The log may lack what this was to write, or hold a line it tore: written whole next.
+      this.#broken = true;
+      throw error;
+    }
+  }
+
+  /** The store journals nothing, saying why (`what`), and leaves its log as it is. */
+  #journalNothing(what: string): void {
+    this.#unjournaled = `${what}, so none can be sent until corrallm opens the canvas again.`;
+    this.warning = this.#unjournaled;
   }
 
   /** The log as the store keeps it now: a line for each message. */
@@ -274,4 +329,9 @@ export function readCursor(cursor: string): Readonly<Record<string, number>> | u
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Why something failed, as a sentence quotes it. */
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

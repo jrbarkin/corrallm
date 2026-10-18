@@ -99,6 +99,8 @@ export class Delivery {
   readonly #sent = new Map<string, () => void>();
   /** The agents a message is being journaled for, before it is sent: nothing else starts meanwhile. */
   readonly #writing = new Set<string>();
+  /** The messages sent whose records are on their way to disk: none goes before it is there. */
+  readonly #recording = new Set<string>();
   /** Who asked for each message whose turn is going to be taken back, by its id. */
   readonly #withdrawing = new Map<string, PartyId>();
   /** What each party was told, so that it is told once. */
@@ -160,10 +162,12 @@ export class Delivery {
   /**
    * Sends agent `to` a message from `from`, once its record is on disk: delivered at once if it
    * can be, and otherwise held, its sender told why. A message sent RETRY_AFTER or more after the
-   * agent's session refused to start tries it again. Resolves with it, as kept.
+   * agent's session refused to start tries it again. Resolves with it, as kept; rejects, the message
+   * unresolved and never sent, if its record can't reach the disk.
    */
   async send(from: PartyId, to: string, body: string, replyTo?: string): Promise<Message> {
-    const message = this.#deps.store.add({
+    const { store } = this.#deps;
+    const message = store.add({
       from,
       to: agentParty(to),
       kind: 'text',
@@ -171,7 +175,19 @@ export class Delivery {
       state: 'pending',
       ...(replyTo === undefined ? {} : { replyTo }),
     });
-    await this.#deps.store.durable();
+    this.#recording.add(message.id);
+    try {
+      await store.durable();
+    } catch (error) {
+      const why = threadTitle(error instanceof Error ? error.message : String(error), REASON);
+      store.update(message.id, {
+        state: 'unresolved',
+        turn: { status: 'failed', reason: 'error', message: why },
+      });
+      throw error;
+    } finally {
+      this.#recording.delete(message.id);
+    }
     const stuck = this.#stuck.get(to);
     if (stuck && this.#deps.now() - stuck.at >= RETRY_AFTER) stuck.retrying = true;
     this.#pump();
@@ -271,7 +287,9 @@ export class Delivery {
     const waiting = new Map<string, Message[]>();
     for (const message of messages) {
       const agent = agentOf(message.to);
-      if (agent === undefined || message.state !== 'pending') continue;
+      if (agent === undefined || message.state !== 'pending' || this.#recording.has(message.id)) {
+        continue;
+      }
       waiting.set(agent, [...(waiting.get(agent) ?? []), message]);
     }
     this.#tellWaiting(messages);
