@@ -1015,6 +1015,41 @@ describe('a restart', () => {
     expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
   });
 
+  it('withdraws what waited for an agent no longer on the canvas, telling each sender', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'helper' } }, YOU);
+    const theirs = await send('helper', 'Still there?');
+    const builders = await send('helper', 'And from me', BUILDER);
+    await core?.close();
+    core = undefined;
+    // Deleted in the app meanwhile.
+    await rm(path.join(profile, 'runs', CANVAS, 'record.json'), { force: true });
+    await keepCanvas(
+      AGENTS.filter(({ id }) => id !== 'helper'),
+      [['builder', 'checker']],
+    );
+    await start();
+    await vi.waitFor(async () => {
+      expect(await find(theirs)).toMatchObject({ state: 'withdrawn', by: 'corrallm' });
+    });
+    for (const [caller, id] of [
+      [OUTSIDE, theirs],
+      [BUILDER, builders],
+    ] as const) {
+      // Told it waited on a pause, then that it was withdrawn.
+      expect((await notices(caller)).filter(({ replyTo }) => replyTo === id)).toEqual([
+        expect.objectContaining({
+          body: expect.stringMatching(/^Helper is paused by you/) as string,
+        }),
+        expect.objectContaining({
+          body: 'Your message was withdrawn: the agent it was for, helper, is no longer on the canvas.',
+          turn: { status: 'cancelled', reason: 'taken-back' },
+        }),
+      ]);
+    }
+  });
+
   it('leaves a message journaled as delivering unresolved after a crash, and sends what was pending', async () => {
     await keepCanvas();
     const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');

@@ -285,11 +285,13 @@ export class Delivery {
   /**
    * Delivers what can be: for each agent, the first message waiting that nothing holds (yours go
    * past what holds everyone else's); and tells each sender, once, what holds its messages, and
-   * what its turn waits for.
+   * what its turn waits for. What waited for an agent no longer on the canvas, or from one, is
+   * withdrawn first.
    */
   #pump(): void {
     if (this.#closed) return;
     const { engine, store } = this.#deps;
+    this.#withdrawGone();
     const messages = store.all();
     // Each message the session has now is delivered.
     for (const message of messages) {
@@ -364,6 +366,33 @@ export class Delivery {
       this.#deliver(node, next);
     }
     this.#arm(alarm);
+  }
+
+  /**
+   * Withdraws (for corrallm) each message waiting for an agent no longer on the canvas, telling its
+   * sender, and each one waiting from such an agent (API Spec §7.2).
+   */
+  #withdrawGone(): void {
+    const here = new Set(
+      this.#deps.nodes().flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
+    );
+    const gone = (party: PartyId) => {
+      const agent = agentOf(party);
+      return agent !== undefined && !here.has(agent) ? agent : undefined;
+    };
+    for (const message of this.#deps.store.all()) {
+      if (message.kind !== 'text' || message.state !== 'pending') continue;
+      const to = gone(message.to);
+      if (to === undefined && gone(message.from) === undefined) continue;
+      this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
+      if (to !== undefined && gone(message.from) === undefined) {
+        this.#notice(
+          message,
+          `Your message was withdrawn: the agent it was for, ${threadTitle(to, TITLE)}, is no longer on the canvas.`,
+          TAKEN_BACK,
+        );
+      }
+    }
   }
 
   /** The messages waiting for agent `agent`, in the order they came. */
