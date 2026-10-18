@@ -1,5 +1,6 @@
 import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
+import { MAX_NODE_ID } from './canvas';
 
 /*
  * Messages (API Spec §5): what parties send each other on a canvas, as the core keeps them (its
@@ -18,8 +19,13 @@ import type { TurnResult } from '../session';
  */
 export type PartyId = 'you' | 'corrallm' | `agent:${string}` | `outside:${string}`;
 
-/** A party id's shape: what a party id passed to an operation must look like. */
-export const PARTY_PATTERN = /^(you|corrallm|agent:.{1,256}|outside:[A-Za-z][A-Za-z0-9._-]{0,31})$/;
+/**
+ * A party id's shape: what a party id passed to an operation, or read back from the store, must
+ * look like. An agent's holds its node's id, which may be any text (line breaks too).
+ */
+export const PARTY_PATTERN = new RegExp(
+  `^(you|corrallm|agent:[\\s\\S]{1,${String(MAX_NODE_ID)}}|outside:[A-Za-z][A-Za-z0-9._-]{0,31})$`,
+);
 
 /** The party an agent of the canvas is. */
 export const agentParty = (agent: string): PartyId => `agent:${agent}`;

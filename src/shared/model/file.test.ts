@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../canvas';
 import { TEST_CATALOG, TEST_ENGINE } from '../engine/test-engine';
+import { MAX_NODE_ID } from './canvas';
 import type { AgentData, AgentNode, CanvasDocument } from './canvas';
 import { fromFile, toFile } from './file';
 import type { QueueItem } from './queue';
@@ -448,6 +449,11 @@ describe('fromFile', () => {
       'a repeated id',
       (f) => Object.assign(f.nodes[2] ?? {}, { id: 'a' }),
       /nodes\[2\]\.id: "a" is used twice/,
+    ],
+    [
+      'an id longer than any agent is named by',
+      (f) => Object.assign(f.nodes[2] ?? {}, { id: 'x'.repeat(MAX_NODE_ID + 1) }),
+      /^nodes\[2\]\.id must be at most 256 characters$/,
     ],
     [
       'a missing parent',

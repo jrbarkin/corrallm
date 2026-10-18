@@ -13,6 +13,12 @@ import type { QueueItem } from './queue';
  * Plain data, free of Node, Electron, the DOM and React Flow: it is compiled into every process.
  */
 
+/**
+ * How long a node's id may be (an agent's or a group's, unique within its canvas): any text, its
+ * file's and the API's alike, and so what an agent's party id holds (src/shared/model/messages.ts).
+ */
+export const MAX_NODE_ID = 256;
+
 /** Where a node sits: relative to its parent's position, as its file keeps it. */
 export interface Position {
   x: number;

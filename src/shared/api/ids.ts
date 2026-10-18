@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_NODE_ID } from '../model/canvas';
+
 /*
  * The ids operations name, as zod brands (Core Server §3.1). core.call resolves every branded id in
  * a token's arguments against what its party reaches before the op runs (core/reach.ts): anything
@@ -39,9 +41,6 @@ export type NeedId = z.infer<typeof NeedId>;
 /** A canvas, by its stable id (src/shared/canvas.ts). */
 export const CanvasId = brandedId('CanvasId', z.uuid());
 export type CanvasId = z.infer<typeof CanvasId>;
-
-/** How long a node's id may be: an agent's or a group's, unique within its canvas. */
-const MAX_NODE_ID = 256;
 
 /** An agent of a canvas, by its node's id. */
 export const AgentId = brandedId('AgentId', z.string().min(1).max(MAX_NODE_ID));

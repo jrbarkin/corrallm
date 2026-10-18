@@ -109,6 +109,17 @@ describe('the message store', () => {
     expect(await readdir(path.join(profile, 'runs', CANVAS))).toEqual(['messages.jsonl']);
   });
 
+  it('reads back messages to and from an agent whose id holds a line break', async () => {
+    const messages = await store();
+    const to = messages.add(draft('outside:orchestrator', 'agent:two\nlines'));
+    const from = messages.add(draft('agent:two\nlines', 'outside:orchestrator', 'delivered'));
+    const after = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    await messages.durable();
+    const again = await store();
+    expect(again.all().map(({ id }) => id)).toEqual([to.id, from.id, after.id]);
+    expect(again.warning).toBeUndefined();
+  });
+
   it('sets aside a log corrupt in the middle, and starts empty', async () => {
     const messages = await store();
     messages.add(draft('outside:orchestrator', 'agent:builder'));
