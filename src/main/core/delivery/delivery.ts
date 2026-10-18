@@ -107,7 +107,7 @@ export class Delivery {
   readonly #recording = new Set<string>();
   /** Who asked for each message whose turn is going to be taken back, by its id. */
   readonly #withdrawing = new Map<string, PartyId>();
-  /** What each party was told, so that it is told once. */
+  /** What each party was told, so that it is told once (kept with each notice, by its key). */
   readonly #told = new Set<string>();
   /** The agents whose sessions would not start, by id. */
   readonly #stuck = new Map<string, Stuck>();
@@ -138,6 +138,8 @@ export class Delivery {
    */
   async start(): Promise<void> {
     const { store } = this.#deps;
+    // What its senders were told before, they were told once.
+    for (const key of store.told()) this.#told.add(key);
     for (const message of store.all()) {
       if (this.#inFlight(message)) this.#cutOff(message);
       else if (message.state === 'pending' && store.doubtful.has(message.id)) this.#unread(message);
@@ -670,25 +672,28 @@ export class Delivery {
     }
   }
 
-  /** Tells a message's sender `text`, once for `key`. */
+  /** Tells a message's sender `text`, once for `key`: kept with the notice, across restarts. */
   #tell(key: string, message: Message, text: string): void {
     if (this.#told.has(key)) return;
     this.#told.add(key);
-    this.#notice(message, text);
+    this.#notice(message, text, undefined, key);
   }
 
   /** A notice to a message's sender, about it: a record, never delivered as a turn. */
-  #notice(message: Message, text: string, turn?: TurnResult): void {
+  #notice(message: Message, text: string, turn?: TurnResult, key?: string): void {
     if (message.from === 'corrallm') return;
-    this.#deps.store.add({
-      from: 'corrallm',
-      to: message.from,
-      kind: 'notice',
-      body: text,
-      replyTo: message.id,
-      ...(turn === undefined ? {} : { turn }),
-      state: 'delivered',
-    });
+    this.#deps.store.add(
+      {
+        from: 'corrallm',
+        to: message.from,
+        kind: 'notice',
+        body: text,
+        replyTo: message.id,
+        ...(turn === undefined ? {} : { turn }),
+        state: 'delivered',
+      },
+      key,
+    );
   }
 
   /**

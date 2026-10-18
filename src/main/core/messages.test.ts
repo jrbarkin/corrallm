@@ -1126,6 +1126,20 @@ describe('a restart', () => {
     expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
   });
 
+  it('tells a sender what its message waits on once, across a restart too', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const id = await send('builder', 'Still paused?');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    await restart();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await find(id))?.state).toBe('pending');
+    expect(await notices()).toHaveLength(1);
+  });
+
   it('withdraws what waited for an agent no longer on the canvas, telling each sender', async () => {
     await keepCanvas();
     await start();

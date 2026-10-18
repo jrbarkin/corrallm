@@ -13,8 +13,8 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 /*
  * A canvas's messages, as the core keeps them (API Spec §5.3, Core Server §5.9): in memory, in the
  * order they came, and journaled to runs/<id>/messages.jsonl through the run journal's one queue,
- * a line for each message each time it changes ({ seq, message }, the last line of a message
- * winning). Its order (`seq`) survives restarts, so a cursor into it does too. It keeps the newest
+ * a line for each message each time it changes ({ seq, message, told? }, the last line of a
+ * message winning). Its order (`seq`) survives restarts, so a cursor into it does too. It keeps the newest
  * STORE_SETTLED_PER_PARTY settled messages of each party within STORE_BYTES, and every pending and
  * unresolved one, dropping the oldest settled first (delivery bounds how many wait: MAX_WAITING),
  * and writes its log anew once what it appended since it last did outgrows both what it kept then
@@ -40,11 +40,15 @@ export interface MessageLog {
 /** A message to add: the store gives it its id, its canvas and when it was sent. */
 export type Draft = Omit<Message, 'id' | 'canvas' | 'at'>;
 
-/** A message as the store keeps it: its place in the store's order, and how big its record is. */
+/**
+ * A message as the store keeps it: its place in the store's order, how big its record is, and, for
+ * a notice, what it told (its key: Delivery tells each thing once, across restarts too).
+ */
 interface Kept {
   seq: number;
   message: Message;
   bytes: number;
+  told?: string;
 }
 
 export class MessageStore {
@@ -72,7 +76,6 @@ export class MessageStore {
   #unjournaled: string | undefined;
   /** Whether anything changed that wasn't journaled, as the store journals nothing. */
   #lost = false;
-  readonly #listeners = new Set<() => void>();
   /** Why the store couldn't read all of its log as it loaded, if it couldn't. */
   warning: string | undefined;
   /**
@@ -154,13 +157,6 @@ export class MessageStore {
     }
   }
 
-  subscribe = (listener: () => void): (() => void) => {
-    this.#listeners.add(listener);
-    return () => {
-      this.#listeners.delete(listener);
-    };
-  };
-
   /** Every message kept, in the store's order. */
   all(): Message[] {
     return [...this.#kept.values()].map(({ message }) => message);
@@ -180,11 +176,25 @@ export class MessageStore {
     return this.#seq;
   }
 
-  /** Adds a message, journaled after everything before it: as kept. */
-  add(draft: Draft): Message {
+  /**
+   * Adds a message, journaled after everything before it: as kept. `told`: for a notice, the key
+   * of what it tells, kept with it.
+   */
+  add(draft: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
-    this.#keep({ seq: ++this.#seq, message, bytes: 0 });
+    this.#keep({ seq: ++this.#seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
     return message;
+  }
+
+  /** The keys of what the notices kept told about messages still waiting. */
+  told(): string[] {
+    return [...this.#kept.values()].flatMap(({ message, told }) =>
+      told !== undefined &&
+      message.replyTo !== undefined &&
+      this.get(message.replyTo)?.state === 'pending'
+        ? [told]
+        : [],
+    );
   }
 
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
@@ -202,7 +212,7 @@ export class MessageStore {
   }
 
   #keep(kept: Kept): void {
-    const line = `${JSON.stringify({ seq: kept.seq, message: kept.message })}\n`;
+    const line = lineOf(kept);
     this.#kept.set(kept.message.id, { ...kept, bytes: Buffer.byteLength(line) });
     this.#pending.push(line);
     this.#prune();
@@ -215,7 +225,6 @@ export class MessageStore {
         });
       });
     }
-    for (const listener of this.#listeners) listener();
   }
 
   /** Writes out what changed, once every write before it is done. */
@@ -270,9 +279,7 @@ export class MessageStore {
 
   /** The log as the store keeps it now: a line for each message. */
   #whole(): string {
-    return [...this.#kept.values()]
-      .map(({ seq, message }) => `${JSON.stringify({ seq, message })}\n`)
-      .join('');
+    return [...this.#kept.values()].map(lineOf).join('');
   }
 
   /**
@@ -329,6 +336,7 @@ export class MessageStore {
       seq: value.seq as number,
       message: message as unknown as Message,
       bytes: Buffer.byteLength(line) + 1,
+      ...(typeof value.told === 'string' ? { told: value.told } : {}),
     };
   }
 }
@@ -351,6 +359,11 @@ export function readCursor(cursor: string): Readonly<Record<string, number>> | u
   } catch {
     return undefined;
   }
+}
+
+/** A message's line in the store's log. */
+function lineOf({ seq, message, told }: Kept): string {
+  return `${JSON.stringify({ seq, message, ...(told === undefined ? {} : { told }) })}\n`;
 }
 
 /** The place in the store's order a line of its log gives, though it isn't a record it reads. */
