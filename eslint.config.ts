@@ -12,6 +12,26 @@ const NODE_BUILTINS = builtinModules.flatMap((name) =>
   name.startsWith('node:') ? [name] : [name, `node:${name}`],
 );
 
+/** An import of an adapter's folder: what is particular to one CLI (src/main/sessions/{sdk,codex}/). */
+const ADAPTER_FOLDERS = {
+  regex: '^(?:\\.{1,2}/)+(?:sessions/)?(?:sdk|codex)/',
+  message:
+    'Platform code must not import an adapter’s folder (src/main/sessions/sdk/, src/main/sessions/codex/): reach the CLI through its connector.',
+};
+/**
+ * What may import adapters' folders: the adapters themselves, Claude's own files outside its folder,
+ * and the platform files that import them today, each to go as adapters move behind the registry.
+ */
+const ADAPTER_IMPORTERS = [
+  'src/main/sessions/sdk/**',
+  'src/main/sessions/codex/**',
+  'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
+  'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
+  'src/main/{index,settings,forge-env.d,selftest}.ts',
+  'src/main/sessions/{manager,installed,connectors}.ts',
+  '**/*.test.ts',
+];
+
 export default defineConfig(
   globalIgnores(['.vite/', 'out/', 'coverage/', 'playwright-report/', 'test-results/']),
   {
@@ -97,6 +117,12 @@ export default defineConfig(
         },
       ],
     },
+  },
+  {
+    name: 'app/adapters',
+    files: ['src/main/**/*.ts'],
+    ignores: ADAPTER_IMPORTERS,
+    rules: { 'no-restricted-imports': ['error', { patterns: [ADAPTER_FOLDERS] }] },
   },
   {
     name: 'app/javascript',
