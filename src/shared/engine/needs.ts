@@ -18,7 +18,7 @@ import type { Run } from './run/runner';
  * won't start while parties' messages to them wait. One derivation (`needsOf`) for the canvas's
  * Needs you sidebar and the core's `needs`, which words each as a NeedsItem (`needsItem`), in the
  * host's locale. Until leads (B24), each is yours alone to answer: a token sees yours without
- * their choices (`withoutChoices`).
+ * their choices or forms (`withoutChoices`).
  */
 
 export interface NeedsInput {
@@ -157,10 +157,14 @@ function idOf(kind: 'hold' | 'start' | 'prompt', agent: string, of?: string): st
   return [kind, encodeURIComponent(agent), ...(of === undefined ? [] : [of])].join('/');
 }
 
-/** An item of yours as a token sees it: what waits, without the choices only you may make. */
+/**
+ * An item of yours as a token sees it: what waits, without the choices only you may make, nor the
+ * form only you fill in (an MCP server's link, often a sign-in's, among them: Core Server R3).
+ */
 export function withoutChoices(item: NeedsItem): NeedsItem {
   const seen: NeedsItem = { ...item, choices: [] };
   delete seen.text;
+  delete seen.form;
   return seen;
 }
 

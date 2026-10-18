@@ -154,4 +154,33 @@ describe('needs', () => {
     expect(theirs).not.toHaveProperty('text');
     expect(theirs).toMatchObject({ title: item.title, by: ['you'], for: 'you' });
   });
+
+  it('shows a token an MCP server’s request without the link only you may open', () => {
+    const signIn: Session = {
+      ...NEW_SESSION,
+      status: 'waiting',
+      entries: [
+        { id: 'm1', kind: 'user', text: 'Read the issues' },
+        {
+          id: 'm1/elicitation',
+          kind: 'elicitation',
+          server: 'tracker',
+          message: 'Sign in to the tracker',
+          url: 'https://tracker.example.com/oauth?state=secret',
+        },
+      ],
+    };
+    const [item] = needs(input({ sessions: { b: signIn } }));
+    expect(item).toMatchObject({
+      title: 'Sign in to the tracker',
+      form: { url: 'https://tracker.example.com/oauth?state=secret' },
+    });
+    if (!item) throw new Error('no item');
+    const theirs = withoutChoices(item);
+    expect(theirs).not.toHaveProperty('form');
+    expect(theirs).toMatchObject({
+      title: 'Sign in to the tracker',
+      detail: 'Asked by its MCP server tracker.',
+    });
+  });
 });
