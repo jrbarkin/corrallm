@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { ModelInfo, SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -131,7 +133,7 @@ describe('Translator, on what the real Claude Code did', () => {
     expect(calls(events, 'AskUserQuestion')).toEqual([]);
     expect(calls(events, 'ExitPlanMode')).toEqual([]);
     expect(calls(events, 'Write').map((call) => call.summary)).toContain(
-      '~/.claude/plans/first-use-the-askuserquestion-validated-sunset.md',
+      path.join('~', '.claude', 'plans', 'first-use-the-askuserquestion-validated-sunset.md'),
     );
     expect(calls(events, 'Write').at(-1)).toMatchObject({ summary: 'a.txt', status: 'done' });
   });

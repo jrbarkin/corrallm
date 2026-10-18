@@ -1,13 +1,31 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { displayPath, output, replacement, resetTime, unifiedDiff, usageLimit } from './transcript';
 
 describe('the transcript’s words, shared by every connection', () => {
   it('shows paths in the project folder relative to it, and the home folder as ~', () => {
-    const places = { cwd: '/home/user/shop', home: '/home/user' };
-    expect(displayPath('/home/user/shop/src/a.ts', places)).toBe('src/a.ts');
-    expect(displayPath('/home/user/.codex/AGENTS.md', places)).toBe('~/.codex/AGENTS.md');
+    // The machine's own paths, with its own separator, as Claude Code and Codex show them there.
+    const home = path.resolve('/home/user');
+    const places = { cwd: path.join(home, 'shop'), home };
+    expect(displayPath(path.join(home, 'shop', 'src', 'a.ts'), places)).toBe(
+      path.join('src', 'a.ts'),
+    );
+    expect(displayPath(path.join(home, '.codex', 'AGENTS.md'), places)).toBe(
+      path.join('~', '.codex', 'AGENTS.md'),
+    );
   });
+
+  it.runIf(process.platform === 'win32')(
+    'reads a Windows path with either slash and in any case, and shows it with backslashes',
+    () => {
+      const places = { cwd: 'C:\\Users\\me\\shop', home: 'C:\\Users\\me' };
+      expect(displayPath('C:/Users/me/shop/src/a.ts', places)).toBe('src\\a.ts');
+      expect(displayPath('c:\\users\\ME\\.codex\\AGENTS.md', places)).toBe('~\\.codex\\AGENTS.md');
+      expect(displayPath('D:\\data\\a.ts', places)).toBe('D:\\data\\a.ts');
+    },
+  );
 
   it('cuts very long output', () => {
     const cut = output('x'.repeat(50_000));

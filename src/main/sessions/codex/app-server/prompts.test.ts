@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionAnswer, SessionEvent } from '../../../../shared/session';
@@ -162,7 +164,7 @@ describe('Codex’s approvals, as prompts', () => {
     });
     expect(shown()).toMatchObject({
       tool: 'permissions',
-      summary: 'network access; write ~/.npm',
+      summary: `network access; write ${path.join('~', '.npm')}`,
       title: 'Codex wants more permissions: to install packages',
     });
     await expect(

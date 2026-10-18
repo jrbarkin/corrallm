@@ -611,7 +611,7 @@ describe('SdkConnector', () => {
     });
     await expect(session.rewindFiles?.(message, true)).resolves.toEqual({
       possible: true,
-      files: ['src/login.ts', '~/notes.md'],
+      files: [path.join('src', 'login.ts'), path.join('~', 'notes.md')],
       added: 4,
       removed: 10,
     });

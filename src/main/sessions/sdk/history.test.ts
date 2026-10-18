@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -26,6 +28,14 @@ function outline(events: SessionEvent[]): string[] {
   });
 }
 
+/** The plan file Claude Code wrote, as the transcript shows it (with the machine's separator). */
+const PLAN = path.join(
+  '~',
+  '.claude',
+  'plans',
+  'first-use-the-askuserquestion-validated-sunset.md',
+);
+
 describe('historyEvents, on what the real Claude Code kept', () => {
   it('replays each turn: the message, what Claude did, and its end', () => {
     const events = historyEvents(recordedHistory('question-and-plan'), RECORDED_PLACES);
@@ -35,8 +45,8 @@ describe('historyEvents, on what the real Claude Code kept', () => {
       'AskUserQuestion Should the new file be named a.txt or b.txt? (running)',
       'AskUserQuestion Should the new file be named a.txt or b.txt? (done)',
       "thinking: Since I'm in plan mode, I shou",
-      'Write ~/.claude/plans/first-use-the-askuserquestion-validated-sunset.md (running)',
-      'Write ~/.claude/plans/first-use-the-askuserquestion-validated-sunset.md (done)',
+      `Write ${PLAN} (running)`,
+      `Write ${PLAN} (done)`,
       'ToolSearch select:ExitPlanMode (running)',
       'ToolSearch select:ExitPlanMode (done)',
       'ExitPlanMode  (running)',

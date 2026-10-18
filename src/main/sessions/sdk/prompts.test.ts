@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -188,7 +190,7 @@ describe('alwaysWording', () => {
         [{ type: 'addDirectories', directories: ['/home/user/docs'], destination: 'session' }],
         RECORDED_PLACES,
       ),
-    ).toBe('Yes, and allow access to ~/docs during this session');
+    ).toBe(`Yes, and allow access to ${path.join('~', 'docs')} during this session`);
   });
 
   it('offers no "always" where the CLI suggests nothing to keep', () => {

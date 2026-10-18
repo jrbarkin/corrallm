@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { displayPath, resultDetail, toolSummary } from './tools';
@@ -6,9 +8,17 @@ const places = { cwd: '/home/user/shop', home: '/home/user' };
 
 describe('displayPath', () => {
   it('shows paths in the project folder relative to it, and the home folder as ~', () => {
-    expect(displayPath('/home/user/shop/src/a.ts', places)).toBe('src/a.ts');
-    expect(displayPath('/home/user/.claude/plans/p.md', places)).toBe('~/.claude/plans/p.md');
-    expect(displayPath('/etc/hosts', places)).toBe('/etc/hosts');
+    // The machine's own paths, with its own separator, as Claude Code shows them there.
+    const home = path.resolve('/home/user');
+    const native = { cwd: path.join(home, 'shop'), home };
+    expect(displayPath(path.join(home, 'shop', 'src', 'a.ts'), native)).toBe(
+      path.join('src', 'a.ts'),
+    );
+    expect(displayPath(path.join(home, '.claude', 'plans', 'p.md'), native)).toBe(
+      path.join('~', '.claude', 'plans', 'p.md'),
+    );
+    const outside = path.resolve('/etc/hosts');
+    expect(displayPath(outside, native)).toBe(outside);
   });
 
   it('knows the project folder by its real path too (the CLI works in that)', () => {

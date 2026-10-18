@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { TerminalAsk } from '../../../shared/session';
@@ -147,7 +149,7 @@ describe('a permission Claude Code asks for in its terminal', () => {
     // A long file shows its start: the card is a preview, the terminal shows it all.
     const content = Array.from({ length: 30 }, (_, i) => `line ${String(i + 1)}`).join('\n');
     const write = asked('Write', { file_path: '/work/app/src/long.ts', content });
-    expect(write).toMatchObject({ tool: 'Write', summary: 'src/long.ts' });
+    expect(write).toMatchObject({ tool: 'Write', summary: path.join('src', 'long.ts') });
     const detail = write?.kind === 'permission' ? write.detail : undefined;
     expect(detail?.kind === 'diff' && detail.added).toBe(30);
     expect(detail?.kind === 'diff' && detail.lines.map((line) => line.text)).toEqual([
