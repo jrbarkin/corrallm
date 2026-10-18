@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,8 +17,9 @@ import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
 /*
  * A message's record reaches the disk before it is sent (API Spec §5.3): the core journals it
  * delivering, with the id it will send under, forces that to disk, and only then sends. A fake fs
- * records each fsync, and the agent's session each message it is sent, in one list; and holds
- * every fsync while a test holds its gate.
+ * records each record appended to the message log (its message, state and delivery id) and each
+ * fsync, and the agent's session each message it is sent, in one list; and holds every fsync while
+ * a test holds its gate.
  */
 
 const events = vi.hoisted(() => [] as string[]);
@@ -31,11 +31,23 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
+      const file = path.basename(String(args[0]));
+      const append = handle.appendFile.bind(handle);
+      handle.appendFile = async (data, options) => {
+        // The journal appends text.
+        if (file === 'messages.jsonl' && typeof data === 'string') {
+          for (const line of data.split('\n').filter(Boolean)) {
+            const { message } = JSON.parse(line) as { message: Message };
+            events.push(`append ${message.id} ${message.state} ${message.delivery?.as ?? '-'}`);
+          }
+        }
+        await append(data, options);
+      };
       const sync = handle.sync.bind(handle);
       handle.sync = async () => {
         await gate.held;
         await sync();
-        events.push(`fsync ${path.basename(String(args[0]))}`);
+        events.push(`fsync ${file}`);
       };
       return handle;
     },
@@ -116,9 +128,6 @@ async function ok<T = Record<string, unknown>>(
 }
 
 it('sends a message only once its delivering record is on disk', async () => {
-  const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-  /** What the log on disk said of each message as it was sent. */
-  const journaled: (Message | undefined)[] = [];
   const codex = new FakeConnector({ adapter: 'codex' });
   await start({
     start: async (spec, host) => {
@@ -126,9 +135,6 @@ it('sends a message only once its delivering record is on disk', async () => {
       const send = session.send.bind(session);
       session.send = (message) => {
         events.push(`send ${message.id}`);
-        const lines = readFileSync(log, 'utf8').trim().split('\n');
-        const records = lines.map((line) => (JSON.parse(line) as { message: Message }).message);
-        journaled.push(records.findLast((record) => record.delivery?.as === message.id));
         return send(message);
       };
       return session;
@@ -139,8 +145,11 @@ it('sends a message only once its delivering record is on disk', async () => {
     expect(events.some((event) => event.startsWith('send '))).toBe(true);
   });
   const sendAt = events.findIndex((event) => event.startsWith('send '));
-  expect(events.slice(0, sendAt)).toContain('fsync messages.jsonl');
-  expect(journaled).toEqual([expect.objectContaining({ id, state: 'delivering' })]);
+  const as = events[sendAt]?.slice('send '.length);
+  // Its delivering record, with the id it was sent under, was appended, and then forced to disk.
+  const appendedAt = events.indexOf(`append ${id} delivering ${String(as)}`);
+  expect(appendedAt).toBeGreaterThan(-1);
+  expect(events.slice(0, sendAt).lastIndexOf('fsync messages.jsonl')).toBeGreaterThan(appendedAt);
 });
 
 it('delivers the next message once one taken back while it was journaled is withdrawn', async () => {
