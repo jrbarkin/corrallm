@@ -1645,16 +1645,24 @@ export class RunStore {
   }
 
   /**
-   * Sets the run's one alarm for the next delay or time limit to come, if it is not set for it
-   * already: no later than a minute away, so the clock is looked at again at least that often.
-   * When it goes off, the run settles: what is due moves on, and the alarm is set for what is next.
+   * Sets the run's one alarm for the next delay, time limit or usage window's reset to come, if it
+   * is not set for it already: no later than a minute away, so the clock is looked at again at
+   * least that often. When it goes off, the run settles: what is due moves on (a usage rule's ask
+   * too, its window reset), and the alarm is set for what is next.
    */
   #arm(now: number): void {
     const next = this.#run.running
       ? Math.min(
-          ...Object.values(this.#run.agents).flatMap((run) =>
-            !run.paused && run.status === 'waiting' && run.until !== undefined ? [run.until] : [],
-          ),
+          ...Object.values(this.#run.agents).flatMap((run) => {
+            if (run.paused) return [];
+            const due =
+              run.status === 'waiting'
+                ? run.until
+                : run.status === 'asking'
+                  ? (run.usage?.resetsAt ?? undefined)
+                  : undefined;
+            return due === undefined ? [] : [due];
+          }),
         )
       : Infinity;
     if (this.#alarm?.at === next) return;

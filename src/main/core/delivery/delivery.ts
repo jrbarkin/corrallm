@@ -310,7 +310,8 @@ export class Delivery {
     ) {
       return { kind: 'busy' };
     }
-    if (at?.usage) return { kind: 'usage', hold: at.usage };
+    // A usage hold the run set (AgentRun.usage) is this rule, with your Go on or Wait for the reset,
+    // read now: so one a stopped run left, or whose window has reset, holds nothing.
     const rule = engine.run.usageRule(node.id, this.#deps.now());
     if (!rule) return undefined;
     if (rule.action === 'warn') {

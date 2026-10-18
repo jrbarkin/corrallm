@@ -510,6 +510,106 @@ describe('usage', () => {
       expect((await find(id, YOU))?.state).toBe('replied');
     });
   });
+
+  /** A run whose Builder is held by its usage rule (`action`) before its queue's message. */
+  async function heldOnUsage(action: string, resetsAt: number) {
+    await overRule(action, resetsAt);
+    await keepCanvas([
+      { ...BUILDER_AGENT, queue: [{ id: 'hello', message: 'From the queue' }] },
+      ...AGENTS.slice(1),
+    ]);
+    const engine = await (await start()).engines.open(CANVAS);
+    engine.run.start();
+    expect(engine.run.snapshot().agents.builder).toMatchObject({
+      current: 'hello',
+      status: action === 'ask' ? 'asking' : 'waiting',
+      usage: { backend: 'codex', window: 'fiveHour', resetsAt },
+    });
+    return engine;
+  }
+
+  /** The notices the outside party was sent. */
+  async function notices(): Promise<Message[]> {
+    return (await inbox()).filter((message) => message.kind === 'notice');
+  }
+
+  const WAITS =
+    /^Codex has used 80% of its 5-hour window \(over 50%\), so your message to Builder waits until it resets at \d{1,2}:\d\d\.$/;
+
+  it.each(['ask', 'waitForReset'])(
+    'holds a party’s message while the run holds its agent on usage (%s) until the window resets, but never yours',
+    async (action) => {
+      const resetsAt = Date.now() + 1500;
+      const engine = await heldOnUsage(action, resetsAt);
+      const id = await send('builder', 'Say hello');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect((await find(id))?.state).toBe('pending');
+      expect(await notices()).toEqual([
+        expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
+      ]);
+      // What you send goes past the hold.
+      const yours = await send('builder', 'From you', YOU);
+      await vi.waitFor(async () => {
+        expect((await find(yours, YOU))?.state).toBe('replied');
+      });
+      expect((await find(id))?.state).toBe('pending');
+      expect(sent(appServer)).toEqual(['From you']);
+
+      await vi.waitFor(
+        async () => {
+          expect((await find(id))?.state).toBe('replied');
+        },
+        { timeout: 3500 },
+      );
+      expect(Date.now()).toBeGreaterThanOrEqual(resetsAt);
+      // The run's hold went with its window, so the party's turn waited for no one.
+      expect(engine.run.snapshot().agents.builder?.usage).toBeUndefined();
+      expect(await notices()).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['ask', 'decide'],
+    ['waitForReset', 'goOn'],
+  ] as const)(
+    'delivers a party’s message once you tell the run to go on at its usage hold (%s)',
+    async (action, how) => {
+      const engine = await heldOnUsage(action, Date.now() + 60_000);
+      const id = await send('builder', 'Say hello');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect((await find(id))?.state).toBe('pending');
+      if (how === 'decide') engine.run.decide('builder', 'hello', { choice: 'goOn' });
+      else engine.run.goOn('builder', 'hello');
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      expect(sent(appServer)).toEqual(['From the queue', `${FRAME(id)}Say hello`]);
+      expect(await notices()).toEqual([
+        expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
+      ]);
+    },
+  );
+
+  it('holds a party’s message no longer than the window of a usage hold a stopped run left', async () => {
+    const resetsAt = Date.now() + 1500;
+    const engine = await heldOnUsage('waitForReset', resetsAt);
+    engine.run.stop();
+    expect(engine.run.snapshot().agents.builder?.usage).toMatchObject({ resetsAt });
+    const id = await send('builder', 'Say hello');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await find(id))?.state).toBe('pending');
+    await vi.waitFor(
+      async () => {
+        expect((await find(id))?.state).toBe('replied');
+      },
+      { timeout: 3500 },
+    );
+    // The stopped run sent nothing of its own.
+    expect(sent(appServer)).toEqual([`${FRAME(id)}Say hello`]);
+    expect(await notices()).toEqual([
+      expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
+    ]);
+  });
 });
 
 describe('a restart', () => {

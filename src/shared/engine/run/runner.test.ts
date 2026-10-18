@@ -2041,6 +2041,27 @@ describe('RunStore', () => {
       expect(stopped.where()).toEqual({ a: 'stopped one', b: 'stopped w' });
     });
 
+    it('asks no longer than its window lasts: it goes on once the window resets', () => {
+      const run = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      run.rule(ask);
+      run.reading(fiveHour(90));
+      run.store.start();
+      expect(run.where()).toEqual({ a: 'asking one' });
+      run.advance(2 * HOUR - 1);
+      expect(run.where()).toEqual({ a: 'asking one' });
+      run.advance(1);
+      expect(run.where()).toEqual({ a: 'running one' });
+      expect(run.store.snapshot().agents.a?.usage).toBeUndefined();
+
+      // Without a reset time, it asks until a reading or an answer says otherwise.
+      const unknown = setup([agent('a', [{ id: 'one', action: 'Edit' }])]);
+      unknown.rule(ask);
+      unknown.reading(fiveHour(90, null));
+      unknown.store.start();
+      unknown.advance(6 * HOUR);
+      expect(unknown.where()).toEqual({ a: 'asking one' });
+    });
+
     it('stops the whole if-then or repeat a held step sits in', () => {
       const queue: QueueItem[] = [
         { id: 'first', action: 'Read' },
