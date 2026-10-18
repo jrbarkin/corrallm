@@ -23,11 +23,14 @@ import {
   isLead,
   NO_DESKTOP,
   REAL_FIXTURES,
+  REAL_OUT_OF_REACH,
   RESOLVERS,
   TEST_FIXTURES,
+  TEST_OUT_OF_REACH,
   testRegistry,
+  unreachableCalls,
 } from './test-registry';
-import type { OpFixture } from './test-registry';
+import type { OpFixture, OutOfReach } from './test-registry';
 
 /*
  * T3a (Core Server §3.7): each transport adds nothing. A transport is factored as identify (who
@@ -61,12 +64,12 @@ function unwrap(result: CallToolResult): OpResult<unknown> {
   return { ok: true, value: result.structuredContent };
 }
 
-/** Every argument list a fixture names. */
-const argsOf = (fixture: OpFixture): unknown[] => [
+/** Every argument list an op's fixture names, and those naming what a party doesn't reach. */
+const argsOf = (core: Dispatcher, name: string, fixture: OpFixture, world: OutOfReach) => [
   ...fixture.valid,
   ...fixture.invalid,
   ...Object.values(fixture.meetsRule ?? {}),
-  ...Object.values(fixture.unreachable ?? {}),
+  ...unreachableCalls(core, name, fixture, world).map(({ args }) => args),
 ];
 
 interface Setup {
@@ -74,10 +77,16 @@ interface Setup {
   close(): Promise<void>;
 }
 
-const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Setup>][] = [
+const REGISTRIES: [
+  string,
+  Readonly<Record<string, OpFixture>>,
+  OutOfReach,
+  () => Promise<Setup>,
+][] = [
   [
     'the registry',
     REAL_FIXTURES,
+    REAL_OUT_OF_REACH,
     async () => {
       const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-transport-'));
       const core = await createCore(
@@ -96,6 +105,7 @@ const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Se
   [
     'the test registry',
     TEST_FIXTURES,
+    TEST_OUT_OF_REACH,
     () => {
       let now = 0;
       const core = createDispatcher(testRegistry(), {
@@ -109,7 +119,7 @@ const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Se
   ],
 ];
 
-describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, start) => {
+describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
   let setup: Setup;
   let server: ApiServer;
   const clients = new Map<Party, Client>();
@@ -145,7 +155,7 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, start) => {
   it.each(Object.entries(fixtures))(
     'answers %s through MCP’s dispatch as directly, for every caller',
     async (name, fixture) => {
-      for (const args of argsOf(fixture)) {
+      for (const args of argsOf(setup.core, name, fixture, world)) {
         for (const party of PARTIES) {
           const direct = await setup.core.call(name, args, CALLERS[party]);
           const mcp = unwrap(await callTool(setup.core, CALLERS[party], toolName(name), args));
@@ -161,7 +171,7 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, start) => {
     'answers %s over HTTP as directly, for every caller a token can be',
     async (name, fixture) => {
       // MCP carries arguments as an object, or none.
-      const sendable = argsOf(fixture).filter(
+      const sendable = argsOf(setup.core, name, fixture, world).filter(
         (args) =>
           args === undefined || (typeof args === 'object' && args !== null && !Array.isArray(args)),
       );

@@ -6,30 +6,39 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PROPOSING_RULES } from '../../shared/api/define';
 import type { OpResult } from '../../shared/api/errors';
+import { idsIn } from '../../shared/api/ids';
 import { toolName } from '../../shared/api/registry';
 import { PARTIES } from '../../shared/api/surface';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
+import { brandsIn } from '../../shared/api/test-schemas';
 import { listTools } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
+import type { TokenCaller } from './caller';
 import { createCore } from './core';
 import {
   CALLERS,
   isLead,
   NO_DESKTOP,
+  OTHER_CANVAS,
   REAL_FIXTURES,
+  REAL_OUT_OF_REACH,
   RESOLVERS,
   TEST_FIXTURES,
+  TEST_OUT_OF_REACH,
   testRegistry,
+  unreachableCalls,
 } from './test-registry';
-import type { OpFixture } from './test-registry';
+import type { OpFixture, OutOfReach } from './test-registry';
 
 /*
  * T3b (Core Server §3.7), generated from a registry: what each op answers each party. A party
  * outside an op's audience is refused (human-only for an op yours alone), and its tool list leaves
  * the op out; the parties in it get the same result but for the fields the op says vary; a rule is
- * refused (or proposed) to a token and applied for you; an id out of a party's reach is not-found.
- * It runs on the registry and on the core's test registry, which has an op for every check.
+ * refused (or proposed) to a token and applied for you; and reach, per op and party: each id an
+ * op's valid arguments name, swapped in turn for each id of its kind a token party in the audience
+ * doesn't reach (`OutOfReach`), is not-found. It runs on the registry and on the core's test
+ * registry, which has an op for every check.
  */
 
 const TOKEN_PARTIES = PARTIES.filter((party) => party !== 'you');
@@ -39,10 +48,16 @@ interface Setup {
   close(): Promise<void>;
 }
 
-const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Setup>][] = [
+const REGISTRIES: [
+  string,
+  Readonly<Record<string, OpFixture>>,
+  OutOfReach,
+  () => Promise<Setup>,
+][] = [
   [
     'the registry',
     REAL_FIXTURES,
+    REAL_OUT_OF_REACH,
     async () => {
       const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-callers-'));
       const core = await createCore(
@@ -61,6 +76,7 @@ const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Se
   [
     'the test registry',
     TEST_FIXTURES,
+    TEST_OUT_OF_REACH,
     () => {
       // Each call a second after the last: no token's writes are limited here.
       let now = 0;
@@ -75,13 +91,77 @@ const REGISTRIES: [string, Readonly<Record<string, OpFixture>>, () => Promise<Se
   ],
 ];
 
+/**
+ * What keeps T3b from trying every token party's reach on every op that takes an id: a kind of id
+ * an op takes that none of its valid arguments names, a kind `world` doesn't say what a party in
+ * the audience doesn't reach of, or a party no call is generated for.
+ */
+function reachGaps(
+  core: Dispatcher,
+  fixtures: Readonly<Record<string, OpFixture>>,
+  world: OutOfReach,
+): string[] {
+  return Object.entries(fixtures).flatMap(([name, fixture]) => {
+    const def = core.ops[name];
+    const surface = core.surface[name];
+    if (!def || !surface) return [`${name}: there is no such op`];
+    const brands = [...new Set(brandsIn(def.input))];
+    if (brands.length === 0) return [];
+    const named = new Set(
+      fixture.valid.flatMap((args) => idsIn(def.input, args).map(({ brand }) => brand)),
+    );
+    const calls = unreachableCalls(core, name, fixture, world);
+    return [
+      ...brands
+        .filter((brand) => !named.has(brand))
+        .map((brand) => `${name}: its valid arguments name no ${brand}`),
+      ...TOKEN_PARTIES.flatMap((party) => {
+        const reach = surface.access[party];
+        if (reach === undefined) return [];
+        const caller = CALLERS[party] as TokenCaller;
+        return [
+          ...brands
+            .filter((brand) => world[brand]?.(caller, reach) === undefined)
+            .map((brand) => `${name}: nothing says which ${brand} ${party} doesn’t reach`),
+          ...(calls.some((call) => call.party === party)
+            ? []
+            : [`${name}: no call names what ${party} doesn’t reach`]),
+        ];
+      }),
+    ];
+  });
+}
+
+describe('T3b’s reach', () => {
+  const core = createDispatcher(testRegistry(), { isLead, resolvers: RESOLVERS });
+
+  it('fails an op whose reach it can’t generate calls for', () => {
+    // A world that says nothing of agents.
+    expect(reachGaps(core, TEST_FIXTURES, { CanvasId: () => [OTHER_CANVAS] })).toContain(
+      'test.message: nothing says which AgentId worker doesn’t reach',
+    );
+    // Valid arguments that name no id.
+    expect(
+      reachGaps(core, { 'test.delete': { valid: [], invalid: [] } }, TEST_OUT_OF_REACH),
+    ).toEqual([
+      'test.delete: its valid arguments name no CanvasId',
+      'test.delete: its valid arguments name no AgentId',
+      'test.delete: no call names what outside-write doesn’t reach',
+    ]);
+    // A world where a party reaches everything.
+    expect(reachGaps(core, TEST_FIXTURES, { CanvasId: () => [], AgentId: () => [] })).toContain(
+      'test.stop: no call names what outside-read doesn’t reach',
+    );
+  });
+});
+
 /** `result`'s value without the fields that may differ by who calls. */
 function invariant(result: OpResult<unknown>, varies: readonly string[]): unknown {
   if (!result.ok || typeof result.value !== 'object' || result.value === null) return result;
   return Object.fromEntries(Object.entries(result.value).filter(([key]) => !varies.includes(key)));
 }
 
-describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, start) => {
+describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
   let setup: Setup;
   beforeAll(async () => {
     setup = await start();
@@ -102,6 +182,10 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, start) => {
         expect(fixture.meetsRule?.[rule], `${name}: ${rule}`).toBeDefined();
       }
     }
+  });
+
+  it('names, for every kind of id an op takes, what each token party in its audience doesn’t reach', () => {
+    expect(reachGaps(setup.core, fixtures, world)).toEqual([]);
   });
 
   describe.each(Object.entries(fixtures))('%s', (name, fixture) => {
@@ -170,12 +254,12 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, start) => {
       }
     });
 
-    it('answers not-found to each party naming what it doesn’t reach', async () => {
-      for (const [party, args] of Object.entries(fixture.unreachable ?? {})) {
-        expect(await setup.core.call(name, args, CALLERS[party as Party]), party).toMatchObject({
-          ok: false,
-          error: { code: 'not-found' },
-        });
+    it('answers not-found to each token party naming, for any id, one it doesn’t reach', async () => {
+      for (const { party, args } of unreachableCalls(setup.core, name, fixture, world)) {
+        expect(
+          await setup.core.call(name, args, CALLERS[party]),
+          `${party}: ${JSON.stringify(args)}`,
+        ).toMatchObject({ ok: false, error: { code: 'not-found' } });
       }
     });
   });

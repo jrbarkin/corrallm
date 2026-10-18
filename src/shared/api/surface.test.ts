@@ -12,6 +12,7 @@ import { RULES } from './rules';
 import type { RuleRow } from './rules';
 import { GUI_OPS, PARTIES, SURFACE } from './surface';
 import type { Party, Rule, Surface } from './surface';
+import { brandsIn, children } from './test-schemas';
 import { UNHOSTED } from './unhosted';
 
 /*
@@ -67,47 +68,6 @@ const ID_KEYS = new Set([
 ]);
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
 const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId'];
-
-/** The schemas directly inside `schema`, each with the argument name it is under, if any. */
-function children(schema: z.ZodType): { key?: string; schema: z.ZodType }[] {
-  const def = defOf(schema);
-  const all = (list: (z.ZodType | null | undefined)[]) =>
-    list.flatMap((child) => (child ? [{ schema: child }] : []));
-  switch (def.type) {
-    case 'object':
-      return Object.entries(def.shape ?? {}).map(([key, child]) => ({ key, schema: child }));
-    case 'optional':
-    case 'nullable':
-    case 'default':
-    case 'prefault':
-    case 'nonoptional':
-    case 'readonly':
-    case 'catch':
-      return all([def.innerType]);
-    case 'array':
-      return all([def.element]);
-    case 'tuple':
-      return all([...(def.items ?? []), def.rest]);
-    case 'record':
-      return all([def.keyType, def.valueType]);
-    case 'union':
-      return all(def.options ?? []);
-    case 'intersection':
-      return all([def.left, def.right]);
-    case 'pipe':
-      return all([def.in]);
-    case 'lazy':
-      return all([def.getter?.()]);
-    default:
-      return [];
-  }
-}
-
-/** Every brand of id named anywhere in `schema`. */
-function brandsIn(schema: z.ZodType): Brand[] {
-  const brand = ID_BRANDS.get(schema)?.brand;
-  return brand ? [brand] : children(schema).flatMap((child) => brandsIn(child.schema));
-}
 
 /** Whether `schema` takes strings that aren't a branded id (a literal or an enum is a fixed word). */
 function takesUnbrandedText(schema: z.ZodType): boolean {

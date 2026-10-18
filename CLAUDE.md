@@ -79,7 +79,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 implementation, by area; core.ts is createCore, the operations composed over the
                 Electron-free services, kept in a profile folder (in milestone 1, only in tests and,
                 from B7, under `corrallm serve`); test-registry.ts is a registry for the core's
-                tests, with an op for every check core.call makes and fixtures for every op.
+                tests, with an op for every check core.call makes, fixtures for every op, and what
+                each party doesn't reach (from which T3b generates its reach calls).
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside
@@ -336,7 +337,8 @@ src/shared/api/ The registry: every operation, defined once (see The registry). 
                 lists them and how MCP names and lists each; ids.ts brands the ids ops take (reach
                 reads the brand at run time); errors.ts is OpError, a code and a sentence;
                 limits.ts the API's numbers (MAX_REQUEST_BYTES, the image limits…); deviations.ts,
-                rules.ts and unhosted.ts the lists below. surface.snap.json is every party's
+                rules.ts and unhosted.ts the lists below; test-schemas.ts what the registry's tests
+                read from a schema (the kinds of id it takes). surface.snap.json is every party's
                 surface, checked in (`pnpm api:surface`).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the
                 connected-session protocol (session.ts), what a terminal view is shown
@@ -401,14 +403,14 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 Every operation of corrallm's one API is defined once (`src/shared/api/`, Core Server §3), and both surfaces are generated from it: MCP for agents and outside orchestrators now (`api/mcp.ts`), the GUI's IPC from B8 (until then the app keeps its hand-written channels). An op's audience (`access` in `surface.ts`: `you` for the GUI, any other party for MCP) is the only thing that decides where it appears, and `core.call` checks it on every call. Results are always objects; failures are values (`OpError`: `invalid`, `forbidden`, `human-only`, `not-found`, `conflict`, `refused`, `unavailable`, with one sentence), on MCP `isError` with the sentence first and `{ error }` as JSON second, never in `structuredContent`.
 
 - By default an op is on both surfaces. One on a surface alone needs a `DEVIATIONS` row (`deviations.ts`) of one of the closed `REASONS`, or, until B11, an op the app doesn't host yet a line in `UNHOSTED` (`unhosted.ts`) naming the phase that will. A rule an op carries needs its row in `RULES` (`rules.ts`) and its check in the core.
-- The tests that make 1:1 the default (Core Server §3.7): T1 and T2 (`shared/api/surface.test.ts`: the surface's rules, each also shown to catch a registry made wrong; `surface.snap.json` up to date), T3a (`core/transport.test.ts`: every op's fixtures through MCP's dispatch half and over HTTP answer byte for byte as `core.call` does, for the same caller), T3b (`core/callers.test.ts`: audience and tool lists agree, results alike but for `varies`, rules and reach per party), T7 and T8 (`boundaries.test.ts`, ESLint). Each runs on the registry and on the core's test registry.
+- The tests that make 1:1 the default (Core Server §3.7): T1 and T2 (`shared/api/surface.test.ts`: the surface's rules, each also shown to catch a registry made wrong; `surface.snap.json` up to date), T3a (`core/transport.test.ts`: every op's fixtures through MCP's dispatch half and over HTTP answer byte for byte as `core.call` does, for the same caller), T3b (`core/callers.test.ts`: audience and tool lists agree, results alike but for `varies`, rules per party, and reach generated per op and party: each id in an op's valid arguments swapped for each one its `OutOfReach` world says a token party doesn't reach, which must be not-found; it fails an op taking a kind of id no valid argument names, or that the world says nothing of for a party in its audience), T7 and T8 (`boundaries.test.ts`, ESLint). Each runs on the registry and on the core's test registry.
 
 To add an operation:
 
 1. Add its surface to `SURFACE` in `src/shared/api/surface.ts`: its audience (who may call it, and how far each reaches), kind, scope, and any rules, `self` (required when a token may call it naming an agent), `destructive`, `varies` and `reads`.
 2. Define it in `src/shared/api/ops/<area>.ts` with `define(name, { summary, input, output })`: the summary is its MCP description; the input a `z.strictObject`, every string and list bounded, every id a branded one (`ids.ts`); the output an object. Add a new area's ops to `OPS` in `registry.ts`.
 3. Implement it in `src/main/core/ops/<area>.ts` (the `Implementations` type refuses a missing one), over the services `createCore` composes.
-4. List it in `UNHOSTED` until the app serves it, or give it a deviation; give it fixtures in `REAL_FIXTURES` (`core/test-registry.ts`): valid and invalid arguments, arguments meeting each of its rules, and, per party, an id out of its reach.
+4. List it in `UNHOSTED` until the app serves it, or give it a deviation; give it fixtures in `REAL_FIXTURES` (`core/test-registry.ts`): valid arguments (naming between them every kind of id it takes), invalid ones and arguments meeting each of its rules; for a kind of id no op took before, say in `REAL_OUT_OF_REACH` which ids of it each token party doesn't reach, as far as each reach goes.
 5. Run `pnpm api:surface` and review the snapshot's diff.
 
 ## Adding an IPC channel
