@@ -2175,10 +2175,6 @@ export function taskState(run: Run, agent: string, item: string | null): string 
   return at.outcomes[item];
 }
 
-/**
- * Whether a run holds anything to resume: an agent it reached, or a pause set on an agent or a
- * group. A run that has done nothing has nothing to pause: Resume would only start it.
- */
 /** Each cause once: one party's second pause of the same target is the same cause. */
 function distinct(causes: readonly PauseCause[]): PauseCause[] {
   return causes.filter(
@@ -2191,6 +2187,10 @@ function releases(cause: PauseCause, id: string, by: PartyId): boolean {
   return cause.id === id && (by === 'you' || cause.by === by);
 }
 
+/**
+ * Whether a run holds anything to resume: an agent it reached, or a pause set on an agent or a
+ * group. A run that has done nothing has nothing to pause: Resume would only start it.
+ */
 function resumable(agents: Readonly<Record<string, AgentRun>>, causes: PauseCauses): boolean {
   return Object.keys(agents).length > 0 || causes.individual.length > 0 || causes.groups.length > 0;
 }
