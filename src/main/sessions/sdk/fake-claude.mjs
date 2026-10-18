@@ -32,6 +32,11 @@
 // path is its real path, as the CLI keeps it and the SDK looks for it: as the system resolves it,
 // which on Windows also spells out a folder given by its short name (RUNNER~1, in a temp folder).
 //
+// A message from another session (origin peer) it holds for its user's review, never answering it,
+// as the CLI does: where the project's settings say to hold or refuse them (crossSessionInbound),
+// and, unless they say to accept them, where the sender's permission class (fromMode) isn't its
+// own, a sender that declares none being held only while it bypasses permissions.
+//
 // The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
@@ -871,6 +876,20 @@ async function play(message) {
   }
 }
 
+/**
+ * Whether the CLI holds a message (or drops it) rather than take it: one from another session, as
+ * its settings say, or by whether its sender runs without asking as it does.
+ */
+function held(message) {
+  if (message.origin?.kind !== 'peer') return false;
+  const inbound = projectSettings().crossSessionInbound;
+  if (inbound === 'accept') return false;
+  if (inbound === 'hold' || inbound === 'refuse') return true;
+  const bypassing = mode === 'bypassPermissions';
+  const { fromMode } = message.origin;
+  return fromMode === undefined ? bypassing : (fromMode === 'bypass') !== bypassing;
+}
+
 const input = createInterface({ input: process.stdin });
 input.on('line', (line) => {
   if (line.trim() === '') return;
@@ -974,7 +993,7 @@ input.on('line', (line) => {
     asked.delete(message.response.request_id);
     answer?.(message.response.response ?? { behavior: 'deny', message: 'No answer' });
   } else if (message.type === 'user') {
-    void play(message);
+    if (!held(message)) void play(message);
   }
 });
 input.on('close', () => {

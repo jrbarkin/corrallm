@@ -19,7 +19,15 @@ export interface ModeSettings {
   appliedModel?: string;
   /** The effort it reasons at unless told otherwise (`applied`, else their `effortLevel`). */
   effort?: string;
+  /**
+   * What it does with a message from another session (`crossSessionInbound`), if the settings say:
+   * take it, hold it for the user's review, or refuse it.
+   */
+  peers?: PeerMessages;
 }
+
+/** What the CLI's settings may say it does with a message from another session. */
+export type PeerMessages = 'accept' | 'hold' | 'refuse';
 
 /** A Query that can be asked for the CLI's settings: the runtime has it; the SDK's types don't. */
 interface WithSettings {
@@ -29,9 +37,10 @@ interface WithSettings {
 /**
  * Asks the running CLI for its settings (the get_settings control request: the user's, project's,
  * local and managed settings, merged, as `effective`, and what it will use, as `applied`), for the
- * user's own default mode, whether bypassing permissions is turned off, and the model and effort
- * it starts with. A CLI or SDK that can't say, or an answer of another shape, says nothing: Manual,
- * bypassing offered, and the account's default model.
+ * user's own default mode, whether bypassing permissions is turned off, the model and effort it
+ * starts with, and what it does with a message from another session. A CLI or SDK that can't say,
+ * or an answer of another shape, says nothing: Manual, bypassing offered, the account's default
+ * model, and messages from other sessions taken as the CLI takes them by default.
  */
 export async function modeSettings(query: Query): Promise<ModeSettings> {
   const asking = query as Query & WithSettings;
@@ -50,14 +59,19 @@ export async function modeSettings(query: Query): Promise<ModeSettings> {
   const effort =
     matching(field(applied, 'effort'), EFFORT_PATTERN) ??
     matching(field(effective, 'effortLevel'), EFFORT_PATTERN);
+  const inbound = field(effective, 'crossSessionInbound');
+  const peers = PEER_MESSAGES.find((one) => one === inbound);
   return {
     ...(defaultMode === undefined ? {} : { defaultMode }),
     bypassDisabled: field(permissions, 'disableBypassPermissionsMode') === 'disable',
     ...(model === undefined ? {} : { model }),
     ...(appliedModel === undefined ? {} : { appliedModel }),
     ...(effort === undefined ? {} : { effort }),
+    ...(peers === undefined ? {} : { peers }),
   };
 }
+
+const PEER_MESSAGES: readonly PeerMessages[] = ['accept', 'hold', 'refuse'];
 
 /** `value`, if it is text that `pattern` matches. */
 function matching(value: unknown, pattern: RegExp): string | undefined {
