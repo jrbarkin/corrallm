@@ -8,7 +8,9 @@ import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { Message } from '../../shared/model/messages';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
+import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
+import { callTool } from '../api/mcp';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
@@ -836,6 +838,32 @@ describe('reads', () => {
       if (!result?.ok) throw new Error(JSON.stringify(result));
       expect(result.value.adapters.map(({ id }) => id)).toEqual(['claude-code', 'codex']);
     }
+  });
+
+  it('asks a token with several canvases to name the one it means, over MCP too', async () => {
+    await keepCanvas();
+    const started = await start();
+    const both: OutsideCaller = { ...OUTSIDE, canvases: [CANVAS, crypto.randomUUID() as CanvasId] };
+    const sentence = 'Name the canvas: there is more than one to choose from.';
+    for (const [name, args] of [
+      ['message', { to: 'builder', body: 'Say hello' }],
+      ['agents', {}],
+    ] as const) {
+      expect(await started.call(name, args, both)).toEqual({
+        ok: false,
+        error: { code: 'invalid', sentence },
+      });
+      expect(await callTool(started, both, name, args)).toMatchObject({
+        isError: true,
+        content: [
+          { text: sentence },
+          { text: JSON.stringify({ error: { code: 'invalid', sentence } }) },
+        ],
+      });
+    }
+    expect(await inbox()).toEqual([]);
+    // Named, it goes.
+    await send('builder', 'Say hello', both);
   });
 
   it('lists the agents each caller reaches, and their state', async () => {

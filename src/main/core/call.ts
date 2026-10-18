@@ -282,7 +282,9 @@ function scopeOf(surface: Surface, args: unknown): string[] | null {
 
 /**
  * `raw` with its canvas filled in where the op takes one, the caller left it out, and the caller
- * has exactly one: an agent's own, an outside token's only one, or the only one you have open.
+ * has exactly one: an agent's own, an outside token's only one, or the only one you have open. A
+ * caller with several is asked to name one, before any id it names is looked for in its reach
+ * (which, with no canvas, would find none, as if the agent it named weren't there).
  */
 function withCanvas(
   def: OpDef,
@@ -303,8 +305,11 @@ function withCanvas(
     return raw;
   }
   const canvases = caller.kind === 'human' ? openCanvases() : canvasesOf(caller);
+  if (canvases.length > 1) {
+    throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
+  }
   const [only] = canvases;
-  return canvases.length === 1 && only !== undefined ? { ...given, canvas: only } : raw;
+  return only === undefined ? raw : { ...given, canvas: only };
 }
 
 /** Whether an agent's call names the agent itself. */

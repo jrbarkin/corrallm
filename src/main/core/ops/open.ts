@@ -11,11 +11,12 @@ import type { Engines, OpenCanvas } from '../engines';
  * of it, and how far the caller reaches for the op (core.call has refused what it doesn't).
  */
 
-/** The open canvas `canvas` names: invalid if none is named, unavailable if it isn't open. */
+/**
+ * The open canvas `canvas` names: unavailable if it isn't open, or if none is named (core.call
+ * names the caller's only one, and asks a caller with several to name one: so it has none).
+ */
 export function openCanvas(engines: Engines, canvas: string | undefined): OpenCanvas {
-  if (canvas === undefined) {
-    throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
-  }
+  if (canvas === undefined) throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
   const open = engines.canvas(canvas as CanvasId);
   if (!open) throw new OpFailure('unavailable', 'That canvas isn’t open in corrallm.');
   return open;
