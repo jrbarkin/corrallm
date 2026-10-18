@@ -602,6 +602,12 @@ describe('session:* handlers', () => {
     ],
     [
       'session:send',
+      'a message naming another party as its sender',
+      ['a', { id: 'm', text: 'Hi', from: { party: 'agent:b', name: 'B' } }],
+      /message/,
+    ],
+    [
+      'session:send',
       'an image of a kind Claude does not read',
       ['a', { id: 'm', text: 'Hi', images: [{ mediaType: 'image/svg+xml', data: 'PHN2Zz4=' }] }],
       /kind of image/,

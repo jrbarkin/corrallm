@@ -9,6 +9,7 @@ import type {
   FormValue,
   McpChange,
   McpServer,
+  MessageSender,
   PastSession,
   RewindRestore,
   RewindResult,
@@ -98,6 +99,8 @@ export class SessionStore {
    */
   readonly #runMessages = new Set<string>();
   readonly #displayTexts = new Map<string, string>();
+  /** Who sent each message another party sent, by its id, until its turn ends. */
+  readonly #senders = new Map<string, MessageSender>();
   readonly #observer: SubmissionObserver;
   readonly #position: (agentId: string) => string | undefined;
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
@@ -268,8 +271,9 @@ export class SessionStore {
    * replied in it (turnReply). `onRefused` hears each time the session would not start while the
    * message waits to go (kept, queued). Returns a function that takes the message back: off the
    * queue while it waits there, or interrupting its turn while that goes on (and nothing once it
-   * has ended). `id`: what it is sent under (its turn ends naming it), when the sender keeps its
-   * own record of it; a new one when not given.
+   * has ended). `as`: the id it is sent under (its turn ends naming it), when the sender keeps its
+   * own record of it (a new one when not given), and who sent it, when another party did (its
+   * session's CLI is told so, where it can be: UserMessage.from).
    */
   send(
     agentId: string,
@@ -280,12 +284,14 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
-    id: string = crypto.randomUUID(),
+    as: { id?: string; from?: MessageSender } = {},
   ): () => void {
+    const { id = crypto.randomUUID(), from } = as;
     this.#types.set(agentId, agent);
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
     if (displayText !== undefined) this.#displayTexts.set(id, displayText);
+    if (from !== undefined) this.#senders.set(id, from);
     if (onDone) this.#onDone.set(id, onDone);
     if (onRefused) this.#onRefused.set(id, onRefused);
     const session = this.of(agentId);
@@ -521,6 +527,7 @@ export class SessionStore {
     this.#runMessages.clear();
     this.#setAside.clear();
     this.#displayTexts.clear();
+    this.#senders.clear();
     this.#onceIn.clear();
     this.#settings.clear();
     this.#roles.clear();
@@ -563,11 +570,15 @@ export class SessionStore {
       type: 'start',
       entry: { id, kind: 'user', text, ...pasted, conversation },
     });
-    this.#driver(agentId).start({ id, text, ...pasted }, (interrupted, result) => {
-      // The next queued message may have started already.
-      if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
-      this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id), result);
-    });
+    const from = this.#senders.get(id);
+    this.#driver(agentId).start(
+      { id, text, ...pasted, ...(from === undefined ? {} : { from }) },
+      (interrupted, result) => {
+        // The next queued message may have started already.
+        if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
+        this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id), result);
+      },
+    );
   }
 
   /** Who hears when message `id`'s turn ends, now that it does: forgotten, as it ends once. */
@@ -578,6 +589,7 @@ export class SessionStore {
     this.#onDone.delete(id);
     this.#onRefused.delete(id);
     this.#displayTexts.delete(id);
+    this.#senders.delete(id);
     return onDone;
   }
 

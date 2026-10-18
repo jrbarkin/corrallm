@@ -35,6 +35,11 @@ export function agentOf(party: PartyId): string | undefined {
   return party.startsWith('agent:') ? party.slice('agent:'.length) : undefined;
 }
 
+/** The name of the outside orchestrator a party is, if it is one. */
+export function outsideOf(party: PartyId): string | undefined {
+  return party.startsWith('outside:') ? party.slice('outside:'.length) : undefined;
+}
+
 /**
  * Where a message is. pending: waiting to be delivered to its agent. delivering: journaled, and
  * handed to the agent's session. delivered: the session has it (a message to an agent, its turn

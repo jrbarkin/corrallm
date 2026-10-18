@@ -493,6 +493,34 @@ describe('delivery', () => {
     });
   });
 
+  it('names who sent each message to its session, and nobody for yours', async () => {
+    await keepCanvas();
+    await start();
+    const theirs = await send('helper', 'Check this', BUILDER);
+    await vi.waitFor(async () => {
+      const reply = (await inbox(BUILDER)).find((message) => message.replyTo === theirs);
+      expect(reply?.state).toBe('replied');
+    });
+    const yours = await send('builder', 'From you', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    const senders = appServer.sessions.flatMap((session) =>
+      session.sent.map(({ text, from }) => [text.split('\n')[0], from]),
+    );
+    expect(senders).toEqual([
+      [
+        expect.stringMatching(/^\[corrallm\] Message from agent "Builder"/),
+        { party: 'agent:builder', name: 'Builder' },
+      ],
+      [
+        expect.stringMatching(/^\[corrallm\] Reply from agent "Helper"/),
+        { party: 'agent:helper', name: 'Helper' },
+      ],
+      ['From you', undefined],
+    ]);
+  });
+
   it('delivers an agent its reply as a turn, which makes no reply of its own', async () => {
     await keepCanvas();
     await start();

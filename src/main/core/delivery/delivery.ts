@@ -6,7 +6,7 @@ import { needsItem, needsOf } from '../../../shared/engine/needs';
 import type { NeedsInput } from '../../../shared/engine/needs';
 import type { Engine } from '../../../shared/engine/engine';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
-import { agentOf, agentParty } from '../../../shared/model/messages';
+import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { agentName } from '../../../shared/model/queries';
 import { threadTitle } from '../../../shared/model/session';
@@ -454,7 +454,9 @@ export class Delivery {
       },
       yours ? 'user' : 'queue',
       undefined,
-      as,
+      yours
+        ? { id: as }
+        : { id: as, from: { party: message.from, name: this.#sender(message.from) } },
     );
     this.#sent.set(message.id, takeBack);
   }
@@ -618,7 +620,7 @@ export class Delivery {
   #frame(message: Message): string {
     const { from, id, replyTo, turn, body } = message;
     const agent = agentOf(from);
-    const outside = from.startsWith('outside:') ? from.slice('outside:'.length) : undefined;
+    const outside = outsideOf(from);
     const [who, what] =
       agent !== undefined
         ? [`agent "${this.#name(agent)}"`, 'an agent']
@@ -662,11 +664,18 @@ export class Delivery {
     return threadTitle(agentName(this.#deps.nodes(), agent), TITLE);
   }
 
-  /** A party, as a notice names it. */
+  /** A party, as a notice names it: an outside orchestrator's name in quotes, as a frame has it. */
   #nameOf(party: PartyId): string {
+    return outsideOf(party) === undefined ? this.#sender(party) : `"${this.#sender(party)}"`;
+  }
+
+  /**
+   * A party's name, as its session's CLI is told who sent a message: an agent's (on one line,
+   * capped), an outside orchestrator's, or "you" or "corrallm".
+   */
+  #sender(party: PartyId): string {
     const agent = agentOf(party);
-    if (agent !== undefined) return this.#name(agent);
-    return party === 'you' ? 'you' : party === 'corrallm' ? 'corrallm' : `“${party.slice(8)}”`;
+    return agent === undefined ? (outsideOf(party) ?? party) : this.#name(agent);
   }
 }
 

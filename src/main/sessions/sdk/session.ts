@@ -132,7 +132,7 @@ export class SdkSession implements LiveSession {
     this.#pump = this.#read();
   }
 
-  send({ id, text, images }: UserMessage): Promise<void> {
+  send({ id, text, images, from }: UserMessage): Promise<void> {
     // The CLI names a message by a uuid, and so does the renderer, usually.
     const uuid = UUID.test(id) ? id : randomUUID();
     const content: SDKUserMessage['message']['content'] =
@@ -151,7 +151,12 @@ export class SdkSession implements LiveSession {
       message: { role: 'user', content },
       parent_tool_use_id: null,
       uuid: uuid as SDKUserMessage['uuid'] & string,
-      origin: { kind: 'human' },
+      // Another party's message is a peer's, never the user's: declaring no mode for it, the CLI
+      // holds it where it runs without asking, and its strict trust gates fail it closed.
+      origin:
+        from === undefined
+          ? { kind: 'human' }
+          : { kind: 'peer', from: from.party, name: from.name },
     });
     this.#host.emit({ type: 'user', id, text });
     this.#host.emit({ type: 'status', status: 'working' });

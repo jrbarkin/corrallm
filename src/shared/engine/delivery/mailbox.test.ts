@@ -46,7 +46,7 @@ describe('SessionStore', () => {
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     const done = vi.fn();
     const id = '6a0d3c1e-5b4f-4e2a-9c8d-7f6e5d4c3b2a';
-    store.send('a', 'claude-code', 'Hello', done, undefined, undefined, 'queue', undefined, id);
+    store.send('a', 'claude-code', 'Hello', done, undefined, undefined, 'queue', undefined, { id });
     await Promise.resolve();
     await Promise.resolve();
     expect(sent()).toBe(id);

@@ -390,6 +390,24 @@ describe('SdkConnector', () => {
     expect(events[0]).toMatchObject({ type: 'started', model: 'haiku' });
   });
 
+  it('tells the CLI a message from another party is a peer’s, never the user’s', async () => {
+    const { sdk, host, query } = connector();
+    const session = await sdk.start(SPEC, host);
+    const id = '4f0c9f4e-2a8b-4c1d-9e3f-5a6b7c8d9e0f';
+    await session.send({
+      id,
+      text: '[corrallm] Message from "orchestrator" (…):\nSay hello',
+      from: { party: 'outside:orchestrator', name: 'orchestrator' },
+    });
+    await settle();
+    // No fromMode: an undeclared sender, held at a recipient that runs without asking.
+    expect(query().sent[0]?.origin).toEqual({
+      kind: 'peer',
+      from: 'outside:orchestrator',
+      name: 'orchestrator',
+    });
+  });
+
   it('plays a turn: the message goes to the CLI, what it does comes back, and its result ends it', async () => {
     const { sdk, host, query, events, remembered } = connector();
     const session = await sdk.start(SPEC, host);
