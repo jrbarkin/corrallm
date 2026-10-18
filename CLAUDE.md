@@ -70,7 +70,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 (and selftest-claude.mjs), the native self-test's checks, run by main, the core
                 process and the CLI. The core's operations (see The registry): call.ts is
                 core.call, the one dispatcher every transport calls (audience, limits per token,
-                the canvas, filled in for a caller with one and asked of one with several, schema,
+                the canvas, filled in for a caller with one, or the one holding a message it names
+                (`withdraw` takes none), and asked of one with several otherwise, schema,
                 reach, self, rules, repeated requests, scopes; failures as values);
                 caller.ts its callers (you, an agent's session, an outside token) and their parties
                 (no token is ever you); scopes.ts the order ops run in (one at a time per scope; a
@@ -80,7 +81,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 came to it by itself, so a cancelled call's retry runs again);
                 reach.ts resolves the ids a token names against its reach (`resolvers`: a canvas
                 it has, an agent or a group it reaches there, a message it sent or received
-                there; a caller with one canvas may leave it out); rules.ts checks each rule an
+                there; a caller with one canvas may leave it out; `holder`, which of a caller's
+                canvases holds a message it sent or got); rules.ts checks each rule an
                 op carries on a token's arguments (shell-text, sticky); ops/ is each op's
                 implementation, by area (open.ts: the open canvas a call names); core.ts is
                 createCore, the operations composed over the Electron-free services, kept in a

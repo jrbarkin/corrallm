@@ -169,7 +169,8 @@ export const conversationOps = {
   withdraw: define('withdraw', {
     summary:
       'Takes back a message you sent: off its agent’s queue if it is still waiting, or ' +
-      'interrupting its turn if that is going on.',
+      'interrupting its turn if that is going on. The message says which canvas it is on, so ' +
+      '`canvas` may be left out.',
     input: z.strictObject({ canvas, id: MessageId }),
     output: z.strictObject({}),
   }),

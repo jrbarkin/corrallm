@@ -1146,7 +1146,16 @@ describe('reads', () => {
     }
     expect(await inbox()).toEqual([]);
     // Named, it goes.
-    await send('builder', 'Say hello', both);
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const id = await send('builder', 'Say hello', both);
+    // `withdraw` names no canvas: the message it names says which, if the caller sent or got it.
+    const builders = await send('helper', 'Hello', BUILDER);
+    expect(await started.call('withdraw', { id: builders }, both)).toEqual({
+      ok: false,
+      error: { code: 'invalid', sentence },
+    });
+    expect(await started.call('withdraw', { id }, both)).toEqual({ ok: true, value: {} });
+    expect(await find(id)).toMatchObject({ state: 'withdrawn' });
   });
 
   it('lists the agents each caller reaches, and their state', async () => {

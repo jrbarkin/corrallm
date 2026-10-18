@@ -2,6 +2,7 @@ import type { Brand, IdRef } from '../../shared/api/ids';
 import type { Reach } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasNode, Link } from '../../shared/model/canvas';
+import type { Message } from '../../shared/model/messages';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
 import { canvasesOf, partyIdOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
@@ -159,9 +160,27 @@ export function resolvers(
       if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;
       const open = engines.canvas(canvas as CanvasId);
       if (!open) return true;
-      const message = open.messages.get(id);
-      const party = partyIdOf(caller);
-      return message !== undefined && (message.from === party || message.to === party);
+      return isTheirs(open.messages.get(id), caller);
     },
   };
+}
+
+/**
+ * Whether an open canvas holds, for `caller`, the message an id names (one it sent or got; you,
+ * any): which of its canvases a call naming that message but no canvas is on.
+ */
+export function holder(
+  engines: Engines,
+): (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean {
+  return (canvas, { brand, id }, caller) =>
+    brand === 'MessageId' &&
+    (caller.kind === 'human'
+      ? engines.canvas(canvas)?.messages.get(id) !== undefined
+      : isTheirs(engines.canvas(canvas)?.messages.get(id), caller));
+}
+
+/** Whether a message is one `caller` sent or got. */
+function isTheirs(message: Message | undefined, caller: TokenCaller): boolean {
+  const party = partyIdOf(caller);
+  return message !== undefined && (message.from === party || message.to === party);
 }

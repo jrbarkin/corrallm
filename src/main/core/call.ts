@@ -20,8 +20,10 @@ import { Throttle } from './throttle';
  * core.call: the one dispatcher every transport calls (Core Server §3.1), a window's port and MCP
  * alike, so that no transport adds or skips anything. On every call, in this order, it checks the
  * caller's party against the op's audience (decision 2: a tool missing from a party's list is
- * refused when called anyway), admits a token's call within its limits, parses the arguments with
- * the op's one schema, resolves every id a token names against its reach, refuses an agent aiming
+ * refused when called anyway), admits a token's call within its limits, fills in the canvas a
+ * caller left out (its only one, or the one holding a message it names), or asks a caller with
+ * several to name one, parses the arguments with the op's one schema, resolves every id a token
+ * names against its reach, refuses an agent aiming
  * at itself an op it may not, checks the op's rules on a token's arguments (a met rule refuses it,
  * or makes it a proposal for you), returns a repeated request's first result, and runs the op in
  * its scope. It never throws: a failure is a value, whose code survives any transport.
@@ -77,6 +79,12 @@ export interface DispatchOptions {
    */
   openCanvases?: () => readonly CanvasId[];
   /**
+   * Whether a canvas holds, for `caller`, an id unique across canvases (a message it sent or got,
+   * by its id): a call that names it but no canvas, from a caller with several, goes to the one
+   * canvas that does (`withdraw` takes no canvas). Without it, none does.
+   */
+  holds?: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean;
+  /**
    * Whether each call's arguments and result are checked to be plain data (as CoreLink checks
    * what crosses a port) and each result against its schema: in dev and tests.
    */
@@ -101,6 +109,8 @@ export interface Dispatcher {
 
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
 const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId']);
+/** The kinds of id unique across canvases (UUIDs a canvas mints), which say whose canvas a call is on. */
+const UNIQUE_BRANDS: ReadonlySet<Brand> = new Set(['MessageId']);
 /** How a refusal names a party that isn't in an op's audience. */
 const PARTY_WORDS: Readonly<Record<Party, string>> = {
   you: 'You',
@@ -115,6 +125,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     isLead,
     resolvers = {},
     openCanvases = () => [],
+    holds = () => false,
     check = false,
     now = Date.now,
   } = options;
@@ -226,7 +237,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         release = throttle.admit(callerKey(caller), surface.kind !== 'read');
         if (!release) throw new OpFailure('refused', 'Too many calls; slow down.');
       }
-      const args = parse(def, withCanvas(def, raw, caller, openCanvases));
+      const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
       if (caller.kind !== 'human') {
         const ids = idsIn(def.input, args);
         const missing = outOfReach(ids, caller, reach, resolvers);
@@ -282,15 +293,18 @@ function scopeOf(surface: Surface, args: unknown): string[] | null {
 
 /**
  * `raw` with its canvas filled in where the op takes one, the caller left it out, and the caller
- * has exactly one: an agent's own, an outside token's only one, or the only one you have open. A
- * caller with several is asked to name one, before any id it names is looked for in its reach
- * (which, with no canvas, would find none, as if the agent it named weren't there).
+ * has exactly one: an agent's own, an outside token's only one, or the only one you have open; or,
+ * for a caller with several, the one that `holds` the ids it names that are unique across canvases
+ * (a message's), if one alone does. Otherwise a caller with several is asked to name one, before
+ * any id it names is looked for in its reach (which, with no canvas, would find none, as if the
+ * agent it named weren't there).
  */
 function withCanvas(
   def: OpDef,
   raw: unknown,
   caller: Caller,
   openCanvases: () => readonly CanvasId[],
+  holds: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean,
 ): unknown {
   const shape = (def.input as { shape?: Record<string, unknown> }).shape;
   const given = raw === undefined ? {} : raw;
@@ -306,6 +320,14 @@ function withCanvas(
   }
   const canvases = caller.kind === 'human' ? openCanvases() : canvasesOf(caller);
   if (canvases.length > 1) {
+    const holding = canvases.filter((canvas) => {
+      const parsed = def.input.safeParse({ ...given, canvas });
+      const unique = parsed.success
+        ? idsIn(def.input, parsed.data).filter((ref) => UNIQUE_BRANDS.has(ref.brand))
+        : [];
+      return unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller));
+    });
+    if (holding.length === 1) return { ...given, canvas: holding[0] };
     throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
   }
   const [only] = canvases;

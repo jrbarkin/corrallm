@@ -26,7 +26,7 @@ import type { Caller } from './caller';
 import { Engines } from './engines';
 import type { HostServices } from './host';
 import { implementations } from './ops';
-import { resolvers } from './reach';
+import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
 
 /*
@@ -160,6 +160,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       isLead,
       resolvers: resolvers(engines, isLead),
       openCanvases: () => engines.opened(),
+      holds: holder(engines),
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
