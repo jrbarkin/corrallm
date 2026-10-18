@@ -586,6 +586,37 @@ describe('pauses', () => {
   });
 });
 
+describe('a kill', () => {
+  it('takes back what waits for a killed agent and interrupts its turn, telling each sender', async () => {
+    await keepCanvas();
+    await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
+    const going = await send('builder', 'A long job');
+    await vi.waitFor(async () => {
+      expect((await find(going))?.state).toBe('delivered');
+    });
+    const waiting = await send('builder', 'Then this');
+    await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(going))?.state).toBe('withdrawn');
+    });
+    expect(await find(waiting)).toMatchObject({ state: 'withdrawn', by: 'you' });
+    const messages = await inbox();
+    expect(messages.filter((message) => message.kind === 'notice').map(({ body }) => body)).toEqual(
+      [
+        'Your message to Builder was withdrawn by you.',
+        'Your message to Builder was withdrawn by you.',
+      ],
+    );
+    expect(
+      messages.filter((message) => message.replyTo === going && message.kind === 'text'),
+    ).toEqual([]);
+    // Killed, it is held: what comes next waits.
+    const after = await send('builder', 'Anyone there?');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await find(after))?.state).toBe('pending');
+  });
+});
+
 describe('reads', () => {
   it('pages an agent’s transcript', async () => {
     await keepCanvas();

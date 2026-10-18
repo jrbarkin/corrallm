@@ -218,8 +218,9 @@ export class Delivery {
   #pump(): void {
     if (this.#closed) return;
     const { engine, store } = this.#deps;
+    const messages = store.all();
     // Each message the session has now is delivered.
-    for (const message of store.all()) {
+    for (const message of messages) {
       if (message.state !== 'delivering' || message.delivery === undefined) continue;
       const agent = agentOf(message.to);
       const entry =
@@ -230,13 +231,20 @@ export class Delivery {
         store.update(message.id, { state: 'delivered' });
       }
     }
-    this.#tellWaiting();
+    /** What waits for each agent, in the order it came. */
+    const waiting = new Map<string, Message[]>();
+    for (const message of messages) {
+      const agent = agentOf(message.to);
+      if (agent === undefined || message.state !== 'pending') continue;
+      waiting.set(agent, [...(waiting.get(agent) ?? []), message]);
+    }
+    this.#tellWaiting(messages);
     let alarm: number | undefined;
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       // Once a party's message is held, the parties' behind it wait their turn; yours go past.
       let held = false;
-      for (const message of this.#waiting(node.id)) {
+      for (const message of waiting.get(node.id) ?? []) {
         if (this.#writing.has(node.id)) break;
         const yours = message.from === 'you';
         if (held && !yours) continue;
@@ -476,14 +484,21 @@ export class Delivery {
   }
 
   /** Tells each party whose message's turn waits for you so, once: by what it waits for. */
-  #tellWaiting(): void {
-    const { engine, store } = this.#deps;
-    const turns = this.#deps.nodes().flatMap((node) => {
-      const id = this.current(node.id);
-      const message = id === undefined ? undefined : store.get(id);
-      return message && message.from !== 'you' && !this.#told.has(`waiting:${message.id}`)
-        ? [{ agent: node.id, message }]
-        : [];
+  #tellWaiting(messages: readonly Message[]): void {
+    const { engine } = this.#deps;
+    const turns = messages.flatMap((message) => {
+      const agent = agentOf(message.to);
+      if (
+        agent === undefined ||
+        message.from === 'you' ||
+        !this.#inFlight(message) ||
+        this.#told.has(`waiting:${message.id}`)
+      ) {
+        return [];
+      }
+      // Its turn has started: the session has it.
+      const { entries } = engine.sessions.of(agent);
+      return entries.some((entry) => entry.id === message.delivery?.as) ? [{ agent, message }] : [];
     });
     if (turns.length === 0) return;
     const waiting = needs({

@@ -1100,6 +1100,18 @@ describe('a connected agent', () => {
     expect(transcript.getByText('Hi there')).toBeTruthy();
   });
 
+  it('lists what its session asks in the canvas’s Needs you, to answer in its view', async () => {
+    const { send, emit } = await open({ connection: 'claude-code.sdk' });
+    await send('Test it');
+    emit({ type: 'permission', id: 'p', tool: 'Bash', summary: 'npm test', always: null });
+    const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(needs.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 1');
+    const asked = within(needs.getByRole('group', { name: 'a asks' }));
+    expect(asked.getByText('Approve Bash: npm test?')).toBeTruthy();
+    expect(asked.getByText('Answer it in its session.')).toBeTruthy();
+    expect(asked.getByRole('button', { name: 'Open session' })).toBeTruthy();
+  });
+
   it('words a permission prompt as the CLI does', async () => {
     const { send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Fetch it');
