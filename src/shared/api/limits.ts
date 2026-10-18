@@ -36,8 +36,16 @@ export const STORE_BYTES = 4 * 1024 * 1024;
  */
 export const MAX_WAITING = 20;
 
-/** The most a page of a list (messages, a transcript) holds; 50 when a call doesn't say. */
+/** The most a page of a list (messages, a transcript) holds. */
 export const MAX_PAGE = 200;
+/** How many a page of a list holds when a call doesn't say. */
+export const DEFAULT_PAGE = 50;
+/**
+ * The most bytes of JSON a page of a list holds, whatever it was asked for (Claude Code caps an MCP
+ * tool's result at 25K tokens): a page ends early rather than pass it, and holds at least one
+ * entry, cut to fit when it alone wouldn't (the whole of it stays where it is kept).
+ */
+export const MAX_PAGE_BYTES = 60 * 1024;
 
 /** How many lines of a prompt's detail are shown, then how many more there are. */
 export const MAX_DETAIL_LINES = 12;

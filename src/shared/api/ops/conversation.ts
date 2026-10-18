@@ -149,7 +149,8 @@ export const conversationOps = {
     summary:
       'Your messages on the canvas, oldest first: what you sent and what was sent to you, ' +
       'replies and corrallm’s notices included. `with` keeps those with one party; `after` (a ' +
-      'cursor) reads on from where a call left off, and `next` is where this one did.',
+      'cursor) reads on from where a call left off, and `next` is where this one did. A page ' +
+      'ends early rather than grow too big for one result.',
     input: z.strictObject({
       canvas,
       with: Party.max(300).optional(),

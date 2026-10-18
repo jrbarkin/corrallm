@@ -36,12 +36,18 @@ const Question = z.strictObject({
   answer: z.string().optional(),
 });
 
-/** Where an entry is withdrawn: a prompt the session stopped waiting for. */
+/** Whether an entry is withdrawn: a prompt the session stopped waiting for. */
 const withdrawn = z.boolean().optional();
 
 /**
+ * Whether an entry was cut to fit its page (MAX_PAGE_BYTES): its text, plan, output or diff ends
+ * early. The whole of it stays in the session.
+ */
+const cut = z.literal(true).optional();
+
+/**
  * An entry of an agent's transcript, as its view shows it (src/shared/model/session.ts Entry). A
- * message's pasted images are only counted.
+ * message's pasted images are only counted, and an entry too big for a page alone is `cut`.
  */
 export const TranscriptEntry = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -57,6 +63,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     kind: z.literal('text'),
     text: z.string(),
     parent: z.string().optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -64,6 +71,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     text: z.string(),
     seconds: z.number(),
     parent: z.string().optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -81,6 +89,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
         tokens: z.number().optional(),
       })
       .optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -93,6 +102,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     answer: z.enum(['once', 'always', 'deny']).optional(),
     feedback: z.string().optional(),
     withdrawn,
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -111,6 +121,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
       ])
       .optional(),
     withdrawn,
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -220,7 +231,8 @@ export const sessionOps = {
   'session.transcript': define('session.transcript', {
     summary:
       'An agent’s transcript, a page at a time, oldest first: pass the `next` a call returned as ' +
-      '`after` to read on.',
+      '`after` to read on. A page ends early rather than grow too big for one result, and an ' +
+      'entry too big alone comes cut, marked `cut`.',
     input: z.strictObject({
       canvas,
       agent: AgentId,

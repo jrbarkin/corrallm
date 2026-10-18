@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import { needs, withoutChoices } from '../../../shared/engine/needs';
 import type { NeedsInput } from '../../../shared/engine/needs';
 import { isOpen } from '../../../shared/model/session';
@@ -11,11 +12,8 @@ import { DeliveryError } from '../delivery/delivery';
 import { cursorOf, readCursor } from '../delivery/messages';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
-import { agentOf, openCanvas, reachFor } from './open';
+import { agentOf, openCanvas, pageOf, reachFor } from './open';
 import type { Implementations, OpServices } from '.';
-
-/** How many of a list a page holds when a call doesn't say. */
-const PAGE = 50;
 
 /** Conversation (Core Server §4 H; API Spec §7.2). */
 export function conversationOps(
@@ -90,7 +88,7 @@ export function conversationOps(
       const open = openCanvas(engines, canvas);
       return { items: waiting(open, ctx, reached(open, 'needs', ctx)) };
     },
-    messages: ({ canvas, with: other, after, limit = PAGE }, ctx) => {
+    messages: ({ canvas, with: other, after, limit = DEFAULT_PAGE }, ctx) => {
       const open = openCanvas(engines, canvas);
       const id = open.document.id;
       const from = after === undefined ? 0 : readCursor(after)?.[id];
@@ -98,15 +96,17 @@ export function conversationOps(
         throw new OpFailure('invalid', 'That cursor isn’t one this canvas gave.');
       }
       const party = partyIdOf(ctx.caller);
-      const items = open.messages
-        .all()
-        .filter(
-          (message) =>
-            (ctx.caller.kind === 'human' || message.from === party || message.to === party) &&
-            (other === undefined || message.from === other || message.to === other) &&
-            (open.messages.seqOf(message.id) ?? 0) > (from ?? 0),
-        )
-        .slice(0, limit);
+      const items = pageOf(
+        open.messages
+          .all()
+          .filter(
+            (message) =>
+              (ctx.caller.kind === 'human' || message.from === party || message.to === party) &&
+              (other === undefined || message.from === other || message.to === other) &&
+              (open.messages.seqOf(message.id) ?? 0) > (from ?? 0),
+          )
+          .slice(0, limit),
+      );
       const last = items.at(-1);
       const next = last === undefined ? (from ?? 0) : (open.messages.seqOf(last.id) ?? 0);
       return { items, next: cursorOf({ [id]: next }) };

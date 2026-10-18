@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_MESSAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
+import { MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import type { Message } from '../../shared/model/messages';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
@@ -1111,6 +1111,114 @@ describe('reads', () => {
       after: rest.next,
     });
     expect(none).toEqual({ entries: [], next: rest.next });
+  });
+
+  it('ends a page of a transcript early rather than pass its byte budget, cutting an entry too big alone', async () => {
+    // A turn that runs the tests (a long output) and writes a big file (a long diff).
+    const long: Connector<SessionMode> = {
+      start: (_spec, host) => {
+        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        const idle = () => Promise.resolve();
+        return Promise.resolve({
+          send: (message) => {
+            host.emit({ type: 'user', id: message.id, text: message.text });
+            host.emit({ type: 'status', status: 'working' });
+            host.emit({
+              type: 'tool',
+              id: 'tests',
+              tool: 'Bash',
+              summary: 'pnpm test',
+              status: 'done',
+              // 40,000 characters, but more bytes as JSON.
+              detail: { kind: 'output', text: '✓✓✓✓✓✓✓"\n'.repeat(4444) },
+            });
+            host.emit({
+              type: 'tool',
+              id: 'write',
+              tool: 'Write',
+              summary: 'big.ts',
+              status: 'done',
+              detail: {
+                kind: 'diff',
+                added: 2000,
+                removed: 0,
+                lines: Array.from({ length: 2000 }, (_, i) => ({
+                  kind: 'add' as const,
+                  text: `export const line${String(i)} = "${'x'.repeat(60)}";`,
+                })),
+              },
+            });
+            host.emit({ type: 'text', id: 'reply', text: 'Done.' });
+            host.emit({
+              type: 'end',
+              messages: [message.id],
+              seconds: 1,
+              interrupted: false,
+              failed: false,
+            });
+            return idle();
+          },
+          answer: idle,
+          interrupt: idle,
+          setMode: idle,
+          setModel: idle,
+          close: idle,
+        });
+      },
+    };
+    await keepCanvas();
+    await start({ appServer: long });
+    const id = await send('builder', 'Run the tests and write big.ts');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    interface Page {
+      entries: { id: string; kind: string; cut?: true }[];
+      next: string | null;
+    }
+    const bytes = (page: Page) => Buffer.byteLength(JSON.stringify(page.entries));
+    const read: Page['entries'] = [];
+    let after: string | null = null;
+    for (let pages = 0; pages < 10; pages++) {
+      const page: Page = await ok<Page>('session.transcript', {
+        agent: 'builder',
+        ...(after === null ? {} : { after }),
+      });
+      if (page.entries.length === 0) break;
+      expect(bytes(page)).toBeLessThanOrEqual(MAX_PAGE_BYTES);
+      read.push(...page.entries);
+      after = page.next;
+    }
+    // Every entry is read, each once; those too big alone are cut, and say so.
+    expect(read.map(({ kind }) => kind)).toEqual(['user', 'tool', 'tool', 'text', 'end']);
+    expect(read.filter((entry) => entry.cut === true).map(({ id }) => id)).toEqual([
+      'tests',
+      'write',
+    ]);
+    // A page asked for more ends before an entry that doesn't fit after another.
+    const first = await ok<Page>('session.transcript', { agent: 'builder', limit: 2 });
+    expect(first).toEqual({ entries: [read[0]], next: read[0]?.id });
+  });
+
+  it('ends a page of messages early rather than pass its byte budget', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++)
+      ids.push(await send('builder', `${String(i)} ${'"'.repeat(16_000)}`));
+    const read: string[] = [];
+    let after: string | undefined;
+    for (let pages = 0; pages < 10 && read.length < ids.length; pages++) {
+      const page: { items: Message[]; next: string } = await ok('messages', {
+        ...(after === undefined ? {} : { after }),
+      });
+      expect(Buffer.byteLength(JSON.stringify(page.items))).toBeLessThanOrEqual(MAX_PAGE_BYTES);
+      expect(page.items.length).toBeGreaterThan(0);
+      read.push(...page.items.map(({ id }) => id));
+      after = page.next;
+    }
+    expect(read).toEqual(ids);
   });
 
   it('gives the catalog to every party', async () => {

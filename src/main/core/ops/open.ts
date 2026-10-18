@@ -1,3 +1,4 @@
+import { MAX_PAGE_BYTES } from '../../../shared/api/limits';
 import { SURFACE } from '../../../shared/api/surface';
 import type { OpName, Reach } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
@@ -8,7 +9,8 @@ import type { Engines, OpenCanvas } from '../engines';
 
 /*
  * What the conversation, session and run operations share: the open canvas a call names, an agent
- * of it, and how far the caller reaches for the op (core.call has refused what it doesn't).
+ * of it, how far the caller reaches for the op (core.call has refused what it doesn't), and how a
+ * list is paged.
  */
 
 /**
@@ -33,4 +35,32 @@ export function agentOf(open: OpenCanvas, id: string): AgentNode {
 export function reachFor(name: OpName, { party }: OpContext): Reach | 'all' {
   const access = SURFACE[name].access as Readonly<Partial<Record<string, Reach>>>;
   return access[party] ?? 'own';
+}
+
+/**
+ * A page of `items`: the longest run of them, from the first, whose JSON fits MAX_PAGE_BYTES; at
+ * least the first, which `fit` cuts to fit when it alone doesn't (given the bytes it may take).
+ */
+export function pageOf<T>(
+  items: readonly T[],
+  fit: (item: T, room: number) => T = (item) => item,
+): T[] {
+  const page: T[] = [];
+  // The brackets around them, and a comma between each.
+  let room = MAX_PAGE_BYTES - 2;
+  for (const item of items) {
+    const size = bytesOf(item) + (page.length === 0 ? 0 : 1);
+    if (size > room) {
+      if (page.length === 0) page.push(fit(item, room));
+      break;
+    }
+    page.push(item);
+    room -= size;
+  }
+  return page;
+}
+
+/** How many bytes a value takes as JSON. */
+export function bytesOf(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
 }
