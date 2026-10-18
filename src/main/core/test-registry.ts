@@ -68,6 +68,12 @@ const Canvas = brandedId('CanvasId', z.uuid());
 const Agent = brandedId('AgentId', z.string().min(1).max(64));
 
 const Y = { you: 'all' } as const;
+const T = {
+  lead: 'linked',
+  worker: 'linked',
+  'outside-read': 'canvas',
+  'outside-write': 'canvas',
+} as const;
 const A = {
   you: 'all',
   lead: 'linked',
@@ -81,6 +87,7 @@ const W = { you: 'all', 'outside-write': 'canvas' } as const;
 
 const SURFACES = {
   'test.read': { access: A, kind: 'read', scope: 'none', varies: ['caller'] },
+  'test.tokens': { access: T, kind: 'read', scope: 'none' },
   'test.yours': { access: Y, kind: 'command', scope: 'none' },
   'test.agent': { access: L, kind: 'command', scope: 'agent', self: 'refused' },
   'test.message': {
@@ -117,6 +124,11 @@ const OPS = {
     summary: 'Says who called, and something that is the same for everyone.',
     input: z.strictObject({}),
     output: z.strictObject({ caller: z.string(), same: z.number() }),
+  }),
+  'test.tokens': define('test.tokens', {
+    summary: 'Something only tokens may do, as waiting for what is addressed to them.',
+    input: z.strictObject({}),
+    output: z.strictObject({ done: z.boolean() }),
   }),
   'test.yours': define('test.yours', {
     summary: 'Something only you may do.',
@@ -162,6 +174,7 @@ export function testRegistry(): Registry & {
 } {
   const calls: Calls = {
     'test.read': [],
+    'test.tokens': [],
     'test.yours': [],
     'test.agent': [],
     'test.message': [],
@@ -178,6 +191,7 @@ export function testRegistry(): Registry & {
     };
   const implementations: Record<Name, Implementation> = {
     'test.read': heard('test.read', (_args, { party }) => ({ caller: party, same: 1 })),
+    'test.tokens': heard('test.tokens', () => ({ done: true })),
     'test.yours': heard('test.yours', () => ({ done: true })),
     'test.agent': heard('test.agent', ({ agent }: { agent: string }) => ({ agent })),
     'test.message': heard('test.message', ({ to }: { to: string }) => ({ sent: to })),
@@ -248,6 +262,7 @@ export interface OpFixture {
 /** What the generated tests call each test op with: all but test.hold, which no call ends by itself. */
 export const TEST_FIXTURES: Readonly<Record<Exclude<Name, 'test.hold'>, OpFixture>> = {
   'test.read': { valid: [{}, undefined], invalid: [{ extra: 1 }, 'text', [], null] },
+  'test.tokens': { valid: [{}], invalid: [{ extra: 1 }] },
   'test.yours': { valid: [{}], invalid: [{ extra: 1 }] },
   'test.agent': {
     valid: [{ canvas: CANVAS, agent: 'helper' }],

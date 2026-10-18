@@ -105,7 +105,7 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, start) => {
   });
 
   describe.each(Object.entries(fixtures))('%s', (name, fixture) => {
-    it.each(TOKEN_PARTIES)(
+    it.each(PARTIES)(
       'is listed to %s only if it is in the audience, and refused otherwise',
       async (party) => {
         const listed = listTools(setup.core, CALLERS[party]).map((tool) => tool.name);
@@ -124,14 +124,17 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, start) => {
     it('answers every party in its audience alike, but for the fields it says vary', async () => {
       const varies = surfaceOf(name).varies ?? [];
       const proposes = (surfaceOf(name).rules ?? []).some((rule) => PROPOSING_RULES.includes(rule));
+      // Each party's answer against the first's: yours, where you are in the audience.
+      const [first, ...others] = PARTIES.filter((p) => inAudience(name, p));
+      if (first === undefined) return;
       for (const args of fixture.valid) {
-        const yours = await setup.core.call(name, args, CALLERS.you);
-        expect(yours.ok, JSON.stringify(yours)).toBe(true);
-        for (const party of TOKEN_PARTIES.filter((p) => inAudience(name, p))) {
+        const firsts = await setup.core.call(name, args, CALLERS[first]);
+        expect(firsts.ok, JSON.stringify(firsts)).toBe(true);
+        for (const party of others) {
           const theirs = await setup.core.call(name, args, CALLERS[party]);
           // A token's call that came to you as a proposal is its rule's to check, below.
           if (proposes && theirs.ok && 'proposed' in (theirs.value as object)) continue;
-          expect(invariant(theirs, varies), party).toEqual(invariant(yours, varies));
+          expect(invariant(theirs, varies), party).toEqual(invariant(firsts, varies));
         }
       }
     });

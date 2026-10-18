@@ -184,7 +184,10 @@ function worstCase(schema: JsonSchema, path = ''): number | { unbounded: string 
         case 'array': {
           const items = (schema.prefixItems as JsonSchema[] | undefined) ?? [];
           const fixed = sum(
-            items.map((item, i) => 1 + (worstCase(item, `${path}[${String(i)}]`) as number)),
+            items.map((item, i) => {
+              const each = worstCase(item, `${path}[${String(i)}]`);
+              return typeof each === 'number' ? each + 1 : each;
+            }),
           );
           if (schema.items === undefined || schema.items === false) return sum([2, fixed]);
           const count = schema.maxItems;

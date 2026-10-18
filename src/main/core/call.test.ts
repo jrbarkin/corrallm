@@ -71,6 +71,16 @@ describe('core.call', () => {
     expect((await core.call('test.yours', {}, CALLERS.you)).ok).toBe(true);
   });
 
+  it('refuses you an op only tokens may call', async () => {
+    const { core, calls } = setup();
+    expect(await core.call('test.tokens', {}, CALLERS.you)).toEqual({
+      ok: false,
+      error: { code: 'forbidden', sentence: 'You can’t call test.tokens.' },
+    });
+    expect(calls['test.tokens']).toEqual([]);
+    expect((await core.call('test.tokens', {}, CALLERS['outside-read'])).ok).toBe(true);
+  });
+
   it('refuses an op that doesn’t exist, or isn’t its own', async () => {
     const { core } = setup();
     for (const name of ['test.missing', 'toString', '__proto__']) {

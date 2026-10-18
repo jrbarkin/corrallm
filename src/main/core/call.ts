@@ -97,7 +97,8 @@ const REMEMBERED_REQUESTS = 1000;
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
 const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId']);
 /** How a refusal names a party that isn't in an op's audience. */
-const PARTY_WORDS: Readonly<Record<Exclude<Party, 'you'>, string>> = {
+const PARTY_WORDS: Readonly<Record<Party, string>> = {
+  you: 'You',
   lead: 'A lead',
   worker: 'An agent',
   'outside-read': 'A read-only token',
@@ -206,10 +207,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       if (reach === undefined) {
         throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
           ? new OpFailure('human-only', `Only you can call ${name}, in corrallm’s window.`)
-          : new OpFailure(
-              'forbidden',
-              `${PARTY_WORDS[party as Exclude<Party, 'you'>]} can’t call ${name}.`,
-            );
+          : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
       }
       if (caller.kind !== 'human') {
         release = throttle.admit(callerKey(caller), surface.kind !== 'read');
