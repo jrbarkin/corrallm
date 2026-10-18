@@ -24,6 +24,8 @@
     "test:e2e": "playwright test",
     "package": "electron-forge package",
     "make": "electron-forge make",
+    "build:cli": "vite build --config vite.cli.config.mts",
+    "corrallm": "node scripts/corrallm.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
