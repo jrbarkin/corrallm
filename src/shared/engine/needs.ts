@@ -102,7 +102,7 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
       const usage = run.agents[agent.id]?.usage;
       const until = usage?.resetsAt;
       return {
-        id: `hold/${agent.id}/${ask.item.id}`,
+        id: idOf('hold', agent.id, ask.item.id),
         ...yours,
         kind: 'hold',
         title: ask.text,
@@ -123,7 +123,7 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
     }
     case 'stuck':
       return {
-        id: `hold/${need.agent.id}/start`,
+        id: idOf('start', need.agent.id),
         ...yours,
         kind: 'hold',
         title: `${agentName(nodes, need.agent.id)} can’t start: ${need.text}`,
@@ -133,19 +133,28 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
       };
     case 'prompt':
       return {
-        id: `prompt/${need.agent.id}/${need.prompt.id}`,
+        id: idOf('prompt', need.agent.id, need.prompt.id),
         ...yours,
         ...promptWords(need.prompt),
       };
     case 'ask':
       return {
-        id: `prompt/${need.agent.id}/${need.ask.id}`,
+        id: idOf('prompt', need.agent.id, need.ask.id),
         ...yours,
         ...askWords(need.ask),
         choices: [],
         answerIn: 'terminal',
       };
   }
+}
+
+/**
+ * A Needs item's id, unique on its canvas: what it is (a run's hold, a session that won't start,
+ * a prompt), its agent (escaped, so that a slash in an agent's id never runs into what follows),
+ * and what of the agent's it is (a queue item's id, a prompt's).
+ */
+function idOf(kind: 'hold' | 'start' | 'prompt', agent: string, of?: string): string {
+  return [kind, encodeURIComponent(agent), ...(of === undefined ? [] : [of])].join('/');
 }
 
 /** An item of yours as a token sees it: what waits, without the choices only you may make. */

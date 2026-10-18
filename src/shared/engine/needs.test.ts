@@ -124,6 +124,28 @@ describe('needs', () => {
     ]);
   });
 
+  it('gives every item an id no other item can have', () => {
+    // A queue item named "start" on an agent whose session won't start; an agent id with a slash.
+    const starter = agent('s', 'Starter', [{ id: 'start', approve: 'the start' }]);
+    const slashed = agent('a/b', 'Slashed', [{ id: 'c', approve: 'it' }]);
+    const plain = agent('a', 'Plain', [{ id: 'b/c', approve: 'it' }]);
+    const asks = (current: string) => ({ status: 'asking' as const, current, outcomes: {} });
+    const items = needs(
+      input({
+        nodes: [starter, slashed, plain],
+        run: { running: true, agents: { s: asks('start'), 'a/b': asks('c'), a: asks('b/c') } },
+        stuck: [{ agent: 's', text: 'This login can’t run here.' }],
+      }),
+    );
+    expect(items.map(({ kind, agent }) => [kind, agent])).toEqual([
+      ['hold', 's'],
+      ['hold', 'a/b'],
+      ['hold', 'a'],
+      ['hold', 's'],
+    ]);
+    expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);
+  });
+
   it('shows a token your items without their choices', () => {
     const [item] = needs(input({ run: held }));
     if (!item) throw new Error('no item');
