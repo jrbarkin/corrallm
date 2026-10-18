@@ -7,6 +7,9 @@ const HOUR = 60 * 60 * 1000;
 /** The usage backend Claude Code's Terminal sessions read (its subscription's limits). */
 export const CLAUDE_USAGE = 'claude-code';
 
+/** Claude Code's Terminal connection: where an agent goes for what the Agent SDK can't do. */
+export const CLAUDE_TERMINAL = 'claude-code.terminal';
+
 /** Claude Code's modes, by its settings' names, in the order Shift+Tab cycles them. */
 const MODES = [
   { id: 'manual', label: 'Manual', description: 'Asks before editing files or running commands' },
@@ -90,7 +93,7 @@ export const claudeCode: Adapter = {
     ],
     connections: [
       {
-        id: 'claude-code.terminal',
+        id: CLAUDE_TERMINAL,
         label: 'Terminal',
         short: 'Terminal',
         description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
@@ -123,7 +126,7 @@ export const claudeCode: Adapter = {
         // It runs on an API key or a cloud provider, which have no usage windows.
         usage: null,
         continueIn: {
-          connection: 'claude-code.terminal',
+          connection: CLAUDE_TERMINAL,
           // Claude Code's commands that open a screen of its own, as Claude Code describes them.
           commands: [
             { name: 'login', description: 'Sign in to your Anthropic account' },

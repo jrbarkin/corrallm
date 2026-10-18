@@ -220,7 +220,7 @@ describe('the App Server connection', () => {
           id: expect.any(String) as unknown,
           level: 'error',
           text: expect.stringMatching(why) as unknown,
-          switchTo: 'codex-terminal',
+          switchTo: 'codex.terminal',
         },
       ]);
       expect(remember).not.toHaveBeenCalled();

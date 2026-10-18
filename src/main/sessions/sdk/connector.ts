@@ -11,6 +11,7 @@ import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-ag
 import { PERMISSION_MODES } from '../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../shared/session';
 import { requireClaude } from '../claude';
+import { CLAUDE_TERMINAL } from '../claude-code/adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { effortChoice } from '../transcript';
 import { historyEvents } from './history';
@@ -135,7 +136,7 @@ export class SdkConnector implements Connector {
       id: randomUUID(),
       level: 'error',
       text: refusal,
-      switchTo: 'terminal',
+      switchTo: CLAUDE_TERMINAL,
     });
     throw new Error(refusal);
   }

@@ -7,6 +7,9 @@ const HOUR = 60 * 60 * 1000;
 /** The usage backend both of Codex's connections read (its plan's limits). */
 export const CODEX_USAGE = 'codex';
 
+/** Codex's Terminal connection: where an agent goes when its App Server refuses its login. */
+export const CODEX_TERMINAL = 'codex.terminal';
+
 /**
  * Codex's modes: its permission presets, as its /permissions names them (by their ids in its
  * source, codex-rs/utils/approval-presets), then its plan collaboration mode, which has Default's
@@ -91,7 +94,7 @@ export const codex: Adapter = {
     ],
     connections: [
       {
-        id: 'codex.terminal',
+        id: CODEX_TERMINAL,
         label: 'Terminal',
         short: 'Terminal',
         description: 'Codex itself, in a terminal in its view',

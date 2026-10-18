@@ -6,7 +6,7 @@ import { DEFAULT_MODES } from '../../../../shared/session';
 import type { CodexMode, ModelChoice, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
-import { CODEX_USAGE } from '../adapter';
+import { CODEX_TERMINAL, CODEX_USAGE } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
@@ -149,7 +149,7 @@ export class AppServerConnector implements Connector<CodexMode> {
           id: randomUUID(),
           level: 'error',
           text: refused,
-          switchTo: 'codex-terminal',
+          switchTo: CODEX_TERMINAL,
         });
         throw new Error(refused);
       }

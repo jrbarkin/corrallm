@@ -351,7 +351,7 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
     path.join(config, 'settings.json'),
     JSON.stringify({ model: 'opus', effortLevel: 'xhigh', permissions: { defaultMode: 'auto' } }),
   );
-  await canvasFile([], { claude: { model: 'haiku', effort: 'low', mode: 'plan' } });
+  await canvasFile([], { 'claude-code': { model: 'haiku', effort: 'low', mode: 'plan' } });
   await chooseProject();
   const { view, terminal } = await openShop();
   // Passed per session on its command line, never saved in the user's settings.
