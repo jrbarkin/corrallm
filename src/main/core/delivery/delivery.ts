@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
+import { MAX_MESSAGE_BYTES, MAX_WAITING } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/engine/needs';
 import type { NeedsInput } from '../../../shared/engine/needs';
@@ -163,10 +163,20 @@ export class Delivery {
    * Sends agent `to` a message from `from`, once its record is on disk: delivered at once if it
    * can be, and otherwise held, its sender told why. A message sent RETRY_AFTER or more after the
    * agent's session refused to start tries it again. Resolves with it, as kept; rejects, the message
-   * unresolved and never sent, if its record can't reach the disk.
+   * unresolved and never sent, if its record can't reach the disk. Throws, saying why, a message
+   * from a party (anyone but you) that has MAX_WAITING waiting for that agent already.
    */
   async send(from: PartyId, to: string, body: string, replyTo?: string): Promise<Message> {
     const { store } = this.#deps;
+    if (
+      from !== 'you' &&
+      this.#waiting(to).filter((message) => message.from === from).length >= MAX_WAITING
+    ) {
+      throw new DeliveryError(
+        'refused',
+        `${this.#name(to)} already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,
+      );
+    }
     const message = store.add({
       from,
       to: agentParty(to),
@@ -679,7 +689,7 @@ export class Delivery {
   }
 }
 
-/** Why a message couldn't be taken back: a code, as an operation's failure carries it. */
+/** Why a message couldn't be sent or taken back: a code, as an operation's failure carries it. */
 export class DeliveryError extends Error {
   readonly code: 'not-found' | 'refused' | 'conflict';
 

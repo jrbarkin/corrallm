@@ -16,8 +16,9 @@ import type { Message, PartyId } from '../../../shared/model/messages';
  * a line for each message each time it changes ({ seq, message }, the last line of a message
  * winning). Its order (`seq`) survives restarts, so a cursor into it does too. It keeps the newest
  * STORE_SETTLED_PER_PARTY settled messages of each party within STORE_BYTES, and every pending and
- * unresolved one, dropping the oldest settled first, and writes its log anew once it has grown past
- * what it keeps. It never throws: what it can't write it says on the console, except where a
+ * unresolved one, dropping the oldest settled first (delivery bounds how many wait: MAX_WAITING),
+ * and writes its log anew once what it appended since it last did outgrows both what it kept then
+ * and STORE_BYTES. It never throws: what it can't write it says on the console, except where a
  * caller asks for its record on disk (`durable`), which rejects then; and once a write fails, the
  * next writes the log anew, whole (a line a failed append tore included). A torn last line of its
  * log is left out, and written out of the log as it loads (or with the next write, if that fails);
@@ -58,8 +59,10 @@ export class MessageStore {
   #scheduled = false;
   /** Each write, after the one before it. */
   #writing: Promise<void> = Promise.resolve();
-  /** How many bytes the log has had appended since it was last written whole. */
-  #grown = 0;
+  /** How many bytes the log holds. */
+  #size = 0;
+  /** How many of them it held when it was last written whole (or read): what the store kept then. */
+  #compacted = 0;
   /** Whether something was written to the log since it was last forced to disk. */
   #unsynced = false;
   /** Whether the log may lack what the store keeps, or hold a torn line: written whole next. */
@@ -119,13 +122,14 @@ export class MessageStore {
     this.#kept = new Map([...read].sort(([, a], [, b]) => a.seq - b.seq));
     this.#prune();
     if (!torn) {
-      this.#grown = Buffer.byteLength(text);
+      this.#size = Buffer.byteLength(text);
+      this.#compacted = [...this.#kept.values()].reduce((sum, { bytes }) => sum + bytes, 0);
       return;
     }
     const whole = this.#whole();
     try {
       await this.#log.rewriteMessages(this.canvas, whole);
-      this.#grown = Buffer.byteLength(whole);
+      this.#size = this.#compacted = Buffer.byteLength(whole);
     } catch (error) {
       console.error('Could not write the canvas’s messages anew:', error);
       this.#broken = true;
@@ -204,9 +208,11 @@ export class MessageStore {
   }
 
   /**
-   * Writes out what changed: appended to the log (forced to disk if `durable`), or, once the log
-   * has grown past what the store keeps or a write before failed, the log written anew, whole. A
-   * store that journals nothing writes nothing, and rejects `durable` once anything has changed.
+   * Writes out what changed: appended to the log (forced to disk if `durable`), or, once a write
+   * before failed or what was appended since the log was last written whole outgrows both what the
+   * store kept then and its byte budget, the log written anew, whole (so that a store keeping more
+   * than its budget, all of it waiting, still appends between its rewrites). A store that journals
+   * nothing writes nothing, and rejects `durable` once anything has changed.
    */
   async #flush(durable: boolean): Promise<void> {
     const text = this.#pending.join('');
@@ -217,14 +223,16 @@ export class MessageStore {
       return;
     }
     if (!this.#broken && text === '' && (!durable || !this.#unsynced)) return;
+    const bytes = Buffer.byteLength(text);
     try {
-      if (!this.#broken && this.#grown + Buffer.byteLength(text) <= STORE_BYTES) {
+      const appended = this.#size + bytes - this.#compacted;
+      if (!this.#broken && appended <= Math.max(this.#compacted, STORE_BYTES)) {
         await this.#log.appendMessages(this.canvas, text, durable);
-        this.#grown += Buffer.byteLength(text);
+        this.#size += bytes;
       } else {
         const whole = this.#whole();
         await this.#log.rewriteMessages(this.canvas, whole);
-        this.#grown = Buffer.byteLength(whole);
+        this.#size = this.#compacted = Buffer.byteLength(whole);
         if (durable) await this.#log.appendMessages(this.canvas, '', true);
         this.#broken = false;
       }

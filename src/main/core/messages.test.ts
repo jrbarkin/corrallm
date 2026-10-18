@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
+import { MAX_MESSAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import type { Message } from '../../shared/model/messages';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
@@ -461,6 +461,30 @@ describe('delivery', () => {
       ),
     ).toMatchObject({ ok: false, error: { code: 'invalid' } });
     await send('builder', 'x'.repeat(MAX_MESSAGE_BYTES));
+  });
+
+  it('refuses a party more messages waiting for one agent than it may have, never yours', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    for (let i = 0; i < MAX_WAITING; i++) await send('builder', `Message ${String(i)}`);
+    expect(
+      await core?.call('message', { canvas: CANVAS, to: 'builder', body: 'One more' }, OUTSIDE),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence: `Builder already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,
+      },
+    });
+    // Another party's, another agent's and yours still go.
+    await send('builder', 'From another', OTHER);
+    await send('helper', 'To Helper');
+    await send('builder', 'From you', YOU);
+    // Once one goes, another may.
+    const [first] = (await inbox()).filter(({ to }) => to === 'agent:builder');
+    await ok('withdraw', { id: first?.id });
+    await send('builder', 'One more');
   });
 
   it('withdraws a message before it is delivered, and interrupts its turn after', async () => {

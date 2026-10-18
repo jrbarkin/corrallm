@@ -29,6 +29,12 @@ export const MAX_MESSAGE_BYTES = 16 * 1024;
 export const STORE_SETTLED_PER_PARTY = 100;
 /** The most bytes of messages a canvas's store keeps (their JSON). */
 export const STORE_BYTES = 4 * 1024 * 1024;
+/**
+ * The most messages one party may have waiting for one agent (pending: not yet delivered); another
+ * is refused until one of them goes. You are never limited. The store keeps every message waiting,
+ * whatever its byte budget, so this bounds them.
+ */
+export const MAX_WAITING = 20;
 
 /** The most a page of a list (messages, a transcript) holds; 50 when a call doesn't say. */
 export const MAX_PAGE = 200;

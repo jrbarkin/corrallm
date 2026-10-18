@@ -117,20 +117,29 @@ export function conversationOps(
       if (replyTo !== undefined && !open.messages.get(replyTo)) {
         throw new OpFailure('not-found', `There is no message ${replyTo}.`);
       }
-      const sent = await open.delivery.send(partyIdOf(ctx.caller), to, body, replyTo);
-      return { id: sent.id };
+      try {
+        const sent = await open.delivery.send(partyIdOf(ctx.caller), to, body, replyTo);
+        return { id: sent.id };
+      } catch (error) {
+        return failed(error);
+      }
     },
     withdraw: ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
         open.delivery.withdraw(id, partyIdOf(ctx.caller));
       } catch (error) {
-        if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
-        throw error;
+        return failed(error);
       }
       return {};
     },
   };
+}
+
+/** Throws what delivery refused as the op's failure, with its code; anything else as it is. */
+function failed(error: unknown): never {
+  if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
+  throw error;
 }
 
 /** What an open canvas's needs are worded from. */

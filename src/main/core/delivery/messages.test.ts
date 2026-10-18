@@ -176,9 +176,47 @@ describe('the message store', () => {
     const added = messages.add(draft('outside:orchestrator', 'agent:builder'));
     for (let i = 0; i < 400; i++) messages.update(added.id, { body: 'y'.repeat(16 * 1024) });
     await messages.durable();
-    const written = Buffer.byteLength(await readFile(logFile(), 'utf8'));
-    expect(written).toBeLessThanOrEqual(STORE_BYTES * 2);
+    // Written anew: one line, the message as it is now.
+    const lines = (await readFile(logFile(), 'utf8')).trimEnd().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(Buffer.byteLength(lines.join('\n'))).toBeLessThan(17 * 1024);
     expect((await store()).get(added.id)?.body).toBe('y'.repeat(16 * 1024));
+  });
+
+  it('appends again after it compacts a log as big as its budget', async () => {
+    // Messages waiting are always kept, however many: what it keeps is past its byte budget.
+    const rewrites: string[] = [];
+    const counting: MessageLog = {
+      readMessages: (canvas) => journal.readMessages(canvas),
+      appendMessages: (canvas, text, durable) => journal.appendMessages(canvas, text, durable),
+      rewriteMessages: (canvas, text) => {
+        rewrites.push(text);
+        return journal.rewriteMessages(canvas, text);
+      },
+      setAsideMessages: (canvas) => journal.setAsideMessages(canvas),
+    };
+    const messages = new MessageStore(CANVAS, counting, () => 1000);
+    await messages.load();
+    const big = 'x'.repeat(16 * 1024);
+    const waiting = Array.from({ length: STORE_BYTES / (16 * 1024) + 10 }, (_, i) =>
+      messages.add(draft(`outside:p${String(i)}`, 'agent:builder', 'pending', big)),
+    );
+    await messages.durable();
+    expect(rewrites).toHaveLength(1);
+    for (const [i, message] of waiting.slice(0, 10).entries()) {
+      messages.update(message.id, {
+        state: 'delivering',
+        delivery: { at: 1000, as: `as-${String(i)}`, attempt: 1 },
+      });
+      await messages.durable();
+    }
+    expect(rewrites).toHaveLength(1);
+    expect(
+      (await store())
+        .all()
+        .filter(({ state }) => state === 'delivering')
+        .map(({ id }) => id),
+    ).toEqual(waiting.slice(0, 10).map(({ id }) => id));
   });
 
   it('reads nothing for a canvas with no messages yet, and writes nothing until one comes', async () => {

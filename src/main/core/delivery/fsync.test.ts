@@ -52,6 +52,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       };
       return handle;
     },
+    // The log written anew, whole, lands with a rename.
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      await actual.rename(...args);
+      const file = path.basename(String(args[1]));
+      if (file === 'messages.jsonl') events.push(`rewrite ${file}`);
+    },
   };
 });
 
@@ -152,6 +158,48 @@ it('sends a message only once its delivering record is on disk', async () => {
   const appendedAt = events.indexOf(`append ${id} delivering ${String(as)}`);
   expect(appendedAt).toBeGreaterThan(-1);
   expect(events.slice(0, sendAt).lastIndexOf('fsync messages.jsonl')).toBeGreaterThan(appendedAt);
+});
+
+it('forces a delivering record written with the log anew to disk before it sends', async () => {
+  // A log grown past the store's budget (a waiting message, changed many times) is written anew
+  // with the next record: the delivering one.
+  const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+  await mkdir(path.dirname(log), { recursive: true });
+  const id = crypto.randomUUID();
+  const line = (i: number) =>
+    JSON.stringify({
+      seq: 1,
+      message: {
+        id,
+        canvas: CANVAS,
+        from: 'outside:orchestrator',
+        to: 'agent:builder',
+        kind: 'text',
+        body: `${String(i)} ${'x'.repeat(16 * 1024)}`,
+        state: 'pending',
+        at: 1,
+      },
+    });
+  await writeFile(log, Array.from({ length: 260 }, (_, i) => `${line(i)}\n`).join(''));
+  const codex = new FakeConnector({ adapter: 'codex' });
+  await start({
+    start: async (spec, host) => {
+      const session = await codex.start(spec, host);
+      const send = session.send.bind(session);
+      session.send = (message) => {
+        events.push(`send ${message.id}`);
+        return send(message);
+      };
+      return session;
+    },
+  });
+  await vi.waitFor(() => {
+    expect(events.some((event) => event.startsWith('send '))).toBe(true);
+  });
+  const sendAt = events.findIndex((event) => event.startsWith('send '));
+  const rewriteAt = events.indexOf('rewrite messages.jsonl');
+  expect(rewriteAt).toBeGreaterThan(-1);
+  expect(events.slice(rewriteAt, sendAt)).toContain('fsync messages.jsonl');
 });
 
 it('delivers the next message once one taken back while it was journaled is withdrawn', async () => {
