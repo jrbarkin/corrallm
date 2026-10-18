@@ -145,7 +145,7 @@ describe('task recovery', () => {
     { task: 'a step', queue: [step, next] },
     { task: 'a message', queue: [{ id: 'build', message: 'Run the tests' }, next] },
   ])(
-    'sends a correction to $task that starts with its shell prefix alone, never with the canvas’s text',
+    'sends a correction to $task that starts with a shell prefix alone, never with the canvas’s text',
     ({ queue }) => {
       // A Terminal runs a message that starts with "!" as a shell command: the canvas's text after
       // the user's own would be run as part of it.
@@ -159,14 +159,52 @@ describe('task recovery', () => {
         origin: 'user',
         displayText: '!npm test',
       });
-      // The Agent SDK runs no shell command from a message: the correction goes with its task.
+      // The Agent SDK runs no shell command from a message, but its agent may run in a Terminal
+      // by the time the correction goes: alone there too.
       const sdk = setup(queue);
       sdk.store.start();
       sdk.reply('FAILED', true);
       sdk.store.decide('a', 'build', { reply: ' !npm test ' });
-      expect(sdk.sent.at(-1)?.text).toMatch(/^!npm test\n\nContinue /);
+      expect(sdk.sent.at(-1)?.text).toBe('!npm test');
     },
   );
+
+  it('checks canvas text against the connection its recipient runs as it goes, not as it was sent', async () => {
+    // Its checkpoint is written before it goes: meanwhile, its agent switches to Terminal.
+    let release: (() => void) | undefined;
+    const beforeSend = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const queue = [{ id: 'own', message: '!ls' }];
+    const later: RunIO['later'] = (run, ms) => {
+      const timer = setTimeout(run, ms);
+      return () => {
+        clearTimeout(timer);
+      };
+    };
+    const { store, sent } = setup(queue, { beforeSend, later });
+    store.start();
+    await vi.waitFor(() => {
+      expect(release).toBeDefined();
+    });
+    store.update([
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: { label: 'A', connection: 'claude-code.terminal', queue },
+      },
+    ]);
+    release?.();
+    await vi.waitFor(() => {
+      expect(store.snapshot().agents.a?.problem).toMatchObject({
+        kind: 'failed',
+        text: expect.stringMatching(/^Not sent: it starts with "!"/) as string,
+      });
+    });
+    expect(sent).toEqual([]);
+  });
 
   it('adopts a direct terminal correction without sending it again', () => {
     const { store, sent, reply } = setup([step, next]);

@@ -34,6 +34,7 @@ import { deadline } from '../../model/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
 import { warningText } from '../../model/words';
+import { shellRefusal, startsWithShell } from '../catalog';
 import type { EngineCatalog } from '../catalog';
 import {
   conditionQuestion,
@@ -229,23 +230,13 @@ export interface RunIO {
 const ALARM_MS = 60_000;
 
 /**
- * Why the run did not send a message that starts with `prefix`, which the connection `name`d runs
- * as a shell command.
- */
-const shellRefused = (prefix: string, name: string) =>
-  `Not sent: it starts with "${prefix}", which ${name} runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.`;
-
-/** Whether `text` starts with `prefix`, the text its recipient runs as a shell command, if any. */
-const startsWith = (text: string, prefix: string | undefined): prefix is string =>
-  prefix !== undefined && prefix !== '' && text.trimStart().startsWith(prefix);
-
-/**
  * What a correction the user typed sends: their note, then what it corrects. A note that starts
- * with the recipient's shell prefix (`prefix`) is a shell command for its CLI's bash mode, sent
- * alone: the canvas's text after it would be run as part of it.
+ * with any connection's shell prefix (`prefixes`) may be a shell command for its CLI's bash mode,
+ * once the recipient runs there (it may switch before the note goes), so it is sent alone: the
+ * canvas's text after it would be run as part of it.
  */
-const corrected = (note: string, task: string, prefix: string | undefined) =>
-  startsWith(note, prefix) ? note : `${note}\n\n${task}`;
+const corrected = (note: string, task: string, prefixes: readonly string[]) =>
+  prefixes.some((prefix) => startsWithShell(note, prefix)) ? note : `${note}\n\n${task}`;
 
 /**
  * What the run says when it waits for a usage window's reset that has never been read (the backend
@@ -1708,7 +1699,7 @@ export class RunStore {
           ? corrected(
               correction.note,
               `Continue this original task and report its result:\n${original}`,
-              this.#shellPrefix(node),
+              this.#catalog.shellPrefixes,
             )
           : original;
         this.#send(node, text, {
@@ -1739,7 +1730,7 @@ export class RunStore {
             ? corrected(
                 correction.note,
                 `Continue the original task: ${task.message}`,
-                this.#shellPrefix(to),
+                this.#catalog.shellPrefixes,
               )
             : task.message,
           {
@@ -1876,11 +1867,14 @@ export class RunStore {
       started = true;
       // What the user typed may be a shell command for its CLI's bash mode; what the run sends of
       // its own (a canvas's messages, which a shared file may hold) never is: checked as it goes,
-      // against the connection its recipient runs now.
+      // against the connection its recipient runs now, and again by its session as it starts it
+      // (which may be later, on another connection: mailbox.ts).
       const now = this.#agents().find((n) => n.id === to.id) ?? to;
-      const prefix = this.#shellPrefix(now);
-      if (origin !== 'user' && startsWith(text, prefix)) {
-        const name = this.#catalog.connectionName(this.#catalog.connectionOf(now.data)) ?? '';
+      const refusal =
+        origin === 'user'
+          ? undefined
+          : shellRefusal(this.#catalog, this.#catalog.connectionOf(now.data), text);
+      if (refusal !== undefined) {
         this.#after(0, () => {
           if (sent.over) return;
           sent.over = true;
@@ -1888,7 +1882,7 @@ export class RunStore {
           ended?.({
             failed: true,
             reply: '',
-            result: { status: 'failed', reason: 'declined', message: shellRefused(prefix, name) },
+            result: { status: 'failed', reason: 'declined', message: refusal },
           });
         });
         return;
@@ -1949,11 +1943,6 @@ export class RunStore {
           },
         );
     } else dispatch();
-  }
-
-  /** The text an agent's connection runs as a shell command, if any (catalog.ts shellPrefix). */
-  #shellPrefix(agent: AgentNode): string | undefined {
-    return this.#catalog.shellPrefix(this.#catalog.connectionOf(agent.data));
   }
 
   /**

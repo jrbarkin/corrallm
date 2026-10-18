@@ -695,6 +695,38 @@ describe('SessionStore', () => {
     expect(store.of('a').entries).toEqual([]);
   });
 
+  it('never starts canvas text that the connection it would go to runs as a shell command', async () => {
+    // Queued behind a turn on Codex's App Server, which runs no shell command from a message; the
+    // agent switches to Codex's Terminal, which runs "!" text without asking, before it goes.
+    const { backend } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'codex.app-server' }]);
+    store.send('a', 'codex', 'Take your time');
+    const done = vi.fn();
+    store.send('a', 'codex', '  !ls', done, undefined, undefined, 'queue');
+    const yours = vi.fn();
+    store.send('a', 'codex', '!pwd', yours);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.of('a').queued.map(({ text }) => text)).toEqual(['  !ls', '!pwd']);
+
+    store.sync([{ id: 'a', connection: 'codex.terminal' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toHaveBeenCalledWith(true, '', {
+      status: 'failed',
+      reason: 'declined',
+      message:
+        'Not sent: it starts with "!", which Codex · Terminal runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.',
+    });
+    // What you typed goes, as you typed it; the canvas's text never reached the session.
+    expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+      'Take your time',
+      '!pwd',
+    ]);
+    expect(store.of('a').entries.filter((entry) => entry.kind === 'user')).toHaveLength(2);
+    store.reset();
+  });
+
   it('keeps one manual message queued after refusal and sends it once after switching', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(engine, backend);

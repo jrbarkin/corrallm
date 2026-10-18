@@ -15,6 +15,7 @@ import type {
   SettingsOptions,
   TurnResult,
 } from '../../session';
+import { shellRefusal } from '../catalog';
 import type { EngineCatalog } from '../catalog';
 import { ConnectedDriver, NO_BACKEND } from '../transcript/receive';
 import type { SessionBackend } from '../transcript/receive';
@@ -530,17 +531,34 @@ export class SessionStore {
     this.#notify();
   }
 
-  /** Starts a turn with message `id` (a queued message keeps its own). */
+  /**
+   * Starts a turn with message `id` (a queued message keeps its own). The run's own text (a
+   * canvas's, which a shared file may hold) that starts with what the connection it goes to runs as
+   * a shell command never starts: its turn fails, saying why, and the next message goes. Checked
+   * here, as it leaves, since the agent may run another way than when it was sent.
+   */
   #start(
     agentId: string,
     { text, images }: { text: string; images: MessageImage[] | undefined },
     id: string,
   ): void {
+    const connection = this.#connection(agentId);
+    const refusal = this.#queueMessages.has(id)
+      ? shellRefusal(this.#catalog, connection, text)
+      : undefined;
+    if (refusal !== undefined) {
+      const onDone = this.#heard(id);
+      this.#idle(agentId);
+      queueMicrotask(() => {
+        onDone?.(true, '', { status: 'failed', reason: 'declined', message: refusal });
+      });
+      return;
+    }
     const pasted = images === undefined || images.length === 0 ? {} : { images };
     this.#turns.set(agentId, id);
     // Its adapter's conversation (model/session.ts Conversation): an unsupported submission's
     // ('unavailable') stays separate from native conversation history.
-    const conversation = this.#catalog.adapterOf(this.#connection(agentId));
+    const conversation = this.#catalog.adapterOf(connection);
     this.#dispatch(agentId, {
       type: 'start',
       entry: { id, kind: 'user', text, ...pasted, conversation },

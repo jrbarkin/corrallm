@@ -54,6 +54,8 @@ export interface EngineCatalog {
    * none for one that runs no shell command from a message (or one the catalog lacks).
    */
   shellPrefix(connection: ConnectionId): string | undefined;
+  /** Every text any connection runs as a shell command, without asking, when a message starts with it. */
+  readonly shellPrefixes: readonly string[];
   /**
    * Whether a connection's sessions may start in `mode`: one its adapter lists that asks, among
    * those the connection starts in (never, for a connection the catalog lacks).
@@ -87,10 +89,40 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
       return found && `${found.adapter.name} · ${found.connection.label}`;
     },
     shellPrefix: (id) => connection(id)?.connection.shellPrefix,
+    shellPrefixes: [
+      ...new Set(
+        catalog.adapters.flatMap(({ connections }) =>
+          connections.flatMap(({ shellPrefix }) =>
+            shellPrefix === undefined || shellPrefix === '' ? [] : [shellPrefix],
+          ),
+        ),
+      ),
+    ],
     isStartMode: (id, mode) => {
       const found = connection(id);
       return found !== undefined && isStartMode(catalog, found.adapter.id, id, mode);
     },
     backendName: (id) => usageBackendIn(catalog, id)?.label ?? id,
   };
+}
+
+/** Whether `text` starts with `prefix`, the text a connection runs as a shell command, if any. */
+export function startsWithShell(text: string, prefix: string | undefined): prefix is string {
+  return prefix !== undefined && prefix !== '' && text.trimStart().startsWith(prefix);
+}
+
+/**
+ * Why `text`, which the user didn't type, isn't sent to a session on `connection`, if it isn't: it
+ * starts with the text that connection runs as a shell command, without asking. Only what the user
+ * typed may be one (a canvas's text, which a shared file may hold, never is).
+ */
+export function shellRefusal(
+  catalog: EngineCatalog,
+  connection: ConnectionId,
+  text: string,
+): string | undefined {
+  const prefix = catalog.shellPrefix(connection);
+  if (!startsWithShell(text, prefix)) return undefined;
+  const name = catalog.connectionName(connection) ?? 'its connection';
+  return `Not sent: it starts with "${prefix}", which ${name} runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.`;
 }
