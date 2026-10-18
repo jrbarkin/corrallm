@@ -1,7 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
-import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, UNASKING_MODES } from '../../shared/session';
+import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
+import { imageBytes, IMAGE_TYPES, UNASKING_MODES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
 import type { AgentType } from '../graph/agents';
 import { ChoiceMenu } from './ChoiceMenu';
@@ -231,12 +232,21 @@ export function Composer({
 
   /** Adds pasted or dropped images to the draft (what Claude reads, up to its limits). */
   const attach = (files: readonly File[]) => {
+    let total = images.reduce((sum, { data }) => sum + imageBytes(data), 0);
     for (const file of files) {
       if (!IMAGE_TYPES.some((type) => type === file.type)) continue;
       if (file.size > MAX_IMAGE_BYTES) {
         setProblem(`${file.name || 'The image'} is too large: images can be up to 5 MB.`);
         continue;
       }
+      if (total + file.size > MAX_IMAGE_TOTAL) {
+        setProblem(
+          `${file.name || 'The image'} would take the images past 20 MB: a message’s images can ` +
+            'be up to 20 MB together.',
+        );
+        continue;
+      }
+      total += file.size;
       const reader = new FileReader();
       reader.onload = () => {
         const url = typeof reader.result === 'string' ? reader.result : '';

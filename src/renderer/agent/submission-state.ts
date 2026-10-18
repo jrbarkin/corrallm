@@ -1,11 +1,5 @@
-import {
-  IMAGE_TYPES,
-  MAX_ID_LENGTH,
-  MAX_IMAGE_BYTES,
-  MAX_IMAGES,
-  MAX_MESSAGE_LENGTH,
-  TURN_REASONS,
-} from '../../shared/session';
+import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../shared/api/limits';
+import { IMAGE_TYPES, MAX_ID_LENGTH, MAX_MESSAGE_LENGTH, TURN_REASONS } from '../../shared/session';
 import type { MessageImage, TurnResult } from '../../shared/session';
 import type { Session, SubmittedMessage } from './session';
 

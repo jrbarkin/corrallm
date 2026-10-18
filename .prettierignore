@@ -1,4 +1,6 @@
 pnpm-lock.yaml
+# Written by `pnpm api:surface`, compared byte for byte by its test.
+src/shared/api/surface.snap.json
 .vite/
 dist-cli/
 out/

@@ -18,12 +18,11 @@ import {
   ELICITATION_ACTIONS,
   EFFORT_PATTERN,
   IMAGE_TYPES,
+  imageBytes,
   MAX_ANSWER_LENGTH,
   MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
-  MAX_IMAGE_BYTES,
   MAX_FORM_FIELDS,
-  MAX_IMAGES,
   MAX_MCP_NAME_LENGTH,
   MAX_MESSAGE_LENGTH,
   MAX_QUESTIONS,
@@ -33,6 +32,7 @@ import {
   PLAN_MODES,
   REWIND_RESTORES,
 } from '../../shared/session';
+import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import type {
   FormValue,
   Cli,
@@ -118,7 +118,7 @@ function parseImages(value: unknown): MessageImage[] {
   if (!Array.isArray(value) || value.length > MAX_IMAGES) {
     throw new TypeError(`Expected at most ${String(MAX_IMAGES)} images`);
   }
-  return value.map((image): MessageImage => {
+  const images = value.map((image): MessageImage => {
     const { mediaType, data } = record(image, 'an image', ['mediaType', 'data']);
     if (
       typeof data !== 'string' ||
@@ -131,6 +131,9 @@ function parseImages(value: unknown): MessageImage[] {
     if (data.length > MAX_IMAGE_BASE64) throw new RangeError('The image is too large');
     return { mediaType: oneOf(mediaType, IMAGE_TYPES, 'kind of image'), data };
   });
+  const bytes = images.reduce((sum, { data }) => sum + imageBytes(data), 0);
+  if (bytes > MAX_IMAGE_TOTAL) throw new RangeError('The images are too large together');
+  return images;
 }
 
 export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {

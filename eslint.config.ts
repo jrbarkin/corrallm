@@ -39,7 +39,8 @@ const ADAPTER_IMPORTERS = [
  * Electron or the host (src/main/host/): what needs the desktop is a HostServices request.
  */
 const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
-const CORE_SERVICES = 'src/main/{memory,settings,usage,files,git,canvas,project,run-journal}.ts';
+const CORE_SERVICES =
+  'src/main/{memory,settings,usage,files,git,canvas,project,run-journal,loopback}.ts';
 const ELECTRON = {
   group: ['electron', 'electron/*'],
   message:

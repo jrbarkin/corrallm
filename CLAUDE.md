@@ -6,18 +6,19 @@ corrallm is a cross-platform Electron desktop app (Electron Forge + Vite + React
 
 Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command          | Purpose                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| `pnpm dev`       | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes |
-| `pnpm typecheck` | `tsc -b` over the solution (node, web, tooling projects)                                               |
-| `pnpm lint`      | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                      |
-| `pnpm format`    | Prettier write (`format:check` to verify)                                                              |
-| `pnpm test`      | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                       |
-| `pnpm test:e2e`  | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI      |
-| `pnpm package`   | Packaged app for the current OS in `out/`                                                              |
-| `pnpm make`      | Installers for the current OS in `out/make/`                                                           |
-| `pnpm build:cli` | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                   |
-| `pnpm corrallm`  | Runs the CLI bundle (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing)       |
+| Command            | Purpose                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`         | `electron-forge start`: Vite dev server + HMR; press `r` in its terminal UI after main-process changes |
+| `pnpm typecheck`   | `tsc -b` over the solution (node, web, tooling projects)                                               |
+| `pnpm lint`        | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                      |
+| `pnpm format`      | Prettier write (`format:check` to verify)                                                              |
+| `pnpm test`        | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                       |
+| `pnpm test:e2e`    | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI      |
+| `pnpm package`     | Packaged app for the current OS in `out/`                                                              |
+| `pnpm make`        | Installers for the current OS in `out/make/`                                                           |
+| `pnpm build:cli`   | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                   |
+| `pnpm corrallm`    | Runs the CLI bundle (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing)       |
+| `pnpm api:surface` | Writes `src/shared/api/surface.snap.json`, every party's surface, after the registry changes           |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` and the CLI bundle in `dist-cli/` (note `pnpm dev` overwrites `.vite/`). Headless Linux: `xvfb-run -a pnpm test:e2e`.
@@ -65,7 +66,27 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 an error) and events over a port, which checks that only plain data crosses;
                 protocol.ts, what main and the core process ask and tell each other; selftest.ts
                 (and selftest-claude.mjs), the native self-test's checks, run by main, the core
-                process and the CLI.
+                process and the CLI. The core's operations (see The registry): call.ts is
+                core.call, the one dispatcher every transport calls (audience, limits per token,
+                schema, reach, self, rules, repeated requests, scopes; failures as values);
+                caller.ts its callers (you, an agent's session, an outside token) and their parties
+                (no token is ever you); scopes.ts the order ops run in (one at a time per scope; a
+                preempting op aborts what runs beneath it first, never another preempting op, and
+                those that overlap run in turn, ahead of the queue); throttle.ts the limits per token;
+                requests.ts the repeated requests (each caller's own; a result kept only when its op
+                came to it by itself, so a cancelled call's retry runs again);
+                reach.ts resolves the ids a token names against its reach; ops/ is each op's
+                implementation, by area; core.ts is createCore, the operations composed over the
+                Electron-free services, kept in a profile folder (in milestone 1, only in tests and,
+                from B7, under `corrallm serve`); test-registry.ts is a registry for the core's
+                tests, with an op for every check core.call makes, fixtures for every op, and what
+                each party doesn't reach (from which T3b generates its reach calls).
+src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
+                the registry (one tool per op, listed by the caller's party; every call through
+                core.call), the caller named by its bearer token: an agent's session or an outside
+                token, never you. The app doesn't start it yet (B7's `corrallm serve` will).
+src/main/loopback.ts  What both local servers (MCP, hooks) check before the token: their own Host, no
+                Origin (see Security rules).
 src/main/host/  Main only, as the core's host: services.ts is main's HostServices (dialogs.ts: the
                 dialogs, which mint TrustedPaths); windows.ts keeps which canvas each window shows,
                 restores the last one for a new window, and ends a canvas's sessions when its window
@@ -309,6 +330,16 @@ src/renderer/usage/  Usage readings and rules in the renderer (see Usage reading
                      sets the backend's rule and simulates usage.
 src/renderer/search/ Reusable type-to-search: search() ranks matches, SearchPicker is the dropdown
                      (its `typed` lists options read from what was typed, such as times, first).
+src/shared/api/ The registry: every operation, defined once (see The registry). surface.ts holds each
+                op's audience, kind, scope, rules, self, varies and reads as plain data (the preload
+                may import it); ops/*.ts each op's zod input and output and summary, through define.ts
+                (the envelope: a write's `request`, an R4 or R5 op's `{ proposed }`); registry.ts
+                lists them and how MCP names and lists each; ids.ts brands the ids ops take and
+                finds them in parsed arguments for reach (failing closed where a pipe hides which
+                id an op gets), and the kinds of id a schema takes; errors.ts is OpError, a code
+                and a sentence; limits.ts the API's numbers (MAX_REQUEST_BYTES, the image
+                limits…); deviations.ts, rules.ts and unhosted.ts the lists below.
+                surface.snap.json is every party's surface, checked in (`pnpm api:surface`).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the
                 connected-session protocol (session.ts), what a terminal view is shown
                 (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a
@@ -325,7 +356,7 @@ Queues: there is one queue component, QueueEditor.tsx. Every queue the app shows
 
 TypeScript: `tsconfig.json` is solution-style and references `tsconfig.node.json` (main, preload, shared), `tsconfig.web.json` (renderer, shared) and `tsconfig.tooling.json` (config files, e2e). All extend `tsconfig.base.json` (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`). Every new `.ts` file must fall under one of these `include`s, or type-aware lint fails with "not found by the project service".
 
-ESLint enforces the process boundaries: renderer and shared code cannot import Electron, Node built-ins or main/preload code; the preload cannot import Node built-ins. In main, `app/boundaries-core` keeps `src/main/{core,sessions,api,cli}/` and the Electron-free services (memory, settings, usage, files, git, canvas, project, run-journal) from importing Electron or `src/main/host/` (what needs the desktop is a `HostServices` request, `core/host.ts`), and `app/adapters` keeps platform files from importing an adapter's folder (`sessions/sdk/`, `sessions/codex/`; Claude's own files outside its folder and today's importers are allowed, each to go). `src/main/boundaries.test.ts` checks both on fixtures, that only the host, index.ts, window.ts, security.ts, app-protocol.ts, ipc.ts, run-shutdown.ts and native-selftest.ts import Electron, and that only `host/dialogs.ts`, memory.ts and run-journal.ts mint a `TrustedPath`. `src/main/platform-neutral.test.ts` keeps the platform (src/shared, src/preload, src/main outside the adapters' folders, src/renderer with its templates; never tests) from naming a CLI: each file that does today is allowed exactly as many names as it has, so a new one fails, and a file that names fewer lowers its count.
+ESLint enforces the process boundaries: renderer and shared code cannot import Electron, Node built-ins or main/preload code; the preload cannot import Node built-ins. In main, `app/boundaries-core` keeps `src/main/{core,sessions,api,cli}/` and the Electron-free services (memory, settings, usage, files, git, canvas, project, run-journal, loopback) from importing Electron or `src/main/host/` (what needs the desktop is a `HostServices` request, `core/host.ts`), and `app/adapters` keeps platform files from importing an adapter's folder (`sessions/sdk/`, `sessions/codex/`; Claude's own files outside its folder and today's importers are allowed, each to go). `src/main/boundaries.test.ts` checks both on fixtures, that only the host, index.ts, window.ts, security.ts, app-protocol.ts, ipc.ts, run-shutdown.ts and native-selftest.ts import Electron, that only `host/dialogs.ts`, memory.ts and run-journal.ts mint a `TrustedPath`, and that nothing makes a human caller (`asHuman` is only defined, in `core/caller.ts`, until B8's `core/gui.ts`). `src/main/platform-neutral.test.ts` keeps the platform (src/shared, src/preload, src/main outside the adapters' folders, src/renderer with its templates; never tests) from naming a CLI: each file that does today is allowed exactly as many names as it has, so a new one fails, and a file that names fewer lowers its count.
 
 Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/main/core/entry.ts` to `.vite/build/core.cjs` (with main's config), `src/preload/index.ts` to `.vite/build/preload.cjs`, and the renderer to `.vite/renderer/main_window/`. `pnpm build:cli` builds `src/main/cli/index.ts` for plain Node to `dist-cli/corrallm.cjs`, outside `.vite/`, which Forge empties on every `pnpm dev` and `pnpm package`.
 
@@ -356,6 +387,9 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 - Navigation and redirects away from the app origin, and renderer-created windows, are blocked (`security.ts`; one to an allowlisted site, `allowedExternalUrl`, opens in the browser instead). Links the user clicks (Markdown links in a transcript, links Cmd-clicked in a terminal, OSC 8 or found by xterm.js's web-links addon) go to main over `link:open` with only their URL (`OpenLinkContext` in the renderer), never through `window.open` or `target="_blank"`. Main decides, never on the renderer's say-so (`host/links.ts`): the URL is validated and length-capped (`MAX_LINK_LENGTH`) and normalized by `linkTarget` (`url-policy.ts`: https, or http to localhost or 127.0.0.1 only; no credentials); a site on `EXTERNAL_URL_ALLOWLIST` (https, default port) opens at once; any other asks in a native dialog ("Open docs.example.com in your browser?", with "Always for this site"), one question per window at a time, and a site allowed always is remembered by origin in user data (`links.json`). Always open the normalized URL, never the raw input. A file:// link Cmd-clicked in a terminal (Claude Code prints the files it names as OSC 8 links; xterm.js's `allowNonHttpProtocols` is on only for these, and the renderer drops every scheme but http, https and file, `linkAction` in `open-link.ts`) goes to main over `link:reveal` with only its URL. Main (`host/reveal.ts`) shows it in the OS file manager, selected in its folder (`shell.showItemInFolder`), only if the URL is length-capped, a file:// URL on this machine (no host; `localhost` counts as none) with no credentials, naming a file or folder that exists, whose real path (symlinks resolved, `fs.realpath`) is the real path of the canvas's project folder (`ProjectFolders.of` for the canvas the sender's window shows) or inside it. Anything else stays inert: no project folder, outside it (a symlink in it that leads out included), another host, missing. It never opens the file (no `shell.openPath`, no `openExternal` for file:// URLs), so no executable or document is ever run from a link.
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - A canvas's text never acts as the user. The run never sends a message of its own (a canvas's, which a shared file may hold, or a hand-off) that starts with "!", which Claude Code and Codex run as a shell command without asking: it holds in Needs you, unsent (`SHELL_REFUSED` in `runner.ts`). Only what the user typed may (an Agent SDK agent's bash mode, continued in Terminal). And no message takes Codex's App Server out of its sandbox: `/permissions full-access` is refused, since Full access is the mode menu's, which asks first.
+- No token is ever you. Only a window's port, made by main, or main's own native UI gives a human caller (`asHuman` in `core/caller.ts`; from B8 only `core/gui.ts` calls it). A token's lookup can't name you (`clientOf`'s type), and the MCP server refuses one that would. Operations only you may call are never listed on the agents' server, and are refused there if called (`human-only`).
+- Which canvases and agents a caller reaches, and the rules that narrow what tokens may do, are enforced in `core.call` (and, once canvas edits reach the core, at commit), never left to an operation's implementation. Every transport calls `core.call`, which checks the caller's audience on every call, not only when listing tools.
+- Both local servers (MCP, `api/mcp.ts`; hooks, `sessions/terminal/hooks.ts`) listen only on 127.0.0.1 and refuse a foreign Host or any Origin header before checking the token (`loopback.ts`). MCP takes only an `application/json` body, of at most `MAX_REQUEST_BYTES`, read before a body too large is answered 413.
 - Session ids are UUIDs (`sessions/id.ts`), checked in hook signals, resume IPC arguments, remembered sessions loaded from disk, and both Terminal CLIs' argv builders. Claude resume uses `--resume=<id>`; an id must never be read as a CLI flag.
 - Only one app instance may use a profile (`requestSingleInstanceLock` in index.ts). A window that crashes ends its canvas's sessions as one that reloads or is destroyed does (`host/windows.ts`).
 - Read-only Git commands share `SAFE_GIT_OPTIONS` (`main/git.ts`), disabling fsmonitor and implicit bare repositories. The App Server's `/diff` also disables external diff, textconv and filter drivers; file suggestions must never run a repository's fsmonitor.
@@ -363,6 +397,21 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 - Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork`, as the core process is forked, or `spawn`; the packaged self-test checks it throws), and Playwright cannot drive the packaged app.
 - Credentials only come from environment variables (see `.env.example`). Never commit `.env` or key files; `pnpm dev` strips the signing variables before launching the app. Agents use the `claude` and `codex` CLIs' own logins; corrallm never reads, stores or passes credentials (the Agent SDK connection asks `claude auth status` only what kind of login it has, the App Server connection asks Codex's `account/read` the same).
 - Agents run only in the project folder the user picked in main's folder dialog (`project.ts`, through `HostServices.pickFolder`): that choice is the trust gate (SDK sessions skip Claude Code's own trust dialog, Codex is told the folder is trusted for its session alone). The renderer never passes a path, a command line or an environment, and names a session to resume only by picking one main listed for the canvas's project folder (`session:list`, then `session:resume`): main resolves `claude` (`sessions/claude.ts`) and `codex` (`sessions/codex/codex.ts`), the environment and the folder, and remembers session ids itself. The one path that crosses is a file dropped on a terminal: the page passes the dropped `File` objects, the preload reads their paths with `webUtils.getPathForFile` (a file the page made has none), and main checks them (`terminal:drop`: absolute, length-capped, no control characters; then that they exist) before pasting them, quoted, into that terminal, never using them otherwise. Connectors use an agent's id only to route events, never in a path or a command line. What an agent is set to run with goes on its CLI's command line only as checked values, from the renderer and from `.corral` files alike: a model's name (`MODEL_PATTERN`: never with a dash first, which would read as a flag), an effort (`EFFORT_PATTERN`; Claude Code's only one of its levels) and a mode of its CLI (a file never sets one that never asks). Canvases are opened from and saved to, and agents run in, only a `TrustedPath` (`core/host.ts`): one the user picked in the app's dialogs (`host/dialogs.ts`), or one memory or the journal wrote and reads back; no command line mints one. Every session's process is closed before the app quits. A Terminal view sends only keystrokes, its size and dropped files; its CLI's hooks post to a server on 127.0.0.1 that needs the session's own token (from its environment), and corrallm only listens to them (it never answers with a decision, and never answers what the CLI asks in its terminal). corrallm only reads Claude Code's settings files (the user's, the project's and the organization's managed ones) to tell whether they turn its hooks off (`hooks-off.ts`), and never overrides them (its `--settings` never set `disableAllHooks` or the hook allowlists). Codex's hooks are given and trusted for its session alone, on its command line: corrallm never writes the user's config.toml, and never runs Codex with `--dangerously-bypass-hook-trust` (which would also run the user's and the project's untrusted hooks). Claude Code's status line posts to that server too, with the token read from a file only the user can read (never on a command line), and never puts what Claude Code gives it into a command line; Codex's are read from its app server (a Codex · Terminal session asks a private one nothing but `account/rateLimits/read`). Usage readings keep only shares and times.
+
+## The registry
+
+Every operation of corrallm's one API is defined once (`src/shared/api/`, Core Server §3), and both surfaces are generated from it: MCP for agents and outside orchestrators now (`api/mcp.ts`), the GUI's IPC from B8 (until then the app keeps its hand-written channels). An op's audience (`access` in `surface.ts`: `you` for the GUI, any other party for MCP) is the only thing that decides where it appears, and `core.call` checks it on every call. Results are always objects; failures are values (`OpError`: `invalid`, `forbidden`, `human-only`, `not-found`, `conflict`, `refused`, `unavailable`, with one sentence), on MCP `isError` with the sentence first and `{ error }` as JSON second, never in `structuredContent`.
+
+- By default an op is on both surfaces. One on a surface alone needs a `DEVIATIONS` row (`deviations.ts`) of one of the closed `REASONS`, or, until B11, an op the app doesn't host yet a line in `UNHOSTED` (`unhosted.ts`) naming the phase that will. A rule an op carries needs its row in `RULES` (`rules.ts`) and its check in the core.
+- The tests that make 1:1 the default (Core Server §3.7): T1 and T2 (`shared/api/surface.test.ts`: the surface's rules, each also shown to catch a registry made wrong; `surface.snap.json` up to date), T3a (`core/transport.test.ts`: every op's fixtures through MCP's dispatch half and over HTTP answer byte for byte as `core.call` does, for the same caller), T3b (`core/callers.test.ts`: audience and tool lists agree, results alike but for `varies`, rules per party, and reach generated per op and party: each id in an op's valid arguments swapped for each one its `OutOfReach` world says a token party doesn't reach, which must be not-found; it fails an op taking a kind of id no valid argument names, or that the world says nothing of for a party in its audience), T7 and T8 (`boundaries.test.ts`, ESLint). Each runs on the registry and on the core's test registry.
+
+To add an operation:
+
+1. Add its surface to `SURFACE` in `src/shared/api/surface.ts`: its audience (who may call it, and how far each reaches), kind, scope, and any rules, `self` (required when a token may call it naming an agent), `destructive`, `varies` and `reads`.
+2. Define it in `src/shared/api/ops/<area>.ts` with `define(name, { summary, input, output })`: the summary is its MCP description; the input a `z.strictObject`, every string and list bounded, every id a branded one (`ids.ts`), never put through a pipe (a transform after it, a preprocess before it) nor in a union with a transform, which T1 refuses: core.call reads the id the op gets for reach, and finds nothing in reach where it can't; the output an object. Add a new area's ops to `OPS` in `registry.ts`.
+3. Implement it in `src/main/core/ops/<area>.ts` (the `Implementations` type refuses a missing one), over the services `createCore` composes.
+4. List it in `UNHOSTED` until the app serves it, or give it a deviation; give it fixtures in `REAL_FIXTURES` (`core/test-registry.ts`): valid arguments (naming between them every kind of id it takes), invalid ones and arguments meeting each of its rules; for a kind of id no op took before, say in `REAL_OUT_OF_REACH` which ids of it each token party doesn't reach, as far as each reach goes.
+5. Run `pnpm api:surface` and review the snapshot's diff.
 
 ## Adding an IPC channel
 
