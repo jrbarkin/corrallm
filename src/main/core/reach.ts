@@ -7,7 +7,8 @@ import type { TokenCaller } from './caller';
  * must be one its party reaches for that op, or the call is not-found, worded as if the thing were
  * not there at all, so a caller learns nothing about what it can't reach. The core resolves each
  * kind of id over what it keeps (a canvas, its agents, a queue's items, messages, Needs), and finds
- * no id of a kind it resolves none of in anyone's reach. You reach everything.
+ * no id of a kind it resolves none of in anyone's reach, nor any id where an op's schema hides which
+ * one the op gets (`UnreadableIds`). You reach everything.
  */
 
 /**

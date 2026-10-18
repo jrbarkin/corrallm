@@ -225,6 +225,26 @@ export function testRegistry(): Registry & {
   return { surface: SURFACES, ops: OPS, implementations, rules, calls, released };
 }
 
+/**
+ * A registry of one op, test.piped, sending an agent text by `to`: an agent id put through
+ * `around` (a preprocess, a transform), for what core.call and T3b make of an id behind a pipe.
+ */
+export function pipedRegistry(around: (agent: typeof Agent) => z.ZodType): Registry {
+  const surface = { access: M, kind: 'command', scope: 'agent', self: 'refused' } as const;
+  return {
+    surface: { 'test.piped': surface },
+    ops: {
+      'test.piped': withEnvelope(surface, {
+        summary: 'Sends an agent text, naming it behind a pipe.',
+        input: z.strictObject({ canvas: Canvas, to: around(Agent) }),
+        output: z.strictObject({ sent: z.string() }),
+      }),
+    },
+    implementations: { 'test.piped': ({ to }: { to: string }) => ({ sent: to }) },
+    rules: {},
+  };
+}
+
 /** A caller for each party: you, the lead, a worker, and an outside token of each kind. */
 export const CALLERS: Readonly<Record<Party, Caller>> = {
   you: asHuman(1),

@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { PROPOSING_RULES } from '../../shared/api/define';
 import type { OpResult } from '../../shared/api/errors';
-import { idsIn } from '../../shared/api/ids';
+import { brandsIn, idsIn } from '../../shared/api/ids';
 import { toolName } from '../../shared/api/registry';
 import { PARTIES } from '../../shared/api/surface';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
-import { brandsIn } from '../../shared/api/test-schemas';
 import { listTools } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
@@ -18,9 +18,11 @@ import type { TokenCaller } from './caller';
 import { createCore } from './core';
 import {
   CALLERS,
+  CANVAS,
   isLead,
   NO_DESKTOP,
   OTHER_CANVAS,
+  pipedRegistry,
   REAL_FIXTURES,
   REAL_OUT_OF_REACH,
   RESOLVERS,
@@ -30,6 +32,8 @@ import {
   unreachableCalls,
 } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
+
+const trim = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
 
 /*
  * T3b (Core Server §3.7), generated from a registry: what each op answers each party. A party
@@ -152,6 +156,26 @@ describe('T3b’s reach', () => {
     expect(reachGaps(core, TEST_FIXTURES, { CanvasId: () => [], AgentId: () => [] })).toContain(
       'test.stop: no call names what outside-read doesn’t reach',
     );
+  });
+
+  it('generates reach for an id behind a preprocess', async () => {
+    const piped = createDispatcher(
+      pipedRegistry((agent) => z.preprocess(trim, agent)),
+      { isLead, resolvers: RESOLVERS },
+    );
+    expect(
+      reachGaps(piped, { 'test.piped': { valid: [], invalid: [] } }, TEST_OUT_OF_REACH),
+    ).toContain('test.piped: its valid arguments name no AgentId');
+    const fixture = { valid: [{ canvas: CANVAS, to: ' peer ' }], invalid: [] };
+    expect(reachGaps(piped, { 'test.piped': fixture }, TEST_OUT_OF_REACH)).toEqual([]);
+    const calls = unreachableCalls(piped, 'test.piped', fixture, TEST_OUT_OF_REACH);
+    expect(calls).toContainEqual({ party: 'worker', args: { canvas: CANVAS, to: 'stranger' } });
+    for (const { party, args } of calls) {
+      expect(await piped.call('test.piped', args, CALLERS[party])).toMatchObject({
+        ok: false,
+        error: { code: 'not-found' },
+      });
+    }
   });
 });
 

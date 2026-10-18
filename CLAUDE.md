@@ -334,12 +334,12 @@ src/shared/api/ The registry: every operation, defined once (see The registry). 
                 op's audience, kind, scope, rules, self, varies and reads as plain data (the preload
                 may import it); ops/*.ts each op's zod input and output and summary, through define.ts
                 (the envelope: a write's `request`, an R4 or R5 op's `{ proposed }`); registry.ts
-                lists them and how MCP names and lists each; ids.ts brands the ids ops take (reach
-                reads the brand at run time); errors.ts is OpError, a code and a sentence;
-                limits.ts the API's numbers (MAX_REQUEST_BYTES, the image limits…); deviations.ts,
-                rules.ts and unhosted.ts the lists below; test-schemas.ts what the registry's tests
-                read from a schema (the kinds of id it takes). surface.snap.json is every party's
-                surface, checked in (`pnpm api:surface`).
+                lists them and how MCP names and lists each; ids.ts brands the ids ops take and
+                finds them in parsed arguments for reach (failing closed where a pipe hides which
+                id an op gets), and the kinds of id a schema takes; errors.ts is OpError, a code
+                and a sentence; limits.ts the API's numbers (MAX_REQUEST_BYTES, the image
+                limits…); deviations.ts, rules.ts and unhosted.ts the lists below.
+                surface.snap.json is every party's surface, checked in (`pnpm api:surface`).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the
                 connected-session protocol (session.ts), what a terminal view is shown
                 (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a
@@ -408,7 +408,7 @@ Every operation of corrallm's one API is defined once (`src/shared/api/`, Core S
 To add an operation:
 
 1. Add its surface to `SURFACE` in `src/shared/api/surface.ts`: its audience (who may call it, and how far each reaches), kind, scope, and any rules, `self` (required when a token may call it naming an agent), `destructive`, `varies` and `reads`.
-2. Define it in `src/shared/api/ops/<area>.ts` with `define(name, { summary, input, output })`: the summary is its MCP description; the input a `z.strictObject`, every string and list bounded, every id a branded one (`ids.ts`); the output an object. Add a new area's ops to `OPS` in `registry.ts`.
+2. Define it in `src/shared/api/ops/<area>.ts` with `define(name, { summary, input, output })`: the summary is its MCP description; the input a `z.strictObject`, every string and list bounded, every id a branded one (`ids.ts`), never put through a pipe (a transform after it, a preprocess before it) nor in a union with a transform, which T1 refuses: core.call reads the id the op gets for reach, and finds nothing in reach where it can't; the output an object. Add a new area's ops to `OPS` in `registry.ts`.
 3. Implement it in `src/main/core/ops/<area>.ts` (the `Implementations` type refuses a missing one), over the services `createCore` composes.
 4. List it in `UNHOSTED` until the app serves it, or give it a deviation; give it fixtures in `REAL_FIXTURES` (`core/test-registry.ts`): valid arguments (naming between them every kind of id it takes), invalid ones and arguments meeting each of its rules; for a kind of id no op took before, say in `REAL_OUT_OF_REACH` which ids of it each token party doesn't reach, as far as each reach goes.
 5. Run `pnpm api:surface` and review the snapshot's diff.

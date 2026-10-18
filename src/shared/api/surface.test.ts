@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { withEnvelope } from './define';
 import type { OpDef } from './define';
 import { DEVIATIONS, REASONS } from './deviations';
-import { brandedId, defOf, ID_BRANDS, NeedId } from './ids';
+import { brandedId, brandsIn, children, defOf, ID_BRANDS, NeedId } from './ids';
 import type { Brand } from './ids';
 import { MAX_REQUEST_BYTES } from './limits';
 import { inputSchemaOf, OPS, opsFor, outputSchemaOf, toolName, toolOf } from './registry';
@@ -12,7 +12,6 @@ import { RULES } from './rules';
 import type { RuleRow } from './rules';
 import { GUI_OPS, PARTIES, SURFACE } from './surface';
 import type { Party, Rule, Surface } from './surface';
-import { brandsIn, children } from './test-schemas';
 import { UNHOSTED } from './unhosted';
 
 /*
@@ -85,6 +84,30 @@ function unbrandedIds(schema: z.ZodType, path = ''): string[] {
     if (key !== undefined && ID_KEYS.has(key) && takesUnbrandedText(child)) return [at];
     return unbrandedIds(child, at);
   });
+}
+
+/** Whether `schema` holds a transform: what it parses may come out as something else. */
+function transforms(schema: z.ZodType): boolean {
+  return (
+    defOf(schema).type === 'transform' || children(schema).some((child) => transforms(child.schema))
+  );
+}
+
+/**
+ * Where, under `path`, reach can't follow an id to the op: through a pipe (a transform after it, a
+ * preprocess before it), or in a union with a transform, whose parsed value may fit another option.
+ */
+function hiddenIds(schema: z.ZodType, path = ''): string[] {
+  const { type } = defOf(schema);
+  if (brandsIn(schema).length > 0) {
+    if (type === 'pipe') return [`${path} puts an id through a pipe`];
+    if (type === 'union' && transforms(schema)) {
+      return [`${path} is a union of an id and a transform`];
+    }
+  }
+  return children(schema).flatMap(({ key, schema: child }) =>
+    hiddenIds(child, key === undefined ? path : `${path}.${key}`),
+  );
 }
 
 /** The fields an object result has, whichever of its shapes it takes. */
@@ -220,6 +243,7 @@ function problems(registry: Registry): string[] {
     }
     for (const field of unbrandedIds(def.input))
       found.push(`${name}: ${field} is an id, not branded`);
+    for (const hidden of hiddenIds(def.input)) found.push(`${name}: ${hidden}`);
     const worst = worstCase(inputSchemaOf(def));
     if (typeof worst !== 'number') {
       found.push(`${name}: ${worst.unbounded || 'its input'} is unbounded`);
@@ -271,6 +295,7 @@ describe('T1: the surface’s rules', () => {
 
   // Registries made wrong on purpose: each check catches what it should.
   const Agent = brandedId('AgentId', z.string().min(1).max(64));
+  const trim = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
   const both = { you: 'all', worker: 'linked' } as const;
   const yours = { you: 'all' } as const;
   const tokens = { 'outside-write': 'canvas' } as const;
@@ -378,6 +403,56 @@ describe('T1: the surface’s rules', () => {
         ),
       }),
       'test.id: .to is an id, not branded',
+    ],
+    [
+      'an id behind a preprocess that isn’t branded',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ to: z.preprocess(trim, z.string().max(9)) }),
+        ),
+      }),
+      'test.id: .to is an id, not branded',
+    ],
+    [
+      'an op naming an agent behind a preprocess, open to a token, without self',
+      registry({
+        'test.agent': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ agent: z.preprocess(trim, Agent) }),
+        ),
+      }),
+      'test.agent: names an agent, open to a token, and declares no self',
+    ],
+    [
+      'an id put through a transform',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none', self: 'refused' },
+          z.strictObject({ to: Agent.transform((id) => id.toLowerCase()) }),
+        ),
+      }),
+      'test.id: .to puts an id through a pipe',
+    ],
+    [
+      'an id put through a preprocess',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none', self: 'refused' },
+          z.strictObject({ to: z.preprocess(trim, Agent) }),
+        ),
+      }),
+      'test.id: .to puts an id through a pipe',
+    ],
+    [
+      'a union of an id and a transform',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none', self: 'refused' },
+          z.strictObject({ to: z.union([Agent, z.number().max(9).transform(String)]) }),
+        ),
+      }),
+      'test.id: .to is a union of an id and a transform',
     ],
     [
       'an unbounded string',

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
 import { createDispatcher, OpFailure } from './call';
@@ -6,9 +7,18 @@ import type { DispatchOptions } from './call';
 import { asHuman, partyOf } from './caller';
 import type { AgentCaller, Caller } from './caller';
 import { REMEMBERED_REQUESTS } from './requests';
-import { CALLERS, CANVAS, isLead, PROPOSAL, RESOLVERS, testRegistry } from './test-registry';
+import {
+  CALLERS,
+  CANVAS,
+  isLead,
+  pipedRegistry,
+  PROPOSAL,
+  RESOLVERS,
+  testRegistry,
+} from './test-registry';
 
 const REQUEST = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60';
+const trim = (value: unknown) => (typeof value === 'string' ? value.trim() : value);
 
 function setup(options: DispatchOptions = {}) {
   const registry = testRegistry();
@@ -150,6 +160,45 @@ describe('core.call', () => {
     expect(
       (await core.call('test.agent', { canvas: CANVAS, agent: 'ghost' }, CALLERS.you)).ok,
     ).toBe(true);
+  });
+
+  it('resolves an id behind a preprocess as the op gets it, for reach and self', async () => {
+    const core = createDispatcher(
+      pipedRegistry((agent) => z.preprocess(trim, agent)),
+      { isLead, resolvers: RESOLVERS },
+    );
+    const piped = (to: string) => ({ canvas: CANVAS, to });
+    expect(await core.call('test.piped', piped(' stranger '), CALLERS.worker)).toEqual({
+      ok: false,
+      error: { code: 'not-found', sentence: 'There is no agent stranger (at to).' },
+    });
+    expect(await core.call('test.piped', piped(' worker '), CALLERS.worker)).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'An agent can’t call test.piped on itself.' },
+    });
+    expect(await core.call('test.piped', piped(' peer '), CALLERS.worker)).toEqual({
+      ok: true,
+      value: { sent: 'peer' },
+    });
+  });
+
+  it('finds nothing in reach behind a pipe that may change an id once it is checked', async () => {
+    const registry = pipedRegistry((agent) => agent.transform((id) => id.toLowerCase()));
+    const core = createDispatcher(registry, { isLead, resolvers: RESOLVERS });
+    const called = vi.spyOn(registry.implementations, 'test.piped');
+    expect(await core.call('test.piped', { canvas: CANVAS, to: 'PEER' }, CALLERS.worker)).toEqual({
+      ok: false,
+      error: {
+        code: 'not-found',
+        sentence: 'There is nothing in reach at to: its schema hides which id it names.',
+      },
+    });
+    expect(called).not.toHaveBeenCalled();
+    // You reach everything.
+    expect(await core.call('test.piped', { canvas: CANVAS, to: 'PEER' }, CALLERS.you)).toEqual({
+      ok: true,
+      value: { sent: 'peer' },
+    });
   });
 
   it('finds nothing a token names in reach where the core resolves no such id', async () => {

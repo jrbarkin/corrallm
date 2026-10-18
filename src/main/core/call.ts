@@ -2,7 +2,7 @@ import type { z } from 'zod';
 
 import type { OpDef } from '../../shared/api/define';
 import type { OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
-import { idsIn } from '../../shared/api/ids';
+import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
@@ -278,6 +278,7 @@ function issueOf(error: z.ZodError): string {
 /** What a failure answers as. */
 function errorOf(error: unknown, signal: AbortSignal | undefined): OpError {
   if (error instanceof OpFailure) return { code: error.code, sentence: error.message };
+  if (error instanceof UnreadableIds) return { code: 'not-found', sentence: error.message };
   if (error instanceof Superseded) return { code: 'refused', sentence: error.message };
   if (signal?.aborted) return { code: 'refused', sentence: 'The call was cancelled.' };
   return { code: 'unavailable', sentence: error instanceof Error ? error.message : String(error) };
