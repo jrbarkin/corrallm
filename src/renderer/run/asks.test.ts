@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
+import type { QueueItem } from '../../shared/model/queue';
 import type { UsageHold } from '../usage/usage';
-import { answersOf, heldAsks, usageAnswers } from './asks';
+import { runCatalog } from '../graph/agents';
+import { answersOf, heldAsks as heldAsksIn, usageAnswers } from './asks';
 import type { AgentRun, Run } from './runner';
 
-const agent = (id: string, label: string, queue: QueueItem[]): GraphNode => ({
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
+/** What a run holds for the user, with the app's catalog. */
+const heldAsks = (nodes: readonly CanvasNode[], run: Run, now?: number) =>
+  heldAsksIn(nodes, run, engine, now);
+
+const agent = (id: string, label: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },

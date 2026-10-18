@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { AgentNode } from '../../shared/model/canvas';
+import type { QueueItem } from '../../shared/model/queue';
+import { runCatalog } from '../graph/agents';
 import { RunStore } from './runner';
 import type { TurnEnd } from './runner';
 import { conditionQuestion } from './turns';
@@ -16,10 +17,13 @@ const condition = {
 } as const;
 const key = JSON.stringify(['a', 'check']);
 
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
 function setup(queue: QueueItem[], unheard = false) {
   const sent: { text: string; done?: (turn: TurnEnd) => void; withdrawn: boolean }[] = [];
   const notices: string[] = [];
-  const store = new RunStore({
+  const store = new RunStore(engine, {
     send: (_node, text, done) => {
       const message = { text, done, withdrawn: false };
       sent.push(message);
@@ -35,7 +39,7 @@ function setup(queue: QueueItem[], unheard = false) {
     now: () => 1234,
     unheard: () => unheard,
   });
-  const node: GraphNode = {
+  const node: AgentNode = {
     id: 'a',
     type: 'agent',
     position: { x: 0, y: 0 },

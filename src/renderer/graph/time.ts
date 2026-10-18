@@ -1,7 +1,7 @@
 import { WINDOW_NAMES } from '../../shared/usage';
 import { backendName } from '../usage/usage';
-import { isUsageReset, MAX_SECONDS } from './queue';
-import type { Time, UsageReset } from './queue';
+import { isUsageReset, MAX_SECONDS } from '../../shared/model/queue';
+import type { Time, UsageReset } from '../../shared/model/queue';
 
 /*
  * Times as the queue has them (queue.ts: Time), read from what the user types and put in words.

@@ -18,7 +18,7 @@ import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agent
 import type { AgentConnection } from './agents';
 import type { GraphNode } from './graph';
 import { SHORTCUTS } from './keys';
-import { isBlank } from './queue';
+import { isBlank } from '../../shared/model/queue';
 
 /**
  * An item: a card with a dot on top and one at the bottom. An edge runs from the dot a drag starts

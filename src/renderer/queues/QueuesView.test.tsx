@@ -5,7 +5,7 @@ import { automaticBackend } from '../test-backend';
 
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { QueueItem } from '../../shared/model/queue';
 
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');

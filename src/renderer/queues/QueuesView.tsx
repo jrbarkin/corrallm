@@ -5,13 +5,20 @@ import type { AdapterId } from '../../shared/adapter';
 import type { SettingsOptions } from '../../shared/session';
 import { AgentSettingsSummary } from '../agent/AgentSettings';
 import type { Session } from '../agent/session';
-import { actionsOf, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import {
+  actionsOf,
+  connectionInfo,
+  connectionOf,
+  DEFAULT_AGENT,
+  runCatalog,
+} from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
+import { canvasNodes } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
 import { itemLabel, taskLabel } from '../graph/labels';
-import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../graph/queue';
-import type { WaitTarget } from '../graph/queue';
+import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../../shared/model/queue';
+import type { WaitTarget } from '../../shared/model/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
@@ -227,7 +234,7 @@ export function QueuesView({
         : undefined;
   };
   /** What the run holds for the user: a session that would not start says so in its lane's head. */
-  const asks = useMemo(() => heldAsks(nodes, run), [nodes, run]);
+  const asks = useMemo(() => heldAsks(canvasNodes(nodes), run, runCatalog()), [nodes, run]);
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;

@@ -1,13 +1,18 @@
-import type { UsageBackendId } from '../../shared/adapter';
-import type { UsageWindow } from '../../shared/usage';
-import type { SubmittedMessage } from '../agent/session';
+import type { UsageBackendId } from '../adapter';
+import type { MessageImage, TurnResult } from '../session';
+import type { UsageWindow } from '../usage';
+
+/*
+ * An agent's queue: the work it is given, item by item, as the canvas keeps it (an agent node's
+ * `queue`: canvas.ts) and its file saves it. Plain data, read wherever the run runs.
+ */
 
 /**
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
  * one to the node whose queue it is in. `instruction`: what it is to do, in the user's words (what
  * to run, what to read); a connected agent is told it with the step (a slash command takes it as
- * its arguments: run/turns.ts). `expect`: 'fails' for a step meant to
- * fail (tests written to fail first: red before green), which the run turns round (run/runner.ts):
+ * its arguments: src/renderer/run/turns.ts). `expect`: 'fails' for a step meant to fail (tests
+ * written to fail first: red before green), which the run turns round (src/renderer/run/runner.ts):
  * failing is its success, passing its failure, so what reads how it went (an If, a repeat, a
  * wait) reads whether it went as expected. What the agent is asked does not change.
  */
@@ -31,10 +36,26 @@ export interface QueueMessage {
   submission?: SubmittedMessage;
 }
 
+/** A live user submission, displayed as a Message in the queue without dispatching it again. */
+export interface SubmittedMessage {
+  id: string;
+  text: string;
+  images?: MessageImage[];
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /** The planned task at which it was submitted; absent before the planned queue. */
+  after?: string;
+  result?: TurnResult;
+  /** The live reply; omitted from persisted submission records. */
+  reply?: string;
+  task?: { agent: string; item: string };
+  /** The previous process stopped before this submission had a definitive result. */
+  unresolved?: boolean;
+}
+
 /**
  * What an if-then checks before it runs its steps: one of `CONDITIONS`, (`freeText`) a condition
  * in the user's own words, for the agent to judge (a connected agent is asked, yes or no, in its
- * session: run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
+ * session: src/renderer/run/turns.ts), or (`usageAbove`) whether a backend's usage is over a share (1 to 99) of
  * a window, by its latest reading when the run reaches it (src/shared/usage.ts). The output it looks
  * in is what the agent replied in the checked task; `wholeLine` requires that text on a line of
  * its own, rather than anywhere in the reply.
@@ -92,7 +113,7 @@ export function chooseTarget(
  * A time: how long (`seconds`, whole, 1 to MAX_SECONDS, counted from when the queue reaches it),
  * (`at`, "HH:MM", 24-hour, local) the next time the clock shows that after the queue reaches it, or
  * (UsageReset) when a backend's usage window resets, by its latest reading when the queue reaches
- * it. Parsed and put in words by time.ts.
+ * it. Parsed and put in words by src/renderer/graph/time.ts.
  */
 export type Time = { seconds: number } | { at: string } | UsageReset;
 

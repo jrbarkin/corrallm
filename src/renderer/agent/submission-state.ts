@@ -1,7 +1,8 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../shared/api/limits';
 import { IMAGE_TYPES, MAX_ID_LENGTH, MAX_MESSAGE_LENGTH, TURN_REASONS } from '../../shared/session';
 import type { MessageImage, TurnResult } from '../../shared/session';
-import type { Session, SubmittedMessage } from './session';
+import type { SubmittedMessage } from '../../shared/model/queue';
+import type { Session } from './session';
 
 const MAX_RECORDS = 2000;
 const MAX_BYTES = 32 * 1024 * 1024;

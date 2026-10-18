@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { NEW_SESSION } from '../agent/session';
 import type { GraphNode } from '../graph/graph';
-import { checkedBy, unfit } from '../graph/queue';
+import { checkedBy, unfit } from '../../shared/model/queue';
 import { withSubmissions } from './submissions';
 
 describe('live messages in queues', () => {

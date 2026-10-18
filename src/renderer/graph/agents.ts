@@ -1,12 +1,16 @@
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
-import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
-import type { QueueItem, RepeatedItem } from './queue';
+import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from '../../shared/model/queue';
+import type { QueueItem, RepeatedItem } from '../../shared/model/queue';
+import { catalog } from '../catalog';
+import { engineCatalog } from '../run/catalog';
+import type { EngineCatalog } from '../run/catalog';
 
 /*
  * The renderer's own tables of what each adapter offers (main declares it in the catalog, which
  * catalog.ts loads): how agents and connections are named and worded on the canvas, and what each
  * can be asked to do. A node naming an adapter or a connection none of them has is Not connected:
- * its work stays unsent, and it is saved back as it was.
+ * its work stays unsent, and it is saved back as it was. The run reads none of them: it reads the
+ * catalog (runCatalog).
  */
 
 export type { AdapterId };
@@ -21,6 +25,14 @@ function own<T>(table: Readonly<Record<string, T>>, id: string): T | undefined {
 
 /** The adapter a new node starts with. */
 export const DEFAULT_AGENT: AdapterId = 'claude-code';
+
+/**
+ * What the run, and the sessions it sends to, read of each agent's adapter (run/catalog.ts): the
+ * catalog main declares, a node naming no adapter running DEFAULT_AGENT.
+ */
+export function runCatalog(): EngineCatalog {
+  return engineCatalog(catalog(), DEFAULT_AGENT);
+}
 
 /** How each adapter's agents are named on the canvas ("Claude · Terminal"). */
 const AGENT_NAMES: Readonly<Record<AdapterId, string>> = {

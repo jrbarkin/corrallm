@@ -1,6 +1,6 @@
 import type { GraphNode } from './graph';
-import { isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
-import type { QueueItem } from './queue';
+import { isApproval, isDelay, isIf, isRepeat, isWait } from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
 
 /**
  * Work between two agents, as their queues make it: an edge from `from` to `to`, drawn (with an

@@ -7,36 +7,18 @@ import {
   percentText,
   resetTime,
   ruleText,
-  usageBackendOf,
   warningText,
 } from './usage';
 
 const at = (...parts: [number, number, number, number, number]) => new Date(...parts).getTime();
 const NOW = at(2026, 9, 12, 12, 0); // Monday 12 October 2026, noon
 
-describe('usageBackendOf', () => {
-  it('is the one its connection spends, as the catalog declares it', () => {
-    expect(usageBackendOf({})).toBe('claude-code');
-    expect(usageBackendOf({ adapter: 'claude-code', connection: 'claude-code.terminal' })).toBe(
-      'claude-code',
-    );
-    expect(usageBackendOf({ adapter: 'codex' })).toBe('codex');
-    expect(usageBackendOf({ adapter: 'codex', connection: 'codex.app-server' })).toBe('codex');
-    expect(usageBackendOf({ adapter: 'gemini' })).toBeUndefined();
-  });
-
-  it('is none for an Agent SDK agent: an API key has no usage windows', () => {
-    expect(
-      usageBackendOf({ adapter: 'claude-code', connection: 'claude-code.sdk' }),
-    ).toBeUndefined();
-  });
-});
-
 describe('backendsOf', () => {
-  it('lists the backends a canvas’s agents use, once each, in order', () => {
-    expect(
-      backendsOf([{ adapter: 'codex' }, {}, { adapter: 'qwen' }, { adapter: 'claude-code' }]),
-    ).toEqual(['claude-code', 'codex']);
+  it('lists the backends a canvas’s agents use (by their adapters), once each, in order', () => {
+    expect(backendsOf(['codex', 'claude-code', 'qwen', 'claude-code'])).toEqual([
+      'claude-code',
+      'codex',
+    ]);
     expect(backendsOf([])).toEqual([]);
   });
 });

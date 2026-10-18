@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
-import type { QueueItem, QueueMessage, QueueStep } from '../graph/queue';
+import type { AgentNode } from '../../shared/model/canvas';
+import type { QueueItem, QueueMessage, QueueStep } from '../../shared/model/queue';
+import { runCatalog } from '../graph/agents';
 import { RunStore } from './runner';
 import type { RunIO, TurnEnd } from './runner';
 
-const node = (id: string, queue: QueueItem[]): GraphNode => ({
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
+const node = (id: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -14,7 +18,7 @@ const node = (id: string, queue: QueueItem[]): GraphNode => ({
 const task = (id: string): QueueStep => ({ id, action: 'Read' });
 const message = (id: string): QueueMessage => ({ id, message: id });
 
-function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
+function setup(nodes: AgentNode[], extra: Partial<RunIO> = {}) {
   const sent: {
     agent: string;
     text: string;
@@ -23,7 +27,7 @@ function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
   }[] = [];
   const events: string[] = [];
   const timers = new Set<() => void>();
-  const store = new RunStore({
+  const store = new RunStore(engine, {
     send: (to, text, done) => {
       const entry = { agent: to.id, text, done, withdrawn: false };
       sent.push(entry);

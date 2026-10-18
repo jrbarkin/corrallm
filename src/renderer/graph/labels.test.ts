@@ -10,7 +10,7 @@ import {
   untilText,
   waitTargetLabel,
 } from './labels';
-import type { QueueItem, QueueRepeat } from './queue';
+import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
 
 const agent = (id: string, label: string, queue: QueueItem[] = []): GraphNode => ({
   id,

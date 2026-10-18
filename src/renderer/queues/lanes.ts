@@ -7,8 +7,8 @@ import {
   isRepeatEnds,
   isWait,
   withRepeated,
-} from '../graph/queue';
-import type { QueueItem, RepeatedItem, WaitTarget } from '../graph/queue';
+} from '../../shared/model/queue';
+import type { QueueItem, RepeatedItem, WaitTarget } from '../../shared/model/queue';
 
 /**
  * An item of a lane, in its row, taking `span` rows: one, but for a repeat, from its own row to

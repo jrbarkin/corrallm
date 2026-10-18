@@ -1,10 +1,8 @@
 import type { MessageImage, TurnResult } from '../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../shared/usage';
 import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import type { UsageReading, UsageState } from '../../shared/usage';
-import { actionsOf, connectionOf, DEFAULT_AGENT } from '../graph/agents';
-import type { AgentConnection } from '../graph/agents';
-import type { GraphNode } from '../graph/graph';
 import { groupMembers, isGroup } from '../graph/group-members';
 import { agentName } from '../graph/labels';
 import {
@@ -19,7 +17,7 @@ import {
   isUsageReset,
   isWait,
   unfit,
-} from '../graph/queue';
+} from '../../shared/model/queue';
 import type {
   Condition,
   QueueIf,
@@ -31,12 +29,13 @@ import type {
   RepeatedItem,
   Time,
   WaitTarget,
-} from '../graph/queue';
+} from '../../shared/model/queue';
 import { deadline } from '../graph/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
-import { backendName, usageBackendOf, warningText } from '../usage/usage';
+import { backendName, warningText } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
+import type { EngineCatalog } from './catalog';
 import {
   conditionQuestion,
   isCommand,
@@ -105,7 +104,7 @@ export interface AgentRun {
    * Claude subscription): the destination, how it ran, why it could not, and a connection to try.
    * An unavailable task stays unsent; otherwise its message waits in the session's queue.
    */
-  refused?: { agent: string; connection: AgentConnection; text: string; switchTo?: ConnectionId };
+  refused?: { agent: string; connection: ConnectionId; text: string; switchTo?: ConnectionId };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /**
@@ -180,7 +179,7 @@ export interface RunIO {
    * on.
    */
   send: (
-    agent: GraphNode,
+    agent: AgentNode,
     text: string,
     done: (turn: TurnEnd) => void,
     images?: readonly MessageImage[],
@@ -190,9 +189,9 @@ export interface RunIO {
     displayText?: string,
   ) => () => void;
   /** Tells the user something about the run, in an agent's session (a notice there). */
-  tell: (agent: GraphNode, text: string) => void;
+  tell: (agent: AgentNode, text: string) => void;
   /** Runs an agent another way: the connection the user chose for it, as its session would not start. */
-  connect: (agent: GraphNode, connection: ConnectionId) => void;
+  connect: (agent: AgentNode, connection: ConnectionId) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
@@ -207,7 +206,7 @@ export interface RunIO {
    * Whether corrallm can't read what a connected agent replies (its session said so: its CLI's
    * settings turn off the hooks that tell it), so the run takes nothing from its replies.
    */
-  unheard?: (agent: GraphNode) => boolean;
+  unheard?: (agent: AgentNode) => boolean;
 }
 
 /**
@@ -277,7 +276,9 @@ interface PauseCauses {
  * in a repeat for a step in another repeat waits for it in the same round; a wait outside one, for
  * that repeat to end. A repeat that follows another goes round with it, and ends with it. Rounds,
  * like delays, are the run's: the agent is only sent each round's messages. Queues are read as
- * they run (`update` gives it the graph as it changes), so edits take effect at once. Stop takes
+ * they run (`update` gives it the canvas's nodes as they change, src/shared/model/canvas.ts), so
+ * edits take effect at once. What it knows of each agent's adapter (how it runs, what its steps
+ * can name, the usage it spends) it reads in the catalog it is given (catalog.ts). Stop takes
  * back what the run sent that is still going (RunIO.send). A task whose session would not start
  * (an Agent SDK agent on a Claude subscription) neither fails nor goes on: its agent asks the user
  * to switch that agent to another connection (`decide`), and works again once it runs another way,
@@ -285,7 +286,8 @@ interface PauseCauses {
  */
 export class RunStore {
   #run: Run = IDLE;
-  #nodes: readonly GraphNode[] = [];
+  #nodes: readonly CanvasNode[] = [];
+  readonly #catalog: EngineCatalog;
   readonly #io: RunIO;
   readonly #listeners = new Set<() => void>();
   /** What cancels each timer set. */
@@ -327,7 +329,8 @@ export class RunStore {
   readonly #toldUnheard = new Set<string>();
   readonly #observed = new Map<string, { owner: string; item: string; token: object }>();
 
-  constructor(io: RunIO) {
+  constructor(catalog: EngineCatalog, io: RunIO) {
+    this.#catalog = catalog;
     this.#io = io;
   }
 
@@ -764,10 +767,10 @@ export class RunStore {
   }
 
   /**
-   * The graph as it is now: a run goes on with new work, and past waits for what is gone; an
-   * agent whose session would not start, once it runs another way.
+   * The canvas's nodes as they are now: a run goes on with new work, and past waits for what is
+   * gone; an agent whose session would not start, once it runs another way.
    */
-  update(nodes: readonly GraphNode[]): void {
+  update(nodes: readonly CanvasNode[]): void {
     this.#nodes = nodes;
     const changed = this.#applyPauses();
     this.#releasePending();
@@ -923,7 +926,7 @@ export class RunStore {
     return container !== -1 && next !== undefined && isIf(next) && next.if.kind === 'failed';
   }
 
-  #retry(node: GraphNode, task: QueueItem, note?: string, images?: readonly MessageImage[]): void {
+  #retry(node: AgentNode, task: QueueItem, note?: string, images?: readonly MessageImage[]): void {
     const at = this.#run.agents[node.id];
     if (!at || (note !== undefined && note === '' && !images?.length)) return;
     const cleared = { ...at };
@@ -960,8 +963,8 @@ export class RunStore {
     }
   }
 
-  #agents(): GraphNode[] {
-    return this.#nodes.filter((n) => n.type === 'agent');
+  #agents(): AgentNode[] {
+    return this.#nodes.filter((n): n is AgentNode => n.type === 'agent');
   }
 
   /** Moves every agent not busy with a task on as far as it can go, until none can. */
@@ -1006,7 +1009,7 @@ export class RunStore {
    * OKs, go with it.
    */
   #advance(
-    node: GraphNode,
+    node: AgentNode,
     run: AgentRun,
     agents: Readonly<Record<string, AgentRun>>,
     now: number,
@@ -1039,7 +1042,7 @@ export class RunStore {
    * repeats' `rounds` are moved on in place.
    */
   #next(
-    node: GraphNode,
+    node: AgentNode,
     done: Readonly<Record<string, Outcome>>,
     rounds: Record<string, Round>,
     agents: Readonly<Record<string, AgentRun>>,
@@ -1113,7 +1116,7 @@ export class RunStore {
    * skipped where it cannot hold.
    */
   #ifThen(
-    node: GraphNode,
+    node: AgentNode,
     item: QueueIf,
     index: number,
     outcomes: Record<string, Outcome>,
@@ -1148,7 +1151,7 @@ export class RunStore {
    * on here, no further than the rounds left.
    */
   #rounds(
-    node: GraphNode,
+    node: AgentNode,
     repeat: QueueRepeat,
     before: readonly QueueItem[],
     outcomes: Record<string, Outcome>,
@@ -1272,8 +1275,8 @@ export class RunStore {
   }
 
   /**
-   * Whether the usage rule of the backend an agent spends (usage/usage.ts usageBackendOf: not an
-   * Agent SDK agent's) holds it before a task it would start now: its latest reading over the rule's
+   * Whether the usage rule of the backend an agent spends (catalog.ts usageBackendOf: none where no
+   * reading sees it) holds it before a task it would start now: its latest reading over the rule's
    * share of its window, and the user not having said to go on until that window resets. Warn me
    * tells the user (once a window, in this agent's session) and holds nothing; pause and ask me
    * asks them; wait for the reset (the rule's, or the user's answer) holds it until the window
@@ -1289,7 +1292,7 @@ export class RunStore {
     if (this.#run.agents[destination]?.paused)
       return { current: task.id, status: 'waiting', outcomes };
     const to = this.#agents().find((n) => n.id === destination);
-    if (to && connectionOf(to.data) === 'unavailable')
+    if (to && this.#catalog.connectionOf(to.data) === 'unavailable')
       return {
         current: task.id,
         status: 'asking',
@@ -1301,7 +1304,7 @@ export class RunStore {
         },
       };
     const node = this.#agents().find((n) => n.id === agent);
-    const backend = node && usageBackendOf(node.data);
+    const backend = node && this.#catalog.usageBackendOf(node.data);
     const rule = backend && this.#io.usage?.().rules[backend];
     if (!node || !backend || !rule) return undefined;
     const window = windowNow(this.#readingOf(backend), rule.window, now);
@@ -1338,7 +1341,7 @@ export class RunStore {
    * agent on that backend, until the window resets), or stop this queue there: the whole if-then
    * or repeat the held task is in.
    */
-  #answerUsage(node: GraphNode, hold: UsageHold, item: string, answer: Answer): void {
+  #answerUsage(node: AgentNode, hold: UsageHold, item: string, answer: Answer): void {
     if (!('choice' in answer)) return;
     if (answer.choice === 'goOn' || (answer.choice === 'wait' && hold.resetsAt !== null)) {
       this.#decideUsage(hold, answer.choice);
@@ -1413,7 +1416,7 @@ export class RunStore {
    * session (while it is, it is busy `at` its If or repeat: an AgentRun).
    */
   #judge(
-    node: GraphNode,
+    node: AgentNode,
     key: string,
     condition: Condition,
     checked: QueueItem | undefined,
@@ -1466,7 +1469,7 @@ export class RunStore {
    * cancelled or unclear query holds for the user without inventing a condition result.
    */
   #ask(
-    node: GraphNode,
+    node: AgentNode,
     key: string,
     condition: string,
     { current, outcomes }: { current: string; outcomes: Record<string, Outcome> },
@@ -1529,7 +1532,7 @@ export class RunStore {
 
   /** An absent native reply is unknown, even when the condition itself is only a text search. */
   #unheardCondition(
-    node: GraphNode,
+    node: AgentNode,
     key: string,
     at: { current: string; outcomes: Record<string, Outcome> },
   ): AgentRun {
@@ -1550,7 +1553,7 @@ export class RunStore {
    * Whether corrallm can't read what a connected agent replies (RunIO.unheard): the first time a run
    * needs to, it says so in the agent's session.
    */
-  #unheard(node: GraphNode): boolean {
+  #unheard(node: AgentNode): boolean {
     if (this.#io.unheard?.(node) !== true) return false;
     if (!this.#toldUnheard.has(node.id)) {
       this.#toldUnheard.add(node.id);
@@ -1740,11 +1743,11 @@ export class RunStore {
   }
 
   /**
-   * What a connected agent's step asks of it (turns.ts): its action, as its type names it, the
+   * What a connected agent's step asks of it (turns.ts): its action, as its adapter names it, the
    * agent it acts on if that is another one still there, and what it is to do, in the user's words.
    */
-  #stepMessage(node: GraphNode, step: QueueStep): string {
-    const actions = actionsOf(node.data.adapter ?? DEFAULT_AGENT);
+  #stepMessage(node: AgentNode, step: QueueStep): string {
+    const actions = this.#catalog.actionsOf(node.data);
     const other =
       step.target !== undefined && step.target !== node.id
         ? this.#agents().find((n) => n.id === step.target)
@@ -1763,7 +1766,7 @@ export class RunStore {
    * busy with the task it is for (`holder`, while its token is) asks the user (#refused).
    */
   #send(
-    to: GraphNode,
+    to: AgentNode,
     text: string,
     {
       ended,
@@ -1872,14 +1875,14 @@ export class RunStore {
    */
   #refused(
     { agent, token }: { agent: string; token: object },
-    to: GraphNode,
+    to: AgentNode,
     { text, switchTo }: Refusal,
   ): void {
     const at = this.#run.agents[agent];
     if (!this.#run.running || this.#busy.get(agent) !== token || !at) return;
     const refused = {
       agent: to.id,
-      connection: connectionOf(to.data),
+      connection: this.#catalog.connectionOf(to.data),
       text,
       ...(switchTo === undefined ? {} : { switchTo }),
     };
@@ -1900,7 +1903,7 @@ export class RunStore {
       const { refused } = at;
       if (!refused) continue;
       const to = this.#agents().find((n) => n.id === refused.agent);
-      if (to && connectionOf(to.data) === refused.connection) continue;
+      if (to && this.#catalog.connectionOf(to.data) === refused.connection) continue;
       const running: AgentRun = { ...at, status: 'running' };
       delete running.refused;
       agents[id] = running;
@@ -1915,7 +1918,7 @@ export class RunStore {
    * next (`reply`, with the images pasted into it; not waited for: its session runs it before the
    * round's first message); or go on (`goOn`), the repeat failed.
    */
-  #decideRounds(node: GraphNode, at: AgentRun, repeat: QueueRepeat, answer: Answer): void {
+  #decideRounds(node: AgentNode, at: AgentRun, repeat: QueueRepeat, answer: Answer): void {
     if ('reply' in answer) {
       const note = answer.reply.trim();
       const images = answer.images ?? [];
@@ -1940,7 +1943,7 @@ export class RunStore {
    * ends (however it ends) the OK asks again.
    */
   #askForChanges(
-    node: GraphNode,
+    node: AgentNode,
     at: AgentRun,
     ok: string,
     note: string,

@@ -1,6 +1,6 @@
 import { WINDOW_NAMES } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
-import type { GraphNode } from './graph';
+import type { NodeLike } from '../../shared/model/canvas';
 import {
   CONDITIONS,
   findItem,
@@ -12,7 +12,7 @@ import {
   isRepeatEnds,
   isWait,
   UNTIL_CONDITIONS,
-} from './queue';
+} from '../../shared/model/queue';
 import type {
   Condition,
   QueueApproval,
@@ -25,7 +25,7 @@ import type {
   Until,
   UsageAbove,
   WaitTarget,
-} from './queue';
+} from '../../shared/model/queue';
 import { backendName } from '../usage/usage';
 import { limitText, timeText } from './time';
 
@@ -48,7 +48,7 @@ export const usageAboveText = ({ backend, percent, window }: UsageAbove): string
  * “APPROVED”", the user's own words, or the repeat it goes round with: "Judge's repeat ends" ("a
  * removed repeat ends" once that is gone).
  */
-export function untilText(nodes: readonly GraphNode[], until: Until): string {
+export function untilText(nodes: readonly NodeLike[], until: Until): string {
   switch (until.kind) {
     case 'outputContains':
       return `the output contains “${until.text}”${until.wholeLine ? ' on a line of its own' : ''}`;
@@ -64,7 +64,7 @@ export function untilText(nodes: readonly GraphNode[], until: Until): string {
 }
 
 /** The repeat another goes round with (`until`), if it is still there. */
-export function leaderOf(nodes: readonly GraphNode[], until: RepeatEnds): QueueRepeat | undefined {
+export function leaderOf(nodes: readonly NodeLike[], until: RepeatEnds): QueueRepeat | undefined {
   const leader = nodes.find((n) => n.id === until.agent && n.type === 'agent');
   const found = leader && findItem(leader.data.queue ?? [], until.item)?.item;
   return found && isRepeat(found) ? found : undefined;
@@ -79,7 +79,7 @@ export const otherwiseText = (repeat: QueueRepeat): string =>
   repeat.otherwise === 'ask' ? 'then ask me' : 'then go on';
 
 /** How a repeat reads: "Repeat until its last step succeeds". */
-export const repeatText = (nodes: readonly GraphNode[], repeat: QueueRepeat): string =>
+export const repeatText = (nodes: readonly NodeLike[], repeat: QueueRepeat): string =>
   `Repeat until ${untilText(nodes, repeat.until)}`;
 
 /** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
@@ -133,13 +133,13 @@ export const expectedText = (asExpected: boolean): string =>
   asExpected ? 'failed, as expected' : 'passed, but was expected to fail';
 
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
-export function agentName(nodes: readonly GraphNode[], id: string): string {
+export function agentName(nodes: readonly NodeLike[], id: string): string {
   const node = nodes.find((n) => n.id === id);
   return node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
 }
 
 /** What a wait waits for, in words: an agent (all of its work), or one of its items. */
-export function waitTargetLabel(nodes: readonly GraphNode[], { agent, item }: WaitTarget): string {
+export function waitTargetLabel(nodes: readonly NodeLike[], { agent, item }: WaitTarget): string {
   if (item === undefined) return agentName(nodes, agent);
   const found = findItem(nodes.find((n) => n.id === agent)?.data.queue ?? [], item);
   return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item) : 'a removed step'}`;
@@ -156,7 +156,7 @@ export function andList(names: readonly string[]): string {
  * How an item reads in full, as All queues names it: what it does, and to which agent; a repeat,
  * how many rounds it runs at most (unless it goes round with another, as many as that one).
  */
-export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string {
+export function taskLabel(nodes: readonly NodeLike[], item: QueueItem): string {
   if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
   if (isRepeat(item)) {
     const text = repeatText(nodes, item);
@@ -175,7 +175,7 @@ export function taskLabel(nodes: readonly GraphNode[], item: QueueItem): string 
  * How an item reads on its own buttons ("Move …", "Remove …", "Go on now: …"): what it is, and
  * for a wait, a delay, an OK, an if-then or a repeat, what it waits for or checks.
  */
-export function describe(nodes: readonly GraphNode[], item: QueueItem): string {
+export function describe(nodes: readonly NodeLike[], item: QueueItem): string {
   if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
   if (isRepeat(item)) return repeatText(nodes, item);
   if (isDelay(item)) return delayText(item);

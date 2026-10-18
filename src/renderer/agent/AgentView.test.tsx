@@ -7,7 +7,7 @@ import type { ComponentProps } from 'react';
 import { GraphEditor as NativeGraphEditor } from '../graph/GraphEditor';
 import { automaticBackend } from '../test-backend';
 import type { Graph, GraphNode } from '../graph/graph';
-import type { QueueItem, QueueRepeat } from '../graph/queue';
+import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
 
 /** Native session events from a test backend; production never fabricates replies. */
 function GraphEditor(props: ComponentProps<typeof NativeGraphEditor>) {

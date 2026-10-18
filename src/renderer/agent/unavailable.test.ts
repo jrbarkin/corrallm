@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakeBackend } from '../test-backend';
 import { SessionStore } from './sessions';
 import type { Refusal } from './session';
+import { runCatalog } from '../graph/agents';
+
+/** The run's catalog, as the app gives the sessions. */
+const engine = runCatalog();
 
 const settle = async () => {
   await Promise.resolve();
@@ -18,7 +22,7 @@ describe('sessions without placeholder execution', () => {
     'dispatches a default $adapter session through its actual native backend',
     async ({ adapter: agent, connection }) => {
       const { backend, emit, sent } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       const done = vi.fn();
       store.send('a', agent, 'Inspect the actual project', done);
       await settle();
@@ -51,7 +55,7 @@ describe('sessions without placeholder execution', () => {
     'keeps unsupported %s work unsent and refused without inventing a turn or completion',
     async (agent) => {
       const { backend } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'unavailable' }]);
       store.open('a');
       const done = vi.fn();
@@ -82,7 +86,7 @@ describe('sessions without placeholder execution', () => {
 
   it('sends refused work once when a supported connection is chosen, including a same-stack switch', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'unavailable' }]);
     const refused = vi.fn<(refusal: Refusal) => void>();
     store.send('a', 'qwen', 'Preserve the objective', undefined, undefined, refused);
@@ -99,7 +103,7 @@ describe('sessions without placeholder execution', () => {
   });
   it('uses an unsupported agent’s default without starting any native backend', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     const refused = vi.fn<(refusal: Refusal) => void>();
     store.send('a', 'qwen', 'Keep unsent', undefined, undefined, refused);
     await settle();
@@ -111,7 +115,7 @@ describe('sessions without placeholder execution', () => {
 
   it('drops a stale unsupported refusal when a held recipient changes to a native connection', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'unavailable' }]);
     const refused = vi.fn<(refusal: Refusal) => void>();
     store.send(

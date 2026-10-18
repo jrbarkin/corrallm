@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { AgentNode, CanvasNode, FrameNode } from '../../shared/model/canvas';
+import type { QueueItem } from '../../shared/model/queue';
+import { runCatalog } from '../graph/agents';
 import { groupControlText, groupPaused, individualPaused } from './controls';
 import { RunStore } from './runner';
 import type { RunIO, TurnEnd } from './runner';
 
-const frame = (id: string, parentId?: string): GraphNode => ({
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
+const frame = (id: string, parentId?: string): FrameNode => ({
   id,
   type: 'frame',
   position: { x: 0, y: 0 },
@@ -20,7 +24,7 @@ const agent = (
     { id: 'one', message: `${id}:one` },
     { id: 'two', message: `${id}:two` },
   ],
-): GraphNode => ({
+): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -36,13 +40,13 @@ const tree = () => [
   agent('c', 'outer'),
   agent('outside'),
 ];
-const moved = (node: GraphNode, parentId?: string): GraphNode => {
+const moved = (node: CanvasNode, parentId?: string): CanvasNode => {
   const rest = { ...node };
   delete rest.parentId;
   return { ...rest, ...(parentId ? { parentId } : {}) };
 };
 
-function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
+function setup(nodes: CanvasNode[], extra: Partial<RunIO> = {}) {
   const events: string[] = [];
   const sent: {
     agent: string;
@@ -50,7 +54,7 @@ function setup(nodes: GraphNode[], extra: Partial<RunIO> = {}) {
     done?: (turn: TurnEnd) => void;
     withdrawn: boolean;
   }[] = [];
-  const store = new RunStore({
+  const store = new RunStore(engine, {
     send: (node, text, done) => {
       const entry = { agent: node.id, text, done, withdrawn: false };
       sent.push(entry);

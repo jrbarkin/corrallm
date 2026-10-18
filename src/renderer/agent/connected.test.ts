@@ -6,6 +6,10 @@ import { fakeBackend } from '../test-backend';
 import { rewindPoints } from './session';
 import type { Refusal } from './session';
 import { SessionStore } from './sessions';
+import { runCatalog } from '../graph/agents';
+
+/** The run's catalog, as the app gives the sessions. */
+const engine = runCatalog();
 
 /** Lets pending promises (IPC replies) settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -13,7 +17,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** A store with agent `a` connected through the Agent SDK, and the backend it talks to. */
 function connected(connection: ConnectionId = 'claude-code.sdk') {
   const fake = fakeBackend();
-  const store = new SessionStore(fake.backend);
+  const store = new SessionStore(engine, fake.backend);
   store.sync([{ id: 'a', connection }]);
   return { store, ...fake };
 }
@@ -460,7 +464,7 @@ describe('a connected session', () => {
 
   it('keeps what a Terminal session asks in its terminal, until it goes on or its CLI is gone', async () => {
     const fake = fakeBackend();
-    const store = new SessionStore(fake.backend);
+    const store = new SessionStore(engine, fake.backend);
     store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.open('a');
     await settle();
@@ -525,7 +529,7 @@ describe('a connected session', () => {
 
 describe('a connected session without the app', () => {
   it('says it needs the app', async () => {
-    const store = new SessionStore();
+    const store = new SessionStore(engine);
     store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.send('a', 'claude-code', 'Go');
     await settle();

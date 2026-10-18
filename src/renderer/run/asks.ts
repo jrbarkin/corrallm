@@ -1,11 +1,11 @@
 import type { ConnectionId } from '../../shared/adapter';
-import { connectionInfo } from '../graph/agents';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { agentName, itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
-import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../graph/queue';
-import type { QueueItem } from '../graph/queue';
+import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
 import { backendName, holdText, resetTime } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
+import type { EngineCatalog } from './catalog';
 import type { Run, TaskProblem } from './runner';
 
 /*
@@ -138,7 +138,7 @@ export function answersOf(item: QueueItem, problem?: TaskProblem): Answers | und
 
 /** A hold a running run has for the user: its agent, the item it holds at, and what it asks. */
 export interface HeldAsk extends Answers {
-  agent: GraphNode;
+  agent: AgentNode;
   item: QueueItem;
   /** The question: "Your OK on the spec in SPEC.md?"; or why a session would not start. */
   text: string;
@@ -158,15 +158,21 @@ export interface HeldAsk extends Answers {
  * after the work before it (pauses passed over), if there is any. A repeat out of rounds says how
  * many it ran, and what still does not hold. A task whose session would not start says why, and
  * what waits, and offers to switch that session's agent: "Switch to Terminal" ("Switch Reviewer
- * to Terminal" for an agent it handed a message to). A usage rule says how much of which window is
- * used, before the task it holds, and when the window resets (as of `now`).
+ * to Terminal" for an agent it handed a message to: `catalog` names the connection). A usage rule
+ * says how much of which window is used, before the task it holds, and when the window resets (as
+ * of `now`).
  */
-export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()): HeldAsk[] {
+export function heldAsks(
+  nodes: readonly CanvasNode[],
+  run: Run,
+  catalog: EngineCatalog,
+  now = Date.now(),
+): HeldAsk[] {
   if (!run.running) return [];
   return nodes.flatMap((agent): HeldAsk[] => {
+    if (agent.type !== 'agent') return [];
     const at = run.agents[agent.id];
-    if (agent.type !== 'agent' || at?.paused || at?.status !== 'asking' || at.current === undefined)
-      return [];
+    if (at?.paused || at?.status !== 'asking' || at.current === undefined) return [];
     const queue = agent.data.queue ?? [];
     const item = findItem(queue, at.current)?.item;
     if (item && at.problem)
@@ -183,7 +189,7 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()
     if (item && at.refused) {
       const { agent: to, text, switchTo } = at.refused;
       const name = agentName(nodes, to);
-      const how = switchTo === undefined ? undefined : connectionInfo(switchTo).label;
+      const how = switchTo === undefined ? undefined : catalog.connectionLabel(switchTo);
       return [
         {
           agent,

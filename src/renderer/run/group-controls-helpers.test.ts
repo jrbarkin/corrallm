@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
+import type { CanvasNode } from '../../shared/model/canvas';
 import { groupControlText, groupPaused, individualPaused } from './controls';
 import type { AgentRun, Run } from './runner';
 
-const node = (id: string, type: 'agent' | 'frame', parentId?: string): GraphNode => ({
+const node = (id: string, type: 'agent' | 'frame', parentId?: string): CanvasNode => ({
   id,
   type,
   position: { x: 0, y: 0 },

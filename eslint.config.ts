@@ -58,6 +58,27 @@ const host = (regex: string) => ({
   message: 'The core never imports the host (src/main/host/): it asks it through HostServices.',
 });
 
+/**
+ * The run and the sessions it sends to (src/renderer/run/, agent/sessions.ts, agent/connected.ts),
+ * and the helpers they import, which move out of the renderer together (Build Plan B5b): none of
+ * them reads React Flow or the renderer's own tables of what each adapter offers. A test keeps
+ * this list to every file they import (src/main/boundaries.test.ts).
+ */
+const RUN_FILES = [
+  'src/renderer/run/*.ts',
+  'src/renderer/agent/{sessions,connected,driver,unavailable,history,session,submission-state}.ts',
+  'src/renderer/usage/usage.ts',
+  'src/renderer/{catalog,ipc-error}.ts',
+  'src/shared/model/*.ts',
+];
+/** The run's helpers in the graph's folder, which name its tables from beside them. */
+const RUN_GRAPH_FILES = 'src/renderer/graph/{labels,time,group-members}.ts';
+const RUN_MESSAGE =
+  'The run never reads React Flow or the renderer’s own tables of what each adapter offers: it reads the model (src/shared/model/) and the catalog it is given (src/renderer/run/catalog.ts).';
+const REACT_FLOW = { group: ['@xyflow/*'], message: RUN_MESSAGE };
+/** An import of graph/graph.ts (React Flow's nodes) or graph/agents.ts (`regex`: as written). */
+const graphTables = (regex: string) => ({ regex, message: RUN_MESSAGE });
+
 export default defineConfig(
   globalIgnores([
     '.vite/',
@@ -175,6 +196,28 @@ export default defineConfig(
       '@typescript-eslint/no-restricted-imports': [
         'error',
         { patterns: [ELECTRON, host('^\\./host/')] },
+      ],
+    },
+  },
+  // typescript-eslint's rule, so that it applies beside app/boundaries-web's (`import type` included).
+  {
+    name: 'app/boundaries-run',
+    files: RUN_FILES,
+    ignores: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [REACT_FLOW, graphTables('(?:^|/)graph/(?:agents|graph)$')] },
+      ],
+    },
+  },
+  {
+    name: 'app/boundaries-run-graph',
+    files: [RUN_GRAPH_FILES],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [REACT_FLOW, graphTables('^\\./(?:agents|graph)$')] },
       ],
     },
   },

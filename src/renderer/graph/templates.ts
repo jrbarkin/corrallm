@@ -3,8 +3,8 @@ import { parseRole } from '../../shared/role';
 import { connectionsOf, DEFAULT_AGENT, translateActions } from './agents';
 import type { AgentConnection } from './agents';
 import type { Graph } from './graph';
-import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
-import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
+import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from '../../shared/model/queue';
+import type { Condition, QueueItem, RepeatedItem, Until } from '../../shared/model/queue';
 
 /**
  * A blank in a template, written `{{key}}` in its agents' names, roles, messages, steps' instructions,

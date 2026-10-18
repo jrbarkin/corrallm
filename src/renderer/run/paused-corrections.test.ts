@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
+import { runCatalog } from '../graph/agents';
 import { RunStore } from './runner';
 import type { TurnEnd } from './runner';
 
-const nodes: GraphNode[] = [
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
+const nodes: AgentNode[] = [
   {
     id: 'a',
     type: 'agent',
@@ -35,7 +39,7 @@ const nodes: GraphNode[] = [
 
 function setup(graph = nodes) {
   const sent: { text: string; done: (turn: TurnEnd) => void }[] = [];
-  const store = new RunStore({
+  const store = new RunStore(engine, {
     send: (_agent, text, done) => {
       sent.push({ text, done });
       return () => undefined;
@@ -125,7 +129,7 @@ describe('native corrections while paused', () => {
   );
 
   it('excludes a paused condition query from native task adoption', () => {
-    const graph: GraphNode[] = [
+    const graph: AgentNode[] = [
       {
         id: 'a',
         type: 'agent',

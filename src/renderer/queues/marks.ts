@@ -1,6 +1,6 @@
 import type { RowMarks } from '../graph/QueueEditor';
-import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from '../graph/queue';
-import type { QueueItem, QueueRepeat } from '../graph/queue';
+import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from '../../shared/model/queue';
+import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
 import { holdText } from '../usage/usage';

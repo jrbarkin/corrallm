@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { QueueItem } from '../../shared/model/queue';
 import { lanesOf } from './lanes';
 import type { LinkEnd } from './lanes';
 import { piecesIn, ribbonsOf } from './ribbons';

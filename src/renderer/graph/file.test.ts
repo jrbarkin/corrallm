@@ -6,7 +6,7 @@ import { agentLabel, connectionOf } from './agents';
 import { fromFile, toFile } from './file';
 import { autosize } from './graph';
 import type { Graph, GraphNode } from './graph';
-import type { QueueItem } from './queue';
+import type { QueueItem } from '../../shared/model/queue';
 
 /** The canvas's id, which its file holds. */
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;

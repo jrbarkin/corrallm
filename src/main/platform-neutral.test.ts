@@ -79,7 +79,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/agent/tools.ts': 1,
   'src/renderer/agent/unavailable.ts': 2,
   'src/renderer/graph/GraphEditor.css': 4,
-  'src/renderer/graph/Questions.tsx': 6,
+  'src/renderer/graph/Questions.tsx': 4,
   'src/renderer/graph/agents.ts': 57,
   'src/renderer/graph/examples.ts': 7,
   'src/renderer/graph/examples/cross-check.corral': 2,

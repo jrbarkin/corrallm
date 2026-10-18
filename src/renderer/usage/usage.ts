@@ -1,5 +1,5 @@
-import { adapterIn, connectionIn, usageBackendIn } from '../../shared/adapter';
-import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
+import { adapterIn, usageBackendIn } from '../../shared/adapter';
+import type { AdapterId, UsageBackendId } from '../../shared/adapter';
 import { WINDOW_NAMES } from '../../shared/usage';
 import type {
   UsageAction,
@@ -9,25 +9,12 @@ import type {
   UsageWindow,
 } from '../../shared/usage';
 import { catalog } from '../catalog';
-import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
 
 /*
  * Usage readings and rules as the renderer shows and runs them (src/shared/usage.ts): which
- * backend an agent spends, and how readings, holds and rules read.
+ * backends a canvas's agents spend, and how readings, holds and rules read. The backend one agent
+ * spends is the run's catalog's to say (run/catalog.ts usageBackendOf).
  */
-
-/**
- * The backend whose usage limits an agent spends, which its usage rule applies to: its
- * connection's, as the catalog declares it (none where corrallm can read none, as on an API key).
- */
-export function usageBackendOf(data: {
-  adapter?: AdapterId;
-  connection?: ConnectionId;
-}): UsageBackendId | undefined {
-  const connection = connectionOf(data);
-  if (connection === 'unavailable') return undefined;
-  return connectionIn(catalog(), connection)?.connection.usage ?? undefined;
-}
 
 /** The backend an adapter's agents spend: the first its connections declare, if any. */
 export function backendOfType(adapter: AdapterId): UsageBackendId | undefined {
@@ -35,9 +22,9 @@ export function backendOfType(adapter: AdapterId): UsageBackendId | undefined {
   return found?.connections.find((connection) => connection.usage !== null)?.usage ?? undefined;
 }
 
-/** The backends the agents on a canvas use (by their adapters), in the order backends are listed. */
-export function backendsOf(agents: readonly { adapter?: AdapterId }[]): UsageBackendId[] {
-  const used = new Set(agents.map((data) => backendOfType(data.adapter ?? DEFAULT_AGENT)));
+/** The backends the agents of `adapters` use, in the order backends are listed. */
+export function backendsOf(adapters: readonly AdapterId[]): UsageBackendId[] {
+  const used = new Set(adapters.map((adapter) => backendOfType(adapter)));
   return catalog()
     .usageBackends.map((backend) => backend.id)
     .filter((backend) => used.has(backend));

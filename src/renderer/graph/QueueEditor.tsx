@@ -40,7 +40,7 @@ import {
   sameTarget,
   unfit,
   UNTIL_CONDITIONS,
-} from './queue';
+} from '../../shared/model/queue';
 import type {
   Condition,
   QueueApproval,
@@ -56,7 +56,7 @@ import type {
   Time,
   Until,
   WaitTarget,
-} from './queue';
+} from '../../shared/model/queue';
 import { leftText, limitText, parseTime, TIME_PRESETS, timeText } from './time';
 import { SortableList } from './SortableList';
 import type { HandleProps } from './SortableList';
