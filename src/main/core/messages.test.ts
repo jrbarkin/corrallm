@@ -23,6 +23,8 @@ import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 
 const OUTSIDE = CALLERS['outside-write'] as OutsideCaller;
 const READER = CALLERS['outside-read'] as OutsideCaller;
+/** Another outside orchestrator, writing to the same canvas. */
+const OTHER: OutsideCaller = { ...OUTSIDE, token: 'other-token', name: 'other' };
 const YOU = CALLERS.you;
 /** Builder, calling as itself (a worker: it reaches Helper and Checker, which are linked to it). */
 const BUILDER: AgentCaller = {
@@ -178,10 +180,29 @@ async function send(to: string, body: string, caller: Caller = OUTSIDE): Promise
   return (await ok<{ id: string }>('message', { to, body }, caller)).id;
 }
 
+/** The notices `caller` was sent. */
+async function notices(caller: Caller = OUTSIDE): Promise<Message[]> {
+  return (await inbox(caller)).filter((message) => message.kind === 'notice');
+}
+
 /** The text the agent's session was sent, each turn. */
 function sent(connector: FakeConnector): string[] {
   return connector.sessions.flatMap((session) => session.sent.map(({ text }) => text));
 }
+
+/** A connector whose sessions won't start: it says why, as a login it can't run on does. */
+const REFUSING: Connector<SessionMode> = {
+  start: (_spec, host) => {
+    host.emit({
+      type: 'notice',
+      id: crypto.randomUUID(),
+      level: 'error',
+      text: 'This login can’t run here.',
+      switchTo: 'codex.terminal',
+    });
+    return Promise.reject(new Error('This login can’t run here.'));
+  },
+};
 
 const FRAME = (id: string) =>
   `[corrallm] Message from "orchestrator" (an orchestrator outside corrallm, not the user; message ${id}):\n`;
@@ -272,20 +293,11 @@ describe('delivery', () => {
   it('keeps a message an agent’s session refused first in line, and tells its sender once', async () => {
     await keepCanvas();
     let refuse = true;
-    const refusing: Connector<SessionMode> = {
-      start: (spec, host) => {
-        if (!refuse) return appServer.start(spec, host);
-        host.emit({
-          type: 'notice',
-          id: crypto.randomUUID(),
-          level: 'error',
-          text: 'This login can’t run here.',
-          switchTo: 'codex.terminal',
-        });
-        return Promise.reject(new Error('This login can’t run here.'));
+    await start({
+      appServer: {
+        start: (spec, host) => (refuse ? REFUSING : appServer).start(spec, host),
       },
-    };
-    await start({ appServer: refusing });
+    });
     const first = await send('builder', 'First');
     await vi.waitFor(async () => {
       expect((await inbox()).filter((message) => message.kind === 'notice')).toHaveLength(1);
@@ -313,6 +325,34 @@ describe('delivery', () => {
       expect((await find(second))?.state).toBe('replied');
     });
     expect(sent(appServer)).toEqual([`${FRAME(first)}First`, `${FRAME(second)}Second`]);
+  });
+
+  it('tells each party whose message waits on a session that won’t start, once', async () => {
+    await keepCanvas();
+    await start({ appServer: REFUSING });
+    const first = await send('helper', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    const others = await send('helper', 'From another orchestrator', OTHER);
+    const builders = await send('helper', 'From Builder', BUILDER);
+    await send('helper', 'Again');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const [caller, id] of [
+      [OUTSIDE, first],
+      [OTHER, others],
+      [BUILDER, builders],
+    ] as const) {
+      expect(await notices(caller)).toEqual([
+        expect.objectContaining({
+          from: 'corrallm',
+          replyTo: id,
+          body: expect.stringMatching(
+            /^Helper can’t start, so your message waits: This login/,
+          ) as string,
+        }),
+      ]);
+    }
   });
 
   it('refuses a body over 16 KB, counted in bytes', async () => {
@@ -501,6 +541,30 @@ describe('usage', () => {
     },
   );
 
+  it('delivers parties’ messages over a rule that warns, warning their agent once', async () => {
+    await overRule('warn', Date.now() + 60_000);
+    await keepCanvas();
+    const engine = await (await start()).engines.open(CANVAS);
+    for (const body of ['First', 'Second']) {
+      const id = await send('builder', body);
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+    }
+    expect(await notices()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(
+        engine.sessions
+          .of('builder')
+          .entries.filter((entry) => entry.kind === 'notice' && entry.level === 'warning'),
+      ).toEqual([
+        expect.objectContaining({
+          text: expect.stringMatching(/^Codex has used 80% of its 5-hour window/) as string,
+        }),
+      ]);
+    });
+  });
+
   it('never holds what you send', async () => {
     await overRule('waitForReset', Date.now() + 60_000);
     await keepCanvas();
@@ -528,13 +592,34 @@ describe('usage', () => {
     return engine;
   }
 
-  /** The notices the outside party was sent. */
-  async function notices(): Promise<Message[]> {
-    return (await inbox()).filter((message) => message.kind === 'notice');
-  }
-
   const WAITS =
     /^Codex has used 80% of its 5-hour window \(over 50%\), so your message to Builder waits until it resets at \d{1,2}:\d\d\.$/;
+
+  it('tells each party whose message waits on a usage window, once', async () => {
+    await overRule('waitForReset', Date.now() + 60_000);
+    await keepCanvas();
+    await start();
+    const first = await send('builder', 'First');
+    const others = await send('builder', 'From another orchestrator', OTHER);
+    await send('builder', 'Again');
+    const builders = await send('helper', 'From Builder', BUILDER);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(appServer.started).toEqual([]);
+    for (const [caller, id] of [
+      [OUTSIDE, first],
+      [OTHER, others],
+    ] as const) {
+      expect(await notices(caller)).toEqual([
+        expect.objectContaining({ replyTo: id, body: expect.stringMatching(WAITS) as string }),
+      ]);
+    }
+    expect(await notices(BUILDER)).toEqual([
+      expect.objectContaining({
+        replyTo: builders,
+        body: expect.stringMatching(/so your message to Helper waits until it resets at/) as string,
+      }),
+    ]);
+  });
 
   it.each(['ask', 'waitForReset'])(
     'holds a party’s message while the run holds its agent on usage (%s) until the window resets, but never yours',

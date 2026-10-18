@@ -211,9 +211,9 @@ export class Delivery {
   }
 
   /**
-   * Delivers what can be: for each agent, yours at once, then the first message of anyone else's
-   * that nothing holds; and tells each sender, once, what holds its message, and what its turn
-   * waits for.
+   * Delivers what can be: for each agent, the first message waiting that nothing holds (yours go
+   * past what holds everyone else's); and tells each sender, once, what holds its messages, and
+   * what its turn waits for.
    */
   #pump(): void {
     if (this.#closed) return;
@@ -241,18 +241,20 @@ export class Delivery {
     this.#tellWaiting(messages);
     let alarm: number | undefined;
     for (const node of this.#deps.nodes()) {
-      if (node.type !== 'agent') continue;
-      // Once a party's message is held, the parties' behind it wait their turn; yours go past.
-      let held = false;
-      for (const message of waiting.get(node.id) ?? []) {
-        if (this.#writing.has(node.id)) break;
-        const yours = message.from === 'you';
-        if (held && !yours) continue;
-        // Yours go past the run's holds, into its session's queue, unless that won't start.
-        const hold = yours ? this.#stuckHold(node) : this.#holdOf(node);
+      const waits = waiting.get(node.id);
+      if (node.type !== 'agent' || !waits || this.#writing.has(node.id)) continue;
+      // Yours go past the run's holds, into its session's queue, unless that won't start; what
+      // holds a party's message holds every party's behind it.
+      const holds = {
+        yours: this.#stuckHold(node),
+        theirs: waits.some(({ from }) => from !== 'you') ? this.#holdOf(node) : undefined,
+      };
+      let next: Message | undefined;
+      for (const message of waits) {
+        const hold = message.from === 'you' ? holds.yours : holds.theirs;
         if (!hold) {
-          this.#deliver(node, message);
-          break;
+          next ??= message;
+          continue;
         }
         if (hold.kind === 'stuck') {
           this.#tell(
@@ -274,9 +276,10 @@ export class Delivery {
             }.`,
           );
         }
-        if (yours) break;
-        held = true;
       }
+      if (next === undefined) continue;
+      if (next.from !== 'you') this.#warnUsage(node);
+      this.#deliver(node, next);
     }
     this.#arm(alarm);
   }
@@ -313,13 +316,16 @@ export class Delivery {
     // A usage hold the run set (AgentRun.usage) is this rule, with your Go on or Wait for the reset,
     // read now: so one a stopped run left, or whose window has reset, holds nothing.
     const rule = engine.run.usageRule(node.id, this.#deps.now());
-    if (!rule) return undefined;
-    if (rule.action === 'warn') {
-      engine.run.warnUsage(node.id, rule.hold, this.#deps.now());
-      return undefined;
-    }
+    if (!rule || rule.action === 'warn') return undefined;
     // With no one to ask headless, a rule that asks holds the message until the window resets.
     return { kind: 'usage', hold: rule.hold };
+  }
+
+  /** Warns agent `node`, once a window, as a party's message starts over its rule's share. */
+  #warnUsage(node: AgentNode): void {
+    const { engine } = this.#deps;
+    const rule = engine.run.usageRule(node.id, this.#deps.now());
+    if (rule?.action === 'warn') engine.run.warnUsage(node.id, rule.hold, this.#deps.now());
   }
 
   /**
