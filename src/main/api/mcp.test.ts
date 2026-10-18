@@ -376,7 +376,7 @@ describe('the MCP server on the registry', () => {
   beforeEach(async () => {
     profile = await mkdtemp(path.join(tmpdir(), 'corrallm-mcp-'));
     real = await createCore(
-      { profile, app: { name: 'corrallm', version: '1.0.0' }, check: true },
+      { profile, app: { name: 'corrallm', version: '1.0.0' }, check: true, distribution: 'local' },
       NO_DESKTOP,
     );
     served = await startApiServer({ core: real, clientOf, port: 0 });

@@ -31,7 +31,7 @@ afterEach(async () => {
 
 async function start(): Promise<Core> {
   core = await createCore(
-    { profile, app: { name: 'corrallm', version: '9.8.7' }, check: true },
+    { profile, app: { name: 'corrallm', version: '9.8.7' }, check: true, distribution: 'local' },
     NO_DESKTOP,
   );
   return core;

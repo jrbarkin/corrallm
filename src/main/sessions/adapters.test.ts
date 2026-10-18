@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ID_PATTERN } from '../../shared/adapter';
 import type { AdapterDescriptor } from '../../shared/adapter';
 import type { Adapter } from './adapter';
-import { ADAPTERS, CATALOG, catalogOf } from './adapters';
+import { ADAPTERS, CATALOG, catalogOf, DEFAULT_ADAPTER } from './adapters';
 import { createConnectors, createOptions } from './connectors';
 
 /*
@@ -95,6 +95,10 @@ describe('the catalog', () => {
       expect(Object.keys(connectors).sort()).toEqual(connections);
       expect(Object.keys(createOptions({ fake })).sort()).toEqual(ids(CATALOG.adapters).sort());
     }
+  });
+
+  it('runs an agent naming no adapter with Claude Code, as the renderer does (DEFAULT_AGENT)', () => {
+    expect(DEFAULT_ADAPTER).toBe('claude-code');
   });
 
   it('is plain data, so that it crosses to the renderer as it is', () => {

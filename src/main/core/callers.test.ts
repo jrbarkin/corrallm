@@ -65,7 +65,12 @@ const REGISTRIES: [
     async () => {
       const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-callers-'));
       const core = await createCore(
-        { profile, app: { name: 'corrallm', version: '1.0.0' }, check: true },
+        {
+          profile,
+          app: { name: 'corrallm', version: '1.0.0' },
+          check: true,
+          distribution: 'local',
+        },
         NO_DESKTOP,
       );
       return {
