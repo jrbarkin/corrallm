@@ -80,43 +80,48 @@ function shown(entry: Entry, yours: boolean): TranscriptEntry {
 }
 
 /**
- * An entry cut to fit `room` bytes of JSON, and marked so: its text, its plan, its tool's output or
- * its diff's lines shortened (the whole of it stays in the session). Another kind is never long.
+ * The shortest a text in an entry is cut: longer than any of the words an entry's fields take from
+ * a list (a status, a level, an answer).
+ */
+const SHORTEST_TEXT = 64;
+
+/**
+ * An entry cut to fit `room` bytes of JSON, and marked so (the whole of it stays in the session):
+ * a diff's last lines left out, each line kept whole; then, if it is still too big, whatever its
+ * kind, every text in it but its id (a message, a reply, a plan, an output, a command) cut to the
+ * longest length that fits, no shorter than SHORTEST_TEXT; then every list in it to the most items
+ * that fit.
  */
 function fitted(entry: TranscriptEntry, room: number): TranscriptEntry {
-  switch (entry.kind) {
-    case 'text':
-    case 'thinking':
-      return shortest(entry.text.length, room, (n) => ({
-        ...entry,
-        text: cutAt(entry.text, n),
-        cut: true,
-      }));
-    case 'plan':
-      return shortest(entry.plan.length, room, (n) => ({
-        ...entry,
-        plan: cutAt(entry.plan, n),
-        cut: true,
-      }));
-    case 'tool':
-    case 'permission': {
-      const { detail } = entry;
-      if (detail === undefined) return entry;
-      return detail.kind === 'output'
-        ? shortest(detail.text.length, room, (n) => ({
-            ...entry,
-            detail: { ...detail, text: cutAt(detail.text, n) },
-            cut: true,
-          }))
-        : shortest(detail.lines.length, room, (n) => ({
-            ...entry,
-            detail: { ...detail, lines: detail.lines.slice(0, n) },
-            cut: true,
-          }));
-    }
-    default:
-      return entry;
-  }
+  const lines = withFewerLines(entry, room);
+  if (bytesOf(lines) <= room) return lines;
+  const total = bytesOf(lines);
+  const cut = (chars: number, items: number) =>
+    ({ ...(capped(lines, chars, items) as object), id: entry.id, cut: true }) as TranscriptEntry;
+  const texts = shortest(total, room, (n) => cut(Math.max(n, SHORTEST_TEXT), total));
+  return bytesOf(texts) <= room ? texts : shortest(total, room, (n) => cut(SHORTEST_TEXT, n));
+}
+
+/** A tool's or a permission's diff with its last lines left out to fit `room` bytes of JSON. */
+function withFewerLines(entry: TranscriptEntry, room: number): TranscriptEntry {
+  if (entry.kind !== 'tool' && entry.kind !== 'permission') return entry;
+  const { detail } = entry;
+  if (detail?.kind !== 'diff') return entry;
+  return shortest(detail.lines.length, room, (n) => ({
+    ...entry,
+    detail: { ...detail, lines: detail.lines.slice(0, n) },
+    cut: true,
+  }));
+}
+
+/** `value` with every text in it cut to at most `chars` characters, and every list to `items`. */
+function capped(value: unknown, chars: number, items: number): unknown {
+  if (typeof value === 'string') return value.length > chars ? cutAt(value, chars) : value;
+  if (Array.isArray(value)) return value.slice(0, items).map((one) => capped(one, chars, items));
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, one]) => [key, capped(one, chars, items)]),
+  );
 }
 
 /** The longest of `make(0)` to `make(total)` that fits `room` bytes of JSON (else the shortest). */

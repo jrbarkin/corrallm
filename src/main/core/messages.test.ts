@@ -1699,6 +1699,97 @@ describe('reads', () => {
     expect(first).toEqual({ entries: [read[0]], next: read[0]?.id });
   });
 
+  it('cuts an entry of any kind too big for a page alone to fit one', async () => {
+    // A turn with a prompt typed in its terminal holding a pasted log, a long notice, a command
+    // given whole (a heredoc), and a long to-do list.
+    const big: Connector<SessionMode> = {
+      start: (_spec, host) => {
+        host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+        const idle = () => Promise.resolve();
+        return Promise.resolve({
+          send: (message) => {
+            host.emit({ type: 'user', id: message.id, text: message.text });
+            host.emit({ type: 'status', status: 'working' });
+            host.emit({ type: 'user', id: 'typed', text: 'a pasted log line\n'.repeat(9000) });
+            host.emit({
+              type: 'notice',
+              id: 'hook',
+              level: 'error',
+              text: `PreToolUse hook error: ${'"failed"\n'.repeat(12_000)}`,
+            });
+            host.emit({
+              type: 'tool',
+              id: 'heredoc',
+              tool: 'Bash',
+              summary: `cat > notes.txt <<'EOF'\n${'é'.repeat(70_000)}\nEOF`,
+              status: 'done',
+            });
+            host.emit({
+              type: 'todos',
+              id: 'todos',
+              items: Array.from({ length: 5000 }, (_, i) => ({
+                text: `Check file ${String(i)}`,
+                status: 'pending' as const,
+              })),
+            });
+            host.emit({
+              type: 'end',
+              messages: [message.id],
+              seconds: 1,
+              interrupted: false,
+              failed: false,
+            });
+            return idle();
+          },
+          answer: idle,
+          interrupt: idle,
+          setMode: idle,
+          setModel: idle,
+          close: idle,
+        });
+      },
+    };
+    await keepCanvas();
+    await start({ appServer: big });
+    const id = await send('builder', 'Go');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    interface Page {
+      entries: { id: string; kind: string; cut?: true }[];
+      next: string | null;
+    }
+    const read: Page['entries'] = [];
+    let after: string | null = null;
+    for (let pages = 0; pages < 10; pages++) {
+      const page: Page = await ok<Page>('session.transcript', {
+        agent: 'builder',
+        limit: 1,
+        ...(after === null ? {} : { after }),
+      });
+      if (page.entries.length === 0) break;
+      expect(Buffer.byteLength(JSON.stringify(page.entries))).toBeLessThanOrEqual(MAX_PAGE_BYTES);
+      read.push(...page.entries);
+      after = page.next;
+    }
+    expect(read.map(({ kind }) => kind)).toEqual([
+      'user',
+      'user',
+      'notice',
+      'tool',
+      'todos',
+      'end',
+    ]);
+    expect(read.filter((entry) => entry.cut === true).map(({ id }) => id)).toEqual([
+      'typed',
+      'hook',
+      'heredoc',
+      'todos',
+    ]);
+    // A text is cut no shorter than its page needs: the prompt fills it.
+    expect(Buffer.byteLength(JSON.stringify(read[1]))).toBeGreaterThan(MAX_PAGE_BYTES - 64);
+  });
+
   it('ends a page of messages early rather than pass its byte budget', async () => {
     await keepCanvas();
     await start();

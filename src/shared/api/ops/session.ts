@@ -41,7 +41,8 @@ const withdrawn = z.boolean().optional();
 
 /**
  * Whether an entry was cut to fit its page (MAX_PAGE_BYTES): its text, plan, output or diff ends
- * early. The whole of it stays in the session.
+ * early, or, for an entry still too big, every text in it, and then every list. The whole of it
+ * stays in the session.
  */
 const cut = z.literal(true).optional();
 
@@ -57,6 +58,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     images: z.int().optional(),
     reached: z.literal(true).optional(),
     conversation: z.string().optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -109,6 +111,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     kind: z.literal('question'),
     questions: z.array(Question),
     withdrawn,
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -129,6 +132,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     items: z.array(
       z.strictObject({ text: z.string(), status: z.enum(['pending', 'active', 'done']) }),
     ),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -139,6 +143,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     url: z.string().optional(),
     answer: z.enum(ELICITATION_ACTIONS).optional(),
     withdrawn,
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -146,11 +151,13 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     level: z.enum(['info', 'warning', 'error']),
     text: z.string(),
     switchTo: z.string().optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
     kind: z.literal('cleared'),
     conversation: z.string().optional(),
+    cut,
   }),
   z.strictObject({
     id: z.string(),
@@ -159,6 +166,7 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     interrupted: z.boolean(),
     failed: z.boolean().optional(),
     result: TurnResult.optional(),
+    cut,
   }),
 ]);
 

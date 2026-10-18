@@ -39,7 +39,8 @@ export function reachFor(name: OpName, { party }: OpContext): Reach | 'all' {
 
 /**
  * A page of `items`: the longest run of them, from the first, whose JSON fits MAX_PAGE_BYTES; at
- * least the first, which `fit` cuts to fit when it alone doesn't (given the bytes it may take).
+ * least the first, which `fit` cuts to fit when it alone doesn't (given the bytes it may take), or,
+ * with no `fit`, as it is.
  */
 export function pageOf<T>(
   items: readonly T[],
