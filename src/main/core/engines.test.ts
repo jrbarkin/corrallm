@@ -9,6 +9,8 @@ import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { Settings } from '../settings';
+import { UsageReadings } from '../usage';
 import { createCore } from './core';
 import type { Core } from './core';
 import { NO_DESKTOP } from './test-registry';
@@ -29,6 +31,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await core?.close();
   core = undefined;
   await rm(profile, { recursive: true, force: true });
@@ -142,6 +145,43 @@ describe('the core runs each canvas’s engine', () => {
       replies: [[JSON.stringify(['worker', 'hello']), REPLY]],
     });
     expect(codex.started).toEqual([]);
+  });
+
+  it('closes every session as it closes, and writes out what it keeps, though a run can’t be journaled', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    let closed = 0;
+    const watched: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await codex.start(spec, host);
+        const close = session.close.bind(session);
+        session.close = () => {
+          closed += 1;
+          return close();
+        };
+        return session;
+      },
+    };
+    const engine = await (await start(watched)).engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(async () => {
+      expect((await journaled()).run.agents.worker).toMatchObject({
+        outcomes: { hello: 'succeeded' },
+      });
+    });
+    // The canvas's record can't be written any more: a file stands where its folder was.
+    const record = path.join(profile, 'runs', CANVAS);
+    await rm(record, { recursive: true });
+    await writeFile(record, '');
+    const flushes = [
+      vi.spyOn(Settings.prototype, 'flush'),
+      vi.spyOn(UsageReadings.prototype, 'flush'),
+    ];
+
+    await expect(core?.close()).rejects.toThrow(/journal/);
+    core = undefined;
+    expect(closed).toBe(1);
+    for (const flush of flushes) expect(flush).toHaveBeenCalled();
   });
 
   it('refuses a canvas the profile keeps no project folder for, starting nothing', async () => {

@@ -31,6 +31,7 @@ const NO_FOLDER =
 const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
 const NO_SWITCH = 'This agent is switched to another connection in the corrallm app.';
+const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 
 export interface EnginesDeps {
   /** What every adapter declares: what a canvas's file is read against. */
@@ -98,22 +99,23 @@ export class Engines {
 
   /**
    * Stops every canvas, as the core closes: its run held where it is (what was going on is
-   * uncertain until inspected), journaled, then its sessions closed.
+   * uncertain until inspected), journaled, then its sessions closed. Every session closes even if a
+   * run can't be journaled; then it rejects, with why each couldn't.
    */
   async close(): Promise<void> {
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
-    await Promise.all(
-      running.flatMap((opened) => {
-        if (opened.status !== 'fulfilled') return [];
-        const { value } = opened;
-        value.stop();
-        value.engine.run.pause();
-        return [this.#write(value)];
-      }),
+    const stopped = await Promise.allSettled(
+      running.flatMap((opened) =>
+        opened.status === 'fulfilled' ? [this.#stop(opened.value)] : [],
+      ),
     );
     await this.#deps.journal.flush();
     await this.#deps.sessions.closeEverything();
+    const failed = stopped.flatMap((result): unknown[] =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (failed.length > 0) throw new AggregateError(failed, JOURNAL_FAILED);
   }
 
   async #open(canvas: CanvasId): Promise<Running> {
@@ -171,6 +173,13 @@ export class Engines {
       running.timer = undefined;
     };
     return running;
+  }
+
+  /** Stops a canvas as the core closes: its run held where it is, and journaled. */
+  async #stop(running: Running): Promise<void> {
+    running.stop();
+    running.engine.run.pause();
+    await this.#write(running);
   }
 
   /** Journals a canvas's run as it is now, the coalesced write it replaces cancelled. */

@@ -71,7 +71,7 @@ export interface Core extends Dispatcher {
   engines: Engines;
   /**
    * Stops: each canvas's run held where it is and journaled, every session closed, and what the
-   * core keeps written out.
+   * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
    */
   close(): Promise<void>;
 }
@@ -147,8 +147,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       dispatcher.call(name, raw, caller, signal) as Promise<OpResult<ResultOf<N>>>,
     engines,
     close: async () => {
-      await engines.close();
-      await Promise.all([memory.flush(), settings.flush(), usage.flush()]);
+      try {
+        await engines.close();
+      } finally {
+        // What the core keeps is written out even if a canvas's run couldn't be.
+        await Promise.all([memory.flush(), settings.flush(), usage.flush()]);
+      }
     },
   };
 }
