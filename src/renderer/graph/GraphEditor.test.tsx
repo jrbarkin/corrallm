@@ -287,6 +287,29 @@ describe('GraphEditor', () => {
     ).not.toMatch(/Simulated|qwen|gemini/i);
   });
 
+  it('draws agents whose adapters are named like what every object inherits as Not connected', () => {
+    const steps = [{ id: 'run', action: 'Bash' }];
+    const { container } = setup({
+      nodes: [
+        agentNode('s', 0, 0, {
+          data: { label: 'S', adapter: 'toString', connection: 'toString', queue: steps },
+        }),
+        agentNode('c', 300, 0, { data: { label: 'C', adapter: 'constructor', queue: steps } }),
+      ],
+      edges: [],
+    });
+    const tags = [...container.querySelectorAll('.graph-agent')].map((tag) =>
+      tag.getAttribute('title'),
+    );
+    expect(tags).toEqual(['Agent: toString · Not connected', 'Agent: constructor · Not connected']);
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    expect(queues.getByRole('group', { name: 'S: Bash' })).toBeTruthy();
+    fireEvent.click(queues.getByRole('button', { name: 'Open C' }));
+    const view = within(screen.getByRole('dialog', { name: 'C' }));
+    expect(view.getByText(/constructor has no connector yet/)).toBeTruthy();
+  });
+
   it('holds one agent through its context menu without changing the saved canvas', async () => {
     const initial: Graph = {
       nodes: [agentNode('a', 0, 0), agentNode('b', 400, 0), frame],

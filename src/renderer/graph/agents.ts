@@ -11,6 +11,14 @@ import type { QueueItem, RepeatedItem } from './queue';
 
 export type { AdapterId };
 
+/**
+ * `table`'s own entry for `id`: never what every object inherits (`toString`, `constructor`, …),
+ * which an adapter or connection a file names may be called.
+ */
+function own<T>(table: Readonly<Record<string, T>>, id: string): T | undefined {
+  return Object.hasOwn(table, id) ? table[id] : undefined;
+}
+
 /** The adapter a new node starts with. */
 export const DEFAULT_AGENT: AdapterId = 'claude-code';
 
@@ -22,7 +30,7 @@ const AGENT_NAMES: Readonly<Record<AdapterId, string>> = {
 
 /** How an adapter's agents are named: its id, for an adapter this build doesn't have. */
 export function adapterName(adapter: AdapterId): string {
-  return AGENT_NAMES[adapter] ?? adapter;
+  return own(AGENT_NAMES, adapter) ?? adapter;
 }
 
 /** The CLI each adapter runs. */
@@ -33,7 +41,7 @@ const AGENT_CLIS: Readonly<Record<AdapterId, string>> = {
 
 /** The CLI an adapter runs, as its user knows it: its id, for an adapter this build doesn't have. */
 export function adapterCli(adapter: AdapterId): string {
-  return AGENT_CLIS[adapter] ?? adapter;
+  return own(AGENT_CLIS, adapter) ?? adapter;
 }
 
 /**
@@ -50,7 +58,7 @@ const AGENT_CONNECTIONS: Readonly<Record<AdapterId, readonly ConnectionId[]>> = 
 
 /** The connections an adapter offers, in its order: none, for one this build doesn't have. */
 export function connectionsOf(adapter: AdapterId): readonly ConnectionId[] {
-  return AGENT_CONNECTIONS[adapter] ?? [];
+  return own(AGENT_CONNECTIONS, adapter) ?? [];
 }
 
 /** The adapters with working connectors, offered when choosing an agent. */
@@ -95,7 +103,7 @@ const CONNECTION_INFO: Readonly<Record<ConnectionId, ConnectionInfo>> = {
 
 /** How a connection is named and explained: Not connected, for one this build doesn't have. */
 export function connectionInfo(connection: AgentConnection): ConnectionInfo {
-  return (connection === 'unavailable' ? undefined : CONNECTION_INFO[connection]) ?? NOT_CONNECTED;
+  return own(CONNECTION_INFO, connection) ?? NOT_CONNECTED;
 }
 
 /** An adapter's first connection: what a new agent runs as; unavailable, for an unknown adapter. */
@@ -195,7 +203,7 @@ const AGENT_ACTIONS: Readonly<Record<AdapterId, readonly AgentAction[]>> = {
 
 /** What an adapter's agents can be asked to do: nothing, for an adapter this build doesn't have. */
 export function actionsOf(adapter: AdapterId): readonly AgentAction[] {
-  return AGENT_ACTIONS[adapter] ?? [];
+  return own(AGENT_ACTIONS, adapter) ?? [];
 }
 
 /**
@@ -223,7 +231,8 @@ export function equivalentAction(
   to: AdapterId,
 ): string | undefined {
   if (from === to) return action;
-  return EQUIVALENT_ACTIONS.find((job) => job[from] === action)?.[to];
+  const job = EQUIVALENT_ACTIONS.find((one) => own(one, from) === action);
+  return job === undefined ? undefined : own(job, to);
 }
 
 /** Steps keep their job when an agent changes adapter, including those inside Ifs and repeats. */

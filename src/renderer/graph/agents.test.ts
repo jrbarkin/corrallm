@@ -4,11 +4,15 @@ import type { CanvasId } from '../../shared/canvas';
 import { catalog } from '../catalog';
 import {
   actionsOf,
+  adapterCli,
+  adapterName,
+  agentLabel,
   CONNECTED_AGENTS,
   connectionInfo,
   connectionOf,
   connectionsOf,
   defaultConnection,
+  translateActions,
 } from './agents';
 import { fromFile, toFile } from './file';
 import { addAgent, EMPTY_GRAPH, setAgent, spawnAgent } from './graph';
@@ -89,6 +93,50 @@ describe('native agent defaults', () => {
       expect(graph.nodes[0]?.data.queue).toEqual([
         { id: 'work', message: 'Keep the authored work.' },
       ]);
+      expect(toFile(graph, ID)).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
+    },
+  );
+
+  it.each([
+    ['toString', undefined],
+    ['toString', 'toString'],
+    ['constructor', undefined],
+    ['constructor', 'constructor.acp'],
+    ['valueOf', 'valueOf'],
+    ['hasOwnProperty', undefined],
+  ])(
+    'reads an adapter named like what every object inherits (%s, connection %s) as one this build lacks',
+    (adapter, connection) => {
+      const file = canvas({ adapter, ...(connection === undefined ? {} : { connection }) });
+      const graph = fromFile(file, catalog());
+      const data = graph.nodes[0]?.data ?? {};
+      // Its card: Not connected, named by its id.
+      expect(connectionOf(data)).toBe('unavailable');
+      expect(agentLabel(adapter, connectionOf(data))).toBe(`${adapter} · Not connected`);
+      expect(adapterName(adapter)).toBe(adapter);
+      expect(adapterCli(adapter)).toBe(adapter);
+      expect(connectionInfo(connection ?? adapter)).toEqual(connectionInfo('unavailable'));
+      expect(connectionsOf(adapter)).toEqual([]);
+      expect(defaultConnection(adapter)).toBe('unavailable');
+      expect(actionsOf(adapter)).toEqual([]);
+      // Its steps keep their actions as it changes adapter, either way.
+      const steps = [
+        { id: 'run', action: 'Bash' },
+        { id: 'look', action: 'Read' },
+      ];
+      expect(translateActions(steps, adapter, 'codex')).toEqual(steps);
+      expect(translateActions(steps, 'claude-code', adapter)).toEqual(steps);
+      const claude = addAgent(EMPTY_GRAPH, 'a', { x: 0, y: 0 });
+      const moved = setAgent(
+        {
+          ...claude,
+          nodes: claude.nodes.map((n) => ({ ...n, data: { ...n.data, queue: steps } })),
+        },
+        'a',
+        adapter,
+      );
+      expect(moved.nodes[0]?.data).toMatchObject({ adapter, queue: steps });
+      expect(connectionOf(moved.nodes[0]?.data ?? {})).toBe('unavailable');
       expect(toFile(graph, ID)).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
     },
   );

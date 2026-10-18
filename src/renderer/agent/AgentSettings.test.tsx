@@ -9,6 +9,7 @@ import type { AgentConnection } from '../graph/agents';
 import { setAgent, setConnection, setRole } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
+import { SettingsMenu } from './Settings';
 import { NEW_SESSION } from './session';
 import type { Session } from './session';
 
@@ -354,4 +355,34 @@ describe('shared agent settings', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(opener);
   });
+
+  it.each(['toString', 'constructor'])(
+    'names an agent whose adapter is named like what every object inherits (%s) by its id',
+    (adapter) => {
+      render(<Editor initial={agent({ adapter, connection: adapter })} />);
+      expect(
+        screen.getByRole('button', { name: 'Agent settings: Reviewer' }).textContent,
+      ).toContain(`${adapter} · Not connected`);
+      const { panel } = open();
+      expect(panel.getByRole('button', { name: `Agent: ${adapter} · Not connected` })).toBeTruthy();
+    },
+  );
+
+  it.each(['toString', 'constructor'])(
+    'words the settings of an adapter it has no words for (%s) as any CLI’s',
+    (adapter) => {
+      render(
+        <SettingsMenu
+          inline
+          adapter={adapter}
+          connection={adapter}
+          settings={{}}
+          options={options}
+          running={undefined}
+          working={false}
+        />,
+      );
+      expect(screen.getByRole('group', { name: 'Its CLI settings' })).toBeTruthy();
+    },
+  );
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import { catalog } from '../catalog';
+import { agentLabel, connectionOf } from './agents';
 import { fromFile, toFile } from './file';
 import { autosize } from './graph';
 import type { Graph, GraphNode } from './graph';
@@ -381,6 +382,34 @@ describe('fromFile', () => {
     Object.assign(file.nodes[2] ?? {}, { settings: { 'claude-code': {}, codex: {} } });
     expect(fromFile(JSON.stringify(file), catalog()).nodes[2]?.data).toEqual({ label: 'Reviewer' });
   });
+
+  it.each([
+    ['toString', undefined],
+    ['toString', 'toString.acp'],
+    ['constructor', undefined],
+    ['constructor', 'constructor'],
+  ])(
+    'keeps an agent whose adapter is named like what every object inherits (%s, connection %s) as it was',
+    (adapter, connection) => {
+      const file = structuredClone(saved);
+      Object.assign(file.nodes[1] ?? {}, {
+        adapter,
+        ...(connection === undefined ? {} : { connection }),
+        settings: { toString: { model: 'pro', mode: 'yolo' }, constructor: { effort: 'max' } },
+      });
+      const graph = fromFile(JSON.stringify(file), catalog());
+      const data = graph.nodes.find((n) => n.id === 'a')?.data ?? {};
+      expect(data).toMatchObject({
+        adapter,
+        settings: { toString: { model: 'pro', mode: 'yolo' }, constructor: { effort: 'max' } },
+      });
+      expect(connectionOf(data)).toBe('unavailable');
+      expect(agentLabel(adapter, connectionOf(data), { short: true })).toBe(
+        `${adapter} · Not connected`,
+      );
+      expect(JSON.parse(toFile(graph, ID))).toEqual(file);
+    },
+  );
 
   it('refuses a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);

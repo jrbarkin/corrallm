@@ -93,7 +93,8 @@ export function SettingsMenu({
     };
   }, [adapter]);
 
-  const words = CLI_WORDS[adapter] ?? SOME_WORDS;
+  // Its own words only: an adapter a file names may be called `toString` or `constructor`.
+  const words = (Object.hasOwn(CLI_WORDS, adapter) ? CLI_WORDS[adapter] : undefined) ?? SOME_WORDS;
   const models: readonly ModelChoice[] = read.options?.models ?? [];
   const defaults = read.options?.defaults ?? { model: null, effort: null, mode: null };
   const named = (value: string | null) => models.find((m) => m.value === value);
