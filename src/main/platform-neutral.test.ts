@@ -101,7 +101,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/usage/UsageGauge.tsx': 5,
   'src/renderer/usage/usage.ts': 3,
   'src/shared/ipc.ts': 6,
-  'src/shared/session.ts': 70,
+  'src/shared/session.ts': 69,
   'src/shared/terminal.ts': 1,
   'src/shared/usage.ts': 7,
 };
