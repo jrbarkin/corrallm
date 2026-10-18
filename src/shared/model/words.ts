@@ -103,9 +103,9 @@ export const otherwiseText = (repeat: QueueRepeat): string =>
 export const repeatText = (nodes: readonly NodeLike[], repeat: QueueRepeat): string =>
   `Repeat until ${untilText(nodes, repeat.until)}`;
 
-/** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
-export const delayText = (item: QueueDelay, catalog: BackendNames): string =>
-  `Wait ${timeText(item.delay, catalog)}`;
+/** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM" (in `locale`'s way). */
+export const delayText = (item: QueueDelay, catalog: BackendNames, locale?: string): string =>
+  `Wait ${timeText(item.delay, catalog, locale)}`;
 
 /** What an OK is on, in the user's words: "the spec in SPEC.md", or "the work before it". */
 export const okWhat = (ok: QueueApproval): string => ok.approve.trim() || 'the work before it';
@@ -114,24 +114,28 @@ export const okWhat = (ok: QueueApproval): string => ok.approve.trim() || 'the w
 export const okText = (ok: QueueApproval, max = 32): string =>
   `Your OK on ${threadTitle(okWhat(ok), max)}`;
 
-/** How a wait reads, given how each of its targets reads: "Wait for Builder, at most 30 minutes". */
+/**
+ * How a wait reads, given how each of its targets reads: "Wait for Builder, at most 30 minutes",
+ * "…, no later than 6:00 PM" (in `locale`'s way).
+ */
 export const waitText = (
   item: QueueWait,
   targetLabel: (target: WaitTarget) => string,
   catalog: BackendNames,
+  locale?: string,
 ): string =>
   `Wait for ${andList(item.waitFor.map(targetLabel))}${
-    item.timeout === undefined ? '' : `, ${limitText(item.timeout, catalog)}`
+    item.timeout === undefined ? '' : `, ${limitText(item.timeout, catalog, locale)}`
   }`;
 
-/** How a queue item reads when another agent waits for it. */
-export const itemLabel = (item: QueueItem, catalog: BackendNames): string =>
+/** How a queue item reads when another agent waits for it (a time of day in `locale`'s way). */
+export const itemLabel = (item: QueueItem, catalog: BackendNames, locale?: string): string =>
   isWait(item)
     ? 'its wait'
     : isRepeat(item)
       ? 'its repeat'
       : isDelay(item)
-        ? delayText(item, catalog)
+        ? delayText(item, catalog, locale)
         : isApproval(item)
           ? okText(item, 24)
           : isIf(item)
@@ -163,10 +167,11 @@ export function waitTargetLabel(
   nodes: readonly NodeLike[],
   { agent, item }: WaitTarget,
   catalog: BackendNames,
+  locale?: string,
 ): string {
   if (item === undefined) return agentName(nodes, agent);
   const found = findItem(nodes.find((n) => n.id === agent)?.data.queue ?? [], item);
-  return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item, catalog) : 'a removed step'}`;
+  return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item, catalog, locale) : 'a removed step'}`;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -178,20 +183,21 @@ export function andList(names: readonly string[]): string {
 
 /**
  * How an item reads in full, as All queues names it: what it does, and to which agent; a repeat,
- * how many rounds it runs at most (unless it goes round with another, as many as that one).
+ * how many rounds it runs at most (unless it goes round with another, as many as that one). A
+ * time of day reads in `locale`'s way.
  */
 export function taskLabel(
   nodes: readonly NodeLike[],
   item: QueueItem,
   catalog: BackendNames,
+  locale?: string,
 ): string {
-  if (isWait(item))
-    return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
+  if (isWait(item)) return waitWords(nodes, item, catalog, locale);
   if (isRepeat(item)) {
     const text = repeatText(nodes, item);
     return isRepeatEnds(item.until) ? text : `${text} (${roundsText(item.rounds)})`;
   }
-  if (isDelay(item)) return delayText(item, catalog);
+  if (isDelay(item)) return delayText(item, catalog, locale);
   if (isApproval(item)) return okText(item);
   if (isIf(item)) return `If ${ifText(item.if, catalog)}`;
   const what = isMessage(item)
@@ -202,20 +208,36 @@ export function taskLabel(
 
 /**
  * How an item reads on its own buttons ("Move …", "Remove …", "Go on now: …"): what it is, and
- * for a wait, a delay, an OK, an if-then or a repeat, what it waits for or checks.
+ * for a wait, a delay, an OK, an if-then or a repeat, what it waits for or checks (a time of day
+ * in `locale`'s way).
  */
 export function describe(
   nodes: readonly NodeLike[],
   item: QueueItem,
   catalog: BackendNames,
+  locale?: string,
 ): string {
-  if (isWait(item))
-    return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
+  if (isWait(item)) return waitWords(nodes, item, catalog, locale);
   if (isRepeat(item)) return repeatText(nodes, item);
-  if (isDelay(item)) return delayText(item, catalog);
+  if (isDelay(item)) return delayText(item, catalog, locale);
   if (isApproval(item)) return okText(item);
   if (isIf(item)) return `If ${ifText(item.if, catalog)}`;
   return isMessage(item) ? 'Message' : item.action;
+}
+
+/** How a wait reads in full: each of its targets named, and its time limit. */
+function waitWords(
+  nodes: readonly NodeLike[],
+  item: QueueWait,
+  catalog: BackendNames,
+  locale: string | undefined,
+): string {
+  return waitText(
+    item,
+    (target) => waitTargetLabel(nodes, target, catalog, locale),
+    catalog,
+    locale,
+  );
 }
 
 const LENGTH_WORDS = [

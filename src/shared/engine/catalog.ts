@@ -11,7 +11,8 @@ import type {
 /*
  * What the engine (the run, and the sessions it sends to) reads of the catalog
  * (src/shared/adapter.ts): an agent's adapter and connection, its actions, the usage backend it
- * spends, the modes a connection starts in, and how a connection and a usage backend are named.
+ * spends, the modes a connection starts in, the text a connection runs as a shell command, and how
+ * a connection and a usage backend are named.
  * Whoever runs the engine (the renderer, or the core) injects it, made from the catalog it has, so
  * that the engine reads no table of its own, nor any catalog but this one, and names no adapter:
  * whatever adapters the catalog declares, it runs.
@@ -44,6 +45,16 @@ export interface EngineCatalog {
   /** How a connection is named ("Terminal"): nothing, for one the catalog lacks. */
   connectionLabel(connection: ConnectionId): string | undefined;
   /**
+   * How a connection is named in full, with its adapter's name ("<adapter> · Terminal"): nothing,
+   * for one the catalog lacks.
+   */
+  connectionName(connection: ConnectionId): string | undefined;
+  /**
+   * The text a connection runs as a shell command, without asking, when a message starts with it:
+   * none for one that runs no shell command from a message (or one the catalog lacks).
+   */
+  shellPrefix(connection: ConnectionId): string | undefined;
+  /**
    * Whether a connection's sessions may start in `mode`: one its adapter lists that asks, among
    * those the connection starts in (never, for a connection the catalog lacks).
    */
@@ -71,6 +82,11 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
     actionsOf: ({ adapter = defaultAdapter }) => adapterIn(catalog, adapter)?.actions ?? [],
     usageBackendOf: (agent) => connection(connectionOf(agent))?.connection.usage ?? undefined,
     connectionLabel: (id) => connection(id)?.connection.label,
+    connectionName: (id) => {
+      const found = connection(id);
+      return found && `${found.adapter.name} · ${found.connection.label}`;
+    },
+    shellPrefix: (id) => connection(id)?.connection.shellPrefix,
     isStartMode: (id, mode) => {
       const found = connection(id);
       return found !== undefined && isStartMode(catalog, found.adapter.id, id, mode);

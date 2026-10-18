@@ -40,6 +40,28 @@ describe('SessionStore', () => {
     store.reset();
   });
 
+  it('sends a message under the id its sender keeps its record by, and its turn ends naming it', async () => {
+    const { backend, emit, sent } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    const done = vi.fn();
+    const id = '6a0d3c1e-5b4f-4e2a-9c8d-7f6e5d4c3b2a';
+    store.send('a', 'claude-code', 'Hello', done, undefined, undefined, 'queue', undefined, id);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent()).toBe(id);
+    emit('a', 'claude-code.sdk', { type: 'user', id, text: 'Hello' });
+    emit('a', 'claude-code.sdk', {
+      type: 'end',
+      messages: [id],
+      seconds: 1,
+      interrupted: false,
+      failed: false,
+    });
+    expect(done).toHaveBeenCalledWith(false, '', { status: 'completed', reason: 'completed' });
+    store.reset();
+  });
+
   describe('held queues', () => {
     it.each(['reset', 'remove', 'rehold'] as const)(
       'does not dispatch a released queue if %s supersedes it in the same call stack',

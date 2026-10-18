@@ -28,15 +28,15 @@ import { AgentView } from '../agent/AgentView';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { NO_BACKEND } from '../../shared/engine/transcript/receive';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
-import { NEW_SESSION, pendingSessionQuestions } from '../../shared/model/session';
-import type { AskedInSession, CardQuestion } from '../../shared/model/session';
-import { adapterOf, catalog, continuesIn, isTerminal } from '../catalog';
+import { adapterOf, catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import { withSubmissions } from '../queues/submissions';
 import { Engine } from '../../shared/engine/engine';
+import { NEW_SESSION } from '../../shared/model/session';
+import { needsOf } from '../../shared/engine/needs';
 import { heldAsks } from '../../shared/engine/run/asks';
 import {
   groupControlText,
@@ -93,7 +93,7 @@ import {
   ungroupSelection,
 } from './graph';
 import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/model/queries';
-import type { Graph, GraphNode } from './graph';
+import type { Graph } from './graph';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import { EXAMPLES } from './examples';
@@ -932,22 +932,17 @@ function Editor({
       };
     });
   }, [displayNodes, sessions, run]);
-  /** What Terminal agents' CLIs ask in their terminals: listed, answered there. */
-  const inTerminal = graph.nodes.flatMap((agent) => {
-    const connection = connectionOf(agent.data);
-    return agent.type === 'agent' && isTerminal(connection)
-      ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
-      : [];
-  });
-  /** The questions agents wait on, asked in their sessions. */
-  const pending: { agent: GraphNode; question: CardQuestion; asked: AskedInSession }[] =
-    graph.nodes.flatMap((agent) =>
-      pendingSessionQuestions(sessions[agent.id] ?? NEW_SESSION).map((asked) => ({
-        agent,
-        question: asked.question,
-        asked,
-      })),
-    );
+  /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
+  const needed = useMemo(() => {
+    const canvas = {
+      canvas: canvasId,
+      nodes: runNodes,
+      run,
+      sessions,
+      catalog: engine.catalog,
+    };
+    return { canvas, needs: needsOf(canvas) };
+  }, [canvasId, runNodes, run, sessions, engine]);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
@@ -1230,35 +1225,14 @@ function Editor({
               Delete
             </button>
           </NodeToolbar>
-          {(pending.length > 0 || asks.length > 0 || inTerminal.length > 0) && (
+          {needed.needs.length > 0 && (
             <Panel position="top-right">
               <QuestionsSidebar
-                asks={asks}
+                needs={needed.needs}
+                canvas={needed.canvas}
                 onDecide={edits.decide}
-                pending={pending.map(({ agent, question }) => ({
-                  agentId: agent.id,
-                  agentName: agent.data.label || 'Unnamed agent',
-                  agentType: agent.data.adapter ?? DEFAULT_AGENT,
-                  question,
-                }))}
-                inTerminal={inTerminal.map(({ agent, ask }) => ({
-                  agentId: agent.id,
-                  agentName: agent.data.label || 'Unnamed agent',
-                  agentType: agent.data.adapter ?? DEFAULT_AGENT,
-                  ask,
-                }))}
-                onAnswer={(agentId, questionId, answer) => {
-                  const asked = pending.find(
-                    (p) => p.agent.id === agentId && p.question.id === questionId,
-                  );
-                  if (asked) {
-                    sessionStore.answerQuestion(
-                      agentId,
-                      asked.asked.prompt,
-                      asked.asked.index,
-                      answer,
-                    );
-                  }
+                onAnswer={(agentId, promptId, index, answer) => {
+                  sessionStore.answerQuestion(agentId, promptId, index, answer);
                 }}
                 onOpen={(agentId) => {
                   apply((g) => selectOnly(g, agentId));
@@ -1594,7 +1568,7 @@ function Editor({
                   },
                 }
               : {})}
-            heldByGroups={(run.groupPauses ?? [])
+            heldByGroups={[...new Set((run.groupPauses ?? []).map(({ id }) => id))]
               .filter((id) => groupAgentIds(graph.nodes, id).includes(menuNode.id))
               .map(nameOf)}
             {...(menuNode.type === 'agent' && menuIsGroup

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { answersOf, NEW_SESSION, pendingSessionQuestions } from '../../model/session';
+import { answersOf, NEW_SESSION, sessionQuestions } from '../../model/session';
 import type { Entry, Session } from '../../model/session';
 import { reduce } from './reduce';
+
+/** The questions a session still waits on an answer to. */
+const pending = (session: Session) =>
+  sessionQuestions(session).filter(({ question }) => question.answer === undefined);
 
 const tool = (id: string, status: 'running' | 'done' = 'running'): Entry => ({
   id,
@@ -105,7 +109,7 @@ describe('reduce, for connected sessions', () => {
     expect(asked.status).toBe('waiting');
     const one = reduce(asked, { type: 'answerQuestion', id: 'q', index: 1, answer: 'Yes' });
     expect(one.status).toBe('waiting');
-    expect(pendingSessionQuestions(one).map((q) => q.question.text)).toEqual(['Which branch?']);
+    expect(pending(one).map((q) => q.question.text)).toEqual(['Which branch?']);
     const both = reduce(one, { type: 'answerQuestion', id: 'q', index: 0, answer: 'main' });
     expect(both.status).toBe('working');
     expect(answersOf(both, 'q')).toEqual(['main', 'Yes']);
@@ -138,7 +142,7 @@ describe('reduce, for connected sessions', () => {
     s = reduce(s, { type: 'ask', entry: { id: 'p2', kind: 'plan', plan: 'Plan' } });
     s = reduce(s, { type: 'end', id: 'e', seconds: 2, interrupted: true });
     expect(s.entries.find((e) => e.id === 'p2')).toMatchObject({ withdrawn: true });
-    expect(pendingSessionQuestions(s)).toEqual([]);
+    expect(pending(s)).toEqual([]);
   });
 
   it('marks a turn that failed', () => {

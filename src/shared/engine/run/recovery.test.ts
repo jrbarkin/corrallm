@@ -11,7 +11,7 @@ afterEach(expectRestorable);
 /** The run's catalog, as the app gives it. */
 const engine = TEST_ENGINE;
 
-function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
+function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}, connection = 'claude-code.sdk') {
   const sent: {
     text: string;
     done: (turn: TurnEnd) => void;
@@ -38,7 +38,7 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
     id: 'a',
     type: 'agent',
     position: { x: 0, y: 0 },
-    data: { label: 'A', connection: 'claude-code.sdk', queue },
+    data: { label: 'A', connection, queue },
   };
   const store = liveRun(engine, io);
   store.update([node]);
@@ -145,11 +145,11 @@ describe('task recovery', () => {
     { task: 'a step', queue: [step, next] },
     { task: 'a message', queue: [{ id: 'build', message: 'Run the tests' }, next] },
   ])(
-    'sends a correction to $task that starts with "!" alone, never with the canvas’s text',
+    'sends a correction to $task that starts with its shell prefix alone, never with the canvas’s text',
     ({ queue }) => {
-      // Claude Code and Codex run a message that starts with "!" as a shell command: the canvas's
-      // text after the user's own would be run as part of it.
-      const { store, sent, reply } = setup(queue);
+      // A Terminal runs a message that starts with "!" as a shell command: the canvas's text after
+      // the user's own would be run as part of it.
+      const { store, sent, reply } = setup(queue, {}, 'claude-code.terminal');
       store.start();
       reply('FAILED', true);
       expect(store.snapshot().agents.a?.problem).toBeDefined();
@@ -159,6 +159,12 @@ describe('task recovery', () => {
         origin: 'user',
         displayText: '!npm test',
       });
+      // The Agent SDK runs no shell command from a message: the correction goes with its task.
+      const sdk = setup(queue);
+      sdk.store.start();
+      sdk.reply('FAILED', true);
+      sdk.store.decide('a', 'build', { reply: ' !npm test ' });
+      expect(sdk.sent.at(-1)?.text).toMatch(/^!npm test\n\nContinue /);
     },
   );
 

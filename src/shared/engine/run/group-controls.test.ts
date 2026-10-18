@@ -126,7 +126,7 @@ describe('group scheduler controls', () => {
     store.start();
     store.update([frame('g'), agent('a')]);
     expect(texts()).toEqual([]);
-    expect(store.snapshot().groupPauses).toEqual(['g']);
+    expect(store.snapshot().groupPauses).toEqual([{ id: 'g', by: 'you' }]);
     store.resumeAgent('a');
     expect(texts()).toEqual(['a:one']);
   });
@@ -142,7 +142,7 @@ describe('group scheduler controls', () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]?.agents.a?.paused).toBe(true);
     expect(snapshots[0]?.agents.b?.paused).toBe(true);
-    expect(snapshots[0]?.groupPauses).toEqual(['g']);
+    expect(snapshots[0]?.groupPauses).toEqual([{ id: 'g', by: 'you' }]);
   });
 
   it('finishes active nested members, including the parent agent, without interrupting them', () => {
@@ -154,7 +154,7 @@ describe('group scheduler controls', () => {
     expect(sent.every(({ withdrawn }) => !withdrawn)).toBe(true);
     for (const id of ['parent', 'a', 'b']) reply(id);
     expect(groupControlText(nodes, store.snapshot(), 'parent')).toBe('Paused');
-    expect(store.snapshot().groupPauses).toEqual(['parent']);
+    expect(store.snapshot().groupPauses).toEqual([{ id: 'parent', by: 'you' }]);
     expect(store.snapshot().individualPauses).toEqual([]);
     reply('outside');
     reply('c');
@@ -193,7 +193,7 @@ describe('group scheduler controls', () => {
     store.pauseAgent('a');
     store.resumeGroup('g');
     expect(texts()).toEqual(['b:one']);
-    expect(store.snapshot().individualPauses).toEqual(['a']);
+    expect(store.snapshot().individualPauses).toEqual([{ id: 'a', by: 'you' }]);
     store.resumeAgent('a');
     expect(texts()).toEqual(['b:one', 'a:one']);
   });
@@ -202,7 +202,7 @@ describe('group scheduler controls', () => {
     const first = setup([frame('g')]);
     first.store.pauseGroup('g');
     first.store.start();
-    expect(first.store.snapshot().groupPauses).toEqual(['g']);
+    expect(first.store.snapshot().groupPauses).toEqual([{ id: 'g', by: 'you' }]);
     const second = setup([frame('g')]);
     second.store.restore(first.store.checkpoint());
     second.store.update([frame('g'), agent('a', 'g')]);
@@ -289,7 +289,7 @@ describe('group scheduler controls', () => {
     store.killGroup('parent');
     expect(events.slice(0, 3)).toEqual(['hold:parent:true', 'hold:a:true', 'hold:b:true']);
     expect(sent.map(({ withdrawn }) => withdrawn)).toEqual([true, true, true, true, false]);
-    expect(store.snapshot().groupPauses).toEqual(['parent']);
+    expect(store.snapshot().groupPauses).toEqual([{ id: 'parent', by: 'you' }]);
     expect(store.snapshot().individualPauses).toEqual([]);
     for (const id of ['parent', 'a', 'b', 'incoming'])
       expect(store.snapshot().agents[id]?.problem?.kind).toBe('cancelled');
@@ -356,8 +356,11 @@ describe('group scheduler controls', () => {
     expect(second.store.snapshot()).toMatchObject({
       running: false,
       paused: true,
-      individualPauses: ['a'],
-      groupPauses: ['outer', 'parent'],
+      individualPauses: [{ id: 'a', by: 'you' }],
+      groupPauses: [
+        { id: 'outer', by: 'you' },
+        { id: 'parent', by: 'you' },
+      ],
     });
     second.store.resumeGroup('outer');
     second.store.resume();
@@ -386,7 +389,10 @@ describe('group scheduler controls', () => {
       const { store } = setup(tree());
       store.start();
       const saved = JSON.parse(store.checkpoint()) as { run: Record<string, unknown> };
-      saved.run[field] = ['parent', 123];
+      saved.run[field] = [
+        { id: 'parent', by: 'you' },
+        { id: 'parent', by: 'nobody' },
+      ];
       const before = store.checkpoint();
       expect(() => {
         store.restore(JSON.stringify(saved));

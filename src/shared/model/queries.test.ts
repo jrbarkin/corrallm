@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasNode } from './canvas';
-import { groupMembers, isGroup } from './queries';
+import { groupMembers, isGroup, managerOf, teamOf } from './queries';
 
 const node = (id: string, type: 'agent' | 'frame', parentId?: string): CanvasNode => ({
   id,
@@ -64,5 +64,29 @@ describe('group membership', () => {
     ];
     expect(groupMembers(nodes, 'a')).toEqual(['b', 'a']);
     expect(groupMembers(nodes, 'outer')).toEqual(['worker']);
+  });
+});
+
+describe('who manages whom', () => {
+  const nodes = [
+    node('lead', 'agent'),
+    node('box', 'frame', 'lead'),
+    node('worker', 'agent', 'box'),
+    node('helper', 'agent', 'worker'),
+    node('frame', 'frame'),
+    node('loose', 'agent', 'frame'),
+  ];
+
+  it('makes an agent’s manager the nearest agent it is nested inside, through frames', () => {
+    expect(managerOf(nodes, 'worker')).toBe('lead');
+    expect(managerOf(nodes, 'helper')).toBe('worker');
+    expect(managerOf(nodes, 'loose')).toBeUndefined();
+    expect(managerOf(nodes, 'lead')).toBeUndefined();
+  });
+
+  it('makes an agent’s team every agent nested inside it, at any depth', () => {
+    expect(teamOf(nodes, 'lead')).toEqual(['worker', 'helper']);
+    expect(teamOf(nodes, 'worker')).toEqual(['helper']);
+    expect(teamOf(nodes, 'loose')).toEqual([]);
   });
 });

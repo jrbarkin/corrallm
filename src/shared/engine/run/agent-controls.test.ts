@@ -75,6 +75,27 @@ function setup(nodes: AgentNode[], extra: Partial<RunIO> = {}) {
 }
 
 describe('per-agent run controls', () => {
+  it('keeps each party’s pause apart: a party releases its own, you release any', () => {
+    const { store, texts } = setup([node('a', [message('one')]), node('b', [message('two')])]);
+    store.pauseAgent('a', 'outside:orchestrator');
+    store.pauseAgent('a');
+    expect(store.pausedBy({ agent: 'a' })).toEqual(['outside:orchestrator', 'you']);
+    store.resumeAgent('a', 'outside:orchestrator');
+    expect(store.pausedBy({ agent: 'a' })).toEqual(['you']);
+    expect(store.snapshot().agents.a?.paused).toBe(true);
+    store.pauseAgent('b', 'outside:orchestrator');
+    store.start();
+    expect(texts()).toEqual([]);
+    // Yours releases every party's.
+    store.resumeAgent('b');
+    store.resumeAgent('a');
+    expect(store.pausedBy({ agent: 'a' })).toEqual([]);
+    expect(texts()).toEqual([
+      ['b', 'two'],
+      ['a', 'one'],
+    ]);
+  });
+
   it('accepts a native correction of a killed Message while keeping its next task paused', () => {
     const { store, sent } = setup([node('a', [message('one'), message('next')])]);
     store.start();

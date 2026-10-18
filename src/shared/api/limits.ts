@@ -22,6 +22,21 @@ export const MAX_IMAGES = 20;
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 
 /**
+ * The newest settled messages the store keeps per party (a message counts for its sender and its
+ * recipient), within STORE_BYTES per canvas; pending and unresolved ones are always kept, and the
+ * oldest settled go first (API Spec §5.8).
+ */
+export const STORE_SETTLED_PER_PARTY = 100;
+/** The most bytes of messages a canvas's store keeps (their JSON). */
+export const STORE_BYTES = 4 * 1024 * 1024;
+
+/** The most a page of a list (messages, a transcript) holds; 50 when a call doesn't say. */
+export const MAX_PAGE = 200;
+
+/** How many lines of a prompt's detail are shown, then how many more there are. */
+export const MAX_DETAIL_LINES = 12;
+
+/**
  * How many live agents one party may have created (decision 13, Build Plan Q12), counted per
  * creating party (`agent:<id>` or `outside:<name>`), never per token: a lead's includes its team's.
  */

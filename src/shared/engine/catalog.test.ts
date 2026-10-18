@@ -78,6 +78,21 @@ describe('engineCatalog', () => {
     expect(engine.connectionLabel('qwen.acp')).toBeUndefined();
   });
 
+  it('names a connection in full, with its adapter, as a refusal says it', () => {
+    expect(engine.connectionName('codex.terminal')).toBe('Codex · Terminal');
+    expect(engine.connectionName('claude-code.sdk')).toBe('Claude Code · Agent SDK');
+    expect(engine.connectionName('unavailable')).toBeUndefined();
+  });
+
+  it('gives the text each connection runs as a shell command when a message starts with it', () => {
+    expect(engine.shellPrefix('claude-code.terminal')).toBe('!');
+    expect(engine.shellPrefix('codex.terminal')).toBe('!');
+    // The Agent SDK and the App Server run no shell command from a message's text.
+    expect(engine.shellPrefix('claude-code.sdk')).toBeUndefined();
+    expect(engine.shellPrefix('codex.app-server')).toBeUndefined();
+    expect(engine.shellPrefix('unavailable')).toBeUndefined();
+  });
+
   it('names a usage backend as the catalog does; by its id, for one it lacks', () => {
     expect(engine.backendName('claude-code')).toBe('Claude');
     expect(engine.backendName('codex')).toBe('Codex');

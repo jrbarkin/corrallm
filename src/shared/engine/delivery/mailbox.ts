@@ -267,7 +267,8 @@ export class SessionStore {
    * replied in it (turnReply). `onRefused` hears each time the session would not start while the
    * message waits to go (kept, queued). Returns a function that takes the message back: off the
    * queue while it waits there, or interrupting its turn while that goes on (and nothing once it
-   * has ended).
+   * has ended). `id`: what it is sent under (its turn ends naming it), when the sender keeps its
+   * own record of it; a new one when not given.
    */
   send(
     agentId: string,
@@ -278,9 +279,9 @@ export class SessionStore {
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
     displayText?: string,
+    id: string = crypto.randomUUID(),
   ): () => void {
     this.#types.set(agentId, agent);
-    const id = crypto.randomUUID();
     if (origin === 'queue') this.#queueMessages.add(id);
     else if (origin === 'run') this.#runMessages.add(id);
     if (displayText !== undefined) this.#displayTexts.set(id, displayText);

@@ -2,7 +2,8 @@ import type { MessageImage, TurnResult } from '../../session';
 import { WINDOW_NAMES, windowNow } from '../../usage';
 import type { ConnectionId, UsageBackendId } from '../../adapter';
 import type { AgentNode, CanvasNode } from '../../model/canvas';
-import type { UsageHold, UsageReading, UsageState } from '../../usage';
+import type { PartyId } from '../../model/messages';
+import type { UsageAction, UsageHold, UsageReading, UsageState } from '../../usage';
 import { agentName, groupMembers, isGroup } from '../../model/queries';
 import {
   findItem,
@@ -127,10 +128,22 @@ export interface AgentRun {
   usage?: UsageHold;
 }
 
+/**
+ * A hold on an agent's or a group's queue (`id`), and the party that set it: a party releases only
+ * its own, and you any (Core Server rule R9).
+ */
+export interface PauseCause {
+  id: string;
+  by: PartyId;
+}
+
+/** What a pause, a kill or a release is aimed at: one agent, or every agent of a group. */
+export type PauseTarget = { agent: string } | { group: string };
+
 export interface Run {
   /** Individual and group hold causes; AgentRun.paused is their current membership projection. */
-  individualPauses?: readonly string[];
-  groupPauses?: readonly string[];
+  individualPauses?: readonly PauseCause[];
+  groupPauses?: readonly PauseCause[];
   /** Paused progress can resume; starting again is a separate deliberate action. */
   paused?: boolean;
   /**
@@ -215,17 +228,24 @@ export interface RunIO {
  */
 const ALARM_MS = 60_000;
 
-/** Why the run did not send a message that starts with "!". */
-const SHELL_REFUSED =
-  'Not sent: it starts with "!", which Claude Code and Codex run as a shell command, without asking. Reword it, or type it in the agent\'s terminal yourself.';
+/**
+ * Why the run did not send a message that starts with `prefix`, which the connection `name`d runs
+ * as a shell command.
+ */
+const shellRefused = (prefix: string, name: string) =>
+  `Not sent: it starts with "${prefix}", which ${name} runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.`;
+
+/** Whether `text` starts with `prefix`, the text its recipient runs as a shell command, if any. */
+const startsWith = (text: string, prefix: string | undefined): prefix is string =>
+  prefix !== undefined && prefix !== '' && text.trimStart().startsWith(prefix);
 
 /**
  * What a correction the user typed sends: their note, then what it corrects. A note that starts
- * with "!" is a shell command for the CLI's bash mode, sent alone: the canvas's text after it
- * would be run as part of it.
+ * with the recipient's shell prefix (`prefix`) is a shell command for its CLI's bash mode, sent
+ * alone: the canvas's text after it would be run as part of it.
  */
-const corrected = (note: string, task: string) =>
-  note.trimStart().startsWith('!') ? note : `${note}\n\n${task}`;
+const corrected = (note: string, task: string, prefix: string | undefined) =>
+  startsWith(note, prefix) ? note : `${note}\n\n${task}`;
 
 /**
  * What the run says when it waits for a usage window's reset that has never been read (the backend
@@ -256,8 +276,8 @@ interface PendingSend {
 }
 
 interface PauseCauses {
-  individual: string[];
-  groups: string[];
+  individual: PauseCause[];
+  groups: PauseCause[];
   recorded: boolean;
 }
 
@@ -487,41 +507,51 @@ export class RunStore {
     this.#settle(true);
   }
 
-  /** Lets the active task finish, then holds only this agent's queue and future incoming work. */
-  pauseAgent(id: string): void {
-    if (!this.#addIndividualPause(id)) return;
+  /**
+   * Lets the active task finish, then holds only this agent's queue and future incoming work: a
+   * cause the party `by` set (you, unless said).
+   */
+  pauseAgent(id: string, by: PartyId = 'you'): void {
+    if (!this.#addIndividualPause(id, by)) return;
     this.#publishControl();
   }
 
   /** Interrupts owned/received tasks, retaining their cancelled holds and the existing console. */
-  killAgent(id: string): void {
-    if (!this.#addIndividualPause(id)) return;
+  killAgent(id: string, by: PartyId = 'you'): void {
+    if (!this.#addIndividualPause(id, by)) return;
     this.#killMembers(new Set([id]));
     this.#publishControl();
   }
 
   /** Group causes are independent of individual and other containing-group causes. */
-  pauseGroup(id: string): void {
-    if (!this.#addGroupPause(id)) return;
+  pauseGroup(id: string, by: PartyId = 'you'): void {
+    if (!this.#addGroupPause(id, by)) return;
     this.#publishControl();
   }
 
   /** Hold the whole group before any withdrawal can release queued work in another member. */
-  killGroup(id: string): void {
-    if (!this.#addGroupPause(id)) return;
+  killGroup(id: string, by: PartyId = 'you'): void {
+    if (!this.#addGroupPause(id, by)) return;
     this.#killMembers(new Set(groupMembers(this.#nodes, id)));
     this.#publishControl();
   }
 
-  resumeGroup(id: string): void {
+  /** Releases the group's pause: the party `by`'s own cause, or (you, unless said) every party's. */
+  resumeGroup(id: string, by: PartyId = 'you'): void {
     const causes = this.#pauseCauses();
-    if (!causes.groups.includes(id)) return;
-    this.#writePauses(
-      causes.individual,
-      causes.groups.filter((group) => group !== id),
-    );
+    const left = causes.groups.filter((cause) => !releases(cause, id, by));
+    if (left.length === causes.groups.length) return;
+    this.#writePauses(causes.individual, left);
     this.#releasePending();
     this.#publishControl();
+  }
+
+  /** The parties whose pauses hold `target` now (an agent's own, or a group's), oldest first. */
+  pausedBy(target: PauseTarget): PartyId[] {
+    const causes = this.#pauseCauses();
+    const [id, held] =
+      'agent' in target ? [target.agent, causes.individual] : [target.group, causes.groups];
+    return held.flatMap((cause) => (cause.id === id ? [cause.by] : []));
   }
 
   #killMembers(members: ReadonlySet<string>): void {
@@ -556,37 +586,38 @@ export class RunStore {
     }
   }
 
-  /** Releases this agent without replaying interrupted work or resuming a globally paused run. */
-  resumeAgent(id: string): void {
+  /**
+   * Releases this agent, without replaying interrupted work or resuming a globally paused run: the
+   * party `by`'s own cause, or (you, unless said) every party's.
+   */
+  resumeAgent(id: string, by: PartyId = 'you'): void {
     const causes = this.#pauseCauses();
-    if (!causes.individual.includes(id)) return;
-    this.#writePauses(
-      causes.individual.filter((agent) => agent !== id),
-      causes.groups,
-    );
+    const left = causes.individual.filter((cause) => !releases(cause, id, by));
+    if (left.length === causes.individual.length) return;
+    this.#writePauses(left, causes.groups);
     this.#releasePending();
     this.#publishControl();
   }
 
-  #addIndividualPause(id: string): boolean {
+  #addIndividualPause(id: string, by: PartyId): boolean {
     if (!this.#agents().some((node) => node.id === id)) return false;
     const causes = this.#pauseCauses();
-    this.#writePauses([...causes.individual, id], causes.groups);
+    this.#writePauses([...causes.individual, { id, by }], causes.groups);
     return true;
   }
 
-  #addGroupPause(id: string): boolean {
+  #addGroupPause(id: string, by: PartyId): boolean {
     if (!isGroup(this.#nodes, id)) return false;
     const causes = this.#pauseCauses();
-    this.#writePauses(causes.individual, [...causes.groups, id]);
+    this.#writePauses(causes.individual, [...causes.groups, { id, by }]);
     return true;
   }
 
-  #writePauses(individual: readonly string[], groups: readonly string[]): void {
+  #writePauses(individual: readonly PauseCause[], groups: readonly PauseCause[]): void {
     this.#run = {
       ...this.#run,
-      individualPauses: [...new Set(individual)],
-      groupPauses: [...new Set(groups)],
+      individualPauses: distinct(individual),
+      groupPauses: distinct(groups),
     };
     this.#applyPauses();
   }
@@ -594,16 +625,16 @@ export class RunStore {
   #pauseCauses(run = this.#run): PauseCauses {
     const present = new Set(this.#agents().map((node) => node.id));
     return {
-      individual: [...new Set(run.individualPauses ?? [])].filter((id) => present.has(id)),
-      groups: [...new Set(run.groupPauses ?? [])].filter((id) => isGroup(this.#nodes, id)),
+      individual: distinct(run.individualPauses ?? []).filter(({ id }) => present.has(id)),
+      groups: distinct(run.groupPauses ?? []).filter(({ id }) => isGroup(this.#nodes, id)),
       recorded: run.individualPauses !== undefined || run.groupPauses !== undefined,
     };
   }
 
   #pausedMembers(causes: PauseCauses): Set<string> {
     return new Set([
-      ...causes.individual,
-      ...causes.groups.flatMap((id) => groupMembers(this.#nodes, id)),
+      ...causes.individual.map(({ id }) => id),
+      ...causes.groups.flatMap(({ id }) => groupMembers(this.#nodes, id)),
     ]);
   }
 
@@ -1315,6 +1346,29 @@ export class RunStore {
           text: 'This agent has no connection; choose Claude or Codex in Agent settings.',
         },
       };
+    const rule = this.usageRule(agent, now);
+    if (!rule) return undefined;
+    const { hold, action } = rule;
+    if (action === 'warn') {
+      this.warnUsage(agent, hold, now);
+      return undefined;
+    }
+    if (action === 'waitForReset' && hold.resetsAt !== null) {
+      return { current: task.id, status: 'waiting', until: hold.resetsAt, outcomes, usage: hold };
+    }
+    return { current: task.id, status: 'asking', outcomes, usage: hold };
+  }
+
+  /**
+   * What the usage rule of the backend an agent spends (catalog.ts usageBackendOf: none where no
+   * reading sees it) calls for before it starts something now, a task or a party's message: its
+   * latest reading over the rule's share of its window, and what to do (the rule's action, unless
+   * the user said to go on, or to wait, until that window resets). Undefined: nothing holds it.
+   */
+  usageRule(
+    agent: string,
+    now = this.#io.now(),
+  ): { hold: UsageHold; action: UsageAction } | undefined {
     const node = this.#agents().find((n) => n.id === agent);
     const backend = node && this.#catalog.usageBackendOf(node.data);
     const rule = backend && this.#io.usage?.().rules[backend];
@@ -1331,21 +1385,21 @@ export class RunStore {
     const decided = this.#usageDecided.get(JSON.stringify([backend, rule.window]));
     const choice = decided && now < decided.until ? decided.choice : undefined;
     if (choice === 'goOn') return undefined;
-    const action = choice === 'wait' ? 'waitForReset' : rule.action;
-    if (action === 'warn') {
-      const warned = JSON.stringify([backend, rule.window, window.resetsAt]);
-      if (!this.#warned.has(warned)) {
-        this.#warned.add(warned);
-        this.#after(0, () => {
-          this.#io.tell(node, warningText(hold, this.#catalog, now, this.#io.locale));
-        });
-      }
-      return undefined;
-    }
-    if (action === 'waitForReset' && hold.resetsAt !== null) {
-      return { current: task.id, status: 'waiting', until: hold.resetsAt, outcomes, usage: hold };
-    }
-    return { current: task.id, status: 'asking', outcomes, usage: hold };
+    return { hold, action: choice === 'wait' ? 'waitForReset' : rule.action };
+  }
+
+  /**
+   * Warns the user in an agent's session that its backend's usage is over its rule's share (as
+   * Warn me does): once a window, whatever the warning was for.
+   */
+  warnUsage(agent: string, hold: UsageHold, now = this.#io.now()): void {
+    const node = this.#agents().find((n) => n.id === agent);
+    const warned = JSON.stringify([hold.backend, hold.window, hold.resetsAt]);
+    if (!node || this.#warned.has(warned)) return;
+    this.#warned.add(warned);
+    this.#after(0, () => {
+      this.#io.tell(node, warningText(hold, this.#catalog, now, this.#io.locale));
+    });
   }
 
   /**
@@ -1646,6 +1700,7 @@ export class RunStore {
           ? corrected(
               correction.note,
               `Continue this original task and report its result:\n${original}`,
+              this.#shellPrefix(node),
             )
           : original;
         this.#send(node, text, {
@@ -1673,7 +1728,11 @@ export class RunStore {
         this.#send(
           to,
           correction
-            ? corrected(correction.note, `Continue the original task: ${task.message}`)
+            ? corrected(
+                correction.note,
+                `Continue the original task: ${task.message}`,
+                this.#shellPrefix(to),
+              )
             : task.message,
           {
             ended,
@@ -1794,9 +1853,6 @@ export class RunStore {
       displayText?: string;
     } = {},
   ): void {
-    // What the user typed may be a shell command for its CLI's bash mode; what the run sends of its
-    // own (a canvas's messages, which a shared file may hold) never is.
-    const shell = origin !== 'user' && text.trimStart().startsWith('!');
     // Its turn may end at once (a session that cannot start): then there is nothing to take back.
     const sent = { over: false };
     let ready = this.#io.beforeSend === undefined;
@@ -1810,7 +1866,13 @@ export class RunStore {
         return;
       if (!this.#run.running && this.#run.paused) return;
       started = true;
-      if (shell) {
+      // What the user typed may be a shell command for its CLI's bash mode; what the run sends of
+      // its own (a canvas's messages, which a shared file may hold) never is: checked as it goes,
+      // against the connection its recipient runs now.
+      const now = this.#agents().find((n) => n.id === to.id) ?? to;
+      const prefix = this.#shellPrefix(now);
+      if (origin !== 'user' && startsWith(text, prefix)) {
+        const name = this.#catalog.connectionName(this.#catalog.connectionOf(now.data)) ?? '';
         this.#after(0, () => {
           if (sent.over) return;
           sent.over = true;
@@ -1818,7 +1880,7 @@ export class RunStore {
           ended?.({
             failed: true,
             reply: '',
-            result: { status: 'failed', reason: 'declined', message: SHELL_REFUSED },
+            result: { status: 'failed', reason: 'declined', message: shellRefused(prefix, name) },
           });
         });
         return;
@@ -1879,6 +1941,11 @@ export class RunStore {
           },
         );
     } else dispatch();
+  }
+
+  /** The text an agent's connection runs as a shell command, if any (catalog.ts shellPrefix). */
+  #shellPrefix(agent: AgentNode): string | undefined {
+    return this.#catalog.shellPrefix(this.#catalog.connectionOf(agent.data));
   }
 
   /**
@@ -2104,6 +2171,18 @@ export function taskState(run: Run, agent: string, item: string | null): string 
  * Whether a run holds anything to resume: an agent it reached, or a pause set on an agent or a
  * group. A run that has done nothing has nothing to pause: Resume would only start it.
  */
+/** Each cause once: one party's second pause of the same target is the same cause. */
+function distinct(causes: readonly PauseCause[]): PauseCause[] {
+  return causes.filter(
+    (cause, i) => causes.findIndex(({ id, by }) => id === cause.id && by === cause.by) === i,
+  );
+}
+
+/** Whether `by`'s release of `id` releases `cause`: its own, or, for you, any party's. */
+function releases(cause: PauseCause, id: string, by: PartyId): boolean {
+  return cause.id === id && (by === 'you' || cause.by === by);
+}
+
 function resumable(agents: Readonly<Record<string, AgentRun>>, causes: PauseCauses): boolean {
   return Object.keys(agents).length > 0 || causes.individual.length > 0 || causes.groups.length > 0;
 }

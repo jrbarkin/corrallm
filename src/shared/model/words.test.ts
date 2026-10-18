@@ -216,3 +216,25 @@ describe('the wording of usage', () => {
     );
   });
 });
+
+describe('times of day in words', () => {
+  it('tells them in the locale given, wherever an item names one', () => {
+    const builder = agent('b', 'Builder', [{ id: 'pause', delay: { at: '18:00' } }]);
+    const wait: QueueItem = {
+      id: 'wait',
+      waitFor: [{ agent: 'b', item: 'pause' }],
+      timeout: { at: '18:00' },
+    };
+    const nodes = [builder, agent('p', 'Planner', [wait])];
+    const delay = builder.data.queue?.[0];
+    if (!delay) throw new Error('no delay');
+    expect(itemLabel(delay, engine, 'en-GB')).toBe('Wait until 18:00');
+    expect(describeItem(nodes, delay, engine, 'en-GB')).toBe('Wait until 18:00');
+    expect(taskLabel(nodes, wait, engine, 'en-GB')).toBe(
+      'Wait for Builder: Wait until 18:00, no later than 18:00',
+    );
+    expect(describeItem(nodes, wait, engine, 'en-US')).toBe(
+      'Wait for Builder: Wait until 6:00 PM, no later than 6:00 PM',
+    );
+  });
+});

@@ -1,13 +1,14 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { newCanvasId } from '../../shared/canvas';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { QueueItem, QueueMessage, SubmittedMessage } from '../../shared/model/queue';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import type { Run } from '../../shared/engine/run/runner';
-import { heldAsks } from '../../shared/engine/run/asks';
+import { needsOf } from '../../shared/engine/needs';
 import { QuestionsSidebar } from './Questions';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
@@ -142,10 +143,18 @@ describe('task recovery in the shared queue row', () => {
   });
   it('uses the same recovery choices in the canvas Needs you sidebar', () => {
     const decide = vi.fn();
+    const canvas = {
+      canvas: newCanvasId(),
+      nodes: canvasNodes([node]),
+      run: run(),
+      sessions: {},
+      catalog: runCatalog(),
+      now: Date.now(),
+    };
     render(
       <QuestionsSidebar
-        asks={heldAsks(canvasNodes([node]), run(), runCatalog())}
-        pending={[]}
+        needs={needsOf(canvas)}
+        canvas={canvas}
         onDecide={decide}
         onAnswer={vi.fn()}
         onOpen={vi.fn()}

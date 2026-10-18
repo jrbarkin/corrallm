@@ -3,10 +3,14 @@ import { useId, useState } from 'react';
 import type { AdapterId } from '../../shared/adapter';
 import type { TerminalAsk } from '../../shared/session';
 import { Markdown } from '../agent/Markdown';
+import type { NeedsItem } from '../../shared/model/needs';
+import { promptQuestions } from '../../shared/model/session';
 import type { CardQuestion } from '../../shared/model/session';
+import { needsItem } from '../../shared/engine/needs';
+import type { Need, NeedsInput } from '../../shared/engine/needs';
 import { ToolDetailView } from '../agent/ToolDetail';
 import { permissionQuestion } from '../agent/tools';
-import type { AskChoice, HeldAsk } from '../../shared/engine/run/asks';
+import type { AskChoice } from '../../shared/engine/run/asks';
 import type { Answer } from '../../shared/engine/run/runner';
 import { adapterCli, DEFAULT_AGENT } from './agents';
 
@@ -301,92 +305,120 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
   );
 }
 
-/** Who is asking, by agent: its id, name and type. */
-interface Asking {
-  agentId: string;
-  agentName: string;
-  agentType: AdapterId;
+/**
+ * What an agent's session asks that is answered in its view (a permission, a plan, an MCP server's
+ * request): what it asks, and Open, which opens the agent's view to answer it there.
+ */
+export function SessionAskCard({ need, agent }: { need: NeedsItem; agent: Asker }) {
+  return (
+    <div className="graph-question" role="group" aria-label={`${agent.name} asks`}>
+      <button
+        type="button"
+        className="graph-question-agent"
+        data-agent={agent.type}
+        aria-label={`Open ${agent.name}`}
+        onClick={agent.onOpen}
+      >
+        {agent.name}
+      </button>
+      <p className="graph-question-text">{need.title}</p>
+      {need.detail !== undefined && <p className="graph-question-detail">{need.detail}</p>}
+      <div className="graph-question-terminal">
+        <span>Answer it in its session.</span>
+        <button type="button" onClick={agent.onOpen}>
+          Open session
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**
- * A floating list of what needs the user, labelled by agent: first what the queues' run holds for
- * them (`asks`, such as an OK), then the questions agents are waiting on, then what Terminal
- * agents' Claude Code asks in their terminals (`inTerminal`: shown, answered there).
+ * A floating list of what needs the user, labelled by agent, as the engine derives it
+ * (src/shared/engine/needs.ts): first what the queues' run holds for them (such as an OK), then
+ * what agents' sessions ask (their questions, answered here; the rest in the agent's view), then
+ * what Terminal agents' CLIs ask in their terminals (shown, answered there).
  */
 export function QuestionsSidebar({
-  asks,
-  pending,
-  inTerminal = [],
+  needs,
+  canvas,
   onDecide,
   onAnswer,
   onOpen,
 }: {
-  asks: readonly HeldAsk[];
-  pending: readonly (Asking & { question: CardQuestion })[];
-  inTerminal?: readonly (Asking & { ask: TerminalAsk })[];
+  needs: readonly Need[];
+  /** What the needs are worded with, for those shown in their words. */
+  canvas: Omit<NeedsInput, 'stuck'>;
   onDecide: (agentId: string, itemId: string, answer: Answer) => void;
-  onAnswer: (agentId: string, questionId: string, answer: string) => void;
+  /** Answers question `index` of the question prompt `promptId`. */
+  onAnswer: (agentId: string, promptId: string, index: number, answer: string) => void;
   onOpen: (agentId: string) => void;
 }) {
+  const cards = needs.flatMap((need) => {
+    const { agent } = need;
+    const asker: Asker = {
+      name: agent.data.label || 'Unnamed agent',
+      type: agent.data.adapter ?? DEFAULT_AGENT,
+      onOpen: () => {
+        onOpen(agent.id);
+      },
+    };
+    switch (need.kind) {
+      case 'hold': {
+        const { item, text, detail, choices, reply } = need.ask;
+        return [
+          <AskCard
+            key={`${agent.id}/${item.id}`}
+            agent={asker}
+            text={text}
+            detail={detail}
+            choices={choices}
+            reply={reply}
+            onChoose={(choice) => {
+              onDecide(agent.id, item.id, { choice });
+            }}
+            onReply={(typed) => {
+              onDecide(agent.id, item.id, { reply: typed });
+            }}
+          />,
+        ];
+      }
+      case 'prompt':
+        if (need.prompt.kind === 'question') {
+          return promptQuestions(need.prompt)
+            .filter(({ question }) => question.answer === undefined)
+            .map(({ prompt, index, question }) => (
+              <QuestionCard
+                key={`${agent.id}/${question.id}`}
+                question={question}
+                agent={asker}
+                onAnswer={(answer) => {
+                  onAnswer(agent.id, prompt, index, answer);
+                }}
+              />
+            ));
+        }
+        return [
+          <SessionAskCard
+            key={`${agent.id}/${need.prompt.id}`}
+            need={needsItem(need, canvas)}
+            agent={asker}
+          />,
+        ];
+      case 'ask':
+        return [
+          <TerminalAskCard key={`${agent.id}/${need.ask.id}`} ask={need.ask} agent={asker} />,
+        ];
+      case 'stuck':
+        return [];
+    }
+  });
   return (
     <aside className="graph-questions" aria-label="Needs you">
       <h2>
-        Needs you{' '}
-        <span className="graph-questions-count">
-          {asks.length + pending.length + inTerminal.length}
-        </span>
+        Needs you <span className="graph-questions-count">{cards.length}</span>
       </h2>
-      {asks.map(({ agent, item, text, detail, choices, reply }) => (
-        <AskCard
-          key={`${agent.id}/${item.id}`}
-          agent={{
-            name: agent.data.label || 'Unnamed agent',
-            type: agent.data.adapter ?? DEFAULT_AGENT,
-            onOpen: () => {
-              onOpen(agent.id);
-            },
-          }}
-          text={text}
-          detail={detail}
-          choices={choices}
-          reply={reply}
-          onChoose={(choice) => {
-            onDecide(agent.id, item.id, { choice });
-          }}
-          onReply={(text) => {
-            onDecide(agent.id, item.id, { reply: text });
-          }}
-        />
-      ))}
-      {pending.map(({ agentId, agentName, agentType, question }) => (
-        <QuestionCard
-          key={`${agentId}/${question.id}`}
-          question={question}
-          agent={{
-            name: agentName,
-            type: agentType,
-            onOpen: () => {
-              onOpen(agentId);
-            },
-          }}
-          onAnswer={(answer) => {
-            onAnswer(agentId, question.id, answer);
-          }}
-        />
-      ))}
-      {inTerminal.map(({ agentId, agentName, agentType, ask }) => (
-        <TerminalAskCard
-          key={`${agentId}/${ask.id}`}
-          ask={ask}
-          agent={{
-            name: agentName,
-            type: agentType,
-            onOpen: () => {
-              onOpen(agentId);
-            },
-          }}
-        />
-      ))}
+      {cards}
     </aside>
   );
 }

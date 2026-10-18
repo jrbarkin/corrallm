@@ -326,29 +326,27 @@ export interface AskedInSession {
   question: CardQuestion;
 }
 
-/** The questions a session asked that still wait for an answer, oldest first. */
-export function pendingSessionQuestions(session: Session): AskedInSession[] {
-  return sessionQuestions(session).filter(({ question }) => question.answer === undefined);
-}
-
 /** Every question a session asked and still waits on, or that was answered. */
 export function sessionQuestions(session: Session): AskedInSession[] {
   return session.entries.flatMap((entry) =>
-    entry.kind === 'question' && entry.withdrawn !== true
-      ? entry.questions.map((q, index) => ({
-          prompt: entry.id,
-          index,
-          question: {
-            id: `${entry.id}#${String(index)}`,
-            text: q.text,
-            ...(q.header === '' ? {} : { header: q.header }),
-            ...(q.options.length > 0 ? { options: q.options } : {}),
-            ...(q.multiple ? { multiple: true } : {}),
-            ...(q.answer === undefined ? {} : { answer: q.answer }),
-          },
-        }))
-      : [],
+    entry.kind === 'question' && entry.withdrawn !== true ? promptQuestions(entry) : [],
   );
+}
+
+/** The questions of one question prompt, each as a question card shows it, with its answer once given. */
+export function promptQuestions(entry: Extract<Entry, { kind: 'question' }>): AskedInSession[] {
+  return entry.questions.map((q, index) => ({
+    prompt: entry.id,
+    index,
+    question: {
+      id: `${entry.id}#${String(index)}`,
+      text: q.text,
+      ...(q.header === '' ? {} : { header: q.header }),
+      ...(q.options.length > 0 ? { options: q.options } : {}),
+      ...(q.multiple ? { multiple: true } : {}),
+      ...(q.answer === undefined ? {} : { answer: q.answer }),
+    },
+  }));
 }
 
 /** The answers to the question prompt `id`, once every question in it has one. */
