@@ -230,8 +230,15 @@ const config: ForgeConfig = {
   plugins: [
     new VitePlugin({
       build: [
-        // Object entries name the outputs main.cjs / preload.cjs (both live in .vite/build).
+        // Object entries name the outputs main.cjs / core.cjs / preload.cjs (all in .vite/build).
         { entry: { main: 'src/main/index.ts' }, config: 'vite.main.config.mts', target: 'main' },
+        // The core process (an Electron utility process main forks): built as main is, with its
+        // externals (node-pty) and defines.
+        {
+          entry: { core: 'src/main/core/entry.ts' },
+          config: 'vite.main.config.mts',
+          target: 'main',
+        },
         {
           entry: { preload: 'src/preload/index.ts' },
           config: 'vite.preload.config.mts',
