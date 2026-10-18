@@ -44,20 +44,38 @@ export interface DeliveryDeps {
   locale?: string;
 }
 
+/** Why an agent's session won't start, and what would let it. */
+interface Unstartable {
+  text: string;
+  clears: string;
+}
+
 /** What holds a message to an agent, if anything does. */
 type Hold =
   | { kind: 'paused' | 'busy' }
-  | { kind: 'stuck'; text: string }
+  | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'usage'; hold: UsageHold };
 
-/** Why a session would not start, and the connection it would not start on. */
+/**
+ * Why a session would not start, the connection it would not start on, when it refused, and
+ * whether a message sent since is trying it again.
+ */
 interface Stuck {
   connection: string;
   text: string;
+  at: number;
+  retrying: boolean;
 }
 
 /** What an agent with no connection this build runs is told. */
 const NO_CONNECTION = 'it has no connection corrallm can run.';
+/** What lets such an agent start. */
+const SWITCH = 'It starts once it is switched to another connection in the corrallm app.';
+/** How long after its session refused to start the next message sent an agent tries it again. */
+const RETRY_AFTER = 60 * 1000;
+/** What lets a session that refused to start go (RETRY_AFTER, in words). */
+const RETRIES =
+  'It tries to start again with the next message sent to it a minute or more after it refused, or once it is switched to another connection in the corrallm app.';
 /** What a message cut off is said to have been. */
 const CUT_OFF: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
 /** What a message taken back is said to have been. */
@@ -141,7 +159,8 @@ export class Delivery {
 
   /**
    * Sends agent `to` a message from `from`, once its record is on disk: delivered at once if it
-   * can be, and otherwise held, its sender told why. Resolves with it, as kept.
+   * can be, and otherwise held, its sender told why. A message sent RETRY_AFTER or more after the
+   * agent's session refused to start tries it again. Resolves with it, as kept.
    */
   async send(from: PartyId, to: string, body: string, replyTo?: string): Promise<Message> {
     const message = this.#deps.store.add({
@@ -153,6 +172,8 @@ export class Delivery {
       ...(replyTo === undefined ? {} : { replyTo }),
     });
     await this.#deps.store.durable();
+    const stuck = this.#stuck.get(to);
+    if (stuck && this.#deps.now() - stuck.at >= RETRY_AFTER) stuck.retrying = true;
     this.#pump();
     return this.#deps.store.get(message.id) ?? message;
   }
@@ -199,12 +220,15 @@ export class Delivery {
     this.schedule();
   }
 
-  /** The agents whose sessions won't start while parties' messages to them wait, and why. */
-  stuck(): { agent: string; text: string }[] {
+  /**
+   * The agents whose sessions won't start while parties' messages to them wait, why, and what
+   * would let them.
+   */
+  stuck(): ({ agent: string } & Unstartable)[] {
     return this.#deps.nodes().flatMap((node) => {
-      const text = node.type === 'agent' ? this.#stuckOf(node) : undefined;
-      return text !== undefined && this.#waiting(node.id).length > 0
-        ? [{ agent: node.id, text }]
+      const stuck = node.type === 'agent' ? this.#stuckOf(node) : undefined;
+      return stuck !== undefined && this.#waiting(node.id).length > 0
+        ? [{ agent: node.id, ...stuck }]
         : [];
     });
   }
@@ -272,7 +296,7 @@ export class Delivery {
           this.#tell(
             `stuck:${node.id}:${message.from}`,
             message,
-            `${this.#name(node.id)} can’t start, so your message waits: ${threadTitle(hold.text, REASON)}`,
+            `${this.#name(node.id)} can’t start, so your message waits: ${threadTitle(hold.text, REASON)} ${hold.clears}`,
           );
         }
         if (hold.kind === 'usage') {
@@ -306,8 +330,8 @@ export class Delivery {
 
   /** What holds a message from you to agent `node` now: only a session that won't start. */
   #stuckHold(node: AgentNode): Hold | undefined {
-    const text = this.#stuckOf(node);
-    return text === undefined ? undefined : { kind: 'stuck', text };
+    const stuck = this.#stuckOf(node);
+    return stuck === undefined ? undefined : { kind: 'stuck', ...stuck };
   }
 
   /** What holds a message from a party (anyone but you) to agent `node` now, if anything. */
@@ -315,8 +339,8 @@ export class Delivery {
     const { engine } = this.#deps;
     const at = engine.run.snapshot().agents[node.id];
     if (at?.paused) return { kind: 'paused' };
-    const stuck = this.#stuckOf(node);
-    if (stuck !== undefined) return { kind: 'stuck', text: stuck };
+    const stuck = this.#stuckHold(node);
+    if (stuck !== undefined) return stuck;
     const session = engine.sessions.of(node.id);
     if (
       session.status !== 'idle' ||
@@ -341,17 +365,19 @@ export class Delivery {
   }
 
   /**
-   * Why agent `node`'s session won't start, if it won't: it has no connection this build runs, or
-   * it refused to start on the connection it runs, and hasn't started since.
+   * Why agent `node`'s session won't start, if it won't, and what would let it: it has no
+   * connection this build runs, or it refused to start on the connection it runs, hasn't started
+   * since, and no message sent since is trying it again.
    */
-  #stuckOf(node: AgentNode): string | undefined {
+  #stuckOf(node: AgentNode): Unstartable | undefined {
     const { engine } = this.#deps;
     const connection = engine.catalog.connectionOf(node.data);
-    if (connection === 'unavailable') return NO_CONNECTION;
+    if (connection === 'unavailable') return { text: NO_CONNECTION, clears: SWITCH };
     const stuck = this.#stuck.get(node.id);
     if (!stuck) return undefined;
     if (stuck.connection === connection && engine.sessions.of(node.id).running === undefined) {
-      return stuck.text;
+      // Tried again, the first in line goes, and starts it.
+      return stuck.retrying ? undefined : { text: stuck.text, clears: RETRIES };
     }
     // It runs another way now, or started after all: what waited on it goes.
     this.#stuck.delete(node.id);
@@ -454,7 +480,8 @@ export class Delivery {
 
   /**
    * An agent's session would not start, so a message sent it never went: it waits again, first in
-   * line, until the agent runs another way (or its session starts after all).
+   * line, until the agent runs another way, or a message sent RETRY_AFTER or more from now tries the
+   * session again and it starts.
    */
   #refused(node: AgentNode, id: string, text: string): void {
     if (this.#closed || this.#deps.store.get(id)?.state !== 'delivering') return;
@@ -462,6 +489,8 @@ export class Delivery {
     this.#stuck.set(node.id, {
       connection: this.#deps.engine.catalog.connectionOf(node.data),
       text,
+      at: this.#deps.now(),
+      retrying: false,
     });
     // It waits here, not in its session's queue.
     const takeBack = this.#sent.get(id);

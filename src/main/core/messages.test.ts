@@ -94,8 +94,15 @@ beforeEach(async () => {
 afterEach(async () => {
   await core?.close();
   core = undefined;
+  vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
 });
+
+const realNow = Date.now.bind(Date);
+/** Runs the clock everything here reads (Date.now) `ms` ahead of the real one, from now on. */
+function ahead(ms: number): void {
+  vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ms);
+}
 
 /** A profile keeping a canvas of `agents`, as the app would once its folder was picked. */
 async function keepCanvas(agents = AGENTS, links = LINKS): Promise<void> {
@@ -358,6 +365,75 @@ describe('delivery', () => {
     }
   });
 
+  it('says what lets a session that wouldn’t start go, in its sender’s notice and in Needs you', async () => {
+    await keepCanvas();
+    await start({ appServer: REFUSING });
+    await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    const clears =
+      'It tries to start again with the next message sent to it a minute or more after it refused, or once it is switched to another connection in the corrallm app.';
+    expect((await notices())[0]?.body).toBe(
+      `Builder can’t start, so your message waits: This login can’t run here. ${clears}`,
+    );
+    expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([
+      expect.objectContaining({
+        id: 'start/builder',
+        title: 'Builder can’t start: This login can’t run here.',
+        detail: `Messages to it wait until it can. ${clears}`,
+      }),
+    ]);
+  });
+
+  it('tries a session that wouldn’t start again with the next message sent a minute or more on', async () => {
+    await keepCanvas();
+    let refuse = true;
+    let starts = 0;
+    await start({
+      appServer: {
+        start: (spec, host) => {
+          starts += 1;
+          return (refuse ? REFUSING : appServer).start(spec, host);
+        },
+      },
+    });
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    // Within the minute, a message waits with the rest, and tries nothing.
+    const second = await send('builder', 'Second');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(starts).toBe(1);
+
+    // A minute on, the next one tries again: refused, everything still waits, no one told twice.
+    ahead(60_000);
+    const third = await send('builder', 'Third');
+    await vi.waitFor(() => {
+      expect(starts).toBe(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const texts = async () => (await inbox()).filter((message) => message.kind === 'text');
+    expect((await texts()).map(({ state }) => state)).toEqual(['pending', 'pending', 'pending']);
+    expect(await notices()).toHaveLength(1);
+
+    // Once what it refused over is fixed, the next one a minute on starts it, and all go in order.
+    refuse = false;
+    ahead(120_000);
+    const fourth = await send('builder', 'Fourth');
+    await vi.waitFor(async () => {
+      expect((await find(fourth))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toEqual([
+      `${FRAME(first)}First`,
+      `${FRAME(second)}Second`,
+      `${FRAME(third)}Third`,
+      `${FRAME(fourth)}Fourth`,
+    ]);
+    expect(starts).toBe(3);
+  });
+
   it('quotes a long name, and a long reason a session won’t start, cut short', async () => {
     await keepCanvas([{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_MESSAGE_BYTES)}` }], []);
     await start({
@@ -488,7 +564,11 @@ describe('a turn waiting for you', () => {
   /** A canvas whose Builder and Checker each hold an OK on their queue, the run asking for both. */
   async function heldAtOks() {
     const ok = [{ id: 'ok', approve: 'the plan' }];
-    await keepCanvas([{ ...BUILDER_AGENT, queue: ok }, AGENTS[1], { ...AGENTS[2], queue: ok }]);
+    await keepCanvas(
+      AGENTS.map((agent) =>
+        agent.id === 'builder' || agent.id === 'checker' ? { ...agent, queue: ok } : agent,
+      ),
+    );
     const engine = await (await start()).engines.open(CANVAS);
     engine.run.start();
     expect(engine.run.snapshot().agents).toMatchObject({

@@ -31,14 +31,17 @@ export interface NeedsInput {
   now?: number;
   /** The locale times of day are told in (the host's): the runtime's own, when none. */
   locale?: string;
-  /** The agents whose sessions would not start while parties' messages to them wait, and why. */
-  stuck?: readonly { agent: string; text: string }[];
+  /**
+   * The agents whose sessions would not start while parties' messages to them wait, why, and what
+   * would let them (a sentence).
+   */
+  stuck?: readonly { agent: string; text: string; clears: string }[];
 }
 
 /** Something that waits for you, as derived: whose it is, and what it is. */
 export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
-  | { kind: 'stuck'; agent: AgentNode; text: string }
+  | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
   | { kind: 'prompt'; agent: AgentNode; prompt: Prompt }
   | { kind: 'ask'; agent: AgentNode; ask: TerminalAsk };
 
@@ -73,9 +76,9 @@ export function needsOf({
       agent: ask.agent,
       ask,
     })),
-    ...stuck.flatMap(({ agent: id, text }): Need[] => {
+    ...stuck.flatMap(({ agent: id, text, clears }): Need[] => {
       const found = agent(id);
-      return found ? [{ kind: 'stuck', agent: found, text }] : [];
+      return found ? [{ kind: 'stuck', agent: found, text, clears }] : [];
     }),
     ...agents.flatMap((node) =>
       (sessions[node.id]?.entries ?? [])
@@ -127,7 +130,7 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
         ...yours,
         kind: 'hold',
         title: `${agentName(nodes, need.agent.id)} can’t start: ${need.text}`,
-        detail: 'Messages to it wait until it can.',
+        detail: `Messages to it wait until it can. ${need.clears}`,
         choices: [],
         answerIn: 'api',
       };

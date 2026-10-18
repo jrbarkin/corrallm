@@ -134,7 +134,7 @@ describe('needs', () => {
       input({
         nodes: [starter, slashed, plain],
         run: { running: true, agents: { s: asks('start'), 'a/b': asks('c'), a: asks('b/c') } },
-        stuck: [{ agent: 's', text: 'This login can’t run here.' }],
+        stuck: [{ agent: 's', text: 'This login can’t run here.', clears: 'It tries again.' }],
       }),
     );
     expect(items.map(({ kind, agent }) => [kind, agent])).toEqual([
