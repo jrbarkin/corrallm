@@ -24,16 +24,22 @@ describe('pause causes', () => {
     expect(individualPaused(paused, 'a')).toBe(false);
     expect(groupPaused(paused, 'team')).toBe(false);
     expect(individualPaused({ ...paused, individualPauses: [] }, 'a')).toBe(false);
-    expect(individualPaused({ ...paused, groupPauses: ['team'] }, 'a')).toBe(false);
-    expect(individualPaused({ ...paused, individualPauses: ['b'] }, 'b')).toBe(true);
-    expect(individualPaused({ ...paused, individualPauses: ['b'] }, 'missing')).toBe(false);
+    expect(individualPaused({ ...paused, groupPauses: [{ id: 'team', by: 'you' }] }, 'a')).toBe(
+      false,
+    );
+    expect(individualPaused({ ...paused, individualPauses: [{ id: 'b', by: 'you' }] }, 'b')).toBe(
+      true,
+    );
+    expect(
+      individualPaused({ ...paused, individualPauses: [{ id: 'b', by: 'you' }] }, 'missing'),
+    ).toBe(false);
   });
 
   it('keeps an individual pause distinct from a group pause', () => {
-    const state = {
+    const state: Run = {
       ...run({ a: agent({ paused: true }), b: agent({ paused: true }) }),
-      individualPauses: ['a'],
-      groupPauses: ['team'],
+      individualPauses: [{ id: 'a', by: 'you' }],
+      groupPauses: [{ id: 'team', by: 'you' }],
     };
     expect(individualPaused(state, 'a')).toBe(true);
     expect(individualPaused(state, 'b')).toBe(false);
@@ -52,10 +58,13 @@ describe('group pause text', () => {
   ];
 
   it('shows only the pause belonging to that group', () => {
-    const state = {
+    const state: Run = {
       ...run({ lead: agent({ paused: true }), worker: agent({ paused: true }) }),
-      individualPauses: ['lead', 'worker'],
-      groupPauses: ['team'],
+      individualPauses: [
+        { id: 'lead', by: 'you' },
+        { id: 'worker', by: 'you' },
+      ],
+      groupPauses: [{ id: 'team', by: 'you' }],
     };
     expect(groupControlText(nodes, state, 'team')).toBe('Paused');
     expect(groupControlText(nodes, state, 'lead')).toBeUndefined();
@@ -64,9 +73,9 @@ describe('group pause text', () => {
 
   it('waits for an unfinished member turn, including an agent parent', () => {
     const active = agent({ paused: true, status: 'running', current: 'task' });
-    const state = {
+    const state: Run = {
       ...run({ lead: active, worker: agent({ paused: true }) }),
-      groupPauses: ['lead'],
+      groupPauses: [{ id: 'lead', by: 'you' }],
     };
     expect(groupControlText(nodes, state, 'lead')).toBe('Pausing');
     expect(
@@ -82,12 +91,15 @@ describe('group pause text', () => {
   });
 
   it('ignores active nonmembers and treats held or absent member queues as paused', () => {
-    const state = {
+    const state: Run = {
       ...run({
         lead: agent({ paused: true, status: 'asking', current: 'review' }),
         outside: agent({ paused: true, status: 'running', current: 'other' }),
       }),
-      groupPauses: ['team', 'empty'],
+      groupPauses: [
+        { id: 'team', by: 'you' },
+        { id: 'empty', by: 'you' },
+      ],
     };
     expect(groupControlText(nodes, state, 'team')).toBe('Paused');
     expect(groupControlText(nodes, state, 'empty')).toBe('Paused');

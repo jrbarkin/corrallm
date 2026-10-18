@@ -22,6 +22,36 @@ export const MAX_IMAGES = 20;
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 
 /**
+ * The newest settled messages the store keeps per party (a message counts for its sender and its
+ * recipient), within STORE_BYTES per canvas; pending and unresolved ones are always kept, and the
+ * oldest settled go first (API Spec §5.8).
+ */
+export const STORE_SETTLED_PER_PARTY = 100;
+/** The most bytes of messages a canvas's store keeps (their JSON). */
+export const STORE_BYTES = 4 * 1024 * 1024;
+/**
+ * The most messages one party may have waiting for one agent (pending: not yet delivered); another
+ * is refused until one of them goes. You are never limited. The store keeps every message waiting,
+ * whatever its byte budget, so this bounds them.
+ */
+export const MAX_WAITING = 20;
+
+/** The most a page of a list (messages, a transcript) holds. */
+export const MAX_PAGE = 200;
+/** How many a page of a list holds when a call doesn't say. */
+export const DEFAULT_PAGE = 50;
+/**
+ * The most bytes of JSON a page of a list holds, whatever it was asked for (an MCP client may cap
+ * what one tool's result holds: Core Server §4 G): a page ends early rather than pass it, and holds
+ * at least one item. A transcript's entry too big alone is cut to fit (the whole of it stays in its
+ * session); a message, at most MAX_MESSAGE_BYTES of text, is given whole.
+ */
+export const MAX_PAGE_BYTES = 60 * 1024;
+
+/** How many lines of a prompt's detail are shown, then how many more there are. */
+export const MAX_DETAIL_LINES = 12;
+
+/**
  * How many live agents one party may have created (decision 13, Build Plan Q12), counted per
  * creating party (`agent:<id>` or `outside:<name>`), never per token: a lead's includes its team's.
  */

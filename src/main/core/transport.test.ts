@@ -1,7 +1,3 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -17,13 +13,10 @@ import type { ApiServer } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { TokenCaller } from './caller';
-import { createCore } from './core';
 import {
+  allValid,
   CALLERS,
   isLead,
-  NO_DESKTOP,
-  REAL_FIXTURES,
-  REAL_OUT_OF_REACH,
   RESOLVERS,
   TEST_FIXTURES,
   TEST_OUT_OF_REACH,
@@ -31,6 +24,7 @@ import {
   unreachableCalls,
 } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
+import { REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld } from './test-world';
 
 /*
  * T3a (Core Server §3.7): each transport adds nothing. A transport is factored as identify (who
@@ -66,7 +60,7 @@ function unwrap(result: CallToolResult): OpResult<unknown> {
 
 /** Every argument list an op's fixture names, and those naming what a party doesn't reach. */
 const argsOf = (core: Dispatcher, name: string, fixture: OpFixture, world: OutOfReach) => [
-  ...fixture.valid,
+  ...allValid(fixture),
   ...fixture.invalid,
   ...Object.values(fixture.meetsRule ?? {}),
   ...unreachableCalls(core, name, fixture, world).map(({ args }) => args),
@@ -83,30 +77,7 @@ const REGISTRIES: [
   OutOfReach,
   () => Promise<Setup>,
 ][] = [
-  [
-    'the registry',
-    REAL_FIXTURES,
-    REAL_OUT_OF_REACH,
-    async () => {
-      const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-transport-'));
-      const core = await createCore(
-        {
-          profile,
-          app: { name: 'corrallm', version: '1.0.0' },
-          check: true,
-          distribution: 'local',
-        },
-        NO_DESKTOP,
-      );
-      return {
-        core,
-        close: async () => {
-          await core.close();
-          await rm(profile, { recursive: true, force: true });
-        },
-      };
-    },
-  ],
+  ['the registry', REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld],
   [
     'the test registry',
     TEST_FIXTURES,

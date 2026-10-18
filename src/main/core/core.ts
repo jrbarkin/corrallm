@@ -1,10 +1,10 @@
 import path from 'node:path';
 
 import type { ConnectionId } from '../../shared/adapter';
+import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
 import { OPS } from '../../shared/api/registry';
 import type { ResultOf } from '../../shared/api/registry';
-import type { RULES } from '../../shared/api/rules';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
@@ -21,11 +21,13 @@ import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { createDispatcher } from './call';
-import type { Dispatcher, RuleCheck } from './call';
+import type { Dispatcher } from './call';
 import type { Caller } from './caller';
 import { Engines } from './engines';
 import type { HostServices } from './host';
 import { implementations } from './ops';
+import { holder, resolvers } from './reach';
+import { ruleChecks } from './rules';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -51,6 +53,16 @@ export interface CoreConfig {
   /** The locale what the core says tells times of day in (the host's): Node's own, when none. */
   locale?: string;
   /**
+   * Which agents are leads now. None is until leads are kept on this machine (B24); tests say
+   * which, to call as a lead.
+   */
+  leads?: (canvas: CanvasId, agent: string) => boolean;
+  /**
+   * The clock the limits per token read (Core Server §6.7): the real one, but in tests that make
+   * many calls as one token at once.
+   */
+  limitsClock?: () => number;
+  /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), and the environment they run in instead of the login shell's.
    */
@@ -75,9 +87,6 @@ export interface Core extends Dispatcher {
    */
   close(): Promise<void>;
 }
-
-/** How each rule an operation carries is checked on a token's arguments: one per RULES row. */
-const RULE_CHECKS: { [R in keyof typeof RULES]: RuleCheck } = {};
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
   const { profile } = config;
@@ -130,14 +139,30 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
   });
+  const isLead = config.leads ?? (() => false);
   const dispatcher = createDispatcher(
     {
       surface: SURFACE,
       ops: OPS,
-      implementations: implementations({ app: config.app, usage, host }),
-      rules: RULE_CHECKS,
+      implementations: implementations({
+        app: config.app,
+        catalog: CATALOG,
+        usage,
+        engines,
+        isLead,
+        host,
+        ...(config.locale === undefined ? {} : { locale: config.locale }),
+      }),
+      rules: ruleChecks(engines),
     },
-    { check: config.check },
+    {
+      check: config.check,
+      isLead,
+      resolvers: resolvers(engines, isLead),
+      openCanvases: () => engines.opened(),
+      holds: holder(engines),
+      ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
+    },
   );
   return {
     surface: dispatcher.surface,

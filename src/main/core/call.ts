@@ -6,7 +6,7 @@ import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
-import { callerKey, partyOf } from './caller';
+import { callerKey, canvasesOf, partyOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
 import { notPlainData } from './link';
 import { outOfReach } from './reach';
@@ -20,8 +20,10 @@ import { Throttle } from './throttle';
  * core.call: the one dispatcher every transport calls (Core Server §3.1), a window's port and MCP
  * alike, so that no transport adds or skips anything. On every call, in this order, it checks the
  * caller's party against the op's audience (decision 2: a tool missing from a party's list is
- * refused when called anyway), admits a token's call within its limits, parses the arguments with
- * the op's one schema, resolves every id a token names against its reach, refuses an agent aiming
+ * refused when called anyway), admits a token's call within its limits, fills in the canvas a
+ * caller left out (its only one, or the one holding a message it names), or asks a caller with
+ * several to name one, parses the arguments with the op's one schema, resolves every id a token
+ * names against its reach, refuses an agent aiming
  * at itself an op it may not, checks the op's rules on a token's arguments (a met rule refuses it,
  * or makes it a proposal for you), returns a repeated request's first result, and runs the op in
  * its scope. It never throws: a failure is a value, whose code survives any transport.
@@ -72,6 +74,17 @@ export interface DispatchOptions {
   /** How each kind of id is resolved against a token's reach. A kind with none is never reached. */
   resolvers?: Readonly<Partial<Record<Brand, Resolver>>>;
   /**
+   * The canvases you have open: an op's canvas may be left out by a caller with exactly one canvas
+   * (yours, an agent's own, or a token's only one). Without it, you have none.
+   */
+  openCanvases?: () => readonly CanvasId[];
+  /**
+   * Whether a canvas holds, for `caller`, an id unique across canvases (a message it sent or got,
+   * by its id): a call that names it but no canvas, from a caller with several, goes to the one
+   * canvas that does (`withdraw` takes no canvas). Without it, none does.
+   */
+  holds?: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean;
+  /**
    * Whether each call's arguments and result are checked to be plain data (as CoreLink checks
    * what crosses a port) and each result against its schema: in dev and tests.
    */
@@ -96,6 +109,8 @@ export interface Dispatcher {
 
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
 const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId']);
+/** The kinds of id unique across canvases (UUIDs a canvas mints), which say whose canvas a call is on. */
+const UNIQUE_BRANDS: ReadonlySet<Brand> = new Set(['MessageId']);
 /** How a refusal names a party that isn't in an op's audience. */
 const PARTY_WORDS: Readonly<Record<Party, string>> = {
   you: 'You',
@@ -106,7 +121,14 @@ const PARTY_WORDS: Readonly<Record<Party, string>> = {
 };
 
 export function createDispatcher(registry: Registry, options: DispatchOptions = {}): Dispatcher {
-  const { isLead, resolvers = {}, check = false, now = Date.now } = options;
+  const {
+    isLead,
+    resolvers = {},
+    openCanvases = () => [],
+    holds = () => false,
+    check = false,
+    now = Date.now,
+  } = options;
   const scopes = new Scopes();
   const throttle = new Throttle(now);
   const requests = new Requests();
@@ -215,7 +237,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         release = throttle.admit(callerKey(caller), surface.kind !== 'read');
         if (!release) throw new OpFailure('refused', 'Too many calls; slow down.');
       }
-      const args = parse(def, raw);
+      const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
       if (caller.kind !== 'human') {
         const ids = idsIn(def.input, args);
         const missing = outOfReach(ids, caller, reach, resolvers);
@@ -244,9 +266,17 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
   };
 }
 
-/** The scope an op runs in, from the canvas and agent its arguments name (null: none). */
-function scopeOf(surface: Surface, args: unknown): string[] | null {
-  const { canvas, agent, to } = args as { canvas?: unknown; agent?: unknown; to?: unknown };
+/**
+ * The scope an op runs in, from the canvas and agent its arguments name (null: none). An op aimed
+ * at a group runs in its canvas's scope, which holds every member's.
+ */
+export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[] | null {
+  const { canvas, agent, to, target } = args as {
+    canvas?: unknown;
+    agent?: unknown;
+    to?: unknown;
+    target?: { agent?: unknown; group?: unknown };
+  };
   switch (surface.scope) {
     case 'none':
       return null;
@@ -255,8 +285,53 @@ function scopeOf(surface: Surface, args: unknown): string[] | null {
     case 'canvas':
       return ['app', String(canvas)];
     case 'agent':
-      return ['app', String(canvas), String(agent ?? to)];
+      return target?.group !== undefined
+        ? ['app', String(canvas)]
+        : ['app', String(canvas), String(agent ?? to ?? target?.agent)];
   }
+}
+
+/**
+ * `raw` with its canvas filled in where the op takes one, the caller left it out, and the caller
+ * has exactly one: an agent's own, an outside token's only one, or the only one you have open; or,
+ * for a caller with several, the one that `holds` the ids it names that are unique across canvases
+ * (a message's), if one alone does. Otherwise a caller with several is asked to name one, before
+ * any id it names is looked for in its reach (which, with no canvas, would find none, as if the
+ * agent it named weren't there).
+ */
+function withCanvas(
+  def: OpDef,
+  raw: unknown,
+  caller: Caller,
+  openCanvases: () => readonly CanvasId[],
+  holds: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean,
+): unknown {
+  const shape = (def.input as { shape?: Record<string, unknown> }).shape;
+  const given = raw === undefined ? {} : raw;
+  if (
+    shape === undefined ||
+    !('canvas' in shape) ||
+    typeof given !== 'object' ||
+    given === null ||
+    Array.isArray(given) ||
+    'canvas' in given
+  ) {
+    return raw;
+  }
+  const canvases = caller.kind === 'human' ? openCanvases() : canvasesOf(caller);
+  if (canvases.length > 1) {
+    const holding = canvases.filter((canvas) => {
+      const parsed = def.input.safeParse({ ...given, canvas });
+      const unique = parsed.success
+        ? idsIn(def.input, parsed.data).filter((ref) => UNIQUE_BRANDS.has(ref.brand))
+        : [];
+      return unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller));
+    });
+    if (holding.length === 1) return { ...given, canvas: holding[0] };
+    throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
+  }
+  const [only] = canvases;
+  return only === undefined ? raw : { ...given, canvas: only };
 }
 
 /** Whether an agent's call names the agent itself. */

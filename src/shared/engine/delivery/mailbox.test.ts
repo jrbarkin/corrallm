@@ -40,6 +40,28 @@ describe('SessionStore', () => {
     store.reset();
   });
 
+  it('sends a message under the id its sender keeps its record by, and its turn ends naming it', async () => {
+    const { backend, emit, sent } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    const done = vi.fn();
+    const id = '6a0d3c1e-5b4f-4e2a-9c8d-7f6e5d4c3b2a';
+    store.send('a', 'claude-code', 'Hello', done, undefined, undefined, 'queue', undefined, { id });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent()).toBe(id);
+    emit('a', 'claude-code.sdk', { type: 'user', id, text: 'Hello' });
+    emit('a', 'claude-code.sdk', {
+      type: 'end',
+      messages: [id],
+      seconds: 1,
+      interrupted: false,
+      failed: false,
+    });
+    expect(done).toHaveBeenCalledWith(false, '', { status: 'completed', reason: 'completed' });
+    store.reset();
+  });
+
   describe('held queues', () => {
     it.each(['reset', 'remove', 'rehold'] as const)(
       'does not dispatch a released queue if %s supersedes it in the same call stack',
@@ -671,6 +693,38 @@ describe('SessionStore', () => {
     expect(store.of('a').submissions).toMatchObject([{ text: '/mcp', status: 'completed' }]);
     expect(backend.send).not.toHaveBeenCalled();
     expect(store.of('a').entries).toEqual([]);
+  });
+
+  it('never starts canvas text that the connection it would go to runs as a shell command', async () => {
+    // Queued behind a turn on Codex's App Server, which runs no shell command from a message; the
+    // agent switches to Codex's Terminal, which runs "!" text without asking, before it goes.
+    const { backend } = fakeBackend();
+    const store = new SessionStore(engine, backend);
+    store.sync([{ id: 'a', connection: 'codex.app-server' }]);
+    store.send('a', 'codex', 'Take your time');
+    const done = vi.fn();
+    store.send('a', 'codex', '  !ls', done, undefined, undefined, 'queue');
+    const yours = vi.fn();
+    store.send('a', 'codex', '!pwd', yours);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.of('a').queued.map(({ text }) => text)).toEqual(['  !ls', '!pwd']);
+
+    store.sync([{ id: 'a', connection: 'codex.terminal' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toHaveBeenCalledWith(true, '', {
+      status: 'failed',
+      reason: 'declined',
+      message:
+        'Not sent: it starts with "!", which Codex · Terminal runs as a shell command, without asking. Reword it, or type it in the agent’s terminal yourself.',
+    });
+    // What you typed goes, as you typed it; the canvas's text never reached the session.
+    expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
+      'Take your time',
+      '!pwd',
+    ]);
+    expect(store.of('a').entries.filter((entry) => entry.kind === 'user')).toHaveLength(2);
+    store.reset();
   });
 
   it('keeps one manual message queued after refusal and sends it once after switching', async () => {

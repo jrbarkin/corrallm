@@ -252,6 +252,7 @@ export class SdkConnector implements Connector {
       stderr,
       mode,
       places,
+      ...(settings.peers === undefined ? {} : { peers: settings.peers }),
     });
     live.session = session;
     // The effort it was given, if its model takes it (for this session, as /effort sets it).

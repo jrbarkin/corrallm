@@ -78,6 +78,9 @@ async function start(
   return { session, events, remembered };
 }
 
+/** An outside orchestrator, as the core names one that sends an agent a message. */
+const PEER = { party: 'outside:orchestrator', name: 'orchestrator' };
+
 /** Waits until `events` has one that `matches`. */
 async function waitFor(events: SessionEvent[], matches: (event: SessionEvent) => boolean) {
   for (let i = 0; i < 200; i += 1) {
@@ -183,6 +186,52 @@ describe('SdkConnector through the Agent SDK', () => {
     });
     await expect(session.setMode('bypassPermissions')).rejects.toThrow(/disabled by settings/);
     expect(events.at(-1)).toEqual({ type: 'mode', mode: 'manual' });
+  });
+
+  it('never sends another party’s message the CLI would hold unanswered while it bypasses permissions', async () => {
+    const { session, events } = await start();
+    await session.setMode('bypassPermissions');
+    // The CLI holds a peer's message for its user's review while it bypasses permissions: no
+    // result would ever end its turn. It isn't sent, and the send says why.
+    await expect(
+      session.send({ id: '00000000-0000-4000-8000-00000000001a', text: 'Hello', from: PEER }),
+    ).rejects.toThrow(/bypasses permissions/);
+    // Yours goes, as its user's.
+    const yours = '00000000-0000-4000-8000-00000000001b';
+    await session.send({ id: yours, text: 'From you' });
+    expect(await waitFor(events, (e) => e.type === 'end')).toMatchObject({ messages: [yours] });
+    expect(events.flatMap((e) => (e.type === 'user' ? [e.id] : []))).toEqual([yours]);
+  });
+
+  it.each([
+    ['hold', /hold messages from other sessions/],
+    ['refuse', /refuse messages from other sessions/],
+  ])(
+    'never sends another party’s message where the settings %s them, and says why',
+    async (inbound, why) => {
+      await mkdir(path.join(folder, '.claude'));
+      await writeFile(
+        path.join(folder, '.claude', 'settings.json'),
+        JSON.stringify({ crossSessionInbound: inbound }),
+      );
+      const { session } = await start();
+      await expect(
+        session.send({ id: '00000000-0000-4000-8000-00000000001c', text: 'Hello', from: PEER }),
+      ).rejects.toThrow(why);
+    },
+  );
+
+  it('sends another party’s message while it bypasses permissions where the settings accept them', async () => {
+    await mkdir(path.join(folder, '.claude'));
+    await writeFile(
+      path.join(folder, '.claude', 'settings.json'),
+      JSON.stringify({ crossSessionInbound: 'accept' }),
+    );
+    const { session, events } = await start();
+    await session.setMode('bypassPermissions');
+    const id = '00000000-0000-4000-8000-00000000001d';
+    await session.send({ id, text: 'Hello', from: PEER });
+    expect(await waitFor(events, (e) => e.type === 'end')).toMatchObject({ messages: [id] });
   });
 
   it('keeps its conversations where the Agent SDK lists them, and resumes one with its history', async () => {

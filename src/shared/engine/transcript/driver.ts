@@ -1,4 +1,10 @@
-import type { AgentStartSettings, MessageImage, SessionAnswer, TurnResult } from '../../session';
+import type {
+  AgentStartSettings,
+  MessageImage,
+  MessageSender,
+  SessionAnswer,
+  TurnResult,
+} from '../../session';
 import type { Mode, Refusal, Session } from '../../model/session';
 import type { SessionAction } from './reduce';
 
@@ -11,11 +17,15 @@ import type { SessionAction } from './reduce';
  * driver tells `refused` instead, and the turn never was.
  */
 
-/** A turn the store starts: the user's message (its entry's id) and the images pasted into it. */
+/**
+ * A turn the store starts: the user's message (its entry's id), the images pasted into it, and who
+ * sent it, when another party did.
+ */
 export interface Turn {
   id: string;
   text: string;
   images?: MessageImage[];
+  from?: MessageSender;
 }
 
 export type DriverDone = (interrupted: boolean, result?: TurnResult) => void;

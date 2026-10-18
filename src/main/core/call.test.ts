@@ -2,15 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
-import { createDispatcher, OpFailure } from './call';
+import { createDispatcher, OpFailure, scopeOf } from './call';
 import type { DispatchOptions } from './call';
 import { asHuman, partyOf } from './caller';
-import type { AgentCaller, Caller } from './caller';
+import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { REMEMBERED_REQUESTS } from './requests';
 import {
   CALLERS,
   CANVAS,
   isLead,
+  OTHER_CANVAS,
   pipedRegistry,
   PROPOSAL,
   RESOLVERS,
@@ -46,6 +47,26 @@ describe('partyOf', () => {
     expect(partyOf(lead, now)).toBe('worker');
     expect(partyOf(CALLERS['outside-read'])).toBe('outside-read');
     expect(partyOf(CALLERS['outside-write'])).toBe('outside-write');
+  });
+});
+
+describe('scopeOf', () => {
+  it('runs an op aimed at a group in its canvas’s scope, which holds every member’s', () => {
+    const agentScoped = { scope: 'agent' } as const;
+    expect(scopeOf(agentScoped, { canvas: CANVAS, target: { group: 'team' } })).toEqual([
+      'app',
+      CANVAS,
+    ]);
+    expect(scopeOf(agentScoped, { canvas: CANVAS, target: { agent: 'helper' } })).toEqual([
+      'app',
+      CANVAS,
+      'helper',
+    ]);
+    expect(scopeOf(agentScoped, { canvas: CANVAS, to: 'helper' })).toEqual([
+      'app',
+      CANVAS,
+      'helper',
+    ]);
   });
 });
 
@@ -159,6 +180,42 @@ describe('core.call', () => {
     // You reach everything; whether it exists is the op’s to say.
     expect(
       (await core.call('test.agent', { canvas: CANVAS, agent: 'ghost' }, CALLERS.you)).ok,
+    ).toBe(true);
+  });
+
+  it('fills in the canvas for a caller with exactly one, and asks one with several to name it', async () => {
+    const both = [CANVAS, OTHER_CANVAS];
+    const { core, calls } = setup({ openCanvases: () => both });
+    const outside: OutsideCaller = {
+      ...(CALLERS['outside-write'] as OutsideCaller),
+      canvases: both,
+    };
+    for (const caller of [CALLERS.you, outside]) {
+      // However the rest reads, and whatever it names: nothing out of reach is told.
+      for (const agent of ['helper', 'ghost']) {
+        expect(await core.call('test.agent', { agent }, caller)).toEqual({
+          ok: false,
+          error: {
+            code: 'invalid',
+            sentence: 'Name the canvas: there is more than one to choose from.',
+          },
+        });
+      }
+    }
+    expect(calls['test.agent']).toEqual([]);
+    // With one, it is filled in.
+    expect(await core.call('test.agent', { agent: 'helper' }, CALLERS['outside-write'])).toEqual({
+      ok: true,
+      value: { agent: 'helper' },
+    });
+    expect(
+      (
+        await setup({ openCanvases: () => [CANVAS] }).core.call(
+          'test.agent',
+          { agent: 'helper' },
+          CALLERS.you,
+        )
+      ).ok,
     ).toBe(true);
   });
 

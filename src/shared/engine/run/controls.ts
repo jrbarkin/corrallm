@@ -10,11 +10,11 @@ import type { Run } from './runner';
 
 /** An explicit individual cause is separate from the queue's combined pause state. */
 export function individualPaused(run: Run, agent: string): boolean {
-  return run.individualPauses?.includes(agent) === true;
+  return run.individualPauses?.some(({ id }) => id === agent) === true;
 }
 
 export function groupPaused(run: Run, group: string): boolean {
-  return run.groupPauses?.includes(group) === true;
+  return run.groupPauses?.some(({ id }) => id === group) === true;
 }
 
 /** A group finishes its active member turns before its pause takes full effect. */

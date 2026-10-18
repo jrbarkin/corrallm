@@ -660,6 +660,45 @@ describe('a connected agent', () => {
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
+  it('answers each question of a prompt from the canvas’s sidebar as that question', async () => {
+    const { backend, view, send, emit } = await open({ connection: 'claude-code.sdk' });
+    await send('Go');
+    emit({
+      type: 'question',
+      id: 'q',
+      questions: [
+        {
+          header: 'Branch',
+          text: 'Which branch?',
+          options: [
+            { label: 'main', description: '' },
+            { label: 'develop', description: '' },
+          ],
+          multiple: false,
+        },
+        {
+          header: 'Speed',
+          text: 'How fast?',
+          options: [
+            { label: 'fast', description: '' },
+            { label: 'careful', description: '' },
+          ],
+          multiple: false,
+        },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
+    // The second first: each answer is its own question's.
+    fireEvent.click(sidebar().getByRole('button', { name: 'careful' }));
+    fireEvent.click(sidebar().getByRole('button', { name: 'main' }));
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'q', {
+      kind: 'question',
+      answers: ['main', 'careful'],
+    });
+  });
+
   it('shows a question’s header and what each answer means, and takes several answers with Submit', async () => {
     const { backend, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
@@ -1098,6 +1137,18 @@ describe('a connected agent', () => {
     );
     expect(transcript.getByRole('separator', { name: 'Conversation cleared' })).toBeTruthy();
     expect(transcript.getByText('Hi there')).toBeTruthy();
+  });
+
+  it('lists what its session asks in the canvas’s Needs you, to answer in its view', async () => {
+    const { send, emit } = await open({ connection: 'claude-code.sdk' });
+    await send('Test it');
+    emit({ type: 'permission', id: 'p', tool: 'Bash', summary: 'npm test', always: null });
+    const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
+    expect(needs.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 1');
+    const asked = within(needs.getByRole('group', { name: 'a asks' }));
+    expect(asked.getByText('Approve Bash: npm test?')).toBeTruthy();
+    expect(asked.getByText('Answer it in its session.')).toBeTruthy();
+    expect(asked.getByRole('button', { name: 'Open session' })).toBeTruthy();
   });
 
   it('words a permission prompt as the CLI does', async () => {

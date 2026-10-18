@@ -376,7 +376,13 @@ describe('the MCP server on the registry', () => {
   beforeEach(async () => {
     profile = await mkdtemp(path.join(tmpdir(), 'corrallm-mcp-'));
     real = await createCore(
-      { profile, app: { name: 'corrallm', version: '1.0.0' }, check: true, distribution: 'local' },
+      {
+        profile,
+        app: { name: 'corrallm', version: '1.0.0' },
+        check: true,
+        distribution: 'local',
+        leads: isLead,
+      },
       NO_DESKTOP,
     );
     served = await startApiServer({ core: real, clientOf, port: 0 });
@@ -409,6 +415,17 @@ describe('the MCP server on the registry', () => {
     expect(direct.ok).toBe(true);
     expect((await client.callTool({ name: 'usage_get' })).structuredContent).toEqual(
       direct.ok ? direct.value : undefined,
+    );
+  });
+
+  it('gives the catalog through MCP as core.call does, past its output schema', async () => {
+    const client = await connect('read-token', served.url);
+    await client.listTools();
+    const direct = await real.call('catalog.get', {}, CALLERS['outside-read']);
+    if (!direct.ok) throw new Error(direct.error.sentence);
+    expect(direct.value.adapters.map(({ id }) => id)).toEqual(['claude-code', 'codex']);
+    expect((await client.callTool({ name: 'catalog_get' })).structuredContent).toEqual(
+      direct.value,
     );
   });
 });

@@ -5,6 +5,7 @@ import { parseRole } from '../role';
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../session';
 import type { AgentSettings } from '../session';
 import { USAGE_WINDOWS } from '../usage';
+import { MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
 import { GROUP_COLORS } from './geometry';
 import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
@@ -222,6 +223,9 @@ function readNode(
 ): FileNode {
   const node = record(value, where);
   const id = name(node.id, `${where}.id`);
+  if (id.length > MAX_NODE_ID) {
+    throw new Error(`${where}.id must be at most ${String(MAX_NODE_ID)} characters`);
+  }
   const { kind } = node;
   if (kind !== 'agent' && kind !== 'group') {
     throw new Error(`${where}.kind must be "agent" or "group"`);

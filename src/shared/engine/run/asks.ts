@@ -161,7 +161,7 @@ export interface HeldAsk extends Answers {
  * what waits, and offers to switch that session's agent: "Switch to Terminal" ("Switch Reviewer
  * to Terminal" for an agent it handed a message to: `catalog` names the connection). A usage rule
  * says how much of whose window is used (`catalog` names the backend), before the task it holds,
- * and when the window resets (as of `now`, in `locale`'s way).
+ * and when the window resets (as of `now`). Times of day read in `locale`'s way throughout.
  */
 export function heldAsks(
   nodes: readonly CanvasNode[],
@@ -183,7 +183,7 @@ export function heldAsks(
           agent,
           item,
           text: at.problem.text,
-          detail: `${taskLabel(nodes, item, catalog)}${at.problem.agent === agent.id ? '' : ` · ${agentName(nodes, at.problem.agent)}`}`,
+          detail: `${taskLabel(nodes, item, catalog, locale)}${at.problem.agent === agent.id ? '' : ` · ${agentName(nodes, at.problem.agent)}`}`,
           ...answersOf(item, at.problem),
           problem: at.problem,
         },
@@ -197,7 +197,7 @@ export function heldAsks(
           agent,
           item,
           text,
-          detail: `${taskLabel(nodes, item, catalog)} waits until ${name} can start`,
+          detail: `${taskLabel(nodes, item, catalog, locale)} waits until ${name} can start`,
           choices:
             how === undefined
               ? []
@@ -220,7 +220,7 @@ export function heldAsks(
           agent,
           item,
           text: `${holdText(at.usage, catalog)}. Go on?`,
-          detail: `Before ${itemLabel(item, catalog)}${reset}`,
+          detail: `Before ${itemLabel(item, catalog, locale)}${reset}`,
           ...usageAnswers(at.usage, catalog),
         },
       ];
@@ -249,7 +249,7 @@ export function heldAsks(
         // A wait or a repeat, in full: what it waited for, or what it repeated until.
         ...(before
           ? {
-              detail: `After ${isWait(before) || isRepeat(before) ? taskLabel(nodes, before, catalog) : itemLabel(before, catalog)}`,
+              detail: `After ${isWait(before) || isRepeat(before) ? taskLabel(nodes, before, catalog, locale) : itemLabel(before, catalog, locale)}`,
             }
           : {}),
         ...answers,

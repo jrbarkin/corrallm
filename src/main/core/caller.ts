@@ -1,5 +1,6 @@
 import type { Party } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
+import type { PartyId } from '../../shared/model/messages';
 import type { WindowId } from './host';
 
 /*
@@ -83,4 +84,25 @@ export function callerKey(caller: Caller): string {
     case 'outside':
       return `token:${caller.token}`;
   }
+}
+
+/**
+ * Who a caller is among a canvas's parties (API Spec §5.1), as its messages and the holds it sets
+ * are stamped: you, an agent by its id, or an outside orchestrator by its token's name. A token
+ * made with a live token's name is the same party.
+ */
+export function partyIdOf(caller: Caller): PartyId {
+  switch (caller.kind) {
+    case 'human':
+      return 'you';
+    case 'agent':
+      return `agent:${caller.agent}`;
+    case 'outside':
+      return `outside:${caller.name}`;
+  }
+}
+
+/** The canvases a token caller has: an agent its own, an outside orchestrator those it was granted. */
+export function canvasesOf(caller: TokenCaller): readonly CanvasId[] {
+  return caller.kind === 'agent' ? [caller.canvas] : caller.canvases;
 }

@@ -28,6 +28,7 @@ import { mcpServer } from './mcp';
 import { displayPath } from './tools';
 import type { Places } from './tools';
 import type { Prompts } from './prompts';
+import type { PeerMessages } from './settings';
 import { sdkMode } from './translate';
 import type { Translator } from './translate';
 
@@ -75,6 +76,8 @@ export interface SdkSessionParts {
   mode: PermissionMode;
   /** Where it works, to name the files a rewind restores. */
   places: Places;
+  /** What the CLI's settings say it does with a message from another session, if they say. */
+  peers?: PeerMessages;
 }
 
 /** The end of what a CLI wrote to stderr: what it said last, when it stops. */
@@ -110,6 +113,7 @@ export class SdkSession implements LiveSession {
   readonly #prompts: Prompts;
   readonly #stderr: Stderr;
   readonly #places: Places;
+  readonly #peers: PeerMessages | undefined;
   /** Messages sent whose turn has not ended: the CLI's uuid for each, and the renderer's id. */
   readonly #pending = new Map<string, string>();
   #mode: PermissionMode;
@@ -120,9 +124,20 @@ export class SdkSession implements LiveSession {
   #afterPlan: { mode: PermissionMode; timer: ReturnType<typeof setTimeout> } | undefined;
   readonly #pump: Promise<void>;
 
-  constructor({ query, inbox, host, translator, prompts, stderr, mode, places }: SdkSessionParts) {
+  constructor({
+    query,
+    inbox,
+    host,
+    translator,
+    prompts,
+    stderr,
+    mode,
+    places,
+    peers,
+  }: SdkSessionParts) {
     this.#mode = mode;
     this.#places = places;
+    this.#peers = peers;
     this.#query = query;
     this.#inbox = inbox;
     this.#host = host;
@@ -132,7 +147,9 @@ export class SdkSession implements LiveSession {
     this.#pump = this.#read();
   }
 
-  send({ id, text, images }: UserMessage): Promise<void> {
+  send({ id, text, images, from }: UserMessage): Promise<void> {
+    const refused = from === undefined ? undefined : this.#peerRefusal();
+    if (refused !== undefined) return Promise.reject(new Error(refused));
     // The CLI names a message by a uuid, and so does the renderer, usually.
     const uuid = UUID.test(id) ? id : randomUUID();
     const content: SDKUserMessage['message']['content'] =
@@ -151,11 +168,36 @@ export class SdkSession implements LiveSession {
       message: { role: 'user', content },
       parent_tool_use_id: null,
       uuid: uuid as SDKUserMessage['uuid'] & string,
-      origin: { kind: 'human' },
+      // Another party's message is a peer's, never the user's: declaring no mode for it, its
+      // strict trust gates fail it closed (and where the CLI would hold it, it isn't sent).
+      origin:
+        from === undefined
+          ? { kind: 'human' }
+          : { kind: 'peer', from: from.party, name: from.name },
     });
     this.#host.emit({ type: 'user', id, text });
     this.#host.emit({ type: 'status', status: 'working' });
     return Promise.resolve();
+  }
+
+  /**
+   * Why another party's message isn't sent, if it isn't: the CLI would hold it for its user's
+   * review, nowhere corrallm shows it, or refuse it, so no result would ever end its turn. Its
+   * settings say to hold or refuse messages from other sessions (crossSessionInbound), or, unless
+   * they say to accept them, it bypasses permissions, and so holds a peer's message that declares
+   * no mode of its own (as corrallm's never do).
+   */
+  #peerRefusal(): string | undefined {
+    if (this.#peers === 'hold') {
+      return 'Not sent: this agent’s Claude Code settings hold messages from other sessions for its user to review (crossSessionInbound), which corrallm can’t show.';
+    }
+    if (this.#peers === 'refuse') {
+      return 'Not sent: this agent’s Claude Code settings refuse messages from other sessions (crossSessionInbound).';
+    }
+    if (this.#peers !== 'accept' && this.#mode === 'bypassPermissions') {
+      return 'Not sent: this agent bypasses permissions, and while it does Claude Code holds a message from another party for its user to review, which corrallm can’t show.';
+    }
+    return undefined;
   }
 
   answer(promptId: string, answer: SessionAnswer): Promise<void> {

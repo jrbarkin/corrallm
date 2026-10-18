@@ -15,16 +15,20 @@ import type { RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
+import { Delivery } from './delivery/delivery';
+import { MessageStore } from './delivery/messages';
 
 /*
  * The canvases the core runs, each with its engine (src/shared/engine/engine.ts): the run and the
- * sessions it sends to, the sessions run by the core's own SessionManager, in the same process.
+ * sessions it sends to, the sessions run by the core's own SessionManager, in the same process;
+ * and its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts).
  * A canvas opens by its id, from what the profile keeps of it: its file and its project folder,
  * which the user picked in the app (canvases.json), and its run as the journal last kept it
  * (runs/<id>/record.json), restored paused. A draft, which has no file, never opens, nor does a
  * canvas whose file holds another canvas. Whatever its engine does is journaled again: at most
  * one write per COALESCE_MS, and one before every message the run sends, so a sent message's
- * record is always on disk first.
+ * record is always on disk first; its messages are journaled beside its run, each one delivering
+ * forced to disk before it is sent.
  */
 
 const COALESCE_MS = 250;
@@ -51,10 +55,16 @@ export interface EnginesDeps {
   locale?: string;
 }
 
-/** A canvas the core runs: its document, its engine, its sessions' listeners and its journal. */
-interface Running {
+/** A canvas the core runs: its document, its engine and its messages. */
+export interface OpenCanvas {
   document: CanvasDocument;
   engine: Engine;
+  messages: MessageStore;
+  delivery: Delivery;
+}
+
+/** A canvas the core runs, with its sessions' listeners and its journal. */
+interface Running extends OpenCanvas {
   /** Its generation's token in the journal, which its writes carry. */
   token: string;
   listeners: Set<(agentId: string, connection: ConnectionId, event: SessionEvent) => void>;
@@ -67,9 +77,21 @@ interface Running {
 export class Engines {
   readonly #deps: EnginesDeps;
   readonly #running = new Map<CanvasId, Promise<Running>>();
+  /** The canvases open now, once opened. */
+  readonly #canvases = new Map<CanvasId, Running>();
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
+  }
+
+  /** A canvas the core has open, if it has. */
+  canvas(canvas: CanvasId): OpenCanvas | undefined {
+    return this.#canvases.get(canvas);
+  }
+
+  /** The canvases the core has open, in the order they opened. */
+  opened(): CanvasId[] {
+    return [...this.#canvases.keys()];
   }
 
   /**
@@ -107,6 +129,7 @@ export class Engines {
   async close(): Promise<void> {
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
+    this.#canvases.clear();
     const stopped = await Promise.allSettled(
       running.flatMap((opened) =>
         opened.status === 'fulfilled' ? [this.#stop(opened.value)] : [],
@@ -137,8 +160,17 @@ export class Engines {
     if (document.id !== canvas) throw new Error(ANOTHER);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
+    const messages = new MessageStore(canvas, journal, () => Date.now());
+    await messages.load();
+    if (messages.warning !== undefined) console.warn(messages.warning);
     // The engine and what journals it need each other.
-    const running = { document, token: context.token, listeners, timer: undefined } as Running;
+    const running = {
+      document,
+      messages,
+      token: context.token,
+      listeners,
+      timer: undefined,
+    } as Running;
     const engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -160,6 +192,22 @@ export class Engines {
     running.engine = engine;
     engine.update(document.nodes);
     if (context.checkpoint) engine.restore(context.checkpoint);
+    const delivery = new Delivery({
+      canvas,
+      engine,
+      store: messages,
+      nodes: () => running.document.nodes,
+      now: () => Date.now(),
+      later: (run, ms) => {
+        const timer = setTimeout(run, ms);
+        return () => {
+          clearTimeout(timer);
+        };
+      },
+      ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
+    });
+    running.delivery = delivery;
+    await delivery.start();
     const changed = () => {
       running.timer ??= setTimeout(() => {
         running.timer = undefined;
@@ -174,6 +222,7 @@ export class Engines {
       // Usage rules are checked again with each reading.
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
+        delivery.schedule();
       }),
     ];
     running.stop = () => {
@@ -181,14 +230,22 @@ export class Engines {
       clearTimeout(running.timer);
       running.timer = undefined;
     };
+    this.#canvases.set(canvas, running);
     return running;
   }
 
-  /** Stops a canvas as the core closes: its run held where it is, and journaled. */
+  /**
+   * Stops a canvas as the core closes: what its messages were doing cut off, its run held where it
+   * is, and journaled.
+   */
   async #stop(running: Running): Promise<void> {
     running.stop();
-    running.engine.run.pause();
-    await this.#write(running);
+    try {
+      await running.delivery.close();
+    } finally {
+      running.engine.run.pause();
+      await this.#write(running);
+    }
   }
 
   /** Journals a canvas's run as it is now, the coalesced write it replaces cancelled. */

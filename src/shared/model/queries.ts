@@ -32,6 +32,39 @@ export function groupMembers(nodes: readonly NodeLike[], id: string): string[] {
     .map((node) => node.id);
 }
 
+/**
+ * The agent that manages an agent (API Spec §6.1): the nearest agent it is nested inside, through
+ * any frames between; none for one nested in no agent.
+ */
+export function managerOf(nodes: readonly NodeLike[], id: string): string | undefined {
+  const seen = new Set([id]);
+  let parent = nodes.find((node) => node.id === id)?.parentId;
+  while (parent !== undefined && !seen.has(parent)) {
+    seen.add(parent);
+    const node = nodes.find((one) => one.id === parent);
+    if (node?.type === 'agent') return node.id;
+    parent = node?.parentId;
+  }
+  return undefined;
+}
+
+/** The nodes a node is nested inside (its groups, an agent's manager among them), nearest first. */
+export function containersOf(nodes: readonly NodeLike[], id: string): string[] {
+  const containers: string[] = [];
+  let parent = nodes.find((node) => node.id === id)?.parentId;
+  while (parent !== undefined && parent !== id && !containers.includes(parent)) {
+    containers.push(parent);
+    const at: string = parent;
+    parent = nodes.find((node) => node.id === at)?.parentId;
+  }
+  return containers;
+}
+
+/** An agent's team: every agent nested inside it, at any depth, in their order on the canvas. */
+export function teamOf(nodes: readonly NodeLike[], id: string): string[] {
+  return groupMembers(nodes, id).filter((member) => member !== id);
+}
+
 /** An agent's name: its label, "Unnamed agent" without one, or "Deleted agent" once it is gone. */
 export function agentName(nodes: readonly NodeLike[], id: string): string {
   const node = nodes.find((n) => n.id === id);

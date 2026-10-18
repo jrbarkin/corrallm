@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_NODE_ID } from '../model/canvas';
+
 /*
  * The ids operations name, as zod brands (Core Server §3.1). core.call resolves every branded id in
  * a token's arguments against what its party reaches before the op runs (core/reach.ts): anything
@@ -35,6 +37,29 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
 /** A Needs item (API Spec §5.9), by the id the core minted: what a proposal returns. */
 export const NeedId = brandedId('NeedId', z.uuid());
 export type NeedId = z.infer<typeof NeedId>;
+
+/** A canvas, by its stable id (src/shared/canvas.ts). */
+export const CanvasId = brandedId('CanvasId', z.uuid());
+export type CanvasId = z.infer<typeof CanvasId>;
+
+/**
+ * The canvas an op acts on, which a caller with exactly one may leave out (an agent's own, a
+ * token's only one, the only one you have open), and so may one naming a message, whose canvas it
+ * says: core.call fills it in.
+ */
+export const OpCanvas = CanvasId.optional();
+
+/** An agent of a canvas, by its node's id. */
+export const AgentId = brandedId('AgentId', z.string().min(1).max(MAX_NODE_ID));
+export type AgentId = z.infer<typeof AgentId>;
+
+/** A node of a canvas (an agent or a group), by its id. */
+export const NodeId = brandedId('NodeId', z.string().min(1).max(MAX_NODE_ID));
+export type NodeId = z.infer<typeof NodeId>;
+
+/** A message (API Spec §5.2), by the id the core minted. */
+export const MessageId = brandedId('MessageId', z.uuid());
+export type MessageId = z.infer<typeof MessageId>;
 
 /** A branded id found in an op's arguments: its brand, its value, and where it was. */
 export interface IdRef {

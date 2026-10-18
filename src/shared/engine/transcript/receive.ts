@@ -176,11 +176,12 @@ export class ConnectedDriver implements SessionDriver {
         // Stopped before it went: it never does.
         if (!this.#turns.has(turn.id)) return null;
         sent.sent = true;
-        const { id, text, images } = turn;
+        const { id, text, images, from } = turn;
         return this.#backend.send(this.#agentId, {
           id,
           text,
           ...(images === undefined || images.length === 0 ? {} : { images }),
+          ...(from === undefined ? {} : { from }),
         });
       })
       .catch((error: unknown) => {

@@ -1,9 +1,16 @@
+import type { Catalog } from '../../../shared/adapter';
 import type { ArgsOf, ResultOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
+import type { CanvasId } from '../../../shared/canvas';
 import type { UsageReadings } from '../../usage';
 import type { OpContext } from '../call';
+import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import { appOps } from './app';
+import { catalogOps } from './catalog';
+import { conversationOps } from './conversation';
+import { runOps } from './run';
+import { sessionOps } from './session';
 import { usageOps } from './usage';
 
 /*
@@ -20,11 +27,26 @@ export type Implementations = {
 export interface OpServices {
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
+  /** What every adapter declares. */
+  catalog: Catalog;
   usage: Pick<UsageReadings, 'state'>;
+  /** The canvases the core runs. */
+  engines: Engines;
+  /** Whether an agent is a lead now, as kept on this machine. */
+  isLead: (canvas: CanvasId, agent: string) => boolean;
+  /** The locale what the core says tells times of day in: the runtime's own, when none. */
+  locale?: string;
   /** Whatever needs the desktop. */
   host: HostServices;
 }
 
 export function implementations(services: OpServices): Implementations {
-  return { ...appOps(services), ...usageOps(services) };
+  return {
+    ...appOps(services),
+    ...catalogOps(services),
+    ...conversationOps(services),
+    ...sessionOps(services),
+    ...runOps(services),
+    ...usageOps(services),
+  };
 }

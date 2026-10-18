@@ -78,6 +78,21 @@ describe('engineCatalog', () => {
     expect(engine.connectionLabel('qwen.acp')).toBeUndefined();
   });
 
+  it('names a connection in full, with its adapter, as a refusal says it', () => {
+    expect(engine.connectionName('codex.terminal')).toBe('Codex · Terminal');
+    expect(engine.connectionName('claude-code.sdk')).toBe('Claude Code · Agent SDK');
+    expect(engine.connectionName('unavailable')).toBeUndefined();
+  });
+
+  it('gives the text each connection runs as a shell command when a message starts with it', () => {
+    expect(engine.shellPrefix('claude-code.terminal')).toBe('!');
+    expect(engine.shellPrefix('codex.terminal')).toBe('!');
+    // The Agent SDK and the App Server run no shell command from a message's text.
+    expect(engine.shellPrefix('claude-code.sdk')).toBeUndefined();
+    expect(engine.shellPrefix('codex.app-server')).toBeUndefined();
+    expect(engine.shellPrefix('unavailable')).toBeUndefined();
+  });
+
   it('names a usage backend as the catalog does; by its id, for one it lacks', () => {
     expect(engine.backendName('claude-code')).toBe('Claude');
     expect(engine.backendName('codex')).toBe('Codex');
@@ -97,6 +112,18 @@ describe('engineCatalog', () => {
     expect(engine.isStartMode('codex.app-server', 'acceptEdits')).toBe(false);
     expect(engine.isStartMode('unavailable', 'plan')).toBe(false);
     expect(engine.isStartMode('qwen.acp', 'plan')).toBe(false);
+  });
+
+  it('says a session acts without asking only in a mode its adapter lists that never asks', () => {
+    expect(engine.neverAsks('claude-code.sdk', 'bypassPermissions')).toBe(true);
+    expect(engine.neverAsks('claude-code.terminal', 'bypassPermissions')).toBe(true);
+    expect(engine.neverAsks('codex.app-server', 'full-access')).toBe(true);
+    expect(engine.neverAsks('claude-code.sdk', 'acceptEdits')).toBe(false);
+    expect(engine.neverAsks('codex.app-server', 'auto')).toBe(false);
+    // Nor another adapter's, nor one on a connection the catalog lacks.
+    expect(engine.neverAsks('codex.app-server', 'bypassPermissions')).toBe(false);
+    expect(engine.neverAsks('unavailable', 'full-access')).toBe(false);
+    expect(engine.neverAsks('qwen.acp', 'yolo')).toBe(false);
   });
 
   it('runs a queue with whatever adapter the catalog declares, wording steps from it', () => {
@@ -152,6 +179,9 @@ describe('engineCatalog', () => {
     expect(zed.isStartMode('zed.acp', 'auto')).toBe(false);
     expect(zed.isStartMode('zed.free', 'plan')).toBe(false);
     expect(zed.isStartMode('claude-code.terminal', 'plan')).toBe(false);
+    expect(zed.neverAsks('zed.acp', 'auto')).toBe(true);
+    expect(zed.neverAsks('zed.acp', 'plan')).toBe(false);
+    expect(zed.neverAsks('claude-code.terminal', 'bypassPermissions')).toBe(false);
   });
 
   it('words a usage rule’s warning and hold with the backend the catalog it is given names', () => {

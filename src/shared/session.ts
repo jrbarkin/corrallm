@@ -230,13 +230,26 @@ export interface MessageImage {
 }
 
 /**
+ * Who sent a message that isn't the user's: its party (src/shared/model/messages.ts PartyId) and
+ * its name, as a notice names it.
+ */
+export interface MessageSender {
+  party: string;
+  name: string;
+}
+
+/**
  * A message the user sends: its id (the turn it starts ends naming it), its text, and the images
- * pasted into it, if any (only connected sessions see them).
+ * pasted into it, if any (only connected sessions see them). `from`: who sent it, when another
+ * party did (an agent, an outside orchestrator, corrallm): its text is framed so, and a connection
+ * whose CLI takes who sent a message (the Agent SDK) tells it too, so that it never takes it for
+ * its user's.
  */
 export interface UserMessage {
   id: string;
   text: string;
   images?: MessageImage[];
+  from?: MessageSender;
 }
 
 /**

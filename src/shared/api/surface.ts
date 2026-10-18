@@ -80,17 +80,83 @@ export interface Surface {
   readonly reads?: TopicKind;
 }
 
+/** Reads no agent makes: you, and outside tokens on their canvases. */
+const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
+/** Reads leads make too, on the agents they reach. */
+const R = { ...O, lead: 'linked' } as const;
 /** Reads every caller makes: you, leads and workers on the agents they reach, outside tokens. */
-const A = {
-  you: 'all',
-  lead: 'linked',
-  worker: 'linked',
-  'outside-read': 'canvas',
-  'outside-write': 'canvas',
-} as const;
+const A = { ...R, worker: 'linked' } as const;
+/** Writes on agents and queues: you; leads, on their team; outside write tokens. */
+const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
+/** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
+const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
 
 export const SURFACE = {
   'app.info': { access: A, kind: 'read', scope: 'none' },
+  'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
+  agents: { access: A, kind: 'read', scope: 'none', varies: ['agents'] },
+  status: {
+    access: R,
+    kind: 'read',
+    scope: 'none',
+    varies: ['agents', 'waitingForYou', 'next'],
+  },
+  needs: { access: A, kind: 'read', scope: 'none', reads: 'needs', varies: ['items'] },
+  messages: {
+    access: A,
+    kind: 'read',
+    scope: 'none',
+    reads: 'messages',
+    varies: ['items', 'next'],
+  },
+  message: {
+    access: M,
+    kind: 'command',
+    scope: 'agent',
+    rules: ['shell-text'],
+    self: 'refused',
+  },
+  withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
+  'session.get': {
+    access: A,
+    kind: 'read',
+    scope: 'none',
+    reads: 'sessions',
+    self: 'allowed',
+  },
+  'session.transcript': {
+    access: { ...R, worker: 'own' },
+    kind: 'read',
+    scope: 'none',
+    reads: 'session',
+    self: 'allowed',
+    // An MCP server's link (a sign-in) is yours alone (R3).
+    varies: ['entries'],
+  },
+  'session.interrupt': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    preempt: true,
+    destructive: true,
+    self: 'refused',
+  },
+  'run.pause': { access: L, kind: 'command', scope: 'agent', self: 'allowed' },
+  'run.kill': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    preempt: true,
+    destructive: true,
+    self: 'allowed',
+  },
+  'run.unpause': {
+    access: L,
+    kind: 'command',
+    scope: 'agent',
+    rules: ['sticky'],
+    self: 'allowed',
+  },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
 } as const satisfies Record<string, Surface>;
 

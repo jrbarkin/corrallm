@@ -1,4 +1,5 @@
 import { ID_PATTERN } from '../../adapter';
+import { PARTY_PATTERN } from '../../model/messages';
 import type { AgentRun, Outcome, Run, TaskAttempt } from './runner';
 
 /** Queue state and the minimal result evidence needed by conditions; no session transcript.
@@ -43,6 +44,9 @@ const entries = (v: unknown, check: (v: unknown) => boolean) =>
     v,
     (entry) => Array.isArray(entry) && entry.length === 2 && string(entry[0]) && check(entry[1]),
   );
+/** A pause cause: what it holds, and the party that set it. */
+const cause = (v: unknown) =>
+  record(v) && string(v.id) && typeof v.by === 'string' && PARTY_PATTERN.test(v.by);
 const attempt = (v: unknown): v is TaskAttempt =>
   record(v) &&
   string(v.id) &&
@@ -125,8 +129,8 @@ export function readRun(text: string): SavedRun {
     !record(v.run) ||
     !boolean(v.run.running) ||
     !optional(v.run, 'paused', boolean) ||
-    !optional(v.run, 'individualPauses', (x) => array(x, string)) ||
-    !optional(v.run, 'groupPauses', (x) => array(x, string)) ||
+    !optional(v.run, 'individualPauses', (x) => array(x, cause)) ||
+    !optional(v.run, 'groupPauses', (x) => array(x, cause)) ||
     !record(v.run.agents) ||
     !values(v.run.agents, agent) ||
     !entries(v.replies, string) ||

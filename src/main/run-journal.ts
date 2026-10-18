@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isCanvasId, newCanvasId } from '../shared/canvas';
@@ -33,11 +33,15 @@ const VERSION = 2;
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
 
 /**
- * Each canvas's run, journaled atomically by the canvas's id, and the canvas the profile had open
- * last:
+ * Each canvas's run, journaled atomically by the canvas's id, its messages, and the canvas the
+ * profile had open last:
  *
- *   runs/<canvas id>/record.json  { "version": 2, "id", "file"?, "checkpoint", "remembered"? }
- *   runs/last.json                { "version": 2, "canvas" }
+ *   runs/<canvas id>/record.json     { "version": 2, "id", "file"?, "checkpoint", "remembered"? }
+ *   runs/<canvas id>/messages.jsonl  the canvas's message store's log, appended (a line a change)
+ *   runs/last.json                   { "version": 2, "canvas" }
+ *
+ * Every write goes through one queue, in order: a message's record appended durably (forced to
+ * disk) is on disk before anything journaled after it.
  *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
  * canvas memory lost it. A window's renderer saves with the token of the canvas it showed: a save
@@ -159,6 +163,52 @@ export class RunJournal {
     return this.#writing;
   }
 
+  /** The canvas's message log, as written: undefined if it has none yet. */
+  async readMessages(canvas: CanvasId): Promise<string | undefined> {
+    await this.flush();
+    try {
+      return await readFile(this.#messagesFile(canvas), 'utf8');
+    } catch (error) {
+      if (missing(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Appends `text` to the canvas's message log, after whatever was journaled before it; with
+   * `durable`, forced to disk (the log and all appended before it) before it resolves.
+   */
+  appendMessages(canvas: CanvasId, text: string, durable: boolean): Promise<void> {
+    return this.#serialize(async () => {
+      const file = this.#messagesFile(canvas);
+      await mkdir(path.dirname(file), { recursive: true });
+      const handle = await open(file, 'a');
+      try {
+        if (text !== '') await handle.appendFile(text, 'utf8');
+        if (durable) await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    });
+  }
+
+  /** Writes the canvas's message log anew, whole, as `text`: what its store keeps now. */
+  rewriteMessages(canvas: CanvasId, text: string): Promise<void> {
+    return this.#serialize(async () => {
+      const file = this.#messagesFile(canvas);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeWhole(file, text);
+    });
+  }
+
+  /** Sets the canvas's message log aside, as one that can't be read: where it is now. */
+  async setAsideMessages(canvas: CanvasId): Promise<string> {
+    const file = this.#messagesFile(canvas);
+    const rejected = file.replace(/\.jsonl$/, `.rejected-${randomUUID()}.jsonl`);
+    await this.#serialize(() => rename(file, rejected));
+    return rejected;
+  }
+
   #entry(canvas: CanvasId): Entry {
     let entry = this.#entries.get(canvas);
     if (entry === undefined) {
@@ -170,6 +220,10 @@ export class RunJournal {
 
   #recordFile(canvas: CanvasId): string {
     return path.join(this.#directory, canvas, 'record.json');
+  }
+
+  #messagesFile(canvas: CanvasId): string {
+    return path.join(this.#directory, canvas, 'messages.jsonl');
   }
 
   #lastFile(): string {
