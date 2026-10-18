@@ -1,4 +1,4 @@
-import type { EngineCatalog } from '../engine/catalog';
+import type { UsageBackendId } from '../adapter';
 import { WINDOW_NAMES } from '../usage';
 import type { UsageHold, UsageWindow } from '../usage';
 import type { NodeLike } from './canvas';
@@ -42,8 +42,13 @@ import { DAY, HOUR, MINUTE } from './time';
  * in (the host's: none, for the runtime's own).
  */
 
+/** What these words read of the catalog: a usage backend's name (the engine's catalog is one). */
+export interface BackendNames {
+  backendName(backend: UsageBackendId): string;
+}
+
 /** How a condition reads after "If". */
-export const ifText = (condition: Condition, catalog: EngineCatalog): string =>
+export const ifText = (condition: Condition, catalog: BackendNames): string =>
   condition.kind === 'outputContains'
     ? `the output contains "${condition.text}"${condition.wholeLine ? ' on a line of its own' : ''}`
     : condition.kind === 'freeText'
@@ -55,7 +60,7 @@ export const ifText = (condition: Condition, catalog: EngineCatalog): string =>
 /** How a usage condition reads: "Claude’s usage is over 80% (5-hour)". */
 export const usageAboveText = (
   { backend, percent, window }: UsageAbove,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string =>
   `${catalog.backendName(backend)}’s usage is over ${String(percent)}% (${WINDOW_NAMES[window]})`;
 
@@ -99,7 +104,7 @@ export const repeatText = (nodes: readonly NodeLike[], repeat: QueueRepeat): str
   `Repeat until ${untilText(nodes, repeat.until)}`;
 
 /** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
-export const delayText = (item: QueueDelay, catalog: EngineCatalog): string =>
+export const delayText = (item: QueueDelay, catalog: BackendNames): string =>
   `Wait ${timeText(item.delay, catalog)}`;
 
 /** What an OK is on, in the user's words: "the spec in SPEC.md", or "the work before it". */
@@ -113,14 +118,14 @@ export const okText = (ok: QueueApproval, max = 32): string =>
 export const waitText = (
   item: QueueWait,
   targetLabel: (target: WaitTarget) => string,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string =>
   `Wait for ${andList(item.waitFor.map(targetLabel))}${
     item.timeout === undefined ? '' : `, ${limitText(item.timeout, catalog)}`
   }`;
 
 /** How a queue item reads when another agent waits for it. */
-export const itemLabel = (item: QueueItem, catalog: EngineCatalog): string =>
+export const itemLabel = (item: QueueItem, catalog: BackendNames): string =>
   isWait(item)
     ? 'its wait'
     : isRepeat(item)
@@ -157,7 +162,7 @@ export const expectedText = (asExpected: boolean): string =>
 export function waitTargetLabel(
   nodes: readonly NodeLike[],
   { agent, item }: WaitTarget,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string {
   if (item === undefined) return agentName(nodes, agent);
   const found = findItem(nodes.find((n) => n.id === agent)?.data.queue ?? [], item);
@@ -178,7 +183,7 @@ export function andList(names: readonly string[]): string {
 export function taskLabel(
   nodes: readonly NodeLike[],
   item: QueueItem,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string {
   if (isWait(item))
     return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
@@ -202,7 +207,7 @@ export function taskLabel(
 export function describe(
   nodes: readonly NodeLike[],
   item: QueueItem,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string {
   if (isWait(item))
     return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
@@ -224,7 +229,7 @@ const LENGTH_WORDS = [
  * A time in words: "10 minutes", "1 hour 30 minutes", "until 9:00 AM" (in `locale`'s way), "until
  * Claude’s usage resets (5-hour)" (its backend named by `catalog`).
  */
-export function timeText(time: Time, catalog: EngineCatalog, locale?: string): string {
+export function timeText(time: Time, catalog: BackendNames, locale?: string): string {
   if (isUsageReset(time)) return `until ${resetText(time, catalog)}`;
   if ('at' in time) return `until ${clockText(time.at, locale)}`;
   let left = time.seconds;
@@ -238,7 +243,7 @@ export function timeText(time: Time, catalog: EngineCatalog, locale?: string): s
 }
 
 /** A time limit in words: "at most 30 minutes", "no later than 6:00 PM". */
-export function limitText(time: Time, catalog: EngineCatalog, locale?: string): string {
+export function limitText(time: Time, catalog: BackendNames, locale?: string): string {
   if (isUsageReset(time)) return `no later than ${resetText(time, catalog)}`;
   return 'at' in time
     ? `no later than ${clockText(time.at, locale)}`
@@ -246,7 +251,7 @@ export function limitText(time: Time, catalog: EngineCatalog, locale?: string): 
 }
 
 /** "Claude’s usage resets (5-hour)". */
-function resetText({ backend, resets }: UsageReset, catalog: EngineCatalog): string {
+function resetText({ backend, resets }: UsageReset, catalog: BackendNames): string {
   return `${catalog.backendName(backend)}’s usage resets (${WINDOW_NAMES[resets]})`;
 }
 
@@ -305,7 +310,7 @@ export const windowText = (window: UsageWindow): string => `${WINDOW_NAMES[windo
  */
 export function holdText(
   { backend, window, percent, used }: UsageHold,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
 ): string {
   return `${catalog.backendName(backend)} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
 }
@@ -316,7 +321,7 @@ export function holdText(
  */
 export function warningText(
   hold: UsageHold,
-  catalog: EngineCatalog,
+  catalog: BackendNames,
   now: number,
   locale?: string,
 ): string {

@@ -32,7 +32,7 @@ const NO_FOLDER =
   'This canvas has no project folder: open it in corrallm and choose its folder there, so its agents can work.';
 const NO_FILE = 'This canvas isn’t saved: save it in corrallm first.';
 const ANOTHER = 'This canvas’s file holds another canvas now: open it in corrallm to run it.';
-const NO_SWITCH = 'This agent is switched to another connection in the corrallm app.';
+const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.';
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 
 export interface EnginesDeps {

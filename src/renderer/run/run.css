@@ -1,12 +1,13 @@
 /*
- * Where the queues' run is (run/runner.ts), on a queue's rows (QueueEditor.tsx) wherever they are
- * shown: the task an agent is on pulses, with a sheen passing over it; a wait or a delay it is held
- * at breathes, grey; a task that needs the user (an OK the run holds for their decision, or a task
- * whose agent asks permission) pulses amber, as an agent with a question does on the canvas; a
- * queue stopped at an OK (or held when the run was stopped), and a wait for what was stopped, is
- * ringed grey; a task done is ticked, one that failed crossed, one skipped faded, and a wait that
- * ran out of time marked with an amber "!". A repeat breathes grey while it waits, pulses amber
- * when out of rounds it asks the user, and once over is ticked (or crossed) as a whole.
+ * Where the queues' run is (src/shared/engine/run/runner.ts), on a queue's rows (QueueEditor.tsx)
+ * wherever they are shown: the task an agent is on pulses, with a sheen passing over it; a wait or
+ * a delay it is held at breathes, grey; a task that needs the user (an OK the run holds for their
+ * decision, or a task whose agent asks permission) pulses amber, as an agent with a question does
+ * on the canvas; a queue stopped at an OK (or held when the run was stopped), and a wait for what
+ * was stopped, is ringed grey; a task done is ticked, one that failed crossed, one skipped faded,
+ * and a wait that ran out of time marked with an amber "!". A repeat breathes grey while it waits,
+ * pulses amber when out of rounds it asks the user, and once over is ticked (or crossed) as a
+ * whole.
  */
 :is(.graph-queue-row, .graph-queue-if, .graph-queue-repeat)[data-run] {
   --run: var(--graph-accent, #2563eb);

@@ -51,6 +51,10 @@ describe('native agent defaults', () => {
     ]);
   });
 
+  it('runs a node naming no adapter with Claude Code, as the core does (DEFAULT_ADAPTER)', () => {
+    expect(DEFAULT_AGENT).toBe('claude-code');
+  });
+
   it('offers each adapter its connections, its first by default', () => {
     expect(CONNECTED_AGENTS).toEqual(['claude-code', 'codex']);
     expect(defaultConnection('claude-code')).toBe('claude-code.terminal');

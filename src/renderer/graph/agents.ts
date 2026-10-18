@@ -23,12 +23,16 @@ function own<T>(table: Readonly<Record<string, T>>, id: string): T | undefined {
   return Object.hasOwn(table, id) ? table[id] : undefined;
 }
 
-/** The adapter a new node starts with. */
+/**
+ * The adapter a new node starts with, and one naming none runs: main's DEFAULT_ADAPTER, which the
+ * core runs such a node with, is the same (both pinned by their tests) until B12 makes it the user's.
+ */
 export const DEFAULT_AGENT: AdapterId = 'claude-code';
 
 /**
- * What the run, and the sessions it sends to, read of each agent's adapter (src/shared/engine/catalog.ts): the
- * catalog main declares, a node naming no adapter running DEFAULT_AGENT.
+ * What the run, and the sessions it sends to, read of each agent's adapter
+ * (src/shared/engine/catalog.ts): the catalog main declares, a node naming no adapter running
+ * DEFAULT_AGENT.
  */
 export function runCatalog(): EngineCatalog {
   return engineCatalog(catalog(), DEFAULT_AGENT);
