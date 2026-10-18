@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
-import { needs } from '../../../shared/engine/needs';
+import { needsItem, needsOf } from '../../../shared/engine/needs';
+import type { NeedsInput } from '../../../shared/engine/needs';
 import type { Engine } from '../../../shared/engine/engine';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty } from '../../../shared/model/messages';
@@ -492,7 +493,11 @@ export class Delivery {
     );
   }
 
-  /** Tells each party whose message's turn waits for you so, once: by what it waits for. */
+  /**
+   * Tells each party whose message's turn waits for you so, once: by what the turn itself waits
+   * on, its session's prompt or what its CLI asks in its terminal; never a hold of the run's on its
+   * agent, which holds no party's message.
+   */
   #tellWaiting(messages: readonly Message[]): void {
     const { engine } = this.#deps;
     const turns = messages.flatMap((message) => {
@@ -505,12 +510,14 @@ export class Delivery {
       ) {
         return [];
       }
-      // Its turn has started: the session has it.
-      const { entries } = engine.sessions.of(agent);
-      return entries.some((entry) => entry.id === message.delivery?.as) ? [{ agent, message }] : [];
+      // Its turn has started (the session has it), and waits on the user.
+      const { entries, status } = engine.sessions.of(agent);
+      return status === 'waiting' && entries.some((entry) => entry.id === message.delivery?.as)
+        ? [{ agent, message }]
+        : [];
     });
     if (turns.length === 0) return;
-    const waiting = needs({
+    const input: NeedsInput = {
       canvas: this.#deps.canvas,
       nodes: this.#deps.nodes(),
       run: engine.run.snapshot(),
@@ -518,14 +525,15 @@ export class Delivery {
       catalog: engine.catalog,
       now: this.#deps.now(),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
-    });
+    };
+    const asked = needsOf(input).filter((need) => need.kind === 'prompt' || need.kind === 'ask');
     for (const { agent, message } of turns) {
-      const waits = waiting.find((item) => item.agent === agent);
-      if (waits) {
+      const need = asked.find((one) => one.agent.id === agent);
+      if (need) {
         this.#tell(
           `waiting:${message.id}`,
           message,
-          `${this.#name(agent)} is waiting for you: ${waits.title}`,
+          `${this.#name(agent)} is waiting for you: ${needsItem(need, input).title}`,
         );
       }
     }

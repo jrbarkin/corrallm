@@ -467,6 +467,43 @@ describe('delivery', () => {
   });
 });
 
+describe('a turn waiting for you', () => {
+  /** A canvas whose Builder and Checker each hold an OK on their queue, the run asking for both. */
+  async function heldAtOks() {
+    const ok = [{ id: 'ok', approve: 'the plan' }];
+    await keepCanvas([{ ...BUILDER_AGENT, queue: ok }, AGENTS[1], { ...AGENTS[2], queue: ok }]);
+    const engine = await (await start()).engines.open(CANVAS);
+    engine.run.start();
+    expect(engine.run.snapshot().agents).toMatchObject({
+      builder: { status: 'asking', current: 'ok' },
+      checker: { status: 'asking', current: 'ok' },
+    });
+  }
+
+  it('tells no one a turn waits for you over a hold of the run’s on its agent', async () => {
+    await heldAtOks();
+    const id = await send('builder', 'Say hello');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await notices()).toEqual([]);
+  });
+
+  it('names what the turn itself waits on, never a hold of the run’s', async () => {
+    await heldAtOks();
+    const id = await send('checker', 'Run the tests');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    expect(await notices()).toEqual([
+      expect.objectContaining({
+        replyTo: id,
+        body: 'Checker is waiting for you: Approve Bash: echo hello?',
+      }),
+    ]);
+  });
+});
+
 describe('the shell prefix', () => {
   it('refuses a token’s body a Terminal agent would run as a shell command, naming the prefix', async () => {
     await keepCanvas();
