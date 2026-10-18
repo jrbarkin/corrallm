@@ -1,4 +1,4 @@
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 import {
   parseBackend,
@@ -14,6 +14,7 @@ import type {
   UsageState,
   UsageWindows,
 } from '../shared/usage';
+import { writeWhole } from './memory';
 
 /*
  * Every backend's latest usage reading, and its usage rule (src/shared/usage.ts). A reading comes
@@ -158,18 +159,9 @@ export class UsageReadings {
   #write(): void {
     const { readings, rules } = this.state();
     const text = `${JSON.stringify({ version: VERSION, readings, rules }, null, 2)}\n`;
-    const partial = `${this.#file}.${String(process.pid)}.partial`;
     // A failed write is logged: readings are a convenience, never worth failing for.
     this.#writing = this.#writing
-      .then(async () => {
-        try {
-          await writeFile(partial, text, 'utf8');
-          await rename(partial, this.#file);
-        } catch (error) {
-          await rm(partial, { force: true });
-          throw error;
-        }
-      })
+      .then(() => writeWhole(this.#file, text))
       .catch((error: unknown) => {
         console.error('Could not remember usage readings:', error);
       });

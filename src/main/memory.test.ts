@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CanvasMemory } from './memory';
+import { CanvasMemory, writeWhole } from './memory';
 
 let dir: string;
 let file: string;
@@ -195,5 +195,15 @@ describe('CanvasMemory', () => {
         '/good.corral': { project: '/p', sessions: { a: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' } },
       },
     });
+  });
+});
+
+describe('writeWhole', () => {
+  it('writes a file whole while other writes of it are under way, each beside it on its own', async () => {
+    const texts = ['one', 'two', 'three', 'four', 'five'].map((word) => `${word}\n`);
+    await Promise.all(texts.map((text) => writeWhole(file, text)));
+    expect(texts).toContain(await readFile(file, 'utf8'));
+    // Nothing is left beside it.
+    expect(await readdir(dir)).toEqual(['canvases.json']);
   });
 });

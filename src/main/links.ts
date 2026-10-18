@@ -1,7 +1,8 @@
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 import type { WebContents } from 'electron';
 
+import { writeWhole } from './memory';
 import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*
@@ -91,23 +92,11 @@ export class LinkOpener {
     const text = `${JSON.stringify({ version: VERSION, sites: [...sites] }, null, 2)}\n`;
     // A failed write is logged: the site is still allowed until the app quits.
     this.#writing = this.#writing
-      .then(() => write(this.#deps.file, text))
+      .then(() => writeWhole(this.#deps.file, text))
       .catch((error: unknown) => {
         console.error('Could not remember the site:', error);
       });
     await this.#writing;
-  }
-}
-
-/** Writes the file whole: beside it, then moved over it. */
-async function write(file: string, text: string): Promise<void> {
-  const partial = `${file}.${String(process.pid)}.partial`;
-  try {
-    await writeFile(partial, text, 'utf8');
-    await rename(partial, file);
-  } catch (error) {
-    await rm(partial, { force: true });
-    throw error;
   }
 }
 

@@ -1,4 +1,4 @@
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BrowserWindow, dialog } from 'electron';
@@ -6,6 +6,7 @@ import type { OpenDialogOptions, SaveDialogOptions, WebContents } from 'electron
 
 import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { CanvasFile } from '../shared/ipc';
+import { writeWhole } from './memory';
 
 /*
  * Canvas files on disk, for the canvas:* channels. The renderer never names a path: it gets a
@@ -62,14 +63,7 @@ export async function saveCanvas(
         : `${filePath}.${CANVAS_EXTENSION}`;
   }
   // Written beside the file, then moved over it, so a failed write never leaves half a canvas.
-  const partial = `${file}.${String(process.pid)}.partial`;
-  try {
-    await writeFile(partial, text, 'utf8');
-    await rename(partial, file);
-  } catch (error) {
-    await rm(partial, { force: true });
-    throw error;
-  }
+  await writeWhole(file, text);
   files.set(contents, file);
   return path.basename(file);
 }

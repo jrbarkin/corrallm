@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 
 import { isSessionId } from './sessions/id';
@@ -104,9 +104,12 @@ export class CanvasMemory {
   }
 }
 
-/** Writes a file whole: beside it, then moved over it, so it is never left half written. */
+/**
+ * Writes a file whole: beside it, then moved over it, so it is never left half written. Each write
+ * has its own file beside it, so writes of the same file at once never move each other's.
+ */
 export async function writeWhole(file: string, text: string): Promise<void> {
-  const partial = `${file}.${String(process.pid)}.partial`;
+  const partial = `${file}.${randomUUID()}.partial`;
   try {
     await writeFile(partial, text, 'utf8');
     await rename(partial, file);
