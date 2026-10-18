@@ -138,8 +138,8 @@ export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
 }
 
 /**
- * Adds an agent spawned from agent `from` in its agent view: of the same type, in the same group,
- * and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
+ * Adds an agent spawned from agent `from` in its agent view: of the same type, connection,
+ * settings and role, in the same group, and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
  * right. A `linked` one is linked to it, as drawing from its bottom dot lets two agents talk, and
  * goes below it, where the canvas's top-to-bottom layout puts what an agent links to (layout.ts),
  * in a row that starts under its left edge. Along its row it steps right past every card and group
@@ -197,6 +197,7 @@ export function spawnAgent(
         ...newAgent(id, source.data.agent),
         ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
         ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
+        ...(source.data.role === undefined ? {} : { role: source.data.role }),
       },
       selected: true,
     },

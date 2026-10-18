@@ -292,18 +292,20 @@ describe('spawnAgent', () => {
     expectValid(linked);
   });
 
-  it('runs a spawned agent with its parent’s native connection and settings', () => {
+  it('runs a spawned agent with its parent’s native connection, settings and role', () => {
     const settings = { claude: { model: 'haiku' } };
+    const role = 'Review every change before it lands.';
     const g = graphOf([
-      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings } }),
+      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings, role } }),
     ]);
     expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data).toMatchObject({
       connection: 'terminal',
       settings,
+      role,
     });
-    expect(
-      get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data,
-    ).not.toHaveProperty('connection');
+    const plain = get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data;
+    expect(plain).not.toHaveProperty('connection');
+    expect(plain).not.toHaveProperty('role');
   });
 
   it('spawns only from an agent', () => {
