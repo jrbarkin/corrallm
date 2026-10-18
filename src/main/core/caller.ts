@@ -45,6 +45,11 @@ export type Caller = HumanCaller | AgentCaller | OutsideCaller;
 /** A caller a token or a session's pipe identifies: never you. */
 export type TokenCaller = AgentCaller | OutsideCaller;
 
+/** Whether `caller` is one a token or a session's pipe identifies, as any but you is. */
+export function isTokenCaller(caller: Caller): caller is TokenCaller {
+  return caller.kind !== 'human';
+}
+
 /**
  * You, at `window`. Only the core's side of a window's port calls this (core/gui.ts, B8), for a
  * port main made after its sender check: never for anything a token, a page or an agent sends.

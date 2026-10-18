@@ -42,12 +42,13 @@ async function importErrors(file: string, code: string): Promise<string[]> {
     .map((message) => message.message);
 }
 
-/** Every file of main but its tests, by its path from the repository's root. */
+/** Every file of main but its tests and their helpers (test-*.ts), by its path from the root. */
 function mainFiles(dir = 'src/main'): string[] {
   return readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
     const file = `${dir}/${entry.name}`;
     if (entry.isDirectory()) return mainFiles(file);
-    return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [file] : [];
+    const test = entry.name.endsWith('.test.ts') || entry.name.startsWith('test-');
+    return entry.name.endsWith('.ts') && !test ? [file] : [];
   });
 }
 const read = (file: string) => readFileSync(path.join(ROOT, file), 'utf8');
@@ -111,6 +112,18 @@ describe('ESLint’s boundaries in main', () => {
     }
   });
 
+  it('keeps the registry (src/shared/api/) to plain code: no main, Node or Electron', async () => {
+    for (const from of ['../../main/core/call', 'node:crypto', 'electron']) {
+      expect(
+        await importErrors('src/shared/api/registry.ts', `import { a } from '${from}';\n`),
+        from,
+      ).toHaveLength(1);
+    }
+    expect(await importErrors('src/shared/api/registry.ts', "import { z } from 'zod';\n")).toEqual(
+      [],
+    );
+  });
+
   it('lets the core import what it asks the host for, and the host import Electron', async () => {
     expect(
       await importErrors('src/main/core/call.ts', "import type { HostServices } from './host';\n"),
@@ -145,6 +158,12 @@ describe('main’s files', () => {
     expect(
       importers.filter((file) => !file.startsWith('src/main/host/') && !allowed.includes(file)),
     ).toEqual([]);
+  });
+
+  it('make a human caller nowhere: no token, and nothing an agent or a page sends, is you', () => {
+    // core/gui.ts (B8), for a window's port main made, will be the one place that makes one.
+    const makers = mainFiles().filter((file) => /\basHuman\b/.test(read(file)));
+    expect(makers).toEqual(['src/main/core/caller.ts']);
   });
 
   it('mint trusted paths only from the dialogs and the stores reading back what they wrote', () => {

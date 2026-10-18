@@ -1,52 +1,62 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { z } from 'zod';
 
-import type { Message } from '../../shared/messages';
+import { MAX_REQUEST_BYTES } from '../../shared/api/limits';
+import { opsFor, toolName } from '../../shared/api/registry';
+import SNAPSHOT from '../../shared/api/surface.snap.json';
+import type { Party } from '../../shared/api/surface';
+import { createDispatcher } from '../core/call';
+import type { Dispatcher } from '../core/call';
+import type { Caller, TokenCaller } from '../core/caller';
+import { createCore } from '../core/core';
+import type { Core } from '../core/core';
+import {
+  CALLERS,
+  CANVAS,
+  isLead,
+  NO_DESKTOP,
+  PROPOSAL,
+  RESOLVERS,
+  testRegistry,
+} from '../core/test-registry';
 import { startApiServer } from './mcp';
-import type { ApiClient, ApiServer } from './mcp';
-import { OPERATIONS } from './operations';
-import type { Api } from './operations';
+import type { ApiServer, ApiServerOptions } from './mcp';
 
-const ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
-const TOKENS = new Map<string, ApiClient>([
-  ['agent-token', { name: 'claude', scope: 'agent' }],
-  ['outside-token', { name: 'you', scope: 'outside' }],
-]);
+const TOKENS: Readonly<Record<string, Exclude<Party, 'you'>>> = {
+  'lead-token': 'lead',
+  'worker-token': 'worker',
+  'read-token': 'outside-read',
+  'write-token': 'outside-write',
+};
+const clientOf = (token: string) => {
+  const party = TOKENS[token];
+  return party === undefined ? undefined : (CALLERS[party] as TokenCaller);
+};
 const HEADERS = {
-  Authorization: 'Bearer agent-token',
+  Authorization: 'Bearer write-token',
   'Content-Type': 'application/json',
   Accept: 'application/json, text/event-stream',
 };
-const MESSAGE: Message = {
-  id: ID,
-  from: 'codex',
-  to: 'you',
-  kind: 'text',
-  body: 'Done.',
-  at: 123,
-};
+const LIST = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
 
-function fakeApi() {
-  return {
-    message: vi.fn<Api['message']>().mockResolvedValue({ id: ID }),
-    reply: vi.fn<Api['reply']>().mockResolvedValue({ id: ID }),
-    status: vi.fn<Api['status']>().mockResolvedValue({ agents: [], pending: [MESSAGE] }),
-    wait: vi.fn<Api['wait']>().mockResolvedValue(null),
-  };
-}
-
-let api: ReturnType<typeof fakeApi>;
+let registry: ReturnType<typeof testRegistry>;
+let core: Dispatcher;
 let server: ApiServer;
 let clients: Client[];
 
 beforeEach(async () => {
-  api = fakeApi();
+  registry = testRegistry();
+  core = createDispatcher(registry, { isLead, resolvers: RESOLVERS, check: true });
   clients = [];
-  server = await startApiServer({ api, clientOf: (token) => TOKENS.get(token), port: 0 });
+  server = await startApiServer({ core, clientOf, port: 0 });
 });
 
 afterEach(async () => {
@@ -54,10 +64,10 @@ afterEach(async () => {
   await server.close();
 });
 
-async function connect(token = 'agent-token') {
+async function connect(token = 'write-token', url = server.url) {
   const client = new Client({ name: 'test', version: '1' });
   clients.push(client);
-  const transport = new StreamableHTTPClientTransport(new URL(server.url), {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   });
   await client.connect(transport as Transport);
@@ -103,77 +113,104 @@ function answerBeforeBody(headers: Record<string, string>): Promise<number> {
   });
 }
 
+/** `headers` without the header `name`. */
+function without(headers: Record<string, string>, name: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(headers).filter(([key]) => key !== name));
+}
+
 function jsonRpcError(code: number, message: string) {
   return JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null });
 }
 
-function holdWait() {
-  const started = Promise.withResolvers<AbortSignal>();
-  const aborted = Promise.withResolvers<undefined>();
-  api.wait.mockImplementation(
-    (_from, _args, signal) =>
-      new Promise((resolve) => {
-        started.resolve(signal);
-        signal.addEventListener(
-          'abort',
-          () => {
-            aborted.resolve(undefined);
-            resolve(null);
-          },
-          { once: true },
-        );
-      }),
-  );
-  return { started: started.promise, aborted: aborted.promise };
-}
-
-describe('the MCP API server', () => {
-  it.each([undefined, 'Bearer wrong-token', 'Basic agent-token', 'Bearer '])(
-    'refuses an unknown or missing bearer token (%s) before reading the request',
-    async (authorization) => {
-      const response = await fetch(server.url, {
-        method: 'POST',
-        headers: authorization === undefined ? {} : { Authorization: authorization },
-        body: 'not JSON',
-      });
-      expect(response.status).toBe(401);
-      await response.body?.cancel();
-      expect(api.message).not.toHaveBeenCalled();
-    },
-  );
-
+describe('the MCP server’s request checks', () => {
   it('serves only /mcp, on 127.0.0.1', async () => {
     expect(server.port).toBeGreaterThan(0);
     expect(server.url).toBe(`http://127.0.0.1:${String(server.port)}/mcp`);
     const response = await fetch(server.url.replace('/mcp', '/other'), { headers: HEADERS });
     expect(response.status).toBe(404);
     await response.body?.cancel();
+    // Nor a token in a query string.
+    const query = await fetch(`${server.url}?token=write-token`, { method: 'POST', body: LIST });
+    expect(query.status).toBe(404);
+    await query.body?.cancel();
   });
 
   it.each(['evil.example:1234', '127.0.0.1:1', 'localhost'])(
-    'refuses a Host other than this server (%s)',
+    'refuses a Host other than its own (%s), before the token and the body',
     async (host) => {
-      const answer = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
-        ...HEADERS,
-        Host: host,
-      });
-      expect(answer).toEqual({
+      expect(await post(LIST, { ...HEADERS, Host: host })).toEqual({
         status: 403,
         body: jsonRpcError(-32000, `Invalid Host header: ${host}`),
       });
+      expect(
+        await answerBeforeBody({ ...HEADERS, Authorization: 'Bearer wrong', Host: host }),
+      ).toBe(403);
     },
   );
 
-  it('refuses a Host other than this server before reading the body', async () => {
-    expect(await answerBeforeBody({ ...HEADERS, Host: 'evil.example:1234' })).toBe(403);
+  it('accepts localhost with its own port as Host', async () => {
+    const { status } = await post(LIST, { ...HEADERS, Host: `localhost:${String(server.port)}` });
+    expect(status).toBe(200);
   });
 
-  it('accepts localhost with its own port as Host', async () => {
-    const { status } = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
-      ...HEADERS,
-      Host: `localhost:${String(server.port)}`,
+  it.each(['http://evil.example', 'null', 'http://127.0.0.1'])(
+    'refuses any Origin (%s) with 403, before the token and the body',
+    async (origin) => {
+      expect(await post(LIST, { ...HEADERS, Origin: origin })).toEqual({
+        status: 403,
+        body: jsonRpcError(-32000, `Requests from a web page are refused (Origin: ${origin})`),
+      });
+      expect(
+        await answerBeforeBody({ ...HEADERS, Authorization: 'Bearer wrong', Origin: origin }),
+      ).toBe(403);
+    },
+  );
+
+  it.each([
+    'text/plain',
+    'application/json-seq',
+    'text/plain; charset=utf-8',
+    'application/json; charset=latin1',
+  ])('refuses a body that isn’t exactly JSON (%s) with 415, before the token', async (type) => {
+    expect(await post(LIST, { ...HEADERS, 'Content-Type': type })).toEqual({
+      status: 415,
+      body: jsonRpcError(-32000, 'Unsupported Media Type: the body must be application/json'),
     });
-    expect(status).toBe(200);
+    expect(
+      await answerBeforeBody({ ...HEADERS, Authorization: 'Bearer wrong', 'Content-Type': type }),
+    ).toBe(415);
+  });
+
+  it('refuses a body with no media type, and takes JSON in UTF-8', async () => {
+    const untyped = without(HEADERS, 'Content-Type');
+    expect((await post(LIST, untyped)).status).toBe(415);
+    expect(
+      (await post(LIST, { ...HEADERS, 'Content-Type': 'Application/JSON; charset=UTF-8' })).status,
+    ).toBe(200);
+  });
+
+  it.each([undefined, 'Bearer wrong-token', 'Basic write-token', 'Bearer '])(
+    'refuses an unknown or missing bearer token (%s) before reading the body',
+    async (authorization) => {
+      const headers = without(HEADERS, 'Authorization');
+      const sent =
+        authorization === undefined ? headers : { ...headers, Authorization: authorization };
+      expect((await post('not JSON', sent)).status).toBe(401);
+      expect(await answerBeforeBody(sent)).toBe(401);
+      expect(Object.values(registry.calls).flat()).toEqual([]);
+    },
+  );
+
+  it('never takes a token for you, even if its lookup would say so', async () => {
+    // A token's lookup can't name you, by its type…
+    expectTypeOf<ReturnType<ApiServerOptions['clientOf']>>().toEqualTypeOf<
+      TokenCaller | undefined
+    >();
+    // …nor by what it returns.
+    await server.close();
+    const you = CALLERS.you as unknown as TokenCaller;
+    server = await startApiServer({ core, clientOf: () => you, port: 0 });
+    expect((await post(LIST)).status).toBe(401);
   });
 
   it('answers a body that is not JSON with a parse error', async () => {
@@ -186,138 +223,192 @@ describe('the MCP API server', () => {
   // The client is still sending when a body goes over: the answer must reach it all the same,
   // every time, not a reset.
   it.each([
-    [1024 * 1024 + 1, false],
-    [1024 * 1024 + 1, true],
-    [8 * 1024 * 1024, false],
-    [8 * 1024 * 1024, true],
-  ])('refuses a body of %i bytes, over 1 MB (chunked: %s)', async (size, chunked) => {
-    const body = 'x'.repeat(size);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      expect(
-        await post(body, {
-          ...HEADERS,
-          ...(chunked ? {} : { 'Content-Length': String(size) }),
-        }),
-      ).toEqual({
-        status: 413,
-        body: jsonRpcError(-32000, 'Payload Too Large: Request body must not exceed 1048576 bytes'),
-      });
-    }
-    expect(api.message).not.toHaveBeenCalled();
-  });
-
-  it('drops a client that goes on sending far past 1 MB', async () => {
-    await expect(post('x'.repeat(16 * 1024 * 1024 + 1))).rejects.toThrow();
-    expect(api.message).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['agent-token', ['message', 'reply']],
-    ['outside-token', ['message', 'reply', 'status']],
-  ] as const)('lists the operations for %s, with their schemas', async (token, names) => {
-    const client = await connect(token);
-    const { tools } = await client.listTools();
-    expect(tools).toEqual(
-      names.map((name) => ({
-        name,
-        description: OPERATIONS[name].description,
-        inputSchema: OPERATIONS[name].input,
-      })),
-    );
-  });
-
-  it('calls message as the client and returns JSON text and structured content', async () => {
-    const client = await connect();
-    const args = { to: 'codex', body: 'Make the tests pass', replyTo: ID };
-    const result = await client.callTool({ name: 'message', arguments: args });
-    expect(api.message).toHaveBeenCalledExactlyOnceWith('claude', args);
-    expect(result).toEqual({
-      content: [{ type: 'text', text: JSON.stringify({ id: ID }) }],
-      structuredContent: { id: ID },
-    });
-  });
-
-  it('returns the argument error without calling the Api', async () => {
-    const client = await connect();
-    const result = await client.callTool({ name: 'message', arguments: { to: 'codex' } });
-    expect(result).toEqual({
-      isError: true,
-      content: [{ type: 'text', text: expect.stringContaining('body is text') as unknown }],
-    });
-    expect(api.message).not.toHaveBeenCalled();
-  });
-
-  it.each(['status', 'wait', 'missing', 'toString'])(
-    'refuses %s when the client cannot call it',
-    async (name) => {
-      const client = await connect();
-      await expect(client.callTool({ name })).rejects.toThrow(/tool/i);
-      expect(api.status).not.toHaveBeenCalled();
-      expect(api.wait).not.toHaveBeenCalled();
+    [MAX_REQUEST_BYTES + 1, false],
+    [MAX_REQUEST_BYTES + 1, true],
+    [33 * 1024 * 1024, false],
+    [33 * 1024 * 1024, true],
+  ])(
+    'refuses a body of %i bytes, over 32 MB, once it is read (chunked: %s)',
+    async (size, chunked) => {
+      const body = 'x'.repeat(size);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect(
+          await post(body, { ...HEADERS, ...(chunked ? {} : { 'Content-Length': String(size) }) }),
+        ).toEqual({
+          status: 413,
+          body: jsonRpcError(
+            -32000,
+            `Payload Too Large: Request body must not exceed ${String(MAX_REQUEST_BYTES)} bytes`,
+          ),
+        });
+      }
+      expect(Object.values(registry.calls).flat()).toEqual([]);
     },
   );
 
-  it('calls reply and status as the client', async () => {
-    const client = await connect('outside-token');
-    await client.callTool({ name: 'reply', arguments: { to: ID, text: 'yes' } });
-    expect(api.reply).toHaveBeenCalledExactlyOnceWith('you', { to: ID, text: 'yes' });
-    const result = await client.callTool({ name: 'status' });
-    expect(api.status).toHaveBeenCalledExactlyOnceWith('you');
-    expect(result.structuredContent).toEqual({ agents: [], pending: [MESSAGE] });
+  it('drops a client that goes on sending far past 32 MB', async () => {
+    await expect(post('x'.repeat(2 * MAX_REQUEST_BYTES + 1))).rejects.toThrow();
+  });
+});
+
+describe('the MCP server’s tools', () => {
+  it.each(Object.entries(TOKENS))(
+    'lists to %s the tools of its party, with their schemas and hints',
+    async (token, party) => {
+      const client = await connect(token);
+      const { tools } = await client.listTools();
+      const names = opsFor(registry.surface, party);
+      expect(tools.map((tool) => tool.name)).toEqual(names.map(toolName));
+      for (const name of names) {
+        const def = registry.ops[name];
+        const surface = registry.surface[name];
+        expect(tools.find((tool) => tool.name === toolName(name))).toEqual({
+          name: toolName(name),
+          description: def?.summary,
+          inputSchema: def && z.toJSONSchema(def.input, { io: 'input' }),
+          outputSchema: expect.objectContaining({ type: 'object' }) as unknown,
+          annotations: {
+            readOnlyHint: surface?.kind === 'read',
+            destructiveHint: surface?.destructive === true,
+          },
+        });
+      }
+    },
+  );
+
+  it('gives instructions that stand alone in what Codex reads of them, 512 characters', async () => {
+    const client = await connect();
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions.length).toBeGreaterThan(0);
+    expect(instructions.length).toBeLessThanOrEqual(512);
+    expect(instructions).toMatch(/\.$/);
   });
 
-  it('returns an Api failure as a tool error', async () => {
-    api.message.mockRejectedValue(new Error('The agent has stopped.'));
-    const client = await connect();
+  it('calls a tool as the token’s caller, answering JSON text and structured content', async () => {
+    const client = await connect('worker-token');
+    await client.listTools();
+    const args = { canvas: CANVAS, to: 'peer', body: 'Make the tests pass' };
+    expect(await client.callTool({ name: 'test_message', arguments: args })).toEqual({
+      content: [{ type: 'text', text: JSON.stringify({ sent: 'peer' }) }],
+      structuredContent: { sent: 'peer' },
+    });
+    expect(registry.calls['test.message']).toEqual([args]);
+  });
+
+  it.each<[string, string, Record<string, unknown> | undefined, string]>([
+    ['invalid arguments', 'test_message', { canvas: CANVAS, to: 'peer' }, 'invalid'],
+    [
+      'a tool its party may not call',
+      'test_agent',
+      { canvas: CANVAS, agent: 'helper' },
+      'forbidden',
+    ],
+    ['a tool only you may call', 'test_yours', {}, 'human-only'],
+    ['a tool that doesn’t exist', 'test_missing', undefined, 'not-found'],
+    [
+      'an id out of its reach',
+      'test_message',
+      { canvas: CANVAS, to: 'stranger', body: 'hi' },
+      'not-found',
+    ],
+  ])('returns %s as an error value, through the SDK’s client', async (_what, name, args, code) => {
+    const client = await connect('worker-token');
+    await client.listTools();
+    const result = await client.callTool({ name, ...(args ? { arguments: args } : {}) });
+    expect(result).toEqual({
+      isError: true,
+      content: [
+        { type: 'text', text: expect.any(String) as unknown },
+        { type: 'text', text: expect.any(String) as unknown },
+      ],
+    });
+    const [sentence, error] = result.content as { text: string }[];
+    expect(JSON.parse(error?.text ?? '')).toEqual({ error: { code, sentence: sentence?.text } });
+    expect(result).not.toHaveProperty('structuredContent');
+  });
+
+  it('returns a token’s proposal, which passes the tool’s outputSchema', async () => {
+    const client = await connect('write-token');
+    await client.listTools();
     expect(
       await client.callTool({
-        name: 'message',
-        arguments: { to: 'codex', body: 'hi' },
+        name: 'test_delete',
+        arguments: { canvas: CANVAS, agent: 'stranger' },
       }),
     ).toEqual({
-      isError: true,
-      content: [{ type: 'text', text: 'The agent has stopped.' }],
+      content: [{ type: 'text', text: JSON.stringify({ proposed: PROPOSAL }) }],
+      structuredContent: { proposed: PROPOSAL },
     });
+    expect(registry.calls['test.delete']).toEqual([]);
   });
 
-  it.each([MESSAGE, null])('lets an outside client call wait and return %j', async (message) => {
-    api.wait.mockResolvedValue(message);
-    const client = await connect('outside-token');
-    const result = await client.callTool({ name: 'wait', arguments: { for: ID } });
-    expect(api.wait).toHaveBeenCalledExactlyOnceWith(
-      'you',
-      { for: ID, timeoutSeconds: 600 },
-      expect.any(AbortSignal),
-    );
-    expect(result).toEqual({
-      content: [{ type: 'text', text: JSON.stringify(message) }],
-      ...(message === null ? {} : { structuredContent: message }),
-    });
-  });
-
-  it('aborts wait when the client aborts its HTTP request', async () => {
-    const waiting = holdWait();
-    const client = await connect('outside-token');
-    const call = client.callTool({ name: 'wait' }).catch(() => undefined);
-    const signal = await waiting.started;
-    expect(signal.aborted).toBe(false);
+  it('aborts a call when the client aborts its HTTP request', async () => {
+    const client = await connect('read-token');
+    const holding = client
+      .callTool({ name: 'test_hold', arguments: { canvas: CANVAS, agent: 'peer' } })
+      .catch(() => undefined);
+    await expect.poll(() => registry.calls['test.hold'].length).toBe(1);
+    expect(registry.released).toEqual([]);
     await client.close();
-    await waiting.aborted;
-    expect(signal.aborted).toBe(true);
-    await call;
+    await expect.poll(() => registry.released.length).toBe(1);
+    await holding;
   });
 
-  it('aborts wait and ends open connections when the server closes', async () => {
-    const waiting = holdWait();
-    const client = await connect('outside-token');
-    const call = client.callTool({ name: 'wait' }).catch(() => undefined);
-    const signal = await waiting.started;
-    expect(signal.aborted).toBe(false);
+  it('aborts calls and ends open connections when the server closes', async () => {
+    const client = await connect('read-token');
+    const holding = client
+      .callTool({ name: 'test_hold', arguments: { canvas: CANVAS, agent: 'peer' } })
+      .catch(() => undefined);
+    await expect.poll(() => registry.calls['test.hold'].length).toBe(1);
     await server.close();
-    await waiting.aborted;
-    expect(signal.aborted).toBe(true);
+    expect(registry.released).toHaveLength(1);
     await client.close();
-    await call;
+    await holding;
     await expect(fetch(server.url)).rejects.toThrow();
+  });
+});
+
+describe('the MCP server on the registry', () => {
+  let profile: string;
+  let real: Core;
+  let served: ApiServer;
+
+  beforeEach(async () => {
+    profile = await mkdtemp(path.join(tmpdir(), 'corrallm-mcp-'));
+    real = await createCore(
+      { profile, app: { name: 'corrallm', version: '1.0.0' }, check: true },
+      NO_DESKTOP,
+    );
+    served = await startApiServer({ core: real, clientOf, port: 0 });
+  });
+
+  afterEach(async () => {
+    await served.close();
+    await real.close();
+    await rm(profile, { recursive: true, force: true });
+  });
+
+  it.each(Object.entries(TOKENS))(
+    'lists to %s exactly the tools surface.snap.json says',
+    async (token, party) => {
+      const client = await connect(token, served.url);
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(SNAPSHOT.mcp[party]);
+      expect(await client.callTool({ name: 'app_info' })).toEqual({
+        content: [{ type: 'text', text: JSON.stringify({ name: 'corrallm', version: '1.0.0' }) }],
+        structuredContent: { name: 'corrallm', version: '1.0.0' },
+      });
+    },
+  );
+
+  it('serves a caller as the dispatcher would directly', async () => {
+    const caller: Caller = CALLERS.worker;
+    const client = await connect('worker-token', served.url);
+    await client.listTools();
+    const direct = await real.call('usage.get', {}, caller);
+    expect(direct.ok).toBe(true);
+    expect((await client.callTool({ name: 'usage_get' })).structuredContent).toEqual(
+      direct.ok ? direct.value : undefined,
+    );
   });
 });

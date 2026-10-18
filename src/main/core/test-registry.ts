@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { withEnvelope } from '../../shared/api/define';
 import type { OpDef } from '../../shared/api/define';
 import { brandedId, NeedId } from '../../shared/api/ids';
-import type { Party, Reach, Rule, Surface } from '../../shared/api/surface';
+import type { OpName, Party, Reach, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Implementation, OpContext, Registry, RuleCheck } from './call';
 import { asHuman } from './caller';
@@ -157,6 +157,8 @@ export type Calls = Record<Name, unknown[]>;
 export function testRegistry(): Registry & {
   implementations: Record<string, Implementation>;
   calls: Calls;
+  /** Why each test.hold stopped holding: its signal's reason. */
+  released: unknown[];
 } {
   const calls: Calls = {
     'test.read': [],
@@ -167,6 +169,7 @@ export function testRegistry(): Registry & {
     'test.hold': [],
     'test.stop': [],
   };
+  const released: unknown[] = [];
   const heard =
     <A, R>(name: Name, implementation: (args: A, ctx: OpContext) => R) =>
     (args: A, ctx: OpContext): R => {
@@ -184,6 +187,7 @@ export function testRegistry(): Registry & {
       (_args, { signal }) =>
         new Promise<{ stopped: boolean }>((resolve) => {
           signal.addEventListener('abort', () => {
+            released.push(signal.reason);
             resolve({ stopped: true });
           });
         }),
@@ -195,7 +199,7 @@ export function testRegistry(): Registry & {
       body.startsWith('!') ? { refuse: 'Only what you typed may run a shell command.' } : undefined,
     discard: () => ({ propose: PROPOSAL }),
   };
-  return { surface: SURFACES, ops: OPS, implementations, rules, calls };
+  return { surface: SURFACES, ops: OPS, implementations, rules, calls, released };
 }
 
 /** A caller for each party: you, the lead, a worker, and an outside token of each kind. */
@@ -241,42 +245,58 @@ export interface OpFixture {
   unreachable?: Partial<Record<Party, unknown>>;
 }
 
-export const TEST_FIXTURES: Readonly<Record<Exclude<Name, 'test.hold' | 'test.stop'>, OpFixture>> =
-  {
-    'test.read': { valid: [{}, undefined], invalid: [{ extra: 1 }, 'text', []] },
-    'test.yours': { valid: [{}], invalid: [{ extra: 1 }] },
-    'test.agent': {
-      valid: [{ canvas: CANVAS, agent: 'helper' }],
-      invalid: [
-        { canvas: CANVAS },
-        { canvas: 'nope', agent: 'helper' },
-        { canvas: CANVAS, agent: '' },
-      ],
-      unreachable: {
-        lead: { canvas: CANVAS, agent: 'worker' },
-        'outside-write': { canvas: OTHER_CANVAS, agent: 'helper' },
-      },
+/** What the generated tests call each test op with: all but test.hold, which no call ends by itself. */
+export const TEST_FIXTURES: Readonly<Record<Exclude<Name, 'test.hold'>, OpFixture>> = {
+  'test.read': { valid: [{}, undefined], invalid: [{ extra: 1 }, 'text', [], null] },
+  'test.yours': { valid: [{}], invalid: [{ extra: 1 }] },
+  'test.agent': {
+    valid: [{ canvas: CANVAS, agent: 'helper' }],
+    invalid: [
+      { canvas: CANVAS },
+      { canvas: 'nope', agent: 'helper' },
+      { canvas: CANVAS, agent: '' },
+    ],
+    unreachable: {
+      lead: { canvas: CANVAS, agent: 'worker' },
+      'outside-write': { canvas: OTHER_CANVAS, agent: 'helper' },
     },
-    'test.message': {
-      valid: [{ canvas: CANVAS, to: 'peer', body: 'hello' }],
-      invalid: [
-        { canvas: CANVAS, to: 'peer', body: '' },
-        { canvas: CANVAS, to: 'peer', body: 'x'.repeat(101) },
-      ],
-      meetsRule: { 'shell-text': { canvas: CANVAS, to: 'peer', body: '!rm -rf /' } },
-      unreachable: {
-        worker: { canvas: CANVAS, to: 'stranger', body: 'hello' },
-        lead: { canvas: CANVAS, to: 'stranger', body: 'hello' },
-        'outside-write': { canvas: OTHER_CANVAS, to: 'peer', body: 'hello' },
-      },
+  },
+  'test.message': {
+    valid: [{ canvas: CANVAS, to: 'peer', body: 'hello' }],
+    invalid: [
+      { canvas: CANVAS, to: 'peer', body: '' },
+      { canvas: CANVAS, to: 'peer', body: 'x'.repeat(101) },
+    ],
+    meetsRule: { 'shell-text': { canvas: CANVAS, to: 'peer', body: '!rm -rf /' } },
+    unreachable: {
+      worker: { canvas: CANVAS, to: 'stranger', body: 'hello' },
+      lead: { canvas: CANVAS, to: 'stranger', body: 'hello' },
+      'outside-write': { canvas: OTHER_CANVAS, to: 'peer', body: 'hello' },
     },
-    'test.delete': {
-      valid: [{ canvas: CANVAS, agent: 'stranger' }],
-      invalid: [{ canvas: CANVAS, agent: 'stranger', extra: true }],
-      meetsRule: { discard: { canvas: CANVAS, agent: 'stranger' } },
-      unreachable: { 'outside-write': { canvas: OTHER_CANVAS, agent: 'stranger' } },
+  },
+  'test.delete': {
+    valid: [{ canvas: CANVAS, agent: 'stranger' }],
+    invalid: [{ canvas: CANVAS, agent: 'stranger', extra: true }],
+    meetsRule: { discard: { canvas: CANVAS, agent: 'stranger' } },
+    unreachable: { 'outside-write': { canvas: OTHER_CANVAS, agent: 'stranger' } },
+  },
+  'test.stop': {
+    valid: [{ canvas: CANVAS, agent: 'peer' }],
+    invalid: [{ agent: 'peer' }],
+    unreachable: {
+      lead: { canvas: CANVAS, agent: 'stranger' },
+      worker: { canvas: CANVAS, agent: 'stranger' },
+      'outside-read': { canvas: OTHER_CANVAS, agent: 'peer' },
+      'outside-write': { canvas: OTHER_CANVAS, agent: 'peer' },
     },
-  };
+  },
+};
+
+/** What the generated tests call each of the registry's operations with. */
+export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
+  'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
+  'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
+};
 
 /** A host with no desktop: every dialog is cancelled. */
 export const NO_DESKTOP: HostServices = {
