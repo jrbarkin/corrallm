@@ -90,18 +90,29 @@ class Replay implements Pty {
     return /http:\/\/127\.0\.0\.1:\d+\/hook/.exec(this.args.join(' '))?.[0] ?? '';
   }
 
+  /**
+   * Plays the recording on a clock: each record comes when it is due, even where the system's
+   * timers are coarse (Windows' tick is about 15 ms; waiting out each gap in turn would add a tick
+   * to each of a recording's thousand records). What follows keys sent or a hook comes after them.
+   */
   async #play(): Promise<void> {
+    let due = performance.now();
     let previous = 0;
     for (const record of this.#records) {
       if (this.exited) return;
-      await new Promise((resolve) => setTimeout(resolve, (record.t - previous) / SPEED));
+      due += (record.t - previous) / SPEED;
       previous = record.t;
+      const wait = due - performance.now();
+      await new Promise((resolve) =>
+        wait >= 1 ? setTimeout(resolve, wait) : setImmediate(resolve),
+      );
       switch (record.kind) {
         case 'out':
           for (const listener of this.#data) listener(record.data);
           break;
         case 'in':
           await this.#keys(record.data === '\\r' ? '\r' : record.data);
+          due = Math.max(due, performance.now());
           break;
         case 'hook':
           // Codex waits for its hooks before it goes on.
@@ -110,6 +121,7 @@ class Replay implements Pty {
             headers: { Authorization: `Bearer ${this.options.env[HOOK_TOKEN] ?? ''}` },
             body: JSON.stringify(record.data.ev),
           });
+          due = Math.max(due, performance.now());
           break;
         case 'exit':
           this.#end(record.data.exitCode);
