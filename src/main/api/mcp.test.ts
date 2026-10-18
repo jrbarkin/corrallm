@@ -65,25 +65,46 @@ async function connect(token = 'agent-token') {
   return client;
 }
 
-function post(body: string, headers: Record<string, string> = HEADERS): Promise<number> {
+function post(
+  body: string,
+  headers: Record<string, string> = HEADERS,
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    let status: number | undefined;
     const sent = request(server.url, { method: 'POST', agent: false, headers }, (response) => {
-      status = response.statusCode ?? 0;
-      response.resume();
+      let text = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        text += chunk;
+      });
       response.on('end', () => {
-        resolve(status ?? 0);
+        resolve({ status: response.statusCode ?? 0, body: text });
       });
     });
-    // A server that refuses a body answers before it has read all of it, and may close the
-    // connection while the rest is still being written: once it has answered, that's no error.
-    sent.on('error', (error) => {
-      if (status === undefined) reject(error);
-      else resolve(status);
-    });
+    sent.on('error', reject);
     sent.write(body);
     sent.end();
   });
+}
+
+/** The status the server answers with before any of a request's body has been sent. */
+function answerBeforeBody(headers: Record<string, string>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const sent = request(server.url, {
+      method: 'POST',
+      agent: false,
+      headers: { ...headers, 'Content-Length': '1000' },
+    });
+    sent.on('response', (response) => {
+      resolve(response.statusCode ?? 0);
+      sent.destroy();
+    });
+    sent.on('error', reject);
+    sent.flushHeaders();
+  });
+}
+
+function jsonRpcError(code: number, message: string) {
+  return JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null });
 }
 
 function holdWait() {
@@ -132,29 +153,61 @@ describe('the MCP API server', () => {
   it.each(['evil.example:1234', '127.0.0.1:1', 'localhost'])(
     'refuses a Host other than this server (%s)',
     async (host) => {
-      const status = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+      const answer = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
         ...HEADERS,
         Host: host,
       });
-      expect(status).toBe(403);
+      expect(answer).toEqual({
+        status: 403,
+        body: jsonRpcError(-32000, `Invalid Host header: ${host}`),
+      });
     },
   );
 
+  it('refuses a Host other than this server before reading the body', async () => {
+    expect(await answerBeforeBody({ ...HEADERS, Host: 'evil.example:1234' })).toBe(403);
+  });
+
   it('accepts localhost with its own port as Host', async () => {
-    const status = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+    const { status } = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
       ...HEADERS,
       Host: `localhost:${String(server.port)}`,
     });
     expect(status).toBe(200);
   });
 
-  it.each([false, true])('refuses bodies over 1 MB (chunked: %s)', async (chunked) => {
-    const body = 'x'.repeat(1024 * 1024 + 1);
-    const status = await post(body, {
-      ...HEADERS,
-      ...(chunked ? {} : { 'Content-Length': String(Buffer.byteLength(body)) }),
+  it('answers a body that is not JSON with a parse error', async () => {
+    expect(await post('not JSON')).toEqual({
+      status: 400,
+      body: jsonRpcError(-32700, 'Parse error: Invalid JSON'),
     });
-    expect(status).toBe(413);
+  });
+
+  // The client is still sending when a body goes over: the answer must reach it all the same,
+  // every time, not a reset.
+  it.each([
+    [1024 * 1024 + 1, false],
+    [1024 * 1024 + 1, true],
+    [8 * 1024 * 1024, false],
+    [8 * 1024 * 1024, true],
+  ])('refuses a body of %i bytes, over 1 MB (chunked: %s)', async (size, chunked) => {
+    const body = 'x'.repeat(size);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(
+        await post(body, {
+          ...HEADERS,
+          ...(chunked ? {} : { 'Content-Length': String(size) }),
+        }),
+      ).toEqual({
+        status: 413,
+        body: jsonRpcError(-32000, 'Payload Too Large: Request body must not exceed 1048576 bytes'),
+      });
+    }
+    expect(api.message).not.toHaveBeenCalled();
+  });
+
+  it('drops a client that goes on sending far past 1 MB', async () => {
+    await expect(post('x'.repeat(16 * 1024 * 1024 + 1))).rejects.toThrow();
     expect(api.message).not.toHaveBeenCalled();
   });
 

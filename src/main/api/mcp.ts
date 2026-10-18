@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -16,6 +17,10 @@ import { OPERATIONS, operationsFor } from './operations';
 import type { Api, Scope } from './operations';
 
 const MAX_BODY = 1024 * 1024;
+// How far a body over MAX_BODY is still read, for its answer to reach the client, before the
+// connection is dropped instead.
+const MAX_DRAIN = 16 * MAX_BODY;
+const TOO_LARGE = Symbol('too large');
 
 export interface ApiClient {
   name: string;
@@ -60,15 +65,60 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
       refuse(503);
       return;
     }
+    // DNS rebinding protection, before anything of the body is read.
+    const host = request.headers.host;
+    if (host !== `127.0.0.1:${String(port)}` && host !== `localhost:${String(port)}`) {
+      request.resume();
+      answerError(response, 403, -32000, `Invalid Host header: ${host ?? 'none'}`);
+      return;
+    }
+    if (request.method !== 'POST') {
+      serve(client, request, response);
+      return;
+    }
 
+    // The body is read here, not by the transport: the transport answers a body too large
+    // before reading the rest, and the connection then closes under a client still sending,
+    // whose reset can lose it the answer.
+    void readBody(request).then((body) => {
+      if (body === undefined) return;
+      if (closing) {
+        refuse(503);
+        return;
+      }
+      if (body === TOO_LARGE) {
+        const message = `Payload Too Large: Request body must not exceed ${String(MAX_BODY)} bytes`;
+        answerError(response, 413, -32000, message, { Connection: 'close' });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        answerError(response, 400, -32700, 'Parse error: Invalid JSON');
+        return;
+      }
+      serve(client, request, response, parsed);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(options.port, '127.0.0.1', resolve);
+  });
+  port = (http.address() as AddressInfo).port;
+
+  /** Answers a request on a transport of its own, under its client's scope. */
+  function serve(
+    client: ApiClient,
+    request: IncomingMessage,
+    response: ServerResponse,
+    parsedBody?: unknown,
+  ) {
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- Tools use the low-level server.
     const server = new Server({ name: 'corrallm', version: '1' }, { capabilities: { tools: {} } });
     // The SDK's optional properties do not allow explicit undefined in its types.
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
-      allowedHosts: [`127.0.0.1:${String(port)}`, `localhost:${String(port)}`],
-      enableDnsRebindingProtection: true,
-      maxRequestBodySize: MAX_BODY,
     } as unknown as StreamableHTTPServerTransportOptions);
     const operations = operationsFor(client.scope);
     server.setRequestHandler(ListToolsRequestSchema, () => ({
@@ -105,17 +155,12 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     });
     void server
       .connect(transport as Transport)
-      .then(() => transport.handleRequest(request, response))
+      .then(() => transport.handleRequest(request, response, parsedBody))
       .catch(() => {
         if (!response.headersSent) response.writeHead(500).end();
         else response.destroy();
       });
-  });
-  await new Promise<void>((resolve, reject) => {
-    http.once('error', reject);
-    http.listen(options.port, '127.0.0.1', resolve);
-  });
-  port = (http.address() as AddressInfo).port;
+  }
 
   async function close(): Promise<void> {
     const closed = new Promise<void>((resolve, reject) => {
@@ -134,6 +179,43 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     port,
     close: () => (closing ??= close()),
   };
+}
+
+/**
+ * Reads a request's body as text, or TOO_LARGE for one over MAX_BODY, which is still read to its
+ * end (keeping none of it) unless it goes on past MAX_DRAIN: then the connection is dropped.
+ * Undefined if the request closes before its end.
+ */
+function readBody(request: IncomingMessage): Promise<string | typeof TOO_LARGE | undefined> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= MAX_BODY) chunks.push(chunk);
+      else if (size > MAX_DRAIN) request.destroy();
+    });
+    request.once('end', () => {
+      // Decoded as the transport decodes it (a byte order mark goes).
+      resolve(size > MAX_BODY ? TOO_LARGE : new TextDecoder().decode(Buffer.concat(chunks)));
+    });
+    request.once('close', () => {
+      resolve(undefined);
+    });
+  });
+}
+
+/** Answers with a JSON-RPC error, as the transport answers what it refuses. */
+function answerError(
+  response: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+  headers: OutgoingHttpHeaders = {},
+) {
+  response
+    .writeHead(status, { 'Content-Type': 'application/json', ...headers })
+    .end(JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null }));
 }
 
 async function call(api: Api, from: string, name: string, args: unknown, signal: AbortSignal) {
