@@ -1,17 +1,19 @@
-import { adapterIn, connectionIn } from '../../shared/adapter';
+import { adapterIn, connectionIn, isStartMode, usageBackendIn } from '../../shared/adapter';
 import type {
   AdapterId,
   AgentAction,
   Catalog,
   ConnectionId,
+  ModeId,
   UsageBackendId,
 } from '../../shared/adapter';
 
 /*
  * What the run, and the sessions it sends to, read of the catalog (src/shared/adapter.ts): an
- * agent's adapter and connection, its actions, the usage backend it spends and how a connection is
- * named. Whoever runs them injects it, made from the catalog it loaded, so that they read no table
- * of their own and name no adapter: whatever adapters the catalog declares, they run.
+ * agent's adapter and connection, its actions, the usage backend it spends, the modes a connection
+ * starts in, and how a connection and a usage backend are named. Whoever runs them injects it, made
+ * from the catalog it loaded, so that they read no table of their own, nor any catalog but this
+ * one, and name no adapter: whatever adapters the catalog declares, they run.
  */
 
 /** An agent, as far as the catalog's lookups read it: the adapter it runs, and how. */
@@ -38,6 +40,13 @@ export interface EngineCatalog {
   usageBackendOf(agent: Runs): UsageBackendId | undefined;
   /** How a connection is named ("Terminal"): nothing, for one the catalog lacks. */
   connectionLabel(connection: ConnectionId): string | undefined;
+  /**
+   * Whether a connection's sessions may start in `mode`: one its adapter lists that asks, among
+   * those the connection starts in (never, for a connection the catalog lacks).
+   */
+  isStartMode(connection: ConnectionId, mode: ModeId): boolean;
+  /** How a usage backend is named: its label; its id, for one the catalog lacks. */
+  backendName(backend: UsageBackendId): string;
 }
 
 /**
@@ -58,5 +67,10 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
     actionsOf: ({ adapter = defaultAdapter }) => adapterIn(catalog, adapter)?.actions ?? [],
     usageBackendOf: (agent) => connection(connectionOf(agent))?.connection.usage ?? undefined,
     connectionLabel: (id) => connection(id)?.connection.label,
+    isStartMode: (id, mode) => {
+      const found = connection(id);
+      return found !== undefined && isStartMode(catalog, found.adapter.id, id, mode);
+    },
+    backendName: (id) => usageBackendIn(catalog, id)?.label ?? id,
   };
 }

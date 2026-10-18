@@ -26,22 +26,31 @@ import type {
   UsageAbove,
   WaitTarget,
 } from '../../shared/model/queue';
-import { backendName } from '../usage/usage';
+import type { EngineCatalog } from '../run/catalog';
 import { limitText, timeText } from './time';
 
+/*
+ * How the queue's items read, wherever they are shown and in what the run says. Words that may
+ * name a usage backend (a usage condition, a delay until a window resets, and whatever reads one of
+ * them) are given the catalog that names it.
+ */
+
 /** How a condition reads after "If". */
-export const ifText = (condition: Condition): string =>
+export const ifText = (condition: Condition, catalog: EngineCatalog): string =>
   condition.kind === 'outputContains'
     ? `the output contains "${condition.text}"${condition.wholeLine ? ' on a line of its own' : ''}`
     : condition.kind === 'freeText'
       ? condition.text
       : condition.kind === 'usageAbove'
-        ? usageAboveText(condition)
+        ? usageAboveText(condition, catalog)
         : (CONDITIONS.find((c) => c.kind === condition.kind)?.label ?? '');
 
 /** How a usage condition reads: "Claude’s usage is over 80% (5-hour)". */
-export const usageAboveText = ({ backend, percent, window }: UsageAbove): string =>
-  `${backendName(backend)}’s usage is over ${String(percent)}% (${WINDOW_NAMES[window]})`;
+export const usageAboveText = (
+  { backend, percent, window }: UsageAbove,
+  catalog: EngineCatalog,
+): string =>
+  `${catalog.backendName(backend)}’s usage is over ${String(percent)}% (${WINDOW_NAMES[window]})`;
 
 /**
  * How a repeat's `until` reads after "Repeat until": "its last step succeeds", "the output contains
@@ -83,7 +92,8 @@ export const repeatText = (nodes: readonly NodeLike[], repeat: QueueRepeat): str
   `Repeat until ${untilText(nodes, repeat.until)}`;
 
 /** How a delay reads: "Wait 10 minutes", "Wait until 9:00 AM". */
-export const delayText = (item: QueueDelay): string => `Wait ${timeText(item.delay)}`;
+export const delayText = (item: QueueDelay, catalog: EngineCatalog): string =>
+  `Wait ${timeText(item.delay, catalog)}`;
 
 /** What an OK is on, in the user's words: "the spec in SPEC.md", or "the work before it". */
 export const okWhat = (ok: QueueApproval): string => ok.approve.trim() || 'the work before it';
@@ -93,23 +103,27 @@ export const okText = (ok: QueueApproval, max = 32): string =>
   `Your OK on ${threadTitle(okWhat(ok), max)}`;
 
 /** How a wait reads, given how each of its targets reads: "Wait for Builder, at most 30 minutes". */
-export const waitText = (item: QueueWait, targetLabel: (target: WaitTarget) => string): string =>
+export const waitText = (
+  item: QueueWait,
+  targetLabel: (target: WaitTarget) => string,
+  catalog: EngineCatalog,
+): string =>
   `Wait for ${andList(item.waitFor.map(targetLabel))}${
-    item.timeout === undefined ? '' : `, ${limitText(item.timeout)}`
+    item.timeout === undefined ? '' : `, ${limitText(item.timeout, catalog)}`
   }`;
 
 /** How a queue item reads when another agent waits for it. */
-export const itemLabel = (item: QueueItem): string =>
+export const itemLabel = (item: QueueItem, catalog: EngineCatalog): string =>
   isWait(item)
     ? 'its wait'
     : isRepeat(item)
       ? 'its repeat'
       : isDelay(item)
-        ? delayText(item)
+        ? delayText(item, catalog)
         : isApproval(item)
           ? okText(item, 24)
           : isIf(item)
-            ? `If ${ifText(item.if)}`
+            ? `If ${ifText(item.if, catalog)}`
             : isMessage(item)
               ? item.message.trim() === ''
                 ? 'an empty message'
@@ -139,10 +153,14 @@ export function agentName(nodes: readonly NodeLike[], id: string): string {
 }
 
 /** What a wait waits for, in words: an agent (all of its work), or one of its items. */
-export function waitTargetLabel(nodes: readonly NodeLike[], { agent, item }: WaitTarget): string {
+export function waitTargetLabel(
+  nodes: readonly NodeLike[],
+  { agent, item }: WaitTarget,
+  catalog: EngineCatalog,
+): string {
   if (item === undefined) return agentName(nodes, agent);
   const found = findItem(nodes.find((n) => n.id === agent)?.data.queue ?? [], item);
-  return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item) : 'a removed step'}`;
+  return `${agentName(nodes, agent)}: ${found ? itemLabel(found.item, catalog) : 'a removed step'}`;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -156,15 +174,20 @@ export function andList(names: readonly string[]): string {
  * How an item reads in full, as All queues names it: what it does, and to which agent; a repeat,
  * how many rounds it runs at most (unless it goes round with another, as many as that one).
  */
-export function taskLabel(nodes: readonly NodeLike[], item: QueueItem): string {
-  if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
+export function taskLabel(
+  nodes: readonly NodeLike[],
+  item: QueueItem,
+  catalog: EngineCatalog,
+): string {
+  if (isWait(item))
+    return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
   if (isRepeat(item)) {
     const text = repeatText(nodes, item);
     return isRepeatEnds(item.until) ? text : `${text} (${roundsText(item.rounds)})`;
   }
-  if (isDelay(item)) return delayText(item);
+  if (isDelay(item)) return delayText(item, catalog);
   if (isApproval(item)) return okText(item);
-  if (isIf(item)) return `If ${ifText(item.if)}`;
+  if (isIf(item)) return `If ${ifText(item.if, catalog)}`;
   const what = isMessage(item)
     ? `Message ${item.message.trim() === '' ? '(empty)' : `“${threadTitle(item.message, 32)}”`}`
     : stepText(item, 32);
@@ -175,11 +198,16 @@ export function taskLabel(nodes: readonly NodeLike[], item: QueueItem): string {
  * How an item reads on its own buttons ("Move …", "Remove …", "Go on now: …"): what it is, and
  * for a wait, a delay, an OK, an if-then or a repeat, what it waits for or checks.
  */
-export function describe(nodes: readonly NodeLike[], item: QueueItem): string {
-  if (isWait(item)) return waitText(item, (target) => waitTargetLabel(nodes, target));
+export function describe(
+  nodes: readonly NodeLike[],
+  item: QueueItem,
+  catalog: EngineCatalog,
+): string {
+  if (isWait(item))
+    return waitText(item, (target) => waitTargetLabel(nodes, target, catalog), catalog);
   if (isRepeat(item)) return repeatText(nodes, item);
-  if (isDelay(item)) return delayText(item);
+  if (isDelay(item)) return delayText(item, catalog);
   if (isApproval(item)) return okText(item);
-  if (isIf(item)) return `If ${ifText(item.if)}`;
+  if (isIf(item)) return `If ${ifText(item.if, catalog)}`;
   return isMessage(item) ? 'Message' : item.action;
 }

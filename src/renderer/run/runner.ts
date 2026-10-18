@@ -33,7 +33,7 @@ import type {
 import { deadline } from '../graph/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
-import { backendName, warningText } from '../usage/usage';
+import { warningText } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
 import type { EngineCatalog } from './catalog';
 import {
@@ -227,9 +227,16 @@ const SHELL_REFUSED =
 const corrected = (note: string, task: string) =>
   note.trimStart().startsWith('!') ? note : `${note}\n\n${task}`;
 
-/** What the run says when it waits for a usage window's reset that has never been read. */
-const unread = (backend: UsageBackendId, window: keyof typeof WINDOW_NAMES) =>
-  `${backendName(backend)}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
+/**
+ * What the run says when it waits for a usage window's reset that has never been read (the backend
+ * named by `catalog`).
+ */
+const unread = (
+  backend: UsageBackendId,
+  window: keyof typeof WINDOW_NAMES,
+  catalog: EngineCatalog,
+) =>
+  `${catalog.backendName(backend)}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
 
 /** What the run says, once a run, when it can't read a connected agent's replies (RunIO.unheard). */
 const UNHEARD =
@@ -1263,7 +1270,7 @@ export class RunStore {
     const node = this.#agents().find((n) => n.id === agent);
     if (!limit && window === undefined && node) {
       this.#after(0, () => {
-        this.#io.tell(node, unread(time.backend, time.resets));
+        this.#io.tell(node, unread(time.backend, time.resets, this.#catalog));
       });
     }
     return until;
@@ -1325,7 +1332,7 @@ export class RunStore {
       if (!this.#warned.has(warned)) {
         this.#warned.add(warned);
         this.#after(0, () => {
-          this.#io.tell(node, warningText(hold, now));
+          this.#io.tell(node, warningText(hold, this.#catalog, now));
         });
       }
       return undefined;

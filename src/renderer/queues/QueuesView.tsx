@@ -24,6 +24,7 @@ import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
 import { heldAsks } from '../run/asks';
 import type { HeldAsk } from '../run/asks';
+import type { EngineCatalog } from '../run/catalog';
 import type { Run } from '../run/runner';
 import { queueControlText } from '../run/controls';
 import { holdText } from '../usage/usage';
@@ -108,6 +109,8 @@ export function QueuesView({
   onClose: () => void;
 }) {
   const layout = useMemo(() => lanesOf(nodes), [nodes]);
+  /** What the run, and the queues' words, read of the catalog. */
+  const [engine] = useState(runCatalog);
   const { lanes, rows, links, isStuck } = layout;
   const grid = useRef<HTMLDivElement>(null);
   const name = (id: string) =>
@@ -196,7 +199,7 @@ export function QueuesView({
     lanes.flatMap(({ agent: { id } }) => (sessions[id]?.status === 'waiting' ? [id] : [])),
   );
   /** Every task's marks: where it is measured, how links mark it, and where the run is. */
-  const marks = queueMarks(layout, run, asking, activeEnds);
+  const marks = queueMarks(layout, run, asking, engine, activeEnds);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
     ? findItem(nodes.find((n) => n.id === choosing.owner)?.data.queue ?? [], choosing.choice.waitId)
@@ -234,7 +237,7 @@ export function QueuesView({
         : undefined;
   };
   /** What the run holds for the user: a session that would not start says so in its lane's head. */
-  const asks = useMemo(() => heldAsks(canvasNodes(nodes), run, runCatalog()), [nodes, run]);
+  const asks = useMemo(() => heldAsks(canvasNodes(nodes), run, engine), [nodes, run, engine]);
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
@@ -344,6 +347,7 @@ export function QueuesView({
                   lane={lane}
                   column={2 * i + 1}
                   nodes={nodes}
+                  catalog={engine}
                   grid={grid}
                   name={name}
                   status={sessions[lane.agent.id]?.status ?? 'idle'}
@@ -415,6 +419,7 @@ function LaneCells({
   lane,
   column,
   nodes,
+  catalog,
   grid,
   name,
   status,
@@ -436,6 +441,8 @@ function LaneCells({
   lane: Lane;
   column: number;
   nodes: readonly GraphNode[];
+  /** What names a usage backend in its words. */
+  catalog: EngineCatalog;
   grid: RefObject<HTMLDivElement | null>;
   name: (id: string) => string;
   /** Its session's status. */
@@ -578,7 +585,7 @@ function LaneCells({
               needsYou === 'answer'
                 ? `${name(id)} asks permission: open it to answer`
                 : agentRun?.usage
-                  ? `${name(id)}: ${holdText(agentRun.usage)}`
+                  ? `${name(id)}: ${holdText(agentRun.usage, catalog)}`
                   : held && isRepeat(held)
                     ? `${name(id)}'s repeat is out of rounds`
                     : `${name(id)} waits for your OK`
@@ -615,7 +622,7 @@ function LaneCells({
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
           role="group"
-          aria-label={`${name(id)}: ${taskLabel(nodes, item)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
+          aria-label={`${name(id)}: ${taskLabel(nodes, item, catalog)}${isStuck(id, item.id) ? ' (stuck)' : ''}`}
           data-lane={id}
           data-sortable={items.includes(item) ? '' : undefined}
           // A repeat's cell is a subgrid of the rows it spans: each item it holds in its own.
@@ -642,7 +649,7 @@ function LaneCells({
           />
           {picking && !inner && !(isMessage(item) && item.submission) && (
             <PickTask
-              label={`Wait for ${picking.name}: ${itemLabel(item)}`}
+              label={`Wait for ${picking.name}: ${itemLabel(item, catalog)}`}
               pressed={picking.current === item.id}
               onPick={() => {
                 picking.onPick(item.id);

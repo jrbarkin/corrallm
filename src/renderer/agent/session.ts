@@ -24,7 +24,6 @@ import type {
   TurnResult,
 } from '../../shared/session';
 import type { SubmittedMessage } from '../../shared/model/queue';
-import { adapterOf } from '../catalog';
 import { mergeHistory } from './history';
 
 export type {
@@ -135,15 +134,11 @@ export function modeOf(adapter: AdapterId, mode: Mode): ModeInfo {
 
 /**
  * Which conversation the transcript's messages are of: an agent's adapter's (main resumes one per
- * adapter, whichever of its connections runs it), or an unsupported submission's ('unavailable').
- * An agent that runs another way keeps its transcript, so it may hold several.
+ * adapter, whichever of its connections runs it: the catalog's adapterOf), or an unsupported
+ * submission's ('unavailable'). An agent that runs another way keeps its transcript, so it may
+ * hold several.
  */
 export type Conversation = AdapterId;
-
-/** The conversation an agent that runs as `connection` is on. */
-export function conversationOf(connection: ConnectionId): Conversation {
-  return adapterOf(connection);
-}
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';

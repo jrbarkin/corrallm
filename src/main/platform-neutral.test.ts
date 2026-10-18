@@ -102,7 +102,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/terminal/TerminalPane.tsx': 6,
   'src/renderer/terminal/keyboard.ts': 1,
   'src/renderer/terminal/screen.ts': 4,
-  'src/renderer/usage/usage.ts': 3,
+  'src/renderer/usage/usage.ts': 2,
   'src/shared/ipc.ts': 4,
   'src/shared/session.ts': 43,
   'src/shared/terminal.ts': 1,

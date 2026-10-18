@@ -88,7 +88,7 @@ describe('task recovery in the shared queue row', () => {
   });
   it('shows the reason, attempt history, and choices on the original step', () => {
     const edit = edits();
-    const marks = queueMarks(lanesOf([node]), run(), new Set());
+    const marks = queueMarks(lanesOf([node]), run(), new Set(), runCatalog());
     render(
       <QueueEditor
         node={node}
@@ -183,6 +183,7 @@ describe('condition query recovery in the shared queue row', () => {
           agents: { a: { current: 'gate', status: 'asking', outcomes: {}, problem } },
         },
         new Set(),
+        runCatalog(),
       );
       const edit = edits();
       render(

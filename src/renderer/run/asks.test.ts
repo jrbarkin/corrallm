@@ -333,7 +333,7 @@ describe('a usage rule that pauses and asks', () => {
   });
 
   it('offers no wait for a reset it does not know', () => {
-    expect(usageAnswers({ ...hold, resetsAt: null }).choices.map((c) => c.key)).toEqual([
+    expect(usageAnswers({ ...hold, resetsAt: null }, engine).choices.map((c) => c.key)).toEqual([
       'goOn',
       'stop',
     ]);

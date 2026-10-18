@@ -1,6 +1,7 @@
 import type { RowMarks } from '../graph/QueueEditor';
 import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from '../../shared/model/queue';
 import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
+import type { EngineCatalog } from '../run/catalog';
 import { taskState } from '../run/runner';
 import type { Run } from '../run/runner';
 import { holdText } from '../usage/usage';
@@ -22,13 +23,15 @@ export function taskKey(lane: string, item: string | null): string {
  * shows; not for a session that would not start), at an OK, `data-asked` (the last changes asked for there, this run) with
  * `data-asked-times` (how many times, when more than once), and at a repeat, `data-round` (the
  * round it is on, "Round 2 of 3", while the run is in it; once over, how many it took, "2 rounds").
- * Where a usage rule holds the agent before a task: `data-usage` (why), `data-usage-backend` (whose
- * usage) and `data-usage-reset` (when its window resets, in epoch ms, if known).
+ * Where a usage rule holds the agent before a task: `data-usage` (why, the backend named by
+ * `catalog`), `data-usage-backend` (whose usage) and `data-usage-reset` (when its window resets, in
+ * epoch ms, if known).
  */
 export function queueMarks(
   { lanes, links, isStuck }: Lanes,
   run: Run,
   asking: ReadonlySet<string>,
+  catalog: EngineCatalog,
   activeEnds: ReadonlySet<string> = new Set(),
 ): (lane: string, item: string | null) => RowMarks {
   const handed = new Set(
@@ -109,7 +112,8 @@ export function queueMarks(
       'data-asked': asked?.at(-1),
       'data-asked-times': asked && asked.length > 1 ? String(asked.length) : undefined,
       'data-usage':
-        usage && `${holdText(usage)}${at?.status === 'waiting' ? ': waiting for it to reset' : ''}`,
+        usage &&
+        `${holdText(usage, catalog)}${at?.status === 'waiting' ? ': waiting for it to reset' : ''}`,
       'data-usage-backend': usage?.backend,
       'data-usage-reset':
         usage?.resetsAt === null || usage === undefined ? undefined : String(usage.resetsAt),

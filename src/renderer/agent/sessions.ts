@@ -624,7 +624,7 @@ export class SessionStore {
       driving.driver = new UnavailableDriver(io);
     } else {
       this.#listen();
-      driving.driver = new ConnectedDriver(agentId, connection, this.#backend, io);
+      driving.driver = new ConnectedDriver(agentId, connection, this.#catalog, this.#backend, io);
     }
     this.#drivers.set(agentId, driving);
     return driving.driver;

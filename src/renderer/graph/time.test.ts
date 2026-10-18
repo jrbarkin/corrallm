@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { runCatalog } from './agents';
 import { deadline, leftText, limitText, parseTime, sameTime, TIME_PRESETS, timeText } from './time';
+
+/** What names a usage backend: the catalog main declares, as the run reads it. */
+const engine = runCatalog();
 
 const minutes = (n: number) => ({ seconds: n * 60 });
 const hours = (n: number) => ({ seconds: n * 3600 });
@@ -57,28 +61,28 @@ describe('parseTime', () => {
 
 describe('the wording of times', () => {
   it('says how long, or until when, in the locale given', () => {
-    expect(timeText({ seconds: 600 })).toBe('10 minutes');
-    expect(timeText({ seconds: 60 })).toBe('1 minute');
-    expect(timeText({ seconds: 5400 })).toBe('1 hour 30 minutes');
-    expect(timeText({ seconds: 90 })).toBe('1 minute 30 seconds');
-    expect(timeText({ seconds: 2 * 86400 + 3600 })).toBe('2 days 1 hour');
-    expect(timeText({ at: '09:00' }, 'en-US')).toBe('until 9:00 AM');
-    expect(timeText({ at: '18:05' }, 'en-GB')).toBe('until 18:05');
+    expect(timeText({ seconds: 600 }, engine)).toBe('10 minutes');
+    expect(timeText({ seconds: 60 }, engine)).toBe('1 minute');
+    expect(timeText({ seconds: 5400 }, engine)).toBe('1 hour 30 minutes');
+    expect(timeText({ seconds: 90 }, engine)).toBe('1 minute 30 seconds');
+    expect(timeText({ seconds: 2 * 86400 + 3600 }, engine)).toBe('2 days 1 hour');
+    expect(timeText({ at: '09:00' }, engine, 'en-US')).toBe('until 9:00 AM');
+    expect(timeText({ at: '18:05' }, engine, 'en-GB')).toBe('until 18:05');
   });
 
   it('words a time limit', () => {
-    expect(limitText({ seconds: 1800 })).toBe('at most 30 minutes');
-    expect(limitText({ at: '18:00' }, 'en-US')).toBe('no later than 6:00 PM');
+    expect(limitText({ seconds: 1800 }, engine)).toBe('at most 30 minutes');
+    expect(limitText({ at: '18:00' }, engine, 'en-US')).toBe('no later than 6:00 PM');
   });
 
   it('says when a backend’s usage window resets', () => {
-    expect(timeText({ resets: 'fiveHour', backend: 'claude-code' })).toBe(
+    expect(timeText({ resets: 'fiveHour', backend: 'claude-code' }, engine)).toBe(
       'until Claude’s usage resets (5-hour)',
     );
-    expect(timeText({ resets: 'weekly', backend: 'codex' })).toBe(
+    expect(timeText({ resets: 'weekly', backend: 'codex' }, engine)).toBe(
       'until Codex’s usage resets (weekly)',
     );
-    expect(limitText({ resets: 'weekly', backend: 'claude-code' })).toBe(
+    expect(limitText({ resets: 'weekly', backend: 'claude-code' }, engine)).toBe(
       'no later than Claude’s usage resets (weekly)',
     );
     expect(
@@ -107,7 +111,7 @@ describe('the wording of times', () => {
 
   it('reads back each preset from its own wording', () => {
     for (const preset of TIME_PRESETS) {
-      expect(parseTime(timeText(preset, 'en-US'))[0]).toEqual(preset);
+      expect(parseTime(timeText(preset, engine, 'en-US'))[0]).toEqual(preset);
     }
   });
 });

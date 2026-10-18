@@ -1,58 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Catalog } from '../../shared/adapter';
 import type { AgentNode } from '../../shared/model/canvas';
+import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
+import { MADE_UP } from '../test-made-up';
+import { heldAsks } from './asks';
 import { engineCatalog } from './catalog';
 import { RunStore } from './runner';
+import type { RunIO } from './runner';
 
 /** The catalog main declares, read with Claude Code as the agent a node without one runs. */
 const engine = engineCatalog(catalog(), 'claude-code');
-
-/** An adapter no build has, declared only here: the run knows it from the catalog alone. */
-const MADE_UP: Catalog = {
-  adapters: [
-    {
-      id: 'zed',
-      name: 'Zed Agent',
-      accent: 0,
-      words: { defaults: '' },
-      modes: [],
-      runtimeModes: false,
-      role: 'none',
-      resume: false,
-      list: false,
-      actions: [{ name: 'shell', description: 'Run a command', job: 'shell' }],
-      connections: [
-        {
-          id: 'zed.acp',
-          label: 'ACP',
-          short: 'ACP',
-          description: '',
-          view: 'transcript',
-          startModes: [],
-          live: { effort: false, stopTask: false },
-          panels: {},
-          images: null,
-          usage: 'zed',
-        },
-        {
-          id: 'zed.free',
-          label: 'Free',
-          short: 'Free',
-          description: '',
-          view: 'transcript',
-          startModes: [],
-          live: { effort: false, stopTask: false },
-          panels: {},
-          images: null,
-          usage: null,
-        },
-      ],
-    },
-  ],
-  usageBackends: [{ id: 'zed', label: 'Zed', source: '', windows: [] }],
-};
 
 describe('engineCatalog', () => {
   it('runs an agent as its connection, else its adapter’s first, its adapter the default if none', () => {
@@ -118,6 +76,27 @@ describe('engineCatalog', () => {
     expect(engine.connectionLabel('qwen.acp')).toBeUndefined();
   });
 
+  it('names a usage backend as the catalog does; by its id, for one it lacks', () => {
+    expect(engine.backendName('claude-code')).toBe('Claude');
+    expect(engine.backendName('codex')).toBe('Codex');
+    expect(engine.backendName('gemini')).toBe('gemini');
+  });
+
+  it('starts a connection in a mode only where it lists it, and the mode asks', () => {
+    expect(engine.isStartMode('claude-code.terminal', 'plan')).toBe(true);
+    expect(engine.isStartMode('claude-code.sdk', 'manual')).toBe(true);
+    expect(engine.isStartMode('codex.app-server', 'plan')).toBe(true);
+    // Codex's Terminal starts only in Read only; Plan is chosen in its terminal.
+    expect(engine.isStartMode('codex.terminal', 'read-only')).toBe(true);
+    expect(engine.isStartMode('codex.terminal', 'plan')).toBe(false);
+    // Never one that never asks, nor another adapter's.
+    expect(engine.isStartMode('claude-code.terminal', 'bypassPermissions')).toBe(false);
+    expect(engine.isStartMode('codex.app-server', 'full-access')).toBe(false);
+    expect(engine.isStartMode('codex.app-server', 'acceptEdits')).toBe(false);
+    expect(engine.isStartMode('unavailable', 'plan')).toBe(false);
+    expect(engine.isStartMode('qwen.acp', 'plan')).toBe(false);
+  });
+
   it('runs a queue with whatever adapter the catalog declares, wording steps from it', () => {
     const sent: [string, string][] = [];
     const store = new RunStore(engineCatalog(MADE_UP, 'zed'), {
@@ -165,5 +144,57 @@ describe('engineCatalog', () => {
     expect(zed.usageBackendOf({ connection: 'zed.free' })).toBeUndefined();
     expect(zed.connectionLabel('zed.acp')).toBe('ACP');
     expect(zed.connectionLabel('claude-code.terminal')).toBeUndefined();
+    expect(zed.backendName('zed')).toBe('Zed');
+    expect(zed.backendName('claude-code')).toBe('claude-code');
+    expect(zed.isStartMode('zed.acp', 'plan')).toBe(true);
+    expect(zed.isStartMode('zed.acp', 'auto')).toBe(false);
+    expect(zed.isStartMode('zed.free', 'plan')).toBe(false);
+    expect(zed.isStartMode('claude-code.terminal', 'plan')).toBe(false);
+  });
+
+  it('words a usage rule’s warning and hold with the backend the catalog it is given names', () => {
+    const zed = engineCatalog(MADE_UP, 'zed');
+    const told: string[] = [];
+    const timers: (() => void)[] = [];
+    let usage: UsageState = {
+      readings: [
+        { backend: 'zed', at: 0, windows: { fiveHour: { usedPercent: 85, resetsAt: null } } },
+      ],
+      rules: { zed: { window: 'fiveHour', percent: 80, action: 'warn' } },
+    };
+    const io: RunIO = {
+      send: () => () => undefined,
+      tell: (_, text) => {
+        told.push(text);
+      },
+      connect: () => undefined,
+      later: (run) => {
+        timers.push(run);
+        return () => undefined;
+      },
+      now: () => 0,
+      usage: () => usage,
+    };
+    const nodes: AgentNode[] = [
+      {
+        id: 'zed',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: { label: 'Zed', queue: [{ id: 'run', action: 'shell' }] },
+      },
+    ];
+    const warned = new RunStore(zed, io);
+    warned.update(nodes);
+    warned.start();
+    for (const run of timers.splice(0)) run();
+    expect(told).toEqual(['Zed has used 85% of its 5-hour window (over 80%).']);
+
+    usage = { ...usage, rules: { zed: { window: 'fiveHour', percent: 80, action: 'ask' } } };
+    const asking = new RunStore(zed, io);
+    asking.update(nodes);
+    asking.start();
+    const [ask] = heldAsks(nodes, asking.snapshot(), zed);
+    expect(ask?.text).toBe('Zed has used 85% of its 5-hour window (over 80%). Go on?');
+    expect(ask?.choices[0]?.title).toBe('Every Zed agent carries on until the window resets');
   });
 });

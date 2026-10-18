@@ -446,8 +446,8 @@ function Editor({
         session.status === 'waiting' ? [id] : [],
       ),
     );
-    return queueMarks(layout, run, asking);
-  }, [layout, run, sessions]);
+    return queueMarks(layout, run, asking, engine);
+  }, [layout, run, sessions, engine]);
   // Sessions follow the agents on the canvas, and how each runs. Before the run reads the queues,
   // which may send agents messages.
   useEffect(() => {
@@ -490,6 +490,7 @@ function Editor({
   const backends = useMemo(
     () =>
       backendsOf(
+        catalog(),
         graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data.adapter ?? DEFAULT_AGENT] : [])),
       ),
     [graph.nodes],

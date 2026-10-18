@@ -187,22 +187,34 @@ describe('ESLint’s boundaries in main', () => {
 
 describe('ESLint’s boundary around the run', () => {
   const RUN_ERROR = 'The run never reads';
+  /** React Flow's nodes, the renderer's CLI tables and the catalog it loaded. */
+  const BANNED_FROM_RUN = [
+    'src/renderer/graph/graph.ts',
+    'src/renderer/graph/agents.ts',
+    'src/renderer/catalog.ts',
+  ];
 
-  it('keeps the run and its helpers from React Flow and the renderer’s CLI tables', async () => {
+  it('keeps the run and its helpers from React Flow, the renderer’s CLI tables and its catalog', async () => {
     for (const [file, from] of [
       ['src/renderer/run/runner.ts', '@xyflow/react'],
       ['src/renderer/run/runner.ts', '../graph/agents'],
+      ['src/renderer/run/runner.ts', '../catalog'],
       ['src/renderer/run/asks.ts', '../graph/graph'],
       ['src/renderer/run/controls.ts', '@xyflow/system'],
       ['src/renderer/agent/sessions.ts', '../graph/agents'],
       ['src/renderer/agent/connected.ts', '../graph/graph'],
+      ['src/renderer/agent/connected.ts', '../catalog'],
       ['src/renderer/agent/session.ts', '../graph/agents'],
+      ['src/renderer/agent/session.ts', '../catalog'],
       ['src/renderer/graph/labels.ts', './graph'],
+      ['src/renderer/graph/labels.ts', '../catalog'],
       ['src/renderer/graph/time.ts', './agents'],
+      ['src/renderer/graph/time.ts', '../catalog'],
       ['src/renderer/graph/group-members.ts', './graph'],
       ['src/renderer/usage/usage.ts', '../graph/agents'],
-      ['src/renderer/catalog.ts', './graph/agents'],
+      ['src/renderer/usage/usage.ts', '../catalog'],
       ['src/shared/model/canvas.ts', '../../renderer/graph/graph'],
+      ['src/shared/model/queue.ts', '../../renderer/catalog'],
     ] as const) {
       const errors = await importErrors(file, `import type { A } from '${from}';\n`);
       expect(
@@ -222,21 +234,28 @@ describe('ESLint’s boundary around the run', () => {
           "import type { AgentAction } from '../../shared/adapter';\n",
       ),
     ).toEqual([]);
+    expect(
+      await importErrors(
+        'src/renderer/agent/connected.ts',
+        "import type { EngineCatalog } from '../run/catalog';\n",
+      ),
+    ).toEqual([]);
   });
 
-  it('lets the views, and the run’s tests, use React Flow and the renderer’s tables', async () => {
+  it('lets the views, and the run’s tests, use React Flow, the renderer’s tables and catalog', async () => {
     for (const file of ['src/renderer/graph/edits.ts', 'src/renderer/run/runner.test.ts']) {
       expect(
         await importErrors(
           file,
-          "import type { Node } from '@xyflow/react';\nimport { actionsOf } from '../graph/agents';\n",
+          "import type { Node } from '@xyflow/react';\nimport { actionsOf } from '../graph/agents';\n" +
+            "import { catalog } from '../catalog';\n",
         ),
         file,
       ).toEqual([]);
     }
   });
 
-  it('covers every file the run imports, none of which imports React Flow or the CLI tables', async () => {
+  it('covers every file the run imports, none of which imports React Flow, the CLI tables or the catalog', async () => {
     const files = [...closure(RUN_ENTRIES)].filter((file) => file.startsWith('src/'));
     expect(files).toContain('src/renderer/run/runner.ts');
     expect(files).toContain('src/shared/model/canvas.ts');
@@ -248,9 +267,7 @@ describe('ESLint’s boundary around the run', () => {
       expect(
         importsOf(file).flatMap((from) => {
           const found = from.startsWith('.') ? resolve(file, from) : undefined;
-          return found === 'src/renderer/graph/agents.ts' || found === 'src/renderer/graph/graph.ts'
-            ? [found]
-            : [];
+          return found !== undefined && BANNED_FROM_RUN.includes(found) ? [found] : [];
         }),
         file,
       ).toEqual([]);

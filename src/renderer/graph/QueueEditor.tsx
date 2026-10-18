@@ -5,12 +5,14 @@ import { USAGE_WINDOWS } from '../../shared/usage';
 import type { AdapterId, UsageBackendId } from '../../shared/adapter';
 import type { UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
+import { catalog as loadedCatalog } from '../catalog';
 import { answersOf, usageAnswers } from '../run/asks';
 import type { Answers } from '../run/asks';
+import type { EngineCatalog } from '../run/catalog';
 import type { Answer, TaskAttempt, TaskProblem } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
-import { backendName, backendOfType, windowText } from '../usage/usage';
-import { DEFAULT_AGENT } from './agents';
+import { backendOfType, windowText } from '../usage/usage';
+import { DEFAULT_AGENT, runCatalog } from './agents';
 import type { AgentAction } from './agents';
 import type { GraphNode } from './graph';
 import type { RepeatChange } from './edits';
@@ -218,7 +220,7 @@ export function QueueEditor({
               <ItemRow item={item} handle={handle} context={context} props={props} />
               {picking && !isRepeat(item) && !(isMessage(item) && item.submission) && (
                 <PickTask
-                  label={`Wait for ${picking.name}: ${itemLabel(item)}`}
+                  label={`Wait for ${picking.name}: ${context.itemLabel(item)}`}
                   pressed={picking.current === item.id}
                   onPick={() => {
                     picking.onPick(item.id);
@@ -394,8 +396,9 @@ function contextOf({
   picking,
 }: QueueProps): Context {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const engine = runCatalog();
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
-  const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target);
+  const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target, engine);
   const queue = (node.data.queue ?? EMPTY).filter(
     (item) => !isMessage(item) || item.submission === undefined,
   );
@@ -403,15 +406,16 @@ function contextOf({
     owner: node.id,
     inRepeat: false,
     agent,
-    usage: backendOfType(agent),
+    usage: backendOfType(loadedCatalog(), agent),
+    catalog: engine,
     actions,
     others,
     name,
-    ifText,
+    ifText: (condition) => ifText(condition, engine),
     untilText: (until) => untilText(nodes, until),
-    itemLabel,
+    itemLabel: (item) => itemLabel(item, engine),
     targetLabel,
-    describe: (item) => describe(nodes, item),
+    describe: (item) => describe(nodes, item, engine),
     onRemove,
     onRetarget,
     onEditMessage,
@@ -447,6 +451,8 @@ interface AddContext {
    * wait for its usage window to reset.
    */
   usage?: UsageBackendId | undefined;
+  /** What names a usage backend in the queue's words: the run's catalog (runCatalog). */
+  catalog: EngineCatalog;
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
   itemLabel: (item: QueueItem) => string;
@@ -502,13 +508,15 @@ export function QueueAddMenu({
   onChooseStep?: (choice: StepChoice) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const engine = runCatalog();
   const context = {
     owner: node.id,
     inRepeat: false,
-    usage: backendOfType(node.data.adapter ?? DEFAULT_AGENT),
+    usage: backendOfType(loadedCatalog(), node.data.adapter ?? DEFAULT_AGENT),
+    catalog: engine,
     actions,
     others,
-    itemLabel,
+    itemLabel: (item: QueueItem) => itemLabel(item, engine),
     ...(onChooseStep ? { onChooseStep } : {}),
   };
   return <AddMenu label={label} place="queue" up={up} context={context} onAdd={onAdd} />;
@@ -612,6 +620,7 @@ function TimePicker({
   current,
   allowNone = false,
   usage,
+  catalog,
   onPick,
   onCancel,
 }: {
@@ -620,6 +629,8 @@ function TimePicker({
   allowNone?: boolean;
   /** A backend whose usage windows' resets are offered too (a delay's, for an agent on it). */
   usage?: UsageBackendId | undefined;
+  /** What names a usage backend in a time's words. */
+  catalog: EngineCatalog;
   onPick: (time: Time | undefined) => void;
   onCancel: () => void;
 }) {
@@ -635,10 +646,10 @@ function TimePicker({
       label={label}
       placeholder="10 minutes, 1 hour, until 9:00…"
       options={options}
-      optionLabel={(time) => (time === null ? 'No time limit' : upper(timeText(time)))}
+      optionLabel={(time) => (time === null ? 'No time limit' : upper(timeText(time, catalog)))}
       optionKey={(time) => (time === null ? '(none)' : JSON.stringify(time))}
       typed={parseTime}
-      {...(current ? { initialQuery: timeText(current) } : {})}
+      {...(current ? { initialQuery: timeText(current, catalog) } : {})}
       onPick={(time) => {
         onPick(time ?? undefined);
       }}
@@ -937,10 +948,10 @@ function UsageHeld({ item, context }: { item: QueueStep | QueueMessage; context:
       {marks['data-decide'] !== undefined && (
         <DecideBar
           item={item}
-          answers={usageAnswers({
-            backend,
-            resetsAt: reset === undefined ? null : Number(reset),
-          })}
+          answers={usageAnswers(
+            { backend, resetsAt: reset === undefined ? null : Number(reset) },
+            context.catalog,
+          )}
           onDecide={(answer) => {
             context.onDecide(item.id, answer);
           }}
@@ -1274,13 +1285,13 @@ function WaitRow({
         <button
           type="button"
           className="graph-queue-target"
-          aria-label={`Change the time limit: ${limitText(item.timeout)}`}
+          aria-label={`Change the time limit: ${limitText(item.timeout, context.catalog)}`}
           aria-expanded={timing}
           onClick={() => {
             setTiming(!timing);
           }}
         >
-          {limitText(item.timeout)}
+          {limitText(item.timeout, context.catalog)}
         </button>
       )}
       <RowCountdown id={item.id} context={context} />
@@ -1291,6 +1302,7 @@ function WaitRow({
         <TimePicker
           label="Go on anyway after…"
           allowNone={item.timeout !== undefined}
+          catalog={context.catalog}
           onPick={(time) => {
             context.onTime(item.id, time);
             setTiming(false);
@@ -1348,7 +1360,7 @@ function DelayRow({
   context: Context;
 }) {
   const [editing, setEditing] = useState(false);
-  const text = timeText(item.delay);
+  const text = timeText(item.delay, context.catalog);
   return (
     <div className="graph-queue-row graph-queue-delay" {...context.marks(item.id)}>
       <Handle handle={handle} item={item} context={context} />
@@ -1372,6 +1384,7 @@ function DelayRow({
           label="Wait how long?"
           current={item.delay}
           usage={context.usage}
+          catalog={context.catalog}
           onPick={(time) => {
             if (time) context.onTime(item.id, time);
             setEditing(false);
@@ -1599,6 +1612,7 @@ function IfRow({
           <ConditionPicker
             current={item.if}
             usage={context.usage}
+            catalog={context.catalog}
             onPick={(condition) => {
               if (condition.kind !== 'repeatEnds') onCondition(condition);
               setEditing(false);
@@ -1737,6 +1751,7 @@ function AddMenu({
       {step === 'condition' && (
         <ConditionPicker
           usage={context.usage}
+          catalog={context.catalog}
           onPick={(condition) => {
             if (condition.kind !== 'repeatEnds') onAdd({ if: condition, then: [] });
             close();
@@ -1748,6 +1763,7 @@ function AddMenu({
         <ConditionPicker
           mode="until"
           leaders={leaderOptions(context, undefined)}
+          catalog={context.catalog}
           onPick={(until) => {
             if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') {
               onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
@@ -1787,6 +1803,7 @@ function AddMenu({
         <TimePicker
           label="Wait how long?"
           usage={context.usage}
+          catalog={context.catalog}
           onPick={(time) => {
             if (time) onAdd({ delay: time });
             close();
@@ -1908,11 +1925,14 @@ interface UsageChoice {
  */
 function UsagePicker({
   backend,
+  catalog,
   current,
   onPick,
   onCancel,
 }: {
   backend: UsageBackendId;
+  /** What names the backend. */
+  catalog: EngineCatalog;
   current?: UsageChoice | undefined;
   onPick: (choice: UsageChoice) => void;
   onCancel: () => void;
@@ -1923,7 +1943,7 @@ function UsagePicker({
   );
   return (
     <SearchPicker
-      label={`${backendName(backend)}’s usage is over…`}
+      label={`${catalog.backendName(backend)}’s usage is over…`}
       placeholder="80%, 90% weekly…"
       options={options}
       optionLabel={({ percent, window }) => `Over ${String(percent)}% of the ${windowText(window)}`}
@@ -1953,6 +1973,7 @@ function ConditionPicker({
   current,
   leaders = [],
   usage,
+  catalog,
   onPick,
   onCancel,
 }: {
@@ -1961,6 +1982,8 @@ function ConditionPicker({
   leaders?: readonly Leader[];
   /** A backend whose usage an if-then can check (the agent's). */
   usage?: UsageBackendId | undefined;
+  /** What names a usage backend. */
+  catalog: EngineCatalog;
   onPick: (condition: Condition | RepeatEnds) => void;
   onCancel: () => void;
 }) {
@@ -1970,6 +1993,7 @@ function ConditionPicker({
     return (
       <UsagePicker
         backend={backend}
+        catalog={catalog}
         current={current?.kind === 'usageAbove' ? current : undefined}
         onPick={({ percent, window }) => {
           onPick({ kind: 'usageAbove', backend, window, percent });
@@ -1997,7 +2021,7 @@ function ConditionPicker({
     ...(mode === 'if' && backend !== undefined
       ? [
           {
-            label: `${backendName(backend)}’s usage is over…`,
+            label: `${catalog.backendName(backend)}’s usage is over…`,
             detail: 'By its latest reading, when the run gets here',
             pick: 'usage' as const,
           },
@@ -2142,7 +2166,7 @@ function RepeatRow({
   const pick = (picked: QueueItem) =>
     picking && (
       <PickTask
-        label={`Wait for ${picking.name}: ${itemLabel(picked)}`}
+        label={`Wait for ${picking.name}: ${context.itemLabel(picked)}`}
         pressed={picking.current === picked.id}
         onPick={() => {
           picking.onPick(picked.id);
@@ -2188,6 +2212,7 @@ function RepeatRow({
             mode="until"
             current={item.until}
             leaders={leaderOptions(context, item)}
+            catalog={context.catalog}
             onPick={(until) => {
               if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') onRepeat({ until });
               close();

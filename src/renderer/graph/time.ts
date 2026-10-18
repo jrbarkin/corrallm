@@ -1,12 +1,13 @@
 import { WINDOW_NAMES } from '../../shared/usage';
-import { backendName } from '../usage/usage';
 import { isUsageReset, MAX_SECONDS } from '../../shared/model/queue';
 import type { Time, UsageReset } from '../../shared/model/queue';
+import type { EngineCatalog } from '../run/catalog';
 
 /*
  * Times as the queue has them (queue.ts: Time), read from what the user types and put in words.
  * Lengths are whole seconds; times of day are local, 24-hour "HH:MM", and mean the next time the
- * clock shows that; a usage window's reset is when its backend's latest reading says it resets.
+ * clock shows that; a usage window's reset is when its backend's latest reading says it resets
+ * (the backend named by the catalog the words are given).
  */
 
 /** The times a picker offers before anything is typed. */
@@ -142,10 +143,10 @@ const LENGTH_WORDS = [
 
 /**
  * A time in words: "10 minutes", "1 hour 30 minutes", "until 9:00 AM" (in `locale`'s way), "until
- * Claude’s usage resets (5-hour)".
+ * Claude’s usage resets (5-hour)" (its backend named by `catalog`).
  */
-export function timeText(time: Time, locale?: string): string {
-  if (isUsageReset(time)) return `until ${resetText(time)}`;
+export function timeText(time: Time, catalog: EngineCatalog, locale?: string): string {
+  if (isUsageReset(time)) return `until ${resetText(time, catalog)}`;
   if ('at' in time) return `until ${clockText(time.at, locale)}`;
   let left = time.seconds;
   const words: string[] = [];
@@ -158,14 +159,16 @@ export function timeText(time: Time, locale?: string): string {
 }
 
 /** A time limit in words: "at most 30 minutes", "no later than 6:00 PM". */
-export function limitText(time: Time, locale?: string): string {
-  if (isUsageReset(time)) return `no later than ${resetText(time)}`;
-  return 'at' in time ? `no later than ${clockText(time.at, locale)}` : `at most ${timeText(time)}`;
+export function limitText(time: Time, catalog: EngineCatalog, locale?: string): string {
+  if (isUsageReset(time)) return `no later than ${resetText(time, catalog)}`;
+  return 'at' in time
+    ? `no later than ${clockText(time.at, locale)}`
+    : `at most ${timeText(time, catalog)}`;
 }
 
 /** "Claude’s usage resets (5-hour)". */
-function resetText({ backend, resets }: UsageReset): string {
-  return `${backendName(backend)}’s usage resets (${WINDOW_NAMES[resets]})`;
+function resetText({ backend, resets }: UsageReset, catalog: EngineCatalog): string {
+  return `${catalog.backendName(backend)}’s usage resets (${WINDOW_NAMES[resets]})`;
 }
 
 /** A time of day ("HH:MM") as `locale` shows one: "9:00 AM", "09:00". */

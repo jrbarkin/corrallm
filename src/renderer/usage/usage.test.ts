@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { catalog } from '../catalog';
+import { runCatalog } from '../graph/agents';
 import {
   ageText,
   backendsOf,
@@ -15,11 +17,11 @@ const NOW = at(2026, 9, 12, 12, 0); // Monday 12 October 2026, noon
 
 describe('backendsOf', () => {
   it('lists the backends a canvas’s agents use (by their adapters), once each, in order', () => {
-    expect(backendsOf(['codex', 'claude-code', 'qwen', 'claude-code'])).toEqual([
+    expect(backendsOf(catalog(), ['codex', 'claude-code', 'qwen', 'claude-code'])).toEqual([
       'claude-code',
       'codex',
     ]);
-    expect(backendsOf([])).toEqual([]);
+    expect(backendsOf(catalog(), [])).toEqual([]);
   });
 });
 
@@ -56,11 +58,12 @@ describe('the wording of usage', () => {
       used: 93.6,
       resetsAt: at(2026, 9, 12, 15, 40),
     } as const;
-    expect(holdText(hold)).toBe('Claude has used 94% of its weekly window (over 90%)');
-    expect(warningText(hold, NOW, 'en-US')).toBe(
+    const engine = runCatalog();
+    expect(holdText(hold, engine)).toBe('Claude has used 94% of its weekly window (over 90%)');
+    expect(warningText(hold, engine, NOW, 'en-US')).toBe(
       'Claude has used 94% of its weekly window (over 90%). It resets at 3:40 PM.',
     );
-    expect(warningText({ ...hold, resetsAt: null }, NOW)).toBe(
+    expect(warningText({ ...hold, resetsAt: null }, engine, NOW)).toBe(
       'Claude has used 94% of its weekly window (over 90%).',
     );
   });

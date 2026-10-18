@@ -14,7 +14,7 @@ import type {
   RewindResult,
   SettingsOptions,
 } from '../../shared/session';
-import { isTerminal } from '../catalog';
+import { adapterOf, isTerminal } from '../catalog';
 import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
@@ -43,7 +43,7 @@ import { AgentChip } from './AgentChip';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
-import { chatStart, conversationOf, rewindPoints, threadTitle } from './session';
+import { chatStart, rewindPoints, threadTitle } from './session';
 import type { Answer, MessageImage, PlanAnswer, Session } from './session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -374,7 +374,7 @@ export function AgentView({
   const name = label || 'Unnamed agent';
   const agent = node.data.adapter ?? DEFAULT_AGENT;
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
-  const firstMessage = chatStart(session.entries, conversationOf(connection));
+  const firstMessage = chatStart(session.entries, adapterOf(connection));
   /** The lines its edits added and removed, this session. */
   const changed = session.entries.reduce(
     (sum, entry) =>

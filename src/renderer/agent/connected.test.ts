@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ConnectionId } from '../../shared/adapter';
 import type { SessionEvent } from '../../shared/session';
 import { fakeBackend } from '../test-backend';
+import { MADE_UP } from '../test-made-up';
 import { rewindPoints } from './session';
 import type { Refusal } from './session';
 import { SessionStore } from './sessions';
 import { runCatalog } from '../graph/agents';
+import { engineCatalog } from '../run/catalog';
 
 /** The run's catalog, as the app gives the sessions. */
 const engine = runCatalog();
@@ -538,6 +540,49 @@ describe('a connected session without the app', () => {
       level: 'error',
       text: expect.stringMatching(/only in the corrallm app/) as unknown,
     });
+  });
+});
+
+describe('a connected session of an adapter only the catalog it is given declares', () => {
+  /** A store over that catalog, with agent `a` on its ACP connection, set to start in Plan. */
+  function madeUp() {
+    const fake = fakeBackend();
+    const store = new SessionStore(engineCatalog(MADE_UP, 'zed'), fake.backend);
+    store.sync([{ id: 'a', connection: 'zed.acp', settings: { zed: { mode: 'plan' } } }]);
+    return { store, ...fake };
+  }
+
+  it('starts in the mode it is set to, which that catalog says its connection starts in', async () => {
+    const { store, backend } = madeUp();
+    store.open('a');
+    expect(backend.start).toHaveBeenCalledWith('a', {
+      connection: 'zed.acp',
+      model: null,
+      mode: 'plan',
+    });
+    await settle();
+  });
+
+  it('marks what it sends, what its CLI tells of, its history and a /clear as its adapter’s', async () => {
+    const { store, emit } = madeUp();
+    store.send('a', 'zed', 'From corrallm');
+    await settle();
+    emit('a', 'zed.acp', { type: 'user', id: 'typed', text: 'From its own prompt' });
+    emit('a', 'zed.acp', { type: 'cleared', id: 'clear' });
+    emit('a', 'zed.acp', {
+      type: 'history',
+      events: [
+        { type: 'user', id: 'past', text: 'Before' },
+        { type: 'end', messages: ['past'], seconds: 1, interrupted: false, failed: false },
+      ],
+    });
+    expect(
+      store
+        .of('a')
+        .entries.flatMap((entry) =>
+          entry.kind === 'user' || entry.kind === 'cleared' ? [entry.conversation] : [],
+        ),
+    ).toEqual(['zed', 'zed', 'zed', 'zed']);
   });
 });
 

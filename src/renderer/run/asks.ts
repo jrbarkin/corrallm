@@ -3,7 +3,7 @@ import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { agentName, itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
 import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
-import { backendName, holdText, resetTime } from '../usage/usage';
+import { holdText, resetTime } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
 import type { EngineCatalog } from './catalog';
 import type { Run, TaskProblem } from './runner';
@@ -66,19 +66,20 @@ const CONDITION_ANSWERS: Answers = {
 
 /**
  * How the user answers where a usage rule holds an agent before a task: Go on (primary) or Wait
- * for the reset (each for every agent on that backend, until the window resets), or Stop here.
- * No wait without a reset time to wait for.
+ * for the reset (each for every agent on that backend, which `catalog` names, until the window
+ * resets), or Stop here. No wait without a reset time to wait for.
  */
-export function usageAnswers({
-  backend,
-  resetsAt,
-}: Pick<UsageHold, 'backend' | 'resetsAt'>): Answers {
+export function usageAnswers(
+  { backend, resetsAt }: Pick<UsageHold, 'backend' | 'resetsAt'>,
+  catalog: EngineCatalog,
+): Answers {
+  const name = catalog.backendName(backend);
   return {
     choices: [
       {
         key: 'goOn',
         label: 'Go on',
-        title: `Every ${backendName(backend)} agent carries on until the window resets`,
+        title: `Every ${name} agent carries on until the window resets`,
         primary: true,
       },
       ...(resetsAt === null
@@ -87,7 +88,7 @@ export function usageAnswers({
             {
               key: 'wait',
               label: 'Wait for the reset',
-              title: `Every ${backendName(backend)} agent holds until the window resets, then goes on`,
+              title: `Every ${name} agent holds until the window resets, then goes on`,
             },
           ]),
       { key: 'stop', label: 'Stop here', title: 'Stop this queue here, and whatever waits on it' },
@@ -159,8 +160,8 @@ export interface HeldAsk extends Answers {
  * many it ran, and what still does not hold. A task whose session would not start says why, and
  * what waits, and offers to switch that session's agent: "Switch to Terminal" ("Switch Reviewer
  * to Terminal" for an agent it handed a message to: `catalog` names the connection). A usage rule
- * says how much of which window is used, before the task it holds, and when the window resets (as
- * of `now`).
+ * says how much of whose window is used (`catalog` names the backend), before the task it holds,
+ * and when the window resets (as of `now`).
  */
 export function heldAsks(
   nodes: readonly CanvasNode[],
@@ -181,7 +182,7 @@ export function heldAsks(
           agent,
           item,
           text: at.problem.text,
-          detail: `${taskLabel(nodes, item)}${at.problem.agent === agent.id ? '' : ` · ${agentName(nodes, at.problem.agent)}`}`,
+          detail: `${taskLabel(nodes, item, catalog)}${at.problem.agent === agent.id ? '' : ` · ${agentName(nodes, at.problem.agent)}`}`,
           ...answersOf(item, at.problem),
           problem: at.problem,
         },
@@ -195,7 +196,7 @@ export function heldAsks(
           agent,
           item,
           text,
-          detail: `${taskLabel(nodes, item)} waits until ${name} can start`,
+          detail: `${taskLabel(nodes, item, catalog)} waits until ${name} can start`,
           choices:
             how === undefined
               ? []
@@ -217,9 +218,9 @@ export function heldAsks(
         {
           agent,
           item,
-          text: `${holdText(at.usage)}. Go on?`,
-          detail: `Before ${itemLabel(item)}${reset}`,
-          ...usageAnswers(at.usage),
+          text: `${holdText(at.usage, catalog)}. Go on?`,
+          detail: `Before ${itemLabel(item, catalog)}${reset}`,
+          ...usageAnswers(at.usage, catalog),
         },
       ];
     }
@@ -247,7 +248,7 @@ export function heldAsks(
         // A wait or a repeat, in full: what it waited for, or what it repeated until.
         ...(before
           ? {
-              detail: `After ${isWait(before) || isRepeat(before) ? taskLabel(nodes, before) : itemLabel(before)}`,
+              detail: `After ${isWait(before) || isRepeat(before) ? taskLabel(nodes, before, catalog) : itemLabel(before, catalog)}`,
             }
           : {}),
         ...answers,
