@@ -11,19 +11,24 @@ if (!DISTRIBUTIONS.includes(distribution)) {
   throw new Error(`CORRALLM_DISTRIBUTION must be one of ${DISTRIBUTIONS.join(', ')}`);
 }
 
-// Merged by Forge with its defaults (CJS output in .vite/build, Node builtins and electron
-// external). Native modules must stay external: they load .node binaries relative to their
-// own files, so they ship in node_modules instead (see NATIVE_MODULES in forge.config.mts).
-export default defineConfig(({ command }) => ({
-  // The bundle is CommonJS, where import.meta is not: modules that find their own file through
+/** What main's bundles (main.cjs, core.cjs) define, and the CLI's too (vite.cli.config.mts). */
+export const mainDefine = {
+  // The bundles are CommonJS, where import.meta is not: modules that find their own file through
   // it (the Agent SDK does) get the bundle's file instead.
-  define: {
-    'import.meta.url': 'require("node:url").pathToFileURL(__filename).href',
-    CORRALLM_DISTRIBUTION: JSON.stringify(distribution),
-  },
+  'import.meta.url': 'require("node:url").pathToFileURL(__filename).href',
+  CORRALLM_DISTRIBUTION: JSON.stringify(distribution),
+};
+
+/** Native modules stay external: they load .node binaries relative to their own files. */
+export const NATIVE_EXTERNALS = ['node-pty'];
+
+// Merged by Forge with its defaults (CJS output in .vite/build, Node builtins and electron
+// external). Native modules ship in node_modules instead (see NATIVE_MODULES in forge.config.mts).
+export default defineConfig(({ command }) => ({
+  define: mainDefine,
   build: {
     rollupOptions: {
-      external: ['node-pty'],
+      external: NATIVE_EXTERNALS,
     },
     // Source maps for debugging under `electron-forge start` only; never shipped.
     sourcemap: command === 'serve',

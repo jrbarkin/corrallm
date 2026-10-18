@@ -1,5 +1,6 @@
 pnpm-lock.yaml
 .vite/
+dist-cli/
 out/
 coverage/
 playwright-report/
