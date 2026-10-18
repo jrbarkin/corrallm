@@ -7,6 +7,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
 import { CanvasFiles } from './canvas';
 import { Closing } from './closing';
+import { lockProfile, ProfileLocked } from './core/lock';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
 import { LinkOpener } from './host/links';
@@ -99,6 +100,30 @@ function main(): void {
   void app
     .whenReady()
     .then(async () => {
+      // One owner per profile (core.lock): `corrallm serve` may hold this one, and must not write
+      // its stores while the app does. B8 moves this into the core process.
+      let lock;
+      try {
+        lock = await lockProfile(app.getPath('userData'), 'app');
+      } catch (error) {
+        if (!(error instanceof ProfileLocked)) throw error;
+        const detail = `${error.message} ${
+          error.holder === undefined
+            ? 'Try again in a moment.'
+            : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
+        }`;
+        console.error(`corrallm: ${detail}`);
+        // The hidden e2e app shows nothing on screen, a dialog included.
+        if (!hidden) dialog.showErrorBox('corrallm can’t open its profile', detail);
+        app.exit(1);
+        return;
+      }
+      const release = () => {
+        lock.release();
+      };
+      app.once('will-quit', release);
+      process.once('exit', release);
+
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {
         serveAppScheme({
