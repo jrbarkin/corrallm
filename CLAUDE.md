@@ -334,12 +334,13 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
-                members, links, an agent's name, its manager and its team), geometry.ts (the boxes' sizes, the group
-                colours), file.ts (the .corral format: a CanvasDocument read against the catalog,
-                an agent naming no adapter running the default it is given, and written back),
-                words.ts (how the queue's items, times and usage holds read, in what the run says
-                and wherever they are shown: words that may name a usage backend take the catalog
-                that names it, and words that tell a time of day the locale) and session.ts (an
+                members, links, an agent's name, its manager, its team and what it is nested
+                in), geometry.ts (the boxes' sizes, the group colours), file.ts (the .corral
+                format: a CanvasDocument read against the catalog, an agent naming no adapter
+                running the default it is given, and written back), words.ts (how the queue's
+                items, times and usage holds read, in what the run says and wherever they are
+                shown: words that may name a usage backend take the catalog that names it, and
+                words that tell a time of day the locale), session.ts (an
                 agent's session as its views show it: its entries and pure helpers, turnReply,
                 rewindPoints, chatStart, threadTitle), messages.ts (a Message: what parties send
                 each other, PartyId, its states) and needs.ts (a NeedsItem: what waits for
@@ -423,8 +424,9 @@ src/shared/engine/  One canvas's engine, run wherever it is hosted: in the rende
                      the Needs you sidebar and above the agent's composer (for a Terminal agent, in
                      the bar under its terminal, with a box of its own for the reply); needs.ts
                      derives everything that waits for the user once (`needsOf`: those holds, every
-                     session's open prompts, what Terminal CLIs ask), for the sidebar and, worded
-                     as NeedsItems in the host's locale (`needs`), the core; run/controls.ts
+                     session's open prompts, what Terminal CLIs ask, and the agents whose sessions
+                     won't start while messages wait for them, from delivery), for the sidebar
+                     and, worded as NeedsItems in the host's locale (`needs`), the core; run/controls.ts
                      says where an agent's or group's own Pause, Kill and Resume leave it. A run that
                      has done nothing has nothing to resume: pausing or stopping it leaves it as it
                      was.
@@ -459,7 +461,7 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 
 - Every canvas has a stable id, a UUID (`CanvasId`, `src/shared/canvas.ts`): in its `.corral` file (`{ "format": "corrallm", "version": 2, "id", … }`; another version is refused), or a draft's journal record. Main keeps everything of a canvas by it: its file, project folder and agents' conversations (`memory.ts`, `canvases.json`), its run (`run-journal.ts`), its sessions (`sessions/manager.ts`) and folder (`project.ts`). Only the host knows windows: `host/windows.ts` maps each window to the canvas it shows, and IPC handlers look the canvas up there first.
 - New and a template give a draft with a fresh id (`canvas:forget` resolves with it); Save As keeps the id; a save of text whose id is another canvas's is refused. Opening a file makes it that canvas, unless the canvas is kept in another file that still holds its id (the original after Save As, or a copy made in the Finder): it opens as a copy with an id of its own (kept the next time it opens), and says so. A moved or renamed file keeps its canvas. A file belongs to one canvas.
-- Stores are version 2, with no migration: a version-1 `.corral` is refused; `canvases.json`, `settings.json` (consents by adapter) and `runs/last.json` of version 1 read as empty, and a run record that isn't version 2 is set aside with the journal's warning. Later phases only add optional fields, which a version-2 reader accepts when absent.
+- Stores are version 2, with no migration: a version-1 `.corral` is refused; `canvases.json`, `settings.json` (consents by adapter) and `runs/last.json` of version 1 read as empty, and a run record that isn't version 2 is set aside with the journal's warning. Until milestone 1 settles them, a phase may change a version-2 shape (B6: a run checkpoint's pause causes became `{ id, by }`, so a B5b-era record is set aside once; a `.corral` file's node ids are at most `MAX_NODE_ID` characters); after that, phases only add optional fields, which a version-2 reader accepts when absent.
 
 ## Security rules (do not regress)
 
