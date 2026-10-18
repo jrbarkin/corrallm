@@ -317,6 +317,9 @@ export interface McpServer {
 export const MCP_CHANGES = ['reconnect', 'enable', 'disable'] as const;
 export type McpChange = (typeof MCP_CHANGES)[number];
 
+/** A JSON Schema, as plain data: what an operation takes and returns, as MCP lists it. */
+export type JsonSchema = Readonly<Record<string, unknown>>;
+
 /** A value of a form an MCP server asks the user to fill in: text, a number, yes or no, choices. */
 export type FormValue = string | number | boolean | string[];
 

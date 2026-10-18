@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import type { JsonSchema } from '../session';
 import { withEnvelope } from './define';
 import type { OpDef } from './define';
 import { DEVIATIONS, REASONS } from './deviations';
@@ -117,7 +118,6 @@ function resultFields(schema: z.ZodType): string[] {
   return children(schema).flatMap((child) => resultFields(child.schema));
 }
 
-type JsonSchema = Record<string, unknown>;
 const utf8 = (text: string) => new TextEncoder().encode(text).length;
 /** The most bytes a JSON number takes (-1.7976931348623157e+308). */
 const NUMBER_BYTES = 24;

@@ -353,7 +353,8 @@ src/shared/api/ The registry: every operation, defined once (see The registry). 
                 surface.snap.json is every party's surface, checked in (`pnpm api:surface`).
 src/shared/     Types shared by all processes, including the IPC contract (ipc.ts), the catalog
                 (adapter.ts: what every adapter declares, ID_PATTERN, JOBS, and lookups over it), the
-                connected-session protocol (session.ts), what a terminal view is shown
+                connected-session protocol (session.ts; also JsonSchema, the type of the registry's
+                JSON Schemas), what a terminal view is shown
                 (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a
                 canvas's id (canvas.ts: CanvasId, and canvasIdOf, the .corral format and version
                 check main and file.ts share). No Node, Electron or DOM imports here.
