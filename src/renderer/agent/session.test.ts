@@ -100,7 +100,7 @@ describe('reduce', () => {
     ]);
   });
 
-  it('waits on a permission prompt, and remembers tools the user always allows', () => {
+  it('waits on a permission prompt, and records the answer it was given', () => {
     const asked: Session = reduce(
       reduce(NEW_SESSION, { type: 'start', entry: { id: 'u', kind: 'user', text: 'Go' } }),
       { type: 'ask', entry: { id: 'p', kind: 'permission', tool: 'Bash', summary: 'npm test' } },
@@ -108,7 +108,6 @@ describe('reduce', () => {
     expect(asked.status).toBe('waiting');
     const always = reduce(asked, { type: 'answer', id: 'p', answer: 'always' });
     expect(always.status).toBe('working');
-    expect(always.allowed).toEqual(['Bash']);
     expect(always.entries.at(-1)).toEqual({
       id: 'p',
       kind: 'permission',
@@ -116,7 +115,6 @@ describe('reduce', () => {
       summary: 'npm test',
       answer: 'always',
     });
-    expect(reduce(asked, { type: 'answer', id: 'p', answer: 'once' }).allowed).toEqual([]);
   });
 
   it('ends a turn; an interrupted one stops its running tools', () => {

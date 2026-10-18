@@ -54,7 +54,6 @@ import {
   addAgent,
   addParent,
   addToQueue,
-  answerQuestion,
   areLinked,
   autosize,
   canConnect,
@@ -67,7 +66,6 @@ import {
   groupMembers,
   groupSelection,
   moveInQueue,
-  pendingQuestions,
   removeFromQueue,
   renameNode,
   retarget,
@@ -957,9 +955,9 @@ function Editor({
     }
   };
 
-  // Each node shows its group's colour, and an agent with a question for the user (or one the run
-  // holds for the user, at an OK; or what its CLI asks in its terminal, such as whether to trust
-  // the folder as it starts) glows, through classes React Flow puts on it (GraphEditor.css).
+  // Each node shows its group's colour, and an agent waiting on the user (a prompt of its session,
+  // what the run holds for the user at an OK, or what its CLI asks in its terminal, such as whether
+  // to trust the folder as it starts) glows, through classes React Flow puts on it (GraphEditor.css).
   // Screen readers hear an agent's type with its label.
   const nodes = useMemo(() => {
     const colors = groupColors(displayNodes);
@@ -970,8 +968,7 @@ function Editor({
       const asking =
         status === 'waiting' ||
         (sessions[n.id]?.asking?.length ?? 0) > 0 ||
-        (run.running && run.agents[n.id]?.status === 'asking') ||
-        (n.data.questions?.some((q) => q.answer === undefined) ?? false);
+        (run.running && run.agents[n.id]?.status === 'asking');
       const classes = [
         ...(color === undefined ? [] : [`group-color-${String(color)}`]),
         ...(asking ? ['asking'] : []),
@@ -995,17 +992,15 @@ function Editor({
       ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
       : [];
   });
-  /** The questions agents wait on: asked on the canvas, and asked in their sessions. */
-  const pending: { agent: GraphNode; question: CardQuestion; asked?: AskedInSession }[] = [
-    ...pendingQuestions(graph.nodes),
-    ...graph.nodes.flatMap((agent) =>
+  /** The questions agents wait on, asked in their sessions. */
+  const pending: { agent: GraphNode; question: CardQuestion; asked: AskedInSession }[] =
+    graph.nodes.flatMap((agent) =>
       pendingSessionQuestions(sessions[agent.id] ?? NEW_SESSION).map((asked) => ({
         agent,
         question: asked.question,
         asked,
       })),
-    ),
-  ];
+    );
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow
@@ -1309,15 +1304,13 @@ function Editor({
                   const asked = pending.find(
                     (p) => p.agent.id === agentId && p.question.id === questionId,
                   );
-                  if (asked?.asked) {
+                  if (asked) {
                     sessionStore.answerQuestion(
                       agentId,
                       asked.asked.prompt,
                       asked.asked.index,
                       answer,
                     );
-                  } else {
-                    setGraph((g) => answerQuestion(g, agentId, questionId, answer));
                   }
                 }}
                 onOpen={(agentId) => {
@@ -1422,9 +1415,6 @@ function Editor({
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
             }}
-            onSettings={(cli, settings) => {
-              setRawGraph((g) => setSettings(g, openedNode.id, cli, settings));
-            }}
             onContinueInTerminal={(command) => {
               // Its terminal resumes the conversation (the connections share it), and runs the
               // command typed for it once the agent runs there.
@@ -1437,9 +1427,6 @@ function Editor({
                 );
               }
               setGraph((g) => setConnection(g, openedNode.id, 'terminal'));
-            }}
-            onAnswer={(questionId, answer) => {
-              setGraph((g) => answerQuestion(g, openedNode.id, questionId, answer));
             }}
             edits={edits}
             marks={marks}

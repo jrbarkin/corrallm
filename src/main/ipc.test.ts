@@ -696,24 +696,6 @@ describe('session:* handlers', () => {
   });
 });
 
-describe('link:open handler', () => {
-  it('passes the URL on, for main to check and ask about, for the renderer that sent it', async () => {
-    const sender = {};
-    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
-    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
-  });
-
-  it.each([
-    ['no URL', [], /Expected a link/],
-    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
-    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
-    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
-  ])('rejects %s', (_label, args, message) => {
-    expect(() => invoke('link:open', args)).toThrow(message);
-    expect(services.links.open).not.toHaveBeenCalled();
-  });
-});
-
 describe('terminal:* handlers', () => {
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = {};
@@ -772,24 +754,6 @@ describe('terminal:* handlers', () => {
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.links.open).not.toHaveBeenCalled();
     expect(services.reveal.reveal).not.toHaveBeenCalled();
-  });
-});
-
-describe('link:open handler', () => {
-  it('passes the URL on, for main to check and ask about, for the renderer that sent it', async () => {
-    const sender = {};
-    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
-    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
-  });
-
-  it.each([
-    ['no URL', [], /Expected a link/],
-    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
-    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
-    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
-  ])('rejects %s', (_label, args, message) => {
-    expect(() => invoke('link:open', args)).toThrow(message);
-    expect(services.links.open).not.toHaveBeenCalled();
   });
 });
 

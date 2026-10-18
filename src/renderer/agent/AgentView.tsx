@@ -2,9 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom';
 
 import type { ProjectFolder } from '../../shared/ipc';
-import { CONNECTION_CLI, TERMINAL_CONNECTIONS } from '../../shared/session';
+import { TERMINAL_CONNECTIONS } from '../../shared/session';
 import type {
-  AgentSettings,
   Cli,
   ElicitationAction,
   FormValue,
@@ -23,7 +22,6 @@ import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
 import { chooseTarget, findItem, isApproval, isWait } from '../graph/queue';
 import type { WaitTarget } from '../graph/queue';
-import { QuestionCard } from '../graph/Questions';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
 import type { RowMarks, StepChoice } from '../graph/QueueEditor';
 import type { HeldAsk } from '../run/asks';
@@ -41,7 +39,6 @@ import { QueueLinks } from './QueueLinks';
 import { Rail } from './Rail';
 import { ResumePicker } from './ResumePicker';
 import { Rewind } from './Rewind';
-import { SettingsMenu } from './Settings';
 import { AgentChip } from './AgentChip';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
@@ -83,7 +80,7 @@ export interface SessionControls extends ComposerControls {
 }
 
 /**
- * An agent opened up: its questions and queue (QueueEditor.tsx) beside its session, the way Claude
+ * An agent opened up: its queue (QueueEditor.tsx) beside its session, the way Claude
  * Code's desktop app shows one (the transcript, and a composer to write to the agent). It grows out
  * of the agent's card to fill the editor, over a blurred canvas, and shrinks back into it on Back,
  * Escape, or a click outside. Escape interrupts the agent first while it works.
@@ -97,8 +94,9 @@ export interface SessionControls extends ComposerControls {
  * agent shown next grows out of the ⊕, or out of its card, over the same backdrop.
  *
  * The agent chip sets its type and how it runs (`connection`): a real connection to the
- * CLI. Beside it, a Terminal agent's settings (Settings.tsx): the model, effort and mode its CLI
- * starts with (a structured session's composer sets them). A session connected through a
+ * CLI. Beside it, a summary of its settings opens the Agent settings sheet (AgentSettings.tsx): the
+ * model, effort and mode its CLI starts with (a structured session's composer sets them too). A
+ * session connected through a
  * structured interface (Claude's Agent SDK, Codex's app server)
  * shows in the same transcript and composer, fed by the main process (connected.ts); one in a
  * Terminal shows the CLI's own terminal instead (TerminalPane.tsx), where the user works with
@@ -136,10 +134,8 @@ export function AgentView({
   project,
   terminal,
   onAgent,
-  onSettings,
   onOpenSettings,
   onContinueInTerminal,
-  onAnswer,
   edits,
   marks,
   ask,
@@ -175,12 +171,10 @@ export function AgentView({
   terminal: TerminalBackend;
   /** Sets its type and how it runs. */
   onAgent: (agent: AgentType, connection: AgentConnection) => void;
-  /** Sets what it runs with in a CLI (its settings, saved with it). */
-  onSettings: (cli: Cli, settings: AgentSettings) => void;
-  onOpenSettings?: () => void;
+  /** Opens its Agent settings sheet (AgentSettings.tsx). */
+  onOpenSettings: () => void;
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
   onContinueInTerminal: (command?: string) => void;
-  onAnswer: (questionId: string, answer: string) => void;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (queues/marks.ts). */
@@ -478,27 +472,11 @@ export function AgentView({
               >
                 All queues
               </button>
-              {onOpenSettings ? (
-                <AgentSettingsSummary
-                  node={node}
-                  options={controls.settingsOptions}
-                  onOpen={onOpenSettings}
-                />
-              ) : connection === 'terminal' || connection === 'codex-terminal' ? (
-                <SettingsMenu
-                  cli={CONNECTION_CLI[connection]}
-                  connection={connection}
-                  agent={agent}
-                  settings={node.data.settings?.[CONNECTION_CLI[connection]] ?? {}}
-                  options={controls.settingsOptions}
-                  running={session.running}
-                  working={working}
-                  onChange={(settings) => {
-                    onSettings(CONNECTION_CLI[connection], settings);
-                  }}
-                  onRestart={controls.restart}
-                />
-              ) : null}
+              <AgentSettingsSummary
+                node={node}
+                options={controls.settingsOptions}
+                onOpen={onOpenSettings}
+              />
               <AgentChip
                 agent={agent}
                 connection={connection}
@@ -510,17 +488,6 @@ export function AgentView({
             </header>
             <div ref={body} className="agent-body">
               <aside className="agent-side" data-column="own" aria-label="Questions and queue">
-                <section className="graph-detail-questions" aria-label="Questions">
-                  {(node.data.questions ?? []).map((question) => (
-                    <QuestionCard
-                      key={question.id}
-                      question={question}
-                      onAnswer={(answer) => {
-                        onAnswer(question.id, answer);
-                      }}
-                    />
-                  ))}
-                </section>
                 <h2 className="agent-side-title">Queue</h2>
                 {firstMessage && (session.submissions?.length ?? 0) === 0 && (
                   <div
@@ -564,11 +531,9 @@ export function AgentView({
               {connection === 'unavailable' ? (
                 <section className="agent-session agent-unavailable" aria-label="Session">
                   <p className="agent-session-note">{sessionNote(agent, connection, project)}</p>
-                  {onOpenSettings && (
-                    <button type="button" onClick={onOpenSettings}>
-                      Choose a connected agent
-                    </button>
-                  )}
+                  <button type="button" onClick={onOpenSettings}>
+                    Choose a connected agent
+                  </button>
                 </section>
               ) : TERMINAL_CONNECTIONS.includes(connection) ? (
                 <TerminalPane

@@ -283,8 +283,6 @@ export interface Session {
   status: 'idle' | 'working' | 'waiting';
   /** Messages sent while it works, sent in order once it is idle. */
   queued: { id: string; text: string; images?: MessageImage[] }[];
-  /** Tools the user said to always allow: it no longer asks about them. */
-  allowed: string[];
   mode: Mode;
   /** The model picked for it; null for its agent's default. */
   model: string | null;
@@ -375,7 +373,6 @@ export const NEW_SESSION: Session = {
   entries: [],
   status: 'idle',
   queued: [],
-  allowed: [],
   mode: 'manual',
   model: null,
 };
@@ -502,21 +499,17 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'answer': {
       const asked = session.entries.find((e) => e.id === action.id);
       if (asked?.kind !== 'permission') return session;
-      const always = action.answer === 'always' && !session.allowed.includes(asked.tool);
-      return {
-        ...settled(
-          update(action.id, (entry) =>
-            entry.kind === 'permission'
-              ? {
-                  ...entry,
-                  answer: action.answer,
-                  ...(action.feedback === undefined ? {} : { feedback: action.feedback }),
-                }
-              : entry,
-          ),
+      return settled(
+        update(action.id, (entry) =>
+          entry.kind === 'permission'
+            ? {
+                ...entry,
+                answer: action.answer,
+                ...(action.feedback === undefined ? {} : { feedback: action.feedback }),
+              }
+            : entry,
         ),
-        allowed: always ? [...session.allowed, asked.tool] : session.allowed,
-      };
+      );
     }
     case 'answerQuestion':
       return settled(

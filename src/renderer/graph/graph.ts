@@ -19,7 +19,6 @@ import type {
   QueueItem,
   QueueMessage,
   QueueRepeat,
-  Question,
   QueueStep,
   Time,
   WaitTarget,
@@ -50,7 +49,6 @@ export type GraphNode = Node<
     /** Authored instructions shared by every CLI this agent runs. */
     role?: string;
     queue?: QueueItem[];
-    questions?: Question[];
     color?: number;
   },
   NodeKind
@@ -482,51 +480,6 @@ export function setExpect(
     else step.expect = expect;
     return step;
   });
-}
-
-/** Adds a question an agent asks the user. */
-export function askUser(graph: Graph, id: string, question: Question): Graph {
-  return updateQuestions(graph, id, (questions) => [...questions, question]);
-}
-
-/** Records the user's answer to an agent's question. */
-export function answerQuestion(
-  graph: Graph,
-  id: string,
-  questionId: string,
-  answer: string,
-): Graph {
-  return updateQuestions(graph, id, (questions) =>
-    questions.map((q) => (q.id === questionId ? { ...q, answer } : q)),
-  );
-}
-
-/** The questions agents are waiting on, in graph order: each with the agent that asked it. */
-export function pendingQuestions(
-  nodes: readonly GraphNode[],
-): { agent: GraphNode; question: Question }[] {
-  return nodes.flatMap((agent) =>
-    (agent.data.questions ?? [])
-      .filter((question) => question.answer === undefined)
-      .map((question) => ({ agent, question })),
-  );
-}
-
-function updateQuestions(
-  graph: Graph,
-  id: string,
-  update: (questions: Question[]) => Question[],
-): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (!node) return graph;
-  const before = node.data.questions ?? [];
-  const questions = update(before);
-  if (questions.length === before.length && questions.every((q, i) => q === before[i]))
-    return graph;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, questions } } : n)),
-  };
 }
 
 /** Sets what an if-then checks. */

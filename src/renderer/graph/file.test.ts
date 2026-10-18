@@ -36,7 +36,6 @@ const graph: Graph = {
         label: 'Coder',
         agent: 'Codex',
         queue,
-        questions: [{ id: 'q', text: 'Which branch?' }],
       },
       measured: { width: 150, height: 34 },
     },
@@ -75,7 +74,7 @@ const saved = {
 };
 
 describe('toFile', () => {
-  it('writes the canvas as readable JSON, leaving out selection, sizes and questions', () => {
+  it('writes the canvas as readable JSON, leaving out selection and sizes', () => {
     const text = toFile(graph);
     expect(JSON.parse(text)).toEqual(saved);
     expect(Object.keys(JSON.parse(text) as object)).toEqual([

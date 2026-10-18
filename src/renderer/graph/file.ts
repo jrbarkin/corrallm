@@ -32,7 +32,7 @@ import type {
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.
  * That is its agents and groups (where they are, what holds them, their queues) and the links
- * between agents. Selection, sizes (groups fit what they hold) and agents' questions are left out.
+ * between agents. Selection and sizes (groups fit what they hold) are left out.
  *
  *   { "format": "corrallm", "version": 1,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },

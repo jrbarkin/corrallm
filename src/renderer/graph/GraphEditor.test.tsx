@@ -1311,47 +1311,6 @@ describe('GraphEditor', () => {
     expect(panel.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
   });
 
-  it('lets agents ask questions: they glow, a sidebar lists them by agent, answering clears them', () => {
-    const question = { id: 'q1', text: 'Which branch?', options: ['main', 'dev'] };
-    const { node } = setup({
-      nodes: [
-        agentNode('a', 0, 0, { data: { label: 'Planner', agent: 'Codex', questions: [question] } }),
-        agentNode('b', 0, 100),
-      ],
-      edges: [],
-    });
-    const sidebar = () => screen.queryByRole('complementary', { name: 'Needs you' });
-    expect(node('a').classList.contains('asking')).toBe(true);
-    expect(node('b').classList.contains('asking')).toBe(false);
-    expect(node('a').querySelector('.graph-question-count')?.getAttribute('data-count')).toBe('1');
-    const list = within(sidebar() ?? document.body);
-    expect(list.getByRole('button', { name: 'Open Planner' })).toBeTruthy();
-    expect(list.getByText('Which branch?')).toBeTruthy();
-
-    fireEvent.click(list.getByRole('button', { name: 'dev' }));
-    expect(sidebar()).toBeNull();
-    expect(node('a').classList.contains('asking')).toBe(false);
-  });
-
-  it("answers an existing question in an agent's panel without generating a simulated question", () => {
-    const { node } = setup({
-      nodes: [
-        agentNode('a', 0, 0, {
-          data: { label: 'a', questions: [{ id: 'q', text: 'What should change?' }] },
-        }),
-      ],
-      edges: [],
-    });
-    fireEvent.doubleClick(node('a'));
-    const panel = within(screen.getByRole('dialog', { name: 'a' }));
-    expect(panel.queryByRole('button', { name: 'Simulate a question' })).toBeNull();
-    const reply = panel.getByRole('textbox', { name: 'Your answer' });
-    fireEvent.change(reply, { target: { value: 'Use the new API' } });
-    fireEvent.keyDown(reply, { key: 'Enter' });
-    expect(panel.getByText('You answered: Use the new API')).toBeTruthy();
-    expect(panel.queryByRole('textbox', { name: 'Your answer' })).toBeNull();
-  });
-
   it('opens only a double-clicked node that is part of a multi-selection', () => {
     const { node, nodes } = setup({
       nodes: [agentNode('a', 0, 0, { selected: true }), agentNode('b', 0, 100, { selected: true })],
