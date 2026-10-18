@@ -94,6 +94,8 @@ const TITLE = 120;
 const REASON = 1000;
 /** How a reply cut to the most a message holds is marked. */
 const CUT = '\n\n[corrallm: cut here; the whole reply is in its transcript]';
+/** How long after a delivering record couldn't be forced to disk delivery tries again. */
+const RECORD_RETRY = 1000;
 
 export class Delivery {
   readonly #deps: DeliveryDeps;
@@ -111,6 +113,11 @@ export class Delivery {
   readonly #stuck = new Map<string, Stuck>();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
+  /**
+   * While a delivering record couldn't be forced to disk: what tries again (RECORD_RETRY later).
+   * Nothing is delivered meanwhile.
+   */
+  #unrecordable: (() => void) | undefined;
   #scheduled = false;
   #closed = false;
   readonly #stop: (() => void)[];
@@ -148,6 +155,8 @@ export class Delivery {
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
+    this.#unrecordable?.();
+    this.#unrecordable = undefined;
     for (const message of this.#deps.store.all()) {
       if (this.#inFlight(message)) this.#cutOff(message);
     }
@@ -350,7 +359,7 @@ export class Delivery {
           );
         }
       }
-      if (next === undefined) continue;
+      if (next === undefined || this.#unrecordable) continue;
       if (next.from !== 'you') this.#warnUsage(node);
       this.#deliver(node, next);
     }
@@ -426,7 +435,10 @@ export class Delivery {
 
   /**
    * Delivers a message: journaled as delivering, with the id it will be sent under, forced to disk,
-   * then sent to its agent's session.
+   * then sent to its agent's session. If that record can't reach the disk, it was never sent, and
+   * its pending record is there: it waits again, first in line, and nothing is delivered on the
+   * canvas until delivery tries again, RECORD_RETRY later, so a passing disk error costs a delay,
+   * never the messages.
    */
   #deliver(node: AgentNode, message: Message): void {
     const as = randomUUID();
@@ -446,16 +458,13 @@ export class Delivery {
       },
       (error: unknown) => {
         this.#writing.delete(node.id);
-        const now = this.#deps.store.get(message.id);
-        if (now?.state !== 'delivering') return;
-        const turn = unrecorded(error);
-        this.#deps.store.update(message.id, { state: 'unresolved', turn });
-        this.#notice(
-          message,
-          `Your message to ${this.#name(node.id)} wasn’t sent: corrallm couldn’t record it (${turn.message}).`,
-          turn,
-        );
-        this.schedule();
+        if (this.#closed || this.#deps.store.get(message.id)?.state !== 'delivering') return;
+        console.error('Could not record a message as delivering:', error);
+        this.#deps.store.update(message.id, { state: 'pending' });
+        this.#unrecordable ??= this.#deps.later(() => {
+          this.#unrecordable = undefined;
+          this.schedule();
+        }, RECORD_RETRY);
       },
     );
   }

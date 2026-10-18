@@ -228,6 +228,42 @@ it('delivers the next message once one taken back while it was journaled is with
   ]);
 });
 
+it('keeps waiting what it couldn’t record as delivering, and sends it once its disk works again', async () => {
+  const codex = new FakeConnector({ adapter: 'codex' });
+  const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
+  await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+  const first = await ok<{ id: string }>('message', { to: 'builder', body: 'First' });
+  const other: OutsideCaller = { ...OUTSIDE, token: 'other-token', name: 'other' };
+  const second = await ok<{ id: string }>('message', { to: 'builder', body: 'Second' }, other);
+  // Its pending record is on disk; its delivering one can't be forced there.
+  gate.fails = true;
+  await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(messages?.get(first.id)?.delivery?.attempt).toBe(1);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Never sent, it waits again, first in line, and so does what is behind it: no one is told.
+  expect([first.id, second.id].map((id) => messages?.get(id)?.state)).toEqual([
+    'pending',
+    'pending',
+  ]);
+  expect(messages?.all().filter(({ body }) => body.includes('wasn’t sent'))).toEqual([]);
+  expect(codex.sessions.flatMap((session) => session.sent)).toEqual([]);
+
+  gate.fails = false;
+  await vi.waitFor(
+    () => {
+      expect(messages?.get(second.id)?.state).toBe('replied');
+    },
+    { timeout: 3000 },
+  );
+  expect(messages?.get(first.id)).toMatchObject({ state: 'replied', delivery: { attempt: 2 } });
+  expect(codex.sessions.flatMap((session) => session.sent.map(({ text }) => text))).toEqual([
+    expect.stringMatching(/First$/) as string,
+    expect.stringMatching(/Second$/) as string,
+  ]);
+});
+
 it('refuses a message whose record can’t be forced to disk, and never sends it', async () => {
   const codex = new FakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
