@@ -5,7 +5,7 @@
   "private": true,
   "description": "Desktop orchestrator for coding-agent CLIs",
   "author": "jrbarkin <jrbarkin1@gmail.com>",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "main": ".vite/build/main.cjs",
   "packageManager": "pnpm@12.11.2",
