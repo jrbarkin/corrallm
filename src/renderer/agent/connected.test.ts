@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Connection, SessionEvent } from '../../shared/session';
+import type { ConnectionId } from '../../shared/adapter';
+import type { SessionEvent } from '../../shared/session';
 import { fakeBackend } from '../test-backend';
 import { rewindPoints } from './session';
 import type { Refusal } from './session';
@@ -10,7 +11,7 @@ import { SessionStore } from './sessions';
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** A store with agent `a` connected through the Agent SDK, and the backend it talks to. */
-function connected(connection: Connection = 'sdk') {
+function connected(connection: ConnectionId = 'claude-code.sdk') {
   const fake = fakeBackend();
   const store = new SessionStore(fake.backend);
   store.sync([{ id: 'a', connection }]);
@@ -27,12 +28,16 @@ describe('a connected session', () => {
     store.open('a');
     expect(backend.start).toHaveBeenCalledOnce();
     // Nothing set: the user's own defaults.
-    expect(backend.start).toHaveBeenCalledWith('a', { connection: 'sdk', model: null, mode: null });
+    expect(backend.start).toHaveBeenCalledWith('a', {
+      connection: 'claude-code.sdk',
+      model: null,
+      mode: null,
+    });
     const models = [
       { value: 'opus', label: 'Opus' },
       { value: 'haiku', label: 'Haiku' },
     ];
-    emit('a', 'sdk', { type: 'started', model: 'opus', mode: 'acceptEdits', models });
+    emit('a', 'claude-code.sdk', { type: 'started', model: 'opus', mode: 'acceptEdits', models });
     expect(store.of('a')).toMatchObject({ models, model: 'opus', mode: 'acceptEdits' });
     await settle();
   });
@@ -42,9 +47,9 @@ describe('a connected session', () => {
     store.sync([
       {
         id: 'a',
-        connection: 'sdk',
+        connection: 'claude-code.sdk',
         settings: {
-          claude: { model: 'haiku', effort: 'low', mode: 'plan' },
+          'claude-code': { model: 'haiku', effort: 'low', mode: 'plan' },
           codex: { model: 'gpt-6-luna', mode: 'read-only' },
         },
       },
@@ -53,7 +58,7 @@ describe('a connected session', () => {
     store.setModel('a', 'Opus 5.5');
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: 'haiku',
       mode: 'plan',
       effort: 'low',
@@ -66,13 +71,13 @@ describe('a connected session', () => {
     store.sync([
       {
         id: 'a',
-        connection: 'app-server',
+        connection: 'codex.app-server',
         settings: { codex: { model: 'gpt-6-luna', mode: 'read-only' } },
       },
     ]);
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: 'gpt-6-luna',
       mode: 'read-only',
     });
@@ -81,11 +86,28 @@ describe('a connected session', () => {
 
   it('restarts its session with what it is set to now, resuming its conversation', async () => {
     const { store, backend, emit } = connected();
-    store.sync([{ id: 'a', connection: 'terminal', settings: { claude: { model: 'haiku' } } }]);
+    store.sync([
+      {
+        id: 'a',
+        connection: 'claude-code.terminal',
+        settings: { 'claude-code': { model: 'haiku' } },
+      },
+    ]);
     store.open('a');
     await settle();
-    emit('a', 'terminal', { type: 'started', model: 'haiku', mode: 'manual', models: [] });
-    store.sync([{ id: 'a', connection: 'terminal', settings: { claude: { model: 'sonnet' } } }]);
+    emit('a', 'claude-code.terminal', {
+      type: 'started',
+      model: 'haiku',
+      mode: 'manual',
+      models: [],
+    });
+    store.sync([
+      {
+        id: 'a',
+        connection: 'claude-code.terminal',
+        settings: { 'claude-code': { model: 'sonnet' } },
+      },
+    ]);
     // Settings changed: the session runs on as it started, until restarted.
     expect(backend.start).toHaveBeenCalledOnce();
     expect(store.of('a').running).toEqual({ model: 'haiku' });
@@ -97,28 +119,28 @@ describe('a connected session', () => {
       backend.start.mock.invocationCallOrder[1] ?? 0,
     );
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: 'sonnet',
       mode: null,
     });
     expect(store.of('a').running).toEqual({ model: 'sonnet' });
     // A session that stopped by itself runs with nothing.
-    emit('a', 'terminal', { type: 'closed' });
+    emit('a', 'claude-code.terminal', { type: 'closed' });
     expect(store.of('a').running).toBeUndefined();
   });
 
   it('warns when it can’t hear the session’s replies, until a session that can starts', async () => {
     const { store, emit } = connected();
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.open('a');
     const text =
       'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json).';
-    emit('a', 'terminal', { type: 'started', model: null, mode: 'manual', models: [] });
-    emit('a', 'terminal', { type: 'unheard', text });
+    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', { type: 'unheard', text });
     expect(store.of('a').unheard).toBe(text);
     expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'notice', level: 'warning', text });
     // Started again, with the hooks back on: nothing more to say.
-    emit('a', 'terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
     expect(store.of('a').unheard).toBeUndefined();
     await settle();
   });
@@ -126,7 +148,7 @@ describe('a connected session', () => {
   it('sends a message, streams the reply into the transcript, and hears when the turn ends', async () => {
     const { store, backend, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
-    store.send('a', 'Claude', 'Fix the bug', done);
+    store.send('a', 'claude-code', 'Fix the bug', done);
     expect(store.of('a').status).toBe('working');
     await settle();
     const id = sent();
@@ -134,7 +156,7 @@ describe('a connected session', () => {
 
     emit(
       'a',
-      'sdk',
+      'claude-code.sdk',
       { type: 'user', id, text: 'Fix the bug' },
       { type: 'thinking', id: 't', text: 'Look at ' },
       { type: 'thinking', id: 't', text: 'the code.' },
@@ -155,7 +177,7 @@ describe('a connected session', () => {
       { type: 'usage', usage: { costUsd: 0.02, contextTokens: 5000, contextWindow: 200_000 } },
     );
     expect(done).not.toHaveBeenCalled();
-    emit('a', 'sdk', end([id]));
+    emit('a', 'claude-code.sdk', end([id]));
 
     const { entries, status, usage } = store.of('a');
     expect(status).toBe('idle');
@@ -185,12 +207,12 @@ describe('a connected session', () => {
   it('tells whoever sent a message what the agent replied in its turn, not its subagents', async () => {
     const { store, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean, reply: string) => void>();
-    store.send('a', 'Claude', 'Is it fixed?', done);
+    store.send('a', 'claude-code', 'Is it fixed?', done);
     await settle();
     const id = sent();
     emit(
       'a',
-      'sdk',
+      'claude-code.sdk',
       { type: 'user', id, text: 'Is it fixed?' },
       { type: 'text', id: 'x', text: 'Let me run the tests.' },
       { type: 'tool', id: 'agent-1', tool: 'Agent', summary: 'Run them', status: 'running' },
@@ -198,8 +220,8 @@ describe('a connected session', () => {
       { type: 'text', id: 'y', text: 'Yes: all 12 pass.' },
     );
     // A message typed while it worked waits for the turn after.
-    store.send('a', 'Claude', 'Thanks');
-    emit('a', 'sdk', end([id]));
+    store.send('a', 'claude-code', 'Thanks');
+    emit('a', 'claude-code.sdk', end([id]));
     expect(done).toHaveBeenCalledWith(false, 'Let me run the tests.\n\nYes: all 12 pass.', {
       status: 'completed',
       reason: 'completed',
@@ -211,9 +233,9 @@ describe('a connected session', () => {
     const first = vi.fn<(interrupted: boolean, reply: string) => void>();
     const second = vi.fn<(interrupted: boolean, reply: string) => void>();
     const third = vi.fn<(interrupted: boolean, reply: string) => void>();
-    const takeFirst = store.send('a', 'Claude', 'First', first);
-    const takeSecond = store.send('a', 'Claude', 'Second', second);
-    const takeThird = store.send('a', 'Claude', 'Third', third);
+    const takeFirst = store.send('a', 'claude-code', 'First', first);
+    const takeSecond = store.send('a', 'claude-code', 'Second', second);
+    const takeThird = store.send('a', 'claude-code', 'Third', third);
     await settle();
     takeThird();
     expect(store.of('a').queued.map((q) => q.text)).toEqual(['Second']);
@@ -221,7 +243,7 @@ describe('a connected session', () => {
     expect(backend.interrupt).not.toHaveBeenCalled();
 
     // Once its turn has ended, there is nothing to take back.
-    emit('a', 'sdk', end([sent()]));
+    emit('a', 'claude-code.sdk', end([sent()]));
     takeFirst();
     await settle();
     expect(backend.interrupt).not.toHaveBeenCalled();
@@ -230,19 +252,19 @@ describe('a connected session', () => {
     takeSecond();
     await settle();
     expect(backend.interrupt).toHaveBeenCalledWith('a');
-    emit('a', 'sdk', end([sent()], { interrupted: true }));
+    emit('a', 'claude-code.sdk', end([sent()], { interrupted: true }));
     expect(first).toHaveBeenCalledWith(false, '', { status: 'completed', reason: 'completed' });
     expect(second).toHaveBeenCalledWith(true, '', { status: 'cancelled', reason: 'interrupted' });
   });
 
   it('queues messages sent while it works, and sends each once the turn before has ended', async () => {
     const { store, backend, emit, sent } = connected();
-    store.send('a', 'Claude', 'First');
-    store.send('a', 'Claude', 'Second');
+    store.send('a', 'claude-code', 'First');
+    store.send('a', 'claude-code', 'Second');
     await settle();
     expect(backend.send).toHaveBeenCalledTimes(1);
     expect(store.of('a').queued.map((q) => q.text)).toEqual(['Second']);
-    emit('a', 'sdk', end([sent()]));
+    emit('a', 'claude-code.sdk', end([sent()]));
     await settle();
     expect(backend.send).toHaveBeenCalledTimes(2);
     expect(backend.send.mock.calls[1]?.[1].text).toBe('Second');
@@ -251,7 +273,7 @@ describe('a connected session', () => {
   it('shows a message typed in its terminal, and a turn it started by itself', () => {
     const { store, emit } = connected();
     store.open('a');
-    emit('a', 'sdk', { type: 'user', id: 'typed', text: 'Hello from the terminal' });
+    emit('a', 'claude-code.sdk', { type: 'user', id: 'typed', text: 'Hello from the terminal' });
     expect(store.of('a').status).toBe('working');
     expect(store.of('a').entries[0]).toEqual({
       id: 'typed',
@@ -259,18 +281,18 @@ describe('a connected session', () => {
       text: 'Hello from the terminal',
       reached: true,
       // Of Claude Code's conversation, whichever of its connections the agent runs.
-      conversation: 'claude',
+      conversation: 'claude-code',
     });
-    emit('a', 'sdk', end(['typed']));
-    emit('a', 'sdk', { type: 'status', status: 'working' });
+    emit('a', 'claude-code.sdk', end(['typed']));
+    emit('a', 'claude-code.sdk', { type: 'status', status: 'working' });
     expect(store.of('a').status).toBe('working');
   });
 
   it('asks permission, and passes the user’s answer on', async () => {
     const { store, backend, emit } = connected();
-    store.send('a', 'Claude', 'Go');
+    store.send('a', 'claude-code', 'Go');
     await settle();
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'permission',
       id: 'p',
       tool: 'Bash',
@@ -286,10 +308,10 @@ describe('a connected session', () => {
 
   it('asks questions, answering once each one has an answer', async () => {
     const { store, backend, emit } = connected();
-    store.send('a', 'Claude', 'Go');
+    store.send('a', 'claude-code', 'Go');
     await settle();
     const option = (label: string) => ({ label, description: '' });
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'question',
       id: 'q',
       questions: [
@@ -311,9 +333,9 @@ describe('a connected session', () => {
 
   it('asks to approve a plan', async () => {
     const { store, backend, emit } = connected();
-    store.send('a', 'Claude', 'Plan it');
+    store.send('a', 'claude-code', 'Plan it');
     await settle();
-    emit('a', 'sdk', { type: 'plan', id: 'plan', plan: '1. Read\n2. Change' });
+    emit('a', 'claude-code.sdk', { type: 'plan', id: 'plan', plan: '1. Read\n2. Change' });
     store.answerPlan('a', 'plan', { approve: false, feedback: 'Add tests' });
     expect(store.of('a').entries.at(-1)).toMatchObject({
       kind: 'plan',
@@ -338,7 +360,7 @@ describe('a connected session', () => {
         };
       }),
     );
-    store.send('a', 'Claude', 'Never mind', done);
+    store.send('a', 'claude-code', 'Never mind', done);
     store.stop('a');
     expect(done).toHaveBeenCalledWith(true, '', expect.objectContaining({ status: 'cancelled' }));
     expect(store.of('a').status).toBe('idle');
@@ -346,12 +368,12 @@ describe('a connected session', () => {
     await settle();
     expect(backend.send).not.toHaveBeenCalled();
 
-    store.send('a', 'Claude', 'Go');
+    store.send('a', 'claude-code', 'Go');
     await settle();
     store.stop('a');
     await settle();
     expect(backend.interrupt).toHaveBeenCalledWith('a');
-    emit('a', 'sdk', end([sent()], { interrupted: true }));
+    emit('a', 'claude-code.sdk', end([sent()], { interrupted: true }));
     expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'end', interrupted: true });
   });
 
@@ -374,7 +396,7 @@ describe('a connected session', () => {
       ),
     );
     const done = vi.fn<(interrupted: boolean) => void>();
-    store.send('a', 'Claude', 'Go', done);
+    store.send('a', 'claude-code', 'Go', done);
     await settle();
     expect(done).toHaveBeenCalledWith(
       true,
@@ -409,9 +431,9 @@ describe('a connected session', () => {
   it('ends its turn when main says the session stopped, and starts it again for the next message', async () => {
     const { store, backend, emit } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
-    store.send('a', 'Claude', 'Go', done);
+    store.send('a', 'claude-code', 'Go', done);
     await settle();
-    emit('a', 'sdk', { type: 'closed', error: 'Claude Code exited (code 1)' });
+    emit('a', 'claude-code.sdk', { type: 'closed', error: 'Claude Code exited (code 1)' });
     expect(done).toHaveBeenCalledWith(true, '', {
       status: 'failed',
       reason: 'connection-closed',
@@ -421,17 +443,17 @@ describe('a connected session', () => {
       { kind: 'notice', level: 'error', text: 'Claude Code exited (code 1)' },
       { kind: 'end', failed: true },
     ]);
-    store.send('a', 'Claude', 'Again');
+    store.send('a', 'claude-code', 'Again');
     await settle();
     expect(backend.start).toHaveBeenCalledTimes(2);
   });
 
   it('hears only its own connection: another one’s late words are dropped', async () => {
     const { store, emit } = connected();
-    store.send('a', 'Claude', 'Go');
+    store.send('a', 'claude-code', 'Go');
     await settle();
-    emit('a', 'terminal', { type: 'text', id: 'x', text: 'From the old terminal' });
-    emit('b', 'sdk', { type: 'text', id: 'y', text: 'For another agent' });
+    emit('a', 'claude-code.terminal', { type: 'text', id: 'x', text: 'From the old terminal' });
+    emit('b', 'claude-code.sdk', { type: 'text', id: 'y', text: 'For another agent' });
     expect(store.of('a').entries.map((e) => e.kind)).toEqual(['user']);
     expect(store.of('b').entries).toEqual([]);
   });
@@ -439,7 +461,7 @@ describe('a connected session', () => {
   it('keeps what a Terminal session asks in its terminal, until it goes on or its CLI is gone', async () => {
     const fake = fakeBackend();
     const store = new SessionStore(fake.backend);
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.open('a');
     await settle();
     const permission = {
@@ -448,28 +470,31 @@ describe('a connected session', () => {
       tool: 'Bash',
       summary: 'npm test',
     } as const;
-    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
+    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
     expect(store.of('a').asking).toEqual([permission]);
     // Answered in the terminal.
-    fake.emit('a', 'terminal', { type: 'asking', asks: [] });
+    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [] });
     expect(store.of('a').asking).toBeUndefined();
 
-    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
-    fake.emit('a', 'terminal', { type: 'closed', error: 'Claude Code exited with code 1.' });
+    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
+    fake.emit('a', 'claude-code.terminal', {
+      type: 'closed',
+      error: 'Claude Code exited with code 1.',
+    });
     expect(store.of('a').asking).toBeUndefined();
     store.open('a');
     await settle();
-    fake.emit('a', 'terminal', { type: 'asking', asks: [permission] });
+    fake.emit('a', 'claude-code.terminal', { type: 'asking', asks: [permission] });
     // The agent runs another way: its terminal is gone, and what it asked.
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     expect(store.of('a').asking).toBeUndefined();
   });
 
   it('closes when its agent runs another way, or is gone', async () => {
     const { store, backend, listening } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
-    store.send('a', 'Claude', 'Go', done);
-    store.send('a', 'Claude', 'Then this');
+    store.send('a', 'claude-code', 'Go', done);
+    store.send('a', 'claude-code', 'Then this');
     await settle();
     store.sync([{ id: 'a', connection: 'unavailable' }]);
     expect(backend.close).toHaveBeenCalledWith('a');
@@ -486,7 +511,7 @@ describe('a connected session', () => {
         .map((e) => e.text),
     ).toEqual(['Go']);
 
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.open('a');
     await settle();
     expect(backend.send).toHaveBeenCalledTimes(2);
@@ -501,8 +526,8 @@ describe('a connected session', () => {
 describe('a connected session without the app', () => {
   it('says it needs the app', async () => {
     const store = new SessionStore();
-    store.sync([{ id: 'a', connection: 'terminal' }]);
-    store.send('a', 'Claude', 'Go');
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    store.send('a', 'claude-code', 'Go');
     await settle();
     expect(store.of('a').entries[1]).toMatchObject({
       kind: 'notice',
@@ -524,9 +549,9 @@ describe('a connected session, resumed or completed', () => {
     const { store, emit, backend } = connected();
     const done = vi.fn<(interrupted: boolean) => void>();
     // A message sent from the queues' run before the view opened: the session resumes for it.
-    store.send('a', 'Claude', 'Go on', done);
+    store.send('a', 'claude-code', 'Go on', done);
     await settle();
-    emit('a', 'sdk', { type: 'history', events: past });
+    emit('a', 'claude-code.sdk', { type: 'history', events: past });
     expect(store.of('a').entries.map((e) => e.kind)).toEqual([
       'user',
       'text',
@@ -544,8 +569,8 @@ describe('a connected session, resumed or completed', () => {
   it('does not show history again that the transcript already shows', () => {
     const { store, emit } = connected();
     store.open('a');
-    emit('a', 'sdk', { type: 'history', events: past });
-    emit('a', 'sdk', { type: 'closed' }, { type: 'history', events: past });
+    emit('a', 'claude-code.sdk', { type: 'history', events: past });
+    emit('a', 'claude-code.sdk', { type: 'closed' }, { type: 'history', events: past });
     expect(store.of('a').entries.filter((e) => e.kind === 'user')).toHaveLength(1);
   });
 
@@ -553,16 +578,16 @@ describe('a connected session, resumed or completed', () => {
     const { store, emit } = connected();
     store.open('a');
     const compact = { name: 'compact', description: 'Summarize', argumentHint: '<instructions>' };
-    emit('a', 'sdk', { type: 'commands', commands: [compact] });
+    emit('a', 'claude-code.sdk', { type: 'commands', commands: [compact] });
     expect(store.of('a').commands).toEqual([compact]);
-    emit('a', 'sdk', { type: 'commands', commands: [] });
+    emit('a', 'claude-code.sdk', { type: 'commands', commands: [] });
     expect(store.of('a').commands).toEqual([]);
   });
 
   it('sends pasted images with the message, queued or not', async () => {
     const { store, backend, sent } = connected();
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
-    store.send('a', 'Claude', 'What is this?', undefined, [image]);
+    store.send('a', 'claude-code', 'What is this?', undefined, [image]);
     await settle();
     expect(backend.send).toHaveBeenCalledWith('a', {
       id: sent(),
@@ -570,7 +595,7 @@ describe('a connected session, resumed or completed', () => {
       images: [image],
     });
     expect(store.of('a').entries[0]).toMatchObject({ kind: 'user', images: [image] });
-    store.send('a', 'Claude', '', undefined, [image]);
+    store.send('a', 'claude-code', '', undefined, [image]);
     expect(store.of('a').queued).toEqual([
       { id: expect.any(String) as unknown, text: '', images: [image] },
     ]);
@@ -579,7 +604,7 @@ describe('a connected session, resumed or completed', () => {
   it('shows a permission prompt as the CLI words it', () => {
     const { store, emit } = connected();
     store.open('a');
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'permission',
       id: 'p',
       tool: 'WebFetch',
@@ -605,25 +630,25 @@ describe('a connected session continued in Terminal', () => {
   it('sends a command typed for Terminal once the agent runs there, never to its SDK session', async () => {
     const { store, backend, emit } = connected();
     store.open('a');
-    emit('a', 'sdk', { type: 'started', model: null, mode: 'manual', models: [] });
-    store.sendOnceIn('a', 'terminal', 'Claude', '/permissions');
+    emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    store.sendOnceIn('a', 'claude-code.terminal', 'Claude', '/permissions');
     await settle();
     expect(backend.send).not.toHaveBeenCalled();
 
     // The canvas switches it: its Agent SDK session closes, and its terminal gets the command.
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     await settle();
     expect(backend.close).toHaveBeenCalledWith('a');
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'terminal' }),
+      expect.objectContaining({ connection: 'claude-code.terminal' }),
     );
     expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
       text: '/permissions',
     });
     // Once.
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     await settle();
     expect(backend.send).toHaveBeenCalledOnce();
   });
@@ -641,10 +666,10 @@ describe('a connected session opened on another conversation (/resume)', () => {
   it('lets its session go, empties the transcript, and starts again on that conversation', async () => {
     const { store, backend, emit, sent } = connected();
     store.setMode('a', 'plan');
-    store.send('a', 'Claude', 'Old question');
+    store.send('a', 'claude-code', 'Old question');
     await settle();
-    emit('a', 'sdk', { type: 'user', id: sent(), text: 'Old question' });
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', { type: 'user', id: sent(), text: 'Old question' });
+    emit('a', 'claude-code.sdk', {
       type: 'usage',
       usage: { costUsd: 1, contextTokens: 10, contextWindow: 100 },
     });
@@ -656,7 +681,7 @@ describe('a connected session opened on another conversation (/resume)', () => {
     expect(store.of('a').usage).toBeUndefined();
     expect(backend.start).toHaveBeenCalledTimes(2);
     // Its history fills the transcript.
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'history',
       events: [
         { type: 'user', id: 'k1-u', text: 'Earlier' },
@@ -670,7 +695,7 @@ describe('a connected session opened on another conversation (/resume)', () => {
   it('keeps its session and transcript when main will not open that conversation', async () => {
     const { store, backend, emit } = connected();
     store.open('a');
-    emit('a', 'sdk', { type: 'notice', id: 'n', level: 'info', text: 'Still here' });
+    emit('a', 'claude-code.sdk', { type: 'notice', id: 'n', level: 'info', text: 'Still here' });
     backend.resume.mockRejectedValueOnce(new Error('Not listed'));
     await expect(store.resume('a', 'elsewhere')).rejects.toThrow('Not listed');
     expect(backend.close).not.toHaveBeenCalled();
@@ -692,11 +717,11 @@ describe('a connected session’s MCP servers', () => {
 
   it('asks what a server asks for, waiting on the user, and passes the answer on', async () => {
     const { store, backend, emit, sent } = connected();
-    store.send('a', 'Claude', 'File an issue');
+    store.send('a', 'claude-code', 'File an issue');
     await settle();
     emit(
       'a',
-      'sdk',
+      'claude-code.sdk',
       { type: 'user', id: sent(), text: 'File an issue' },
       {
         type: 'elicitation',
@@ -726,23 +751,23 @@ describe('a connected session that would not start', () => {
     'API key or a cloud provider.';
   const connections = [
     {
-      connection: 'sdk' as const,
-      switchTo: 'terminal' as const,
-      agent: 'Claude' as const,
+      connection: 'claude-code.sdk' as const,
+      switchTo: 'claude-code.terminal' as const,
+      adapter: 'claude-code' as const,
       reason: why,
     },
     {
-      connection: 'app-server' as const,
-      switchTo: 'codex-terminal' as const,
-      agent: 'Codex' as const,
+      connection: 'codex.app-server' as const,
+      switchTo: 'codex.terminal' as const,
+      adapter: 'codex' as const,
       reason: "Codex isn't logged in. Switch this agent to Codex · Terminal and log in there.",
     },
   ];
 
   /** A store whose agent `a` main refuses to start, offering its CLI's Terminal connection. */
   function refused(
-    connection: Connection = 'sdk',
-    switchTo: Connection = 'terminal',
+    connection: ConnectionId = 'claude-code.sdk',
+    switchTo: ConnectionId = 'claude-code.terminal',
     reason = why,
   ) {
     const fake = connected(connection);
@@ -764,7 +789,7 @@ describe('a connected session that would not start', () => {
 
   it.each(connections)(
     'keeps the $connection message, queued, says why once, and tells whoever sent it',
-    async ({ connection, switchTo, agent, reason }) => {
+    async ({ connection, switchTo, adapter: agent, reason }) => {
       const { store, backend } = refused(connection, switchTo, reason);
       const done = vi.fn<(interrupted: boolean, reply: string) => void>();
       const held = vi.fn<(refusal: Refusal) => void>();
@@ -798,7 +823,7 @@ describe('a connected session that would not start', () => {
 
   it.each(connections)(
     'sends what $connection kept once the agent runs in $switchTo, and whoever sent it hears the turn end',
-    async ({ connection, switchTo, agent, reason }) => {
+    async ({ connection, switchTo, adapter: agent, reason }) => {
       const { store, backend, emit } = refused(connection, switchTo, reason);
       const done = vi.fn<(interrupted: boolean, reply: string) => void>();
       store.send('a', agent, 'Fix the bug', done);
@@ -833,7 +858,7 @@ describe('a connected session that would not start', () => {
   it('takes a kept message back off the queue', async () => {
     const { store } = refused();
     const done = vi.fn<(interrupted: boolean, reply: string) => void>();
-    const takeBack = store.send('a', 'Claude', 'Fix the bug', done);
+    const takeBack = store.send('a', 'claude-code', 'Fix the bug', done);
     await settle();
     takeBack();
     expect(store.of('a').queued).toEqual([]);
@@ -845,11 +870,16 @@ describe('a connected session that would not start', () => {
 
   it('marks the messages the CLI has, which a rewind can go back to', async () => {
     const { store, emit, sent } = connected();
-    store.send('a', 'Claude', 'Edit the notes');
+    store.send('a', 'claude-code', 'Edit the notes');
     await settle();
     // Not yet: main has not said it went to the CLI.
     expect(rewindPoints(store.of('a').entries)).toEqual([]);
-    emit('a', 'sdk', { type: 'user', id: sent(), text: 'Edit the notes' }, end([sent()]));
+    emit(
+      'a',
+      'claude-code.sdk',
+      { type: 'user', id: sent(), text: 'Edit the notes' },
+      end([sent()]),
+    );
     expect(rewindPoints(store.of('a').entries)).toEqual([{ id: sent(), text: 'Edit the notes' }]);
   });
 });
@@ -858,10 +888,10 @@ describe('a connected session rewound', () => {
   /** A store whose agent `a` has had a turn: "Edit the notes". */
   async function talked() {
     const fake = connected();
-    fake.store.send('a', 'Claude', 'Edit the notes');
+    fake.store.send('a', 'claude-code', 'Edit the notes');
     await settle();
     const id = fake.sent();
-    fake.emit('a', 'sdk', { type: 'user', id, text: 'Edit the notes' }, end([id]));
+    fake.emit('a', 'claude-code.sdk', { type: 'user', id, text: 'Edit the notes' }, end([id]));
     return { ...fake, id };
   }
 

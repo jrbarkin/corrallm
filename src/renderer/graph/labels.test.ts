@@ -130,10 +130,10 @@ describe('repeats in words', () => {
 
 describe('ifText', () => {
   it('reads a usage condition with its backend, share and window', () => {
-    expect(ifText({ kind: 'usageAbove', backend: 'Claude', window: 'fiveHour', percent: 80 })).toBe(
-      'Claude’s usage is over 80% (5-hour)',
-    );
-    expect(ifText({ kind: 'usageAbove', backend: 'Codex', window: 'weekly', percent: 95 })).toBe(
+    expect(
+      ifText({ kind: 'usageAbove', backend: 'claude-code', window: 'fiveHour', percent: 80 }),
+    ).toBe('Claude’s usage is over 80% (5-hour)');
+    expect(ifText({ kind: 'usageAbove', backend: 'codex', window: 'weekly', percent: 95 })).toBe(
       'Codex’s usage is over 95% (weekly)',
     );
   });

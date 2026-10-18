@@ -272,7 +272,7 @@ describe('SdkConnector', () => {
         id: expect.any(String) as unknown,
         level: 'error',
         text: SUBSCRIPTION_LOGIN,
-        switchTo: 'terminal',
+        switchTo: 'claude-code.terminal',
       },
     ]);
     expect(SUBSCRIPTION_LOGIN).toMatch(/Anthropic doesn't allow other products/);
@@ -286,7 +286,9 @@ describe('SdkConnector', () => {
       /couldn't check how Claude Code is logged in \(error: unknown command auth\)/,
     );
     expect(queries).toEqual([]);
-    expect(events).toMatchObject([{ type: 'notice', level: 'error', switchTo: 'terminal' }]);
+    expect(events).toMatchObject([
+      { type: 'notice', level: 'error', switchTo: 'claude-code.terminal' },
+    ]);
   });
 
   it('says it started, with the models and slash commands the CLI offers', async () => {

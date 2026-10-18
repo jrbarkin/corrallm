@@ -1,6 +1,7 @@
+import type { AdapterId } from '../../shared/adapter';
 import { parseRole } from '../../shared/role';
-import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
-import type { AgentConnection, AgentType } from './agents';
+import { connectionsOf, DEFAULT_AGENT, translateActions } from './agents';
+import type { AgentConnection } from './agents';
 import type { Graph } from './graph';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
 import type { Condition, QueueItem, RepeatedItem, Until } from './queue';
@@ -95,19 +96,19 @@ export function fillTemplate(graph: Graph, values: Readonly<Record<string, strin
  */
 export function withAgents(
   graph: Graph,
-  types: Readonly<Record<string, AgentType | undefined>>,
+  types: Readonly<Record<string, AdapterId | undefined>>,
 ): Graph {
   return {
     ...graph,
     nodes: graph.nodes.map((node) => {
       if (node.type !== 'agent' || !(node.id in types)) return node;
-      const was = node.data.agent ?? DEFAULT_AGENT;
+      const was = node.data.adapter ?? DEFAULT_AGENT;
       const type = types[node.id];
       const now = type ?? DEFAULT_AGENT;
       const queue = node.data.queue && translateActions(node.data.queue, was, now);
       const data = { ...node.data, ...(queue ? { queue } : {}) };
-      if (type === undefined) delete data.agent;
-      else data.agent = type;
+      if (type === undefined) delete data.adapter;
+      else data.adapter = type;
       return { ...node, data };
     }),
   };
@@ -128,7 +129,7 @@ export function withConnections(
       if (node.type !== 'agent' || connection === undefined) return node;
       if (
         connection === 'unavailable' ||
-        !AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection)
+        !connectionsOf(node.data.adapter ?? DEFAULT_AGENT).includes(connection)
       )
         return node;
       const data = { ...node.data };

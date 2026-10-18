@@ -12,11 +12,11 @@ const settle = async () => {
 
 describe('sessions without placeholder execution', () => {
   it.each([
-    { agent: 'Claude', connection: 'terminal' },
-    { agent: 'Codex', connection: 'codex-terminal' },
+    { adapter: 'claude-code', connection: 'claude-code.terminal' },
+    { adapter: 'codex', connection: 'codex.terminal' },
   ] as const)(
-    'dispatches a default $agent session through its actual native backend',
-    async ({ agent, connection }) => {
+    'dispatches a default $adapter session through its actual native backend',
+    async ({ adapter: agent, connection }) => {
       const { backend, emit, sent } = fakeBackend();
       const store = new SessionStore(backend);
       const done = vi.fn();
@@ -85,8 +85,8 @@ describe('sessions without placeholder execution', () => {
     const store = new SessionStore(backend);
     store.sync([{ id: 'a', connection: 'unavailable' }]);
     const refused = vi.fn<(refusal: Refusal) => void>();
-    store.send('a', 'Qwen', 'Preserve the objective', undefined, undefined, refused);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.send('a', 'qwen', 'Preserve the objective', undefined, undefined, refused);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     await settle();
     expect(refused).not.toHaveBeenCalled();
     expect(backend.send).toHaveBeenCalledExactlyOnceWith(
@@ -101,7 +101,7 @@ describe('sessions without placeholder execution', () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
     const refused = vi.fn<(refusal: Refusal) => void>();
-    store.send('a', 'Qwen', 'Keep unsent', undefined, undefined, refused);
+    store.send('a', 'qwen', 'Keep unsent', undefined, undefined, refused);
     await settle();
     expect(backend.start).not.toHaveBeenCalled();
     expect(refused).toHaveBeenCalledOnce();
@@ -124,7 +124,7 @@ describe('sessions without placeholder execution', () => {
       'queue',
     );
     store.holdQueue('a', true);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     await settle();
     expect(refused).not.toHaveBeenCalled();
     expect(backend.send).not.toHaveBeenCalled();

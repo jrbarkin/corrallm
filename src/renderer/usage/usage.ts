@@ -1,14 +1,15 @@
-import { USAGE_BACKENDS, WINDOW_NAMES } from '../../shared/usage';
+import { adapterIn, connectionIn, usageBackendIn } from '../../shared/adapter';
+import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
+import { WINDOW_NAMES } from '../../shared/usage';
 import type {
   UsageAction,
-  UsageBackend,
   UsageReading,
   UsageRule,
   UsageState,
   UsageWindow,
 } from '../../shared/usage';
-import type { Connection } from '../../shared/session';
-import { AgentType, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import { catalog } from '../catalog';
+import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
 
 /*
  * Usage readings and rules as the renderer shows and runs them (src/shared/usage.ts): which
@@ -16,31 +17,39 @@ import { AgentType, connectionOf, DEFAULT_AGENT } from '../graph/agents';
  */
 
 /**
- * The backend whose usage limits an agent spends, which its usage rule applies to: its type's, if
- * corrallm reads that backend's usage. An Agent SDK agent spends none: it runs on an API key
- * (decided Oct 12, 2026), which has no usage windows.
+ * The backend whose usage limits an agent spends, which its usage rule applies to: its
+ * connection's, as the catalog declares it (none where corrallm can read none, as on an API key).
  */
 export function usageBackendOf(data: {
-  agent?: AgentType;
-  connection?: Connection;
-}): UsageBackend | undefined {
-  if (connectionOf(data) === 'sdk') return undefined;
-  return backendOfType(data.agent ?? DEFAULT_AGENT);
+  adapter?: AdapterId;
+  connection?: ConnectionId;
+}): UsageBackendId | undefined {
+  const connection = connectionOf(data);
+  if (connection === 'unavailable') return undefined;
+  return connectionIn(catalog(), connection)?.connection.usage ?? undefined;
 }
 
-/** The backend an agent type is, if corrallm reads its usage. */
-export function backendOfType(agent: AgentType): UsageBackend | undefined {
-  return USAGE_BACKENDS.find((backend) => backend === agent);
+/** The backend an adapter's agents spend: the first its connections declare, if any. */
+export function backendOfType(adapter: AdapterId): UsageBackendId | undefined {
+  const found = adapterIn(catalog(), adapter);
+  return found?.connections.find((connection) => connection.usage !== null)?.usage ?? undefined;
 }
 
-/** The backends the agents on a canvas use (by their types), in the order backends are listed. */
-export function backendsOf(agents: readonly { agent?: AgentType }[]): UsageBackend[] {
-  const types = new Set(agents.map((data) => data.agent ?? DEFAULT_AGENT));
-  return USAGE_BACKENDS.filter((backend) => types.has(AgentType[backend]));
+/** The backends the agents on a canvas use (by their adapters), in the order backends are listed. */
+export function backendsOf(agents: readonly { adapter?: AdapterId }[]): UsageBackendId[] {
+  const used = new Set(agents.map((data) => backendOfType(data.adapter ?? DEFAULT_AGENT)));
+  return catalog()
+    .usageBackends.map((backend) => backend.id)
+    .filter((backend) => used.has(backend));
+}
+
+/** How a backend is named ("Claude"): the catalog's label, else its id. */
+export function backendName(backend: UsageBackendId): string {
+  return usageBackendIn(catalog(), backend)?.label ?? backend;
 }
 
 /** A backend's latest reading, if it has one. */
-export function readingOf(state: UsageState, backend: UsageBackend): UsageReading | undefined {
+export function readingOf(state: UsageState, backend: UsageBackendId): UsageReading | undefined {
   return state.readings.find((reading) => reading.backend === backend);
 }
 
@@ -108,7 +117,7 @@ export function ruleText(rule: UsageRule): string {
  * usage, which window, the rule's share, how much was used then and when the window resets.
  */
 export interface UsageHold {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   window: UsageWindow;
   /** The rule's share. */
   percent: number;
@@ -120,7 +129,7 @@ export interface UsageHold {
 
 /** What a usage rule's hold says: "Claude has used 84% of its 5-hour window (over 80%)". */
 export function holdText({ backend, window, percent, used }: UsageHold): string {
-  return `${backend} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
+  return `${backendName(backend)} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
 }
 
 /**

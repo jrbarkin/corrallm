@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
 import { appOps } from './ops/app';
 import { usageOps } from './ops/usage';
@@ -31,7 +32,7 @@ export function toolName(name: string): string {
 }
 
 /** An op's arguments as a JSON Schema: exactly what zod makes of its input, as MCP lists it. */
-export function inputSchemaOf(def: OpDef): Record<string, unknown> {
+export function inputSchemaOf(def: OpDef): JsonSchema {
   return z.toJSONSchema(def.input, { io: 'input' });
 }
 
@@ -39,7 +40,7 @@ export function inputSchemaOf(def: OpDef): Record<string, unknown> {
  * An op's result as a JSON Schema. MCP wants an object at its root, so a result that may be a
  * proposal instead (a union of objects) says so at its root too.
  */
-export function outputSchemaOf(def: OpDef): Record<string, unknown> {
+export function outputSchemaOf(def: OpDef): JsonSchema {
   const schema = z.toJSONSchema(def.output);
   return 'type' in schema ? schema : { type: 'object', ...schema };
 }
@@ -48,8 +49,8 @@ export function outputSchemaOf(def: OpDef): Record<string, unknown> {
 export interface ToolListing {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
+  inputSchema: JsonSchema;
+  outputSchema: JsonSchema;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean };
 }
 

@@ -4,7 +4,9 @@ import { homedir } from 'node:os';
 
 import { DEFAULT_MODES } from '../../../../shared/session';
 import type { CodexMode, ModelChoice, SessionEvent } from '../../../../shared/session';
-import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
+import type { UsageBackendId } from '../../../../shared/adapter';
+import type { UsageWindows } from '../../../../shared/usage';
+import { CODEX_TERMINAL, CODEX_USAGE } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
@@ -52,7 +54,7 @@ export interface AppServerConnectorDeps {
   git?: (env: Readonly<Record<string, string>>) => RunGit;
   home?: string;
   /** Takes the usage readings Codex reports (main's UsageReadings). */
-  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
+  usage?: (backend: UsageBackendId, windows: UsageWindows) => void;
 }
 
 /** How many of a resumed thread's last turns its history shows. */
@@ -68,7 +70,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   readonly #consent: PlanConsent;
   readonly #git: (env: Readonly<Record<string, string>>) => RunGit;
   readonly #home: string;
-  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
+  readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;
 
   constructor({
     clientApp,
@@ -105,7 +107,7 @@ export class AppServerConnector implements Connector<CodexMode> {
         ? {}
         : {
             usage: (windows: UsageWindows) => {
-              usage('Codex', windows);
+              usage(CODEX_USAGE, windows);
             },
           }),
     });
@@ -147,7 +149,7 @@ export class AppServerConnector implements Connector<CodexMode> {
           id: randomUUID(),
           level: 'error',
           text: refused,
-          switchTo: 'codex-terminal',
+          switchTo: CODEX_TERMINAL,
         });
         throw new Error(refused);
       }

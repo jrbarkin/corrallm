@@ -1,7 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 
-import type { UsageBackend, UsageWindows } from '../../../shared/usage';
+import type { UsageBackendId } from '../../../shared/adapter';
+import type { UsageWindows } from '../../../shared/usage';
+import { CLAUDE_USAGE } from '../claude-code/adapter';
 import { claudeFlags, requireClaude } from '../claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
@@ -57,7 +59,7 @@ export interface TerminalConnectorOptions {
   /** The user's home folder. */
   home?: string;
   /** Takes the usage readings its sessions' status lines report (main's UsageReadings). */
-  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
+  usage?: (backend: UsageBackendId, windows: UsageWindows) => void;
 }
 
 export class TerminalConnector implements Connector {
@@ -70,7 +72,7 @@ export class TerminalConnector implements Connector {
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
   readonly #home: string;
-  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
+  readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;
   /** The server every session's hooks post to (it runs while any session does). */
   readonly #hooks = new HookServer();
   /** Which session starts first in each folder, until the folder is trusted. */
@@ -126,7 +128,7 @@ export class TerminalConnector implements Connector {
       tmp: this.#tmp,
       env: (token) => terminalEnvironment(spec.env, token),
       timing: this.#timing,
-      usage: (windows) => this.#usage?.('Claude', windows),
+      usage: (windows) => this.#usage?.(CLAUDE_USAGE, windows),
       firstRun: this.#firstRuns.take(folder),
     });
     await session.launch();

@@ -21,6 +21,7 @@ import { RunJournal } from './run-journal';
 import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
 import { Settings } from './settings';
+import { CATALOG } from './sessions/adapters';
 import { createConnectors, createOptions } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { installedClis } from './sessions/installed';
@@ -129,7 +130,10 @@ function main(): void {
         sendEvent(contents, 'run:stopping', requestId);
       });
       // Every backend's usage, read from its agents' CLIs: every window hears each change.
-      const usage = new UsageReadings({ file: path.join(app.getPath('userData'), 'usage.json') });
+      const usage = new UsageReadings({
+        file: path.join(app.getPath('userData'), 'usage.json'),
+        backends: CATALOG.usageBackends.map((backend) => backend.id),
+      });
       await usage.load();
       usage.subscribe((state) => {
         for (const window of BrowserWindow.getAllWindows()) {
@@ -143,6 +147,7 @@ function main(): void {
           ? Promise.resolve(agentEnvironment(process.env))
           : loginShellEnvironment().then(agentEnvironment));
       const sessions = new SessionManager({
+        catalog: CATALOG,
         connectors: createConnectors({
           fake: fakeSessions,
           clientApp: `${app.getName()}/${app.getVersion()}`,
@@ -191,7 +196,7 @@ function main(): void {
         },
         openExternal: (url) => shell.openExternal(url),
       });
-      // Which CLIs the user has, for the templates' agents.
+      // Which agents the user has, for the templates' agents.
       const clis = { installed: async () => installedClis(await agentsEnvironment()) };
       // file:// links in a terminal: shown in the file manager, if in the project folder.
       const reveal = new FileRevealer({
@@ -201,6 +206,7 @@ function main(): void {
         },
       });
       registerIpcHandlers(trustedOrigin, {
+        catalog: CATALOG,
         windows,
         canvases,
         runs,

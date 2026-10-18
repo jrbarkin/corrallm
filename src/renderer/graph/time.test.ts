@@ -72,22 +72,28 @@ describe('the wording of times', () => {
   });
 
   it('says when a backend’s usage window resets', () => {
-    expect(timeText({ resets: 'fiveHour', backend: 'Claude' })).toBe(
+    expect(timeText({ resets: 'fiveHour', backend: 'claude-code' })).toBe(
       'until Claude’s usage resets (5-hour)',
     );
-    expect(timeText({ resets: 'weekly', backend: 'Codex' })).toBe(
+    expect(timeText({ resets: 'weekly', backend: 'codex' })).toBe(
       'until Codex’s usage resets (weekly)',
     );
-    expect(limitText({ resets: 'weekly', backend: 'Claude' })).toBe(
+    expect(limitText({ resets: 'weekly', backend: 'claude-code' })).toBe(
       'no later than Claude’s usage resets (weekly)',
     );
     expect(
-      sameTime({ resets: 'weekly', backend: 'Claude' }, { resets: 'weekly', backend: 'Claude' }),
+      sameTime(
+        { resets: 'weekly', backend: 'claude-code' },
+        { resets: 'weekly', backend: 'claude-code' },
+      ),
     ).toBe(true);
     expect(
-      sameTime({ resets: 'weekly', backend: 'Claude' }, { resets: 'fiveHour', backend: 'Claude' }),
+      sameTime(
+        { resets: 'weekly', backend: 'claude-code' },
+        { resets: 'fiveHour', backend: 'claude-code' },
+      ),
     ).toBe(false);
-    expect(sameTime({ resets: 'weekly', backend: 'Claude' }, { seconds: 60 })).toBe(false);
+    expect(sameTime({ resets: 'weekly', backend: 'claude-code' }, { seconds: 60 })).toBe(false);
   });
 
   it('says how long is left: minutes and seconds, or hours and minutes from an hour on', () => {
@@ -122,7 +128,7 @@ describe('deadline', () => {
   });
 
   it('takes a usage window’s reset from its reading, or now if it has reset or is not read', () => {
-    const reset = { resets: 'fiveHour', backend: 'Claude' } as const;
+    const reset = { resets: 'fiveHour', backend: 'claude-code' } as const;
     expect(deadline(reset, 1_000, () => 90_000)).toBe(90_000);
     expect(deadline(reset, 1_000, () => 500)).toBe(1_000);
     expect(deadline(reset, 1_000, () => undefined)).toBe(1_000);

@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
+import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { IpcArgs } from '../../shared/ipc';
 import { parseRole } from '../../shared/role';
 import {
@@ -10,11 +12,7 @@ import {
   MAX_TERMINAL_ROWS,
 } from '../../shared/terminal';
 import {
-  CLI_MODES,
-  CLIS,
   CODEX_MODES,
-  CONNECTION_CLI,
-  CONNECTIONS,
   ELICITATION_ACTIONS,
   EFFORT_PATTERN,
   IMAGE_TYPES,
@@ -35,7 +33,6 @@ import {
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import type {
   FormValue,
-  Cli,
   MessageImage,
   PlanAnswer,
   SessionAnswer,
@@ -51,7 +48,7 @@ import { isSessionId } from './id';
  * throws. Nothing the renderer sent is passed on as it came.
  */
 
-export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
+export function parseStartArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:start'> {
   const [agentId, options] = expect(args, 2, 'an agent and how to start its session');
   const { connection, model, mode, effort, role } = record(options, 'the session options', [
     'connection',
@@ -61,27 +58,36 @@ export function parseStartArgs(args: unknown[]): IpcArgs<'session:start'> {
     'role',
   ]);
   const authoredRole = parseRole(role);
-  const connected = oneOf(connection, CONNECTIONS, 'connection');
+  const connected = connectionIn(catalog, typeof connection === 'string' ? connection : '');
+  if (!connected) {
+    const all = catalog.adapters.flatMap((adapter) => adapter.connections.map((one) => one.id));
+    throw new TypeError(`Expected a connection: ${all.join(', ')}`);
+  }
+  const { adapter, connection: started } = connected;
   const parsed: SessionOptions = {
-    connection: connected,
+    connection: started.id,
     model: model === null ? null : parseModel(model),
-    // One of its CLI's modes, or null for the user's own.
-    mode:
-      mode === null
-        ? null
-        : oneOf(
-            mode,
-            CLI_MODES[CONNECTION_CLI[connected]],
-            `mode of ${CLI_NAMES[CONNECTION_CLI[connected]]}`,
-          ),
+    // One its connection starts in (each asks), or null for the user's own.
+    mode: mode === null ? null : parseStartMode(mode, catalog, adapter.id, started.id),
     ...(effort === undefined ? {} : { effort: parseEffort(effort) }),
     ...(authoredRole === undefined ? {} : { role: authoredRole }),
   };
   return [parseId(agentId, 'agent'), parsed];
 }
 
-/** How messages name each CLI. */
-const CLI_NAMES: Record<Cli, string> = { claude: 'Claude Code', codex: 'Codex' };
+/** A mode `connection` (one of `adapter`'s) starts its sessions in: never one that never asks. */
+function parseStartMode(
+  value: unknown,
+  catalog: Catalog,
+  adapter: AdapterId,
+  connection: string,
+): SessionMode {
+  const mode = parseMode(value);
+  if (!isStartMode(catalog, adapter, connection, mode)) {
+    throw new TypeError(`Expected a mode ${connection} sessions start in`);
+  }
+  return mode;
+}
 
 export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
   const [agentId, message] = expect(args, 2, 'an agent and a message');
@@ -141,22 +147,31 @@ export function parseAnswerArgs(args: unknown[]): IpcArgs<'session:answer'> {
   return [parseId(agentId, 'agent'), parseId(promptId, 'prompt'), parseAnswer(answer)];
 }
 
-/** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
-/** session:options: one of the CLIs corrallm runs. */
-export function parseOptionsArgs(args: unknown[]): IpcArgs<'session:options'> {
-  const [cli] = expect(args, 1, 'a CLI');
-  return [oneOf(cli, CLIS, 'CLI')];
+/** session:options: one of the adapters the catalog lists. */
+export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:options'> {
+  const [adapter] = expect(args, 1, 'an adapter');
+  return [parseAdapter(adapter, catalog)];
 }
 
+/** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
 }
 
-/** session:fresh: which CLI's remembered conversation the agent should replace. */
-export function parseFreshArgs(args: unknown[]): IpcArgs<'session:fresh'> {
-  const [agentId, cli] = expect(args, 2, 'an agent and a CLI');
-  return [parseId(agentId, 'agent'), oneOf(cli, CLIS, 'CLI')];
+/** session:fresh: which adapter's remembered conversation the agent should replace. */
+export function parseFreshArgs(args: unknown[], catalog: Catalog): IpcArgs<'session:fresh'> {
+  const [agentId, adapter] = expect(args, 2, 'an agent and an adapter');
+  return [parseId(agentId, 'agent'), parseAdapter(adapter, catalog)];
+}
+
+/** One of the adapters the catalog lists. */
+function parseAdapter(value: unknown, catalog: Catalog): AdapterId {
+  const found = adapterIn(catalog, typeof value === 'string' ? value : '');
+  if (!found) {
+    throw new TypeError(`Expected an adapter: ${catalog.adapters.map((a) => a.id).join(', ')}`);
+  }
+  return found.id;
 }
 
 /** terminal:input: an agent, and the keystrokes typed (any characters: they are keys). */
@@ -349,7 +364,7 @@ function parsePlanAnswer(value: unknown): PlanAnswer {
   return { approve: false, feedback };
 }
 
-/** Any CLI's mode: the manager checks it is one of the running session's CLI. */
+/** Any adapter's mode: the manager checks it is one of the running session's adapter. */
 function parseMode(value: unknown): SessionMode {
   return oneOf<SessionMode>(value, [...PERMISSION_MODES, ...CODEX_MODES], 'mode');
 }

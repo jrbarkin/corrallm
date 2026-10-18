@@ -1,24 +1,37 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
-import { CONNECTIONS } from '../../shared/session';
-import { AGENT_CONNECTIONS, CONNECTED_AGENTS, connectionOf, defaultConnection } from './agents';
+import { catalog } from '../catalog';
+import {
+  actionsOf,
+  adapterCli,
+  adapterName,
+  agentLabel,
+  CONNECTED_AGENTS,
+  connectionInfo,
+  connectionOf,
+  connectionsOf,
+  defaultConnection,
+  translateActions,
+} from './agents';
 import { fromFile, toFile } from './file';
 import { addAgent, EMPTY_GRAPH, setAgent, spawnAgent } from './graph';
 
-const legacy = (agent: 'Claude' | 'Codex' | 'Qwen' | 'Gemini', connection?: string) =>
+const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
+
+/** A canvas with one agent, `worker`, as a file has it, with `fields` of its own. */
+const canvas = (fields: Record<string, unknown>) =>
   JSON.stringify({
     format: 'corrallm',
     version: 2,
-    id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b',
+    id: ID,
     nodes: [
       {
         id: 'worker',
         kind: 'agent',
         label: 'Worker',
-        agent,
         position: { x: 0, y: 0 },
-        ...(connection === undefined ? {} : { connection }),
+        ...fields,
         queue: [{ id: 'work', message: 'Keep the authored work.' }],
       },
     ],
@@ -28,42 +41,112 @@ const legacy = (agent: 'Claude' | 'Codex' | 'Qwen' | 'Gemini', connection?: stri
 describe('native agent defaults', () => {
   it('creates and spawns real Terminal agents without waiting for CLI detection', () => {
     const graph = addAgent(EMPTY_GRAPH, 'a', { x: 100, y: 100 });
-    expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('terminal');
-    const codex = setAgent(graph, 'a', 'Codex');
+    expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('claude-code.terminal');
+    const codex = setAgent(graph, 'a', 'codex');
     const spawned = spawnAgent(codex, 'a', 'b', 'peer');
     expect(spawned.nodes.map((node) => connectionOf(node.data))).toEqual([
-      'codex-terminal',
-      'codex-terminal',
+      'codex.terminal',
+      'codex.terminal',
     ]);
   });
 
-  it('offers only real connectors for implemented agent types', () => {
-    expect(CONNECTED_AGENTS).toEqual(['Claude', 'Codex']);
-    expect(Object.values(AGENT_CONNECTIONS).flat().sort()).toEqual([...CONNECTIONS].sort());
-    expect(defaultConnection('Claude')).toBe('terminal');
-    expect(defaultConnection('Codex')).toBe('codex-terminal');
+  it('offers each adapter its connections, its first by default', () => {
+    expect(CONNECTED_AGENTS).toEqual(['claude-code', 'codex']);
+    expect(defaultConnection('claude-code')).toBe('claude-code.terminal');
+    expect(defaultConnection('codex')).toBe('codex.terminal');
   });
 
-  it.each(['Claude', 'Codex'] as const)(
-    'refuses the removed placeholder connection for %s agents',
-    (agent) => {
-      expect(() => fromFile(legacy(agent, 'simulated'))).toThrow('nodes[0].connection');
+  it('names the connections and actions the catalog declares, as it declares them', () => {
+    for (const adapter of catalog().adapters) {
+      expect(connectionsOf(adapter.id)).toEqual(adapter.connections.map((one) => one.id));
+      for (const { id, label, short, description } of adapter.connections) {
+        expect(connectionInfo(id)).toEqual({ label, short, description });
+      }
+      expect(actionsOf(adapter.id)).toEqual(
+        adapter.actions.map(({ name, description }) => ({ name, description })),
+      );
+    }
+  });
+
+  it.each([
+    ['claude-code', 'simulated'],
+    ['claude-code', 'terminal'],
+    ['codex', 'app-server'],
+  ])(
+    'opens a %s agent with a connection this build lacks (%s) as Not connected',
+    (adapter, how) => {
+      const graph = fromFile(canvas({ adapter, connection: how }), catalog());
+      expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('unavailable');
+      expect(toFile(graph, ID)).toContain(`"connection": "${how}"`);
     },
   );
 
-  it.each(['Qwen', 'Gemini'] as const)(
-    'retains legacy %s nodes as unavailable without offering a pretend connection',
-    (agent) => {
-      const graph = fromFile(legacy(agent));
-      expect(graph.nodes[0]?.data.agent).toBe(agent);
+  it.each(['qwen', 'gemini'])(
+    'keeps an agent of an adapter this build lacks (%s) as Not connected, saved back as it was',
+    (adapter) => {
+      const settings = { [adapter]: { model: 'pro', mode: 'yolo' } };
+      const file = canvas({ adapter, connection: `${adapter}.acp`, settings });
+      const graph = fromFile(file, catalog());
+      expect(graph.nodes[0]?.data).toMatchObject({ adapter, settings });
       expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('unavailable');
-      expect(AGENT_CONNECTIONS[agent]).toEqual([]);
+      expect(connectionsOf(adapter)).toEqual([]);
       expect(graph.nodes[0]?.data.queue).toEqual([
         { id: 'work', message: 'Keep the authored work.' },
       ]);
-      expect(toFile(graph, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId)).toContain(
-        `"agent": "${agent}"`,
-      );
+      expect(toFile(graph, ID)).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
     },
   );
+
+  it.each([
+    ['toString', undefined],
+    ['toString', 'toString'],
+    ['constructor', undefined],
+    ['constructor', 'constructor.acp'],
+    ['valueOf', 'valueOf'],
+    ['hasOwnProperty', undefined],
+  ])(
+    'reads an adapter named like what every object inherits (%s, connection %s) as one this build lacks',
+    (adapter, connection) => {
+      const file = canvas({ adapter, ...(connection === undefined ? {} : { connection }) });
+      const graph = fromFile(file, catalog());
+      const data = graph.nodes[0]?.data ?? {};
+      // Its card: Not connected, named by its id.
+      expect(connectionOf(data)).toBe('unavailable');
+      expect(agentLabel(adapter, connectionOf(data))).toBe(`${adapter} · Not connected`);
+      expect(adapterName(adapter)).toBe(adapter);
+      expect(adapterCli(adapter)).toBe(adapter);
+      expect(connectionInfo(connection ?? adapter)).toEqual(connectionInfo('unavailable'));
+      expect(connectionsOf(adapter)).toEqual([]);
+      expect(defaultConnection(adapter)).toBe('unavailable');
+      expect(actionsOf(adapter)).toEqual([]);
+      // Its steps keep their actions as it changes adapter, either way.
+      const steps = [
+        { id: 'run', action: 'Bash' },
+        { id: 'look', action: 'Read' },
+      ];
+      expect(translateActions(steps, adapter, 'codex')).toEqual(steps);
+      expect(translateActions(steps, 'claude-code', adapter)).toEqual(steps);
+      const claude = addAgent(EMPTY_GRAPH, 'a', { x: 0, y: 0 });
+      const moved = setAgent(
+        {
+          ...claude,
+          nodes: claude.nodes.map((n) => ({ ...n, data: { ...n.data, queue: steps } })),
+        },
+        'a',
+        adapter,
+      );
+      expect(moved.nodes[0]?.data).toMatchObject({ adapter, queue: steps });
+      expect(connectionOf(moved.nodes[0]?.data ?? {})).toBe('unavailable');
+      expect(toFile(graph, ID)).toBe(`${JSON.stringify(JSON.parse(file), null, 2)}\n`);
+    },
+  );
+
+  it('refuses a connection the catalog has under another adapter', () => {
+    expect(() =>
+      fromFile(canvas({ adapter: 'codex', connection: 'claude-code.terminal' }), catalog()),
+    ).toThrow(/nodes\[0\]\.connection: "claude-code\.terminal" is a connection of claude-code/);
+    expect(() => fromFile(canvas({ connection: 'codex.terminal' }), catalog())).toThrow(
+      /not of claude-code/,
+    );
+  });
 });

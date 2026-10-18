@@ -1,109 +1,137 @@
-import type { Connection } from '../../shared/session';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
 import type { QueueItem, RepeatedItem } from './queue';
 
-/** The coding agent a node runs. */
-export const AgentType = {
-  Claude: 'Claude',
-  Codex: 'Codex',
-  Qwen: 'Qwen',
-  Gemini: 'Gemini',
-} as const;
-// An object rather than a TypeScript `enum`: erasableSyntaxOnly (tsconfig.base.json) rejects enums.
-export type AgentType = (typeof AgentType)[keyof typeof AgentType];
+/*
+ * The renderer's own tables of what each adapter offers (main declares it in the catalog, which
+ * catalog.ts loads): how agents and connections are named and worded on the canvas, and what each
+ * can be asked to do. A node naming an adapter or a connection none of them has is Not connected:
+ * its work stays unsent, and it is saved back as it was.
+ */
 
-/** The type a new node starts with. */
-export const DEFAULT_AGENT: AgentType = AgentType.Claude;
+export type { AdapterId };
 
-/** The CLI each agent type is. */
-export const AGENT_CLI: Record<AgentType, string> = {
-  Claude: 'Claude Code',
-  Codex: 'Codex CLI',
-  Qwen: 'Qwen Code',
-  Gemini: 'Gemini CLI',
+/**
+ * `table`'s own entry for `id`: never what every object inherits (`toString`, `constructor`, …),
+ * which an adapter or connection a file names may be called.
+ */
+function own<T>(table: Readonly<Record<string, T>>, id: string): T | undefined {
+  return Object.hasOwn(table, id) ? table[id] : undefined;
+}
+
+/** The adapter a new node starts with. */
+export const DEFAULT_AGENT: AdapterId = 'claude-code';
+
+/** How each adapter's agents are named on the canvas ("Claude · Terminal"). */
+const AGENT_NAMES: Readonly<Record<AdapterId, string>> = {
+  'claude-code': 'Claude',
+  codex: 'Codex',
 };
 
-/** A real native connection, or an unavailable connector for a legacy agent type. */
-export type AgentConnection = Connection | 'unavailable';
+/** How an adapter's agents are named: its id, for an adapter this build doesn't have. */
+export function adapterName(adapter: AdapterId): string {
+  return own(AGENT_NAMES, adapter) ?? adapter;
+}
+
+/** The CLI each adapter runs. */
+const AGENT_CLIS: Readonly<Record<AdapterId, string>> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex CLI',
+};
+
+/** The CLI an adapter runs, as its user knows it: its id, for an adapter this build doesn't have. */
+export function adapterCli(adapter: AdapterId): string {
+  return own(AGENT_CLIS, adapter) ?? adapter;
+}
+
+/**
+ * How an agent runs: a real native connection, or 'unavailable' (Not connected): its adapter, or the
+ * connection it names, is one this build lacks.
+ */
+export type AgentConnection = ConnectionId;
 
 /** Terminal works with the CLI's own login; structured connections are an explicit choice. */
-export const AGENT_CONNECTIONS: Record<AgentType, readonly Connection[]> = {
-  Claude: ['terminal', 'sdk'],
-  Codex: ['codex-terminal', 'app-server'],
-  Qwen: [],
-  Gemini: [],
+const AGENT_CONNECTIONS: Readonly<Record<AdapterId, readonly ConnectionId[]>> = {
+  'claude-code': ['claude-code.terminal', 'claude-code.sdk'],
+  codex: ['codex.terminal', 'codex.app-server'],
 };
 
-/** Agent types with working connectors, offered when choosing an agent. */
-export const CONNECTED_AGENTS: readonly AgentType[] = Object.values(AgentType).filter(
-  (agent) => AGENT_CONNECTIONS[agent].length > 0,
-);
+/** The connections an adapter offers, in its order: none, for one this build doesn't have. */
+export function connectionsOf(adapter: AdapterId): readonly ConnectionId[] {
+  return own(AGENT_CONNECTIONS, adapter) ?? [];
+}
 
-/** How each connection is named (`short`: on an agent's card) and explained. */
-export const CONNECTION_INFO: Record<
-  AgentConnection,
-  { label: string; short: string; description: string }
-> = {
-  unavailable: {
-    label: 'Not connected',
-    short: 'Not connected',
-    description: 'This CLI has no connector yet. Choose Claude Code or Codex',
-  },
-  terminal: {
+/** The adapters with working connectors, offered when choosing an agent. */
+export const CONNECTED_AGENTS: readonly AdapterId[] = Object.keys(AGENT_CONNECTIONS);
+
+/** How a connection is named (`short`: on an agent's card) and explained. */
+export interface ConnectionInfo {
+  label: string;
+  short: string;
+  description: string;
+}
+
+const NOT_CONNECTED: ConnectionInfo = {
+  label: 'Not connected',
+  short: 'Not connected',
+  description: 'This agent has no connector in this build. Choose Claude Code or Codex',
+};
+
+const CONNECTION_INFO: Readonly<Record<ConnectionId, ConnectionInfo>> = {
+  'claude-code.terminal': {
     label: 'Terminal',
     short: 'Terminal',
     description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
   },
-  sdk: {
+  'claude-code.sdk': {
     label: 'Agent SDK',
     short: 'SDK',
     description:
       'Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider',
   },
-  'codex-terminal': {
+  'codex.terminal': {
     label: 'Terminal',
     short: 'Terminal',
     description: 'Codex itself, in a terminal in its view',
   },
-  'app-server': {
+  'codex.app-server': {
     label: 'App Server',
     short: 'App Server',
     description: 'Codex through its app server, in corrallm’s transcript',
   },
 };
 
-/** New and legacy agents use a real terminal; missing CLIs fail visibly instead of simulating. */
-export function defaultConnection(agent: AgentType): AgentConnection {
-  return AGENT_CONNECTIONS[agent][0] ?? 'unavailable';
+/** How a connection is named and explained: Not connected, for one this build doesn't have. */
+export function connectionInfo(connection: AgentConnection): ConnectionInfo {
+  return own(CONNECTION_INFO, connection) ?? NOT_CONNECTED;
 }
 
-/** The ways an agent type can be connected, as a sentence names them. */
-export function connectionNames(agent: AgentType): string {
-  const names = AGENT_CONNECTIONS[agent].map((connection) => CONNECTION_INFO[connection].label);
-  return names.length <= 1
-    ? (names[0] ?? '')
-    : `${names.slice(0, -1).join(', ')} or ${names.at(-1) ?? ''}`;
+/** An adapter's first connection: what a new agent runs as; unavailable, for an unknown adapter. */
+export function defaultConnection(adapter: AdapterId): AgentConnection {
+  return connectionsOf(adapter)[0] ?? 'unavailable';
 }
 
-/** An omitted connection (including old placeholder workflows) uses the native default. */
+/**
+ * How an agent runs: its connection; its adapter's first, when it names none; unavailable when it
+ * names one its adapter doesn't offer, or its adapter is one this build lacks.
+ */
 export function connectionOf(data: {
-  agent?: AgentType;
-  connection?: Connection;
+  adapter?: AdapterId;
+  connection?: ConnectionId;
 }): AgentConnection {
-  const agent = data.agent ?? DEFAULT_AGENT;
-  return data.connection !== undefined && AGENT_CONNECTIONS[agent].includes(data.connection)
-    ? data.connection
-    : defaultConnection(agent);
+  const adapter = data.adapter ?? DEFAULT_AGENT;
+  if (data.connection === undefined) return defaultConnection(adapter);
+  return connectionsOf(adapter).includes(data.connection) ? data.connection : 'unavailable';
 }
 
-/** An agent's type and real connection, or its unavailable connector status. */
+/** An agent's adapter and real connection, or its unavailable connector status. */
 export function agentLabel(
-  agent: AgentType,
+  adapter: AdapterId,
   connection: AgentConnection,
   { short = false }: { short?: boolean } = {},
 ): string {
-  const info = CONNECTION_INFO[connection];
-  return `${agent} · ${short ? info.short : info.label}`;
+  const info = connectionInfo(connection);
+  return `${adapterName(adapter)} · ${short ? info.short : info.label}`;
 }
 
 /** Something an agent can be asked to do: a built-in tool or command, named as its docs name it. */
@@ -113,14 +141,14 @@ export interface AgentAction {
 }
 
 /**
- * What each agent can do: its built-in tools and the slash commands that do work, as documented.
- * Tools and commands that only run the session itself (help, settings, feedback, notifications,
- * task-list and MCP plumbing) are left out.
+ * What each adapter's agents can do: their built-in tools and the slash commands that do work, as
+ * documented. Tools and commands that only run the session itself (help, settings, feedback,
+ * notifications, task-list and MCP plumbing) are left out.
  */
-export const AGENT_ACTIONS: Record<AgentType, readonly AgentAction[]> = {
+const AGENT_ACTIONS: Readonly<Record<AdapterId, readonly AgentAction[]>> = {
   // https://code.claude.com/docs/en/tools-reference.md, https://code.claude.com/docs/en/commands.md
   // (read 2026-10-11, Claude Code v2.1.287)
-  Claude: [
+  'claude-code': [
     { name: 'Read', description: 'Read files' },
     { name: 'Write', description: 'Create or overwrite files' },
     { name: 'Edit', description: 'Make targeted edits to files' },
@@ -152,7 +180,7 @@ export const AGENT_ACTIONS: Record<AgentType, readonly AgentAction[]> = {
   ],
   // https://developers.openai.com/codex/cli/slash-commands (now learn.chatgpt.com) and the CLI's
   // source, openai/codex rust-v0.162.1 (read 2026-10-11)
-  Codex: [
+  codex: [
     { name: 'exec_command', description: 'Run a shell command' },
     { name: 'apply_patch', description: 'Create, edit, delete or move files with a patch' },
     { name: 'view_image', description: 'Look at a local image' },
@@ -171,105 +199,49 @@ export const AGENT_ACTIONS: Record<AgentType, readonly AgentAction[]> = {
     { name: '/new', description: 'Start a new chat' },
     { name: '/export', description: 'Export the conversation as Markdown' },
   ],
-  // https://qwenlm.github.io/qwen-code-docs/en/developers/tools/introduction/,
-  // https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/ and the CLI's source
-  // (read 2026-10-11, Qwen Code v0.25.1)
-  Qwen: [
-    { name: 'read_file', description: 'Read a file, including images, PDFs and notebooks' },
-    { name: 'write_file', description: 'Create or overwrite a file' },
-    { name: 'edit', description: 'Replace exact text in a file' },
-    { name: 'notebook_edit', description: 'Edit Jupyter notebook cells' },
-    { name: 'list_directory', description: 'List a directory' },
-    { name: 'glob', description: 'Find files by pattern' },
-    { name: 'grep_search', description: 'Search file contents' },
-    { name: 'lsp', description: 'Code intelligence: definitions, references, diagnostics' },
-    { name: 'run_shell_command', description: 'Run shell commands' },
-    { name: 'monitor', description: 'Run a long-lived command and stream its output' },
-    { name: 'web_fetch', description: 'Fetch a URL and process its content' },
-    { name: 'web_search', description: 'Search the web' },
-    { name: 'agent', description: 'Hand a task to a subagent' },
-    { name: 'enter_worktree', description: 'Work in an isolated git worktree' },
-    { name: 'advisor', description: 'Get a second opinion from the advisor model' },
-    { name: '/review', description: 'Multi-agent review of changes, files or a PR' },
-    { name: '/simplify', description: 'Clean up recent changes' },
-    { name: '/commit', description: 'Commit with an AI-drafted message' },
-    { name: '/init', description: 'Write a QWEN.md for the project' },
-    { name: '/summary', description: 'Write a project summary' },
-    { name: '/plan', description: 'Plan before changing code' },
-    { name: '/goal', description: 'Keep working until a verifier confirms the goal' },
-    { name: '/batch', description: 'Process many files in parallel' },
-    { name: '/arena', description: 'Run several models on one task and pick the best' },
-    { name: '/new-app', description: 'Scaffold and build a new app' },
-    { name: '/compress', description: 'Summarize the chat to save tokens' },
-    { name: '/clear', description: 'Start a fresh session' },
-    { name: '/restore', description: 'Revert files to a checkpoint before a tool ran' },
-    { name: '/rewind', description: 'Rewind the conversation to an earlier turn' },
-  ],
-  // https://geminicli.com/docs/reference/tools/, https://geminicli.com/docs/reference/commands/
-  // and the CLI's source (read 2026-10-11, Gemini CLI v0.63.0)
-  Gemini: [
-    { name: 'read_file', description: 'Read a file, including images, audio and PDFs' },
-    { name: 'write_file', description: 'Create or overwrite a file' },
-    { name: 'replace', description: 'Replace text in a file' },
-    { name: 'list_directory', description: 'List a directory' },
-    { name: 'glob', description: 'Find files by pattern' },
-    { name: 'grep_search', description: 'Search file contents' },
-    { name: 'run_shell_command', description: 'Run shell commands' },
-    { name: 'web_fetch', description: 'Fetch and process URLs' },
-    { name: 'google_web_search', description: 'Search the web with Google' },
-    { name: 'invoke_agent', description: 'Hand a task to a subagent' },
-    { name: 'enter_plan_mode', description: 'Research changes in read-only plan mode' },
-    { name: 'activate_skill', description: "Load an Agent Skill's instructions" },
-    { name: '/init', description: 'Write a GEMINI.md for the project' },
-    { name: '/plan', description: 'Switch to read-only plan mode' },
-    { name: '/setup-github', description: 'Set up GitHub Actions for issue triage and PR review' },
-    { name: '/compress', description: 'Summarize the chat to free context' },
-    { name: '/clear', description: 'Start a new session' },
-    { name: '/restore', description: 'Restore files to a checkpoint before a tool ran' },
-    { name: '/rewind', description: 'Rewind the chat, file changes, or both' },
-  ],
 };
 
-/**
- * Actions that do the same job in each agent type that has one (running commands, editing,
- * searching the web, reviewing, working in a worktree, handing work to a subagent, …), so that a
- * step keeps its meaning when its agent's type changes, as when a template's role is given
- * another agent (templates.ts).
- */
-export const EQUIVALENT_ACTIONS: readonly Partial<Readonly<Record<AgentType, string>>>[] = [
-  { Claude: 'Bash', Codex: 'exec_command', Qwen: 'run_shell_command', Gemini: 'run_shell_command' },
-  { Claude: 'Edit', Codex: 'apply_patch', Qwen: 'edit', Gemini: 'replace' },
-  { Claude: 'Write', Qwen: 'write_file', Gemini: 'write_file' },
-  { Claude: 'Read', Qwen: 'read_file', Gemini: 'read_file' },
-  { Claude: 'Grep', Qwen: 'grep_search', Gemini: 'grep_search' },
-  { Claude: 'Glob', Qwen: 'glob', Gemini: 'glob' },
-  { Claude: 'WebSearch', Codex: 'web_search', Qwen: 'web_search', Gemini: 'google_web_search' },
-  { Claude: 'WebFetch', Qwen: 'web_fetch', Gemini: 'web_fetch' },
-  { Claude: '/code-review', Codex: '/review', Qwen: '/review' },
-  { Claude: 'EnterWorktree', Codex: '/worktree', Qwen: 'enter_worktree' },
-  { Claude: 'Agent', Codex: 'spawn_agent', Qwen: 'agent', Gemini: 'invoke_agent' },
-  { Claude: '/plan', Codex: '/plan', Qwen: '/plan', Gemini: '/plan' },
-  { Claude: '/init', Codex: '/init', Qwen: '/init', Gemini: '/init' },
-  { Claude: '/goal', Codex: '/goal', Qwen: '/goal' },
-];
-
-/** What agent type `to` calls the action `from` calls `action`, if it has one for the same job. */
-export function equivalentAction(
-  action: string,
-  from: AgentType,
-  to: AgentType,
-): string | undefined {
-  if (from === to) return action;
-  return EQUIVALENT_ACTIONS.find((job) => job[from] === action)?.[to];
+/** What an adapter's agents can be asked to do: nothing, for an adapter this build doesn't have. */
+export function actionsOf(adapter: AdapterId): readonly AgentAction[] {
+  return own(AGENT_ACTIONS, adapter) ?? [];
 }
 
-/** Steps keep their job when an agent changes type, including those inside Ifs and repeats. */
+/**
+ * Actions that do the same job in each adapter that has one (running commands, editing,
+ * searching the web, reviewing, working in a worktree, handing work to a subagent, …), so that a
+ * step keeps its meaning when its agent's adapter changes, as when a template's role is given
+ * another agent (templates.ts).
+ */
+const EQUIVALENT_ACTIONS: readonly Readonly<Record<AdapterId, string>>[] = [
+  { 'claude-code': 'Bash', codex: 'exec_command' },
+  { 'claude-code': 'Edit', codex: 'apply_patch' },
+  { 'claude-code': 'WebSearch', codex: 'web_search' },
+  { 'claude-code': '/code-review', codex: '/review' },
+  { 'claude-code': 'EnterWorktree', codex: '/worktree' },
+  { 'claude-code': 'Agent', codex: 'spawn_agent' },
+  { 'claude-code': '/plan', codex: '/plan' },
+  { 'claude-code': '/init', codex: '/init' },
+  { 'claude-code': '/goal', codex: '/goal' },
+];
+
+/** What adapter `to` calls the action `from` calls `action`, if it has one for the same job. */
+export function equivalentAction(
+  action: string,
+  from: AdapterId,
+  to: AdapterId,
+): string | undefined {
+  if (from === to) return action;
+  const job = EQUIVALENT_ACTIONS.find((one) => own(one, from) === action);
+  return job === undefined ? undefined : own(job, to);
+}
+
+/** Steps keep their job when an agent changes adapter, including those inside Ifs and repeats. */
 export function translateActions(
   queue: readonly QueueItem[],
-  from: AgentType,
-  to: AgentType,
+  from: AdapterId,
+  to: AdapterId,
 ): QueueItem[] {
-  const has = new Set(AGENT_ACTIONS[to].map((a) => a.name));
+  const has = new Set(actionsOf(to).map((a) => a.name));
   const translate = <T extends RepeatedItem>(step: T): T =>
     isWait(step) || isDelay(step) || isMessage(step) || has.has(step.action)
       ? step

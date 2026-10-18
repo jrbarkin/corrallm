@@ -10,7 +10,12 @@ function show(usage: UsageState) {
   const onRule = vi.fn();
   const onSimulate = vi.fn();
   render(
-    <UsageGauges backends={['Claude']} usage={usage} onRule={onRule} onSimulate={onSimulate} />,
+    <UsageGauges
+      backends={['claude-code']}
+      usage={usage}
+      onRule={onRule}
+      onSimulate={onSimulate}
+    />,
   );
   return { gauge: screen.getByRole('button', { name: /^Claude usage:/ }), onRule, onSimulate };
 }
@@ -20,7 +25,7 @@ describe('UsageGauges', () => {
     const { gauge } = show({
       readings: [
         {
-          backend: 'Claude',
+          backend: 'claude-code',
           windows: { weekly: { usedPercent: 40, resetsAt: Date.now() + 48 * HOUR } },
           at: Date.now() - 3 * HOUR,
         },
@@ -37,12 +42,12 @@ describe('UsageGauges', () => {
     const { gauge } = show({
       readings: [
         {
-          backend: 'Claude',
+          backend: 'claude-code',
           windows: { fiveHour: { usedPercent: 99, resetsAt: Date.now() - HOUR } },
           at: Date.now() - 6 * HOUR,
         },
       ],
-      rules: { Claude: { window: 'fiveHour', percent: 80, action: 'ask' } },
+      rules: { 'claude-code': { window: 'fiveHour', percent: 80, action: 'ask' } },
     });
     // What was used then no longer counts: nothing is over the rule.
     expect(gauge.getAttribute('aria-label')).toBe('Claude usage: reset since read');
@@ -54,12 +59,12 @@ describe('UsageGauges', () => {
   it('takes a rule off, and clears a reading', () => {
     const { gauge, onRule, onSimulate } = show({
       readings: [],
-      rules: { Claude: { window: 'weekly', percent: 90, action: 'warn' } },
+      rules: { 'claude-code': { window: 'weekly', percent: 90, action: 'warn' } },
     });
     fireEvent.click(gauge);
     const panel = within(screen.getByRole('dialog'));
     fireEvent.click(panel.getByRole('button', { name: 'Take the usage rule off' }));
-    expect(onRule).toHaveBeenCalledWith('Claude', null);
+    expect(onRule).toHaveBeenCalledWith('claude-code', null);
     fireEvent.click(panel.getByRole('button', { name: 'Simulate usage…' }));
     fireEvent.change(panel.getByRole('textbox', { name: '5-hour window: resets in' }), {
       target: { value: 'soon' },
@@ -69,6 +74,6 @@ describe('UsageGauges', () => {
       'Type how long until the 5-hour window resets, e.g. 2 hours.',
     );
     fireEvent.click(panel.getByRole('button', { name: 'Clear reading' }));
-    expect(onSimulate).toHaveBeenCalledWith('Claude', null);
+    expect(onSimulate).toHaveBeenCalledWith('claude-code', null);
   });
 });

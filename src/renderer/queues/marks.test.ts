@@ -129,7 +129,7 @@ describe('queueMarks', () => {
 
   it('marks a task a usage rule holds: why, and what the user can decide there', () => {
     const usage = {
-      backend: 'Claude',
+      backend: 'claude-code',
       window: 'fiveHour',
       percent: 80,
       used: 84,
@@ -140,7 +140,7 @@ describe('queueMarks', () => {
       'data-run': 'asking',
       'data-decide': '',
       'data-usage': 'Claude has used 84% of its 5-hour window (over 80%)',
-      'data-usage-backend': 'Claude',
+      'data-usage-backend': 'claude-code',
       'data-usage-reset': '7200000',
     });
     expect(asking('a', 'ok')['data-usage']).toBeUndefined();

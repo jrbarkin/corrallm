@@ -120,7 +120,7 @@ async function claudeReady(count = 1) {
 async function canvasFile(
   queue: { id: string; message: string }[] = [],
   settings?: unknown,
-  connection: 'terminal' | 'sdk' = 'terminal',
+  connection: 'claude-code.terminal' | 'claude-code.sdk' = 'claude-code.terminal',
 ) {
   const file = path.join(dir, 'team.corral');
   await writeFile(
@@ -135,7 +135,7 @@ async function canvasFile(
           kind: 'agent',
           label: 'Shop',
           position: { x: 0, y: 0 },
-          agent: 'Claude',
+          adapter: 'claude-code',
           connection,
           ...(settings === undefined ? {} : { settings }),
           ...(queue.length > 0 ? { queue } : {}),
@@ -147,7 +147,7 @@ async function canvasFile(
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.locator('.react-flow__node')).toHaveAttribute(
     'aria-label',
-    connection === 'terminal' ? 'Shop, Claude · Terminal' : 'Shop, Claude · SDK',
+    connection === 'claude-code.terminal' ? 'Shop, Claude · Terminal' : 'Shop, Claude · SDK',
   );
 }
 
@@ -191,7 +191,7 @@ test('an omitted connection runs in the native Terminal as a chosen one does, wi
           id: 'omitted',
           kind: 'agent',
           label: 'Omitted',
-          agent: 'Claude',
+          adapter: 'claude-code',
           position: { x: 0, y: 0 },
           queue: [{ id: 'work', message: 'Omitted connection work' }],
         },
@@ -199,8 +199,8 @@ test('an omitted connection runs in the native Terminal as a chosen one does, wi
           id: 'chosen',
           kind: 'agent',
           label: 'Chosen',
-          agent: 'Claude',
-          connection: 'terminal',
+          adapter: 'claude-code',
+          connection: 'claude-code.terminal',
           position: { x: 350, y: 0 },
           queue: [{ id: 'work', message: 'Chosen connection work' }],
         },
@@ -239,7 +239,7 @@ test('an omitted connection runs in the native Terminal as a chosen one does, wi
         (node) => node.connection,
       ),
     )
-    .toEqual([undefined, 'terminal']);
+    .toEqual([undefined, 'claude-code.terminal']);
   await page.reload();
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(2);
   await page.getByRole('button', { name: 'Show all queues' }).click();
@@ -351,7 +351,7 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
     path.join(config, 'settings.json'),
     JSON.stringify({ model: 'opus', effortLevel: 'xhigh', permissions: { defaultMode: 'auto' } }),
   );
-  await canvasFile([], { claude: { model: 'haiku', effort: 'low', mode: 'plan' } });
+  await canvasFile([], { 'claude-code': { model: 'haiku', effort: 'low', mode: 'plan' } });
   await chooseProject();
   const { view, terminal } = await openShop();
   // Passed per session on its command line, never saved in the user's settings.
@@ -402,7 +402,7 @@ test('starts Claude Code with the model, effort and mode its agent is set to, ch
       };
       return file.nodes[0]?.settings;
     })
-    .toEqual({ claude: { effort: 'low' } });
+    .toEqual({ 'claude-code': { effort: 'low' } });
   // The user's own settings are as they were.
   expect(JSON.parse(await readFile(path.join(config, 'settings.json'), 'utf8'))).toEqual({
     model: 'opus',
@@ -419,7 +419,7 @@ test('a template’s Claude agents run in their terminals, asked once whether to
   await gallery.getByRole('button', { name: /^Independent cross-check/ }).click();
   for (const role of ['Builder', 'Checker']) {
     await expect(gallery.getByRole('combobox', { name: `How ${role} runs` })).toHaveValue(
-      'terminal',
+      'claude-code.terminal',
     );
   }
   await gallery.getByRole('button', { name: 'Create canvas' }).click();
@@ -463,7 +463,7 @@ test('a template’s Claude agents run in their terminals, asked once whether to
 
 test('an Agent SDK agent on a Claude subscription says why it can’t run, and runs in Terminal instead', async () => {
   // Start this refusal fixture on its authored SDK connection; new agents use Terminal directly.
-  await canvasFile([], undefined, 'sdk');
+  await canvasFile([], undefined, 'claude-code.sdk');
   await chooseProject();
   await page.locator('.react-flow__node').dblclick();
   const view = page.getByRole('dialog', { name: 'Shop' });

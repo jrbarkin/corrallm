@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
+import { catalog } from '../catalog';
+import { agentLabel, connectionOf } from './agents';
 import { fromFile, toFile } from './file';
 import { autosize } from './graph';
 import type { Graph, GraphNode } from './graph';
@@ -38,7 +40,7 @@ const graph: Graph = {
       position: { x: 20, y: 52 },
       data: {
         label: 'Coder',
-        agent: 'Codex',
+        adapter: 'codex',
         queue,
       },
       measured: { width: 150, height: 34 },
@@ -70,7 +72,7 @@ const saved = {
       label: 'Coder',
       position: { x: 20, y: 52 },
       parent: 'G',
-      agent: 'Codex',
+      adapter: 'codex',
       queue,
     },
     { id: 'b', kind: 'agent', label: 'Reviewer', position: { x: 600, y: 0 } },
@@ -113,14 +115,16 @@ describe('fromFile', () => {
       ),
     };
     const saved = toFile(withConditions, ID);
-    expect(fromFile(saved).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(wholeLine);
-    expect(toFile(fromFile(saved), ID)).toBe(saved);
+    expect(fromFile(saved, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(
+      wholeLine,
+    );
+    expect(toFile(fromFile(saved, catalog()), ID)).toBe(saved);
   });
 
   it('reads back what was saved, with groups sized to fit what they hold', () => {
     const plain = (node: GraphNode): GraphNode => {
       const { id, type, position, parentId } = node;
-      const { label, agent, color, queue: items } = node.data;
+      const { label, adapter, color, queue: items } = node.data;
       return {
         id,
         type,
@@ -128,13 +132,13 @@ describe('fromFile', () => {
         ...(parentId === undefined ? {} : { parentId }),
         data: {
           label,
-          ...(agent === undefined ? {} : { agent }),
+          ...(adapter === undefined ? {} : { adapter }),
           ...(color === undefined ? {} : { color }),
           ...(items === undefined ? {} : { queue: items }),
         },
       };
     };
-    const loaded = fromFile(toFile(graph, ID));
+    const loaded = fromFile(toFile(graph, ID), catalog());
     expect(loaded).toEqual({
       nodes: autosize(graph.nodes.map(plain)),
       edges: [
@@ -164,8 +168,8 @@ describe('fromFile', () => {
     };
     const text = toFile(withTimes, ID);
     expect(text).toContain('"delay": {\n');
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(timed);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(timed);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
   });
 
   it('reads back what a step is to do, in the user’s words', () => {
@@ -181,15 +185,15 @@ describe('fromFile', () => {
     };
     const text = toFile(withSteps, ID);
     expect(text).toContain('"instruction": "run npm test"');
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(told);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(told);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
     // An empty one is none.
     const empty = JSON.stringify({
       ...saved,
       nodes: [{ ...saved.nodes[2], queue: [{ id: 's', action: 'Bash', instruction: '' }] }],
       links: [],
     });
-    expect(fromFile(empty).nodes[0]?.data.queue).toEqual([{ id: 's', action: 'Bash' }]);
+    expect(fromFile(empty, catalog()).nodes[0]?.data.queue).toEqual([{ id: 's', action: 'Bash' }]);
   });
 
   it('reads back steps expected to fail, in a repeat and an if-then too', () => {
@@ -214,17 +218,19 @@ describe('fromFile', () => {
     };
     const text = toFile(withRed, ID);
     expect(text).toContain('"expect": "fails"');
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(red);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(red);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
   });
 
   it('reads back usage conditions, and delays and time limits until a usage window resets', () => {
     const usage: QueueItem[] = [
-      { id: 'reset', delay: { resets: 'fiveHour', backend: 'Claude' } },
-      { id: 'built', waitFor: [{ agent: 'b' }], timeout: { resets: 'weekly', backend: 'Codex' } },
+      { id: 'reset', delay: { resets: 'fiveHour', backend: 'claude-code' } },
+      // A backend this build lacks is kept, and has no reading.
+      { id: 'later', delay: { resets: 'weekly', backend: 'gemini' } },
+      { id: 'built', waitFor: [{ agent: 'b' }], timeout: { resets: 'weekly', backend: 'codex' } },
       {
         id: 'high',
-        if: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 80 },
+        if: { kind: 'usageAbove', backend: 'claude-code', window: 'weekly', percent: 80 },
         then: [{ id: 'hand', message: 'Take the mechanical steps.', target: 'b' }],
       },
     ];
@@ -235,8 +241,8 @@ describe('fromFile', () => {
       ),
     };
     const text = toFile(withUsage, ID);
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(usage);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(usage);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
   });
 
   it('reads back OKs, on what they name or (no words) on the work before them', () => {
@@ -255,8 +261,8 @@ describe('fromFile', () => {
     expect(text).toContain(
       '{\n          "id": "spec-ok",\n          "approve": "the spec in SPEC.md"\n',
     );
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(asked);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(asked);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
   });
 
   it('reads back repeats, keys in the order the app writes them; older files read as before', () => {
@@ -299,10 +305,10 @@ describe('fromFile', () => {
     expect(text).toMatch(
       /\{\n {10}"id": "green-loop",\n {10}"repeat": \[[^]*\],\n {10}"until": \{\n {12}"kind": "succeeded"\n {10}\},\n {10}"rounds": 3,\n {10}"otherwise": "ask"\n/,
     );
-    expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(looped);
-    expect(toFile(fromFile(text), ID)).toBe(text);
+    expect(fromFile(text, catalog()).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(looped);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
     // A file from before repeats reads just as it did.
-    expect(fromFile(JSON.stringify(saved)).nodes[1]?.data.queue).toEqual(queue);
+    expect(fromFile(JSON.stringify(saved), catalog()).nodes[1]?.data.queue).toEqual(queue);
   });
 
   it('saves how a Claude or Codex agent runs when it is connected, and reads it back', () => {
@@ -312,40 +318,38 @@ describe('fromFile', () => {
           id: 't',
           type: 'agent',
           position: { x: 0, y: 0 },
-          data: { label: 'T', connection: 'terminal' },
+          data: { label: 'T', connection: 'claude-code.terminal' },
         },
         {
           id: 's',
           type: 'agent',
           position: { x: 200, y: 0 },
-          data: { label: 'S', agent: 'Claude', connection: 'sdk' },
+          data: { label: 'S', adapter: 'claude-code', connection: 'claude-code.sdk' },
         },
         {
           id: 'c',
           type: 'agent',
           position: { x: 400, y: 0 },
-          data: { label: 'C', agent: 'Codex', connection: 'codex-terminal' },
+          data: { label: 'C', adapter: 'codex', connection: 'codex.terminal' },
         },
         {
           id: 'x',
           type: 'agent',
           position: { x: 600, y: 0 },
-          data: { label: 'X', agent: 'Codex', connection: 'app-server' },
+          data: { label: 'X', adapter: 'codex', connection: 'codex.app-server' },
         },
       ],
       edges: [],
     };
     const file = JSON.parse(toFile(connected, ID)) as typeof saved;
-    const ways = ['terminal', 'sdk', 'codex-terminal', 'app-server'];
+    const ways = ['claude-code.terminal', 'claude-code.sdk', 'codex.terminal', 'codex.app-server'];
     expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual(ways);
-    expect(fromFile(toFile(connected, ID)).nodes.map((n) => n.data.connection)).toEqual(ways);
-    // The removed placeholder is no connection.
-    const simulated = structuredClone(saved);
-    Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
-    expect(() => fromFile(JSON.stringify(simulated))).toThrow('nodes[2].connection must be one of');
+    expect(fromFile(toFile(connected, ID), catalog()).nodes.map((n) => n.data.connection)).toEqual(
+      ways,
+    );
   });
 
-  it('saves what an agent is set to run with in each CLI, and reads it back', () => {
+  it('saves what an agent is set to run with by each adapter, and reads it back', () => {
     const set: Graph = {
       nodes: [
         {
@@ -354,11 +358,12 @@ describe('fromFile', () => {
           position: { x: 0, y: 0 },
           data: {
             label: 'T',
-            connection: 'terminal',
+            connection: 'claude-code.terminal',
             settings: {
-              claude: { model: 'haiku', effort: 'low', mode: 'plan' },
-              // What it was set to when it ran Codex is kept too.
-              codex: { model: 'gpt-6-luna' },
+              'claude-code': { model: 'haiku', effort: 'low', mode: 'plan' },
+              // What it was set to when it ran Codex is kept too: a mode one of its connections
+              // starts in.
+              codex: { model: 'gpt-6-luna', mode: 'plan' },
             },
           },
         },
@@ -367,39 +372,69 @@ describe('fromFile', () => {
     };
     const text = toFile(set, ID);
     expect((JSON.parse(text) as { nodes: { settings?: unknown }[] }).nodes[0]?.settings).toEqual({
-      claude: { model: 'haiku', effort: 'low', mode: 'plan' },
-      codex: { model: 'gpt-6-luna' },
+      'claude-code': { model: 'haiku', effort: 'low', mode: 'plan' },
+      codex: { model: 'gpt-6-luna', mode: 'plan' },
     });
-    expect(fromFile(text).nodes[0]?.data.settings).toEqual(set.nodes[0]?.data.settings);
-    expect(toFile(fromFile(text), ID)).toBe(text);
-    // Nothing set: written as nothing, for a CLI or at all.
+    expect(fromFile(text, catalog()).nodes[0]?.data.settings).toEqual(set.nodes[0]?.data.settings);
+    expect(toFile(fromFile(text, catalog()), ID)).toBe(text);
+    // Nothing set: written as nothing, for an adapter or at all.
     const file = structuredClone(saved);
-    Object.assign(file.nodes[2] ?? {}, { settings: { claude: {}, codex: {} } });
-    expect(fromFile(JSON.stringify(file)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
+    Object.assign(file.nodes[2] ?? {}, { settings: { 'claude-code': {}, codex: {} } });
+    expect(fromFile(JSON.stringify(file), catalog()).nodes[2]?.data).toEqual({ label: 'Reviewer' });
   });
+
+  it.each([
+    ['toString', undefined],
+    ['toString', 'toString.acp'],
+    ['constructor', undefined],
+    ['constructor', 'constructor'],
+  ])(
+    'keeps an agent whose adapter is named like what every object inherits (%s, connection %s) as it was',
+    (adapter, connection) => {
+      const file = structuredClone(saved);
+      Object.assign(file.nodes[1] ?? {}, {
+        adapter,
+        ...(connection === undefined ? {} : { connection }),
+        settings: { toString: { model: 'pro', mode: 'yolo' }, constructor: { effort: 'max' } },
+      });
+      const graph = fromFile(JSON.stringify(file), catalog());
+      const data = graph.nodes.find((n) => n.id === 'a')?.data ?? {};
+      expect(data).toMatchObject({
+        adapter,
+        settings: { toString: { model: 'pro', mode: 'yolo' }, constructor: { effort: 'max' } },
+      });
+      expect(connectionOf(data)).toBe('unavailable');
+      expect(agentLabel(adapter, connectionOf(data), { short: true })).toBe(
+        `${adapter} · Not connected`,
+      );
+      expect(JSON.parse(toFile(graph, ID))).toEqual(file);
+    },
+  );
 
   it('refuses a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
-    expect(() => fromFile(JSON.stringify(file))).toThrow('nodes[1].queue[0].waitFor[0]');
+    expect(() => fromFile(JSON.stringify(file), catalog())).toThrow('nodes[1].queue[0].waitFor[0]');
   });
 
   it('puts parents before their children, whatever order the file lists them in', () => {
     const [group, ...rest] = saved.nodes;
-    const loaded = fromFile(JSON.stringify({ ...saved, nodes: [...rest, group] }));
+    const loaded = fromFile(JSON.stringify({ ...saved, nodes: [...rest, group] }), catalog());
     expect(loaded.nodes.map((n) => n.id)).toEqual(['G', 'a', 'b']);
   });
 
   it('rejects what is not a canvas, canvases from another version, and one without an id', () => {
-    expect(() => fromFile('not json')).toThrow('This is not a corrallm canvas');
-    expect(() => fromFile('{"format": "other"}')).toThrow('This is not a corrallm canvas');
-    expect(() => fromFile(JSON.stringify({ ...saved, version: 3 }))).toThrow(
+    expect(() => fromFile('not json', catalog())).toThrow('This is not a corrallm canvas');
+    expect(() => fromFile('{"format": "other"}', catalog())).toThrow(
+      'This is not a corrallm canvas',
+    );
+    expect(() => fromFile(JSON.stringify({ ...saved, version: 3 }), catalog())).toThrow(
       'This canvas was made by a newer version of corrallm',
     );
-    expect(() => fromFile(JSON.stringify({ ...saved, version: 1 }))).toThrow(
+    expect(() => fromFile(JSON.stringify({ ...saved, version: 1 }), catalog())).toThrow(
       'This canvas is from an older version of corrallm',
     );
-    expect(() => fromFile(JSON.stringify({ ...saved, id: 'team' }))).toThrow(
+    expect(() => fromFile(JSON.stringify({ ...saved, id: 'team' }), catalog())).toThrow(
       'id must be the canvas’s id',
     );
   });
@@ -413,50 +448,51 @@ describe('fromFile', () => {
       /^nodes\[0\]\.label must be text$/,
     ],
     [
-      'an unknown agent',
-      (f) => Object.assign(f.nodes[1] ?? {}, { agent: 'Eliza' }),
-      /nodes\[1\]\.agent/,
+      'an adapter that is no id',
+      (f) => Object.assign(f.nodes[1] ?? {}, { adapter: '--yolo' }),
+      /^nodes\[1\]\.adapter must be an adapter's id$/,
     ],
     [
-      'an unknown connection',
-      (f) => Object.assign(f.nodes[2] ?? {}, { connection: 'ssh' }),
-      /^nodes\[2\]\.connection must be one of: terminal, sdk, codex-terminal, app-server$/,
+      'a connection that is no id',
+      (f) => Object.assign(f.nodes[2] ?? {}, { connection: 'ssh://host' }),
+      /^nodes\[2\]\.connection must be a connection's id$/,
     ],
     [
-      'a connection its agent type does not offer',
-      (f) => Object.assign(f.nodes[1] ?? {}, { connection: 'terminal' }),
-      /^nodes\[1\]\.connection: Codex agents run only codex-terminal or app-server$/,
+      'a connection of another adapter',
+      (f) => Object.assign(f.nodes[1] ?? {}, { connection: 'claude-code.terminal' }),
+      /^nodes\[1\]\.connection: "claude-code\.terminal" is a connection of claude-code, not of codex$/,
     ],
     [
       'a group with a connection',
-      (f) => Object.assign(f.nodes[0] ?? {}, { connection: 'sdk' }),
+      (f) => Object.assign(f.nodes[0] ?? {}, { connection: 'claude-code.sdk' }),
       /^nodes\[0\]\.connection: a group has no connection$/,
     ],
     [
       'a group with settings',
-      (f) => Object.assign(f.nodes[0] ?? {}, { settings: { claude: { model: 'opus' } } }),
+      (f) => Object.assign(f.nodes[0] ?? {}, { settings: { 'claude-code': { model: 'opus' } } }),
       /^nodes\[0\]\.settings: a group has no settings$/,
     ],
     [
-      'settings for a CLI corrallm does not run',
-      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { gemini: { model: 'pro' } } }),
-      /^nodes\[2\]\.settings\.gemini: settings are for claude or codex$/,
+      'settings by what is no adapter',
+      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { 'no adapter': { model: 'pro' } } }),
+      /^nodes\[2\]\.settings\.no adapter: settings are by adapter$/,
     ],
     [
       'a model that reads as a flag',
       (f) =>
         Object.assign(f.nodes[2] ?? {}, {
-          settings: { claude: { model: '--dangerously-skip-permissions' } },
+          settings: { 'claude-code': { model: '--dangerously-skip-permissions' } },
         }),
-      /^nodes\[2\]\.settings\.claude\.model must be a model's name/,
+      /^nodes\[2\]\.settings\.claude-code\.model must be a model's name/,
     ],
     [
       'an effort that is not a word',
-      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { claude: { effort: 'max; rm' } } }),
-      /^nodes\[2\]\.settings\.claude\.effort must be a reasoning effort/,
+      (f) =>
+        Object.assign(f.nodes[2] ?? {}, { settings: { 'claude-code': { effort: 'max; rm' } } }),
+      /^nodes\[2\]\.settings\.claude-code\.effort must be a reasoning effort/,
     ],
     [
-      'a mode of the other CLI',
+      'a mode of another adapter',
       (f) => Object.assign(f.nodes[2] ?? {}, { settings: { codex: { mode: 'plan-ish' } } }),
       /^nodes\[2\]\.settings\.codex\.mode must be one of: read-only, auto, plan$/,
     ],
@@ -464,13 +500,31 @@ describe('fromFile', () => {
       // A file never starts an agent without its asking: that is chosen in its session, each time.
       'a mode that never asks',
       (f) =>
-        Object.assign(f.nodes[2] ?? {}, { settings: { claude: { mode: 'bypassPermissions' } } }),
-      /^nodes\[2\]\.settings\.claude\.mode must be one of: manual, acceptEdits, plan, auto$/,
+        Object.assign(f.nodes[2] ?? {}, {
+          settings: { 'claude-code': { mode: 'bypassPermissions' } },
+        }),
+      /^nodes\[2\]\.settings\.claude-code\.mode must be one of: manual, acceptEdits, plan, auto$/,
+    ],
+    [
+      // Its Terminal starts in Read only, or the user's own default; Plan is chosen in it.
+      'a mode its connection does not start in',
+      (f) => Object.assign(f.nodes[1] ?? {}, { settings: { codex: { mode: 'plan' } } }),
+      /^nodes\[1\]\.settings\.codex\.mode must be one of: read-only$/,
+    ],
+    [
+      'a mode another connection starts in, for the one it runs',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          connection: 'codex.terminal',
+          settings: { codex: { mode: 'auto' } },
+        }),
+      /^nodes\[1\]\.settings\.codex\.mode must be one of: read-only$/,
     ],
     [
       'something else set',
-      (f) => Object.assign(f.nodes[2] ?? {}, { settings: { claude: { command: 'rm -rf /' } } }),
-      /^nodes\[2\]\.settings\.claude: only model, effort and mode can be set$/,
+      (f) =>
+        Object.assign(f.nodes[2] ?? {}, { settings: { 'claude-code': { command: 'rm -rf /' } } }),
+      /^nodes\[2\]\.settings\.claude-code: only model, effort and mode can be set$/,
     ],
     [
       'a repeated id',
@@ -532,18 +586,18 @@ describe('fromFile', () => {
       /^nodes\[1\]\.queue\[0\]\.until\.wholeLine must be true or false$/,
     ],
     [
-      'a usage condition on a backend whose usage corrallm reads not',
+      'a usage condition on what is no backend',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, {
           queue: [
             {
               id: 'i',
-              if: { kind: 'usageAbove', backend: 'Gemini', window: 'weekly', percent: 80 },
+              if: { kind: 'usageAbove', backend: 'my plan', window: 'weekly', percent: 80 },
               then: [],
             },
           ],
         }),
-      /^nodes\[1\]\.queue\[0\]\.if\.backend must be one of: Claude, Codex$/,
+      /^nodes\[1\]\.queue\[0\]\.if\.backend must be a usage backend's id$/,
     ],
     [
       'a usage condition over all of a window',
@@ -552,7 +606,7 @@ describe('fromFile', () => {
           queue: [
             {
               id: 'i',
-              if: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 100 },
+              if: { kind: 'usageAbove', backend: 'claude-code', window: 'weekly', percent: 100 },
               then: [],
             },
           ],
@@ -566,7 +620,7 @@ describe('fromFile', () => {
           queue: [
             {
               id: 'i',
-              if: { kind: 'usageAbove', backend: 'Claude', window: 'daily', percent: 80 },
+              if: { kind: 'usageAbove', backend: 'claude-code', window: 'daily', percent: 80 },
               then: [],
             },
           ],
@@ -577,17 +631,17 @@ describe('fromFile', () => {
       'a delay until a window there is none of resets',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, {
-          queue: [{ id: 'd', delay: { resets: 'monthly', backend: 'Claude' } }],
+          queue: [{ id: 'd', delay: { resets: 'monthly', backend: 'claude-code' } }],
         }),
       /^nodes\[1\]\.queue\[0\]\.delay\.resets must be one of: fiveHour, weekly$/,
     ],
     [
-      'a delay until the usage of a backend corrallm reads not resets',
+      'a delay until the usage of what is no backend resets',
       (f) =>
         Object.assign(f.nodes[1] ?? {}, {
-          queue: [{ id: 'd', delay: { resets: 'weekly', backend: 'Qwen' } }],
+          queue: [{ id: 'd', delay: { resets: 'weekly', backend: '' } }],
         }),
-      /^nodes\[1\]\.queue\[0\]\.delay\.backend must be one of: Claude, Codex$/,
+      /^nodes\[1\]\.queue\[0\]\.delay\.backend must be a usage backend's id$/,
     ],
     [
       'a wait inside an if-then',
@@ -734,7 +788,7 @@ describe('fromFile', () => {
             {
               id: 'r',
               repeat: [],
-              until: { kind: 'usageAbove', backend: 'Claude', window: 'weekly', percent: 80 },
+              until: { kind: 'usageAbove', backend: 'claude-code', window: 'weekly', percent: 80 },
               rounds: 3,
               otherwise: 'ask',
             },
@@ -849,6 +903,6 @@ describe('fromFile', () => {
   ])('rejects %s, saying where', (_label, breakIt, message) => {
     const file = structuredClone(saved);
     breakIt(file);
-    expect(() => fromFile(JSON.stringify(file))).toThrow(message);
+    expect(() => fromFile(JSON.stringify(file), catalog())).toThrow(message);
   });
 });

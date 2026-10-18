@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { AgentType } from '../graph/agents';
+import { catalog } from '../catalog';
 import {
   answersOf,
   chatStart,
+  cycledModes,
   modeOf,
   modesOf,
   NEW_SESSION,
@@ -44,17 +45,17 @@ describe('the conversations a transcript holds', () => {
   const entries: Entry[] = [
     said('Review it', 'codex'),
     said('Sketch it', 'unavailable'),
-    said('Fix it', 'claude'),
-    { id: 'c1', kind: 'cleared', conversation: 'claude' },
-    said('Document it', 'claude'),
-    said('Ship it', 'claude'),
+    said('Fix it', 'claude-code'),
+    { id: 'c1', kind: 'cleared', conversation: 'claude-code' },
+    said('Document it', 'claude-code'),
+    said('Ship it', 'claude-code'),
   ];
 
   it('names a chat by the first message of its conversation since its last /clear', () => {
-    expect(chatStart(entries, 'claude')?.text).toBe('Document it');
+    expect(chatStart(entries, 'claude-code')?.text).toBe('Document it');
     expect(chatStart(entries, 'codex')?.text).toBe('Review it');
     expect(chatStart(entries, 'unavailable')?.text).toBe('Sketch it');
-    expect(chatStart(entries.slice(0, 4), 'claude')).toBeUndefined();
+    expect(chatStart(entries.slice(0, 4), 'claude-code')).toBeUndefined();
   });
 
   it('rewinds only within Claude Code’s conversation now', () => {
@@ -64,13 +65,13 @@ describe('the conversations a transcript holds', () => {
 
 describe('modes', () => {
   it('offers a Codex agent Codex’s modes, and other agents Claude Code’s', () => {
-    expect(modesOf(AgentType.Codex).map((m) => m.mode)).toEqual([
+    expect(modesOf('codex').map((m) => m.mode)).toEqual([
       'read-only',
       'auto',
       'full-access',
       'plan',
     ]);
-    expect(modesOf(AgentType.Claude).map((m) => m.mode)).toEqual([
+    expect(modesOf('claude-code').map((m) => m.mode)).toEqual([
       'manual',
       'acceptEdits',
       'plan',
@@ -79,11 +80,23 @@ describe('modes', () => {
     ]);
   });
 
+  it('offers each adapter the modes the catalog declares, as it declares them', () => {
+    for (const adapter of catalog().adapters) {
+      expect(modesOf(adapter.id)).toEqual(
+        adapter.modes.map(({ id, label, description }) => ({ mode: id, label, description })),
+      );
+      // Shift+Tab never cycles into a mode that never asks.
+      expect(cycledModes(adapter.id)).toEqual(
+        adapter.modes.flatMap(({ id, asks }) => (asks ? [id] : [])),
+      );
+    }
+  });
+
   it('shows a mode its agent has, or else the one it starts in', () => {
-    expect(modeOf(AgentType.Codex, 'full-access').label).toBe('Full access');
-    expect(modeOf(AgentType.Codex, 'acceptEdits').label).toBe('Default');
-    expect(modeOf(AgentType.Claude, 'read-only').label).toBe('Manual');
-    expect(modeOf(AgentType.Claude, 'plan').label).toBe('Plan');
+    expect(modeOf('codex', 'full-access').label).toBe('Full access');
+    expect(modeOf('codex', 'acceptEdits').label).toBe('Default');
+    expect(modeOf('claude-code', 'read-only').label).toBe('Manual');
+    expect(modeOf('claude-code', 'plan').label).toBe('Plan');
   });
 });
 

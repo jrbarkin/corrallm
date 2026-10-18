@@ -297,7 +297,12 @@ describe('SdkConnector through the Agent SDK', () => {
     await expect(start('manual', {}, events)).rejects.toThrow(SUBSCRIPTION_LOGIN);
     expect(session).toBeUndefined();
     expect(events).toMatchObject([
-      { type: 'notice', level: 'error', text: SUBSCRIPTION_LOGIN, switchTo: 'terminal' },
+      {
+        type: 'notice',
+        level: 'error',
+        text: SUBSCRIPTION_LOGIN,
+        switchTo: 'claude-code.terminal',
+      },
     ]);
   });
 

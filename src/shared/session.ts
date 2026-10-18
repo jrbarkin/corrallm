@@ -1,3 +1,5 @@
+import type { AdapterId, ConnectionId, ModeId } from './adapter';
+
 /*
  * Connected sessions: an agent's session run by the main process (Claude Code or Codex, in a
  * terminal or through a structured interface), what the renderer asks of it, and what main tells
@@ -7,10 +9,6 @@
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
-
-/** The CLIs agents can be connected to: Claude Code and Codex. */
-export const CLIS = ['claude', 'codex'] as const;
-export type Cli = (typeof CLIS)[number];
 
 /** Why a session turn ended; a completed turn does not itself verify a task's objective. */
 export const TURN_REASONS = [
@@ -51,30 +49,8 @@ export function turnResult(end: {
   );
 }
 
-/** Which CLIs the user has: whether corrallm finds each, as its connections would run it. */
-export type InstalledClis = Readonly<Record<Cli, boolean>>;
-
-/**
- * The real native agent connections: each names what runs its session. Claude Code
- * in a terminal ('terminal') or through the Agent SDK ('sdk'); Codex in a terminal
- * ('codex-terminal') or through its app server ('app-server', JSON-RPC over stdio).
- */
-export const CONNECTIONS = ['terminal', 'sdk', 'codex-terminal', 'app-server'] as const;
-export type Connection = (typeof CONNECTIONS)[number];
-
-/** The CLI each connection runs. */
-export const CONNECTION_CLI: Readonly<Record<Connection, Cli>> = {
-  terminal: 'claude',
-  sdk: 'claude',
-  'codex-terminal': 'codex',
-  'app-server': 'codex',
-};
-
-/**
- * The connections whose view is their CLI's own terminal (src/shared/terminal.ts), rather than
- * corrallm's transcript and composer.
- */
-export const TERMINAL_CONNECTIONS: readonly Connection[] = ['terminal', 'codex-terminal'];
+/** Which agents the user has, by adapter: whether corrallm finds each, as its connections would run it. */
+export type InstalledClis = Readonly<Record<AdapterId, boolean>>;
 
 /**
  * Claude Code's permission modes, by its settings' names, in the order Shift+Tab cycles them.
@@ -103,34 +79,21 @@ export type CodexMode = (typeof CODEX_MODES)[number];
 /** A session's mode: one of its CLI's. */
 export type SessionMode = PermissionMode | CodexMode;
 
-/** Each CLI's modes. */
-export const CLI_MODES: {
-  readonly claude: readonly PermissionMode[];
-  readonly codex: readonly CodexMode[];
-} = {
-  claude: PERMISSION_MODES,
-  codex: CODEX_MODES,
-};
-
-/** The mode each CLI starts in unless told otherwise: Claude Code's Manual, Codex's Default. */
-export const DEFAULT_MODES: { readonly claude: PermissionMode; readonly codex: CodexMode } = {
-  claude: 'manual',
-  codex: 'auto',
-};
+/** The mode each adapter's agents start in unless told otherwise: Claude Code's Manual, Codex's Default. */
+export const DEFAULT_MODES: { readonly 'claude-code': PermissionMode; readonly codex: CodexMode } =
+  {
+    'claude-code': 'manual',
+    codex: 'auto',
+  };
 
 /** Whether `mode` is one of Claude Code's permission modes. */
 export function isPermissionMode(mode: SessionMode): mode is PermissionMode {
   return (PERMISSION_MODES as readonly SessionMode[]).includes(mode);
 }
 
-/** Whether `mode` is one of `cli`'s modes. */
-export function isModeOf(cli: Cli, mode: SessionMode): boolean {
-  return (CLI_MODES[cli] as readonly SessionMode[]).includes(mode);
-}
-
-/** `mode` if it is one of `cli`'s, else the mode `cli` starts in. */
-export function modeFor(cli: Cli, mode: SessionMode): SessionMode {
-  return isModeOf(cli, mode) ? mode : DEFAULT_MODES[cli];
+/** Whether `mode` is one a session can run in. */
+export function isSessionMode(mode: ModeId): mode is SessionMode {
+  return [...PERMISSION_MODES, ...CODEX_MODES].some((one) => one === mode);
 }
 
 export type ToolStatus = 'running' | 'done' | 'failed' | 'interrupted';
@@ -199,7 +162,7 @@ export interface EffortChoice {
  * it resumes.
  */
 export interface SessionOptions {
-  connection: Connection;
+  connection: ConnectionId;
   /** The agent's authored role, independent of its CLI-specific settings. */
   role?: string;
   /** The model the agent is set to run, or null: the user's own default (their CLI's settings). */
@@ -214,16 +177,17 @@ export interface SessionOptions {
 }
 
 /**
- * What an agent is set to run with in a CLI, each only if chosen: its model, its reasoning effort
- * and the mode its sessions start in (never one that never asks: UNASKING_MODES). Saved with the
- * agent in its canvas's file, one for each CLI it has run (so switching between Claude and Codex
- * loses neither), and shared by that CLI's connections: a Terminal agent's are passed on its CLI's
- * command line as it starts, a structured session's are its composer's choices.
+ * What an agent is set to run with by an adapter, each only if chosen: its model, its reasoning
+ * effort and the mode its sessions start in (one its connection starts in, which asks: the
+ * catalog's `startModes`). Saved with the agent in its canvas's file, one for each adapter it has
+ * run (so switching between them loses neither), and shared by that adapter's connections: a
+ * Terminal agent's are passed on its CLI's command line as it starts, a structured session's are
+ * its composer's choices.
  */
 export interface AgentSettings {
   model?: string;
   effort?: string;
-  mode?: SessionMode;
+  mode?: ModeId;
 }
 
 /** What a session starts with; the authored role is shared by every CLI the agent runs. */
@@ -352,6 +316,9 @@ export interface McpServer {
 /** What /mcp can do to a server. */
 export const MCP_CHANGES = ['reconnect', 'enable', 'disable'] as const;
 export type McpChange = (typeof MCP_CHANGES)[number];
+
+/** A JSON Schema, as plain data: what an operation takes and returns, as MCP lists it. */
+export type JsonSchema = Readonly<Record<string, unknown>>;
 
 /** A value of a form an MCP server asks the user to fill in: text, a number, yes or no, choices. */
 export type FormValue = string | number | boolean | string[];
@@ -560,7 +527,7 @@ export type SessionEvent =
       id: string;
       level: 'info' | 'warning' | 'error';
       text: string;
-      switchTo?: Connection;
+      switchTo?: ConnectionId;
     }
   /**
    * The conversation was cleared (/clear): Claude starts afresh, under a new session id. The

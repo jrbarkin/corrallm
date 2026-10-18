@@ -45,7 +45,6 @@ import {
   ungroupSelection,
 } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { AgentType } from './agents';
 
 /** An item measured at 100×40. */
 function agentNode(id: string, x: number, y: number, extra: Partial<GraphNode> = {}): GraphNode {
@@ -177,7 +176,7 @@ describe('addAgent', () => {
       // Its queue starts with a message to write: what the agent is to do.
       data: {
         label: 'Agent 1',
-        agent: AgentType.Claude,
+        adapter: 'claude-code',
         queue: [{ id: 'n/message', message: '' }],
       },
       selected: true,
@@ -235,12 +234,12 @@ describe('spawnAgent', () => {
   const NEXT = CARD_SIZE.width + 40;
 
   it('puts a peer beside the agent, in its row: of its type, selected, and not linked to it', () => {
-    const codex = { label: 'a', agent: AgentType.Codex };
+    const codex = { label: 'a', adapter: 'codex' };
     const g = graphOf([selected(agentNode('a', 0, 0, { data: codex }))]);
     const result = spawnAgent(g, 'a', 'n', 'peer');
     expect(get(result, 'n')).toMatchObject({
       position: { x: 140, y: 0 },
-      data: { label: 'Agent 1', agent: AgentType.Codex, queue: [{ id: 'n/message', message: '' }] },
+      data: { label: 'Agent 1', adapter: 'codex', queue: [{ id: 'n/message', message: '' }] },
     });
     expect(selectedIds(result)).toEqual(['n']);
     expect(result.edges).toEqual([]);
@@ -290,13 +289,15 @@ describe('spawnAgent', () => {
   });
 
   it('runs a spawned agent with its parent’s native connection, settings and role', () => {
-    const settings = { claude: { model: 'haiku' } };
+    const settings = { 'claude-code': { model: 'haiku' } };
     const role = 'Review every change before it lands.';
     const g = graphOf([
-      agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal', settings, role } }),
+      agentNode('a', 0, 0, {
+        data: { label: 'a', connection: 'claude-code.terminal', settings, role },
+      }),
     ]);
     expect(get(spawnAgent(g, 'a', 'n', 'peer'), 'n').data).toMatchObject({
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       settings,
       role,
     });
@@ -619,7 +620,7 @@ describe('setAgent', () => {
       agentNode('a', 0, 0, { data: { label: 'a', queue } }),
       agentNode('b', 0, 100),
     ]);
-    const changed = setAgent(g, 'a', AgentType.Codex);
+    const changed = setAgent(g, 'a', 'codex');
     expect(get(changed, 'a').data.queue).toEqual([
       { id: 'run', action: 'exec_command', instruction: 'npm test', expect: 'fails' },
       { id: 'read', action: 'Read', target: 'b', instruction: 'REVIEW.md' },
@@ -644,17 +645,19 @@ describe('setAgent', () => {
 
   it("sets a node's agent type; groups have none", () => {
     const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 100, 200, 200)]);
-    const qwen = setAgent(g, 'a', AgentType.Qwen);
-    expect(get(qwen, 'a').data.agent).toBe(AgentType.Qwen);
-    expect(setAgent(qwen, 'a', AgentType.Qwen)).toBe(qwen);
-    expect(setAgent(g, 'F', AgentType.Qwen)).toBe(g);
+    const qwen = setAgent(g, 'a', 'qwen');
+    expect(get(qwen, 'a').data.adapter).toBe('qwen');
+    expect(setAgent(qwen, 'a', 'qwen')).toBe(qwen);
+    expect(setAgent(g, 'F', 'qwen')).toBe(g);
   });
 
   it('drops a connection the new type does not offer', () => {
-    const g = graphOf([agentNode('a', 0, 0, { data: { label: 'a', connection: 'terminal' } })]);
-    expect(get(setAgent(g, 'a', AgentType.Codex), 'a').data).toEqual({
+    const g = graphOf([
+      agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.terminal' } }),
+    ]);
+    expect(get(setAgent(g, 'a', 'codex'), 'a').data).toEqual({
       label: 'a',
-      agent: AgentType.Codex,
+      adapter: 'codex',
     });
   });
 });
@@ -663,36 +666,66 @@ describe('setConnection', () => {
   it('switches real connections; unavailable types and groups cannot be connected', () => {
     const g = graphOf([
       agentNode('a', 0, 0),
-      agentNode('b', 0, 100, { data: { label: 'b', agent: AgentType.Gemini } }),
+      agentNode('b', 0, 100, { data: { label: 'b', adapter: 'gemini' } }),
       frame('F', 0, 200, 200, 200),
     ]);
-    const sdk = setConnection(g, 'a', 'sdk');
-    expect(get(sdk, 'a').data.connection).toBe('sdk');
-    expect(setConnection(sdk, 'a', 'sdk')).toBe(sdk);
-    expect(get(setConnection(sdk, 'a', 'terminal'), 'a').data).toEqual({
+    const sdk = setConnection(g, 'a', 'claude-code.sdk');
+    expect(get(sdk, 'a').data.connection).toBe('claude-code.sdk');
+    expect(setConnection(sdk, 'a', 'claude-code.sdk')).toBe(sdk);
+    expect(get(setConnection(sdk, 'a', 'claude-code.terminal'), 'a').data).toEqual({
       label: 'a',
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
     });
     expect(setConnection(sdk, 'a', 'unavailable')).toBe(sdk);
-    expect(setConnection(g, 'b', 'terminal')).toBe(g);
-    expect(setConnection(g, 'F', 'terminal')).toBe(g);
+    expect(setConnection(g, 'b', 'claude-code.terminal')).toBe(g);
+    expect(setConnection(g, 'F', 'claude-code.terminal')).toBe(g);
   });
 });
 
 describe('setSettings', () => {
-  it('sets what an agent runs with in one CLI, keeping the other’s; nothing set leaves nothing', () => {
+  it('sets what an agent runs with by one adapter, keeping the other’s; nothing set leaves nothing', () => {
     const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
-    const claude = setSettings(g, 'a', 'claude', { model: 'haiku', mode: 'plan' });
+    const claude = setSettings(g, 'a', 'claude-code', { model: 'haiku', mode: 'plan' });
     const both = setSettings(claude, 'a', 'codex', { effort: 'low' });
     expect(get(both, 'a').data.settings).toEqual({
-      claude: { model: 'haiku', mode: 'plan' },
+      'claude-code': { model: 'haiku', mode: 'plan' },
       codex: { effort: 'low' },
     });
     expect(get(setSettings(both, 'a', 'codex', {}), 'a').data.settings).toEqual({
-      claude: { model: 'haiku', mode: 'plan' },
+      'claude-code': { model: 'haiku', mode: 'plan' },
     });
-    expect(get(setSettings(claude, 'a', 'claude', {}), 'a').data).toEqual({ label: 'a' });
-    expect(setSettings(g, 'F', 'claude', { model: 'haiku' })).toBe(g);
+    expect(get(setSettings(claude, 'a', 'claude-code', {}), 'a').data).toEqual({ label: 'a' });
+    expect(setSettings(g, 'F', 'claude-code', { model: 'haiku' })).toBe(g);
+  });
+
+  it('drops a saved mode the connection an agent switches to does not start in', () => {
+    // Codex's App Server starts in Plan; its Terminal only in Read only (Plan is chosen in it).
+    const planning = { codex: { model: 'gpt-6-luna', mode: 'plan' } };
+    const g = graphOf([
+      agentNode('a', 0, 0, {
+        data: { label: 'a', adapter: 'codex', connection: 'codex.app-server', settings: planning },
+      }),
+    ]);
+    expect(get(setConnection(g, 'a', 'codex.terminal'), 'a').data.settings).toEqual({
+      codex: { model: 'gpt-6-luna' },
+    });
+    // A mode it starts in stays, and so does what other adapters are set to.
+    const reading = { codex: { mode: 'read-only' }, 'claude-code': { mode: 'plan' } };
+    const read = setSettings(g, 'a', 'codex', reading.codex);
+    const both = setSettings(read, 'a', 'claude-code', reading['claude-code']);
+    expect(get(setConnection(both, 'a', 'codex.terminal'), 'a').data.settings).toEqual(reading);
+    // Switching adapter, it runs that adapter's first connection.
+    const claude = setSettings(
+      graphOf([agentNode('b', 0, 0, { data: { label: 'b', adapter: 'codex' } })]),
+      'b',
+      'codex',
+      { mode: 'plan' },
+    );
+    expect(get(setAgent(claude, 'b', 'claude-code'), 'b').data.settings).toEqual({
+      codex: { mode: 'plan' },
+    });
+    const back = setSettings(setAgent(claude, 'b', 'claude-code'), 'b', 'claude-code', {});
+    expect(get(setAgent(back, 'b', 'codex'), 'b').data).not.toHaveProperty('settings');
   });
 });
 
@@ -916,7 +949,7 @@ describe('groupSelection', () => {
       type: 'agent',
       data: {
         label: 'Agent 3',
-        agent: AgentType.Claude,
+        adapter: 'claude-code',
         queue: [{ id: 'P/message', message: '' }],
       },
       selected: true,
@@ -990,7 +1023,7 @@ describe('addParent', () => {
       type: 'agent',
       data: {
         label: 'Agent 5',
-        agent: AgentType.Claude,
+        adapter: 'claude-code',
         queue: [{ id: 'F/message', message: '' }],
       },
       selected: true,

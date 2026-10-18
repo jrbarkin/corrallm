@@ -11,10 +11,11 @@ import type { Edge, EdgeProps, NodeProps } from '@xyflow/react';
 import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import type { AdapterId } from '../../shared/adapter';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
-import { agentLabel, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from './agents';
-import type { AgentConnection, AgentType } from './agents';
+import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agents';
+import type { AgentConnection } from './agents';
 import type { GraphNode } from './graph';
 import { SHORTCUTS } from './keys';
 import { isBlank } from './queue';
@@ -32,10 +33,10 @@ export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const state = queueState?.(id);
   const group = isParent ? groupState?.(id) : undefined;
   return (
-    <div className="graph-card" data-agent={data.agent ?? DEFAULT_AGENT} {...hover.target}>
+    <div className="graph-card" data-agent={data.adapter ?? DEFAULT_AGENT} {...hover.target}>
       <Handle type="source" id="top" position={Position.Top} />
       <Label id={id} label={data.label} />
-      <AgentTag agent={data.agent ?? DEFAULT_AGENT} connection={connectionOf(data)} />
+      <AgentTag agent={data.adapter ?? DEFAULT_AGENT} connection={connectionOf(data)} />
       <QueueCount count={data.queue?.filter((item) => !isBlank(item)).length ?? 0} />
       {state && (
         <span
@@ -278,12 +279,12 @@ function LabelInput({ id, label }: { id: string; label: string }) {
  * The coding agent a node runs, colour-coded, and how it runs when connected ("Claude · Terminal").
  * Drawn by CSS, so it is not part of the label.
  */
-function AgentTag({ agent, connection }: { agent: AgentType; connection: AgentConnection }) {
+function AgentTag({ agent, connection }: { agent: AdapterId; connection: AgentConnection }) {
   return (
     <span
       className="graph-agent"
       data-agent={agent}
-      data-connection={CONNECTION_INFO[connection].short}
+      data-connection={connectionInfo(connection).short}
       title={`Agent: ${agentLabel(agent, connection)}`}
     />
   );

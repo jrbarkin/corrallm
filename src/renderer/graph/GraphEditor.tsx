@@ -21,7 +21,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
-import { CONNECTION_CLI, TERMINAL_CONNECTIONS, UNASKING_MODES } from '../../shared/session';
+import { UNASKING_MODES } from '../../shared/session';
 import type { AgentSettings, InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
@@ -31,6 +31,7 @@ import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
 import type { AskedInSession } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
+import { adapterOf, catalog, continuesIn, isTerminal } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
@@ -186,7 +187,7 @@ export function GraphEditor({
 /** A template as a canvas: its blanks filled in, its agents given their types and connections. */
 function fromTemplate(example: Example, { values, agents, connections }: TemplateChoices): Graph {
   return withConnections(
-    withAgents(fillTemplate(fromFile(example.text), values), agents),
+    withAgents(fillTemplate(fromFile(example.text, catalog()), values), agents),
     connections,
   );
 }
@@ -288,7 +289,7 @@ function Editor({
       send: (agent, text, done, images, refused, origin, displayText) =>
         sessionStore.send(
           agent.id,
-          agent.data.agent ?? DEFAULT_AGENT,
+          agent.data.adapter ?? DEFAULT_AGENT,
           text,
           (failed, reply, result) => {
             done({ failed, reply, ...(result ? { result } : {}) });
@@ -336,11 +337,13 @@ function Editor({
         restore: (context) => {
           const checkpoint = context.checkpoint;
           const next = checkpoint
-            ? fromFile(checkpoint.workflow)
+            ? fromFile(checkpoint.workflow, catalog())
             : context.savedText
-              ? fromFile(context.savedText)
+              ? fromFile(context.savedText, catalog())
               : undefined;
-          const savedGraph = context.savedText ? fromFile(context.savedText) : EMPTY_GRAPH;
+          const savedGraph = context.savedText
+            ? fromFile(context.savedText, catalog())
+            : EMPTY_GRAPH;
           if (checkpoint) {
             readRun(checkpoint.state);
             const check = new SessionStore();
@@ -621,8 +624,8 @@ function Editor({
   }, [front, nodeElement]);
 
   /**
-   * Changes what a connected agent is set to run with in the CLI it runs now (its settings, saved
-   * with it). What it runs with changes nothing laid out; an unavailable connector has none to change.
+   * Changes what a connected agent is set to run with by the adapter it runs now (its settings,
+   * saved with it). What it runs with changes nothing laid out; an unavailable connector has none to change.
    */
   const updateSettings = useCallback(
     (id: string, change: (settings: AgentSettings) => AgentSettings) => {
@@ -630,8 +633,8 @@ function Editor({
         const node = g.nodes.find((n) => n.id === id);
         const connection = node ? connectionOf(node.data) : 'unavailable';
         if (!node || connection === 'unavailable') return g;
-        const cli = CONNECTION_CLI[connection];
-        return setSettings(g, id, cli, change(node.data.settings?.[cli] ?? {}));
+        const adapter = adapterOf(connection);
+        return setSettings(g, id, adapter, change(node.data.settings?.[adapter] ?? {}));
       });
     },
     [],
@@ -844,7 +847,7 @@ function Editor({
           files.open().then((file) => {
             if (!file) return;
             try {
-              load(fromFile(file.text), file.name, file.id);
+              load(fromFile(file.text, catalog()), file.name, file.id);
               setProject(file.project ?? null);
             } catch (error) {
               setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
@@ -899,7 +902,7 @@ function Editor({
             .then(() =>
               persistence.transition(async () => {
                 const name = await files.save(text, choose);
-                if (name !== null) setSaved({ name, graph: fromFile(text) });
+                if (name !== null) setSaved({ name, graph: fromFile(text, catalog()) });
               }, false),
             )
             .then(() => {
@@ -908,7 +911,7 @@ function Editor({
           return;
         }
         files.save(text, choose).then((name) => {
-          if (name !== null) setSaved({ name, graph: fromFile(text) });
+          if (name !== null) setSaved({ name, graph: fromFile(text, catalog()) });
         }, failed('save the canvas'));
       },
     };
@@ -984,7 +987,9 @@ function Editor({
         ...(status === 'idle' ? [] : ['working']),
       ];
       const name = n.data.label || 'Unnamed agent';
-      const type = agentLabel(n.data.agent ?? DEFAULT_AGENT, connectionOf(n.data), { short: true });
+      const type = agentLabel(n.data.adapter ?? DEFAULT_AGENT, connectionOf(n.data), {
+        short: true,
+      });
       return {
         ...n,
         ...(classes.length === 0 ? {} : { className: classes.join(' ') }),
@@ -995,9 +1000,7 @@ function Editor({
   /** What Terminal agents' CLIs ask in their terminals: listed, answered there. */
   const inTerminal = graph.nodes.flatMap((agent) => {
     const connection = connectionOf(agent.data);
-    return agent.type === 'agent' &&
-      connection !== 'unavailable' &&
-      TERMINAL_CONNECTIONS.includes(connection)
+    return agent.type === 'agent' && isTerminal(connection)
       ? (sessions[agent.id]?.asking ?? []).map((ask) => ({ agent, ask }))
       : [];
   });
@@ -1073,7 +1076,7 @@ function Editor({
           {
             id,
             name: n.data.label || 'Unnamed agent',
-            agent: n.data.agent ?? DEFAULT_AGENT,
+            agent: n.data.adapter ?? DEFAULT_AGENT,
             status: sessions[id]?.status ?? 'idle',
           },
         ]
@@ -1300,13 +1303,13 @@ function Editor({
                 pending={pending.map(({ agent, question }) => ({
                   agentId: agent.id,
                   agentName: agent.data.label || 'Unnamed agent',
-                  agentType: agent.data.agent ?? DEFAULT_AGENT,
+                  agentType: agent.data.adapter ?? DEFAULT_AGENT,
                   question,
                 }))}
                 inTerminal={inTerminal.map(({ agent, ask }) => ({
                   agentId: agent.id,
                   agentName: agent.data.label || 'Unnamed agent',
-                  agentType: agent.data.agent ?? DEFAULT_AGENT,
+                  agentType: agent.data.adapter ?? DEFAULT_AGENT,
                   ask,
                 }))}
                 onAnswer={(agentId, questionId, answer) => {
@@ -1427,15 +1430,17 @@ function Editor({
             onContinueInTerminal={(command) => {
               // Its terminal resumes the conversation (the connections share it), and runs the
               // command typed for it once the agent runs there.
+              const terminal = continuesIn(connectionOf(openedNode.data));
+              if (terminal === undefined) return;
               if (command !== undefined) {
                 sessionStore.sendOnceIn(
                   openedNode.id,
-                  'terminal',
-                  openedNode.data.agent ?? DEFAULT_AGENT,
+                  terminal,
+                  openedNode.data.adapter ?? DEFAULT_AGENT,
                   command,
                 );
               }
-              setGraph((g) => setConnection(g, openedNode.id, 'terminal'));
+              setGraph((g) => setConnection(g, openedNode.id, terminal));
             }}
             edits={edits}
             marks={marks}
@@ -1454,7 +1459,7 @@ function Editor({
               send: (text, images) => {
                 sessionStore.send(
                   openedNode.id,
-                  openedNode.data.agent ?? DEFAULT_AGENT,
+                  openedNode.data.adapter ?? DEFAULT_AGENT,
                   text,
                   undefined,
                   images,
@@ -1510,7 +1515,7 @@ function Editor({
                   return effort === null ? next : { ...next, effort };
                 });
               },
-              settingsOptions: (cli) => sessionStore.settingsOptions(cli),
+              settingsOptions: (adapter) => sessionStore.settingsOptions(adapter),
               restart: () => {
                 void sessionStore.restart(openedNode.id);
               },
@@ -1550,7 +1555,7 @@ function Editor({
             }}
             onAgentContextMenu={showAgentMenu}
             onOpenSettings={setSettingsAgent}
-            settingsOptions={(cli) => sessionStore.settingsOptions(cli)}
+            settingsOptions={(adapter) => sessionStore.settingsOptions(adapter)}
             {...(queues.from === undefined ? {} : { focus: queues.from })}
             backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
             onOpenAgent={(id) => {
@@ -1609,7 +1614,7 @@ function Editor({
             key={`settings:${settingsNode.id}`}
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
-            options={(cli) => sessionStore.settingsOptions(cli)}
+            options={(adapter) => sessionStore.settingsOptions(adapter)}
             onRename={(name) => {
               setGraph((g) => renameNode(g, settingsNode.id, name));
             }}
@@ -1621,8 +1626,8 @@ function Editor({
                 setConnection(setAgent(g, settingsNode.id, agent), settingsNode.id, connection),
               );
             }}
-            onSettings={(cli, settings) => {
-              setRawGraph((g) => setSettings(g, settingsNode.id, cli, settings));
+            onSettings={(adapter, settings) => {
+              setRawGraph((g) => setSettings(g, settingsNode.id, adapter, settings));
             }}
             onRestart={() => {
               void sessionStore.restart(settingsNode.id);

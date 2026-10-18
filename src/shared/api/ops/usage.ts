@@ -1,11 +1,15 @@
 import { z } from 'zod';
 
-import { USAGE_ACTIONS, USAGE_BACKENDS, USAGE_WINDOWS } from '../../usage';
+import { ID_PATTERN } from '../../adapter';
+import { USAGE_ACTIONS, USAGE_WINDOWS } from '../../usage';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import type { OpName } from '../surface';
 
 /** Usage readings and rules (Core Server §4 I; src/shared/usage.ts). */
+
+/** A usage backend, as the catalog names it (src/shared/adapter.ts): adapters declare them. */
+const UsageBackendId = z.string().regex(ID_PATTERN);
 
 const WindowUsage = z.strictObject({
   usedPercent: z.number().min(0).max(100),
@@ -13,7 +17,7 @@ const WindowUsage = z.strictObject({
 });
 
 const UsageReading = z.strictObject({
-  backend: z.enum(USAGE_BACKENDS),
+  backend: UsageBackendId,
   windows: z.partialRecord(z.enum(USAGE_WINDOWS), WindowUsage),
   at: z.number(),
   simulated: z.literal(true).optional(),
@@ -33,7 +37,7 @@ export const usageOps = {
     input: z.strictObject({}),
     output: z.strictObject({
       readings: z.array(UsageReading),
-      rules: z.partialRecord(z.enum(USAGE_BACKENDS), UsageRule),
+      rules: z.partialRecord(UsageBackendId, UsageRule),
     }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;

@@ -9,7 +9,7 @@ const node = (id: string, queue: QueueItem[]): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, queue, connection: 'sdk' },
+  data: { label: id, queue, connection: 'claude-code.sdk' },
 });
 const task = (id: string): QueueStep => ({ id, action: 'Read' });
 const message = (id: string): QueueMessage => ({ id, message: id });

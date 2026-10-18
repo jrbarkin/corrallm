@@ -9,7 +9,7 @@ import { queueMarks } from '../queues/marks';
 import type { Run } from '../run/runner';
 import { heldAsks } from '../run/asks';
 import { QuestionsSidebar } from './Questions';
-import { AGENT_ACTIONS } from './agents';
+import { actionsOf } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
 import type { GraphNode } from './graph';
@@ -93,7 +93,7 @@ describe('task recovery in the shared queue row', () => {
         node={node}
         nodes={[node]}
         agent="Claude"
-        actions={AGENT_ACTIONS.Claude}
+        actions={actionsOf('claude-code')}
         {...editsOf(edit, 'a')}
         marks={(id) => marks('a', id)}
       />,
@@ -189,7 +189,7 @@ describe('condition query recovery in the shared queue row', () => {
           node={node}
           nodes={[node]}
           agent="Claude"
-          actions={AGENT_ACTIONS.Claude}
+          actions={actionsOf('claude-code')}
           {...editsOf(edit, 'a')}
           marks={(id) => marks('a', id)}
         />,
@@ -223,7 +223,7 @@ describe('submitted messages in the shared queue row', () => {
         node={node}
         nodes={[node]}
         agent="Claude"
-        actions={AGENT_ACTIONS.Claude}
+        actions={actionsOf('claude-code')}
         {...editsOf(edits(), 'a')}
       />,
     );
@@ -246,7 +246,7 @@ describe('submitted messages in the shared queue row', () => {
           node={node}
           nodes={[node]}
           agent="Claude"
-          actions={AGENT_ACTIONS.Claude}
+          actions={actionsOf('claude-code')}
           {...editsOf(edit, 'a')}
           marks={() => ({ 'data-decide': '', 'data-until': '10000' })}
         />,
@@ -274,7 +274,7 @@ describe('submitted messages in the shared queue row', () => {
         node={node}
         nodes={[node]}
         agent="Claude"
-        actions={AGENT_ACTIONS.Claude}
+        actions={actionsOf('claude-code')}
         {...editsOf(edit, 'a')}
         picking={{ name: 'a', current: undefined, onPick: pick }}
       />,
@@ -327,7 +327,7 @@ describe('submitted messages in the shared queue row', () => {
         node={node}
         nodes={nodes}
         agent="Claude"
-        actions={AGENT_ACTIONS.Claude}
+        actions={actionsOf('claude-code')}
         {...editsOf(edits(), 'a')}
       />,
     );

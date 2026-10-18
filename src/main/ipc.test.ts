@@ -24,6 +24,7 @@ import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../shar
 import { mintTrustedPath } from './core/host';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
+import { CATALOG } from './sessions/adapters';
 
 const TRUSTED_ORIGIN = 'app://main_window';
 
@@ -39,6 +40,7 @@ const DRAFT = newCanvasId();
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
   return {
+    catalog: CATALOG,
     windows: {
       canvasOf: vi.fn<IpcServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
       show: vi.fn<IpcServices['windows']['show']>().mockResolvedValue(undefined),
@@ -110,7 +112,7 @@ function fakeServices() {
     clis: {
       installed: vi
         .fn<IpcServices['clis']['installed']>()
-        .mockResolvedValue({ claude: true, codex: false }),
+        .mockResolvedValue({ 'claude-code': true, codex: false }),
     },
     usage: {
       state: vi.fn<IpcServices['usage']['state']>().mockReturnValue({ readings: [], rules: {} }),
@@ -139,6 +141,13 @@ const pingListener = () => listenerFor('app:ping');
 beforeEach(() => {
   handle.mockReset();
   services = fakeServices();
+});
+
+describe('catalog:get handler', () => {
+  it('answers with the catalog, and takes no arguments', () => {
+    expect(invoke('catalog:get', [])).toBe(CATALOG);
+    expect(() => invoke('catalog:get', ['claude-code'])).toThrow(/no arguments/);
+  });
 });
 
 describe('app:ping handler', () => {
@@ -294,7 +303,7 @@ describe('the sender’s canvas', () => {
     { channel: 'project:choose', args: [], action: 'choose' },
     {
       channel: 'session:start',
-      args: ['a', { connection: 'terminal', model: null, mode: null }],
+      args: ['a', { connection: 'claude-code.terminal', model: null, mode: null }],
       action: 'start',
     },
   ])('$channel acts on it once its window has it', async ({ channel, args, action }) => {
@@ -390,14 +399,14 @@ describe('project:files handler', () => {
 describe('session:* handlers', () => {
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = {};
-    const options = { connection: 'sdk', model: 'opus', mode: 'plan' };
+    const options = { connection: 'claude-code.sdk', model: 'opus', mode: 'plan' };
     await invoke('session:start', ['a', options], sender);
     const [canvas, agentId, given] = services.sessions.start.mock.calls[0] ?? [];
     expect([canvas, agentId, given]).toEqual([CANVAS, 'a', options]);
     // Built afresh: nothing the renderer sent is passed on as it came.
     expect(given).not.toBe(options);
     // No model or mode chosen: main's to decide (what the agent last chose, or the user's own).
-    const unchosen = { connection: 'terminal', model: null, mode: null };
+    const unchosen = { connection: 'claude-code.terminal', model: null, mode: null };
     await invoke('session:start', ['b', unchosen], sender);
     expect(services.sessions.start).toHaveBeenLastCalledWith(CANVAS, 'b', unchosen);
 
@@ -454,6 +463,8 @@ describe('session:* handlers', () => {
     expect(services.sessions.close).toHaveBeenCalledWith(CANVAS, 'a');
     await invoke('session:fresh', ['a', 'codex'], sender);
     expect(services.sessions.fresh).toHaveBeenCalledWith(CANVAS, 'a', 'codex');
+    await invoke('session:fresh', ['a', 'claude-code'], sender);
+    expect(services.sessions.fresh).toHaveBeenLastCalledWith(CANVAS, 'a', 'claude-code');
     const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
     await invoke('session:answer', ['a', 'e1', form], sender);
     expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'e1', form);
@@ -477,9 +488,11 @@ describe('session:* handlers', () => {
     );
     await invoke('session:list', ['a'], sender);
     expect(services.sessions.listSessions).toHaveBeenCalledWith(CANVAS, 'a');
-    // What a CLI's agents can be set to: read for the canvas the renderer shows.
+    // What an adapter's agents can be set to: read for the canvas the renderer shows.
     await invoke('session:options', ['codex'], sender);
     expect(services.sessions.settingsOptions).toHaveBeenCalledWith(CANVAS, 'codex');
+    await invoke('session:options', ['claude-code'], sender);
+    expect(services.sessions.settingsOptions).toHaveBeenLastCalledWith(CANVAS, 'claude-code');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
     await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
     expect(services.sessions.resumeSession).toHaveBeenCalledWith(
@@ -489,20 +502,23 @@ describe('session:* handlers', () => {
     );
   });
 
-  it('start Codex sessions in Codex’s modes, and switch to them', async () => {
+  it('start Codex sessions in the modes each connection starts in, and switch to any', async () => {
     const sender = {};
-    const options = { connection: 'app-server', model: 'gpt-6-luna', mode: 'full-access' };
+    const options = { connection: 'codex.app-server', model: 'gpt-6-luna', mode: 'plan' };
     await invoke('session:start', ['a', options], sender);
     expect(services.sessions.start).toHaveBeenCalledWith(CANVAS, 'a', options);
-    await invoke('session:start', ['b', { ...options, connection: 'codex-terminal' }], sender);
-    await invoke('session:mode', ['a', 'read-only'], sender);
-    expect(services.sessions.setMode).toHaveBeenCalledWith(CANVAS, 'a', 'read-only');
+    const terminal = { ...options, connection: 'codex.terminal', mode: 'read-only' };
+    await invoke('session:start', ['b', terminal], sender);
+    expect(services.sessions.start).toHaveBeenLastCalledWith(CANVAS, 'b', terminal);
+    // A mode that never asks is the session's, once the user confirms it: never a start's.
+    await invoke('session:mode', ['a', 'full-access'], sender);
+    expect(services.sessions.setMode).toHaveBeenCalledWith(CANVAS, 'a', 'full-access');
   });
 
   it('start sessions at a reasoning effort, and switch it (or back to the model’s default)', async () => {
     const sender = {};
     const options = {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: 'gpt-6-luna',
       mode: 'auto',
       effort: 'xhigh',
@@ -515,7 +531,7 @@ describe('session:* handlers', () => {
     expect(services.sessions.setEffort).toHaveBeenLastCalledWith(CANVAS, 'a', null);
   });
 
-  const start = { connection: 'terminal', model: null, mode: 'manual' };
+  const start = { connection: 'claude-code.terminal', model: null, mode: 'manual' };
   it.each([
     ['session:start', 'no options', ['a'], /Expected an agent and how to start/],
     ['session:start', 'an agent id that is not text', [7, start], /agent's id/],
@@ -527,14 +543,39 @@ describe('session:* handlers', () => {
       ['a', { ...start, connection: 'ssh' }],
       /connection/,
     ],
+    // Connections are named by their final ids only.
+    [
+      'session:start',
+      'an old connection id',
+      ['a', { ...start, connection: 'terminal' }],
+      /connection/,
+    ],
     ['session:start', 'an unknown mode', ['a', { ...start, mode: 'yolo' }], /mode/],
     [
       'session:start',
-      'a mode of another CLI',
-      ['a', { ...start, connection: 'app-server', mode: 'acceptEdits' }],
-      /mode of Codex/,
+      'a mode of another adapter',
+      ['a', { ...start, connection: 'codex.app-server', mode: 'acceptEdits' }],
+      /mode codex\.app-server sessions start in/,
     ],
     ['session:start', 'a Codex mode for Claude', ['a', { ...start, mode: 'read-only' }], /mode/],
+    [
+      'session:start',
+      'a mode that never asks',
+      ['a', { ...start, mode: 'bypassPermissions' }],
+      /mode claude-code\.terminal sessions start in/,
+    ],
+    [
+      'session:start',
+      'Full access',
+      ['a', { ...start, connection: 'codex.app-server', mode: 'full-access' }],
+      /mode codex\.app-server sessions start in/,
+    ],
+    [
+      'session:start',
+      'a mode its connection does not start in',
+      ['a', { ...start, connection: 'codex.terminal', mode: 'plan' }],
+      /mode codex\.terminal sessions start in/,
+    ],
     ['session:start', 'a model with spaces', ['a', { ...start, model: 'rm -rf /' }], /model/],
     // A command line would take it for a flag.
     [
@@ -662,8 +703,8 @@ describe('session:* handlers', () => {
     ],
     ['session:interrupt', 'no agent', [], /an agent/],
     ['session:close', 'an extra argument', ['a', 'b'], /an agent/],
-    ['session:fresh', 'no agent', [], /an agent and a CLI/],
-    ['session:fresh', 'no CLI', ['a'], /an agent and a CLI/],
+    ['session:fresh', 'no agent', [], /an agent and an adapter/],
+    ['session:fresh', 'no adapter', ['a'], /an agent and an adapter/],
     ['session:fresh', 'an empty agent id', ['', 'codex'], /agent's id/],
     ['session:fresh', 'a non-text agent id', [12, 'codex'], /agent's id/],
     [
@@ -672,9 +713,10 @@ describe('session:* handlers', () => {
       ['a'.repeat(MAX_ID_LENGTH + 1), 'codex'],
       /agent's id/,
     ],
-    ['session:fresh', 'an unknown CLI', ['a', 'other'], /CLI/],
-    ['session:fresh', 'a non-text CLI', ['a', {}], /CLI/],
-    ['session:fresh', 'an extra argument', ['a', 'codex', 'extra'], /an agent and a CLI/],
+    ['session:fresh', 'an unknown adapter', ['a', 'other'], /adapter/],
+    ['session:fresh', 'an old adapter id', ['a', 'claude'], /adapter/],
+    ['session:fresh', 'a non-text adapter', ['a', {}], /adapter/],
+    ['session:fresh', 'an extra argument', ['a', 'codex', 'extra'], /an agent and an adapter/],
     ['session:mode', 'an unknown mode', ['a', 'default'], /mode/],
     ['session:model', 'a model that is not text', ['a', 42], /model/],
     ['session:list', 'no agent', [], /an agent/],
@@ -751,16 +793,17 @@ describe('session:* handlers', () => {
       ],
       /what to do instead/,
     ],
-    ['session:options', 'no CLI', [], /a CLI/],
-    ['session:options', 'a CLI corrallm does not run', ['gemini'], /CLI/],
-    ['session:options', 'a folder as well', ['claude', '/etc'], /a CLI/],
+    ['session:options', 'no adapter', [], /an adapter/],
+    ['session:options', 'an adapter corrallm does not run', ['gemini'], /adapter/],
+    ['session:options', 'an old adapter id', ['claude'], /adapter/],
+    ['session:options', 'a folder as well', ['claude-code', '/etc'], /an adapter/],
     ['session:effort', 'no effort', ['a'], /an agent and a reasoning effort/],
     ['session:effort', 'an effort that is not a word', ['a', 'high; rm -rf'], /reasoning effort/],
     ['session:effort', 'an effort that is not text', ['a', 3], /reasoning effort/],
     [
       'session:start',
       'an effort that is not a word',
-      ['a', { connection: 'app-server', model: null, mode: 'auto', effort: '--yolo' }],
+      ['a', { connection: 'codex.app-server', model: null, mode: 'auto', effort: '--yolo' }],
       /reasoning effort/,
     ],
   ])('%s rejects %s', (channel, _label, args, message) => {
@@ -833,9 +876,12 @@ describe('terminal:* handlers', () => {
 });
 
 describe('session:clis', () => {
-  it('says which CLIs the user has, and takes no arguments', async () => {
-    await expect(invoke('session:clis', [])).resolves.toEqual({ claude: true, codex: false });
-    expect(() => invoke('session:clis', ['claude'])).toThrow(/no arguments/);
+  it('says which agents the user has, by adapter, and takes no arguments', async () => {
+    await expect(invoke('session:clis', [])).resolves.toEqual({
+      'claude-code': true,
+      codex: false,
+    });
+    expect(() => invoke('session:clis', ['claude-code'])).toThrow(/no arguments/);
   });
 });
 
@@ -843,49 +889,50 @@ describe('usage:* handlers', () => {
   it('pass checked arguments on', () => {
     expect(invoke('usage:get', [])).toEqual({ readings: [], rules: {} });
     const rule = { window: 'fiveHour', percent: 80, action: 'ask' };
-    invoke('usage:rule', ['Claude', rule]);
-    expect(services.usage.setRule).toHaveBeenCalledWith('Claude', rule);
-    invoke('usage:rule', ['Claude', null]);
-    expect(services.usage.setRule).toHaveBeenLastCalledWith('Claude', null);
+    invoke('usage:rule', ['claude-code', rule]);
+    expect(services.usage.setRule).toHaveBeenCalledWith('claude-code', rule);
+    invoke('usage:rule', ['claude-code', null]);
+    expect(services.usage.setRule).toHaveBeenLastCalledWith('claude-code', null);
     const resetsAt = Date.now() + 60 * 60 * 1000;
     invoke('usage:simulate', [
-      'Codex',
+      'codex',
       { weekly: { usedPercent: 91, resetsAt, extra: 'dropped' }, other: {} },
     ]);
-    expect(services.usage.simulate).toHaveBeenCalledWith('Codex', {
+    expect(services.usage.simulate).toHaveBeenCalledWith('codex', {
       weekly: { usedPercent: 91, resetsAt },
     });
-    invoke('usage:simulate', ['Claude', null]);
-    expect(services.usage.simulate).toHaveBeenLastCalledWith('Claude', null);
+    invoke('usage:simulate', ['claude-code', null]);
+    expect(services.usage.simulate).toHaveBeenLastCalledWith('claude-code', null);
   });
 
   it.each([
-    ['usage:get', 'an argument', ['Claude'], /no arguments/],
-    ['usage:rule', 'no rule', ['Claude'], /a backend and a rule/],
-    ['usage:rule', 'a backend corrallm reads no usage of', ['Gemini', null], /Expected one of/],
+    ['usage:get', 'an argument', ['claude-code'], /no arguments/],
+    ['usage:rule', 'no rule', ['claude-code'], /a backend and a rule/],
+    ['usage:rule', 'a backend corrallm reads no usage of', ['gemini', null], /Expected one of/],
+    ['usage:rule', 'an old backend id', ['Claude', null], /Expected one of/],
     [
       'usage:rule',
       'a share out of range',
-      ['Claude', { window: 'weekly', percent: 100, action: 'ask' }],
+      ['claude-code', { window: 'weekly', percent: 100, action: 'ask' }],
       /1 to 99/,
     ],
     [
       'usage:rule',
       'an action not built yet',
-      ['Claude', { window: 'weekly', percent: 80, action: 'nextBackend' }],
+      ['claude-code', { window: 'weekly', percent: 80, action: 'nextBackend' }],
       /Expected one of/,
     ],
-    ['usage:simulate', 'no windows', ['Claude'], /a backend and its windows/],
+    ['usage:simulate', 'no windows', ['claude-code'], /a backend and its windows/],
     [
       'usage:simulate',
       'a share over 100',
-      ['Claude', { fiveHour: { usedPercent: 150, resetsAt: null } }],
+      ['claude-code', { fiveHour: { usedPercent: 150, resetsAt: null } }],
       /from 0 to 100/,
     ],
     [
       'usage:simulate',
       'a reset too far ahead',
-      ['Claude', { fiveHour: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } }],
+      ['claude-code', { fiveHour: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } }],
       /reset/,
     ],
   ])('%s rejects %s', (channel, _label, args, message) => {

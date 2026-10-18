@@ -1,4 +1,5 @@
 import { WINDOW_NAMES } from '../../shared/usage';
+import { backendName } from '../usage/usage';
 import { isUsageReset, MAX_SECONDS } from './queue';
 import type { Time, UsageReset } from './queue';
 
@@ -164,7 +165,7 @@ export function limitText(time: Time, locale?: string): string {
 
 /** "Claude’s usage resets (5-hour)". */
 function resetText({ backend, resets }: UsageReset): string {
-  return `${backend}’s usage resets (${WINDOW_NAMES[resets]})`;
+  return `${backendName(backend)}’s usage resets (${WINDOW_NAMES[resets]})`;
 }
 
 /** A time of day ("HH:MM") as `locale` shows one: "9:00 AM", "09:00". */

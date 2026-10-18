@@ -16,13 +16,13 @@ describe('SessionStore', () => {
     const { backend, emit, sent } = fakeBackend();
     const submitted = vi.fn();
     const store = new SessionStore(backend, undefined, { submitted });
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'Use tabs, please', undefined, undefined, undefined, 'run');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Use tabs, please', undefined, undefined, undefined, 'run');
     await Promise.resolve();
     await Promise.resolve();
     const id = sent();
-    emit('a', 'sdk', { type: 'user', id, text: 'Use tabs, please' });
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', { type: 'user', id, text: 'Use tabs, please' });
+    emit('a', 'claude-code.sdk', {
       type: 'end',
       messages: [id],
       seconds: 1,
@@ -42,9 +42,17 @@ describe('SessionStore', () => {
       async (next) => {
         const { backend } = fakeBackend();
         const store = new SessionStore(backend);
-        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
         store.holdQueue('a', true);
-        store.send('a', 'Claude', 'Waiting automation', undefined, undefined, undefined, 'queue');
+        store.send(
+          'a',
+          'claude-code',
+          'Waiting automation',
+          undefined,
+          undefined,
+          undefined,
+          'queue',
+        );
         store.holdQueue('a', false);
         if (next === 'reset') store.reset();
         else if (next === 'remove') store.sync([]);
@@ -73,19 +81,27 @@ describe('SessionStore', () => {
       const { backend, emit, sent } = fakeBackend();
       const submitted = vi.fn();
       const store = new SessionStore(backend, undefined, { submitted });
-      store.sync([{ id: 'a', connection: 'sdk' }]);
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       const firstDone = vi.fn();
-      store.send('a', 'Claude', 'Active work', firstDone, undefined, undefined, 'queue');
+      store.send('a', 'claude-code', 'Active work', firstDone, undefined, undefined, 'queue');
       await Promise.resolve();
       await Promise.resolve();
       const first = sent();
       const queuedDone = vi.fn();
-      store.send('a', 'Claude', 'Earlier manual message', queuedDone);
-      store.send('a', 'Claude', 'Next automated task', undefined, undefined, undefined, 'queue');
+      store.send('a', 'claude-code', 'Earlier manual message', queuedDone);
+      store.send(
+        'a',
+        'claude-code',
+        'Next automated task',
+        undefined,
+        undefined,
+        undefined,
+        'queue',
+      );
       store.holdQueue('a', true);
       expect(backend.interrupt).not.toHaveBeenCalled();
       const end = (id: string) => {
-        emit('a', 'sdk', {
+        emit('a', 'claude-code.sdk', {
           type: 'end',
           messages: [id],
           seconds: 1,
@@ -105,7 +121,7 @@ describe('SessionStore', () => {
       expect(store.of('a').queued.map(({ text }) => text)).toEqual(['Next automated task']);
       const earlier = sent();
 
-      store.send('a', 'Claude', 'A fresh correction');
+      store.send('a', 'claude-code', 'A fresh correction');
       end(earlier);
       await Promise.resolve();
       await Promise.resolve();
@@ -145,23 +161,27 @@ describe('SessionStore', () => {
       const { backend, emit } = fakeBackend();
       const store = new SessionStore(backend);
       store.sync([
-        { id: 'a', connection: 'terminal' },
-        { id: 'b', connection: 'sdk' },
+        { id: 'a', connection: 'claude-code.terminal' },
+        { id: 'b', connection: 'claude-code.sdk' },
       ]);
       store.holdQueue('a', true);
-      store.send('a', 'Claude', 'Held automation', undefined, undefined, undefined, 'queue');
+      store.send('a', 'claude-code', 'Held automation', undefined, undefined, undefined, 'queue');
       expect(backend.start).not.toHaveBeenCalled();
       expect(store.of('a').queued).toMatchObject([{ text: 'Held automation' }]);
-      store.send('b', 'Claude', 'Other agent', undefined, undefined, undefined, 'queue');
+      store.send('b', 'claude-code', 'Other agent', undefined, undefined, undefined, 'queue');
       store.open('a');
       await Promise.resolve();
       await Promise.resolve();
       expect(backend.send.mock.calls.map(([id]) => id)).toEqual(['b']);
-      emit('a', 'terminal', { type: 'user', id: 'native', text: 'Typed in the native console' });
+      emit('a', 'claude-code.terminal', {
+        type: 'user',
+        id: 'native',
+        text: 'Typed in the native console',
+      });
       expect(store.of('a').submissions).toMatchObject([
         { id: 'native', text: 'Typed in the native console', status: 'running' },
       ]);
-      emit('a', 'terminal', {
+      emit('a', 'claude-code.terminal', {
         type: 'end',
         messages: ['native'],
         seconds: 1,
@@ -184,17 +204,17 @@ describe('SessionStore', () => {
           }),
       );
       const store = new SessionStore(backend);
-      store.sync([{ id: 'a', connection: 'sdk' }]);
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       store.holdQueue('a', true);
       const done = vi.fn();
-      store.send('a', 'Claude', 'Not yet dispatched', done);
-      store.send('a', 'Claude', 'Keep queued');
+      store.send('a', 'claude-code', 'Not yet dispatched', done);
+      store.send('a', 'claude-code', 'Keep queued');
       store.stop('a');
       store.stop('a');
       expect(done).toHaveBeenCalledOnce();
       expect(store.of('a').status).toBe('idle');
       expect(store.of('a').queued).toMatchObject([{ text: 'Keep queued' }]);
-      store.send('a', 'Claude', 'New intervention');
+      store.send('a', 'claude-code', 'New intervention');
       ready?.(null);
       await Promise.resolve();
       await Promise.resolve();
@@ -203,7 +223,7 @@ describe('SessionStore', () => {
         'New intervention',
       ]);
       expect(backend.interrupt).not.toHaveBeenCalled();
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'end',
         messages: [sent()],
         seconds: 1,
@@ -222,19 +242,19 @@ describe('SessionStore', () => {
     it('interrupts an active turn once and keeps queued work held and the console connected', async () => {
       const { backend, emit, sent } = fakeBackend();
       const store = new SessionStore(backend);
-      store.sync([{ id: 'a', connection: 'sdk' }]);
-      store.send('a', 'Claude', 'Active');
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+      store.send('a', 'claude-code', 'Active');
       await Promise.resolve();
       await Promise.resolve();
       const active = sent();
-      store.send('a', 'Claude', 'Waiting');
+      store.send('a', 'claude-code', 'Waiting');
       store.holdQueue('a', true);
       store.stop('a');
       store.stop('a');
       await Promise.resolve();
       await Promise.resolve();
       expect(backend.interrupt).toHaveBeenCalledExactlyOnceWith('a');
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'end',
         messages: [active],
         seconds: 1,
@@ -243,7 +263,7 @@ describe('SessionStore', () => {
       });
       expect(store.of('a').queued).toMatchObject([{ text: 'Waiting' }]);
       expect(backend.send).toHaveBeenCalledTimes(1);
-      store.send('a', 'Claude', 'Fresh manual turn');
+      store.send('a', 'claude-code', 'Fresh manual turn');
       await Promise.resolve();
       await Promise.resolve();
       store.stop('a');
@@ -259,11 +279,11 @@ describe('SessionStore', () => {
       async (action) => {
         const { backend } = fakeBackend();
         const store = new SessionStore(backend);
-        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
         store.holdQueue('a', true);
         if (action === 'reset') store.reset();
         else store.sync([]);
-        store.sync([{ id: 'a', connection: 'sdk' }]);
+        store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
         store.send(
           'a',
           'Claude',
@@ -287,8 +307,8 @@ describe('SessionStore', () => {
       const { backend } = fakeBackend();
       backend.interrupt.mockRejectedValueOnce(new Error('The interrupt did not reach the CLI'));
       const store = new SessionStore(backend);
-      store.sync([{ id: 'a', connection: 'sdk' }]);
-      store.send('a', 'Claude', 'Active');
+      store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+      store.send('a', 'claude-code', 'Active');
       await Promise.resolve();
       await Promise.resolve();
       store.holdQueue('a', true);
@@ -314,8 +334,8 @@ describe('SessionStore', () => {
     const submitted = vi.fn();
     const ended = vi.fn();
     const store = new SessionStore(backend, undefined, { submitted, ended });
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'Previous');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Previous');
     await Promise.resolve();
     await Promise.resolve();
     const previous = sent();
@@ -337,7 +357,7 @@ describe('SessionStore', () => {
       status: 'queued',
     });
     expect(submitted).toHaveBeenLastCalledWith('a', correction);
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'end',
       messages: [previous],
       seconds: 1,
@@ -355,9 +375,9 @@ describe('SessionStore', () => {
   it('preserves a typed failure and its reset through callbacks and the submitted row', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     const done = vi.fn();
-    store.send('a', 'Claude', 'Work', done);
+    store.send('a', 'claude-code', 'Work', done);
     await Promise.resolve();
     await Promise.resolve();
     const id = sent();
@@ -369,7 +389,7 @@ describe('SessionStore', () => {
     } as const;
     emit(
       'a',
-      'sdk',
+      'claude-code.sdk',
       { type: 'text', id: 'reply', text: 'Try after the reset.' },
       {
         type: 'end',
@@ -391,17 +411,17 @@ describe('SessionStore', () => {
     const submitted = vi.fn();
     const ended = vi.fn();
     const store = new SessionStore(backend, undefined, { submitted, ended });
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     submitted.mockImplementation((agentId: string, message: { id: string; text: string }) => {
       expect(store.of(agentId).submissions?.some(({ id }) => id === message.id)).toBe(true);
       if (message.text === 'Correction')
         store.tagSubmission(agentId, message.id, 'owner', 'held-task');
     });
-    store.send('a', 'Claude', 'Automation', undefined, undefined, undefined, 'queue');
+    store.send('a', 'claude-code', 'Automation', undefined, undefined, undefined, 'queue');
     await Promise.resolve();
     await Promise.resolve();
     const automated = sent();
-    store.send('a', 'Claude', 'Correction');
+    store.send('a', 'claude-code', 'Correction');
     const queued = store.of('a').queued[0];
     if (!queued) throw new Error('No queued correction');
     expect(submitted).toHaveBeenCalledExactlyOnceWith(
@@ -410,7 +430,7 @@ describe('SessionStore', () => {
     );
     store.tagSubmission('a', queued.id, 'owner', 'held-task');
     expect(submitted).toHaveBeenCalledTimes(1);
-    emit('a', 'terminal', {
+    emit('a', 'claude-code.terminal', {
       type: 'end',
       messages: [automated],
       seconds: 1,
@@ -421,7 +441,7 @@ describe('SessionStore', () => {
     await Promise.resolve();
     emit(
       'a',
-      'terminal',
+      'claude-code.terminal',
       { type: 'user', id: queued.id, text: 'Correction' },
       { type: 'user', id: 'native-one', text: 'Native correction' },
       { type: 'user', id: 'native-two', text: 'Still working' },
@@ -431,7 +451,7 @@ describe('SessionStore', () => {
     const result = { status: 'completed', reason: 'completed' } as const;
     emit(
       'a',
-      'terminal',
+      'claude-code.terminal',
       { type: 'text', id: 'reply', text: 'Updated.' },
       {
         type: 'end',
@@ -451,7 +471,7 @@ describe('SessionStore', () => {
       { id: 'native-one', status: 'completed' },
       { id: 'native-two', status: 'running' },
     ]);
-    emit('a', 'terminal', {
+    emit('a', 'claude-code.terminal', {
       type: 'end',
       messages: ['native-two'],
       seconds: 1,
@@ -469,14 +489,14 @@ describe('SessionStore', () => {
   it('serializes only submission records and restores unresolved work without dispatching it', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'Finished');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Finished');
     await Promise.resolve();
     await Promise.resolve();
     const id = sent();
     emit(
       'a',
-      'sdk',
+      'claude-code.sdk',
       { type: 'text', id: 'private-transcript', text: 'Do not persist this transcript.' },
       {
         type: 'end',
@@ -486,8 +506,8 @@ describe('SessionStore', () => {
         failed: false,
       },
     );
-    store.send('a', 'Claude', 'Unresolved');
-    store.send('a', 'Claude', 'Queued');
+    store.send('a', 'claude-code', 'Unresolved');
+    store.send('a', 'claude-code', 'Queued');
     const serialized = store.serializeSubmissions();
     expect(serialized).not.toContain('Do not persist this transcript.');
     const freshBackend = fakeBackend();
@@ -652,28 +672,28 @@ describe('SessionStore', () => {
   it('keeps one manual message queued after refusal and sends it once after switching', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     backend.start.mockImplementationOnce(() => {
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'notice',
         id: 'refusal',
         level: 'error',
         text: 'Use Terminal',
-        switchTo: 'terminal',
+        switchTo: 'claude-code.terminal',
       });
       return Promise.reject(new Error('Use Terminal'));
     });
-    store.send('a', 'Claude', 'Keep this');
+    store.send('a', 'claude-code', 'Keep this');
     await new Promise((resolve) => setTimeout(resolve, 0));
     const id = store.of('a').submissions?.[0]?.id;
     if (!id) throw new Error('No recorded message');
     expect(store.of('a').submissions).toMatchObject([{ id, text: 'Keep this', status: 'queued' }]);
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     await Promise.resolve();
     await Promise.resolve();
     expect(sent()).toBe(id);
     expect(store.of('a').submissions).toMatchObject([{ id, status: 'running' }]);
-    emit('a', 'terminal', {
+    emit('a', 'claude-code.terminal', {
       type: 'end',
       messages: [id],
       seconds: 1,
@@ -687,10 +707,10 @@ describe('SessionStore', () => {
   it('records each manual submission once, including queued images and cancellation', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend, () => 'held-step');
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'First');
-    store.send('a', 'Claude', '', undefined, [{ mediaType: 'image/png', data: 'picture' }]);
-    const cancel = store.send('a', 'Claude', 'First');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'First');
+    store.send('a', 'claude-code', '', undefined, [{ mediaType: 'image/png', data: 'picture' }]);
+    const cancel = store.send('a', 'claude-code', 'First');
     cancel();
     expect(store.of('a').submissions).toMatchObject([
       { text: 'First', status: 'running', after: 'held-step' },
@@ -700,7 +720,7 @@ describe('SessionStore', () => {
     for (let turn = 0; turn < 2; turn++) {
       await Promise.resolve();
       await Promise.resolve();
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'end',
         messages: [sent()],
         seconds: 1,
@@ -714,11 +734,11 @@ describe('SessionStore', () => {
       'cancelled',
     ]);
     expect(new Set(store.of('a').submissions?.map(({ id }) => id)).size).toBe(3);
-    store.send('a', 'Claude', 'Interrupted');
+    store.send('a', 'claude-code', 'Interrupted');
     await Promise.resolve();
     await Promise.resolve();
     store.stop('a');
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'end',
       messages: [sent()],
       seconds: 1,
@@ -730,13 +750,18 @@ describe('SessionStore', () => {
     expect(store.of('a').submissions).toBeUndefined();
   });
 
-  it.each(['terminal', 'codex-terminal', 'sdk', 'app-server'] as const)(
+  it.each([
+    'claude-code.terminal',
+    'codex.terminal',
+    'claude-code.sdk',
+    'codex.app-server',
+  ] as const)(
     'records live %s prompts, excludes automation and restored history, and correlates turn ends',
     async (connection) => {
       const { backend, emit, sent } = fakeBackend();
       const store = new SessionStore(backend);
       store.sync([{ id: 'a', connection }]);
-      store.send('a', 'Claude', 'Automated step', undefined, undefined, undefined, 'queue');
+      store.send('a', 'claude-code', 'Automated step', undefined, undefined, undefined, 'queue');
       await Promise.resolve();
       await Promise.resolve();
       const automated = sent();
@@ -749,7 +774,7 @@ describe('SessionStore', () => {
         interrupted: false,
         failed: false,
       });
-      store.send('a', 'Claude', 'Manual');
+      store.send('a', 'claude-code', 'Manual');
       await Promise.resolve();
       await Promise.resolve();
       const manual = sent();
@@ -792,21 +817,21 @@ describe('SessionStore', () => {
   it('tells whoever sent a message when the native turn it starts ends, queued or not', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     const heard: string[] = [];
     const tell = (text: string) => (interrupted: boolean) => {
       heard.push(`${text}${interrupted ? ' (interrupted)' : ''}`);
     };
-    store.send('a', 'Claude', 'First', tell('First'));
-    store.send('a', 'Claude', 'Second', tell('Second'));
-    store.send('a', 'Claude', 'Third', tell('Third'));
+    store.send('a', 'claude-code', 'First', tell('First'));
+    store.send('a', 'claude-code', 'Second', tell('Second'));
+    store.send('a', 'claude-code', 'Third', tell('Third'));
     const third = store.of('a').queued[1];
     if (!third) throw new Error('Third is not queued');
     store.unqueue('a', third.id);
     for (let turn = 0; turn < 2; turn++) {
       await Promise.resolve();
       await Promise.resolve();
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'end',
         messages: [sent()],
         seconds: 1,
@@ -815,11 +840,11 @@ describe('SessionStore', () => {
       });
     }
     expect(heard).toEqual(['Third (interrupted)', 'First', 'Second']);
-    store.send('a', 'Claude', 'Fourth', tell('Fourth'));
+    store.send('a', 'claude-code', 'Fourth', tell('Fourth'));
     await Promise.resolve();
     await Promise.resolve();
     store.stop('a');
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'end',
       messages: [sent()],
       seconds: 1,
@@ -846,15 +871,15 @@ describe('SessionStore', () => {
   it('sends a message sent as a native turn ends after the ones already queued', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'First', () => {
-      store.send('a', 'Claude', 'Next');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'First', () => {
+      store.send('a', 'claude-code', 'Next');
     });
-    store.send('a', 'Claude', 'Second');
+    store.send('a', 'claude-code', 'Second');
     for (let turn = 0; turn < 3; turn++) {
       await Promise.resolve();
       await Promise.resolve();
-      emit('a', 'sdk', {
+      emit('a', 'claude-code.sdk', {
         type: 'end',
         messages: [sent()],
         seconds: 1,
@@ -888,9 +913,9 @@ describe('submission retention', () => {
         ],
       }),
     );
-    store.sync([{ id: 'a', connection: 'sdk' }]);
-    store.send('a', 'Claude', 'Running');
-    store.send('a', 'Claude', 'Queued');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
+    store.send('a', 'claude-code', 'Running');
+    store.send('a', 'claude-code', 'Queued');
     store.holdQueue('a', true);
     for (let index = 0; index < 105; index++)
       store.recordSubmission('a', `Command ${String(index)}`);
@@ -912,18 +937,18 @@ describe('submission retention', () => {
   it('prunes older settled records when a native prompt is added', () => {
     const { backend, emit } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'terminal' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.open('a');
     for (let index = 0; index < 105; index++) {
       const id = `native-${String(index)}`;
       emit(
         'a',
-        'terminal',
+        'claude-code.terminal',
         { type: 'user', id, text: `Prompt ${String(index)}` },
         { type: 'end', messages: [id], seconds: 1, interrupted: false, failed: false },
       );
     }
-    emit('a', 'terminal', { type: 'user', id: 'latest', text: 'Still running' });
+    emit('a', 'claude-code.terminal', { type: 'user', id: 'latest', text: 'Still running' });
     expect(store.of('a').submissions).toHaveLength(101);
     expect(
       store

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { canvasIdOf } from '../../shared/canvas';
-import { AGENT_ACTIONS, AGENT_CONNECTIONS, DEFAULT_AGENT } from './agents';
+import { catalog } from '../catalog';
+import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
@@ -10,7 +11,7 @@ import type { QueueItem } from './queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
-  const graph = fromFile(example.text);
+  const graph = fromFile(example.text, catalog());
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
   it('is a canvas, written just as corrallm writes one', () => {
@@ -19,14 +20,14 @@ describe.each(EXAMPLES)('the $name example', (example) => {
 
   it('pins roles only to agent types with a connection', () => {
     for (const agent of agents.values()) {
-      if (agent.data.agent !== undefined)
-        expect(AGENT_CONNECTIONS[agent.data.agent], agent.data.label).not.toHaveLength(0);
+      if (agent.data.adapter !== undefined)
+        expect(connectionsOf(agent.data.adapter), agent.data.label).not.toHaveLength(0);
     }
   });
 
   it("aims only at its own agents, and uses only each agent's own actions", () => {
     for (const agent of agents.values()) {
-      const actions = AGENT_ACTIONS[agent.data.agent ?? DEFAULT_AGENT].map((a) => a.name);
+      const actions = actionsOf(agent.data.adapter ?? DEFAULT_AGENT).map((a) => a.name);
       // Every level of nesting: what if-thens and repeats hold too.
       const check = (item: QueueItem) => {
         if (isWait(item)) {

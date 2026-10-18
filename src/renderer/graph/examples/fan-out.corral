@@ -11,7 +11,7 @@
         "x": 210,
         "y": 0
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "q1",
@@ -49,7 +49,7 @@
         "y": 52
       },
       "parent": "research",
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "question",
@@ -81,7 +81,7 @@
         "y": 52
       },
       "parent": "research",
-      "agent": "Codex",
+      "adapter": "codex",
       "queue": [
         {
           "id": "question",
@@ -143,7 +143,7 @@
         "x": 210,
         "y": 320
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "reports",

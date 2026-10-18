@@ -1,4 +1,4 @@
-import { CONNECTIONS } from '../../shared/session';
+import { ID_PATTERN } from '../../shared/adapter';
 import type { AgentRun, Outcome, Run, TaskAttempt } from './runner';
 
 /** Queue state and the minimal result evidence needed by conditions; no session transcript.
@@ -28,6 +28,8 @@ const number = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 const boolean = (v: unknown): v is boolean => typeof v === 'boolean';
 const oneOf = (v: unknown, values: readonly string[]) =>
   typeof v === 'string' && values.includes(v);
+/** An id the catalog's ids look like: one this build lacks is kept, and matches nothing. */
+const id = (v: unknown) => typeof v === 'string' && ID_PATTERN.test(v);
 const outcome = (v: unknown): v is Outcome =>
   oneOf(v, ['succeeded', 'failed', 'cancelled', 'skipped', 'timedOut', 'stopped']);
 const values = (v: unknown, check: (v: unknown) => boolean) =>
@@ -92,15 +94,15 @@ function agent(v: unknown): v is AgentRun {
         record(x) &&
         string(x.agent) &&
         string(x.text) &&
-        oneOf(x.connection, ['unavailable', ...CONNECTIONS]) &&
-        optional(x, 'switchTo', (value) => oneOf(value, CONNECTIONS)),
+        (x.connection === 'unavailable' || id(x.connection)) &&
+        optional(x, 'switchTo', id),
     ) &&
     optional(
       v,
       'usage',
       (x) =>
         record(x) &&
-        oneOf(x.backend, ['Claude', 'Codex']) &&
+        id(x.backend) &&
         oneOf(x.window, ['fiveHour', 'weekly']) &&
         number(x.percent) &&
         number(x.used) &&

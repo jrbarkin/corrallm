@@ -764,21 +764,13 @@ input.graph-label {
   color: white;
 }
 
-/* Agent types (agents.ts), colour-coded: the tag on a node's card and the chip in its panel. */
-[data-agent='Claude'] {
+/* Agents by adapter (agents.ts), colour-coded: the tag on a node's card and the chip in its panel. */
+[data-agent='claude-code'] {
   --agent-color: #c15f3c;
 }
 
-[data-agent='Codex'] {
+[data-agent='codex'] {
   --agent-color: #0e8a6b;
-}
-
-[data-agent='Qwen'] {
-  --agent-color: #5b4fe0;
-}
-
-[data-agent='Gemini'] {
-  --agent-color: #1a73e8;
 }
 
 .graph-agent {

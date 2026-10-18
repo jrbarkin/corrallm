@@ -6,6 +6,7 @@ import type { ResultOf } from '../../shared/api/registry';
 import type { RULES } from '../../shared/api/rules';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName } from '../../shared/api/surface';
+import { CATALOG } from '../sessions/adapters';
 import { UsageReadings } from '../usage';
 import { createDispatcher } from './call';
 import type { Dispatcher, RuleCheck } from './call';
@@ -47,7 +48,10 @@ export interface Core extends Dispatcher {
 const RULE_CHECKS: { [R in keyof typeof RULES]: RuleCheck } = {};
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
-  const usage = new UsageReadings({ file: path.join(config.profile, 'usage.json') });
+  const usage = new UsageReadings({
+    file: path.join(config.profile, 'usage.json'),
+    backends: CATALOG.usageBackends.map((backend) => backend.id),
+  });
   await usage.load();
   const dispatcher = createDispatcher(
     {

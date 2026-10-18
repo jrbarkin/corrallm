@@ -1,4 +1,4 @@
-import { AGENT_ACTIONS, DEFAULT_AGENT } from '../graph/agents';
+import { actionsOf, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -29,7 +29,7 @@ export function PeerQueue({
   onClose: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
-  const agent = node.data.agent ?? DEFAULT_AGENT;
+  const agent = node.data.adapter ?? DEFAULT_AGENT;
   return (
     <aside className="agent-side agent-peer" data-column="peer" aria-label={`${name}'s queue`}>
       <header className="agent-peer-header">
@@ -50,7 +50,7 @@ export function PeerQueue({
         node={node}
         nodes={nodes}
         agent={agent}
-        actions={AGENT_ACTIONS[agent]}
+        actions={actionsOf(agent)}
         {...editsOf(edits, node.id)}
         marks={(item) => marks(node.id, item)}
         addLabel={`Add to ${name}'s queue`}

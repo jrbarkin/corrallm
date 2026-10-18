@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 
-import type { Cli, SettingsOptions } from '../../shared/session';
+import type { AdapterId } from '../../shared/adapter';
+import type { SettingsOptions } from '../../shared/session';
 import { AgentSettingsSummary } from '../agent/AgentSettings';
 import type { Session } from '../agent/session';
-import { AGENT_ACTIONS, CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import { actionsOf, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -96,7 +97,7 @@ export function QueuesView({
   onOpenAgent: (agentId: string) => void;
   onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   onOpenSettings?: ((id: string) => void) | undefined;
-  settingsOptions?: ((cli: Cli) => Promise<SettingsOptions>) | undefined;
+  settingsOptions?: ((cli: AdapterId) => Promise<SettingsOptions>) | undefined;
   onClose: () => void;
 }) {
   const layout = useMemo(() => lanesOf(nodes), [nodes]);
@@ -447,11 +448,11 @@ function LaneCells({
   picking: Picking | undefined;
   onOpenAgent: (agentId: string) => void;
   onOpenSettings?: ((id: string) => void) | undefined;
-  settingsOptions?: ((cli: Cli) => Promise<SettingsOptions>) | undefined;
+  settingsOptions?: ((cli: AdapterId) => Promise<SettingsOptions>) | undefined;
 }) {
   const { agent: node } = lane;
   const id = node.id;
-  const agent = node.data.agent ?? DEFAULT_AGENT;
+  const agent = node.data.adapter ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
   const items = lane.cells
     .map((cell) => cell.item)
@@ -480,7 +481,7 @@ function LaneCells({
     node,
     nodes,
     agent,
-    actions: AGENT_ACTIONS[agent],
+    actions: actionsOf(agent),
     ...editsOf(edits, id),
     onChooseStep: onChoose,
     marks: (itemId: string | null) => marks(id, itemId),
@@ -528,8 +529,8 @@ function LaneCells({
           {name(id)}
         </button>
         {(!onOpenSettings || !settingsOptions) && (
-          <span className="queues-connection" title={CONNECTION_INFO[connection].description}>
-            {CONNECTION_INFO[connection].short}
+          <span className="queues-connection" title={connectionInfo(connection).description}>
+            {connectionInfo(connection).short}
           </span>
         )}
         {onOpenSettings && settingsOptions && (
@@ -659,7 +660,7 @@ function LaneCells({
         <QueueAddMenu
           node={node}
           nodes={nodes}
-          actions={AGENT_ACTIONS[agent]}
+          actions={actionsOf(agent)}
           label={`Add to ${name(id)}'s queue`}
           up={false}
           onAdd={(entry) => {

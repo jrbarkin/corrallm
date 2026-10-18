@@ -35,6 +35,7 @@ function listen<E extends IpcEvent>(
 
 const api: AppApi = {
   ping: () => invoke(API_CHANNELS.ping),
+  catalog: () => invoke(API_CHANNELS.catalog),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),

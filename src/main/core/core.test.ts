@@ -10,7 +10,7 @@ import type { Core } from './core';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 const READING = {
-  backend: 'Codex',
+  backend: 'codex',
   windows: { fiveHour: { usedPercent: 42, resetsAt: null } },
   at: 1000,
 };
@@ -51,13 +51,13 @@ describe('createCore', () => {
   it('reads the usage readings and rules the profile remembers', async () => {
     await writeFile(
       path.join(profile, 'usage.json'),
-      JSON.stringify({ version: 1, readings: [READING], rules: { Codex: RULE } }),
+      JSON.stringify({ version: 2, readings: [READING], rules: { codex: RULE } }),
     );
     const started = await start();
     for (const party of PARTIES) {
       expect(await started.call('usage.get', {}, CALLERS[party])).toEqual({
         ok: true,
-        value: { readings: [READING], rules: { Codex: RULE } },
+        value: { readings: [READING], rules: { codex: RULE } },
       });
     }
   });

@@ -1,27 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { connectionIn } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import type {
   AgentSettings,
-  Cli,
-  Connection,
   ModelChoice,
   SessionMode,
   SettingsOptions,
 } from '../../shared/session';
-import type { AgentType } from '../graph/agents';
+import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { ChoiceMenu } from './ChoiceMenu';
-import { cycledModes, modeOf, STARTING_MODES } from './session';
+import { modeOf, modesOf } from './session';
 
-/** How each CLI is named, and where the user's own defaults come from. */
-const CLI_WORDS: Readonly<Record<Cli, { name: string; yours: string; its: string }>> = {
-  claude: {
+/** How each adapter's CLI is named, and where the user's own defaults come from. */
+const CLI_WORDS: Readonly<Record<AdapterId, { name: string; yours: string; its: string }>> = {
+  'claude-code': {
     name: 'Claude Code',
     yours: 'Yours, from Claude Code’s settings',
     its: 'Claude Code’s choice for your account',
   },
   codex: { name: 'Codex', yours: 'Yours, from your Codex config', its: 'Codex’s choice' },
 };
+
+/** Words for an adapter this build has no words for. */
+const SOME_WORDS = { name: 'Its CLI', yours: 'Yours', its: 'Its CLI’s choice' };
 
 /** The menus' key for nothing chosen: the user's own default. */
 const DEFAULT = '';
@@ -36,9 +39,8 @@ const DEFAULT = '';
  * (resuming its conversation).
  */
 export function SettingsMenu({
-  cli,
+  adapter,
   connection,
-  agent,
   settings,
   options,
   running,
@@ -51,12 +53,11 @@ export function SettingsMenu({
   prefix,
   suffix,
 }: {
-  cli: Cli;
-  connection: Connection;
-  agent: AgentType;
+  adapter: AdapterId;
+  connection: ConnectionId;
   settings: AgentSettings;
-  /** What the CLI's agents can be set to, and the user's own defaults (asked of main once). */
-  options: (cli: Cli) => Promise<SettingsOptions>;
+  /** What the adapter's agents can be set to, and the user's own defaults (asked of main once). */
+  options: (adapter: AdapterId) => Promise<SettingsOptions>;
   /** What the session that runs started with, if one runs. */
   running: AgentSettings | undefined;
   /** Whether the agent is in a turn (a restart would end it). */
@@ -72,14 +73,14 @@ export function SettingsMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [read, setRead] = useState<{ options?: SettingsOptions; problem?: string }>({});
-  // Read once for its CLI (main's answer is kept by the store), whatever the view renders meanwhile.
+  // Read once for its adapter (main's answer is kept by the store), whatever the view renders meanwhile.
   const ask = useRef(options);
   useEffect(() => {
     ask.current = options;
   });
   useEffect(() => {
     let current = true;
-    ask.current(cli).then(
+    ask.current(adapter).then(
       (given) => {
         if (current) setRead({ options: given });
       },
@@ -90,21 +91,22 @@ export function SettingsMenu({
     return () => {
       current = false;
     };
-  }, [cli]);
+  }, [adapter]);
 
-  const words = CLI_WORDS[cli];
+  // Its own words only: an adapter a file names may be called `toString` or `constructor`.
+  const words = (Object.hasOwn(CLI_WORDS, adapter) ? CLI_WORDS[adapter] : undefined) ?? SOME_WORDS;
   const models: readonly ModelChoice[] = read.options?.models ?? [];
   const defaults = read.options?.defaults ?? { model: null, effort: null, mode: null };
   const named = (value: string | null) => models.find((m) => m.value === value);
   /** The model it runs, chosen or not, if known: whose efforts it offers. */
   const runs = named(settings.model ?? defaults.model);
   const efforts = runs?.efforts ?? [];
-  const startable =
-    connection === 'terminal' || connection === 'codex-terminal'
-      ? STARTING_MODES[connection]
-      : cycledModes(agent);
-  const chosenMode =
-    settings.mode !== undefined && startable.includes(settings.mode) ? settings.mode : undefined;
+  // The modes its connection starts in (each asks), as the catalog declares them.
+  const starts = connectionIn(catalog(), connection)?.connection.startModes ?? [];
+  const startable = modesOf(adapter)
+    .map((m) => m.mode)
+    .filter((mode) => starts.includes(mode));
+  const chosenMode = startable.find((mode) => mode === settings.mode);
 
   /** What each is named: its own name; '' for a default not known. */
   const modelName = (value: string | null) =>
@@ -115,7 +117,7 @@ export function SettingsMenu({
       : (efforts.find((e) => e.value === value)?.label ??
         value.charAt(0).toUpperCase() + value.slice(1));
   const modeName = (value: SessionMode | null) =>
-    value === null ? '' : modeOf(agent, value).label;
+    value === null ? '' : modeOf(adapter, value).label;
   /** The effort it reasons at unless one is chosen: the user's own, if its model has it. */
   const defaultEffort =
     (efforts.some((e) => e.value === defaults.effort) ? defaults.effort : null) ??
@@ -261,7 +263,7 @@ export function SettingsMenu({
                   detail: defaults.mode === null ? words.its : words.yours,
                 },
                 ...startable.map((m) => {
-                  const info = modeOf(agent, m);
+                  const info = modeOf(adapter, m);
                   return { key: m, label: info.label, detail: info.description };
                 }),
               ]}
@@ -315,5 +317,5 @@ function withSetting(
   else if (key === 'effort') delete next.effort;
   else delete next.mode;
   if (value === undefined) return next;
-  return key === 'mode' ? { ...next, mode: value as SessionMode } : { ...next, [key]: value };
+  return { ...next, [key]: value };
 }

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import type { Connection, ElicitationAction, FormValue, PlanMode } from '../../shared/session';
-import { AgentType, CONNECTION_INFO } from '../graph/agents';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
+import type { ElicitationAction, FormValue, PlanMode } from '../../shared/session';
+import { connectionInfo } from '../graph/agents';
 import { QuestionCard } from '../graph/Questions';
 import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
@@ -17,7 +18,7 @@ export interface TranscriptAnswers {
   onAnswerQuestion: (promptId: string, index: number, answer: string) => void;
   onAnswerPlan: (promptId: string, answer: PlanAnswer) => void;
   /** Switches the agent to another connection, as a notice offers (Terminal, for a login). */
-  onSwitch?: (connection: Connection) => void;
+  onSwitch?: (connection: ConnectionId) => void;
   /** Rewinds to before one of the user's messages: offered on each, where it can be done. */
   onRewind?: (messageId: string) => void;
   /** Answers an MCP server's request: accepted (with the form's values), declined, cancelled. */
@@ -44,13 +45,13 @@ export interface TranscriptAnswers {
 export function Transcript({
   session,
   agentName,
-  agent = AgentType.Claude,
+  agent = 'claude-code',
   note,
   answers,
 }: {
   session: Session;
   agentName: string;
-  agent?: AgentType;
+  agent?: AdapterId;
   note: string;
   answers: TranscriptAnswers;
 }) {
@@ -126,7 +127,7 @@ function EntryView({
   rewinds,
 }: {
   entry: Entry;
-  agent: AgentType;
+  agent: AdapterId;
   session: Session;
   answers: TranscriptAnswers;
   /** Whether the keyboard's numbers answer it (a permission prompt). */
@@ -259,7 +260,7 @@ function EntryView({
                 onSwitch(switchTo);
               }}
             >
-              Switch to {CONNECTION_INFO[switchTo].label}
+              Switch to {connectionInfo(switchTo).label}
             </button>
           )}
         </p>
@@ -394,7 +395,7 @@ function Permission({
   keys,
   onAnswer,
 }: {
-  agent: AgentType;
+  agent: AdapterId;
   entry: Extract<Entry, { kind: 'permission' }>;
   keys: boolean;
   onAnswer: (permissionId: string, answer: Answer, feedback?: string) => void;
@@ -485,7 +486,7 @@ function Permission({
           </button>
         ))}
       </div>
-      {agent !== AgentType.Codex && (
+      {agent !== 'codex' && (
         <div className="graph-question-reply agent-permission-instead">
           <input
             aria-label={INSTEAD}
@@ -544,10 +545,10 @@ function Plan({
   onAnswer,
 }: {
   entry: Extract<Entry, { kind: 'plan' }>;
-  agent: AgentType;
+  agent: AdapterId;
   onAnswer: (promptId: string, answer: PlanAnswer) => void;
 }) {
-  const codex = agent === AgentType.Codex;
+  const codex = agent === 'codex';
   const [feedback, setFeedback] = useState('');
   const { answer } = entry;
   const open = answer === undefined && entry.withdrawn !== true;

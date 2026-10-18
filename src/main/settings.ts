@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
+import { ID_PATTERN } from '../shared/adapter';
 import { writeWhole } from './memory';
 
 /** What the user chose for corrallm as a whole, rather than for one canvas (memory.ts). */
@@ -18,8 +19,6 @@ export interface Consent {
 }
 
 const VERSION = 2;
-/** What names an adapter, or a consent's key: never a key an object has of its own. */
-const KEY = /^[A-Za-z][A-Za-z0-9._-]{0,31}$/;
 
 /**
  * The user's settings for the app, kept between runs in a JSON file in the app's user data:
@@ -95,8 +94,11 @@ function parse(text: string): AppSettings {
   return {
     consents: Object.fromEntries(
       Object.entries(consents).flatMap(([adapter, given]) => {
-        if (!KEY.test(adapter) || !isRecord(given)) return [];
-        const keys = Object.keys(given).filter((key) => KEY.test(key) && given[key] === true);
+        if (!ID_PATTERN.test(adapter) || !isRecord(given)) return [];
+        // A consent's key has an id's shape too: never a key an object has of its own.
+        const keys = Object.keys(given).filter(
+          (key) => ID_PATTERN.test(key) && given[key] === true,
+        );
         return keys.length === 0
           ? []
           : [[adapter, Object.fromEntries(keys.map((key) => [key, true]))]];

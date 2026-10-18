@@ -83,7 +83,9 @@ async function openCanvas(nodes: Node[]) {
       version: 2,
       id: randomUUID(),
       nodes: nodes.map((node) =>
-        node.kind === 'agent' ? { ...node, agent: 'Claude', connection: 'sdk' } : node,
+        node.kind === 'agent'
+          ? { ...node, adapter: 'claude-code', connection: 'claude-code.sdk' }
+          : node,
       ),
       links: [],
     }),

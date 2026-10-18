@@ -2,12 +2,14 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AdapterId } from '../../shared/adapter';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
-import type { AgentSettings, Cli, SettingsOptions } from '../../shared/session';
-import type { AgentConnection, AgentType } from '../graph/agents';
+import type { AgentSettings, SettingsOptions } from '../../shared/session';
+import type { AgentConnection } from '../graph/agents';
 import { setAgent, setConnection, setRole } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
+import { SettingsMenu } from './Settings';
 import { NEW_SESSION } from './session';
 import type { Session } from './session';
 
@@ -21,7 +23,7 @@ const choices: SettingsOptions = {
   models: [{ value: 'opus', label: 'Opus', efforts: [{ value: 'low', label: 'Low' }] }],
   defaults: { model: 'opus', effort: 'low', mode: 'manual' },
 };
-const options = vi.fn<(cli: Cli) => Promise<SettingsOptions>>().mockResolvedValue(choices);
+const options = vi.fn<(cli: AdapterId) => Promise<SettingsOptions>>().mockResolvedValue(choices);
 
 /** Echo saved graph changes as the editor does, while the sheet keeps its own role draft. */
 function Editor({
@@ -47,7 +49,7 @@ function Editor({
       (current) => setRole({ nodes: [current], edges: [] }, current.id, role).nodes[0] ?? current,
     );
   };
-  const changeAgent = (next: AgentType, connection: AgentConnection) => {
+  const changeAgent = (next: AdapterId, connection: AgentConnection) => {
     setNode(
       (current) =>
         setConnection(
@@ -57,7 +59,7 @@ function Editor({
         ).nodes[0] ?? current,
     );
   };
-  const changeSettings = (cli: Cli, settings: AgentSettings) => {
+  const changeSettings = (cli: AdapterId, settings: AgentSettings) => {
     setNode((current) => ({
       ...current,
       data: { ...current.data, settings: { ...current.data.settings, [cli]: settings } },
@@ -173,7 +175,7 @@ describe('shared agent settings', () => {
       const onRole = vi.fn();
       render(
         <Editor
-          initial={agent({ connection: 'sdk', role: 'Original role' })}
+          initial={agent({ connection: 'claude-code.sdk', role: 'Original role' })}
           session={{ ...NEW_SESSION, status, running: { role: 'Original role' } }}
           onRole={onRole}
           onRestart={onRestart}
@@ -201,7 +203,7 @@ describe('shared agent settings', () => {
 
   it('offers an explicit restart once idle, including when an existing role was cleared', async () => {
     const onRestart = vi.fn();
-    const initial = agent({ connection: 'sdk', role: 'Original role' });
+    const initial = agent({ connection: 'claude-code.sdk', role: 'Original role' });
     const working: Session = {
       ...NEW_SESSION,
       status: 'working',
@@ -227,12 +229,12 @@ describe('shared agent settings', () => {
     expect(panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' }).value).toBe('');
   });
 
-  it.each(['app-server', 'codex-terminal'] as const)(
+  it.each(['codex.app-server', 'codex.terminal'] as const)(
     'applies a changed Codex role through an explicit new %s conversation, available once idle',
     async (connection) => {
       const onRestart = vi.fn();
       const onFresh = vi.fn();
-      const initial = agent({ agent: 'Codex', connection, role: 'Original role' });
+      const initial = agent({ adapter: 'codex', connection, role: 'Original role' });
       const working: Session = {
         ...NEW_SESSION,
         status: 'working',
@@ -277,7 +279,7 @@ describe('shared agent settings', () => {
     const onFresh = vi.fn();
     render(
       <Editor
-        initial={agent({ agent: 'Codex', connection: 'app-server', role: 'Saved role' })}
+        initial={agent({ adapter: 'codex', connection: 'codex.app-server', role: 'Saved role' })}
         onFresh={onFresh}
       />,
     );
@@ -317,7 +319,7 @@ describe('shared agent settings', () => {
 
   it('closes an inner choice with Escape before closing the settings sheet', async () => {
     const onClose = vi.fn();
-    render(<Editor initial={agent({ connection: 'sdk' })} onClose={onClose} />);
+    render(<Editor initial={agent({ connection: 'claude-code.sdk' })} onClose={onClose} />);
     const { panel } = open();
     await waitFor(() => {
       expect(panel.getByRole('button', { name: 'Model: Default (Opus)' })).toBeTruthy();
@@ -334,7 +336,7 @@ describe('shared agent settings', () => {
   });
   it('still owns Escape when choosing a model removes the focused menu item', async () => {
     const onClose = vi.fn();
-    render(<Editor initial={agent({ connection: 'sdk' })} onClose={onClose} />);
+    render(<Editor initial={agent({ connection: 'claude-code.sdk' })} onClose={onClose} />);
     const { opener, panel } = open();
     await waitFor(() => {
       expect(panel.getByRole('button', { name: 'Model: Default (Opus)' })).toBeTruthy();
@@ -353,4 +355,34 @@ describe('shared agent settings', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(opener);
   });
+
+  it.each(['toString', 'constructor'])(
+    'names an agent whose adapter is named like what every object inherits (%s) by its id',
+    (adapter) => {
+      render(<Editor initial={agent({ adapter, connection: adapter })} />);
+      expect(
+        screen.getByRole('button', { name: 'Agent settings: Reviewer' }).textContent,
+      ).toContain(`${adapter} · Not connected`);
+      const { panel } = open();
+      expect(panel.getByRole('button', { name: `Agent: ${adapter} · Not connected` })).toBeTruthy();
+    },
+  );
+
+  it.each(['toString', 'constructor'])(
+    'words the settings of an adapter it has no words for (%s) as any CLI’s',
+    (adapter) => {
+      render(
+        <SettingsMenu
+          inline
+          adapter={adapter}
+          connection={adapter}
+          settings={{}}
+          options={options}
+          running={undefined}
+          working={false}
+        />,
+      );
+      expect(screen.getByRole('group', { name: 'Its CLI settings' })).toBeTruthy();
+    },
+  );
 });

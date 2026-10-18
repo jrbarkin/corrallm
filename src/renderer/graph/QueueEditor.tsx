@@ -2,15 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 
 import { USAGE_WINDOWS } from '../../shared/usage';
-import type { UsageBackend, UsageWindow } from '../../shared/usage';
+import type { AdapterId, UsageBackendId } from '../../shared/adapter';
+import type { UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../agent/session';
 import { answersOf, usageAnswers } from '../run/asks';
 import type { Answers } from '../run/asks';
 import type { Answer, TaskAttempt, TaskProblem } from '../run/runner';
 import { SearchPicker } from '../search/SearchPicker';
-import { backendOfType, windowText } from '../usage/usage';
+import { backendName, backendOfType, windowText } from '../usage/usage';
 import { DEFAULT_AGENT } from './agents';
-import type { AgentAction, AgentType } from './agents';
+import type { AgentAction } from './agents';
 import type { GraphNode } from './graph';
 import type { RepeatChange } from './edits';
 import {
@@ -114,7 +115,7 @@ interface QueueProps {
   node: GraphNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
   nodes: readonly GraphNode[];
-  agent: AgentType;
+  agent: AdapterId;
   /** What the agent can do. */
   actions: readonly AgentAction[];
   /** `into`: the id of the if-then or repeat to add to. */
@@ -445,7 +446,7 @@ interface AddContext {
    * The backend the agent's type is, if corrallm reads its usage: an If can check it, and a delay
    * wait for its usage window to reset.
    */
-  usage?: UsageBackend | undefined;
+  usage?: UsageBackendId | undefined;
   actions: readonly AgentAction[];
   others: readonly GraphNode[];
   itemLabel: (item: QueueItem) => string;
@@ -453,7 +454,7 @@ interface AddContext {
 }
 
 interface Context extends AddContext {
-  agent: AgentType;
+  agent: AdapterId;
   name: (id: string | undefined) => string;
   ifText: (condition: Condition) => string;
   untilText: (until: Until) => string;
@@ -504,7 +505,7 @@ export function QueueAddMenu({
   const context = {
     owner: node.id,
     inRepeat: false,
-    usage: backendOfType(node.data.agent ?? DEFAULT_AGENT),
+    usage: backendOfType(node.data.adapter ?? DEFAULT_AGENT),
     actions,
     others,
     itemLabel,
@@ -618,7 +619,7 @@ function TimePicker({
   current?: Time;
   allowNone?: boolean;
   /** A backend whose usage windows' resets are offered too (a delay's, for an agent on it). */
-  usage?: UsageBackend | undefined;
+  usage?: UsageBackendId | undefined;
   onPick: (time: Time | undefined) => void;
   onCancel: () => void;
 }) {
@@ -937,7 +938,7 @@ function UsageHeld({ item, context }: { item: QueueStep | QueueMessage; context:
         <DecideBar
           item={item}
           answers={usageAnswers({
-            backend: backend as UsageBackend,
+            backend,
             resetsAt: reset === undefined ? null : Number(reset),
           })}
           onDecide={(answer) => {
@@ -1911,7 +1912,7 @@ function UsagePicker({
   onPick,
   onCancel,
 }: {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   current?: UsageChoice | undefined;
   onPick: (choice: UsageChoice) => void;
   onCancel: () => void;
@@ -1922,7 +1923,7 @@ function UsagePicker({
   );
   return (
     <SearchPicker
-      label={`${backend}’s usage is over…`}
+      label={`${backendName(backend)}’s usage is over…`}
       placeholder="80%, 90% weekly…"
       options={options}
       optionLabel={({ percent, window }) => `Over ${String(percent)}% of the ${windowText(window)}`}
@@ -1959,7 +1960,7 @@ function ConditionPicker({
   current?: Condition | RepeatEnds;
   leaders?: readonly Leader[];
   /** A backend whose usage an if-then can check (the agent's). */
-  usage?: UsageBackend | undefined;
+  usage?: UsageBackendId | undefined;
   onPick: (condition: Condition | RepeatEnds) => void;
   onCancel: () => void;
 }) {
@@ -1996,7 +1997,7 @@ function ConditionPicker({
     ...(mode === 'if' && backend !== undefined
       ? [
           {
-            label: `${backend}’s usage is over…`,
+            label: `${backendName(backend)}’s usage is over…`,
             detail: 'By its latest reading, when the run gets here',
             pick: 'usage' as const,
           },

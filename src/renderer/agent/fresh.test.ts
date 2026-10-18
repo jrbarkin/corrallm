@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CONNECTION_CLI, CONNECTIONS } from '../../shared/session';
+import { adapterOf, catalog } from '../catalog';
 import { fakeBackend } from '../test-backend';
 import { SessionStore } from './sessions';
 
@@ -20,13 +20,13 @@ function deferred() {
 }
 
 describe('starting a fresh native conversation', () => {
-  it.each(CONNECTIONS)(
+  it.each(catalog().adapters.flatMap((adapter) => adapter.connections.map((one) => one.id)))(
     'opens %s with the latest role and settings without resending any user message',
     async (connection) => {
       const { backend, emit, sent } = fakeBackend();
       const store = new SessionStore(backend);
       store.sync([{ id: 'a', connection, role: 'Old role' }]);
-      store.send('a', 'Claude', 'Earlier manual work');
+      store.send('a', 'claude-code', 'Earlier manual work');
       await vi.waitFor(() => {
         expect(backend.send).toHaveBeenCalledOnce();
       });
@@ -38,7 +38,7 @@ describe('starting a fresh native conversation', () => {
         failed: false,
       });
       const submissions = store.of('a').submissions;
-      const cli = CONNECTION_CLI[connection];
+      const cli = adapterOf(connection);
       store.sync([
         {
           id: 'a',
@@ -75,12 +75,12 @@ describe('starting a fresh native conversation', () => {
   it('can replace a restored Codex conversation before any renderer driver exists', async () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'app-server', role: 'New role' }]);
+    store.sync([{ id: 'a', connection: 'codex.app-server', role: 'New role' }]);
     await store.fresh('a');
     await settled();
     expect(backend.fresh).toHaveBeenCalledExactlyOnceWith('a', 'codex');
     expect(backend.start).toHaveBeenCalledExactlyOnceWith('a', {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: null,
       mode: null,
       role: 'New role',
@@ -95,10 +95,10 @@ describe('starting a fresh native conversation', () => {
     async (status) => {
       const { backend, emit } = fakeBackend();
       const store = new SessionStore(backend);
-      store.sync([{ id: 'a', connection: 'app-server' }]);
-      store.send('a', 'Codex', 'Current work');
+      store.sync([{ id: 'a', connection: 'codex.app-server' }]);
+      store.send('a', 'codex', 'Current work');
       await settled();
-      emit('a', 'app-server', { type: 'status', status });
+      emit('a', 'codex.app-server', { type: 'status', status });
       await store.fresh('a');
       expect(backend.fresh).not.toHaveBeenCalled();
       expect(backend.close).not.toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe('starting a fresh native conversation', () => {
   it('leaves the visible conversation intact when the durable clear fails', async () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'app-server' }]);
+    store.sync([{ id: 'a', connection: 'codex.app-server' }]);
     store.open('a');
     await settled();
     store.notice('a', 'info', 'Keep this conversation visible.');
@@ -142,13 +142,13 @@ describe('starting a fresh native conversation', () => {
       const pending = deferred();
       backend.fresh.mockReturnValueOnce(pending.promise);
       const store = new SessionStore(backend);
-      store.sync([{ id: 'a', connection: 'app-server' }]);
+      store.sync([{ id: 'a', connection: 'codex.app-server' }]);
       const fresh = store.fresh('a');
       await settled();
       expect(backend.fresh).toHaveBeenCalledOnce();
       if (change === 'reset') store.reset();
       else if (change === 'remove') store.sync([]);
-      else store.sync([{ id: 'a', connection: 'sdk' }]);
+      else store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       pending.resolve(null);
       await fresh;
       expect(backend.start).not.toHaveBeenCalled();
@@ -162,10 +162,10 @@ describe('starting a fresh native conversation', () => {
     const pending = deferred();
     backend.fresh.mockReturnValueOnce(pending.promise);
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'app-server', role: 'Reviewer' }]);
+    store.sync([{ id: 'a', connection: 'codex.app-server', role: 'Reviewer' }]);
     const fresh = store.fresh('a');
     const again = store.fresh('a');
-    store.send('a', 'Codex', 'New conversation work');
+    store.send('a', 'codex', 'New conversation work');
     store.open('a');
     await settled();
     expect(backend.fresh).toHaveBeenCalledOnce();

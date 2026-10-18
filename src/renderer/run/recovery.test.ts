@@ -32,7 +32,7 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
     id: 'a',
     type: 'agent',
     position: { x: 0, y: 0 },
-    data: { label: 'A', connection: 'sdk', queue },
+    data: { label: 'A', connection: 'claude-code.sdk', queue },
   };
   const store = new RunStore(io);
   store.update([node]);

@@ -39,6 +39,12 @@ describe('preload', () => {
     await expect(api.ping()).resolves.toBe('corrallm 0.1.0');
     expect(invoke).toHaveBeenCalledWith('app:ping');
 
+    // The catalog, which the renderer loads before it mounts.
+    const catalog = { adapters: [], usageBackends: [] };
+    invoke.mockResolvedValue(catalog);
+    await expect(api.catalog()).resolves.toBe(catalog);
+    expect(invoke).toHaveBeenLastCalledWith('catalog:get');
+
     // The canvas file functions invoke their channels with their arguments.
     await api.openCanvas();
     expect(invoke).toHaveBeenLastCalledWith('canvas:open');
@@ -55,7 +61,7 @@ describe('preload', () => {
   it('invokes the session channels with their arguments', async () => {
     const api = await exposed();
     invoke.mockResolvedValue(null);
-    const options = { connection: 'sdk', model: null, mode: 'manual' } as const;
+    const options = { connection: 'claude-code.sdk', model: null, mode: 'manual' } as const;
     await api.startSession('a', options);
     expect(invoke).toHaveBeenLastCalledWith('session:start', 'a', options);
     await api.sendToSession('a', { id: 'm', text: 'Hi' });
@@ -94,8 +100,8 @@ describe('preload', () => {
     expect(invoke).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
     await api.mcpServers('a');
     expect(invoke).toHaveBeenLastCalledWith('session:mcp', 'a');
-    await api.settingsOptions('claude');
-    expect(invoke).toHaveBeenLastCalledWith('session:options', 'claude');
+    await api.settingsOptions('claude-code');
+    expect(invoke).toHaveBeenLastCalledWith('session:options', 'claude-code');
     await api.changeMcpServer('a', 'github', 'disable');
     expect(invoke).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
     await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
@@ -115,8 +121,8 @@ describe('preload', () => {
     if (!receive) throw new Error('not listening');
 
     const event: SessionEvent = { type: 'status', status: 'working' };
-    receive({ sender: 'the ipcRenderer event' }, 'a', 'sdk', event);
-    expect(heard).toHaveBeenCalledWith('a', 'sdk', event);
+    receive({ sender: 'the ipcRenderer event' }, 'a', 'claude-code.sdk', event);
+    expect(heard).toHaveBeenCalledWith('a', 'claude-code.sdk', event);
 
     stop();
     expect(removeListener).toHaveBeenCalledWith('session:event', receive);
@@ -178,10 +184,10 @@ describe('preload', () => {
     expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
   });
 
-  it('asks main which CLIs the user has', async () => {
+  it('asks main which agents the user has', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue({ claude: true, codex: true });
-    await expect(api.installedClis()).resolves.toEqual({ claude: true, codex: true });
+    invoke.mockResolvedValue({ 'claude-code': true, codex: true });
+    await expect(api.installedClis()).resolves.toEqual({ 'claude-code': true, codex: true });
     expect(invoke).toHaveBeenLastCalledWith('session:clis');
   });
 
@@ -191,11 +197,11 @@ describe('preload', () => {
     await expect(api.getUsage()).resolves.toEqual({ readings: [], rules: {} });
     expect(invoke).toHaveBeenLastCalledWith('usage:get');
     const rule = { window: 'weekly', percent: 90, action: 'warn' } as const;
-    await api.setUsageRule('Claude', rule);
-    expect(invoke).toHaveBeenLastCalledWith('usage:rule', 'Claude', rule);
+    await api.setUsageRule('claude-code', rule);
+    expect(invoke).toHaveBeenLastCalledWith('usage:rule', 'claude-code', rule);
     const windows = { fiveHour: { usedPercent: 85, resetsAt: null } };
-    await api.simulateUsage('Claude', windows);
-    expect(invoke).toHaveBeenLastCalledWith('usage:simulate', 'Claude', windows);
+    await api.simulateUsage('claude-code', windows);
+    expect(invoke).toHaveBeenLastCalledWith('usage:simulate', 'claude-code', windows);
   });
 
   it('passes usage changes on without Electron’s event object, until told to stop', async () => {

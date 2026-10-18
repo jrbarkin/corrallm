@@ -1,8 +1,8 @@
-import { CONNECTION_CLI, turnResult } from '../../shared/session';
+import type { AdapterId } from '../../shared/adapter';
+import { turnResult } from '../../shared/session';
 import { parseRole } from '../../shared/role';
 import type {
   AgentSettings,
-  Cli,
   ElicitationAction,
   FilesRewind,
   FormValue,
@@ -14,8 +14,9 @@ import type {
   SettingsOptions,
   TurnResult,
 } from '../../shared/session';
+import { adapterOf } from '../catalog';
 import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
-import type { AgentConnection, AgentType } from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
@@ -64,13 +65,13 @@ export class SessionStore {
   /** How each agent runs, as the canvas last said (`sync`). */
   readonly #connections = new Map<string, AgentConnection>();
   /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
-  readonly #settings = new Map<string, Partial<Record<Cli, AgentSettings>>>();
+  readonly #settings = new Map<string, Partial<Record<AdapterId, AgentSettings>>>();
   /** The authored role is independent of the settings remembered for each CLI. */
   readonly #roles = new Map<string, string>();
   /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
-  readonly #options = new Map<Cli, Promise<SettingsOptions>>();
+  readonly #options = new Map<AdapterId, Promise<SettingsOptions>>();
   /** Each agent's type, as it was last sent a message: its default connection and queue sends. */
-  readonly #types = new Map<string, AgentType>();
+  readonly #types = new Map<string, AdapterId>();
   /**
    * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
    * (queued or not) until then.
@@ -107,7 +108,7 @@ export class SessionStore {
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
   readonly #onceIn = new Map<
     string,
-    { connection: AgentConnection; agent: AgentType; text: string }
+    { connection: AgentConnection; agent: AdapterId; text: string }
   >();
   #unsubscribe: (() => void) | undefined;
 
@@ -145,7 +146,7 @@ export class SessionStore {
     agents: readonly {
       id: string;
       connection: AgentConnection;
-      settings?: Partial<Record<Cli, AgentSettings>> | undefined;
+      settings?: Partial<Record<AdapterId, AgentSettings>> | undefined;
       role?: string | undefined;
     }[],
   ): void {
@@ -225,7 +226,7 @@ export class SessionStore {
     const pending = Promise.resolve().then(async () => {
       try {
         if (this.#freshening.get(agentId) !== pending) return;
-        await this.#backend.fresh(agentId, CONNECTION_CLI[connection]);
+        await this.#backend.fresh(agentId, adapterOf(connection));
         if (this.#freshening.get(agentId) !== pending) return;
         this.#letGo(agentId);
         this.#dispatch(agentId, { type: 'clear' });
@@ -241,22 +242,22 @@ export class SessionStore {
   }
 
   /**
-   * What an agent of `cli` can be set to run with, and the user's own defaults: asked of main once,
-   * then kept (until `forgetOptions`, or a failure, which is asked again next time).
+   * What an agent of `adapter` can be set to run with, and the user's own defaults: asked of main
+   * once, then kept (until `forgetOptions`, or a failure, which is asked again next time).
    */
-  settingsOptions(cli: Cli): Promise<SettingsOptions> {
-    let options = this.#options.get(cli);
+  settingsOptions(adapter: AdapterId): Promise<SettingsOptions> {
+    let options = this.#options.get(adapter);
     if (!options) {
-      options = this.#backend.options(cli);
+      options = this.#backend.options(adapter);
       options.catch(() => {
-        if (this.#options.get(cli) === options) this.#options.delete(cli);
+        if (this.#options.get(adapter) === options) this.#options.delete(adapter);
       });
-      this.#options.set(cli, options);
+      this.#options.set(adapter, options);
     }
     return options;
   }
 
-  /** What CLIs' agents can be set to is read again when next asked (another project folder). */
+  /** What adapters' agents can be set to is read again when next asked (another project folder). */
   forgetOptions(): void {
     this.#options.clear();
   }
@@ -274,7 +275,7 @@ export class SessionStore {
    */
   send(
     agentId: string,
-    agent: AgentType,
+    agent: AdapterId,
     text: string,
     onDone?: (interrupted: boolean, reply: string, result?: TurnResult) => void,
     images?: MessageImage[],
@@ -316,7 +317,7 @@ export class SessionStore {
    * Sends a message once the agent runs with `connection`, as the canvas switches it (`sync`): a
    * command typed for Claude Code's terminal, sent there once the agent continues in Terminal.
    */
-  sendOnceIn(agentId: string, connection: AgentConnection, agent: AgentType, text: string): void {
+  sendOnceIn(agentId: string, connection: AgentConnection, agent: AdapterId, text: string): void {
     if (this.#connections.get(agentId) === connection) {
       this.send(agentId, agent, text);
       return;
@@ -535,7 +536,7 @@ export class SessionStore {
   /** Starts a turn with message `id` (a queued message keeps its own). */
   #start(
     agentId: string,
-    agent: AgentType,
+    agent: AdapterId,
     { text, images }: { text: string; images: MessageImage[] | undefined },
     id: string,
   ): void {
@@ -609,7 +610,7 @@ export class SessionStore {
   #connection(agentId: string): AgentConnection {
     return (
       this.#connections.get(agentId) ??
-      connectionOf({ agent: this.#types.get(agentId) ?? DEFAULT_AGENT })
+      connectionOf({ adapter: this.#types.get(agentId) ?? DEFAULT_AGENT })
     );
   }
 
@@ -646,7 +647,7 @@ export class SessionStore {
         const settings =
           driving.connection === 'unavailable'
             ? {}
-            : (this.#settings.get(agentId)?.[CONNECTION_CLI[driving.connection]] ?? {});
+            : (this.#settings.get(agentId)?.[adapterOf(driving.connection)] ?? {});
         const role = this.#roles.get(agentId);
         return { ...settings, ...(role === undefined ? {} : { role }) };
       },

@@ -1,18 +1,18 @@
 import { useId, useState } from 'react';
 
+import type { AdapterId } from '../../shared/adapter';
 import type { TerminalAsk } from '../../shared/session';
 import { Markdown } from '../agent/Markdown';
 import { ToolDetailView } from '../agent/ToolDetail';
 import { permissionQuestion } from '../agent/tools';
 import type { AskChoice, HeldAsk } from '../run/asks';
 import type { Answer } from '../run/runner';
-import { AGENT_CLI, DEFAULT_AGENT } from './agents';
-import type { AgentType } from './agents';
+import { adapterCli, DEFAULT_AGENT } from './agents';
 
 /** Who asks, labelled on a card: a button that opens that agent. */
 interface Asker {
   name: string;
-  type: AgentType;
+  type: AdapterId;
   onOpen: () => void;
 }
 
@@ -276,7 +276,7 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
       case 'trust':
         return (
           <p className="graph-question-text">
-            {AGENT_CLI[agent.type]} asks whether you trust this folder before it works in it.
+            {adapterCli(agent.type)} asks whether you trust this folder before it works in it.
           </p>
         );
       case 'other':
@@ -318,7 +318,7 @@ export function TerminalAskCard({ ask, agent }: { ask: TerminalAsk; agent: Asker
 interface Asking {
   agentId: string;
   agentName: string;
-  agentType: AgentType;
+  agentType: AdapterId;
 }
 
 /**
@@ -354,7 +354,7 @@ export function QuestionsSidebar({
           key={`${agent.id}/${item.id}`}
           agent={{
             name: agent.data.label || 'Unnamed agent',
-            type: agent.data.agent ?? DEFAULT_AGENT,
+            type: agent.data.adapter ?? DEFAULT_AGENT,
             onOpen: () => {
               onOpen(agent.id);
             },

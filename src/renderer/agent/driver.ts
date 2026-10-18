@@ -4,7 +4,8 @@ import type {
   SessionAnswer,
   TurnResult,
 } from '../../shared/session';
-import type { AgentType } from '../graph/agents';
+
+import type { AdapterId } from '../../shared/adapter';
 import type { Mode, Refusal, Session, SessionAction } from './session';
 
 /*
@@ -24,7 +25,7 @@ export interface Turn {
   id: string;
   text: string;
   images?: MessageImage[];
-  agent: AgentType;
+  agent: AdapterId;
 }
 
 export type DriverDone = (interrupted: boolean, result?: TurnResult) => void;

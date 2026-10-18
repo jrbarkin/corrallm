@@ -2,7 +2,9 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 import type { CodexMode } from '../../../../shared/session';
-import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
+import type { UsageBackendId } from '../../../../shared/adapter';
+import type { UsageWindows } from '../../../../shared/usage';
+import { CODEX_USAGE } from '../adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
 import { HOOK_TOKEN, HookServer } from '../../terminal/hooks';
 import { spawnPty } from '../../terminal/pty';
@@ -80,7 +82,7 @@ export interface CodexTerminalConnectorOptions {
   /** Reads Codex's usage limits for its sessions (a private app server). */
   reader?: UsageReader;
   /** Takes the usage readings its sessions report (main's UsageReadings). */
-  usage?: (backend: UsageBackend, windows: UsageWindows) => void;
+  usage?: (backend: UsageBackendId, windows: UsageWindows) => void;
   /** Reads effective native developer instructions without starting a thread. */
   readInstructions?: (context: InstructionsContext) => Promise<string | undefined>;
   /** Where sessions' own folders go. */
@@ -95,7 +97,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
   readonly #version: (codex: string, env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #truster: HookTruster;
   readonly #reader: UsageReader;
-  readonly #usage: ((backend: UsageBackend, windows: UsageWindows) => void) | undefined;
+  readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;
   readonly #readInstructions: (context: InstructionsContext) => Promise<string | undefined>;
   readonly #tmp: string;
   readonly #timing: TerminalTiming;
@@ -159,7 +161,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
         ? {}
         : {
             usage: (windows: UsageWindows) => {
-              usage('Codex', windows);
+              usage(CODEX_USAGE, windows);
             },
           }),
     });

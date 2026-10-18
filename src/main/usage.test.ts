@@ -30,7 +30,12 @@ afterEach(async () => {
 });
 
 async function open(): Promise<UsageReadings> {
-  const store = new UsageReadings({ file, now: () => now, writeDelay: 0 });
+  const store = new UsageReadings({
+    file,
+    backends: ['claude-code', 'codex'],
+    now: () => now,
+    writeDelay: 0,
+  });
   await store.load();
   store.subscribe((state) => heard.push(state));
   return store;
@@ -42,25 +47,25 @@ const fiveHour = (usedPercent: number, resetsAt: number | null = START + 2 * HOU
 
 describe('UsageReadings', () => {
   it('keeps one reading per backend, with when it was read, and tells listeners', () => {
-    readings.take('Claude', fiveHour(42));
+    readings.take('claude-code', fiveHour(42));
     expect(readings.state().readings).toEqual([
-      { backend: 'Claude', windows: fiveHour(42), at: START },
+      { backend: 'claude-code', windows: fiveHour(42), at: START },
     ]);
     expect(heard).toHaveLength(1);
 
     now += MINUTE;
-    readings.take('Claude', fiveHour(43));
-    readings.take('Codex', { weekly: { usedPercent: 7, resetsAt: null } });
+    readings.take('claude-code', fiveHour(43));
+    readings.take('codex', { weekly: { usedPercent: 7, resetsAt: null } });
     expect(readings.state().readings).toEqual([
-      { backend: 'Claude', windows: fiveHour(43), at: START + MINUTE },
-      { backend: 'Codex', windows: { weekly: { usedPercent: 7, resetsAt: null } }, at: now },
+      { backend: 'claude-code', windows: fiveHour(43), at: START + MINUTE },
+      { backend: 'codex', windows: { weekly: { usedPercent: 7, resetsAt: null } }, at: now },
     ]);
     expect(heard).toHaveLength(3);
   });
 
   it('keeps a window the newest reading leaves out', () => {
-    readings.take('Claude', { ...fiveHour(10), weekly: { usedPercent: 30, resetsAt: null } });
-    readings.take('Claude', fiveHour(12));
+    readings.take('claude-code', { ...fiveHour(10), weekly: { usedPercent: 30, resetsAt: null } });
+    readings.take('claude-code', fiveHour(12));
     expect(readings.state().readings[0]?.windows).toEqual({
       ...fiveHour(12),
       weekly: { usedPercent: 30, resetsAt: null },
@@ -68,55 +73,55 @@ describe('UsageReadings', () => {
   });
 
   it('tells listeners of the same reading again only once a minute (to say how old it is)', () => {
-    readings.take('Claude', fiveHour(42));
+    readings.take('claude-code', fiveHour(42));
     now += 10_000;
-    readings.take('Claude', fiveHour(42));
+    readings.take('claude-code', fiveHour(42));
     expect(heard).toHaveLength(1);
     expect(readings.state().readings[0]?.at).toBe(START + 10_000);
     now += MINUTE;
-    readings.take('Claude', fiveHour(42));
+    readings.take('claude-code', fiveHour(42));
     expect(heard).toHaveLength(2);
   });
 
   it('simulates a reading, which a real one replaces, and forgets it', () => {
-    readings.simulate('Claude', fiveHour(90));
+    readings.simulate('claude-code', fiveHour(90));
     expect(readings.state().readings).toEqual([
-      { backend: 'Claude', windows: fiveHour(90), at: START, simulated: true },
+      { backend: 'claude-code', windows: fiveHour(90), at: START, simulated: true },
     ]);
-    readings.take('Claude', fiveHour(20));
+    readings.take('claude-code', fiveHour(20));
     expect(readings.state().readings).toEqual([
-      { backend: 'Claude', windows: fiveHour(20), at: START },
+      { backend: 'claude-code', windows: fiveHour(20), at: START },
     ]);
-    readings.simulate('Claude', fiveHour(95));
-    readings.simulate('Claude', null);
+    readings.simulate('claude-code', fiveHour(95));
+    readings.simulate('claude-code', null);
     expect(readings.state().readings).toEqual([]);
   });
 
   it('a real reading does not keep windows only a simulated one had', () => {
-    readings.simulate('Claude', { weekly: { usedPercent: 99, resetsAt: null } });
-    readings.take('Claude', fiveHour(20));
+    readings.simulate('claude-code', { weekly: { usedPercent: 99, resetsAt: null } });
+    readings.take('claude-code', fiveHour(20));
     expect(readings.state().readings[0]?.windows).toEqual(fiveHour(20));
   });
 
   it('keeps a rule per backend, and takes it off', () => {
-    readings.setRule('Claude', { window: 'fiveHour', percent: 80, action: 'ask' });
+    readings.setRule('claude-code', { window: 'fiveHour', percent: 80, action: 'ask' });
     expect(readings.state().rules).toEqual({
-      Claude: { window: 'fiveHour', percent: 80, action: 'ask' },
+      'claude-code': { window: 'fiveHour', percent: 80, action: 'ask' },
     });
-    readings.setRule('Claude', null);
+    readings.setRule('claude-code', null);
     expect(readings.state().rules).toEqual({});
     expect(heard).toHaveLength(2);
   });
 
   it('remembers readings and rules across restarts, with when they were read', async () => {
-    readings.take('Claude', fiveHour(42));
-    readings.setRule('Claude', { window: 'weekly', percent: 90, action: 'waitForReset' });
+    readings.take('claude-code', fiveHour(42));
+    readings.setRule('claude-code', { window: 'weekly', percent: 90, action: 'waitForReset' });
     await readings.flush();
     now += 3 * HOUR;
     const again = await open();
     expect(again.state()).toEqual({
-      readings: [{ backend: 'Claude', windows: fiveHour(42), at: START }],
-      rules: { Claude: { window: 'weekly', percent: 90, action: 'waitForReset' } },
+      readings: [{ backend: 'claude-code', windows: fiveHour(42), at: START }],
+      rules: { 'claude-code': { window: 'weekly', percent: 90, action: 'waitForReset' } },
     });
   });
 
@@ -126,29 +131,47 @@ describe('UsageReadings', () => {
     await writeFile(
       file,
       JSON.stringify({
-        version: 1,
+        version: 2,
         readings: [
-          { backend: 'Claude', windows: fiveHour(5), at: START },
-          { backend: 'Gemini', windows: fiveHour(5), at: START },
-          { backend: 'Codex', windows: fiveHour(500), at: START },
-          { backend: 'Codex', windows: fiveHour(5), at: 'yesterday' },
+          { backend: 'claude-code', windows: fiveHour(5), at: START },
+          { backend: 'gemini', windows: fiveHour(5), at: START },
+          { backend: 'codex', windows: fiveHour(500), at: START },
+          { backend: 'codex', windows: fiveHour(5), at: 'yesterday' },
         ],
-        rules: { Claude: { window: 'weekly', percent: 0, action: 'ask' }, Codex: 'warn' },
+        rules: { 'claude-code': { window: 'weekly', percent: 0, action: 'ask' }, codex: 'warn' },
       }),
     );
     expect((await open()).state()).toEqual({
-      readings: [{ backend: 'Claude', windows: fiveHour(5), at: START }],
+      readings: [{ backend: 'claude-code', windows: fiveHour(5), at: START }],
       rules: {},
     });
   });
 
+  it('reads a file of another version as nothing read and no rules', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        readings: [{ backend: 'Claude', windows: fiveHour(5), at: START }],
+        rules: { Claude: { window: 'weekly', percent: 80, action: 'ask' } },
+      }),
+    );
+    expect((await open()).state()).toEqual({ readings: [], rules: {} });
+  });
+
+  it('keeps no reading of a backend the catalog does not list', () => {
+    readings.take('gemini', fiveHour(5));
+    expect(readings.state()).toEqual({ readings: [], rules: {} });
+    expect(heard).toEqual([]);
+  });
+
   it('writes nothing but shares, times and rules', async () => {
-    readings.take('Claude', fiveHour(42));
+    readings.take('claude-code', fiveHour(42));
     await readings.flush();
     const text = await readFile(file, 'utf8');
     expect(JSON.parse(text)).toEqual({
-      version: 1,
-      readings: [{ backend: 'Claude', windows: fiveHour(42), at: START }],
+      version: 2,
+      readings: [{ backend: 'claude-code', windows: fiveHour(42), at: START }],
       rules: {},
     });
   });

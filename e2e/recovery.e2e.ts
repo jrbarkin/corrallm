@@ -80,8 +80,8 @@ async function openCanvas(queue: unknown[], dependent = false) {
           kind: 'agent',
           label: 'Builder',
           position: { x: 0, y: 0 },
-          agent: 'Claude',
-          connection: 'sdk',
+          adapter: 'claude-code',
+          connection: 'claude-code.sdk',
           queue,
         },
         ...(dependent
@@ -91,8 +91,8 @@ async function openCanvas(queue: unknown[], dependent = false) {
                 kind: 'agent',
                 label: 'Verifier',
                 position: { x: 400, y: 0 },
-                agent: 'Claude',
-                connection: 'sdk',
+                adapter: 'claude-code',
+                connection: 'claude-code.sdk',
                 queue: [
                   { id: 'wait', waitFor: [{ agent: 'builder', item: 'objective' }] },
                   { id: 'verify', message: 'recovery-dependent' },

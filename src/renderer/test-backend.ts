@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 
-import type { Connection, SessionEvent, SessionMode } from '../shared/session';
+import type { ConnectionId } from '../shared/adapter';
+import type { SessionEvent, SessionMode } from '../shared/session';
 import type { SessionBackend } from './agent/connected';
 
 /**
@@ -9,12 +10,12 @@ import type { SessionBackend } from './agent/connected';
  */
 export function fakeBackend() {
   let listener:
-    ((agentId: string, connection: Connection, event: SessionEvent) => void) | undefined;
+    ((agentId: string, connection: ConnectionId, event: SessionEvent) => void) | undefined;
   const backend = {
     start: vi.fn<SessionBackend['start']>().mockResolvedValue(null),
     installed: vi
       .fn<SessionBackend['installed']>()
-      .mockResolvedValue({ claude: false, codex: false }),
+      .mockResolvedValue({ 'claude-code': false, codex: false }),
     send: vi.fn<SessionBackend['send']>().mockResolvedValue(null),
     answer: vi.fn<SessionBackend['answer']>().mockResolvedValue(null),
     interrupt: vi.fn<SessionBackend['interrupt']>().mockResolvedValue(null),
@@ -47,7 +48,7 @@ export function fakeBackend() {
   return {
     backend,
     /** Main says `events` happened in agent `agentId`'s session, connected through `connection`. */
-    emit: (agentId: string, connection: Connection, ...events: SessionEvent[]) => {
+    emit: (agentId: string, connection: ConnectionId, ...events: SessionEvent[]) => {
       for (const event of events) listener?.(agentId, connection, event);
     },
     /** Whether the renderer listens for session events. */
@@ -67,7 +68,7 @@ export function fakeBackend() {
  */
 export function automaticBackend() {
   const fake = fakeBackend();
-  const sessions = new Map<string, { connection: Connection; mode: SessionMode }>();
+  const sessions = new Map<string, { connection: ConnectionId; mode: SessionMode }>();
   const turns = new Map<string, { id: string; timer: ReturnType<typeof setTimeout> }>();
   const finish = (agentId: string, interrupted: boolean) => {
     const session = sessions.get(agentId);
@@ -96,7 +97,7 @@ export function automaticBackend() {
   fake.backend.start.mockImplementation((agentId, options) => {
     const mode =
       options.mode ??
-      (options.connection === 'app-server' || options.connection === 'codex-terminal'
+      (options.connection === 'codex.app-server' || options.connection === 'codex.terminal'
         ? 'auto'
         : 'manual');
     sessions.set(agentId, { connection: options.connection, mode });

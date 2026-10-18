@@ -12,19 +12,25 @@ const NODE_BUILTINS = builtinModules.flatMap((name) =>
   name.startsWith('node:') ? [name] : [name, `node:${name}`],
 );
 
-/** An import of an adapter's folder: what is particular to one CLI (src/main/sessions/{sdk,codex}/). */
+/**
+ * An import of an adapter's folder: what is particular to one CLI
+ * (src/main/sessions/{claude-code,sdk,codex}/).
+ */
 const ADAPTER_FOLDERS = {
-  regex: '^(?:\\.{1,2}/)+(?:sessions/)?(?:sdk|codex)/',
+  regex: '^(?:\\.{1,2}/)+(?:sessions/)?(?:claude-code|sdk|codex)/',
   message:
-    'Platform code must not import an adapter’s folder (src/main/sessions/sdk/, src/main/sessions/codex/): reach the CLI through its connector.',
+    'Platform code must not import an adapter’s folder (src/main/sessions/claude-code/, src/main/sessions/sdk/, src/main/sessions/codex/): reach the CLI through its connector, and what it declares through the catalog (sessions/adapters.ts).',
 };
 /**
- * What may import adapters' folders: the adapters themselves, Claude's own files outside its folder,
- * and the platform files that import them today, each to go as adapters move behind the registry.
+ * What may import adapters' folders: the adapters themselves, the registry (sessions/adapters.ts),
+ * Claude's own files outside its folder, and the platform files that import them today, each to go
+ * as adapters move behind the registry.
  */
 const ADAPTER_IMPORTERS = [
+  'src/main/sessions/claude-code/**',
   'src/main/sessions/sdk/**',
   'src/main/sessions/codex/**',
+  'src/main/sessions/adapters.ts',
   'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
   'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
   'src/main/{index,forge-env.d}.ts',

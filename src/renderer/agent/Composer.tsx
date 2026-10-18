@@ -1,10 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 
+import type { AdapterId } from '../../shared/adapter';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import { imageBytes, IMAGE_TYPES, UNASKING_MODES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
-import type { AgentType } from '../graph/agents';
+
 import { ChoiceMenu } from './ChoiceMenu';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
@@ -81,7 +82,7 @@ export function Composer({
   initialDraft = '',
 }: {
   agentName: string;
-  agent: AgentType;
+  agent: AdapterId;
   session: Session;
   controls: ComposerControls;
   /** Its text box, which the view focuses again after the user answers a prompt. */

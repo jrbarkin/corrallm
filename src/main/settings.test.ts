@@ -39,7 +39,7 @@ describe('Settings', () => {
     await plan.give();
     expect(await plan.given()).toBe(true);
     expect(await settings.consent('codex', 'other').given()).toBe(false);
-    expect(await settings.consent('claude', 'plan').given()).toBe(false);
+    expect(await settings.consent('claude-code', 'plan').given()).toBe(false);
     expect(await new Settings(file).consent('codex', 'plan').given()).toBe(true);
   });
 

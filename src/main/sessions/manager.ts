@@ -1,10 +1,9 @@
 import { homedir } from 'node:os';
 
+import { adapterIn, connectionIn } from '../../shared/adapter';
+import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
-import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
-  Cli,
-  Connection,
   FilesRewind,
   McpChange,
   McpServer,
@@ -34,16 +33,18 @@ const NO_REWIND = 'This agent rewinds in its terminal: press Esc twice there.';
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
-const NO_OPTIONS = 'corrallm can’t read that CLI’s settings.';
+const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 
 export interface SessionManagerDeps {
+  /** What every adapter declares (adapters.ts): the adapter each connection runs, and its modes. */
+  catalog: Catalog;
   /**
    * What starts each connection's sessions (connectors.ts); a connection without one cannot run
    * (tests give only those they use).
    */
-  connectors: Readonly<Partial<Record<Connection, Connector<SessionMode>>>>;
+  connectors: Readonly<Partial<Record<ConnectionId, Connector<SessionMode>>>>;
   /** The environment agents run in: the user's login shell's, cleaned (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
   /**
@@ -60,13 +61,13 @@ export interface SessionManagerDeps {
   /** Where each canvas's agents' conversations are remembered. */
   memory: CanvasMemory;
   /**
-   * What an agent of each CLI can be set to run with, read in a folder for the agents' environment
-   * (claude-settings.ts, codex/options.ts): without a session, or a prompt.
+   * What an agent of each adapter can be set to run with, read in a folder for the agents'
+   * environment (claude-settings.ts, codex/options.ts): without a session, or a prompt.
    */
   options?: Readonly<
     Partial<
       Record<
-        Cli,
+        AdapterId,
         (context: {
           cwd: string;
           env: Readonly<Record<string, string>>;
@@ -75,14 +76,14 @@ export interface SessionManagerDeps {
     >
   >;
   /** Sends an event to the windows showing the canvas whose agent's session it is. */
-  emit: (canvas: CanvasId, agentId: string, connection: Connection, event: SessionEvent) => void;
+  emit: (canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent) => void;
   /** Sends a terminal event to the view showing the canvas's agent's terminal. */
   terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
 }
 
 /** An agent's session, as the manager keeps it. */
 interface Agent {
-  connection: Connection;
+  connection: ConnectionId;
   /** Resolves with the session once it runs; rejects if it could not start. */
   session: Promise<LiveSession<SessionMode>>;
 }
@@ -92,7 +93,7 @@ interface Agent {
  * session with its connection's connector (connector.ts), in the canvas's project folder, resuming
  * the agent's last conversation, and passes requests on to it. It remembers each agent's
  * conversation with the canvas (memory.ts, by the canvas's id), so that sessions survive a
- * restart: one per CLI (Claude Code's session, Codex's thread), which each of its connections
+ * restart: one per adapter (Claude Code's session, Codex's thread), which each of its connections
  * resumes. What an agent starts with (its model, effort and mode) is the renderer's to say: its
  * settings, saved in the canvas's file. A window that stops showing the canvas, a new project
  * folder, and the app quitting all end sessions.
@@ -124,8 +125,7 @@ export class SessionManager {
       await running.session;
       return;
     }
-    const cli = CONNECTION_CLI[options.connection];
-    if (options.mode !== null && !isModeOf(cli, options.mode)) {
+    if (options.mode !== null && !this.#hasMode(options.connection, options.mode)) {
       throw new TypeError(`${options.mode} is not a mode of ${options.connection} sessions`);
     }
     if (running) await this.#end(canvas, agentId, running, false);
@@ -165,10 +165,10 @@ export class SessionManager {
     await (await this.#session(canvas, agentId)).interrupt();
   }
 
-  /** Switches the agent's session's mode (one of its CLI's). */
+  /** Switches the agent's session's mode (one of its adapter's). */
   async setMode(canvas: CanvasId, agentId: string, mode: SessionMode): Promise<void> {
     const agent = this.#agents.get(canvas)?.get(agentId);
-    if (agent && !isModeOf(CONNECTION_CLI[agent.connection], mode)) {
+    if (agent && !this.#hasMode(agent.connection, mode)) {
       throw new TypeError(`${mode} is not a mode of ${agent.connection} sessions`);
     }
     await (await this.#session(canvas, agentId)).setMode(mode);
@@ -190,12 +190,12 @@ export class SessionManager {
   }
 
   /**
-   * What an agent of `cli` can be set to run with (its models and their efforts), and the user's
-   * own defaults, as read in the canvas's project folder (else the home folder, for the user's own
-   * settings alone): without a session, or a prompt.
+   * What an agent of `adapter` can be set to run with (its models and their efforts), and the
+   * user's own defaults, as read in the canvas's project folder (else the home folder, for the
+   * user's own settings alone): without a session, or a prompt.
    */
-  async settingsOptions(canvas: CanvasId, cli: Cli): Promise<SettingsOptions> {
-    const read = this.#deps.options?.[cli];
+  async settingsOptions(canvas: CanvasId, adapter: AdapterId): Promise<SettingsOptions> {
+    const read = this.#deps.options?.[adapter];
     if (!read) throw new Error(NO_OPTIONS);
     const env = await this.#deps.environment();
     return read({ cwd: this.#deps.projectOf(canvas) ?? env.HOME ?? homedir(), env });
@@ -227,7 +227,7 @@ export class SessionManager {
     const conversation = restore !== 'code';
     const folder = this.#deps.projectOf(canvas);
     // Claude Code's conversation (only its connections rewind).
-    const id = (await this.#conversation(canvas, 'claude', agentId))?.id;
+    const id = (await this.#conversation(canvas, 'claude-code', agentId))?.id;
     const kept = this.#deps.conversations;
     let point: string | null = null;
     if (conversation) {
@@ -242,8 +242,8 @@ export class SessionManager {
     if (conversation && folder !== undefined && id !== undefined && kept) {
       const forked = point === null ? null : await kept.fork(folder, id, point);
       await this.close(canvas, agentId);
-      if (forked === null) await this.#forget(canvas, 'claude', agentId);
-      else await this.#remember(canvas, 'claude', agentId, forked);
+      if (forked === null) await this.#forget(canvas, 'claude-code', agentId);
+      else await this.#remember(canvas, 'claude-code', agentId, forked);
     }
     return { ...(files === undefined ? {} : { files }), conversation };
   }
@@ -278,7 +278,7 @@ export class SessionManager {
     if (folder === undefined) throw new Error(NO_PROJECT);
     const listed = (await this.#deps.conversations?.list(folder)) ?? [];
     this.#listed.set(canvas, { folder, ids: new Set(listed.map((kept) => kept.id)) });
-    const own = (await this.#conversation(canvas, 'claude', agentId))?.id;
+    const own = (await this.#conversation(canvas, 'claude-code', agentId))?.id;
     return listed.map((kept) => ({ ...kept, current: kept.id === own }));
   }
 
@@ -292,7 +292,7 @@ export class SessionManager {
       throw new Error(NOT_LISTED);
     }
     await this.close(canvas, agentId);
-    await this.#remember(canvas, 'claude', agentId, sessionId);
+    await this.#remember(canvas, 'claude-code', agentId, sessionId);
   }
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
@@ -353,12 +353,12 @@ export class SessionManager {
     if (agent) await this.#end(canvas, agentId, agent, false);
   }
 
-  /** Ends this agent and forgets only the chosen CLI's ID; native history remains untouched. */
-  async fresh(canvas: CanvasId, agentId: string, cli: Cli): Promise<void> {
+  /** Ends this agent and forgets only the chosen adapter's ID; native history remains untouched. */
+  async fresh(canvas: CanvasId, agentId: string, adapter: AdapterId): Promise<void> {
     // A session already closing still owns its conversation until it has.
     await this.#settled(canvas);
     await this.close(canvas, agentId);
-    await this.#forget(canvas, cli, agentId);
+    await this.#forget(canvas, adapter, agentId);
     // A failed durable clear must not be reported as a successful fresh conversation.
     await this.#deps.memory.flush();
   }
@@ -394,8 +394,8 @@ export class SessionManager {
   ): Promise<LiveSession<SessionMode>> {
     const connector = this.#deps.connectors[connection];
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
-    const cli = CONNECTION_CLI[connection];
-    const remembered = await this.#conversation(canvas, cli, agentId);
+    const adapter = this.#adapterOf(connection);
+    const remembered = await this.#conversation(canvas, adapter, agentId);
     const resume = remembered?.id ?? null;
     const fingerprint = roleFingerprint(role);
     const roleChanged = remembered?.role !== fingerprint;
@@ -408,7 +408,7 @@ export class SessionManager {
         this.#deps.emit(canvas, agentId, connection, event);
       },
       remember: (sessionId) => {
-        if (current()) void this.#remember(canvas, cli, agentId, sessionId, fingerprint);
+        if (current()) void this.#remember(canvas, adapter, agentId, sessionId, fingerprint);
       },
     };
     return connector.start(
@@ -427,36 +427,49 @@ export class SessionManager {
     );
   }
 
-  /** The agent's conversation in `cli`, as remembered with the canvas: what it resumes. */
+  /** The adapter `connection` runs (one the catalog lists: the arguments were checked). */
+  #adapterOf(connection: ConnectionId): AdapterId {
+    const found = connectionIn(this.#deps.catalog, connection);
+    if (!found) throw new TypeError(`corrallm can't run ${connection} sessions.`);
+    return found.adapter.id;
+  }
+
+  /** Whether `mode` is one of the modes of the adapter `connection` runs. */
+  #hasMode(connection: ConnectionId, mode: SessionMode): boolean {
+    const adapter = adapterIn(this.#deps.catalog, this.#adapterOf(connection));
+    return adapter?.modes.some((one) => one.id === mode) ?? false;
+  }
+
+  /** The agent's conversation in `adapter`, as remembered with the canvas: what it resumes. */
   async #conversation(
     canvas: CanvasId,
-    cli: Cli,
+    adapter: AdapterId,
     agentId: string,
   ): Promise<Conversation | undefined> {
-    const conversations = (await this.#deps.memory.get(canvas)).conversations[cli] ?? {};
+    const conversations = (await this.#deps.memory.get(canvas)).conversations[adapter] ?? {};
     return Object.hasOwn(conversations, agentId) ? conversations[agentId] : undefined;
   }
 
-  /** Forgets the agent's conversation in `cli`: it starts afresh next time. */
-  async #forget(canvas: CanvasId, cli: Cli, agentId: string): Promise<void> {
+  /** Forgets the agent's conversation in `adapter`: it starts afresh next time. */
+  async #forget(canvas: CanvasId, adapter: AdapterId, agentId: string): Promise<void> {
     await this.#deps.memory.update(canvas, (remembered) => {
-      const kept = Object.entries(remembered.conversations[cli] ?? {}).filter(
+      const kept = Object.entries(remembered.conversations[adapter] ?? {}).filter(
         ([agent]) => agent !== agentId,
       );
       return {
         ...remembered,
-        conversations: { ...remembered.conversations, [cli]: Object.fromEntries(kept) },
+        conversations: { ...remembered.conversations, [adapter]: Object.fromEntries(kept) },
       };
     });
   }
 
   /**
-   * Remembers the agent's conversation in `cli`, and the role fingerprint it launched with (none
-   * given: not known, as for one picked with /resume, or a rewind's copy).
+   * Remembers the agent's conversation in `adapter`, and the role fingerprint it launched with
+   * (none given: not known, as for one picked with /resume, or a rewind's copy).
    */
   async #remember(
     canvas: CanvasId,
-    cli: Cli,
+    adapter: AdapterId,
     agentId: string,
     sessionId: string,
     fingerprint?: string,
@@ -469,7 +482,7 @@ export class SessionManager {
       ...remembered,
       conversations: {
         ...remembered.conversations,
-        [cli]: { ...remembered.conversations[cli], [agentId]: conversation },
+        [adapter]: { ...remembered.conversations[adapter], [agentId]: conversation },
       },
     }));
   }

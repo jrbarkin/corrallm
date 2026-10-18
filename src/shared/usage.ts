@@ -7,16 +7,13 @@
  * CLI reported. A usage rule, one per backend, says what the queues' run does when usage passes a
  * share of a window.
  *
+ * A backend is one the catalog lists (src/shared/adapter.ts): each adapter declares the backends
+ * its connections spend.
+ *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 
-/**
- * The backends whose usage corrallm reads, named as their agent type is (graph/agents.ts). Claude:
- * from the Terminal connection's status line. Codex: from `codex app-server`'s
- * account/rateLimits (primary: 5-hour, secondary: weekly), once it is connected.
- */
-export const USAGE_BACKENDS = ['Claude', 'Codex'] as const;
-export type UsageBackend = (typeof USAGE_BACKENDS)[number];
+import type { UsageBackendId } from './adapter';
 
 /** The usage windows a backend's limits are counted in. */
 export const USAGE_WINDOWS = ['fiveHour', 'weekly'] as const;
@@ -39,7 +36,7 @@ export type UsageWindows = Partial<Record<UsageWindow, WindowUsage>>;
 
 /** A backend's latest usage: its windows, when it was read (epoch ms), and whether simulated. */
 export interface UsageReading {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   windows: UsageWindows;
   at: number;
   /** Set by "Simulate usage…", to try rules without spending real usage. */
@@ -65,7 +62,7 @@ export interface UsageRule {
 /** Every backend's latest reading (those read so far), and each backend's rule, if it has one. */
 export interface UsageState {
   readings: UsageReading[];
-  rules: Partial<Record<UsageBackend, UsageRule>>;
+  rules: Partial<Record<UsageBackendId, UsageRule>>;
 }
 
 export const NO_USAGE: UsageState = { readings: [], rules: {} };
@@ -77,10 +74,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `value` as a backend whose usage corrallm reads, or throws. */
-export function parseBackend(value: unknown): UsageBackend {
-  const found = USAGE_BACKENDS.find((backend) => backend === value);
-  if (found === undefined) throw new TypeError(`Expected one of: ${USAGE_BACKENDS.join(', ')}`);
+/** `value` as one of `backends` (those whose usage corrallm reads), or throws. */
+export function parseBackend(value: unknown, backends: readonly UsageBackendId[]): UsageBackendId {
+  const found = backends.find((backend) => backend === value);
+  if (found === undefined) throw new TypeError(`Expected one of: ${backends.join(', ')}`);
   return found;
 }
 

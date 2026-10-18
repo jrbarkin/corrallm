@@ -1,7 +1,8 @@
-import type { Connection, MessageImage, TurnResult } from '../../shared/session';
+import type { MessageImage, TurnResult } from '../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../shared/usage';
-import type { UsageBackend, UsageReading, UsageState } from '../../shared/usage';
-import { AGENT_ACTIONS, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
+import type { UsageReading, UsageState } from '../../shared/usage';
+import { actionsOf, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { groupMembers, isGroup } from '../graph/group-members';
@@ -34,7 +35,7 @@ import type {
 import { deadline } from '../graph/time';
 import { readRun } from './checkpoint';
 import type { SavedRun } from './checkpoint';
-import { usageBackendOf, warningText } from '../usage/usage';
+import { backendName, usageBackendOf, warningText } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
 import {
   conditionQuestion,
@@ -104,7 +105,7 @@ export interface AgentRun {
    * Claude subscription): the destination, how it ran, why it could not, and a connection to try.
    * An unavailable task stays unsent; otherwise its message waits in the session's queue.
    */
-  refused?: { agent: string; connection: AgentConnection; text: string; switchTo?: Connection };
+  refused?: { agent: string; connection: AgentConnection; text: string; switchTo?: ConnectionId };
   /** While held at a delay, or at a wait with a time limit: when that time comes (epoch ms). */
   until?: number;
   /**
@@ -152,7 +153,7 @@ export type Answer = { choice: string } | { reply: string; images?: readonly Mes
 /** Why an agent's session would not start, as it said, and the connection that would. */
 export interface Refusal {
   text: string;
-  switchTo?: Connection;
+  switchTo?: ConnectionId;
 }
 
 /**
@@ -191,7 +192,7 @@ export interface RunIO {
   /** Tells the user something about the run, in an agent's session (a notice there). */
   tell: (agent: GraphNode, text: string) => void;
   /** Runs an agent another way: the connection the user chose for it, as its session would not start. */
-  connect: (agent: GraphNode, connection: Connection) => void;
+  connect: (agent: GraphNode, connection: ConnectionId) => void;
   /** Runs `run` in `ms`; returns a function that cancels it. */
   later: (run: () => void, ms: number) => () => void;
   /** The time now (epoch ms): the only clock a run reads, for its delays and time limits. */
@@ -228,8 +229,8 @@ const corrected = (note: string, task: string) =>
   note.trimStart().startsWith('!') ? note : `${note}\n\n${task}`;
 
 /** What the run says when it waits for a usage window's reset that has never been read. */
-const unread = (backend: UsageBackend, window: keyof typeof WINDOW_NAMES) =>
-  `${backend}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
+const unread = (backend: UsageBackendId, window: keyof typeof WINDOW_NAMES) =>
+  `${backendName(backend)}’s usage hasn’t been read yet, so the queue went on without waiting for its ${WINDOW_NAMES[window]} reset.`;
 
 /** What the run says, once a run, when it can't read a connected agent's replies (RunIO.unheard). */
 const UNHEARD =
@@ -1266,7 +1267,7 @@ export class RunStore {
   }
 
   /** A backend's latest usage reading (RunIO.usage), if it has one. */
-  #readingOf(backend: UsageBackend): UsageReading | undefined {
+  #readingOf(backend: UsageBackendId): UsageReading | undefined {
     return this.#io.usage?.().readings.find((reading) => reading.backend === backend);
   }
 
@@ -1743,7 +1744,7 @@ export class RunStore {
    * agent it acts on if that is another one still there, and what it is to do, in the user's words.
    */
   #stepMessage(node: GraphNode, step: QueueStep): string {
-    const actions = AGENT_ACTIONS[node.data.agent ?? DEFAULT_AGENT];
+    const actions = actionsOf(node.data.adapter ?? DEFAULT_AGENT);
     const other =
       step.target !== undefined && step.target !== node.id
         ? this.#agents().find((n) => n.id === step.target)

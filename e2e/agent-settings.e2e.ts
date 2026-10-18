@@ -12,10 +12,10 @@ import { launchApp } from './launch';
 interface CanvasNode {
   id: string;
   label: string;
-  agent?: 'Claude' | 'Codex';
+  adapter?: 'claude-code' | 'codex';
   role?: string;
-  connection?: 'sdk' | 'app-server';
-  settings?: { claude: { model?: string; effort?: string; mode?: string } };
+  connection?: 'claude-code.sdk' | 'codex.app-server';
+  settings?: { 'claude-code': { model?: string; effort?: string; mode?: string } };
   queue?: { id: string; message: string }[];
 }
 
@@ -125,7 +125,7 @@ async function openCanvas(nodes: CanvasNode[]) {
       nodes: nodes.map((node, index) => ({
         ...node,
         kind: 'agent',
-        agent: node.agent ?? 'Claude',
+        adapter: node.adapter ?? 'claude-code',
         position: { x: index * 350, y: 0 },
       })),
       links: [],
@@ -195,7 +195,9 @@ function option(args: string[], name: string) {
 test('the shared panel saves role, name and startup settings while manual Message rows stay outside the authored file', async () => {
   await launch();
   const planned = { id: 'planned', message: 'Only planned work belongs in the file' };
-  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'sdk', queue: [planned] }]);
+  await openCanvas([
+    { id: 'builder', label: 'Builder', connection: 'claude-code.sdk', queue: [planned] },
+  ]);
   let view = await openAgent('Builder');
   const settings = await settingsFrom(view, 'Builder');
   await expect(settings).toContainText('Agent SDK');
@@ -231,8 +233,8 @@ test('the shared panel saves role, name and startup settings while manual Messag
         {
           label: 'Reviewer',
           role,
-          connection: 'sdk',
-          settings: { claude: { model: 'haiku', effort: 'high', mode: 'plan' } },
+          connection: 'claude-code.sdk',
+          settings: { 'claude-code': { model: 'haiku', effort: 'high', mode: 'plan' } },
           queue: [planned],
         },
       ],
@@ -254,7 +256,7 @@ test('the shared panel saves role, name and startup settings while manual Messag
 
 test('All queues and the canvas open native settings; a role survives CLI changes and clearing removes it', async () => {
   await launch('codex');
-  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'sdk' }]);
+  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'claude-code.sdk' }]);
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const queues = page.getByRole('dialog', { name: 'All queues', exact: true });
   const summary = queues.getByRole('button', { name: 'Agent settings: Builder', exact: true });
@@ -288,7 +290,7 @@ test('All queues and the canvas open native settings; a role survives CLI change
   await page.keyboard.press('ControlOrMeta+s');
   await expect
     .poll(async () => JSON.parse(await readFile(canvas, 'utf8')) as { nodes: CanvasNode[] })
-    .toMatchObject({ nodes: [{ agent: 'Codex', connection: 'app-server' }] });
+    .toMatchObject({ nodes: [{ adapter: 'codex', connection: 'codex.app-server' }] });
   const saved = JSON.parse(await readFile(canvas, 'utf8')) as { nodes: CanvasNode[] };
   expect(saved.nodes[0]).not.toHaveProperty('role');
 });
@@ -297,7 +299,9 @@ test('a role is native startup context; edits wait through active work and an ex
   await launch();
   const originalRole = 'Review behavior and explain every material risk.';
   const nextRole = 'Focus on public documentation and concrete examples.';
-  await openCanvas([{ id: 'builder', label: 'Builder', connection: 'sdk', role: originalRole }]);
+  await openCanvas([
+    { id: 'builder', label: 'Builder', connection: 'claude-code.sdk', role: originalRole },
+  ]);
   const view = await openAgent('Builder');
   const composer = view.getByRole('textbox', { name: 'Message Builder', exact: true });
   const transcript = view.getByRole('log', { name: 'Transcript' });
@@ -373,8 +377,8 @@ test('Codex applies a changed role in an explicit new conversation, retaining it
     {
       id: 'builder',
       label: 'Builder',
-      agent: 'Codex',
-      connection: 'app-server',
+      adapter: 'codex',
+      connection: 'codex.app-server',
       role: originalRole,
     },
   ]);
