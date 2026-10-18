@@ -1372,6 +1372,32 @@ describe('pauses', () => {
     });
   });
 
+  it('tells a token whose own pause on a group holds an agent to release that group', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    await ok('run.pause', { target: { group: 'team' } });
+    const unpause = () =>
+      core?.call('run.unpause', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE);
+    expect(await unpause()).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence:
+          'Builder is held by your pause on its group "Team": release it with run.unpause on that group.',
+      },
+    });
+    await ok('run.pause', { target: { agent: 'builder' } }, OTHER);
+    expect(await unpause()).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence:
+          'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or you, can release it.',
+      },
+    });
+    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [] });
+  });
+
   it('tells a party once that its message waits on a pause, naming who set it', async () => {
     await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
     await start();

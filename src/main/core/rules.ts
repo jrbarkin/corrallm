@@ -1,6 +1,7 @@
 import type { RULES } from '../../shared/api/rules';
 import type { CanvasId } from '../../shared/canvas';
 import type { PauseTarget } from '../../shared/engine/run/runner';
+import { andList } from '../../shared/model/words';
 import type { RuleCheck } from './call';
 import { partyIdOf } from './caller';
 import type { Engines } from './engines';
@@ -31,19 +32,30 @@ export function ruleChecks(engines: Engines): { [R in keyof typeof RULES]: RuleC
       };
     },
     // R9: a token releases only the pauses its own party set; yours (and others') stay. One whose
-    // own release would let go of nothing that holds the target is refused, saying who holds it.
+    // own release would let go of nothing that holds the target is refused, saying who holds it:
+    // its own pause on a group the target is in, released on that group, first.
     sticky: ({ canvas, target }: { canvas?: CanvasId; target: PauseTarget }, { caller }) => {
       const open = canvas === undefined ? undefined : engines.canvas(canvas);
       if (!open) return undefined;
       const { run } = open.engine;
       const holding = run.holding(target);
-      if (holding.length === 0 || run.pausedBy(target).includes(partyIdOf(caller))) {
-        return undefined;
-      }
+      const party = partyIdOf(caller);
+      if (holding.length === 0 || run.pausedBy(target).includes(party)) return undefined;
       const { nodes } = open.document;
       const id = 'agent' in target ? target.agent : target.group;
+      const own = holding.filter(({ by }) => by === party);
+      const others = holding.filter(({ by }) => by !== party);
+      const othersText = `paused by ${pausesText(nodes, id, others)}: ${RELEASES}`;
+      if (own.length === 0) return { refuse: `${nameOf(nodes, id)} stays ${othersText}` };
+      const names = andList(own.map(({ id: on }) => `"${nameOf(nodes, on)}"`));
+      const [pauses, groups, them, those] =
+        own.length === 1
+          ? ['pause', 'group', 'it', 'that group']
+          : ['pauses', 'groups', 'them', 'those groups'];
       return {
-        refuse: `${nameOf(nodes, id)} stays paused by ${pausesText(nodes, id, holding)}: ${RELEASES}`,
+        refuse:
+          `${nameOf(nodes, id)} is held by your ${pauses} on its ${groups} ${names}: release ${them} with run.unpause on ${those}.` +
+          (others.length === 0 ? '' : ` It is also ${othersText}`),
       };
     },
   };
