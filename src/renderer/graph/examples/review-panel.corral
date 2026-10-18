@@ -1,6 +1,7 @@
 {
   "format": "corrallm",
-  "version": 1,
+  "version": 2,
+  "id": "3054f47c-1451-4c68-8afb-d3b38cae4ff2",
   "nodes": [
     {
       "id": "builder",

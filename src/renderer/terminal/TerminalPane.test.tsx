@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { newCanvasId } from '../../shared/canvas';
 import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { fromFile } from '../graph/file';
@@ -59,7 +60,7 @@ async function open({
   const files: CanvasFiles = {
     open: () => Promise.resolve(null),
     save,
-    forget: () => Promise.resolve(null),
+    forget: () => Promise.resolve(newCanvasId()),
   };
   const sessions = fakeBackend();
   if (start) sessions.backend.start.mockImplementation(start);

@@ -18,6 +18,8 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
+import { newCanvasId } from '../../shared/canvas';
+import type { CanvasId } from '../../shared/canvas';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { CONNECTION_CLI, TERMINAL_CONNECTIONS, UNASKING_MODES } from '../../shared/session';
 import type { AgentSettings, InstalledClis } from '../../shared/session';
@@ -141,8 +143,8 @@ export interface CanvasFiles {
   open: () => Promise<CanvasFile | null>;
   /** Saves a canvas's text (to a file picked anew, if `choose`): resolves with its name, or null. */
   save: (text: string, choose: boolean) => Promise<string | null>;
-  /** Forgets the canvas's file: the next save asks where. */
-  forget: () => Promise<null>;
+  /** Begins a new canvas, with no file (the next save asks where): resolves with its id. */
+  forget: () => Promise<CanvasId>;
   /** Asks for the folder the canvas's agents work in: resolves with it, or null if cancelled. */
   chooseProject?: () => Promise<ProjectFolder | null>;
 }
@@ -205,10 +207,15 @@ function Editor({
   runSource: RunSource | undefined;
 }) {
   const [graph, setRawGraph] = useState(initialGraph);
-  /** The canvas's file (its name; undefined if never saved) and the text last saved to it. */
+  /** The canvas's id: main's (a file's, or a draft's), which its file's text holds. */
+  const [canvasId, setCanvasId] = useState(newCanvasId);
+  /**
+   * The canvas's file (its name; undefined if never saved) and the graph last saved to it, whose
+   * text is the canvas's, by its id.
+   */
   const [saved, setSaved] = useState(() => ({
     name: undefined as string | undefined,
-    text: toFile(initialGraph),
+    graph: initialGraph,
   }));
   /** Why the last open or save failed. */
   const [problem, setProblem] = useState<string>();
@@ -241,7 +248,7 @@ function Editor({
   const [{ sessionStore, runStore, persistence, documentState }] = useState(() => {
     let runner: RunStore | undefined = undefined;
     let persistence: RunPersistence | undefined = undefined;
-    let workflow = toFile(initialGraph);
+    let workflow = toFile(initialGraph, canvasId);
     const documentState = {
       read: () => workflow,
       write: (next: string) => {
@@ -314,7 +321,7 @@ function Editor({
     if (runSource)
       persistence = new RunPersistence(runSource, {
         capture: () => ({
-          version: 1,
+          version: 2,
           workflow: documentState.read(),
           state: runStore.checkpoint(),
           messages: sessionStore.serializeSubmissions(),
@@ -333,18 +340,17 @@ function Editor({
             : context.savedText
               ? fromFile(context.savedText)
               : undefined;
-          const savedText = context.savedText
-            ? toFile(fromFile(context.savedText))
-            : toFile(EMPTY_GRAPH);
+          const savedGraph = context.savedText ? fromFile(context.savedText) : EMPTY_GRAPH;
           if (checkpoint) {
             readRun(checkpoint.state);
             const check = new SessionStore();
             check.restoreSubmissions(checkpoint.messages);
           }
+          setCanvasId(context.id);
           if (next) {
             runStore.reset();
             sessionStore.reset();
-            documentState.write(toFile(next));
+            documentState.write(toFile(next, context.id));
             setLoads((n) => n + 1);
             setRawGraph(next);
             sessionStore.sync(
@@ -366,10 +372,7 @@ function Editor({
               sessionStore.restoreSubmissions(checkpoint.messages);
               runStore.restore(checkpoint.state);
             }
-            setSaved({
-              name: context.name ?? undefined,
-              text: savedText,
-            });
+            setSaved({ name: context.name ?? undefined, graph: savedGraph });
           }
           setProject(context.project ?? null);
           if (context.warning) setProblem(context.warning);
@@ -418,9 +421,9 @@ function Editor({
     };
   }, [persistence, runStore, sessionStore]);
   useEffect(() => {
-    documentState.write(toFile(graph));
+    documentState.write(toFile(graph, canvasId));
     persistence?.changed();
-  }, [graph, documentState, persistence]);
+  }, [graph, canvasId, documentState, persistence]);
   /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
   const displayNodes = useMemo(
     () => withSubmissions(graph.nodes, sessions),
@@ -493,8 +496,9 @@ function Editor({
       }}
     />
   );
-  const text = useMemo(() => toFile(graph), [graph]);
-  const edited = text !== saved.text;
+  const text = useMemo(() => toFile(graph, canvasId), [graph, canvasId]);
+  const savedText = useMemo(() => toFile(saved.graph, canvasId), [saved.graph, canvasId]);
+  const edited = text !== savedText;
   /** What would discard unsaved changes, while the user is asked first. */
   const [discarding, setDiscarding] = useState<{ run: () => void }>();
   // What agents can be set to is read there (its own settings count): again for another folder.
@@ -742,16 +746,20 @@ function Editor({
       void fitView({ nodes: [{ id: inserted }], padding: 0.3, maxZoom: 1 });
   }, [inserted, fitView]);
 
-  /** Replaces the canvas with one from a file (`name`), or a new one, and fits the view to it. */
+  /**
+   * Replaces the canvas with canvas `id` from a file (`name`), or a new one, and fits the view to
+   * it.
+   */
   const load = useCallback(
-    (next: Graph, name: string | undefined) => {
-      documentState.write(toFile(next));
+    (next: Graph, name: string | undefined, id: CanvasId) => {
+      setCanvasId(id);
+      documentState.write(toFile(next, id));
       setLoads((n) => n + 1);
       setRawGraph(next);
       runStore.reset();
       // Another canvas: main has ended the old one's connected sessions.
       sessionStore.reset();
-      setSaved({ name, text: toFile(next) });
+      setSaved({ name, graph: next });
       setArranging(false);
       setEditing(undefined);
       setOpened({ ids: [] });
@@ -787,8 +795,7 @@ function Editor({
               .prepareForReplacement()
               .then(() =>
                 persistence.transition(async () => {
-                  await files.forget();
-                  load(EMPTY_GRAPH, undefined);
+                  load(EMPTY_GRAPH, undefined, await files.forget());
                   setProject(null);
                 }, false),
               )
@@ -798,9 +805,10 @@ function Editor({
               }, failed('start a new canvas'));
             return;
           }
-          load(EMPTY_GRAPH, undefined);
           setProject(null);
-          files.forget().catch(failed('start a new canvas'));
+          files.forget().then((id) => {
+            load(EMPTY_GRAPH, undefined, id);
+          }, failed('start a new canvas'));
         });
       },
       open: (edited: boolean) => {
@@ -814,9 +822,10 @@ function Editor({
                   files.open,
                   (file) => file !== null,
                   async () => {
-                    await files.forget();
+                    const id = await files.forget();
+                    setCanvasId(id);
                     setProject(null);
-                    setSaved({ name: undefined, text: toFile(EMPTY_GRAPH) });
+                    setSaved({ name: undefined, graph: EMPTY_GRAPH });
                   },
                 ),
               )
@@ -835,13 +844,13 @@ function Editor({
           files.open().then((file) => {
             if (!file) return;
             try {
-              load(fromFile(file.text), file.name);
+              load(fromFile(file.text), file.name, file.id);
               setProject(file.project ?? null);
             } catch (error) {
               setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
               // Main took it as the canvas's file: never save this canvas over it.
               setProject(null);
-              files.forget().catch(failed('open the canvas'));
+              files.forget().then(setCanvasId, failed('open the canvas'));
             }
           }, failed('open the canvas'));
         });
@@ -855,8 +864,7 @@ function Editor({
               .prepareForReplacement()
               .then(() =>
                 persistence.transition(async () => {
-                  await files.forget();
-                  load(fromTemplate(example, choices), undefined);
+                  load(fromTemplate(example, choices), undefined, await files.forget());
                   setProject(null);
                 }, false),
               )
@@ -866,9 +874,10 @@ function Editor({
               }, failed('open the template'));
             return;
           }
-          load(fromTemplate(example, choices), undefined);
           setProject(null);
-          files.forget().catch(failed('open the template'));
+          files.forget().then((id) => {
+            load(fromTemplate(example, choices), undefined, id);
+          }, failed('open the template'));
         });
       },
       /** Asks for the folder the canvas's agents work in. */
@@ -890,7 +899,7 @@ function Editor({
             .then(() =>
               persistence.transition(async () => {
                 const name = await files.save(text, choose);
-                if (name !== null) setSaved({ name, text });
+                if (name !== null) setSaved({ name, graph: fromFile(text) });
               }, false),
             )
             .then(() => {
@@ -899,7 +908,7 @@ function Editor({
           return;
         }
         files.save(text, choose).then((name) => {
-          if (name !== null) setSaved({ name, text });
+          if (name !== null) setSaved({ name, graph: fromFile(text) });
         }, failed('save the canvas'));
       },
     };

@@ -1,6 +1,7 @@
 {
   "format": "corrallm",
-  "version": 1,
+  "version": 2,
+  "id": "8150e630-f601-4abe-afae-e93bbf6aa197",
   "nodes": [
     {
       "id": "planner",

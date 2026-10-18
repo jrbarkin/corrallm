@@ -27,10 +27,28 @@ const ADAPTER_IMPORTERS = [
   'src/main/sessions/codex/**',
   'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
   'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
-  'src/main/{index,settings,forge-env.d,selftest}.ts',
+  'src/main/{index,forge-env.d,selftest}.ts',
   'src/main/sessions/{manager,installed,connectors}.ts',
   '**/*.test.ts',
 ];
+
+/**
+ * The core's side of main, which never runs in main's process (src/main/core/host.ts): its folders,
+ * and the Electron-free services it uses. It never imports Electron or the host (src/main/host/):
+ * what needs the desktop is a HostServices request.
+ */
+const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
+const CORE_SERVICES = 'src/main/{memory,settings,usage,files,git,canvas,project,run-journal}.ts';
+const ELECTRON = {
+  group: ['electron', 'electron/*'],
+  message:
+    'The core never imports Electron: what needs the desktop is a HostServices request (src/main/core/host.ts).',
+};
+/** An import of the host's folder (`regex`: as written from a folder below main, or from main). */
+const host = (regex: string) => ({
+  regex,
+  message: 'The core never imports the host (src/main/host/): it asks it through HostServices.',
+});
 
 export default defineConfig(
   globalIgnores(['.vite/', 'out/', 'coverage/', 'playwright-report/', 'test-results/']),
@@ -123,6 +141,27 @@ export default defineConfig(
     files: ['src/main/**/*.ts'],
     ignores: ADAPTER_IMPORTERS,
     rules: { 'no-restricted-imports': ['error', { patterns: [ADAPTER_FOLDERS] }] },
+  },
+  // typescript-eslint's rule, so that it applies beside app/adapters' (`import type` included).
+  {
+    name: 'app/boundaries-core',
+    files: [CORE_FOLDERS],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [ELECTRON, host('^(?:\\.\\./)+host/')] },
+      ],
+    },
+  },
+  {
+    name: 'app/boundaries-core-services',
+    files: [CORE_SERVICES],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [ELECTRON, host('^\\./host/')] },
+      ],
+    },
   },
   {
     name: 'app/javascript',

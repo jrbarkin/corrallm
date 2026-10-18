@@ -5,7 +5,7 @@ import type { AgentRun, Outcome, Run, TaskAttempt } from './runner';
  * TODO(V2): full transcript and terminal-screen snapshots, if native CLI history is insufficient.
  */
 export interface SavedRun {
-  version: 1;
+  version: 2;
   run: Run;
   replies: [string, string][];
   held: [string, boolean][];
@@ -119,7 +119,7 @@ export function readRun(text: string): SavedRun {
   }
   if (
     !record(v) ||
-    v.version !== 1 ||
+    v.version !== 2 ||
     !record(v.run) ||
     !boolean(v.run.running) ||
     !optional(v.run, 'paused', boolean) ||

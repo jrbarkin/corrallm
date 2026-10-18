@@ -1,7 +1,6 @@
-import type { WebContents } from 'electron';
-
 import { homedir } from 'node:os';
 
+import type { CanvasId } from '../../shared/canvas';
 import { CONNECTION_CLI, isModeOf } from '../../shared/session';
 import type {
   Cli,
@@ -20,7 +19,7 @@ import type {
   UserMessage,
 } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
-import type { CanvasMemory, Remembered } from '../memory';
+import type { CanvasMemory, Conversation } from '../memory';
 import { roleFingerprint } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
 import type { KeptConversation } from './sdk/conversations';
@@ -56,11 +55,9 @@ export interface SessionManagerDeps {
     before(folder: string, sessionId: string, messageId: string): Promise<string | null>;
     fork(folder: string, sessionId: string, upTo: string): Promise<string>;
   };
-  /** The folder a renderer's canvas's agents work in, if one was chosen (project.ts). */
-  projectOf: (contents: WebContents) => string | undefined;
-  /** The file a renderer's canvas was opened from or saved to, if any (canvas.ts). */
-  canvasOf: (contents: WebContents) => string | undefined;
-  /** Where each canvas file's agents' session ids are remembered. */
+  /** The folder a canvas's agents work in, if one was chosen (project.ts). */
+  projectOf: (canvas: CanvasId) => string | undefined;
+  /** Where each canvas's agents' conversations are remembered. */
   memory: CanvasMemory;
   /**
    * What an agent of each CLI can be set to run with, read in a folder for the agents' environment
@@ -77,15 +74,10 @@ export interface SessionManagerDeps {
       >
     >
   >;
-  /** Sends an event to the renderer whose agent's session it is. */
-  emit: (
-    contents: WebContents,
-    agentId: string,
-    connection: Connection,
-    event: SessionEvent,
-  ) => void;
-  /** Sends a terminal event to the renderer whose view shows the agent's terminal. */
-  terminal?: (contents: WebContents, agentId: string, event: TerminalEvent) => void;
+  /** Sends an event to the windows showing the canvas whose agent's session it is. */
+  emit: (canvas: CanvasId, agentId: string, connection: Connection, event: SessionEvent) => void;
+  /** Sends a terminal event to the view showing the canvas's agent's terminal. */
+  terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
 }
 
 /** An agent's session, as the manager keeps it. */
@@ -95,52 +87,38 @@ interface Agent {
   session: Promise<LiveSession<SessionMode>>;
 }
 
-/** Where each CLI's session ids are remembered (memory.ts). */
-const REMEMBERED = {
-  claude: { ids: 'sessions', roles: 'sessionRoles' },
-  codex: { ids: 'threads', roles: 'threadRoles' },
-} as const satisfies Record<Cli, { ids: keyof Remembered; roles: keyof Remembered }>;
-
 /**
- * Every connected session, by the renderer whose canvas it belongs to and the agent's id. It
- * starts an agent's session with its connection's connector (connector.ts), in the canvas's
- * project folder, resuming the agent's last session, and passes the renderer's requests on to it.
- * It remembers each agent's session id with the canvas's file (memory.ts), so that sessions survive
- * a restart: one per CLI (Claude Code's session, Codex's thread), which each of its connections
+ * Every connected session, by the canvas it belongs to and the agent's id. It starts an agent's
+ * session with its connection's connector (connector.ts), in the canvas's project folder, resuming
+ * the agent's last conversation, and passes requests on to it. It remembers each agent's
+ * conversation with the canvas (memory.ts, by the canvas's id), so that sessions survive a
+ * restart: one per CLI (Claude Code's session, Codex's thread), which each of its connections
  * resumes. What an agent starts with (its model, effort and mode) is the renderer's to say: its
- * settings, saved in the canvas's file. A canvas opened or forgotten, a new project folder, a
- * renderer that goes, and the app quitting all end sessions.
+ * settings, saved in the canvas's file. A window that stops showing the canvas, a new project
+ * folder, and the app quitting all end sessions.
  */
 export class SessionManager {
   readonly #deps: SessionManagerDeps;
-  readonly #agents = new Map<WebContents, Map<string, Agent>>();
+  readonly #agents = new Map<CanvasId, Map<string, Agent>>();
   /** Removed agents still own native processes until their bounded close has finished. */
-  readonly #closing = new Map<WebContents, Set<Promise<void>>>();
+  readonly #closing = new Map<CanvasId, Set<Promise<void>>>();
   readonly #ending = new WeakMap<Agent, Promise<void>>();
-  /** Each renderer's agents' session ids, per CLI: what starting an agent again resumes. */
-  readonly #ids = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
-  /** The role fingerprints belonging to those ids, captured when their sessions launched. */
-  readonly #roles = new WeakMap<WebContents, Record<Cli, Map<string, string>>>();
-  /** Changes synchronously when a canvas transition begins, before native shutdown can wait. */
-  readonly #canvasGeneration = new WeakMap<WebContents, object>();
-  /** Renderers whose going is watched for. */
-  readonly #watched = new WeakSet<WebContents>();
-  /** The conversations each renderer was last listed (session:list): the only ones it may open. */
-  readonly #listed = new WeakMap<WebContents, { folder: string; ids: Set<string> }>();
+  /** The conversations each canvas was last listed (session:list): the only ones it may open. */
+  readonly #listed = new Map<CanvasId, { folder: string; ids: Set<string> }>();
   /**
-   * The agents whose terminal each renderer's view shows (attachTerminal), and what stops the
+   * The agents whose terminal each canvas's view shows (attachTerminal), and what stops the
    * running session's screen being shown there (undefined while none runs).
    */
-  readonly #views = new Map<WebContents, Map<string, (() => void) | undefined>>();
+  readonly #views = new Map<CanvasId, Map<string, (() => void) | undefined>>();
 
   constructor(deps: SessionManagerDeps) {
     this.#deps = deps;
   }
 
   /** Starts an agent's session (resuming its last), unless it runs already with that connection. */
-  async start(contents: WebContents, agentId: string, options: SessionOptions): Promise<void> {
-    await this.#settled(contents);
-    const agents = this.#agentsOf(contents);
+  async start(canvas: CanvasId, agentId: string, options: SessionOptions): Promise<void> {
+    await this.#settled(canvas);
+    const agents = this.#agentsOf(canvas);
     const running = agents.get(agentId);
     if (running?.connection === options.connection) {
       await running.session;
@@ -150,15 +128,14 @@ export class SessionManager {
     if (options.mode !== null && !isModeOf(cli, options.mode)) {
       throw new TypeError(`${options.mode} is not a mode of ${options.connection} sessions`);
     }
-    if (running) await this.#end(contents, agentId, running, false);
-    const cwd = this.#deps.projectOf(contents);
+    if (running) await this.#end(canvas, agentId, running, false);
+    const cwd = this.#deps.projectOf(canvas);
     if (cwd === undefined) throw new Error(NO_PROJECT);
-    this.#watch(contents);
     // What is not given is the user's own: their CLI's settings, else its defaults.
     const given: SessionOptions = { ...options, effort: options.effort ?? null };
     const agent: Agent = {
       connection: options.connection,
-      session: this.#launch(contents, agentId, cwd, given, () => agents.get(agentId) === agent),
+      session: this.#launch(canvas, agentId, cwd, given, () => agents.get(agentId) === agent),
     };
     agents.set(agentId, agent);
     try {
@@ -168,46 +145,46 @@ export class SessionManager {
       throw error;
     }
     // A view waiting to show the agent's terminal shows this session's.
-    this.#show(contents, agentId, agent);
+    this.#show(canvas, agentId, agent);
   }
 
-  async send(contents: WebContents, agentId: string, message: UserMessage): Promise<void> {
-    await (await this.#session(contents, agentId)).send(message);
+  async send(canvas: CanvasId, agentId: string, message: UserMessage): Promise<void> {
+    await (await this.#session(canvas, agentId)).send(message);
   }
 
   async answer(
-    contents: WebContents,
+    canvas: CanvasId,
     agentId: string,
     promptId: string,
     answer: SessionAnswer,
   ): Promise<void> {
-    await (await this.#session(contents, agentId)).answer(promptId, answer);
+    await (await this.#session(canvas, agentId)).answer(promptId, answer);
   }
 
-  async interrupt(contents: WebContents, agentId: string): Promise<void> {
-    await (await this.#session(contents, agentId)).interrupt();
+  async interrupt(canvas: CanvasId, agentId: string): Promise<void> {
+    await (await this.#session(canvas, agentId)).interrupt();
   }
 
   /** Switches the agent's session's mode (one of its CLI's). */
-  async setMode(contents: WebContents, agentId: string, mode: SessionMode): Promise<void> {
-    const agent = this.#agents.get(contents)?.get(agentId);
+  async setMode(canvas: CanvasId, agentId: string, mode: SessionMode): Promise<void> {
+    const agent = this.#agents.get(canvas)?.get(agentId);
     if (agent && !isModeOf(CONNECTION_CLI[agent.connection], mode)) {
       throw new TypeError(`${mode} is not a mode of ${agent.connection} sessions`);
     }
-    await (await this.#session(contents, agentId)).setMode(mode);
+    await (await this.#session(canvas, agentId)).setMode(mode);
   }
 
   /** Switches the agent's session's model. */
-  async setModel(contents: WebContents, agentId: string, model: string): Promise<void> {
-    await (await this.#session(contents, agentId)).setModel(model);
+  async setModel(canvas: CanvasId, agentId: string, model: string): Promise<void> {
+    await (await this.#session(canvas, agentId)).setModel(model);
   }
 
   /**
    * Switches the agent's session's reasoning effort (null: its model's default), where its
    * connection takes it from corrallm.
    */
-  async setEffort(contents: WebContents, agentId: string, effort: string | null): Promise<void> {
-    const session = await this.#session(contents, agentId);
+  async setEffort(canvas: CanvasId, agentId: string, effort: string | null): Promise<void> {
+    const session = await this.#session(canvas, agentId);
     if (!session.setEffort) throw new Error(NO_EFFORT);
     await session.setEffort(effort);
   }
@@ -217,20 +194,16 @@ export class SessionManager {
    * own defaults, as read in the canvas's project folder (else the home folder, for the user's own
    * settings alone): without a session, or a prompt.
    */
-  async settingsOptions(contents: WebContents, cli: Cli): Promise<SettingsOptions> {
+  async settingsOptions(canvas: CanvasId, cli: Cli): Promise<SettingsOptions> {
     const read = this.#deps.options?.[cli];
     if (!read) throw new Error(NO_OPTIONS);
     const env = await this.#deps.environment();
-    return read({ cwd: this.#deps.projectOf(contents) ?? env.HOME ?? homedir(), env });
+    return read({ cwd: this.#deps.projectOf(canvas) ?? env.HOME ?? homedir(), env });
   }
 
   /** What restoring the agent's files to how they were before a message would change. */
-  async previewRewind(
-    contents: WebContents,
-    agentId: string,
-    messageId: string,
-  ): Promise<FilesRewind> {
-    const session = await this.#session(contents, agentId);
+  async previewRewind(canvas: CanvasId, agentId: string, messageId: string): Promise<FilesRewind> {
+    const session = await this.#session(canvas, agentId);
     if (!session.rewindFiles) throw new Error(NO_REWIND);
     return session.rewindFiles(messageId, true);
   }
@@ -244,17 +217,17 @@ export class SessionManager {
    * restored.
    */
   async rewind(
-    contents: WebContents,
+    canvas: CanvasId,
     agentId: string,
     messageId: string,
     restore: RewindRestore,
   ): Promise<RewindResult> {
-    const session = await this.#session(contents, agentId);
+    const session = await this.#session(canvas, agentId);
     if (!session.rewindFiles) throw new Error(NO_REWIND);
     const conversation = restore !== 'code';
-    const folder = this.#deps.projectOf(contents);
+    const folder = this.#deps.projectOf(canvas);
     // Claude Code's conversation (only its connections rewind).
-    const id = this.#idsOf(contents).claude.get(agentId);
+    const id = (await this.#conversation(canvas, 'claude', agentId))?.id;
     const kept = this.#deps.conversations;
     let point: string | null = null;
     if (conversation) {
@@ -268,28 +241,28 @@ export class SessionManager {
     }
     if (conversation && folder !== undefined && id !== undefined && kept) {
       const forked = point === null ? null : await kept.fork(folder, id, point);
-      await this.close(contents, agentId);
-      if (forked === null) await this.#forget(contents, 'claude', agentId);
-      else await this.#remember(contents, 'claude', agentId, forked);
+      await this.close(canvas, agentId);
+      if (forked === null) await this.#forget(canvas, 'claude', agentId);
+      else await this.#remember(canvas, 'claude', agentId, forked);
     }
     return { ...(files === undefined ? {} : { files }), conversation };
   }
 
   /** The MCP servers of the agent's session, and how each is (/mcp). */
-  async mcpServers(contents: WebContents, agentId: string): Promise<McpServer[]> {
-    const session = await this.#session(contents, agentId);
+  async mcpServers(canvas: CanvasId, agentId: string): Promise<McpServer[]> {
+    const session = await this.#session(canvas, agentId);
     if (!session.mcpServers) throw new Error(NO_MCP);
     return session.mcpServers();
   }
 
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
   async changeMcpServer(
-    contents: WebContents,
+    canvas: CanvasId,
     agentId: string,
     name: string,
     change: McpChange,
   ): Promise<McpServer[]> {
-    const session = await this.#session(contents, agentId);
+    const session = await this.#session(canvas, agentId);
     if (!session.changeMcpServer || !session.mcpServers) throw new Error(NO_MCP);
     await session.changeMcpServer(name, change);
     return session.mcpServers();
@@ -300,12 +273,12 @@ export class SessionManager {
    * which is the agent's own (the one it runs, or would resume). They are the only ones the
    * renderer may then open (`resumeSession`).
    */
-  async listSessions(contents: WebContents, agentId: string): Promise<PastSession[]> {
-    const folder = this.#deps.projectOf(contents);
+  async listSessions(canvas: CanvasId, agentId: string): Promise<PastSession[]> {
+    const folder = this.#deps.projectOf(canvas);
     if (folder === undefined) throw new Error(NO_PROJECT);
     const listed = (await this.#deps.conversations?.list(folder)) ?? [];
-    this.#listed.set(contents, { folder, ids: new Set(listed.map((kept) => kept.id)) });
-    const own = this.#idsOf(contents).claude.get(agentId);
+    this.#listed.set(canvas, { folder, ids: new Set(listed.map((kept) => kept.id)) });
+    const own = (await this.#conversation(canvas, 'claude', agentId))?.id;
     return listed.map((kept) => ({ ...kept, current: kept.id === own }));
   }
 
@@ -313,57 +286,52 @@ export class SessionManager {
    * Makes a conversation the agent's own (/resume): one listed for the canvas's project folder,
    * never another. The agent's session ends; it resumes that conversation when it starts again.
    */
-  async resumeSession(contents: WebContents, agentId: string, sessionId: string): Promise<void> {
-    const listed = this.#listed.get(contents);
-    if (!listed || listed.folder !== this.#deps.projectOf(contents) || !listed.ids.has(sessionId)) {
+  async resumeSession(canvas: CanvasId, agentId: string, sessionId: string): Promise<void> {
+    const listed = this.#listed.get(canvas);
+    if (!listed || listed.folder !== this.#deps.projectOf(canvas) || !listed.ids.has(sessionId)) {
       throw new Error(NOT_LISTED);
     }
-    await this.close(contents, agentId);
-    await this.#remember(contents, 'claude', agentId, sessionId);
+    await this.close(canvas, agentId);
+    await this.#remember(canvas, 'claude', agentId, sessionId);
   }
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
-  async stopTask(contents: WebContents, agentId: string, taskId: string): Promise<void> {
-    const session = await this.#session(contents, agentId);
+  async stopTask(canvas: CanvasId, agentId: string, taskId: string): Promise<void> {
+    const session = await this.#session(canvas, agentId);
     if (!session.stopTask) throw new Error(NO_TASKS);
     await session.stopTask(taskId);
   }
 
   /**
-   * Shows an agent's terminal in the renderer's view (terminal:event): the screen of the session
+   * Shows an agent's terminal in its canvas's view (terminal:event): the screen of the session
    * that runs, if any, and of each one that starts until the view is detached.
    */
-  attachTerminal(contents: WebContents, agentId: string): void {
-    this.#watch(contents);
-    const views = this.#viewsOf(contents);
+  attachTerminal(canvas: CanvasId, agentId: string): void {
+    const views = this.#viewsOf(canvas);
     views.get(agentId)?.();
     views.set(agentId, undefined);
-    const agent = this.#agents.get(contents)?.get(agentId);
-    if (agent) this.#show(contents, agentId, agent);
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    if (agent) this.#show(canvas, agentId, agent);
   }
 
-  /** The renderer's view no longer shows the agent's terminal. */
-  detachTerminal(contents: WebContents, agentId: string): void {
-    const views = this.#views.get(contents);
+  /** The canvas's view no longer shows the agent's terminal. */
+  detachTerminal(canvas: CanvasId, agentId: string): void {
+    const views = this.#views.get(canvas);
     views?.get(agentId)?.();
     views?.delete(agentId);
   }
 
   /** Keystrokes typed in an agent's terminal view, for its session's terminal, if it runs. */
-  async inputTerminal(contents: WebContents, agentId: string, data: string): Promise<void> {
-    (await this.#running(contents, agentId))?.terminal?.input(data);
+  async inputTerminal(canvas: CanvasId, agentId: string, data: string): Promise<void> {
+    (await this.#running(canvas, agentId))?.terminal?.input(data);
   }
 
   /**
    * Files dropped on an agent's terminal view (checked paths): those that are there are pasted
    * into its session's terminal, if it runs, quoted (drop.ts).
    */
-  async dropOnTerminal(
-    contents: WebContents,
-    agentId: string,
-    paths: readonly string[],
-  ): Promise<void> {
-    const terminal = (await this.#running(contents, agentId))?.terminal;
+  async dropOnTerminal(canvas: CanvasId, agentId: string, paths: readonly string[]): Promise<void> {
+    const terminal = (await this.#running(canvas, agentId))?.terminal;
     if (!terminal) return;
     const text = await droppedPaste(paths);
     if (text !== '') terminal.paste(text);
@@ -371,96 +339,54 @@ export class SessionManager {
 
   /** An agent's terminal view was resized: so is its session's terminal, if it runs. */
   async resizeTerminal(
-    contents: WebContents,
+    canvas: CanvasId,
     agentId: string,
     cols: number,
     rows: number,
   ): Promise<void> {
-    (await this.#running(contents, agentId))?.terminal?.resize(cols, rows);
+    (await this.#running(canvas, agentId))?.terminal?.resize(cols, rows);
   }
 
   /** Ends an agent's session, if it runs. Its id is kept: starting it again resumes it. */
-  async close(contents: WebContents, agentId: string): Promise<void> {
-    const agent = this.#agents.get(contents)?.get(agentId);
-    if (agent) await this.#end(contents, agentId, agent, false);
+  async close(canvas: CanvasId, agentId: string): Promise<void> {
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    if (agent) await this.#end(canvas, agentId, agent, false);
   }
 
   /** Ends this agent and forgets only the chosen CLI's ID; native history remains untouched. */
-  async fresh(contents: WebContents, agentId: string, cli: Cli): Promise<void> {
-    const generation = this.#canvasGeneration.get(contents);
-    await this.#settled(contents);
-    if (generation !== this.#canvasGeneration.get(contents)) {
-      throw new Error('The canvas changed before its conversation could be cleared.');
-    }
-    const ids = this.#idsOf(contents);
-    await this.close(contents, agentId);
-    if (generation !== this.#canvasGeneration.get(contents) || ids !== this.#ids.get(contents)) {
-      throw new Error('The canvas changed before its conversation could be cleared.');
-    }
-    await this.#forget(contents, cli, agentId);
+  async fresh(canvas: CanvasId, agentId: string, cli: Cli): Promise<void> {
+    // A session already closing still owns its conversation until it has.
+    await this.#settled(canvas);
+    await this.close(canvas, agentId);
+    await this.#forget(canvas, cli, agentId);
     // A failed durable clear must not be reported as a successful fresh conversation.
     await this.#deps.memory.flush();
   }
 
-  /** A canvas opened in the renderer: the old canvas's sessions end; the new one's ids load. */
-  async canvasOpened(contents: WebContents): Promise<void> {
-    this.#canvasGeneration.set(contents, {});
-    await this.#endAll(contents, true);
-    const file = this.#deps.canvasOf(contents);
-    const remembered = file === undefined ? undefined : await this.#deps.memory.get(file);
-    this.#ids.set(contents, {
-      claude: new Map(Object.entries(remembered?.sessions ?? {})),
-      codex: new Map(Object.entries(remembered?.threads ?? {})),
-    });
-    this.#roles.set(contents, {
-      claude: new Map(Object.entries(remembered?.sessionRoles ?? {})),
-      codex: new Map(Object.entries(remembered?.threadRoles ?? {})),
-    });
-  }
-
-  /** The renderer's canvas was replaced by a new one: its sessions end, and are forgotten. */
-  async canvasForgotten(contents: WebContents): Promise<void> {
-    this.#canvasGeneration.set(contents, {});
-    await this.#endAll(contents, true);
-    this.#ids.set(contents, noIds());
-    this.#roles.delete(contents);
-  }
-
-  /** The canvas was saved (maybe to a new file): the file remembers its agents' sessions. */
-  async canvasSaved(contents: WebContents): Promise<void> {
-    const file = this.#deps.canvasOf(contents);
-    if (file === undefined) return;
-    const ids = this.#idsOf(contents);
-    const roles = this.#rolesOf(contents);
-    await this.#deps.memory.update(file, (remembered) => {
-      const next: Remembered = { ...remembered, sessions: Object.fromEntries(ids.claude) };
-      if (ids.codex.size > 0) next.threads = Object.fromEntries(ids.codex);
-      else delete next.threads;
-      if (roles.claude.size > 0) next.sessionRoles = Object.fromEntries(roles.claude);
-      else delete next.sessionRoles;
-      if (roles.codex.size > 0) next.threadRoles = Object.fromEntries(roles.codex);
-      else delete next.threadRoles;
-      return next;
-    });
+  /**
+   * No window shows the canvas any more (one closed, reloaded or crashed, or opened another
+   * canvas): its sessions end. Its conversations are kept, to resume when it is shown again.
+   */
+  async closeCanvas(canvas: CanvasId): Promise<void> {
+    this.#views.delete(canvas);
+    await this.#endAll(canvas, false);
+    if (this.#agents.get(canvas)?.size === 0) this.#agents.delete(canvas);
   }
 
   /** The canvas has a new project folder: its sessions end and are forgotten, to start afresh there. */
-  async projectChanged(contents: WebContents): Promise<void> {
-    this.#canvasGeneration.set(contents, {});
-    await this.#endAll(contents, true);
-    this.#ids.set(contents, noIds());
-    this.#roles.delete(contents);
-    await this.canvasSaved(contents);
+  async projectChanged(canvas: CanvasId): Promise<void> {
+    await this.#endAll(canvas, true);
+    await this.#deps.memory.update(canvas, (remembered) => ({ ...remembered, conversations: {} }));
   }
 
   /** Ends every session, as the app quits: resolves once they have all closed. */
   async closeEverything(): Promise<void> {
-    const renderers = new Set([...this.#agents.keys(), ...this.#closing.keys()]);
-    await Promise.all([...renderers].map((contents) => this.#endAll(contents, false)));
+    const canvases = new Set([...this.#agents.keys(), ...this.#closing.keys()]);
+    await Promise.all([...canvases].map((canvas) => this.#endAll(canvas, false)));
   }
 
   async #launch(
-    contents: WebContents,
+    canvas: CanvasId,
     agentId: string,
     cwd: string,
     { connection, model, mode, effort, role }: SessionOptions,
@@ -469,19 +395,20 @@ export class SessionManager {
     const connector = this.#deps.connectors[connection];
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
     const cli = CONNECTION_CLI[connection];
-    const resume = this.#idsOf(contents)[cli].get(agentId) ?? null;
+    const remembered = await this.#conversation(canvas, cli, agentId);
+    const resume = remembered?.id ?? null;
     const fingerprint = roleFingerprint(role);
-    const roleChanged = this.#rolesOf(contents)[cli].get(agentId) !== fingerprint;
+    const roleChanged = remembered?.role !== fingerprint;
     const env = await this.#deps.environment();
     // A session replaced (by another connection, or after it closed) is no longer heard.
     const host: SessionHost = {
       emit: (event) => {
         if (!current()) return;
-        if (event.type === 'closed') this.#agents.get(contents)?.delete(agentId);
-        this.#deps.emit(contents, agentId, connection, event);
+        if (event.type === 'closed') this.#agents.get(canvas)?.delete(agentId);
+        this.#deps.emit(canvas, agentId, connection, event);
       },
       remember: (sessionId) => {
-        if (current()) void this.#remember(contents, cli, agentId, sessionId, fingerprint);
+        if (current()) void this.#remember(canvas, cli, agentId, sessionId, fingerprint);
       },
     };
     return connector.start(
@@ -500,64 +427,67 @@ export class SessionManager {
     );
   }
 
-  /** Forgets the agent's session in `cli`: it starts afresh next time. */
-  async #forget(contents: WebContents, cli: Cli, agentId: string): Promise<void> {
-    this.#idsOf(contents)[cli].delete(agentId);
-    this.#rolesOf(contents)[cli].delete(agentId);
-    const file = this.#deps.canvasOf(contents);
-    if (file === undefined) return;
-    const { ids, roles } = REMEMBERED[cli];
-    await this.#deps.memory.update(file, (remembered): Remembered => ({
-      ...remembered,
-      [ids]: Object.fromEntries(
-        Object.entries(remembered[ids] ?? {}).filter(([agent]) => agent !== agentId),
-      ),
-      [roles]: Object.fromEntries(
-        Object.entries(remembered[roles] ?? {}).filter(([agent]) => agent !== agentId),
-      ),
-    }));
+  /** The agent's conversation in `cli`, as remembered with the canvas: what it resumes. */
+  async #conversation(
+    canvas: CanvasId,
+    cli: Cli,
+    agentId: string,
+  ): Promise<Conversation | undefined> {
+    const conversations = (await this.#deps.memory.get(canvas)).conversations[cli] ?? {};
+    return Object.hasOwn(conversations, agentId) ? conversations[agentId] : undefined;
   }
 
+  /** Forgets the agent's conversation in `cli`: it starts afresh next time. */
+  async #forget(canvas: CanvasId, cli: Cli, agentId: string): Promise<void> {
+    await this.#deps.memory.update(canvas, (remembered) => {
+      const kept = Object.entries(remembered.conversations[cli] ?? {}).filter(
+        ([agent]) => agent !== agentId,
+      );
+      return {
+        ...remembered,
+        conversations: { ...remembered.conversations, [cli]: Object.fromEntries(kept) },
+      };
+    });
+  }
+
+  /**
+   * Remembers the agent's conversation in `cli`, and the role fingerprint it launched with (none
+   * given: not known, as for one picked with /resume, or a rewind's copy).
+   */
   async #remember(
-    contents: WebContents,
+    canvas: CanvasId,
     cli: Cli,
     agentId: string,
     sessionId: string,
     fingerprint?: string,
   ): Promise<void> {
-    this.#idsOf(contents)[cli].set(agentId, sessionId);
-    const launched = this.#rolesOf(contents)[cli];
-    if (fingerprint === undefined) launched.delete(agentId);
-    else launched.set(agentId, fingerprint);
-    const file = this.#deps.canvasOf(contents);
-    if (file === undefined) return;
-    const { ids, roles } = REMEMBERED[cli];
-    await this.#deps.memory.update(file, (remembered): Remembered => ({
+    const conversation: Conversation = {
+      id: sessionId,
+      ...(fingerprint === undefined ? {} : { role: fingerprint }),
+    };
+    await this.#deps.memory.update(canvas, (remembered) => ({
       ...remembered,
-      [ids]: { ...remembered[ids], [agentId]: sessionId },
-      [roles]: {
-        ...Object.fromEntries(
-          Object.entries(remembered[roles] ?? {}).filter(([agent]) => agent !== agentId),
-        ),
-        ...(fingerprint === undefined ? {} : { [agentId]: fingerprint }),
+      conversations: {
+        ...remembered.conversations,
+        [cli]: { ...remembered.conversations[cli], [agentId]: conversation },
       },
     }));
   }
 
-  /** Shows the agent's session's screen in the renderer's view, if it has a view and a screen. */
-  #show(contents: WebContents, agentId: string, agent: Agent): void {
+  /** Shows the agent's session's screen in its canvas's view, if it has a view and a screen. */
+  #show(canvas: CanvasId, agentId: string, agent: Agent): void {
     void agent.session.then(
       (session) => {
-        const views = this.#views.get(contents);
+        const views = this.#views.get(canvas);
         const screen = session.terminal;
-        if (!screen || !views?.has(agentId) || this.#agents.get(contents)?.get(agentId) !== agent) {
+        if (!screen || !views?.has(agentId) || this.#agents.get(canvas)?.get(agentId) !== agent) {
           return;
         }
         views.get(agentId)?.();
         views.set(
           agentId,
           screen.show((event) => {
-            this.#deps.terminal?.(contents, agentId, event);
+            this.#deps.terminal?.(canvas, agentId, event);
           }),
         );
       },
@@ -566,48 +496,45 @@ export class SessionManager {
   }
 
   /** The agent's session, if it runs (or starts) and does start. */
-  async #running(
-    contents: WebContents,
-    agentId: string,
-  ): Promise<LiveSession<SessionMode> | undefined> {
-    const agent = this.#agents.get(contents)?.get(agentId);
+  async #running(canvas: CanvasId, agentId: string): Promise<LiveSession<SessionMode> | undefined> {
+    const agent = this.#agents.get(canvas)?.get(agentId);
     return agent?.session.catch(() => undefined);
   }
 
-  #viewsOf(contents: WebContents): Map<string, (() => void) | undefined> {
-    let views = this.#views.get(contents);
+  #viewsOf(canvas: CanvasId): Map<string, (() => void) | undefined> {
+    let views = this.#views.get(canvas);
     if (!views) {
       views = new Map();
-      this.#views.set(contents, views);
+      this.#views.set(canvas, views);
     }
     return views;
   }
 
-  async #session(contents: WebContents, agentId: string): Promise<LiveSession<SessionMode>> {
-    const agent = this.#agents.get(contents)?.get(agentId);
+  async #session(canvas: CanvasId, agentId: string): Promise<LiveSession<SessionMode>> {
+    const agent = this.#agents.get(canvas)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
     return agent.session;
   }
 
-  /** Ends a session, telling the renderer (`tell`) when it did not ask for it. */
-  #end(contents: WebContents, agentId: string, agent: Agent, tell: boolean): Promise<void> {
+  /** Ends a session, telling the canvas's windows (`tell`) when they did not ask for it. */
+  #end(canvas: CanvasId, agentId: string, agent: Agent, tell: boolean): Promise<void> {
     const existing = this.#ending.get(agent);
     if (existing) return existing;
-    const pending = this.#closing.get(contents) ?? new Set<Promise<void>>();
-    this.#closing.set(contents, pending);
-    const closing = this.#close(contents, agentId, agent, tell).finally(() => {
+    const pending = this.#closing.get(canvas) ?? new Set<Promise<void>>();
+    this.#closing.set(canvas, pending);
+    const closing = this.#close(canvas, agentId, agent, tell).finally(() => {
       pending.delete(closing);
-      if (pending.size === 0) this.#closing.delete(contents);
+      if (pending.size === 0) this.#closing.delete(canvas);
     });
     this.#ending.set(agent, closing);
     pending.add(closing);
     return closing;
   }
 
-  async #close(contents: WebContents, agentId: string, agent: Agent, tell: boolean): Promise<void> {
-    const agents = this.#agents.get(contents);
+  async #close(canvas: CanvasId, agentId: string, agent: Agent, tell: boolean): Promise<void> {
+    const agents = this.#agents.get(canvas);
     if (agents?.get(agentId) === agent) agents.delete(agentId);
-    if (tell) this.#deps.emit(contents, agentId, agent.connection, { type: 'closed' });
+    if (tell) this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed' });
     let session: LiveSession<SessionMode>;
     try {
       session = await agent.session;
@@ -629,69 +556,26 @@ export class SessionManager {
     }
   }
 
-  async #endAll(contents: WebContents, tell: boolean): Promise<void> {
-    const agents = [...(this.#agents.get(contents) ?? [])];
-    await Promise.all(agents.map(([id, agent]) => this.#end(contents, id, agent, tell)));
-    await this.#settled(contents);
+  async #endAll(canvas: CanvasId, tell: boolean): Promise<void> {
+    const agents = [...(this.#agents.get(canvas) ?? [])];
+    await Promise.all(agents.map(([id, agent]) => this.#end(canvas, id, agent, tell)));
+    await this.#settled(canvas);
   }
 
-  async #settled(contents: WebContents): Promise<void> {
+  async #settled(canvas: CanvasId): Promise<void> {
     for (;;) {
-      const pending = this.#closing.get(contents);
+      const pending = this.#closing.get(canvas);
       if (!pending?.size) return;
       await Promise.all(pending);
     }
   }
 
-  #agentsOf(contents: WebContents): Map<string, Agent> {
-    let agents = this.#agents.get(contents);
+  #agentsOf(canvas: CanvasId): Map<string, Agent> {
+    let agents = this.#agents.get(canvas);
     if (!agents) {
       agents = new Map();
-      this.#agents.set(contents, agents);
+      this.#agents.set(canvas, agents);
     }
     return agents;
   }
-
-  #idsOf(contents: WebContents): Record<Cli, Map<string, string>> {
-    let ids = this.#ids.get(contents);
-    if (!ids) {
-      ids = noIds();
-      this.#ids.set(contents, ids);
-    }
-    return ids;
-  }
-
-  #rolesOf(contents: WebContents): Record<Cli, Map<string, string>> {
-    let roles = this.#roles.get(contents);
-    if (!roles) {
-      roles = { claude: new Map(), codex: new Map() };
-      this.#roles.set(contents, roles);
-    }
-    return roles;
-  }
-
-  /** A renderer that goes, crashes, or loads another page takes its sessions with it. */
-  #watch(contents: WebContents): void {
-    if (this.#watched.has(contents)) return;
-    this.#watched.add(contents);
-    contents.once('destroyed', () => {
-      this.#views.delete(contents);
-      void this.#endAll(contents, false).then(() => {
-        this.#agents.delete(contents);
-      });
-    });
-    contents.on('did-navigate', () => {
-      this.#views.delete(contents);
-      void this.#endAll(contents, false);
-    });
-    contents.on('render-process-gone', () => {
-      this.#views.delete(contents);
-      void this.#endAll(contents, false);
-    });
-  }
-}
-
-/** No session ids, for any CLI. */
-function noIds(): Record<Cli, Map<string, string>> {
-  return { claude: new Map(), codex: new Map() };
 }

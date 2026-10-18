@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { fromFile, toFile } from './file';
 import { autosize } from './graph';
 import type { Graph, GraphNode } from './graph';
 import type { QueueItem } from './queue';
+
+/** The canvas's id, which its file holds. */
+const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 
 const queue: QueueItem[] = [
   { id: 'w', waitFor: [{ agent: 'b' }, { agent: 'b', item: 'x' }] },
@@ -56,7 +60,8 @@ const graph: Graph = {
 /** The file `graph` saves as, parsed. */
 const saved = {
   format: 'corrallm',
-  version: 1,
+  version: 2,
+  id: ID,
   nodes: [
     { id: 'G', kind: 'group', label: 'Team', position: { x: 0, y: 0 }, color: 2 },
     {
@@ -75,11 +80,12 @@ const saved = {
 
 describe('toFile', () => {
   it('writes the canvas as readable JSON, leaving out selection and sizes', () => {
-    const text = toFile(graph);
+    const text = toFile(graph, ID);
     expect(JSON.parse(text)).toEqual(saved);
     expect(Object.keys(JSON.parse(text) as object)).toEqual([
       'format',
       'version',
+      'id',
       'nodes',
       'links',
     ]);
@@ -106,9 +112,9 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: wholeLine } } : n,
       ),
     };
-    const saved = toFile(withConditions);
+    const saved = toFile(withConditions, ID);
     expect(fromFile(saved).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(wholeLine);
-    expect(toFile(fromFile(saved))).toBe(saved);
+    expect(toFile(fromFile(saved), ID)).toBe(saved);
   });
 
   it('reads back what was saved, with groups sized to fit what they hold', () => {
@@ -128,14 +134,14 @@ describe('fromFile', () => {
         },
       };
     };
-    const loaded = fromFile(toFile(graph));
+    const loaded = fromFile(toFile(graph, ID));
     expect(loaded).toEqual({
       nodes: autosize(graph.nodes.map(plain)),
       edges: [
         { id: 'a->b', source: 'a', target: 'b', sourceHandle: 'bottom', targetHandle: 'top' },
       ],
     });
-    expect(toFile(loaded)).toBe(toFile(graph));
+    expect(toFile(loaded, ID)).toBe(toFile(graph, ID));
   });
 
   it('reads back delays, time limits on waits, and the condition that a wait ran out of time', () => {
@@ -156,10 +162,10 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: timed } } : n,
       ),
     };
-    const text = toFile(withTimes);
+    const text = toFile(withTimes, ID);
     expect(text).toContain('"delay": {\n');
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(timed);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
   });
 
   it('reads back what a step is to do, in the user’s words', () => {
@@ -173,10 +179,10 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: told } } : n,
       ),
     };
-    const text = toFile(withSteps);
+    const text = toFile(withSteps, ID);
     expect(text).toContain('"instruction": "run npm test"');
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(told);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
     // An empty one is none.
     const empty = JSON.stringify({
       ...saved,
@@ -206,10 +212,10 @@ describe('fromFile', () => {
       ...graph,
       nodes: graph.nodes.map((n) => (n.id === 'a' ? { ...n, data: { ...n.data, queue: red } } : n)),
     };
-    const text = toFile(withRed);
+    const text = toFile(withRed, ID);
     expect(text).toContain('"expect": "fails"');
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(red);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
   });
 
   it('reads back usage conditions, and delays and time limits until a usage window resets', () => {
@@ -228,9 +234,9 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: usage } } : n,
       ),
     };
-    const text = toFile(withUsage);
+    const text = toFile(withUsage, ID);
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(usage);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
   });
 
   it('reads back OKs, on what they name or (no words) on the work before them', () => {
@@ -245,12 +251,12 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: asked } } : n,
       ),
     };
-    const text = toFile(withOks);
+    const text = toFile(withOks, ID);
     expect(text).toContain(
       '{\n          "id": "spec-ok",\n          "approve": "the spec in SPEC.md"\n',
     );
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(asked);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
   });
 
   it('reads back repeats, keys in the order the app writes them; older files read as before', () => {
@@ -289,12 +295,12 @@ describe('fromFile', () => {
         n.id === 'a' ? { ...n, data: { ...n.data, queue: looped } } : n,
       ),
     };
-    const text = toFile(withRepeats);
+    const text = toFile(withRepeats, ID);
     expect(text).toMatch(
       /\{\n {10}"id": "green-loop",\n {10}"repeat": \[[^]*\],\n {10}"until": \{\n {12}"kind": "succeeded"\n {10}\},\n {10}"rounds": 3,\n {10}"otherwise": "ask"\n/,
     );
     expect(fromFile(text).nodes.find((n) => n.id === 'a')?.data.queue).toEqual(looped);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
     // A file from before repeats reads just as it did.
     expect(fromFile(JSON.stringify(saved)).nodes[1]?.data.queue).toEqual(queue);
   });
@@ -329,10 +335,10 @@ describe('fromFile', () => {
       ],
       edges: [],
     };
-    const file = JSON.parse(toFile(connected)) as typeof saved;
+    const file = JSON.parse(toFile(connected, ID)) as typeof saved;
     const ways = ['terminal', 'sdk', 'codex-terminal', 'app-server'];
     expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual(ways);
-    expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual(ways);
+    expect(fromFile(toFile(connected, ID)).nodes.map((n) => n.data.connection)).toEqual(ways);
     // The removed placeholder is no connection.
     const simulated = structuredClone(saved);
     Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
@@ -359,13 +365,13 @@ describe('fromFile', () => {
       ],
       edges: [],
     };
-    const text = toFile(set);
+    const text = toFile(set, ID);
     expect((JSON.parse(text) as { nodes: { settings?: unknown }[] }).nodes[0]?.settings).toEqual({
       claude: { model: 'haiku', effort: 'low', mode: 'plan' },
       codex: { model: 'gpt-6-luna' },
     });
     expect(fromFile(text).nodes[0]?.data.settings).toEqual(set.nodes[0]?.data.settings);
-    expect(toFile(fromFile(text))).toBe(text);
+    expect(toFile(fromFile(text), ID)).toBe(text);
     // Nothing set: written as nothing, for a CLI or at all.
     const file = structuredClone(saved);
     Object.assign(file.nodes[2] ?? {}, { settings: { claude: {}, codex: {} } });
@@ -384,11 +390,17 @@ describe('fromFile', () => {
     expect(loaded.nodes.map((n) => n.id)).toEqual(['G', 'a', 'b']);
   });
 
-  it('rejects what is not a canvas, and canvases from a newer version', () => {
+  it('rejects what is not a canvas, canvases from another version, and one without an id', () => {
     expect(() => fromFile('not json')).toThrow('This is not a corrallm canvas');
     expect(() => fromFile('{"format": "other"}')).toThrow('This is not a corrallm canvas');
-    expect(() => fromFile(JSON.stringify({ ...saved, version: 2 }))).toThrow(
+    expect(() => fromFile(JSON.stringify({ ...saved, version: 3 }))).toThrow(
       'This canvas was made by a newer version of corrallm',
+    );
+    expect(() => fromFile(JSON.stringify({ ...saved, version: 1 }))).toThrow(
+      'This canvas is from an older version of corrallm',
+    );
+    expect(() => fromFile(JSON.stringify({ ...saved, id: 'team' }))).toThrow(
+      'id must be the canvas’s id',
     );
   });
 

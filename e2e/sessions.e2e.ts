@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -175,7 +176,8 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
     canvas,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'releaser',

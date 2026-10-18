@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -126,7 +127,8 @@ async function canvasFile(
     file,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'shop',
@@ -182,7 +184,8 @@ test('legacy omitted and simulated connections migrate to native Terminal withou
     file,
     JSON.stringify({
       format: 'corrallm',
-      version: 1,
+      version: 2,
+      id: randomUUID(),
       nodes: [
         {
           id: 'omitted',

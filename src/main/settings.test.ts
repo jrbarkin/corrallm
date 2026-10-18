@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { planConsent, Settings } from './settings';
+import { Settings } from './settings';
 
 let dir: string;
 let file: string;
@@ -17,47 +17,66 @@ afterEach(async () => {
 });
 
 describe('Settings', () => {
-  it('keeps what the user chose for the app, across instances (runs of the app)', async () => {
+  it('keeps the consents the user gave, by adapter, across instances (runs of the app)', async () => {
     const settings = new Settings(file);
-    expect(await settings.get()).toEqual({});
-    await settings.update((s) => ({ ...s, chatgptPlan: true }));
-    expect(await settings.get()).toEqual({ chatgptPlan: true });
+    expect(await settings.get()).toEqual({ consents: {} });
+    await settings.consent('codex', 'plan').give();
+    expect(await settings.get()).toEqual({ consents: { codex: { plan: true } } });
 
-    expect(await new Settings(file).get()).toEqual({ chatgptPlan: true });
+    expect(await new Settings(file).get()).toEqual({ consents: { codex: { plan: true } } });
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
-      version: 1,
-      settings: { chatgptPlan: true },
+      version: 2,
+      consents: { codex: { plan: true } },
     });
     // Written whole: nothing is left beside it.
     expect(await readdir(dir)).toEqual(['settings.json']);
   });
 
-  it('starts from nothing when its file is missing, unreadable, or not what it wrote', async () => {
-    for (const text of ['not json', '{"version": 2, "settings": {"chatgptPlan": true}}', '[]']) {
+  it('asks a consent only of the adapter and key it was given for', async () => {
+    const settings = new Settings(file);
+    const plan = settings.consent('codex', 'plan');
+    expect(await plan.given()).toBe(false);
+    await plan.give();
+    expect(await plan.given()).toBe(true);
+    expect(await settings.consent('codex', 'other').given()).toBe(false);
+    expect(await settings.consent('claude', 'plan').given()).toBe(false);
+    expect(await new Settings(file).consent('codex', 'plan').given()).toBe(true);
+  });
+
+  it('reads a file with none of the fields later versions add', async () => {
+    await writeFile(file, JSON.stringify({ version: 2, consents: {} }));
+    expect(await new Settings(file).get()).toEqual({ consents: {} });
+    await writeFile(file, JSON.stringify({ version: 2 }));
+    expect(await new Settings(file).get()).toEqual({ consents: {} });
+  });
+
+  it('starts from nothing when its file is missing, unreadable, of version 1, or not what it wrote', async () => {
+    for (const text of [
+      'not json',
+      '{"version": 1, "settings": {"chatgptPlan": true}}',
+      '[]',
+      '{"version": 2, "consents": []}',
+    ]) {
       await writeFile(file, text);
-      expect(await new Settings(file).get()).toEqual({});
+      expect(await new Settings(file).get()).toEqual({ consents: {} });
     }
-    // A setting of the wrong kind is left out.
-    await writeFile(file, '{"version": 1, "settings": {"chatgptPlan": "yes"}}');
-    expect(await new Settings(file).get()).toEqual({});
+    // A consent of the wrong kind, or for no adapter, is left out.
+    await writeFile(
+      file,
+      '{"version": 2, "consents": {"codex": {"plan": "yes", "other": true}, ' +
+        '"__proto__": {"plan": true}, "": {"plan": true}}}',
+    );
+    expect(await new Settings(file).get()).toEqual({ consents: { codex: { other: true } } });
   });
 
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));
-    await settings.update((s) => ({ ...s, chatgptPlan: true }));
+    await settings.consent('codex', 'plan').give();
     expect(errors).toHaveBeenCalledOnce();
     // What it was told stays, for this run.
-    expect(await settings.get()).toEqual({ chatgptPlan: true });
+    expect(await settings.consent('codex', 'plan').given()).toBe(true);
     await expect(settings.flush()).resolves.toBeUndefined();
     errors.mockRestore();
-  });
-
-  it('keeps the user’s say on Codex using their ChatGPT plan', async () => {
-    const consent = planConsent(new Settings(file));
-    expect(await consent.given()).toBe(false);
-    await consent.give();
-    expect(await consent.given()).toBe(true);
-    expect(await planConsent(new Settings(file)).given()).toBe(true);
   });
 });

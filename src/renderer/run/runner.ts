@@ -342,7 +342,7 @@ export class RunStore {
 
   checkpoint(): string {
     const saved: SavedRun = {
-      version: 1,
+      version: 2,
       run: this.#run,
       replies: [...this.#replies],
       held: [...this.#held],

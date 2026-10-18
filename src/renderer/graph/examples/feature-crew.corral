@@ -1,6 +1,7 @@
 {
   "format": "corrallm",
-  "version": 1,
+  "version": 2,
+  "id": "86ff6160-58b4-4ba2-b956-33bf61bacc3a",
   "nodes": [
     {
       "id": "researcher",

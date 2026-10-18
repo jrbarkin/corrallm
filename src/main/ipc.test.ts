@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Unit tests never load the real 'electron' module (importing it would download the binary).
-const { handle, openCanvas, saveCanvas } = vi.hoisted(() => ({
-  openCanvas: vi.fn<() => Promise<{ name: string; text: string } | null>>(),
-  saveCanvas: vi.fn<typeof Canvas.saveCanvas>(),
+const { handle } = vi.hoisted(() => ({
   handle:
     vi.fn<(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void>(),
 }));
@@ -12,13 +10,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle },
 }));
 
-vi.mock('./canvas', async (importOriginal) => ({
-  ...(await importOriginal<typeof Canvas>()),
-  openCanvas,
-  saveCanvas,
-}));
-
-import type * as Canvas from './canvas';
+import { newCanvasId } from '../shared/canvas';
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import {
   MAX_ANSWER_LENGTH,
@@ -30,6 +22,7 @@ import {
   MAX_MESSAGE_LENGTH,
 } from '../shared/session';
 import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../shared/terminal';
+import { mintTrustedPath } from './core/host';
 import { registerIpcHandlers } from './ipc';
 import type { IpcServices } from './ipc';
 
@@ -39,25 +32,35 @@ function frame(origin: string, overrides: Record<string, unknown> = {}) {
   return { origin, detached: false, parent: null, ...overrides };
 }
 
+/** The canvas the sender's window shows, as the window map says. */
+const CANVAS = newCanvasId();
+/** A new draft's id, as the journal gives it. */
+const DRAFT = newCanvasId();
+
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
   return {
+    windows: {
+      canvasOf: vi.fn<IpcServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
+      show: vi.fn<IpcServices['windows']['show']>().mockResolvedValue(undefined),
+    },
+    canvases: {
+      open: vi.fn<IpcServices['canvases']['open']>().mockResolvedValue(null),
+      save: vi.fn<IpcServices['canvases']['save']>().mockResolvedValue(null),
+    },
     runs: {
-      ready: vi.fn<IpcServices['runs']['ready']>().mockResolvedValue(undefined),
       get: vi
         .fn<IpcServices['runs']['get']>()
-        .mockResolvedValue({ token: 'canvas-token', checkpoint: null, name: null }),
+        .mockResolvedValue({ id: CANVAS, token: 'canvas-token', checkpoint: null, name: null }),
       save: vi.fn<IpcServices['runs']['save']>().mockResolvedValue(undefined),
       opened: vi.fn<IpcServices['runs']['opened']>().mockResolvedValue(undefined),
       saved: vi.fn<IpcServices['runs']['saved']>().mockResolvedValue(undefined),
-      forgotten: vi.fn<IpcServices['runs']['forgotten']>().mockResolvedValue(undefined),
+      draft: vi.fn<IpcServices['runs']['draft']>().mockResolvedValue(DRAFT),
     },
     shutdown: { ready: vi.fn<IpcServices['shutdown']['ready']>() },
     projects: {
       choose: vi.fn<IpcServices['projects']['choose']>().mockResolvedValue(null),
       restore: vi.fn<IpcServices['projects']['restore']>().mockResolvedValue(undefined),
-      remember: vi.fn<IpcServices['projects']['remember']>().mockResolvedValue(undefined),
-      forget: vi.fn<IpcServices['projects']['forget']>(),
       of: vi.fn<IpcServices['projects']['of']>().mockReturnValue(undefined),
     },
     files: {
@@ -92,11 +95,6 @@ function fakeServices() {
         models: [],
         defaults: { model: null, effort: null, mode: null },
       }),
-      canvasOpened: vi.fn<IpcServices['sessions']['canvasOpened']>().mockResolvedValue(undefined),
-      canvasForgotten: vi
-        .fn<IpcServices['sessions']['canvasForgotten']>()
-        .mockResolvedValue(undefined),
-      canvasSaved: vi.fn<IpcServices['sessions']['canvasSaved']>().mockResolvedValue(undefined),
       projectChanged: vi
         .fn<IpcServices['sessions']['projectChanged']>()
         .mockResolvedValue(undefined),
@@ -133,7 +131,7 @@ function listenerFor(name: string) {
 }
 
 /** Calls channel `name` as the trusted renderer would, its web contents being `sender`. */
-function invoke(name: string, args: unknown[], sender: unknown = {}) {
+function invoke(name: string, args: unknown[], sender: unknown = { id: 7 }) {
   return listenerFor(name)({ senderFrame: frame(TRUSTED_ORIGIN), sender }, ...args);
 }
 
@@ -141,8 +139,6 @@ const pingListener = () => listenerFor('app:ping');
 
 beforeEach(() => {
   handle.mockReset();
-  openCanvas.mockReset();
-  saveCanvas.mockReset();
   services = fakeServices();
 });
 
@@ -202,11 +198,11 @@ describe('link:open handler', () => {
 });
 
 describe('link:reveal handler', () => {
-  it('passes the link on, for main to check against the sender’s project folder', async () => {
+  it('passes the link on, for main to check against the sender’s canvas’s project folder', async () => {
     const sender = {};
     const link = 'file:///work/app/notes.txt';
     await expect(invoke('link:reveal', [link], sender)).resolves.toBe(true);
-    expect(services.reveal.reveal).toHaveBeenCalledWith(sender, link);
+    expect(services.reveal.reveal).toHaveBeenCalledWith(CANVAS, link);
   });
 
   it.each([
@@ -220,31 +216,80 @@ describe('link:reveal handler', () => {
   });
 });
 
-describe('canvas replacement after a failed restore', () => {
-  it('starts New without requiring the rejected journal to be readable', async () => {
-    const sender = {};
-    services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
-    await expect(invoke('canvas:forget', [], sender)).resolves.toBeNull();
-    expect(services.runs.get).not.toHaveBeenCalled();
-    expect(services.runs.forgotten).toHaveBeenCalledWith(sender);
-    expect(services.sessions.canvasForgotten).toHaveBeenCalledWith(sender);
+describe('canvas:* handlers', () => {
+  it('opens a canvas file in the sender’s window, which shows it, its folder restored', async () => {
+    const sender = { id: 7 };
+    const id = newCanvasId();
+    services.canvases.open.mockResolvedValue({ id, name: 'team.corral', text: '{}' });
+    services.projects.restore.mockResolvedValue({ name: 'app', path: '/work/app' });
+    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
+      id,
+      name: 'team.corral',
+      text: '{}',
+      project: { name: 'app', path: '/work/app' },
+    });
+    expect(services.canvases.open).toHaveBeenCalledWith(7);
+    expect(services.runs.opened).toHaveBeenCalledWith(id, undefined);
+    expect(services.windows.show).toHaveBeenCalledWith(sender, id);
+    expect(services.projects.restore).toHaveBeenCalledWith(id);
   });
 
-  it('opens a replacement without reading the rejected journal first', async () => {
-    const sender = {};
-    services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
-    openCanvas.mockResolvedValue({ name: 'replacement.corral', text: '{}' });
-    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
-      name: 'replacement.corral',
+  it('says once why a file opened as a copy, and opens nothing when cancelled', async () => {
+    const id = newCanvasId();
+    const copy = 'team.corral is a copy of a canvas saved as other.corral: it opened as its own.';
+    services.canvases.open.mockResolvedValueOnce({ id, name: 'team.corral', text: '{}', copy });
+    await expect(invoke('canvas:open', [])).resolves.toEqual({
+      id,
+      name: 'team.corral',
       text: '{}',
     });
-    expect(services.runs.get).not.toHaveBeenCalled();
-    expect(services.runs.opened).toHaveBeenCalledWith(sender);
-    expect(services.sessions.canvasOpened).toHaveBeenCalledWith(sender);
+    expect(services.runs.opened).toHaveBeenCalledWith(id, copy);
+    await expect(invoke('canvas:open', [])).resolves.toBeNull();
+    expect(services.windows.show).toHaveBeenCalledOnce();
+  });
+
+  it('saves the sender’s canvas, and its record names the file then', async () => {
+    services.canvases.save.mockResolvedValueOnce('team.corral').mockResolvedValueOnce(null);
+    await expect(invoke('canvas:save', ['{}', true])).resolves.toBe('team.corral');
+    expect(services.canvases.save).toHaveBeenCalledWith(7, CANVAS, '{}', true);
+    expect(services.runs.saved).toHaveBeenCalledWith(CANVAS);
+    // Cancelled: nothing changes.
+    await expect(invoke('canvas:save', ['{}', false])).resolves.toBeNull();
+    expect(services.runs.saved).toHaveBeenCalledOnce();
+  });
+
+  it('begins a new draft in the sender’s window', async () => {
+    const sender = { id: 7 };
+    await expect(invoke('canvas:forget', [], sender)).resolves.toBe(DRAFT);
+    expect(services.windows.show).toHaveBeenCalledWith(sender, DRAFT);
   });
 });
 
-describe('journal barriers', () => {
+describe('canvas replacement after a failed restore', () => {
+  it('starts New without requiring the rejected journal to be readable', async () => {
+    const sender = { id: 7 };
+    services.windows.canvasOf.mockRejectedValue(new Error('Corrupt journal'));
+    await expect(invoke('canvas:forget', [], sender)).resolves.toBe(DRAFT);
+    expect(services.windows.canvasOf).not.toHaveBeenCalled();
+    expect(services.windows.show).toHaveBeenCalledWith(sender, DRAFT);
+  });
+
+  it('opens a replacement without reading the rejected journal first', async () => {
+    const sender = { id: 7 };
+    const id = newCanvasId();
+    services.windows.canvasOf.mockRejectedValue(new Error('Corrupt journal'));
+    services.canvases.open.mockResolvedValue({ id, name: 'replacement.corral', text: '{}' });
+    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
+      id,
+      name: 'replacement.corral',
+      text: '{}',
+    });
+    expect(services.windows.canvasOf).not.toHaveBeenCalled();
+    expect(services.windows.show).toHaveBeenCalledWith(sender, id);
+  });
+});
+
+describe('the sender’s canvas', () => {
   it.each([
     { channel: 'canvas:save', args: ['{}', true], action: 'save' },
     { channel: 'project:choose', args: [], action: 'choose' },
@@ -253,37 +298,36 @@ describe('journal barriers', () => {
       args: ['a', { connection: 'terminal', model: null, mode: null }],
       action: 'start',
     },
-  ])(
-    '$channel waits for ready without restoring the renderer again',
-    async ({ channel, args, action }) => {
-      const sender = {};
-      const ready = Promise.withResolvers<undefined>();
-      services.runs.ready.mockReturnValue(ready.promise);
-      services.runs.get.mockRejectedValue(new Error('Corrupt journal'));
-      saveCanvas.mockResolvedValue('rescued.corral');
-      const called =
-        action === 'save'
-          ? saveCanvas
-          : action === 'choose'
-            ? services.projects.choose
-            : services.sessions.start;
-      const result = Promise.resolve(invoke(channel, args, sender)).then(
-        (value: unknown) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      expect(services.runs.ready).toHaveBeenCalledWith(sender);
-      expect(called).not.toHaveBeenCalled();
-      ready.resolve(undefined);
-      expect(await result).toEqual({ value: action === 'save' ? 'rescued.corral' : null });
-      expect(called).toHaveBeenCalledOnce();
-      expect(called.mock.calls[0]?.[0]).toBe(sender);
-      expect(services.runs.get).not.toHaveBeenCalled();
-      if (action === 'save') {
-        expect(saveCanvas).toHaveBeenCalledWith(sender, '{}', true);
-        expect(services.runs.saved).toHaveBeenCalledWith(sender);
-      }
-    },
-  );
+  ])('$channel acts on it once its window has it', async ({ channel, args, action }) => {
+    const sender = { id: 7 };
+    const shown = Promise.withResolvers<typeof CANVAS>();
+    services.windows.canvasOf.mockReturnValue(shown.promise);
+    services.canvases.save.mockResolvedValue('rescued.corral');
+    const called =
+      action === 'save'
+        ? services.canvases.save
+        : action === 'choose'
+          ? services.projects.choose
+          : services.sessions.start;
+    const result = Promise.resolve(invoke(channel, args, sender)).then(
+      (value: unknown) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    expect(services.windows.canvasOf).toHaveBeenCalledWith(sender);
+    expect(called).not.toHaveBeenCalled();
+    shown.resolve(CANVAS);
+    expect(await result).toEqual({ value: action === 'save' ? 'rescued.corral' : null });
+    expect(called).toHaveBeenCalledOnce();
+    expect(called.mock.calls[0]).toContain(CANVAS);
+  });
+
+  it('is what run:get restores and run:save journals', async () => {
+    await expect(invoke('run:get', [])).resolves.toMatchObject({ id: CANVAS });
+    expect(services.runs.get).toHaveBeenCalledWith(CANVAS);
+    const checkpoint = { version: 2, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
+    await invoke('run:save', ['canvas-token', checkpoint]);
+    expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
+  });
 });
 
 describe('canvas:save handler', () => {
@@ -302,7 +346,7 @@ describe('canvas:save handler', () => {
 describe('project:choose handler', () => {
   it('ends the canvas’s sessions only when another folder is chosen', async () => {
     const sender = {};
-    services.projects.of.mockReturnValue('/work/app');
+    services.projects.of.mockReturnValue(mintTrustedPath('/work/app'));
     services.projects.choose.mockResolvedValueOnce({ name: 'app', path: '/work/app' });
     await invoke('project:choose', [], sender);
     expect(services.sessions.projectChanged).not.toHaveBeenCalled();
@@ -312,7 +356,7 @@ describe('project:choose handler', () => {
       name: 'other',
       path: '/work/other',
     });
-    expect(services.sessions.projectChanged).toHaveBeenCalledWith(sender);
+    expect(services.sessions.projectChanged).toHaveBeenCalledWith(CANVAS);
 
     services.projects.choose.mockResolvedValueOnce(null);
     await expect(invoke('project:choose', [], sender)).resolves.toBeNull();
@@ -326,10 +370,10 @@ describe('project:files handler', () => {
     await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual([]);
     expect(services.files.find).not.toHaveBeenCalled();
 
-    services.projects.of.mockReturnValue('/work/app');
+    services.projects.of.mockReturnValue(mintTrustedPath('/work/app'));
     services.files.find.mockResolvedValueOnce(['src/main/ipc.ts']);
     await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual(['src/main/ipc.ts']);
-    expect(services.projects.of).toHaveBeenCalledWith(sender);
+    expect(services.projects.of).toHaveBeenCalledWith(CANVAS);
     expect(services.files.find).toHaveBeenCalledWith('/work/app', 'ipc', MAX_FILE_MATCHES);
   });
 
@@ -349,83 +393,83 @@ describe('session:* handlers', () => {
     const sender = {};
     const options = { connection: 'sdk', model: 'opus', mode: 'plan' };
     await invoke('session:start', ['a', options], sender);
-    const [contents, agentId, given] = services.sessions.start.mock.calls[0] ?? [];
-    expect([contents, agentId, given]).toEqual([sender, 'a', options]);
+    const [canvas, agentId, given] = services.sessions.start.mock.calls[0] ?? [];
+    expect([canvas, agentId, given]).toEqual([CANVAS, 'a', options]);
     // Built afresh: nothing the renderer sent is passed on as it came.
     expect(given).not.toBe(options);
     // No model or mode chosen: main's to decide (what the agent last chose, or the user's own).
     const unchosen = { connection: 'terminal', model: null, mode: null };
     await invoke('session:start', ['b', unchosen], sender);
-    expect(services.sessions.start).toHaveBeenLastCalledWith(sender, 'b', unchosen);
+    expect(services.sessions.start).toHaveBeenLastCalledWith(CANVAS, 'b', unchosen);
 
     await invoke('session:send', ['a', { id: 'm1', text: 'Hi' }], sender);
-    expect(services.sessions.send).toHaveBeenCalledWith(sender, 'a', { id: 'm1', text: 'Hi' });
+    expect(services.sessions.send).toHaveBeenCalledWith(CANVAS, 'a', { id: 'm1', text: 'Hi' });
     // A pasted image may be all a message is.
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
     await invoke('session:send', ['a', { id: 'm2', text: '', images: [image] }], sender);
-    expect(services.sessions.send).toHaveBeenLastCalledWith(sender, 'a', {
+    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
       id: 'm2',
       text: '',
       images: [image],
     });
     await invoke('session:answer', ['a', 'p1', { kind: 'question', answers: ['Yes'] }], sender);
-    expect(services.sessions.answer).toHaveBeenCalledWith(sender, 'a', 'p1', {
+    expect(services.sessions.answer).toHaveBeenCalledWith(CANVAS, 'a', 'p1', {
       kind: 'question',
       answers: ['Yes'],
     });
     const plan = { kind: 'plan', answer: { approve: false, feedback: 'Smaller steps' } };
     await invoke('session:answer', ['a', 'p2', plan], sender);
-    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'p2', plan);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'p2', plan);
     await invoke('session:interrupt', ['a'], sender);
-    expect(services.sessions.interrupt).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.interrupt).toHaveBeenCalledWith(CANVAS, 'a');
     await invoke('session:mode', ['a', 'bypassPermissions'], sender);
-    expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'bypassPermissions');
+    expect(services.sessions.setMode).toHaveBeenCalledWith(CANVAS, 'a', 'bypassPermissions');
     await invoke('session:model', ['a', 'claude-haiku-5-5[1m]'], sender);
-    expect(services.sessions.setModel).toHaveBeenCalledWith(sender, 'a', 'claude-haiku-5-5[1m]');
+    expect(services.sessions.setModel).toHaveBeenCalledWith(CANVAS, 'a', 'claude-haiku-5-5[1m]');
     await invoke('session:effort', ['a', 'xhigh'], sender);
-    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'xhigh');
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(CANVAS, 'a', 'xhigh');
     await invoke('session:effort', ['a', null], sender);
-    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(CANVAS, 'a', null);
     await invoke('session:stopTask', ['a', 'b1'], sender);
-    expect(services.sessions.stopTask).toHaveBeenCalledWith(sender, 'a', 'b1');
+    expect(services.sessions.stopTask).toHaveBeenCalledWith(CANVAS, 'a', 'b1');
     // Denied, with what to do instead.
     const denied = { kind: 'permission', answer: 'deny', feedback: 'Use pnpm' };
     await invoke('session:answer', ['a', 'p3', denied], sender);
-    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'p3', denied);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'p3', denied);
     await invoke('session:close', ['a'], sender);
-    expect(services.sessions.close).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.close).toHaveBeenCalledWith(CANVAS, 'a');
     await invoke('session:fresh', ['a', 'codex'], sender);
-    expect(services.sessions.fresh).toHaveBeenCalledWith(sender, 'a', 'codex');
+    expect(services.sessions.fresh).toHaveBeenCalledWith(CANVAS, 'a', 'codex');
     const form = { kind: 'elicitation', action: 'accept', values: { repo: 'acme/shop', n: 2 } };
     await invoke('session:answer', ['a', 'e1', form], sender);
-    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'e1', form);
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'e1', form);
     await invoke('session:answer', ['a', 'e2', { kind: 'elicitation', action: 'decline' }], sender);
-    expect(services.sessions.answer).toHaveBeenLastCalledWith(sender, 'a', 'e2', {
+    expect(services.sessions.answer).toHaveBeenLastCalledWith(CANVAS, 'a', 'e2', {
       kind: 'elicitation',
       action: 'decline',
     });
     await invoke('session:rewind-preview', ['a', 'm1'], sender);
-    expect(services.sessions.previewRewind).toHaveBeenCalledWith(sender, 'a', 'm1');
+    expect(services.sessions.previewRewind).toHaveBeenCalledWith(CANVAS, 'a', 'm1');
     await invoke('session:rewind', ['a', 'm1', 'conversation'], sender);
-    expect(services.sessions.rewind).toHaveBeenCalledWith(sender, 'a', 'm1', 'conversation');
+    expect(services.sessions.rewind).toHaveBeenCalledWith(CANVAS, 'a', 'm1', 'conversation');
     await invoke('session:mcp', ['a'], sender);
-    expect(services.sessions.mcpServers).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.mcpServers).toHaveBeenCalledWith(CANVAS, 'a');
     await invoke('session:mcp-change', ['a', 'github', 'reconnect'], sender);
     expect(services.sessions.changeMcpServer).toHaveBeenCalledWith(
-      sender,
+      CANVAS,
       'a',
       'github',
       'reconnect',
     );
     await invoke('session:list', ['a'], sender);
-    expect(services.sessions.listSessions).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.listSessions).toHaveBeenCalledWith(CANVAS, 'a');
     // What a CLI's agents can be set to: read for the canvas the renderer shows.
     await invoke('session:options', ['codex'], sender);
-    expect(services.sessions.settingsOptions).toHaveBeenCalledWith(sender, 'codex');
+    expect(services.sessions.settingsOptions).toHaveBeenCalledWith(CANVAS, 'codex');
     // Which conversations it may open is main's to say (it listed them): the id goes on.
     await invoke('session:resume', ['a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11'], sender);
     expect(services.sessions.resumeSession).toHaveBeenCalledWith(
-      sender,
+      CANVAS,
       'a',
       '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
     );
@@ -435,10 +479,10 @@ describe('session:* handlers', () => {
     const sender = {};
     const options = { connection: 'app-server', model: 'gpt-6-luna', mode: 'full-access' };
     await invoke('session:start', ['a', options], sender);
-    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    expect(services.sessions.start).toHaveBeenCalledWith(CANVAS, 'a', options);
     await invoke('session:start', ['b', { ...options, connection: 'codex-terminal' }], sender);
     await invoke('session:mode', ['a', 'read-only'], sender);
-    expect(services.sessions.setMode).toHaveBeenCalledWith(sender, 'a', 'read-only');
+    expect(services.sessions.setMode).toHaveBeenCalledWith(CANVAS, 'a', 'read-only');
   });
 
   it('start sessions at a reasoning effort, and switch it (or back to the model’s default)', async () => {
@@ -450,11 +494,11 @@ describe('session:* handlers', () => {
       effort: 'xhigh',
     };
     await invoke('session:start', ['a', options], sender);
-    expect(services.sessions.start).toHaveBeenCalledWith(sender, 'a', options);
+    expect(services.sessions.start).toHaveBeenCalledWith(CANVAS, 'a', options);
     await invoke('session:effort', ['a', 'low'], sender);
-    expect(services.sessions.setEffort).toHaveBeenCalledWith(sender, 'a', 'low');
+    expect(services.sessions.setEffort).toHaveBeenCalledWith(CANVAS, 'a', 'low');
     await invoke('session:effort', ['a', null], sender);
-    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(sender, 'a', null);
+    expect(services.sessions.setEffort).toHaveBeenLastCalledWith(CANVAS, 'a', null);
   });
 
   const start = { connection: 'terminal', model: null, mode: 'manual' };
@@ -700,17 +744,17 @@ describe('terminal:* handlers', () => {
   it('pass checked arguments on, for the renderer that sent them', async () => {
     const sender = {};
     await invoke('terminal:attach', ['a'], sender);
-    expect(services.sessions.attachTerminal).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.attachTerminal).toHaveBeenCalledWith(CANVAS, 'a');
     // Keystrokes are keys: control characters included.
     await invoke('terminal:input', ['a', '\x1b[Z\x03'], sender);
-    expect(services.sessions.inputTerminal).toHaveBeenCalledWith(sender, 'a', '\x1b[Z\x03');
+    expect(services.sessions.inputTerminal).toHaveBeenCalledWith(CANVAS, 'a', '\x1b[Z\x03');
     await invoke('terminal:resize', ['a', 120, 40], sender);
-    expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(sender, 'a', 120, 40);
+    expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(CANVAS, 'a', 120, 40);
     await invoke('terminal:detach', ['a'], sender);
-    expect(services.sessions.detachTerminal).toHaveBeenCalledWith(sender, 'a');
+    expect(services.sessions.detachTerminal).toHaveBeenCalledWith(CANVAS, 'a');
     // The paths of files dropped (as the preload read them), checked: main sees if they are there.
     await invoke('terminal:drop', ['a', ['/Users/me/Screen Shot.png']], sender);
-    expect(services.sessions.dropOnTerminal).toHaveBeenCalledWith(sender, 'a', [
+    expect(services.sessions.dropOnTerminal).toHaveBeenCalledWith(CANVAS, 'a', [
       '/Users/me/Screen Shot.png',
     ]);
   });
@@ -821,12 +865,13 @@ describe('usage:* handlers', () => {
 });
 
 describe('run journal channels', () => {
-  const checkpoint = { version: 1, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
-  it('uses the sender and generation token, never a renderer-supplied path', async () => {
-    const sender = {};
+  const checkpoint = { version: 2, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
+  it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
+    const sender = { id: 7 };
     await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });
     await invoke('run:save', ['canvas-token', checkpoint], sender);
-    expect(services.runs.save).toHaveBeenCalledWith(sender, 'canvas-token', checkpoint);
+    expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
+    // The shutdown handshake is the window's.
     await invoke('run:ready', ['request', null], sender);
     expect(services.shutdown.ready).toHaveBeenCalledWith(sender, 'request', null);
   });

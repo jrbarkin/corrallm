@@ -1,23 +1,26 @@
 import path from 'node:path';
 
 import { app, BrowserWindow, dialog, session, shell } from 'electron';
-import type { MessageBoxOptions, WebContents } from 'electron';
+import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
+import { CanvasFiles } from './canvas';
 import { Closing } from './closing';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
+import { LinkOpener } from './host/links';
+import { FileRevealer } from './host/reveal';
+import { hostServices } from './host/services';
+import { Windows } from './host/windows';
 import { registerIpcHandlers, sendEvent } from './ipc';
-import { LinkOpener } from './links';
 import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
 import { ProjectFolders } from './project';
-import { FileRevealer } from './reveal';
 import { RunJournal } from './run-journal';
 import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
-import { planConsent, Settings } from './settings';
+import { Settings } from './settings';
 import { createConnectors, createOptions } from './sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
 import { installedClis } from './sessions/installed';
@@ -103,25 +106,25 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      // What main remembers of canvas files, their project folders, and their agents' sessions.
+      // What main remembers of each canvas: its file, its project folder, its agents' conversations.
       const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
       // What the user chose for the app as a whole.
       const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
-      const reloading = new WeakMap<WebContents, Promise<void>>();
-      const runs: RunJournal = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
+      const canvases = new CanvasFiles({ host: hostServices, memory });
+      const projects = new ProjectFolders({ host: hostServices, memory });
+      const runs = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
         memory,
-        projectOf: (contents) => projects.of(contents),
-        settled: async (contents) => {
-          await reloading.get(contents);
-        },
-        restored: async (contents) => {
-          await sessions.canvasOpened(contents);
-          await projects.restore(contents);
-        },
+        projectOf: (canvas) => projects.of(canvas),
       });
-      const projects: ProjectFolders = new ProjectFolders(memory, (contents) =>
-        runs.identity(contents),
-      );
+      // Which canvas each window shows: a new window shows the one the profile had open last.
+      const windows: Windows = new Windows(trustedOrigin, {
+        restore: async () => {
+          const canvas = await runs.last();
+          await projects.restore(canvas);
+          return canvas;
+        },
+        left: (canvas) => sessions.closeCanvas(canvas),
+      });
       const shutdown = new RunShutdown((contents, requestId) => {
         sendEvent(contents, 'run:stopping', requestId);
       });
@@ -144,7 +147,7 @@ function main(): void {
           fake: fakeSessions,
           clientApp: `${app.getName()}/${app.getVersion()}`,
           distribution: CORRALLM_DISTRIBUTION,
-          consent: planConsent(settings),
+          consent: (adapter, key) => settings.consent(adapter, key),
           usage: (backend, windows) => {
             usage.take(backend, windows);
           },
@@ -153,14 +156,17 @@ function main(): void {
         options: createOptions({ fake: fakeSessions }),
         // The conversations Claude Code kept, whichever connection ran them.
         conversations: new Conversations(),
-        projectOf: (contents) => projects.of(contents),
-        canvasOf: (contents) => runs.identity(contents),
+        projectOf: (canvas) => projects.of(canvas),
         memory,
-        emit: (contents, agentId, connection, event) => {
-          sendEvent(contents, 'session:event', agentId, connection, event);
+        emit: (canvas, agentId, connection, event) => {
+          for (const contents of windows.showing(canvas)) {
+            sendEvent(contents, 'session:event', agentId, connection, event);
+          }
         },
-        terminal: (contents, agentId, event) => {
-          sendEvent(contents, 'terminal:event', agentId, event);
+        terminal: (canvas, agentId, event) => {
+          for (const contents of windows.showing(canvas)) {
+            sendEvent(contents, 'terminal:event', agentId, event);
+          }
         },
       });
       const files = new ProjectFiles({ environment: agentsEnvironment });
@@ -189,12 +195,14 @@ function main(): void {
       const clis = { installed: async () => installedClis(await agentsEnvironment()) };
       // file:// links in a terminal: shown in the file manager, if in the project folder.
       const reveal = new FileRevealer({
-        folderOf: (contents) => projects.of(contents),
+        folderOf: (canvas) => projects.of(canvas),
         show: (file) => {
           shell.showItemInFolder(file);
         },
       });
       registerIpcHandlers(trustedOrigin, {
+        windows,
+        canvases,
         runs,
         shutdown,
         projects,
@@ -207,10 +215,10 @@ function main(): void {
       });
 
       // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.
-      const persistWindows = async (windows: BrowserWindow[]) => {
+      const persistWindows = async (closing: BrowserWindow[]) => {
         await Promise.all(
-          windows.map((window) =>
-            runs.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
+          closing.map((window) =>
+            windows.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
           ),
         );
         await runs.flush();
@@ -255,24 +263,11 @@ function main(): void {
       app.on('before-quit', (event) => {
         if (!quit.request()) event.preventDefault();
       });
-      // macOS window close does not quit the app, but must save/freeze the run all the same.
       app.on('browser-window-created', (_event, window) => {
-        window.webContents.on('did-start-navigation', (event) => {
-          if (
-            !event.isMainFrame ||
-            event.isSameDocument ||
-            originKey(event.url) !== trustedOrigin ||
-            !runs.has(window.webContents)
-          )
-            return;
-          // Reload keeps this canvas identity but ends its old native processes. New run:get
-          // waits for their graceful exit and for queued journal writes before restoring.
-          const closing = sessions.closeEverything();
-          reloading.set(window.webContents, closing);
-          void closing.catch((error: unknown) => {
-            console.error('Could not close before reload:', error);
-          });
-        });
+        // A reload keeps the window's canvas but ends its sessions (run:get waits for them to
+        // close before restoring); a crash or close ends them too.
+        windows.watch(window.webContents);
+        // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({
           save: () => persistWindows([window]),
           abandon,

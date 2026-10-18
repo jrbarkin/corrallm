@@ -30,9 +30,10 @@ export interface Connectors {
  * (sessions/terminal/, sessions/sdk/) and Codex's (sessions/codex/terminal/,
  * sessions/codex/app-server/). With `fake`, every connection runs the fake connector instead (e2e
  * tests, unpackaged builds only). `clientApp`: what the CLI is told runs it ("corrallm/0.1.0").
- * `distribution` and `consent`: how this build is offered, and the user's say on running Codex's
- * app server on their ChatGPT plan (codex/login.ts). `usage` takes the usage readings their CLIs
- * report (main's UsageReadings: usage.ts).
+ * `distribution` and `consent`: how this build is offered, and the consents only the user gives,
+ * by adapter and key (settings.ts), as their say on running Codex's app server on their ChatGPT
+ * plan (codex/login.ts). `usage` takes the usage readings their CLIs report (main's
+ * UsageReadings: usage.ts).
  */
 export function createConnectors({
   fake,
@@ -44,7 +45,7 @@ export function createConnectors({
   fake: boolean;
   clientApp: string;
   distribution: Distribution;
-  consent: PlanConsent;
+  consent: (adapter: string, key: string) => PlanConsent;
   usage?: (backend: UsageBackend, windows: UsageWindows) => void;
 }): Connectors {
   if (fake) {
@@ -65,7 +66,12 @@ export function createConnectors({
     terminal: new TerminalConnector(readings),
     sdk: new SdkConnector({ clientApp }),
     'codex-terminal': new CodexTerminalConnector(readings),
-    'app-server': new AppServerConnector({ clientApp, distribution, consent, ...readings }),
+    'app-server': new AppServerConnector({
+      clientApp,
+      distribution,
+      consent: consent('codex', 'plan'),
+      ...readings,
+    }),
   } satisfies Record<Connection, Connector<SessionMode>>;
 }
 

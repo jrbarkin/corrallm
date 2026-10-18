@@ -1,84 +1,107 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { BrowserWindow, dialog } from 'electron';
-import type { OpenDialogOptions, SaveDialogOptions, WebContents } from 'electron';
-
+import { canvasIdOf, newCanvasId } from '../shared/canvas';
+import type { CanvasId } from '../shared/canvas';
 import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/ipc';
-import type { CanvasFile } from '../shared/ipc';
+import type { HostServices, TrustedPath, WindowId } from './core/host';
+import type { CanvasMemory } from './memory';
 import { writeWhole } from './memory';
 
 /*
  * Canvas files on disk, for the canvas:* channels. The renderer never names a path: it gets a
- * file's name and text, and main remembers, per renderer, which file its canvas is, so a save can
- * only write where the user picked in a dialog.
+ * file's name and text, and main remembers which file each canvas is (memory.ts, by the canvas's
+ * id), so a save can only write where the user picked in a dialog.
+ *
+ * A canvas's id is in its file. Opening a file makes it that canvas, unless the canvas is kept in
+ * another file that still holds its id (the original after Save As, or a copy made in the Finder):
+ * then it opens as a copy, with an id of its own, which it keeps the next time it opens. A moved or
+ * renamed file keeps its canvas.
  */
 
-const FILTERS = [{ name: 'corrallm canvas', extensions: [CANVAS_EXTENSION] }];
+export interface CanvasFilesDeps {
+  /** The Open and Save dialogs (host/dialogs.ts). */
+  host: Pick<HostServices, 'pickCanvasToOpen' | 'pickCanvasToSave'>;
+  memory: CanvasMemory;
+}
 
-/** The file each renderer's canvas was opened from or last saved to. */
-const files = new WeakMap<WebContents, string>();
+/** A canvas file opened: its canvas, its name and text, and why it opened as a copy, if it did. */
+export interface OpenedCanvas {
+  id: CanvasId;
+  name: string;
+  text: string;
+  copy?: string;
+}
 
-/** The Open dialog, then the file picked: its name and text. Null if cancelled. */
-export async function openCanvas(contents: WebContents): Promise<CanvasFile | null> {
-  const options: OpenDialogOptions = { properties: ['openFile'], filters: FILTERS };
-  const window = BrowserWindow.fromWebContents(contents);
-  const { canceled, filePaths } = window
-    ? await dialog.showOpenDialog(window, options)
-    : await dialog.showOpenDialog(options);
-  const [file] = filePaths;
-  if (canceled || file === undefined) return null;
+export class CanvasFiles {
+  readonly #deps: CanvasFilesDeps;
+
+  constructor(deps: CanvasFilesDeps) {
+    this.#deps = deps;
+  }
+
+  /** The Open dialog on `window`, then the file picked, as a canvas. Null if cancelled. */
+  async open(window: WindowId): Promise<OpenedCanvas | null> {
+    const file = await this.#deps.host.pickCanvasToOpen(window);
+    if (file === null) return null;
+    const text = await read(file);
+    const own = canvasIdOf(text);
+    const { memory } = this.#deps;
+    const kept = await memory.canvasWithFile(file);
+    if (kept !== undefined) return { id: kept, name: path.basename(file), text };
+    const owner = (await memory.get(own)).file;
+    if (owner !== undefined && owner !== file && (await holds(owner, own))) {
+      const id = newCanvasId();
+      await memory.setFile(id, file);
+      return {
+        id,
+        name: path.basename(file),
+        text,
+        copy: `${path.basename(file)} is a copy of a canvas saved as ${path.basename(owner)}: it opened as a canvas of its own.`,
+      };
+    }
+    await memory.setFile(own, file);
+    return { id: own, name: path.basename(file), text };
+  }
+
+  /**
+   * Writes `text` (the canvas's, by its id) to the canvas's file, or to one picked in the Save
+   * dialog on `window` when it has none or `choose` is true (Save As, which keeps its id). Resolves
+   * with the file's name, or null if cancelled.
+   */
+  async save(
+    window: WindowId,
+    canvas: CanvasId,
+    text: string,
+    choose: boolean,
+  ): Promise<string | null> {
+    if (canvasIdOf(text) !== canvas) throw new Error('This canvas’s text is another canvas’s.');
+    const known = (await this.#deps.memory.get(canvas)).file;
+    let file = choose ? undefined : known;
+    file ??=
+      (await this.#deps.host.pickCanvasToSave(window, known ?? `Untitled.${CANVAS_EXTENSION}`)) ??
+      undefined;
+    if (file === undefined) return null;
+    // Written beside the file, then moved over it, so a failed write never leaves half a canvas.
+    await writeWhole(file, text);
+    await this.#deps.memory.setFile(canvas, file);
+    return path.basename(file);
+  }
+}
+
+/** A canvas file's text, if it is not too large to be one. */
+async function read(file: TrustedPath): Promise<string> {
   if ((await stat(file)).size > MAX_CANVAS_BYTES) {
     throw new Error(`${path.basename(file)} is too large to be a canvas`);
   }
-  const text = await readFile(file, 'utf8');
-  files.set(contents, file);
-  return { name: path.basename(file), text };
+  return readFile(file, 'utf8');
 }
 
-/**
- * Writes `text` to the canvas's file, or to one picked in the Save dialog when it has none or
- * `choose` is true (Save As). Resolves with the file's name, or null if cancelled.
- */
-export async function saveCanvas(
-  contents: WebContents,
-  text: string,
-  choose: boolean,
-): Promise<string | null> {
-  const known = files.get(contents);
-  let file = choose ? undefined : known;
-  if (file === undefined) {
-    const options: SaveDialogOptions = {
-      filters: FILTERS,
-      defaultPath: known ?? `Untitled.${CANVAS_EXTENSION}`,
-    };
-    const window = BrowserWindow.fromWebContents(contents);
-    const { canceled, filePath } = window
-      ? await dialog.showSaveDialog(window, options)
-      : await dialog.showSaveDialog(options);
-    if (canceled || !filePath) return null;
-    file =
-      path.extname(filePath) === `.${CANVAS_EXTENSION}`
-        ? filePath
-        : `${filePath}.${CANVAS_EXTENSION}`;
+/** Whether `file` still holds canvas `id`. */
+async function holds(file: TrustedPath, id: CanvasId): Promise<boolean> {
+  try {
+    return canvasIdOf(await read(file)) === id;
+  } catch {
+    return false;
   }
-  // Written beside the file, then moved over it, so a failed write never leaves half a canvas.
-  await writeWhole(file, text);
-  files.set(contents, file);
-  return path.basename(file);
-}
-
-/** The file the renderer's canvas was opened from or last saved to, if any. */
-export function canvasFile(contents: WebContents): string | undefined {
-  return files.get(contents);
-}
-
-/** Forgets the canvas's file: its next save asks where. */
-export function forgetCanvas(contents: WebContents): void {
-  files.delete(contents);
-}
-
-/** Main-only restoration of a path previously chosen through this app's file dialog. */
-export function associateCanvas(contents: WebContents, file: string): void {
-  files.set(contents, file);
 }

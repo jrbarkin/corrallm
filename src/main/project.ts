@@ -1,81 +1,55 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { BrowserWindow, dialog } from 'electron';
-import type { OpenDialogOptions, WebContents } from 'electron';
-
+import type { CanvasId } from '../shared/canvas';
 import type { ProjectFolder } from '../shared/ipc';
+import type { HostServices, TrustedPath, WindowId } from './core/host';
 import type { CanvasMemory } from './memory';
 
+export interface ProjectFoldersDeps {
+  /** The folder dialog (host/dialogs.ts): the trust gate. */
+  host: Pick<HostServices, 'pickFolder'>;
+  /** Where each canvas's folder is remembered. */
+  memory: CanvasMemory;
+}
+
 /**
- * The folder each renderer's canvas's agents work in: the user picks it in a folder dialog, so
- * agents only ever run where the user chose (the renderer never names a path). It is remembered
- * with the canvas's file (memory.ts), and comes back when that file opens again.
+ * The folder each canvas's agents work in: the user picks it in the folder dialog, so agents only
+ * ever run where the user chose (the renderer never names a path). It is remembered with the canvas
+ * (memory.ts), and comes back when the canvas is shown again.
  */
 export class ProjectFolders {
-  readonly #folders = new WeakMap<WebContents, string>();
-  readonly #memory: CanvasMemory;
-  /** The file a renderer's canvas was opened from or saved to (canvas.ts). */
-  readonly #canvasOf: (contents: WebContents) => string | undefined;
+  readonly #folders = new Map<CanvasId, TrustedPath>();
+  readonly #deps: ProjectFoldersDeps;
 
-  constructor(memory: CanvasMemory, canvasOf: (contents: WebContents) => string | undefined) {
-    this.#memory = memory;
-    this.#canvasOf = canvasOf;
+  constructor(deps: ProjectFoldersDeps) {
+    this.#deps = deps;
   }
 
-  /** The folder the renderer's canvas's agents work in, if one was chosen. */
-  of(contents: WebContents): string | undefined {
-    return this.#folders.get(contents);
+  /** The folder a canvas's agents work in, if one was chosen (and the canvas restored). */
+  of(canvas: CanvasId): TrustedPath | undefined {
+    return this.#folders.get(canvas);
   }
 
-  /** The folder dialog, then the folder picked. Null if cancelled, keeping the folder it had. */
-  async choose(contents: WebContents): Promise<ProjectFolder | null> {
-    const current = this.#folders.get(contents);
-    const options: OpenDialogOptions = {
-      title: 'Project folder',
-      message: 'Choose the folder this canvas’s agents work in',
-      buttonLabel: 'Choose',
-      properties: ['openDirectory', 'createDirectory'],
-      ...(current === undefined ? {} : { defaultPath: current }),
-    };
-    const window = BrowserWindow.fromWebContents(contents);
-    const { canceled, filePaths } = window
-      ? await dialog.showOpenDialog(window, options)
-      : await dialog.showOpenDialog(options);
-    const [folder] = filePaths;
-    if (canceled || folder === undefined) return null;
-    this.#folders.set(contents, folder);
-    await this.remember(contents);
+  /**
+   * The folder dialog, on `window`, then the folder picked, remembered with the canvas. Null if
+   * cancelled, keeping the folder it had.
+   */
+  async choose(window: WindowId, canvas: CanvasId): Promise<ProjectFolder | null> {
+    const folder = await this.#deps.host.pickFolder(window, this.#folders.get(canvas));
+    if (folder === null) return null;
+    this.#folders.set(canvas, folder);
+    await this.#deps.memory.update(canvas, (remembered) => ({ ...remembered, project: folder }));
     return describe(folder);
   }
 
-  /** After a canvas opens: the folder remembered with its file, if it is still there. */
-  async restore(contents: WebContents): Promise<ProjectFolder | undefined> {
-    this.#folders.delete(contents);
-    const file = this.#canvasOf(contents);
-    if (file === undefined) return undefined;
-    const { project } = await this.#memory.get(file);
+  /** As a canvas is shown: the folder remembered with it, if it is still there. */
+  async restore(canvas: CanvasId): Promise<ProjectFolder | undefined> {
+    this.#folders.delete(canvas);
+    const { project } = await this.#deps.memory.get(canvas);
     if (project === undefined || !(await isFolder(project))) return undefined;
-    this.#folders.set(contents, project);
+    this.#folders.set(canvas, project);
     return describe(project);
-  }
-
-  /** Remembers the folder with the canvas's file: after it is chosen, and after a save. */
-  async remember(contents: WebContents): Promise<void> {
-    const file = this.#canvasOf(contents);
-    if (file === undefined) return;
-    const project = this.#folders.get(contents);
-    await this.#memory.update(file, (remembered) => {
-      const next = { ...remembered };
-      if (project === undefined) delete next.project;
-      else next.project = project;
-      return next;
-    });
-  }
-
-  /** Forgets the folder, for a new canvas. */
-  forget(contents: WebContents): void {
-    this.#folders.delete(contents);
   }
 }
 

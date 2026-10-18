@@ -9,11 +9,12 @@ import type { RunShutdown } from './run-shutdown';
 import { MAX_FILE_MATCHES } from '../shared/session';
 import type { InstalledClis } from '../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../shared/usage';
-import { forgetCanvas, openCanvas, saveCanvas } from './canvas';
+import type { CanvasFiles } from './canvas';
 import type { ProjectFiles } from './files';
-import type { LinkOpener } from './links';
+import type { LinkOpener } from './host/links';
+import type { FileRevealer } from './host/reveal';
+import type { Windows } from './host/windows';
 import type { ProjectFolders } from './project';
-import type { FileRevealer } from './reveal';
 import { isTrustedSender } from './security';
 import {
   parseAgentArgs,
@@ -50,13 +51,17 @@ export type IpcHandler<C extends IpcChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on besides canvas files: project folders, their files, links to open (and
- * project files to show), sessions, the CLIs the user has, and usage.
+ * What the handlers act on: which canvas each window shows, canvas files, runs, project folders,
+ * their files, links to open (and project files to show), sessions, the CLIs the user has, and
+ * usage. Every service but the window map knows canvases by their ids, never windows: a handler
+ * looks up the sender's canvas first.
  */
 export interface IpcServices {
-  runs: Pick<RunJournal, 'ready' | 'get' | 'save' | 'opened' | 'saved' | 'forgotten'>;
+  windows: Pick<Windows, 'canvasOf' | 'show'>;
+  canvases: Pick<CanvasFiles, 'open' | 'save'>;
+  runs: Pick<RunJournal, 'get' | 'save' | 'opened' | 'saved' | 'draft'>;
   shutdown: Pick<RunShutdown, 'ready'>;
-  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'remember' | 'forget' | 'of'>;
+  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
@@ -79,9 +84,6 @@ export interface IpcServices {
     | 'settingsOptions'
     | 'previewRewind'
     | 'rewind'
-    | 'canvasOpened'
-    | 'canvasForgotten'
-    | 'canvasSaved'
     | 'projectChanged'
     | 'attachTerminal'
     | 'detachTerminal'
@@ -183,6 +185,8 @@ export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
 }
 
 function createHandlers({
+  windows,
+  canvases,
   runs,
   shutdown,
   projects,
@@ -193,9 +197,11 @@ function createHandlers({
   clis,
   usage,
 }: IpcServices): HandlerTable {
+  /** The canvas the sender's window shows: what every canvas's channel acts on. */
+  const of = (contents: WebContents) => windows.canvasOf(contents);
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
-    'run:get': { parseArgs: noArgs, handler: ({ contents }) => runs.get(contents) },
+    'run:get': { parseArgs: noArgs, handler: async ({ contents }) => runs.get(await of(contents)) },
     'run:save': {
       parseArgs: (args) => {
         if (args.length !== 2 || typeof args[0] !== 'string' || args[0].length > 100) {
@@ -204,7 +210,7 @@ function createHandlers({
         return [args[0], args[1] === null ? null : parseRunCheckpoint(args[1])];
       },
       handler: async ({ contents }, token, checkpoint) => {
-        await runs.save(contents, token, checkpoint);
+        await runs.save(await of(contents), token, checkpoint);
         return null;
       },
     },
@@ -229,62 +235,56 @@ function createHandlers({
     'canvas:open': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
-        // Explicit replacement must also work when the previous journal cannot be read.
-        const file = await openCanvas(contents);
-        if (file === null) return null;
-        await runs.opened(contents);
+        // It works even when the canvas before could not be restored.
+        const opened = await canvases.open(contents.id);
+        if (opened === null) return null;
+        const { id, name, text, copy } = opened;
+        await runs.opened(id, copy);
         // Another canvas: the old one's sessions end, and the new one's folder comes back.
-        await sessions.canvasOpened(contents);
-        const project = await projects.restore(contents);
-        return project ? { ...file, project } : file;
+        await windows.show(contents, id);
+        const project = await projects.restore(id);
+        return { id, name, text, ...(project ? { project } : {}) };
       },
     },
     'canvas:save': {
       parseArgs: parseSaveArgs,
       handler: async ({ contents }, text, choose) => {
-        await runs.ready(contents);
-        const name = await saveCanvas(contents, text, choose);
-        if (name !== null) {
-          await runs.saved(contents);
-          await projects.remember(contents);
-          await sessions.canvasSaved(contents);
-        }
+        const canvas = await of(contents);
+        const name = await canvases.save(contents.id, canvas, text, choose);
+        if (name !== null) await runs.saved(canvas);
         return name;
       },
     },
     'canvas:forget': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
-        // New preserves the old journal and starts a fresh identity, even after a bad restore.
-        forgetCanvas(contents);
-        await runs.forgotten(contents);
-        projects.forget(contents);
-        await sessions.canvasForgotten(contents);
-        return null;
+        // New keeps the canvas before as it was, even one that could not be restored.
+        const draft = await runs.draft();
+        await windows.show(contents, draft);
+        return draft;
       },
     },
     'project:choose': {
       parseArgs: noArgs,
       handler: async ({ contents }) => {
-        await runs.ready(contents);
-        const before = projects.of(contents);
-        const chosen = await projects.choose(contents);
-        if (chosen !== null && chosen.path !== before) await sessions.projectChanged(contents);
+        const canvas = await of(contents);
+        const before = projects.of(canvas);
+        const chosen = await projects.choose(contents.id, canvas);
+        if (chosen !== null && chosen.path !== before) await sessions.projectChanged(canvas);
         return chosen;
       },
     },
     'project:files': {
       parseArgs: parseFilesArgs,
       handler: async ({ contents }, query) => {
-        const folder = projects.of(contents);
+        const folder = projects.of(await of(contents));
         return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
       },
     },
     'session:start': {
       parseArgs: parseStartArgs,
       handler: async ({ contents }, agentId, options) => {
-        await runs.ready(contents);
-        await sessions.start(contents, agentId, options);
+        await sessions.start(await of(contents), agentId, options);
         return null;
       },
     },
@@ -292,118 +292,118 @@ function createHandlers({
     'session:send': {
       parseArgs: parseSendArgs,
       handler: async ({ contents }, agentId, message) => {
-        await sessions.send(contents, agentId, message);
+        await sessions.send(await of(contents), agentId, message);
         return null;
       },
     },
     'session:answer': {
       parseArgs: parseAnswerArgs,
       handler: async ({ contents }, agentId, promptId, answer) => {
-        await sessions.answer(contents, agentId, promptId, answer);
+        await sessions.answer(await of(contents), agentId, promptId, answer);
         return null;
       },
     },
     'session:interrupt': {
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
-        await sessions.interrupt(contents, agentId);
+        await sessions.interrupt(await of(contents), agentId);
         return null;
       },
     },
     'session:mode': {
       parseArgs: parseModeArgs,
       handler: async ({ contents }, agentId, mode) => {
-        await sessions.setMode(contents, agentId, mode);
+        await sessions.setMode(await of(contents), agentId, mode);
         return null;
       },
     },
     'session:model': {
       parseArgs: parseModelArgs,
       handler: async ({ contents }, agentId, model) => {
-        await sessions.setModel(contents, agentId, model);
+        await sessions.setModel(await of(contents), agentId, model);
         return null;
       },
     },
     'session:effort': {
       parseArgs: parseEffortArgs,
       handler: async ({ contents }, agentId, effort) => {
-        await sessions.setEffort(contents, agentId, effort);
+        await sessions.setEffort(await of(contents), agentId, effort);
         return null;
       },
     },
     'session:stopTask': {
       parseArgs: parseStopTaskArgs,
       handler: async ({ contents }, agentId, taskId) => {
-        await sessions.stopTask(contents, agentId, taskId);
+        await sessions.stopTask(await of(contents), agentId, taskId);
         return null;
       },
     },
     'session:close': {
       parseArgs: parseAgentArgs,
       handler: async ({ contents }, agentId) => {
-        await sessions.close(contents, agentId);
+        await sessions.close(await of(contents), agentId);
         return null;
       },
     },
     'session:fresh': {
       parseArgs: parseFreshArgs,
       handler: async ({ contents }, agentId, cli) => {
-        await sessions.fresh(contents, agentId, cli);
+        await sessions.fresh(await of(contents), agentId, cli);
         return null;
       },
     },
     'session:list': {
       parseArgs: parseAgentArgs,
-      handler: ({ contents }, agentId) => sessions.listSessions(contents, agentId),
+      handler: async ({ contents }, agentId) => sessions.listSessions(await of(contents), agentId),
     },
     'session:resume': {
       parseArgs: parseResumeArgs,
       handler: async ({ contents }, agentId, sessionId) => {
-        await sessions.resumeSession(contents, agentId, sessionId);
+        await sessions.resumeSession(await of(contents), agentId, sessionId);
         return null;
       },
     },
     'session:rewind-preview': {
       parseArgs: parseRewindPreviewArgs,
-      handler: ({ contents }, agentId, messageId) =>
-        sessions.previewRewind(contents, agentId, messageId),
+      handler: async ({ contents }, agentId, messageId) =>
+        sessions.previewRewind(await of(contents), agentId, messageId),
     },
     'session:rewind': {
       parseArgs: parseRewindArgs,
-      handler: ({ contents }, agentId, messageId, restore) =>
-        sessions.rewind(contents, agentId, messageId, restore),
+      handler: async ({ contents }, agentId, messageId, restore) =>
+        sessions.rewind(await of(contents), agentId, messageId, restore),
     },
     'session:options': {
       parseArgs: parseOptionsArgs,
-      handler: ({ contents }, cli) => sessions.settingsOptions(contents, cli),
+      handler: async ({ contents }, cli) => sessions.settingsOptions(await of(contents), cli),
     },
     'session:mcp': {
       parseArgs: parseAgentArgs,
-      handler: ({ contents }, agentId) => sessions.mcpServers(contents, agentId),
+      handler: async ({ contents }, agentId) => sessions.mcpServers(await of(contents), agentId),
     },
     'session:mcp-change': {
       parseArgs: parseMcpChangeArgs,
-      handler: ({ contents }, agentId, server, change) =>
-        sessions.changeMcpServer(contents, agentId, server, change),
+      handler: async ({ contents }, agentId, server, change) =>
+        sessions.changeMcpServer(await of(contents), agentId, server, change),
     },
     'terminal:attach': {
       parseArgs: parseAgentArgs,
-      handler: ({ contents }, agentId) => {
-        sessions.attachTerminal(contents, agentId);
+      handler: async ({ contents }, agentId) => {
+        sessions.attachTerminal(await of(contents), agentId);
         return null;
       },
     },
     'terminal:detach': {
       parseArgs: parseAgentArgs,
-      handler: ({ contents }, agentId) => {
-        sessions.detachTerminal(contents, agentId);
+      handler: async ({ contents }, agentId) => {
+        sessions.detachTerminal(await of(contents), agentId);
         return null;
       },
     },
     'terminal:input': {
       parseArgs: parseTerminalInputArgs,
       handler: async ({ contents }, agentId, data) => {
-        await sessions.inputTerminal(contents, agentId, data);
+        await sessions.inputTerminal(await of(contents), agentId, data);
         return null;
       },
     },
@@ -413,19 +413,19 @@ function createHandlers({
     },
     'link:reveal': {
       parseArgs: parseLinkArgs,
-      handler: ({ contents }, url) => reveal.reveal(contents, url),
+      handler: async ({ contents }, url) => reveal.reveal(await of(contents), url),
     },
     'terminal:resize': {
       parseArgs: parseTerminalResizeArgs,
       handler: async ({ contents }, agentId, cols, rows) => {
-        await sessions.resizeTerminal(contents, agentId, cols, rows);
+        await sessions.resizeTerminal(await of(contents), agentId, cols, rows);
         return null;
       },
     },
     'terminal:drop': {
       parseArgs: parseTerminalDropArgs,
       handler: async ({ contents }, agentId, paths) => {
-        await sessions.dropOnTerminal(contents, agentId, paths);
+        await sessions.dropOnTerminal(await of(contents), agentId, paths);
         return null;
       },
     },

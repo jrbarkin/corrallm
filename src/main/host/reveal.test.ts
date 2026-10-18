@@ -3,12 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { WebContents } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { newCanvasId } from '../../shared/canvas';
 import { FileRevealer, revealTarget } from './reveal';
-
-vi.mock('electron', () => ({}));
 
 let root: string;
 /** The project folder, with notes.txt and src/app.ts in it, and links out of it. */
@@ -77,18 +75,18 @@ describe('a file:// link revealed in the file manager', () => {
     for (const raw of inert) await expect(revealTarget(raw, project)).resolves.toBeNull();
   });
 
-  it('is shown for the renderer whose canvas has the folder, and never otherwise', async () => {
+  it('is shown for the canvas that has the folder, and never otherwise', async () => {
     const show = vi.fn<(file: string) => void>();
-    const contents = {} as WebContents;
-    const another = {} as WebContents;
-    const folders = new Map([[contents, project]]);
+    const canvas = newCanvasId();
+    const another = newCanvasId();
+    const folders = new Map([[canvas, project]]);
     const revealer = new FileRevealer({ folderOf: (of) => folders.get(of), show });
     const notes = link(path.join(project, 'notes.txt'));
     // Another canvas, with no project folder chosen: nothing to reveal.
     await expect(revealer.reveal(another, notes)).resolves.toBe(false);
-    await expect(revealer.reveal(contents, notes)).resolves.toBe(true);
+    await expect(revealer.reveal(canvas, notes)).resolves.toBe(true);
     expect(show).toHaveBeenCalledWith(path.join(project, 'notes.txt'));
-    await expect(revealer.reveal(contents, link(path.join(outside, 'secret.txt')))).resolves.toBe(
+    await expect(revealer.reveal(canvas, link(path.join(outside, 'secret.txt')))).resolves.toBe(
       false,
     );
     expect(show).toHaveBeenCalledTimes(1);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { CONNECTIONS } from '../../shared/session';
 import { AGENT_CONNECTIONS, CONNECTED_AGENTS, connectionOf, defaultConnection } from './agents';
 import { fromFile, toFile } from './file';
@@ -8,7 +9,8 @@ import { addAgent, EMPTY_GRAPH, setAgent, spawnAgent } from './graph';
 const legacy = (agent: 'Claude' | 'Codex' | 'Qwen' | 'Gemini', connection?: string) =>
   JSON.stringify({
     format: 'corrallm',
-    version: 1,
+    version: 2,
+    id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b',
     nodes: [
       {
         id: 'worker',
@@ -59,7 +61,9 @@ describe('native agent defaults', () => {
       expect(graph.nodes[0]?.data.queue).toEqual([
         { id: 'work', message: 'Keep the authored work.' },
       ]);
-      expect(toFile(graph)).toContain('"agent": "' + agent + '"');
+      expect(toFile(graph, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId)).toContain(
+        `"agent": "${agent}"`,
+      );
     },
   );
 });
