@@ -6,9 +6,10 @@ import type { QueueItem } from '../../shared/model/queue';
 import {
   absolutePosition,
   addAgent,
+  documentOf,
+  graphOf,
   addParent,
   addToQueue,
-  areLinked,
   autosize,
   canConnect,
   canUngroup,
@@ -18,16 +19,11 @@ import {
   deleteEdge,
   deleteSelection,
   editMessage,
-  GROUP_COLORS,
   groupColors,
-  EMPTY_FRAME,
   groupMembers,
   groupSelection,
-  HEADER,
-  CARD_SIZE,
   moveInQueue,
   nextLabel,
-  PADDING,
   removeFromQueue,
   renameNode,
   retarget,
@@ -46,7 +42,11 @@ import {
   spawnAgent,
   ungroupSelection,
 } from './graph';
+import { areLinked } from '../../shared/model/queries';
+import { GROUP_COLORS, EMPTY_FRAME, HEADER, CARD_SIZE, PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
+import type { CanvasId } from '../../shared/canvas';
+import type { CanvasDocument } from '../../shared/model/canvas';
 
 /** An item measured at 100×40. */
 function agentNode(id: string, x: number, y: number, extra: Partial<GraphNode> = {}): GraphNode {
@@ -85,7 +85,7 @@ function edge(source: string, target: string, extra: Partial<Edge> = {}): Edge {
 }
 
 /** Freezes the graph deeply, so any mutation by an operation throws. */
-function graphOf(nodes: GraphNode[], edges: Edge[] = []): Graph {
+function frozen(nodes: GraphNode[], edges: Edge[] = []): Graph {
   const freeze = (value: unknown): void => {
     if (typeof value !== 'object' || value === null) return;
     Object.values(value).forEach(freeze);
@@ -169,7 +169,7 @@ describe('nextLabel', () => {
 
 describe('addAgent', () => {
   it('adds a selected item centred on the point and deselects everything else', () => {
-    const g = graphOf([selected(agentNode('a', 0, 0))], [edge('a', 'a', { selected: true })]);
+    const g = frozen([selected(agentNode('a', 0, 0))], [edge('a', 'a', { selected: true })]);
     const result = addAgent(g, 'n', { x: 200, y: 100 });
     expect(get(result, 'n')).toEqual({
       id: 'n',
@@ -188,7 +188,7 @@ describe('addAgent', () => {
   });
 
   it('nudges a node that would land on the corner of another', () => {
-    let g = graphOf([]);
+    let g = frozen([]);
     for (const id of ['a', 'b', 'c']) g = addAgent(g, id, { x: 200, y: 100 });
     expect(g.nodes.map((n) => n.position)).toEqual([
       { x: 125, y: 83 },
@@ -199,7 +199,7 @@ describe('addAgent', () => {
 
   it('adds into the innermost container under the point, which grows to fit it', () => {
     // F at (100, 100) holds G at (120, 152), which holds x at (140, 204).
-    const g = graphOf(
+    const g = frozen(
       autosize([
         frame('F', 100, 100, 0, 0),
         inside('F', frame('G', 20, 52, 0, 0)),
@@ -215,7 +215,7 @@ describe('addAgent', () => {
   });
 
   it('moves a container left and up for a node added past its padding, moving nothing else', () => {
-    const g = graphOf(
+    const g = frozen(
       autosize([
         frame('F', 100, 100, 0, 0),
         inside('F', frame('G', 20, 52, 0, 0)),
@@ -237,7 +237,7 @@ describe('spawnAgent', () => {
 
   it('puts a peer beside the agent, in its row: of its type, selected, and not linked to it', () => {
     const codex = { label: 'a', adapter: 'codex' };
-    const g = graphOf([selected(agentNode('a', 0, 0, { data: codex }))]);
+    const g = frozen([selected(agentNode('a', 0, 0, { data: codex }))]);
     const result = spawnAgent(g, 'a', 'n', 'peer');
     expect(get(result, 'n')).toMatchObject({
       position: { x: 140, y: 0 },
@@ -253,7 +253,7 @@ describe('spawnAgent', () => {
   });
 
   it('puts a linked agent below the agent, linked to it, in a row of the ones linked before', () => {
-    const g = graphOf([agentNode('a', 0, 0)]);
+    const g = frozen([agentNode('a', 0, 0)]);
     const one = spawnAgent(g, 'a', 'n', 'linked');
     expect(get(one, 'n').position).toEqual({ x: 0, y: 100 });
     // Linked as drawing from the agent's bottom dot to the new one's top dot would.
@@ -266,7 +266,7 @@ describe('spawnAgent', () => {
   });
 
   it('steps past every card and group in the way, but not past what is clear of its row', () => {
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0),
       agentNode('b', 150, 20), // overlaps the first spot
       frame('F', 280, -100, 200, 150), // overlaps the spot past b
@@ -276,7 +276,7 @@ describe('spawnAgent', () => {
   });
 
   it("stays in the agent's group, which grows to fit it, moving nothing else", () => {
-    const g = graphOf(autosize([frame('F', 100, 100, 0, 0), inside('F', agentNode('a', 20, 52))]));
+    const g = frozen(autosize([frame('F', 100, 100, 0, 0), inside('F', agentNode('a', 20, 52))]));
     const peer = spawnAgent(g, 'a', 'n', 'peer');
     expect(get(peer, 'n').parentId).toBe('F');
     expect(abs(peer, 'n')).toEqual({ x: abs(g, 'a').x + 140, y: abs(g, 'a').y });
@@ -293,7 +293,7 @@ describe('spawnAgent', () => {
   it('runs a spawned agent with its parent’s native connection, settings and role', () => {
     const settings = { 'claude-code': { model: 'haiku' } };
     const role = 'Review every change before it lands.';
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0, {
         data: { label: 'a', connection: 'claude-code.terminal', settings, role },
       }),
@@ -303,13 +303,13 @@ describe('spawnAgent', () => {
       settings,
       role,
     });
-    const plain = get(spawnAgent(graphOf([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data;
+    const plain = get(spawnAgent(frozen([agentNode('a', 0, 0)]), 'a', 'n', 'peer'), 'n').data;
     expect(plain).not.toHaveProperty('connection');
     expect(plain).not.toHaveProperty('role');
   });
 
   it('spawns only from an agent', () => {
-    const g = graphOf([frame('F', 0, 0, 200, 100)]);
+    const g = frozen([frame('F', 0, 0, 200, 100)]);
     expect(spawnAgent(g, 'F', 'n', 'peer')).toBe(g);
     expect(spawnAgent(g, 'missing', 'n', 'linked')).toBe(g);
   });
@@ -317,20 +317,20 @@ describe('spawnAgent', () => {
 
 describe('renameNode', () => {
   it('renames items and frames, accepting an empty label', () => {
-    const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 0, 100, 100)]);
+    const g = frozen([agentNode('a', 0, 0), frame('F', 0, 0, 100, 100)]);
     expect(get(renameNode(g, 'a', 'Alpha'), 'a').data.label).toBe('Alpha');
     expect(get(renameNode(g, 'F', ''), 'F').data.label).toBe('');
   });
 
   it('returns the same graph when nothing changes', () => {
-    const g = graphOf([agentNode('a', 0, 0)]);
+    const g = frozen([agentNode('a', 0, 0)]);
     expect(renameNode(g, 'a', 'a')).toBe(g);
     expect(renameNode(g, 'missing', 'x')).toBe(g);
   });
 });
 
 describe('queues', () => {
-  const g = graphOf([agentNode('a', 0, 0), agentNode('b', 0, 100)]);
+  const g = frozen([agentNode('a', 0, 0), agentNode('b', 0, 100)]);
   const first = { id: 'q1', action: 'Read' };
   const second = { id: 'q2', action: 'Edit', target: 'b' };
   const third = { id: 'q3', action: 'Bash' };
@@ -618,7 +618,7 @@ describe('setAgent', () => {
         otherwise: 'ask',
       },
     ];
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0, { data: { label: 'a', queue } }),
       agentNode('b', 0, 100),
     ]);
@@ -646,7 +646,7 @@ describe('setAgent', () => {
   });
 
   it("sets a node's agent type; groups have none", () => {
-    const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 100, 200, 200)]);
+    const g = frozen([agentNode('a', 0, 0), frame('F', 0, 100, 200, 200)]);
     const qwen = setAgent(g, 'a', 'qwen');
     expect(get(qwen, 'a').data.adapter).toBe('qwen');
     expect(setAgent(qwen, 'a', 'qwen')).toBe(qwen);
@@ -654,7 +654,7 @@ describe('setAgent', () => {
   });
 
   it('drops a connection the new type does not offer', () => {
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.terminal' } }),
     ]);
     expect(get(setAgent(g, 'a', 'codex'), 'a').data).toEqual({
@@ -666,7 +666,7 @@ describe('setAgent', () => {
 
 describe('setConnection', () => {
   it('switches real connections; unavailable types and groups cannot be connected', () => {
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0),
       agentNode('b', 0, 100, { data: { label: 'b', adapter: 'gemini' } }),
       frame('F', 0, 200, 200, 200),
@@ -686,7 +686,7 @@ describe('setConnection', () => {
 
 describe('setSettings', () => {
   it('sets what an agent runs with by one adapter, keeping the other’s; nothing set leaves nothing', () => {
-    const g = graphOf([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
+    const g = frozen([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
     const claude = setSettings(g, 'a', 'claude-code', { model: 'haiku', mode: 'plan' });
     const both = setSettings(claude, 'a', 'codex', { effort: 'low' });
     expect(get(both, 'a').data.settings).toEqual({
@@ -703,7 +703,7 @@ describe('setSettings', () => {
   it('drops a saved mode the connection an agent switches to does not start in', () => {
     // Codex's App Server starts in Plan; its Terminal only in Read only (Plan is chosen in it).
     const planning = { codex: { model: 'gpt-6-luna', mode: 'plan' } };
-    const g = graphOf([
+    const g = frozen([
       agentNode('a', 0, 0, {
         data: { label: 'a', adapter: 'codex', connection: 'codex.app-server', settings: planning },
       }),
@@ -718,7 +718,7 @@ describe('setSettings', () => {
     expect(get(setConnection(both, 'a', 'codex.terminal'), 'a').data.settings).toEqual(reading);
     // Switching adapter, it runs that adapter's first connection.
     const claude = setSettings(
-      graphOf([agentNode('b', 0, 0, { data: { label: 'b', adapter: 'codex' } })]),
+      frozen([agentNode('b', 0, 0, { data: { label: 'b', adapter: 'codex' } })]),
       'b',
       'codex',
       { mode: 'plan' },
@@ -733,7 +733,7 @@ describe('setSettings', () => {
 
 describe('selectOnly', () => {
   it('selects only that node, deselecting other nodes and every edge', () => {
-    const g = graphOf(
+    const g = frozen(
       [selected(agentNode('a', 0, 0)), selected(agentNode('b', 0, 100)), agentNode('c', 0, 200)],
       [edge('a', 'b', { selected: true })],
     );
@@ -745,13 +745,13 @@ describe('selectOnly', () => {
   });
 
   it('returns the same graph when that node is already the only selected element', () => {
-    const g = graphOf([agentNode('a', 0, 0), selected(agentNode('b', 0, 100))], [edge('a', 'b')]);
+    const g = frozen([agentNode('a', 0, 0), selected(agentNode('b', 0, 100))], [edge('a', 'b')]);
     expect(selectOnly(g, 'b')).toBe(g);
   });
 });
 
 describe('connect', () => {
-  const g = graphOf([
+  const g = frozen([
     agentNode('a', 0, 0),
     agentNode('b', 0, 100),
     frame('F', 300, 0, 200, 200),
@@ -768,11 +768,11 @@ describe('connect', () => {
     expect(ab.edges).toEqual([
       { id: 'a->b', source: 'a', target: 'b', sourceHandle: 'bottom', targetHandle: 'top' },
     ]);
-    expect([areLinked(ab, 'a', 'b'), areLinked(ab, 'b', 'a'), areLinked(g, 'a', 'b')]).toEqual([
-      true,
-      true,
-      false,
-    ]);
+    expect([
+      areLinked(ab.edges, 'a', 'b'),
+      areLinked(ab.edges, 'b', 'a'),
+      areLinked(g.edges, 'a', 'b'),
+    ]).toEqual([true, true, false]);
   });
 
   it('links two agents once, either way round', () => {
@@ -799,7 +799,7 @@ describe('connect', () => {
 
 describe('deleteEdge', () => {
   it('deletes only that edge', () => {
-    const g = graphOf(
+    const g = frozen(
       [agentNode('a', 0, 0), agentNode('b', 0, 100)],
       [edge('a', 'b'), edge('b', 'a')],
     );
@@ -810,7 +810,7 @@ describe('deleteEdge', () => {
 
 describe('deleteSelection', () => {
   it('deletes the selected agents and edges, and the edges of deleted agents', () => {
-    const g = graphOf(
+    const g = frozen(
       [selected(agentNode('a', 0, 0)), agentNode('b', 0, 100), agentNode('c', 0, 200)],
       [edge('a', 'b'), edge('c', 'a'), edge('b', 'c', { selected: true }), edge('c', 'b')],
     );
@@ -820,12 +820,12 @@ describe('deleteSelection', () => {
   });
 
   it('returns the same graph when nothing is selected', () => {
-    const g = graphOf([agentNode('a', 0, 0)], [edge('a', 'a')]);
+    const g = frozen([agentNode('a', 0, 0)], [edge('a', 'a')]);
     expect(deleteSelection(g)).toBe(g);
   });
 
   it('keeps the children of a deleted container, in place, in the nearest surviving ancestor', () => {
-    const g = graphOf([
+    const g = frozen([
       frame('P', 10, 10, 300, 300),
       selected(inside('P', frame('F', 20, 40, 200, 200))),
       inside('F', agentNode('a', 5, 6)),
@@ -843,7 +843,7 @@ describe('deleteSelection', () => {
   });
 
   it('shrinks a container to fit what is left, and an emptied frame to its smallest size', () => {
-    const g = graphOf(
+    const g = frozen(
       autosize([
         frame('F', 100, 100, 0, 0),
         inside('F', agentNode('a', 20, 52)),
@@ -863,7 +863,7 @@ describe('deleteSelection', () => {
   });
 
   it('moves the children of a deleted top-level frame to the top level', () => {
-    const g = graphOf([
+    const g = frozen([
       selected(frame('F', 100, 100, 300, 200)),
       inside('F', agentNode('a', 20, 52)),
     ]);
@@ -872,7 +872,7 @@ describe('deleteSelection', () => {
 
   it('turns a parent node whose last child is deleted back into a plain node, keeping its edges', () => {
     const parent: GraphNode = { ...agentNode('p', 0, 0), width: 300, height: 200 };
-    const g = graphOf(
+    const g = frozen(
       [parent, agentNode('b', 400, 0), selected(inside('p', agentNode('a', 20, 54)))],
       [edge('p', 'b')],
     );
@@ -910,7 +910,7 @@ describe('groupMembers', () => {
 
 describe('groupSelection', () => {
   it('frames top-level nodes without moving them on screen', () => {
-    const g = graphOf(
+    const g = frozen(
       [
         agentNode('x', 900, 900),
         selected(agentNode('a', 100, 100)),
@@ -942,7 +942,7 @@ describe('groupSelection', () => {
   });
 
   it('creates a connectable parent node for the "item" kind', () => {
-    const g = graphOf([
+    const g = frozen([
       selected(agentNode('a', 0, 0, { data: { label: 'Agent 1' } })),
       selected(agentNode('b', 0, 100, { data: { label: 'Agent 2' } })),
     ]);
@@ -964,12 +964,12 @@ describe('groupSelection', () => {
   });
 
   it('groups a single node', () => {
-    const result = groupSelection(graphOf([selected(agentNode('a', 0, 0))]), 'frame', 'F');
+    const result = groupSelection(frozen([selected(agentNode('a', 0, 0))]), 'frame', 'F');
     expect(get(result, 'a').parentId).toBe('F');
   });
 
   it('nests the new container in the shared parent, growing it so nothing moves', () => {
-    const g = graphOf(
+    const g = frozen(
       autosize([
         frame('C', 100, 100, 0, 0),
         selected(inside('C', agentNode('a', 20, 52))),
@@ -989,7 +989,7 @@ describe('groupSelection', () => {
 
   it('moves a container with its contents, even when some of them are selected too', () => {
     // A marquee around a container selects the container and everything inside it.
-    const g = graphOf([
+    const g = frozen([
       selected(frame('F', 100, 100, 300, 200)),
       selected(inside('F', agentNode('a', 20, 52))),
       selected(agentNode('b', 500, 100)),
@@ -1003,16 +1003,16 @@ describe('groupSelection', () => {
   });
 
   it('returns the same graph when the selection cannot be grouped', () => {
-    const g = graphOf([frame('F', 0, 0, 300, 300), selected(inside('F', agentNode('a', 20, 52)))]);
-    const mixed = graphOf([...g.nodes, selected(agentNode('b', 400, 0))]);
+    const g = frozen([frame('F', 0, 0, 300, 300), selected(inside('F', agentNode('a', 20, 52)))]);
+    const mixed = frozen([...g.nodes, selected(agentNode('b', 400, 0))]);
     expect(groupSelection(mixed, 'frame', 'G')).toBe(mixed);
-    expect(groupSelection(graphOf([agentNode('a', 0, 0)]), 'frame', 'G').nodes).toHaveLength(1);
+    expect(groupSelection(frozen([agentNode('a', 0, 0)]), 'frame', 'G').nodes).toHaveLength(1);
   });
 });
 
 describe('addParent', () => {
   it('turns a frame into a parent node over the same children, without moving them', () => {
-    const g = graphOf(
+    const g = frozen(
       autosize([
         frame('F', 100, 100, 0, 0),
         inside('F', agentNode('a', 20, 52)),
@@ -1036,14 +1036,14 @@ describe('addParent', () => {
   });
 
   it("keeps the group's top border where it was, so the card appears where the '+' was", () => {
-    const g = graphOf(autosize([frame('F', 100, 100, 0, 0), inside('F', agentNode('a', 20, 52))]));
+    const g = frozen(autosize([frame('F', 100, 100, 0, 0), inside('F', agentNode('a', 20, 52))]));
     const parent = get(addParent(g, 'F'), 'F');
     expect(parent.position.y + CARD_SIZE.height / 2).toBe(100);
     expect(parent.position.x).toBe(100);
   });
 
   it('returns the same graph for anything but a frame', () => {
-    const g = graphOf([agentNode('a', 0, 0)]);
+    const g = frozen([agentNode('a', 0, 0)]);
     expect(addParent(g, 'a')).toBe(g);
     expect(addParent(g, 'missing')).toBe(g);
   });
@@ -1053,26 +1053,26 @@ describe('group colours', () => {
   const pair = (x: number, ids: [string, string]) =>
     ids.map((id, i) => selected(agentNode(id, x, i * 100)));
   const group = (g: Graph, id: string) => groupSelection(g, 'frame', id);
-  const deselected = (g: Graph) => graphOf(g.nodes.map((n) => ({ ...n, selected: false })));
+  const deselected = (g: Graph) => frozen(g.nodes.map((n) => ({ ...n, selected: false })));
 
   it('gives each new group the next colour, reusing the least used one', () => {
-    const one = group(graphOf(pair(0, ['a', 'b'])), 'F');
-    const two = group(graphOf([...deselected(one).nodes, ...pair(400, ['c', 'd'])]), 'G');
+    const one = group(frozen(pair(0, ['a', 'b'])), 'F');
+    const two = group(frozen([...deselected(one).nodes, ...pair(400, ['c', 'd'])]), 'G');
     expect(get(two, 'F').data.color).toBe(0);
     expect(get(two, 'G').data.color).toBe(1);
     // With F gone, its colour is free again.
     const withoutF = deleteSelection(
-      graphOf(deselected(two).nodes.map((n) => (n.id === 'F' ? { ...n, selected: true } : n))),
+      frozen(deselected(two).nodes.map((n) => (n.id === 'F' ? { ...n, selected: true } : n))),
     );
-    const three = group(graphOf([...withoutF.nodes, ...pair(800, ['e', 'f'])]), 'H');
+    const three = group(frozen([...withoutF.nodes, ...pair(800, ['e', 'f'])]), 'H');
     expect(get(three, 'H').data.color).toBe(0);
   });
 
   it('cycles through the palette once every colour is taken', () => {
-    let g = graphOf([]);
+    let g = frozen([]);
     for (let i = 0; i <= GROUP_COLORS; i++) {
       g = group(
-        graphOf([...deselected(g).nodes, ...pair(i * 400, [`a${String(i)}`, `b${String(i)}`])]),
+        frozen([...deselected(g).nodes, ...pair(i * 400, [`a${String(i)}`, `b${String(i)}`])]),
         `G${String(i)}`,
       );
     }
@@ -1091,14 +1091,14 @@ describe('group colours', () => {
   });
 
   it('keeps the colour when a group gets a parent node', () => {
-    const g = group(graphOf(pair(0, ['a', 'b'])), 'F');
+    const g = group(frozen(pair(0, ['a', 'b'])), 'F');
     expect(get(addParent(g, 'F'), 'F').data.color).toBe(get(g, 'F').data.color);
   });
 });
 
 describe('ungroupSelection', () => {
   it('removes a frame and selects its children, in place', () => {
-    const g = graphOf([
+    const g = frozen([
       selected(frame('F', 100, 100, 300, 200)),
       inside('F', agentNode('a', 20, 52)),
       inside('F', agentNode('b', 150, 60)),
@@ -1112,7 +1112,7 @@ describe('ungroupSelection', () => {
 
   it('keeps a parent node and its edges, back as a plain node where its card was', () => {
     const parent: GraphNode = selected({ ...agentNode('p', 100, 100), width: 300, height: 200 });
-    const g = graphOf(
+    const g = frozen(
       [parent, inside('p', agentNode('a', 20, 54)), agentNode('b', 500, 0)],
       [edge('p', 'b')],
     );
@@ -1123,7 +1123,7 @@ describe('ungroupSelection', () => {
   });
 
   it('moves children of a nested container into the outer one', () => {
-    const g = graphOf([
+    const g = frozen([
       frame('F', 100, 100, 400, 300),
       selected(inside('F', frame('G', 20, 52, 200, 150))),
       inside('G', agentNode('a', 20, 52)),
@@ -1136,7 +1136,7 @@ describe('ungroupSelection', () => {
   });
 
   it('ungroups only the outermost of nested selected containers', () => {
-    const g = graphOf([
+    const g = frozen([
       selected(frame('F', 100, 100, 400, 300)),
       selected(inside('F', frame('G', 20, 52, 200, 150))),
       inside('G', agentNode('a', 20, 52)),
@@ -1148,7 +1148,7 @@ describe('ungroupSelection', () => {
   });
 
   it('moves a selected child out of its container', () => {
-    const g = graphOf([
+    const g = frozen([
       frame('F', 100, 100, 400, 300),
       selected(inside('F', agentNode('a', 20, 52))),
       inside('F', agentNode('b', 200, 52)),
@@ -1160,7 +1160,7 @@ describe('ungroupSelection', () => {
   });
 
   it('shrinks a parent node whose last child moves out', () => {
-    const g = graphOf([
+    const g = frozen([
       { ...agentNode('p', 0, 0), width: 300, height: 200 },
       selected(inside('p', agentNode('a', 20, 52))),
     ]);
@@ -1168,11 +1168,11 @@ describe('ungroupSelection', () => {
   });
 
   it('removes a selected empty frame', () => {
-    expect(ungroupSelection(graphOf([selected(frame('F', 0, 0, 100, 100))])).nodes).toEqual([]);
+    expect(ungroupSelection(frozen([selected(frame('F', 0, 0, 100, 100))])).nodes).toEqual([]);
   });
 
   it('does nothing for a top-level node', () => {
-    const g = graphOf([selected(agentNode('a', 0, 0))]);
+    const g = frozen([selected(agentNode('a', 0, 0))]);
     expect(canUngroup(g.nodes)).toBe(false);
     expect(ungroupSelection(g)).toBe(g);
   });
@@ -1198,13 +1198,13 @@ describe('autosize', () => {
       ['d', { x: 300, y: 200 }, undefined, undefined],
     ]);
     expect(result[3]).toBe(dragged[3]);
-    expectValid(graphOf(result));
+    expectValid(frozen(result));
   });
 
   it('grows containers left and up for a child dragged past their top-left, moving nothing on screen', () => {
-    const before = graphOf(nested());
-    const dragged = graphOf(moved(before.nodes, 'c', { x: -60, y: -90 }));
-    const result = graphOf(autosize(dragged.nodes));
+    const before = frozen(nested());
+    const dragged = frozen(moved(before.nodes, 'c', { x: -60, y: -90 }));
+    const result = frozen(autosize(dragged.nodes));
     expect(absAll(result, ['c', 'd'])).toEqual(absAll(dragged, ['c', 'd']));
     expect(get(result, 'c').position).toEqual({ x: 20, y: 52 });
     // Each container grew only left and up: its right and bottom edges stay where they were.
@@ -1226,17 +1226,17 @@ describe('autosize', () => {
   it('keeps the top-left corner of containers around a dragged node until the drag ends', () => {
     // React Flow only reports a drag move when the node's position in its container changes, so a
     // container that moved along with the node would swallow moves.
-    const before = graphOf(nested());
+    const before = frozen(nested());
     const dragging = (nodes: GraphNode[], value: boolean) =>
       nodes.map((n) => (n.id === 'c' ? { ...n, dragging: value } : n));
     const out = autosize(dragging(moved(before.nodes, 'c', { x: -60, y: 300 }), true));
     for (const id of ['H', 'G', 'F']) {
-      expect(get(graphOf(out), id).position, id).toEqual(get(before, id).position);
+      expect(get(frozen(out), id).position, id).toEqual(get(before, id).position);
     }
     // The right and bottom edges still follow: F now reaches down to c.
-    expect(get(graphOf(out), 'F').height).toBe(300 + 40 + PADDING);
-    const dropped = graphOf(autosize(dragging(out, false)));
-    expect(absAll(dropped, ['c', 'd'])).toEqual(absAll(graphOf(out), ['c', 'd']));
+    expect(get(frozen(out), 'F').height).toBe(300 + 40 + PADDING);
+    const dropped = frozen(autosize(dragging(out, false)));
+    expect(absAll(dropped, ['c', 'd'])).toEqual(absAll(frozen(out), ['c', 'd']));
     expectValid(dropped);
   });
 
@@ -1250,7 +1250,7 @@ describe('autosize', () => {
   });
 
   it('returns the same array when every container fits', () => {
-    const nodes = graphOf([...nested(), agentNode('z', -500, -500)]).nodes;
+    const nodes = frozen([...nested(), agentNode('z', -500, -500)]).nodes;
     expect(autosize(nodes)).toBe(nodes);
     expect(autosize([])).toEqual([]);
   });
@@ -1281,7 +1281,7 @@ describe('containerAt', () => {
 
 describe('canvasNodes', () => {
   it('are the model’s nodes: agents and groups, without how the view draws them', () => {
-    const { nodes } = graphOf([
+    const { nodes } = frozen([
       selected(frame('F', 0, 0, 300, 200)),
       inside(
         'F',
@@ -1324,8 +1324,59 @@ describe('canvasNodes', () => {
       ...frame('F', 0, 0, 100, 100),
       data: { label: 'Team', color: 3, queue: [{ id: 'm', message: 'Stray' }] },
     };
-    expect(canvasNodes(graphOf([team]).nodes)).toEqual([
+    expect(canvasNodes(frozen([team]).nodes)).toEqual([
       { id: 'F', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Team', color: 3 } },
+    ]);
+  });
+});
+
+describe('a canvas, drawn', () => {
+  const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
+  /** A group holding an agent, another agent outside it, and a link between the two. */
+  const canvas: CanvasDocument = {
+    id: ID,
+    nodes: [
+      { id: 'G', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Team', color: 2 } },
+      {
+        id: 'a',
+        type: 'agent',
+        parentId: 'G',
+        position: { x: 20, y: 52 },
+        data: { label: 'Coder', adapter: 'codex' },
+      },
+      { id: 'b', type: 'agent', position: { x: 600, y: 0 }, data: { label: 'Reviewer' } },
+    ],
+    links: [{ source: 'a', target: 'b', dots: ['bottom', 'top'] }],
+  };
+
+  it('draws a canvas with its groups sized to fit what they hold, and its links as edges', () => {
+    const graph = graphOf(canvas);
+    expectValid(graph);
+    expect(graph.nodes.map(({ id, width, height }) => ({ id, width, height }))).toEqual([
+      {
+        id: 'G',
+        width: PADDING + CARD_SIZE.width + PADDING,
+        height: HEADER + PADDING + CARD_SIZE.height + PADDING,
+      },
+      { id: 'a', width: undefined, height: undefined },
+      { id: 'b', width: undefined, height: undefined },
+    ]);
+    expect(graph.edges).toEqual([
+      { id: 'a->b', source: 'a', target: 'b', sourceHandle: 'bottom', targetHandle: 'top' },
+    ]);
+  });
+
+  it('keeps of a graph what the model keeps: no selection, sizes or edge ids', () => {
+    const graph = graphOf(canvas);
+    expect(documentOf(graph, ID)).toEqual(canvas);
+    const drawn: Graph = {
+      nodes: graph.nodes.map((n) => ({ ...n, selected: true, dragging: false })),
+      edges: graph.edges.map((e) => ({ ...e, selected: true })),
+    };
+    expect(documentOf(drawn, ID)).toEqual(canvas);
+    // An edge drawn without its dots keeps none.
+    expect(documentOf({ ...graph, edges: [edge('a', 'b')] }, ID).links).toEqual([
+      { source: 'a', target: 'b' },
     ]);
   });
 });

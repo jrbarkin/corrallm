@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphNode } from '../graph/graph';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
-import type { AgentRun } from '../run/runner';
+import type { AgentRun } from '../../shared/engine/run/runner';
 import { lanesOf } from './lanes';
 import { queueMarks } from './marks';
 

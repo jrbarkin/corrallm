@@ -4,7 +4,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
 import type { AdapterId } from '../../shared/adapter';
 import type { SettingsOptions } from '../../shared/session';
 import { AgentSettingsSummary } from '../agent/AgentSettings';
-import type { Session } from '../agent/session';
+import type { Session } from '../../shared/model/session';
 import {
   actionsOf,
   connectionInfo,
@@ -16,18 +16,17 @@ import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import { canvasNodes } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
-import { itemLabel, taskLabel } from '../graph/labels';
+import { holdText, itemLabel, taskLabel } from '../../shared/model/words';
 import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../../shared/model/queue';
 import type { WaitTarget } from '../../shared/model/queue';
 import { PickTask, QueueAddMenu, QueueEnd, QueueRow } from '../graph/QueueEditor';
 import type { Picking, RowMarks, StepChoice } from '../graph/QueueEditor';
 import { useSortable } from '../graph/sortable';
-import { heldAsks } from '../run/asks';
-import type { HeldAsk } from '../run/asks';
-import type { EngineCatalog } from '../run/catalog';
-import type { Run } from '../run/runner';
-import { queueControlText } from '../run/controls';
-import { holdText } from '../usage/usage';
+import { heldAsks } from '../../shared/engine/run/asks';
+import type { HeldAsk } from '../../shared/engine/run/asks';
+import type { EngineCatalog } from '../../shared/engine/catalog';
+import type { Run } from '../../shared/engine/run/runner';
+import { queueControlText } from '../../shared/engine/run/controls';
 import { lanesOf } from './lanes';
 import type { Lane, Lanes, Link } from './lanes';
 import { queueMarks, taskKey as at } from './marks';
@@ -60,13 +59,13 @@ interface Choosing {
  *
  * Each lane is its agent's queue, the same queue as everywhere (QueueEditor.tsx's rows, edited
  * in place): a wait's step is picked by clicking it in its agent's lane. Run plays every queue
- * (run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
+ * (src/shared/engine/run/runner.ts): the task each agent is on pulses, a wait or a delay it is held at breathes
  * (counting down to its time, with Go on now on hover), and what it has done is ticked. A wait
  * with a time limit has dashed edges: it may go on without what it waits for, so a loop of waits
  * that holds one is not stuck. At an OK the run waits for the user: the row pulses amber with how
  * to decide, and its lane's head says it needs you, taking you there. A queue stopped at an OK
  * stops whatever waits on it. Where a session would not start, the lane's head says why, and
- * offers to switch the agent (asks.ts). A repeat is one card in its lane, over the rows of what it holds,
+ * offers to switch the agent (src/shared/engine/run/asks.ts). A repeat is one card in its lane, over the rows of what it holds,
  * each in its row: its round shows in a pill, and once out of rounds it asks, as an OK does.
  *
  * Opened from the canvas, or from an agent (`focus`, whose lane is brought into view). Escape, Back

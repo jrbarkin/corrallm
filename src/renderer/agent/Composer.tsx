@@ -9,7 +9,7 @@ import type { ImageType, SlashCommand } from '../../shared/session';
 import { ChoiceMenu } from './ChoiceMenu';
 import { complete, completing, matchCommands } from './completion';
 import type { Completing } from './completion';
-import { cycledModes, modeOf, modesOf } from './session';
+import { cycledModes, modeOf, modesOf } from './modes';
 import type {
   BackgroundTask,
   MessageImage,
@@ -17,9 +17,9 @@ import type {
   ModelChoice,
   Session,
   SessionUsage,
-} from './session';
+} from '../../shared/model/session';
 
-/** What the composer does to its agent's session (sessions.ts). */
+/** What the composer does to its agent's session (src/shared/engine/delivery/mailbox.ts). */
 export interface ComposerControls {
   /** Sends a message, with the images pasted into it. */
   send: (text: string, images?: MessageImage[]) => void;

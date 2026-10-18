@@ -3,7 +3,7 @@ import { afterEach } from 'vitest';
 
 import type { Catalog } from '../shared/adapter';
 import { loadCatalog } from './catalog';
-import testCatalog from './test-catalog.json';
+import testCatalog from '../shared/test-catalog.json';
 
 // The catalog main declares, as the app loads it before it mounts (its copy is kept by
 // src/main/sessions/adapters.test.ts).

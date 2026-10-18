@@ -8,8 +8,16 @@ import { Elicitation } from './Elicitation';
 import { Markdown } from './Markdown';
 import { ToolDetailView } from './ToolDetail';
 import { EDIT_TOOLS, permissionQuestion, SHELL_TOOLS } from './tools';
-import { isOpen, modeOf, rewindPoints, sessionQuestions } from './session';
-import type { Answer, BackgroundTask, Entry, PlanAnswer, Session, ToolProgress } from './session';
+import { isOpen, rewindPoints, sessionQuestions } from '../../shared/model/session';
+import { modeOf } from './modes';
+import type {
+  Answer,
+  BackgroundTask,
+  Entry,
+  PlanAnswer,
+  Session,
+  ToolProgress,
+} from '../../shared/model/session';
 
 /** What the transcript does with the user's answers to prompts (and its Stops). */
 export interface TranscriptAnswers {

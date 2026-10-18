@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { NEW_SESSION } from '../agent/session';
+import { NEW_SESSION } from '../../shared/model/session';
 import type { GraphNode } from '../graph/graph';
 import { checkedBy, unfit } from '../../shared/model/queue';
 import { withSubmissions } from './submissions';

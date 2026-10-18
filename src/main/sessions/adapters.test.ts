@@ -102,10 +102,11 @@ describe('the catalog', () => {
     expect(ADAPTERS.map((adapter) => adapter.descriptor.id).sort()).toEqual(ids(CATALOG.adapters));
   });
 
-  it('is the catalog the renderer’s tests load', async () => {
-    // The renderer can't import main: its tests read this copy, rewritten with vitest -u.
+  it('is the catalog the renderer’s and the engine’s tests load', async () => {
+    // Neither the renderer nor shared code can import main: their tests read this copy, rewritten
+    // with vitest -u.
     await expect(`${JSON.stringify(CATALOG, null, 2)}\n`).toMatchFileSnapshot(
-      '../../renderer/test-catalog.json',
+      '../../shared/test-catalog.json',
     );
   });
 });

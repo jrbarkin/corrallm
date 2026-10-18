@@ -208,7 +208,7 @@ export interface IpcEvents {
 
 /**
  * A canvas file opened: its canvas's id (its own, or a new one for a copy of a canvas kept in
- * another file), its name (without folders) and its text (src/renderer/graph/file.ts).
+ * another file), its name (without folders) and its text (src/shared/model/file.ts).
  */
 export interface CanvasFile {
   id: CanvasId;

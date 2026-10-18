@@ -2,10 +2,10 @@ import type { AdapterId, ConnectionId, ModeId } from './adapter';
 
 /*
  * Connected sessions: an agent's session run by the main process (Claude Code or Codex, in a
- * terminal or through a structured interface), what the renderer asks of it, and what main tells
- * it back. Main's connectors (src/main/sessions/) turn their CLI's own output into these events;
- * the renderer's connected driver (src/renderer/agent/connected.ts) plays them onto the session its
- * view shows (src/renderer/agent/session.ts).
+ * terminal or through a structured interface), what the engine asks of it, and what main tells it
+ * back. Main's connectors (src/main/sessions/) turn their CLI's own output into these events; the
+ * engine's connected driver (src/shared/engine/transcript/receive.ts) plays them onto the session
+ * its views show (src/shared/model/session.ts).
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */

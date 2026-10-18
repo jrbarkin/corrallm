@@ -11,7 +11,7 @@ import type {
 import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { ChoiceMenu } from './ChoiceMenu';
-import { modeOf, modesOf } from './session';
+import { modeOf, modesOf } from './modes';
 
 /** How each adapter's CLI is named, and where the user's own defaults come from. */
 const CLI_WORDS: Readonly<Record<AdapterId, { name: string; yours: string; its: string }>> = {

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
-import type { Session } from './session';
+import type { Session } from '../../shared/model/session';
 
 /** An agent waiting in the rail's stack: what its card shows. */
 export interface StackedAgent {

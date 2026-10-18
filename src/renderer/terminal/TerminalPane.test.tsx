@@ -5,13 +5,15 @@ import { newCanvasId } from '../../shared/canvas';
 import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
-import { fromFile } from '../graph/file';
+import { fromFile } from '../../shared/model/file';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { CanvasFiles } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { OpenLinkContext } from '../open-link';
-import { fakeBackend } from '../test-backend';
+import { fakeBackend } from '../../shared/engine/test-backend';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
+import { graphOf } from '../graph/graph';
+import { DEFAULT_AGENT } from '../graph/agents';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in (test-screen.ts).
 vi.mock('./screen', async () => {
@@ -19,7 +21,7 @@ vi.mock('./screen', async () => {
   return { createScreen: screens.create };
 });
 
-/** What the run asks at the end of a tool's step: how it went (run/turns.ts). */
+/** What the run asks at the end of a tool's step: how it went (src/shared/engine/run/turns.ts). */
 const VERDICT =
   ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
 
@@ -768,9 +770,11 @@ describe('a Terminal agent’s settings', () => {
     // Saved with the agent, in the canvas's file.
     fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
     const [text] = save.mock.calls.at(-1) ?? [];
-    expect(fromFile(text ?? '', catalog()).nodes[0]?.data.settings).toEqual({
-      'claude-code': { effort: 'low', mode: 'plan' },
-    });
+    expect(graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings).toEqual(
+      {
+        'claude-code': { effort: 'low', mode: 'plan' },
+      },
+    );
 
     // Its session runs as it started: restarted, it starts with these, resuming its conversation.
     expect(sessions.backend.start).toHaveBeenCalledOnce();

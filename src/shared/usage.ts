@@ -154,3 +154,18 @@ export function usageOver(
   const usage = windowNow(reading, window, now);
   return usage !== undefined && usage.usedPercent > percent;
 }
+
+/**
+ * Where a usage rule holds an agent, before its next task (engine/run/runner.ts AgentRun.usage): whose
+ * usage, which window, the rule's share, how much was used then and when the window resets.
+ */
+export interface UsageHold {
+  backend: UsageBackendId;
+  window: UsageWindow;
+  /** The rule's share. */
+  percent: number;
+  /** The share used, by the reading that held it. */
+  used: number;
+  /** When the window resets (epoch ms), if the reading says. */
+  resetsAt: number | null;
+}

@@ -59,35 +59,14 @@ const host = (regex: string) => ({
 });
 
 /**
- * The run and the sessions it sends to (src/renderer/run/, agent/sessions.ts, agent/connected.ts),
- * and the helpers they import, which move out of the renderer together (Build Plan B5b): none of
- * them reads React Flow, the renderer's own tables of what each adapter offers, or the catalog the
- * renderer loaded (src/renderer/catalog.ts). A test keeps this list to every file they import
- * (src/main/boundaries.test.ts).
+ * What shared code may not import: the renderer (its views, the tables it keeps of what each adapter
+ * offers, the catalog it loaded) and React Flow. The model and the engine (src/shared/model/,
+ * src/shared/engine/) run wherever they are hosted, the renderer or the core, and are given what
+ * they need there: their sessions' backend and the catalog (src/shared/engine/catalog.ts).
  */
-const RUN_FILES = [
-  'src/renderer/run/*.ts',
-  'src/renderer/agent/{sessions,connected,driver,unavailable,history,session,submission-state}.ts',
-  'src/renderer/usage/usage.ts',
-  'src/renderer/ipc-error.ts',
-  'src/shared/model/*.ts',
-];
-/** The run's helpers in the graph's folder, which name its tables from beside them. */
-const RUN_GRAPH_FILES = 'src/renderer/graph/{labels,time,group-members}.ts';
-const RUN_MESSAGE =
-  'The run never reads React Flow or the renderer’s own tables of what each adapter offers: it reads the model (src/shared/model/) and the catalog it is given (src/renderer/run/catalog.ts).';
-const REACT_FLOW = { group: ['@xyflow/*'], message: RUN_MESSAGE };
-/** An import of graph/graph.ts (React Flow's nodes) or graph/agents.ts (`regex`: as written). */
-const graphTables = (regex: string) => ({ regex, message: RUN_MESSAGE });
-/**
- * An import of the catalog the renderer loaded: `../catalog` from a folder in the renderer,
- * `../../renderer/catalog` from one in shared (not the run's own, `./catalog` in run/).
- */
-const LOADED_CATALOG = {
-  regex: '^(?:\\.\\./)+(?:renderer/)?catalog$',
-  message:
-    'The run never reads the catalog the renderer loaded (src/renderer/catalog.ts): it reads the catalog it is given (src/renderer/run/catalog.ts), as whoever runs it injects it.',
-};
+const SHARED_MESSAGE =
+  'Shared code never imports the renderer or React Flow: the model and the engine run in the core too, given their backend and the catalog by whoever runs them (src/shared/engine/catalog.ts).';
+const RENDERER = { group: ['**/renderer/**', '@xyflow/*'], message: SHARED_MESSAGE };
 
 export default defineConfig(
   globalIgnores([
@@ -211,27 +190,9 @@ export default defineConfig(
   },
   // typescript-eslint's rule, so that it applies beside app/boundaries-web's (`import type` included).
   {
-    name: 'app/boundaries-run',
-    files: RUN_FILES,
-    ignores: ['**/*.test.ts'],
-    rules: {
-      '@typescript-eslint/no-restricted-imports': [
-        'error',
-        {
-          patterns: [REACT_FLOW, graphTables('(?:^|/)graph/(?:agents|graph)$'), LOADED_CATALOG],
-        },
-      ],
-    },
-  },
-  {
-    name: 'app/boundaries-run-graph',
-    files: [RUN_GRAPH_FILES],
-    rules: {
-      '@typescript-eslint/no-restricted-imports': [
-        'error',
-        { patterns: [REACT_FLOW, graphTables('^\\./(?:agents|graph)$'), LOADED_CATALOG] },
-      ],
-    },
+    name: 'app/boundaries-shared',
+    files: ['src/shared/**/*.ts'],
+    rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [RENDERER] }] },
   },
   {
     name: 'app/javascript',

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { automaticBackend } from '../test-backend';
+import { automaticBackend } from '../../shared/engine/test-backend';
 
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';

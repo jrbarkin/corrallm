@@ -1,4 +1,4 @@
-import type { Session } from '../agent/session';
+import type { Session } from '../../shared/model/session';
 import type { GraphNode } from '../graph/graph';
 import { findItem } from '../../shared/model/queue';
 import type { QueueMessage } from '../../shared/model/queue';

@@ -1,4 +1,5 @@
-import { autosize, bounds, edgeId, nextGroupColor, PADDING, topInset } from './graph';
+import { autosize, bounds, edgeId, nextGroupColor, topInset } from './graph';
+import { PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
 import {
   isApproval,

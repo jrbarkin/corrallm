@@ -5,7 +5,7 @@ import { useState } from 'react';
 import type { ComponentProps } from 'react';
 
 import { GraphEditor as NativeGraphEditor } from '../graph/GraphEditor';
-import { automaticBackend } from '../test-backend';
+import { automaticBackend } from '../../shared/engine/test-backend';
 import type { Graph, GraphNode } from '../graph/graph';
 import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
 

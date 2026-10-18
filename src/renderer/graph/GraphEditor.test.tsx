@@ -7,15 +7,17 @@ import type { CanvasFile } from '../../shared/ipc';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
-import { readRun } from '../run/checkpoint';
+import { readRun } from '../../shared/engine/run/checkpoint';
 import type { RunSource } from '../run/persistence';
-import { automaticBackend, fakeBackend } from '../test-backend';
+import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
 import type { UsageSource } from '../usage/store';
-import { fromFile, toFile } from './file';
+import { fromFile, toFile } from '../../shared/model/file';
 import { GraphEditor } from './GraphEditor';
 import type { CanvasFiles } from './GraphEditor';
-import { PADDING } from './graph';
+import { PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
+import { documentOf, graphOf } from './graph';
+import { DEFAULT_AGENT } from './agents';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in for a Terminal agent's (test-screen.ts).
 vi.mock('../terminal/screen', async () => {
@@ -101,7 +103,7 @@ describe('GraphEditor', () => {
     const id = newCanvasId();
     const checkpoint: RunCheckpoint = {
       version: 2,
-      workflow: toFile(saved, id),
+      workflow: toFile(documentOf(saved, id)),
       state: JSON.stringify({
         version: 2,
         run: {
@@ -152,7 +154,9 @@ describe('GraphEditor', () => {
     fireEvent.keyDown(labelInput(), { key: 'Enter' });
     await waitFor(() => {
       const saved = source.save.mock.calls.at(-1)?.[1];
-      expect(saved && fromFile(saved.workflow, catalog()).nodes[0]?.data.label).toBe('Shown');
+      expect(
+        saved && graphOf(fromFile(saved.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
+      ).toBe('Shown');
     });
     fireEvent.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
@@ -168,7 +172,9 @@ describe('GraphEditor', () => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
     });
     const stopped = source.save.mock.calls.at(-1)?.[1];
-    expect(stopped && fromFile(stopped.workflow, catalog()).nodes[0]?.data.label).toBe('Shown');
+    expect(
+      stopped && graphOf(fromFile(stopped.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
+    ).toBe('Shown');
     expect(stopped && readRun(stopped.state).run).toMatchObject({
       running: false,
       paused: true,
@@ -339,7 +345,7 @@ describe('GraphEditor', () => {
       expect(files.save).toHaveBeenCalledOnce();
     });
     const text = files.save.mock.calls[0]?.[0] ?? '';
-    expect(text).toBe(toFile(initial, canvasIdOf(text)));
+    expect(text).toBe(toFile(documentOf(initial, canvasIdOf(text))));
     fireEvent.contextMenu(node('a'));
     fireEvent.click(screen.getByRole('menuitem', { name: /^Resume/ }));
     expect(within(node('a')).queryByText('Paused')).toBeNull();
@@ -486,7 +492,7 @@ describe('GraphEditor', () => {
       expect(files.save).toHaveBeenCalledTimes(1);
     });
     const text = files.save.mock.calls[0]?.[0] ?? '';
-    expect(text).toBe(toFile(initial, canvasIdOf(text)));
+    expect(text).toBe(toFile(documentOf(initial, canvasIdOf(text))));
   });
 
   it('records an SDK command handled locally as a completed submitted message', async () => {
@@ -1702,7 +1708,9 @@ describe('GraphEditor', () => {
       });
       const [text, choose] = files.save.mock.calls[0] ?? [];
       expect(choose).toBe(false);
-      expect(fromFile(text ?? '', catalog()).nodes.map((n) => n.data.label)).toEqual(['Agent 1']);
+      expect(
+        graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes.map((n) => n.data.label),
+      ).toEqual(['Agent 1']);
 
       // Ctrl/⌘ Shift S saves as, Ctrl/⌘ S saves.
       fireEvent.keyDown(document.body, { key: 's', ctrlKey: true, shiftKey: true });
@@ -1713,7 +1721,7 @@ describe('GraphEditor', () => {
 
     it('opens a canvas file and starts new ones, asking before unsaved changes are lost', async () => {
       const id = newCanvasId();
-      const files = fakeFiles({ id, name: 'review.corral', text: toFile(coder, id) });
+      const files = fakeFiles({ id, name: 'review.corral', text: toFile(documentOf(coder, id)) });
       const { pane, nodes } = setup(undefined, files);
       fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
 
@@ -1766,7 +1774,7 @@ describe('GraphEditor', () => {
         ...fakeFiles({
           id: newCanvasId(),
           name: 'shop.corral',
-          text: toFile(coder, newCanvasId()),
+          text: toFile(documentOf(coder, newCanvasId())),
           project: { name: 'shop', path: '/work/shop' },
         }),
         chooseProject: vi
@@ -1945,7 +1953,8 @@ describe('GraphEditor', () => {
               ? null
               : {
                   version: 2 as const,
-                  workflow: failure === 'invalid workflow' ? '{}' : toFile(coder, before),
+                  workflow:
+                    failure === 'invalid workflow' ? '{}' : toFile(documentOf(coder, before)),
                   state:
                     failure === 'invalid queue state'
                       ? '{}'
@@ -2000,14 +2009,22 @@ describe('GraphEditor', () => {
     it('saves each canvas with main’s id for it: the restored one’s, a new draft’s, an opened file’s', async () => {
       const [restored, draft, opened] = [newCanvasId(), newCanvasId(), newCanvasId()];
       let shown = restored;
-      const files = fakeFiles({ id: opened, name: 'team.corral', text: toFile(coder, opened) });
+      const files = fakeFiles({
+        id: opened,
+        name: 'team.corral',
+        text: toFile(documentOf(coder, opened)),
+      });
       files.forget.mockImplementation(() => {
         shown = draft;
         return Promise.resolve(draft);
       });
       files.open.mockImplementation(() => {
         shown = opened;
-        return Promise.resolve({ id: opened, name: 'team.corral', text: toFile(coder, opened) });
+        return Promise.resolve({
+          id: opened,
+          name: 'team.corral',
+          text: toFile(documentOf(coder, opened)),
+        });
       });
       const runSource = {
         get: vi.fn(() =>
@@ -2016,7 +2033,7 @@ describe('GraphEditor', () => {
             token: shown,
             checkpoint: null,
             name: shown === opened ? 'team.corral' : null,
-            ...(shown === opened ? { savedText: toFile(coder, opened) } : {}),
+            ...(shown === opened ? { savedText: toFile(documentOf(coder, opened)) } : {}),
           }),
         ),
         save: vi.fn().mockResolvedValue(null),
@@ -2090,7 +2107,9 @@ describe('GraphEditor', () => {
               ? {}
               : {
                   savedText:
-                    association === 'invalid' ? 'Remember the milk' : toFile(coder, ids.original),
+                    association === 'invalid'
+                      ? 'Remember the milk'
+                      : toFile(documentOf(coder, ids.original)),
                 }),
           }),
         ),

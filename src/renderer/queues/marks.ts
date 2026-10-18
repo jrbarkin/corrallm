@@ -1,10 +1,10 @@
 import type { RowMarks } from '../graph/QueueEditor';
 import { isApproval, isMessage, isRepeat, isRepeatEnds, isWait } from '../../shared/model/queue';
 import type { QueueItem, QueueRepeat } from '../../shared/model/queue';
-import type { EngineCatalog } from '../run/catalog';
-import { taskState } from '../run/runner';
-import type { Run } from '../run/runner';
-import { holdText } from '../usage/usage';
+import type { EngineCatalog } from '../../shared/engine/catalog';
+import { taskState } from '../../shared/engine/run/runner';
+import type { Run } from '../../shared/engine/run/runner';
+import { holdText } from '../../shared/model/words';
 import type { Lanes } from './lanes';
 
 /** A task's key, by its agent's id and its own (null: the end of the agent's queue). */
@@ -100,7 +100,7 @@ export function queueMarks(
       'data-run': state === 'running' && asking.has(lane) ? 'asking' : state,
       'data-expected': expected === undefined ? undefined : expected ? 'met' : 'unmet',
       'data-until': until === undefined ? undefined : String(until),
-      // A session that would not start is decided where it says why (asks.ts), not on the row.
+      // A session that would not start is decided where it says why (src/shared/engine/run/asks.ts), not on the row.
       'data-decide': held && at.status === 'asking' && !at.refused ? '' : undefined,
       'data-problem': problem?.kind,
       'data-problem-text': problem?.text,

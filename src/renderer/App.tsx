@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 
-import type { SessionBackend } from './agent/connected';
+import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
+import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
@@ -29,25 +30,28 @@ const files: CanvasFiles = {
 
 /** Connected agents' sessions run in the main process (src/main/sessions/). */
 const sessionBackend: SessionBackend = {
-  start: (agentId, options) => window.api.startSession(agentId, options),
-  installed: () => window.api.installedClis(),
-  send: (agentId, message) => window.api.sendToSession(agentId, message),
-  answer: (agentId, promptId, answer) => window.api.answerSession(agentId, promptId, answer),
-  interrupt: (agentId) => window.api.interruptSession(agentId),
-  setMode: (agentId, mode) => window.api.setSessionMode(agentId, mode),
-  setModel: (agentId, model) => window.api.setSessionModel(agentId, model),
-  setEffort: (agentId, effort) => window.api.setSessionEffort(agentId, effort),
-  stopTask: (agentId, taskId) => window.api.stopSessionTask(agentId, taskId),
-  close: (agentId) => window.api.closeSession(agentId),
-  fresh: (agentId, adapter) => window.api.freshSession(agentId, adapter),
-  files: (query) => window.api.findProjectFiles(query),
-  options: (adapter) => window.api.settingsOptions(adapter),
-  sessions: (agentId) => window.api.listSessions(agentId),
-  resume: (agentId, sessionId) => window.api.resumeSession(agentId, sessionId),
-  previewRewind: (agentId, messageId) => window.api.previewRewind(agentId, messageId),
-  rewind: (agentId, messageId, restore) => window.api.rewindSession(agentId, messageId, restore),
-  mcp: (agentId) => window.api.mcpServers(agentId),
-  changeMcp: (agentId, server, change) => window.api.changeMcpServer(agentId, server, change),
+  start: (agentId, options) => fromMain(window.api.startSession(agentId, options)),
+  installed: () => fromMain(window.api.installedClis()),
+  send: (agentId, message) => fromMain(window.api.sendToSession(agentId, message)),
+  answer: (agentId, promptId, answer) =>
+    fromMain(window.api.answerSession(agentId, promptId, answer)),
+  interrupt: (agentId) => fromMain(window.api.interruptSession(agentId)),
+  setMode: (agentId, mode) => fromMain(window.api.setSessionMode(agentId, mode)),
+  setModel: (agentId, model) => fromMain(window.api.setSessionModel(agentId, model)),
+  setEffort: (agentId, effort) => fromMain(window.api.setSessionEffort(agentId, effort)),
+  stopTask: (agentId, taskId) => fromMain(window.api.stopSessionTask(agentId, taskId)),
+  close: (agentId) => fromMain(window.api.closeSession(agentId)),
+  fresh: (agentId, adapter) => fromMain(window.api.freshSession(agentId, adapter)),
+  files: (query) => fromMain(window.api.findProjectFiles(query)),
+  options: (adapter) => fromMain(window.api.settingsOptions(adapter)),
+  sessions: (agentId) => fromMain(window.api.listSessions(agentId)),
+  resume: (agentId, sessionId) => fromMain(window.api.resumeSession(agentId, sessionId)),
+  previewRewind: (agentId, messageId) => fromMain(window.api.previewRewind(agentId, messageId)),
+  rewind: (agentId, messageId, restore) =>
+    fromMain(window.api.rewindSession(agentId, messageId, restore)),
+  mcp: (agentId) => fromMain(window.api.mcpServers(agentId)),
+  changeMcp: (agentId, server, change) =>
+    fromMain(window.api.changeMcpServer(agentId, server, change)),
   onEvent: (listener) => window.api.onSessionEvent(listener),
 };
 

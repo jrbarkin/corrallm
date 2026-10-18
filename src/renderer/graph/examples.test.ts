@@ -4,7 +4,7 @@ import { canvasIdOf } from '../../shared/canvas';
 import { catalog } from '../catalog';
 import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
-import { fromFile, toFile } from './file';
+import { fromFile, toFile } from '../../shared/model/file';
 import { placeholdersOf } from './templates';
 import {
   findItem,
@@ -17,13 +17,14 @@ import {
 } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { workEdges } from './work';
+import { documentOf, graphOf } from './graph';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
-  const graph = fromFile(example.text, catalog());
+  const graph = graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT));
   const agents = new Map(graph.nodes.filter((n) => n.type === 'agent').map((n) => [n.id, n]));
 
   it('is a canvas, written just as corrallm writes one', () => {
-    expect(toFile(graph, canvasIdOf(example.text))).toBe(example.text);
+    expect(toFile(documentOf(graph, canvasIdOf(example.text)))).toBe(example.text);
   });
 
   it('pins roles only to agent types with a connection', () => {
