@@ -136,12 +136,14 @@ describe('needs', () => {
         nodes: [starter, slashed, plain],
         run: { running: true, agents: { s: asks('start'), 'a/b': asks('c'), a: asks('b/c') } },
         stuck: [{ agent: 's', text: 'This login can’t run here.', clears: 'It tries again.' }],
+        unasking: ['s'],
       }),
     );
     expect(items.map(({ kind, agent }) => [kind, agent])).toEqual([
       ['hold', 's'],
       ['hold', 'a/b'],
       ['hold', 'a'],
+      ['hold', 's'],
       ['hold', 's'],
     ]);
     expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);

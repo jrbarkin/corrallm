@@ -11,8 +11,8 @@ import type {
 /*
  * What the engine (the run, and the sessions it sends to) reads of the catalog
  * (src/shared/adapter.ts): an agent's adapter and connection, its actions, the usage backend it
- * spends, the modes a connection starts in, the text a connection runs as a shell command, and how
- * a connection and a usage backend are named.
+ * spends, the modes a connection starts in and those that never ask, the text a connection runs as
+ * a shell command, and how a connection and a usage backend are named.
  * Whoever runs the engine (the renderer, or the core) injects it, made from the catalog it has, so
  * that the engine reads no table of its own, nor any catalog but this one, and names no adapter:
  * whatever adapters the catalog declares, it runs.
@@ -61,6 +61,11 @@ export interface EngineCatalog {
    * those the connection starts in (never, for a connection the catalog lacks).
    */
   isStartMode(connection: ConnectionId, mode: ModeId): boolean;
+  /**
+   * Whether a session on `connection` acts without asking in `mode`: one its adapter lists that
+   * never asks (never a mode it doesn't list, nor one on a connection the catalog lacks).
+   */
+  neverAsks(connection: ConnectionId, mode: ModeId): boolean;
   /** How a usage backend is named: its label; its id, for one the catalog lacks. */
   backendName(backend: UsageBackendId): string;
 }
@@ -102,6 +107,8 @@ export function engineCatalog(catalog: Catalog, defaultAdapter: AdapterId): Engi
       const found = connection(id);
       return found !== undefined && isStartMode(catalog, found.adapter.id, id, mode);
     },
+    neverAsks: (id, mode) =>
+      connection(id)?.adapter.modes.some((one) => one.id === mode && !one.asks) ?? false,
     backendName: (id) => usageBackendIn(catalog, id)?.label ?? id,
   };
 }

@@ -11,7 +11,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionEvent, SessionMode } from '../../shared/session';
 import { callTool } from '../api/mcp';
-import type { Connector } from '../sessions/connector';
+import type { Connector, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
@@ -558,6 +558,124 @@ describe('delivery', () => {
       ok: false,
       error: { code: 'not-found' },
     });
+  });
+
+  it('holds a party’s message while its agent runs in a mode that never asks, telling its sender and you', async () => {
+    await keepCanvas();
+    const engine = await (await start()).engines.open(CANVAS);
+    const started = await send('builder', 'Start', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(started, YOU))?.state).toBe('replied');
+    });
+    engine.sessions.setMode('builder', 'full-access');
+    await vi.waitFor(() => {
+      expect(engine.sessions.of('builder').mode).toBe('full-access');
+    });
+    const first = await send('builder', 'First');
+    const second = await send('builder', 'Second');
+    // Yours go: you are its user.
+    const yours = await send('builder', 'From you', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect((await find(first))?.state).toBe('pending');
+    const waits =
+      'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.';
+    expect(await notices()).toEqual([expect.objectContaining({ replyTo: first, body: waits })]);
+    expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([
+      expect.objectContaining({
+        id: 'unasking/builder',
+        kind: 'hold',
+        title: 'Builder runs without asking, so messages from other parties wait',
+        detail: 'They go once it runs in a mode that asks again, or its session ends.',
+        choices: [],
+      }),
+    ]);
+
+    // Back in a mode that asks, they go, in order; in one that never asks again, its sender is told
+    // again.
+    engine.sessions.setMode('builder', 'auto');
+    await vi.waitFor(async () => {
+      expect((await find(second))?.state).toBe('replied');
+    });
+    expect(sent(appServer).slice(-2)).toEqual([`${FRAME(first)}First`, `${FRAME(second)}Second`]);
+    expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([]);
+    engine.sessions.setMode('builder', 'full-access');
+    await vi.waitFor(() => {
+      expect(engine.sessions.of('builder').mode).toBe('full-access');
+    });
+    const third = await send('builder', 'Third');
+    await vi.waitFor(async () => {
+      expect((await notices()).map(({ replyTo }) => replyTo)).toEqual([first, third]);
+    });
+  });
+
+  it('delivers a party’s message to an agent whose session ended in a mode that never asks', async () => {
+    await keepCanvas();
+    let host: SessionHost | undefined;
+    const engine = await (
+      await start({
+        appServer: {
+          start: (spec, given) => {
+            host = given;
+            return appServer.start(spec, given);
+          },
+        },
+      })
+    ).engines.open(CANVAS);
+    const started = await send('builder', 'Start', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(started, YOU))?.state).toBe('replied');
+    });
+    engine.sessions.setMode('builder', 'full-access');
+    await vi.waitFor(() => {
+      expect(engine.sessions.of('builder').mode).toBe('full-access');
+    });
+    host?.emit({ type: 'closed' });
+    // It starts again in its own mode, which asks.
+    const id = await send('builder', 'After it ended');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(appServer.started).toHaveLength(2);
+  });
+
+  it('tells a sender its message failed when the session won’t take another party’s, and what waits behind it goes', async () => {
+    // A session that takes only its user's messages, as one whose CLI would hold another party's.
+    const picky: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await appServer.start(spec, host);
+        return {
+          send: (message) =>
+            message.from === undefined
+              ? session.send(message)
+              : Promise.reject(new Error('Not sent: it takes no message from another party now.')),
+          answer: (id, answer) => session.answer(id, answer),
+          interrupt: () => session.interrupt(),
+          setMode: (mode) => session.setMode(mode),
+          setModel: (model) => session.setModel(model),
+          close: () => session.close(),
+        };
+      },
+    };
+    await keepCanvas();
+    await start({ appServer: picky });
+    const id = await send('builder', 'Hello');
+    const yours = await send('builder', 'From you', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect(await find(id)).toMatchObject({ state: 'replied' });
+    expect((await inbox()).filter((message) => message.replyTo === id)).toEqual([
+      expect.objectContaining({
+        from: 'agent:builder',
+        turn: {
+          status: 'failed',
+          reason: 'error',
+          message: 'Not sent: it takes no message from another party now.',
+        },
+      }),
+    ]);
   });
 
   it('names who sent each message to its session, and nobody for yours', async () => {

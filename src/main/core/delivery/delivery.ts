@@ -21,16 +21,16 @@ import type { MessageStore } from './messages';
  * Delivering a canvas's messages (API Spec §5.5 to §5.7, Core Server §5.9). A message to an agent
  * waits until the agent is idle (no turn going, nothing asked, nothing queued in its session) and
  * nothing holds it: its own or its group's pause (a kill too), a session that would not start (it
- * stays first in line), or its backend's usage rule. Then it is journaled as delivering, with the
- * id it will be sent under, forced to disk, and only then sent, whether or not a run is going: a
- * whole-run Stop, and the paused state a run restores in, hold only the run's own sends. What you
- * send goes past those holds into the session's queue, as you typed it; anything else reaches the
- * agent behind a first line saying whom it is from, so the agent's CLI never takes it for its
- * user's. When a message's turn ends, what the agent replied is a message to its sender, with how
+ * stays first in line), a session running in a mode that never asks (which no party's text drives),
+ * or its backend's usage rule. Then it is journaled as delivering, with the id it will be sent
+ * under, forced to disk, and only then sent, whether or not a run is going: a whole-run Stop, and
+ * the paused state a run restores in, hold only the run's own sends. What you send goes past those
+ * holds into the session's queue, as you typed it; anything else reaches the agent behind a first
+ * line saying whom it is from, so the agent's CLI never takes it for its user's. When a message's turn ends, what the agent replied is a message to its sender, with how
  * the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never answered
- * by another reply. corrallm tells a sender once when its message waits on something (a session
- * that won't start, a usage window) or its turn waits for you, and when it ends withdrawn or
- * unresolved.
+ * by another reply. corrallm tells a sender once when its message waits on something (a pause, a
+ * session that won't start, a mode that never asks, a usage window) or its turn waits for you, and
+ * when it ends withdrawn or unresolved.
  */
 
 export interface DeliveryDeps {
@@ -56,6 +56,7 @@ type Hold =
   | { kind: 'busy' }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
+  | { kind: 'unasking' }
   | { kind: 'usage'; hold: UsageHold; until: number };
 
 /**
@@ -277,6 +278,19 @@ export class Delivery {
     });
   }
 
+  /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
+  unasking(): string[] {
+    return this.#deps
+      .nodes()
+      .flatMap((node) =>
+        node.type === 'agent' &&
+        this.#unasking(node) &&
+        this.#waiting(node.id).some(({ from }) => from !== 'you')
+          ? [node.id]
+          : [],
+      );
+  }
+
   /** The message whose turn an agent is on, if one is. */
   current(agent: string): string | undefined {
     const session = this.#deps.engine.sessions.of(agent);
@@ -357,6 +371,13 @@ export class Delivery {
             `${this.#name(node.id)} can’t start, so your message waits: ${threadTitle(hold.text, REASON)} ${hold.clears}`,
           );
         }
+        if (hold.kind === 'unasking') {
+          this.#tell(
+            holdKey('unasking', node.id, message.from),
+            message,
+            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.`,
+          );
+        }
         if (hold.kind === 'usage') {
           const { until } = hold;
           alarm = Math.min(alarm ?? until, until);
@@ -422,6 +443,7 @@ export class Delivery {
     if (holding.length > 0) return { kind: 'paused', holding };
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
+    if (this.#unasking(node)) return { kind: 'unasking' };
     const session = engine.sessions.of(node.id);
     if (
       session.status !== 'idle' ||
@@ -437,6 +459,20 @@ export class Delivery {
     return rule === undefined
       ? undefined
       : { kind: 'usage', hold: rule.hold, until: rule.hold.resetsAt };
+  }
+
+  /**
+   * Whether agent `node`'s session runs, now, in a mode its adapter says never asks: it acts on
+   * whatever it is sent, so a party's text would act unchecked. One that doesn't run starts in its
+   * own mode, which always asks.
+   */
+  #unasking(node: AgentNode): boolean {
+    const { catalog, sessions } = this.#deps.engine;
+    const session = sessions.of(node.id);
+    return (
+      session.running !== undefined &&
+      catalog.neverAsks(catalog.connectionOf(node.data), session.mode)
+    );
   }
 
   /**
@@ -488,12 +524,14 @@ export class Delivery {
   /**
    * Forgets what senders were told of a hold on agent `node` that is gone, so that they are told
    * again should it hold again: a pause, once nothing pauses it; a session that wouldn't start, once
-   * it has started (after a restart too, when only the notices kept say it refused).
+   * it has started (after a restart too, when only the notices kept say it refused); a mode that
+   * never asks, once it runs in none.
    */
   #forgetReleased(node: AgentNode): void {
     const { engine } = this.#deps;
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
+    if (!this.#unasking(node)) this.#forget('unasking', node.id);
   }
 
   /** Forgets what each sender was told of a hold of `kind` on agent `agent`. */
@@ -803,7 +841,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'usage';
+type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage';
 
 /**
  * The key of what a sender is told of a hold of `kind` on agent `agent`, and what it is told of

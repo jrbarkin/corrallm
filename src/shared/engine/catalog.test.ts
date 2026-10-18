@@ -114,6 +114,18 @@ describe('engineCatalog', () => {
     expect(engine.isStartMode('qwen.acp', 'plan')).toBe(false);
   });
 
+  it('says a session acts without asking only in a mode its adapter lists that never asks', () => {
+    expect(engine.neverAsks('claude-code.sdk', 'bypassPermissions')).toBe(true);
+    expect(engine.neverAsks('claude-code.terminal', 'bypassPermissions')).toBe(true);
+    expect(engine.neverAsks('codex.app-server', 'full-access')).toBe(true);
+    expect(engine.neverAsks('claude-code.sdk', 'acceptEdits')).toBe(false);
+    expect(engine.neverAsks('codex.app-server', 'auto')).toBe(false);
+    // Nor another adapter's, nor one on a connection the catalog lacks.
+    expect(engine.neverAsks('codex.app-server', 'bypassPermissions')).toBe(false);
+    expect(engine.neverAsks('unavailable', 'full-access')).toBe(false);
+    expect(engine.neverAsks('qwen.acp', 'yolo')).toBe(false);
+  });
+
   it('runs a queue with whatever adapter the catalog declares, wording steps from it', () => {
     const sent: [string, string][] = [];
     const store = liveRun(engineCatalog(MADE_UP, 'zed'), {
@@ -167,6 +179,9 @@ describe('engineCatalog', () => {
     expect(zed.isStartMode('zed.acp', 'auto')).toBe(false);
     expect(zed.isStartMode('zed.free', 'plan')).toBe(false);
     expect(zed.isStartMode('claude-code.terminal', 'plan')).toBe(false);
+    expect(zed.neverAsks('zed.acp', 'auto')).toBe(true);
+    expect(zed.neverAsks('zed.acp', 'plan')).toBe(false);
+    expect(zed.neverAsks('claude-code.terminal', 'bypassPermissions')).toBe(false);
   });
 
   it('words a usage rule’s warning and hold with the backend the catalog it is given names', () => {

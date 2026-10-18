@@ -15,7 +15,8 @@ import type { Run } from './run/runner';
  * What waits for you on a canvas (API Spec §5.9), derived from the run and the sessions, never
  * stored: the holds the run has for you (run/asks.ts), what each agent's session asks (its open
  * prompts), what each Terminal agent's CLI asks in its terminal, and the agents whose sessions
- * won't start while parties' messages to them wait. One derivation (`needsOf`) for the canvas's
+ * won't start, or run in a mode that never asks, while parties' messages to them wait. One
+ * derivation (`needsOf`) for the canvas's
  * Needs you sidebar and the core's `needs`, which words each as a NeedsItem (`needsItem`), in the
  * host's locale. Until leads (B24), each is yours alone to answer: a token sees yours without
  * their choices or forms (`withoutChoices`).
@@ -36,12 +37,15 @@ export interface NeedsInput {
    * would let them (a sentence).
    */
   stuck?: readonly { agent: string; text: string; clears: string }[];
+  /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
+  unasking?: readonly string[];
 }
 
 /** Something that waits for you, as derived: whose it is, and what it is. */
 export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
   | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
+  | { kind: 'unasking'; agent: AgentNode }
   | { kind: 'prompt'; agent: AgentNode; prompt: Prompt }
   | { kind: 'ask'; agent: AgentNode; ask: TerminalAsk };
 
@@ -56,8 +60,8 @@ const YOURS = {
 
 /**
  * Everything that waits for you, in order: the run's holds, in graph order; then the agents whose
- * sessions won't start for parties' messages; then each agent's open prompts; then what Terminal
- * agents' CLIs ask in their terminals.
+ * sessions won't start, or run in a mode that never asks, for parties' messages; then each agent's
+ * open prompts; then what Terminal agents' CLIs ask in their terminals.
  */
 export function needsOf({
   nodes,
@@ -67,6 +71,7 @@ export function needsOf({
   now,
   locale,
   stuck = [],
+  unasking = [],
 }: NeedsInput): Need[] {
   const agents = nodes.filter((node): node is AgentNode => node.type === 'agent');
   const agent = (id: string) => agents.find((node) => node.id === id);
@@ -79,6 +84,10 @@ export function needsOf({
     ...stuck.flatMap(({ agent: id, text, clears }): Need[] => {
       const found = agent(id);
       return found ? [{ kind: 'stuck', agent: found, text, clears }] : [];
+    }),
+    ...unasking.flatMap((id): Need[] => {
+      const found = agent(id);
+      return found ? [{ kind: 'unasking', agent: found }] : [];
     }),
     ...agents.flatMap((node) =>
       (sessions[node.id]?.entries ?? [])
@@ -134,6 +143,16 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
         choices: [],
         answerIn: 'api',
       };
+    case 'unasking':
+      return {
+        id: idOf('unasking', need.agent.id),
+        ...yours,
+        kind: 'hold',
+        title: `${agentName(nodes, need.agent.id)} runs without asking, so messages from other parties wait`,
+        detail: 'They go once it runs in a mode that asks again, or its session ends.',
+        choices: [],
+        answerIn: 'api',
+      };
     case 'prompt':
       return {
         id: idOf('prompt', need.agent.id, need.prompt.id),
@@ -153,10 +172,10 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
 
 /**
  * A Needs item's id, unique on its canvas: what it is (a run's hold, a session that won't start,
- * a prompt), its agent (escaped, so that a slash in an agent's id never runs into what follows),
+ * one that runs without asking, a prompt), its agent (escaped, so that a slash in an agent's id never runs into what follows),
  * and what of the agent's it is (a queue item's id, a prompt's).
  */
-function idOf(kind: 'hold' | 'start' | 'prompt', agent: string, of?: string): string {
+function idOf(kind: 'hold' | 'start' | 'unasking' | 'prompt', agent: string, of?: string): string {
   return [kind, encodeURIComponent(agent), ...(of === undefined ? [] : [of])].join('/');
 }
 

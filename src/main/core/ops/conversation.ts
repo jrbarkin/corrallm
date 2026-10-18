@@ -154,6 +154,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     catalog: engine.catalog,
     now: Date.now(),
     stuck: delivery.stuck(),
+    unasking: delivery.unasking(),
     ...(locale === undefined ? {} : { locale }),
   };
 }

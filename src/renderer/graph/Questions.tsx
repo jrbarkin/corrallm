@@ -348,7 +348,7 @@ export function QuestionsSidebar({
 }: {
   needs: readonly Need[];
   /** What the needs are worded with, for those shown in their words. */
-  input: Omit<NeedsInput, 'stuck'>;
+  input: Omit<NeedsInput, 'stuck' | 'unasking'>;
   onDecide: (agentId: string, itemId: string, answer: Answer) => void;
   /** Answers question `index` of the question prompt `promptId`. */
   onAnswer: (agentId: string, promptId: string, index: number, answer: string) => void;
@@ -410,6 +410,7 @@ export function QuestionsSidebar({
           <TerminalAskCard key={`${agent.id}/${need.ask.id}`} ask={need.ask} agent={asker} />,
         ];
       case 'stuck':
+      case 'unasking':
         return [];
     }
   });
