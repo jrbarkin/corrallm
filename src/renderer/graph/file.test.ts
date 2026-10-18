@@ -333,10 +333,10 @@ describe('fromFile', () => {
     const ways = ['terminal', 'sdk', 'codex-terminal', 'app-server'];
     expect(file.nodes.map((n) => ('connection' in n ? n.connection : undefined))).toEqual(ways);
     expect(fromFile(toFile(connected)).nodes.map((n) => n.data.connection)).toEqual(ways);
-    // Removed placeholder files remain readable and now resolve to the native default.
+    // The removed placeholder is no connection.
     const simulated = structuredClone(saved);
     Object.assign(simulated.nodes[2] ?? {}, { connection: 'simulated' });
-    expect(fromFile(JSON.stringify(simulated)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
+    expect(() => fromFile(JSON.stringify(simulated))).toThrow('nodes[2].connection must be one of');
   });
 
   it('saves what an agent is set to run with in each CLI, and reads it back', () => {
@@ -372,12 +372,10 @@ describe('fromFile', () => {
     expect(fromFile(JSON.stringify(file)).nodes[2]?.data).toEqual({ label: 'Reviewer' });
   });
 
-  it('reads a wait for an agent written as just its id', () => {
+  it('refuses a wait for an agent written as just its id', () => {
     const file = structuredClone(saved);
     Object.assign(file.nodes[1] ?? {}, { queue: [{ id: 'w', waitFor: ['b'] }] });
-    expect(fromFile(JSON.stringify(file)).nodes[1]?.data.queue).toEqual([
-      { id: 'w', waitFor: [{ agent: 'b' }] },
-    ]);
+    expect(() => fromFile(JSON.stringify(file))).toThrow('nodes[1].queue[0].waitFor[0]');
   });
 
   it('puts parents before their children, whatever order the file lists them in', () => {

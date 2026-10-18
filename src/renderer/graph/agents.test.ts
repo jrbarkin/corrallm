@@ -43,27 +43,23 @@ describe('native agent defaults', () => {
   });
 
   it.each(['Claude', 'Codex'] as const)(
-    'reads old %s placeholder workflows as native without changing their work',
+    'refuses the removed placeholder connection for %s agents',
     (agent) => {
-      const absent = fromFile(legacy(agent));
-      const explicit = fromFile(legacy(agent, 'simulated'));
-      expect(explicit).toEqual(absent);
-      expect(connectionOf(explicit.nodes[0]?.data ?? {})).toBe(defaultConnection(agent));
-      expect(explicit.nodes[0]?.data.queue).toEqual([
-        { id: 'work', message: 'Keep the authored work.' },
-      ]);
-      expect(toFile(explicit)).not.toContain('simulated');
+      expect(() => fromFile(legacy(agent, 'simulated'))).toThrow('nodes[0].connection');
     },
   );
 
   it.each(['Qwen', 'Gemini'] as const)(
     'retains legacy %s nodes as unavailable without offering a pretend connection',
     (agent) => {
-      const graph = fromFile(legacy(agent, 'simulated'));
+      const graph = fromFile(legacy(agent));
       expect(graph.nodes[0]?.data.agent).toBe(agent);
       expect(connectionOf(graph.nodes[0]?.data ?? {})).toBe('unavailable');
       expect(AGENT_CONNECTIONS[agent]).toEqual([]);
-      expect(toFile(graph)).not.toContain('simulated');
+      expect(graph.nodes[0]?.data.queue).toEqual([
+        { id: 'work', message: 'Keep the authored work.' },
+      ]);
+      expect(toFile(graph)).toContain('"agent": "' + agent + '"');
     },
   );
 });

@@ -357,7 +357,7 @@ export class RunStore {
   }
 
   restore(text: string): void {
-    const saved = readRun(text, this.#nodes);
+    const saved = readRun(text);
     const causes = this.#pauseCauses(saved.run);
     for (const id of this.#pausedMembers(causes)) this.#hold(id, true);
     this.#cancel();
@@ -577,16 +577,10 @@ export class RunStore {
 
   #pauseCauses(run = this.#run): PauseCauses {
     const present = new Set(this.#agents().map((node) => node.id));
-    const recorded = run.individualPauses !== undefined || run.groupPauses !== undefined;
-    const legacy = recorded
-      ? []
-      : Object.entries(run.agents)
-          .filter(([, at]) => at.paused)
-          .map(([id]) => id);
     return {
-      individual: [...new Set(run.individualPauses ?? legacy)].filter((id) => present.has(id)),
+      individual: [...new Set(run.individualPauses ?? [])].filter((id) => present.has(id)),
       groups: [...new Set(run.groupPauses ?? [])].filter((id) => isGroup(this.#nodes, id)),
-      recorded: recorded || legacy.length > 0,
+      recorded: run.individualPauses !== undefined || run.groupPauses !== undefined,
     };
   }
 

@@ -19,17 +19,14 @@ const agent = (extra: Partial<AgentRun> = {}): AgentRun => ({
 const run = (agents: Run['agents']): Run => ({ running: true, agents });
 
 describe('pause causes', () => {
-  it('reads old agent pause flags until explicit cause arrays are present', () => {
-    const legacy = run({ a: agent({ paused: true }), b: agent() });
-    expect(individualPaused(legacy, 'a')).toBe(true);
-    expect(individualPaused(legacy, 'b')).toBe(false);
-    expect(individualPaused(legacy, 'missing')).toBe(false);
-    expect(groupPaused(legacy, 'team')).toBe(false);
-
-    expect(individualPaused({ ...legacy, individualPauses: [] }, 'a')).toBe(false);
-    expect(individualPaused({ ...legacy, groupPauses: ['team'] }, 'a')).toBe(false);
-    expect(individualPaused({ ...legacy, groupPauses: [] }, 'a')).toBe(false);
-    expect(individualPaused({ ...legacy, individualPauses: ['b'] }, 'b')).toBe(true);
+  it('reads an individual pause only from its cause, never from an agent’s pause flag', () => {
+    const paused = run({ a: agent({ paused: true }), b: agent() });
+    expect(individualPaused(paused, 'a')).toBe(false);
+    expect(groupPaused(paused, 'team')).toBe(false);
+    expect(individualPaused({ ...paused, individualPauses: [] }, 'a')).toBe(false);
+    expect(individualPaused({ ...paused, groupPauses: ['team'] }, 'a')).toBe(false);
+    expect(individualPaused({ ...paused, individualPauses: ['b'] }, 'b')).toBe(true);
+    expect(individualPaused({ ...paused, individualPauses: ['b'] }, 'missing')).toBe(false);
   });
 
   it('keeps an individual pause distinct from a group pause', () => {

@@ -4,9 +4,6 @@ import type { Run } from './runner';
 
 /** An explicit individual cause is separate from the queue's combined pause state. */
 export function individualPaused(run: Run, agent: string): boolean {
-  if (run.individualPauses === undefined && run.groupPauses === undefined) {
-    return run.agents[agent]?.paused === true;
-  }
   return run.individualPauses?.includes(agent) === true;
 }
 

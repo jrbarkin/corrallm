@@ -234,8 +234,6 @@ function readNode(value: unknown, where: string): FileNode {
   });
   const connection = optional(node.connection, `${where}.connection`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
-    // Compatibility only: the removed placeholder becomes the type's native default.
-    if (v === 'simulated') return undefined;
     const all = CONNECTIONS;
     const found = all.find((c) => c === v);
     if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
@@ -470,9 +468,8 @@ function readTime(value: unknown, where: string): Time {
   return { seconds };
 }
 
-/** `{ "agent", "item"? }`, or (as older files have it) just an agent's id. */
+/** `{ "agent", "item"? }`. */
 function readTarget(value: unknown, where: string): WaitTarget {
-  if (typeof value === 'string') return { agent: name(value, where) };
   const target = record(value, where);
   const item = optional(target.item, `${where}.item`, name);
   return { agent: name(target.agent, `${where}.agent`), ...(item === undefined ? {} : { item }) };
