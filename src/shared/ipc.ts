@@ -167,7 +167,7 @@ export interface IpcContract {
   /**
    * Shows the file or folder a file:// link the user Cmd-clicked in a terminal names in the OS file
    * manager (Finder), selected, never opened: only if it is in the canvas's project folder, links
-   * resolved (src/main/reveal.ts). Resolves with whether it was shown.
+   * resolved (src/main/host/reveal.ts). Resolves with whether it was shown.
    */
   'link:reveal': { args: [url: string]; result: boolean };
   /**

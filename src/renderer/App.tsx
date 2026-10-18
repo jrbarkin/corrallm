@@ -62,8 +62,8 @@ const terminalBackend: TerminalBackend = {
 };
 
 /**
- * Links clicked in the app open in the browser if main says so (src/main/links.ts); a file://
- * link's file is shown in the file manager if it is in the project folder (src/main/reveal.ts).
+ * Links clicked in the app open in the browser if main says so (src/main/host/links.ts); a file://
+ * link's file is shown in the file manager if it is in the project folder (src/main/host/reveal.ts).
  */
 const openLink: OpenLink = openLinkWith(() => window.api);
 

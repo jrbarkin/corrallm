@@ -160,7 +160,7 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
 
 /**
  * `ArgsParser` for link:open and link:reveal: the URL clicked, a string within MAX_LINK_LENGTH.
- * Whether it may open (or its file be shown), and how, is main's to decide (links.ts, reveal.ts),
+ * Whether it may open (or its file be shown), and how, is main's to decide (host/links.ts, host/reveal.ts),
  * never the renderer's.
  */
 export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open' | 'link:reveal'> {
