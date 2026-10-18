@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
+import { catalog } from '../catalog';
 import { fromFile } from '../graph/file';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { CanvasFiles } from '../graph/GraphEditor';
@@ -46,12 +47,12 @@ beforeEach(() => {
 async function open({
   start,
   queue,
-  data = { connection: 'terminal' },
+  data = { connection: 'claude-code.terminal' },
   options,
 }: {
   start?: () => Promise<null>;
   queue?: GraphNode['data']['queue'];
-  data?: Partial<GraphNode['data']> & { connection: 'terminal' | 'codex-terminal' };
+  data?: Partial<GraphNode['data']> & { connection: 'claude-code.terminal' | 'codex.terminal' };
   /** What main reads of what its CLI's agents can be set to, or why it could not. */
   options?: SettingsOptions | Error;
 } = {}) {
@@ -122,7 +123,7 @@ describe('a Terminal agent', () => {
     expect(view.getByText('Starting Claude Code…')).toBeTruthy();
     // Its session starts as its view opens, and the view shows its terminal.
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: null,
       mode: null,
     });
@@ -318,12 +319,12 @@ describe('a Terminal agent', () => {
 
   it('shows Codex’s own terminal for a Codex agent, and follows its turns there and on the canvas', async () => {
     const { sessions, terminals, card, view, session } = await open({
-      data: { agent: 'Codex', connection: 'codex-terminal' },
+      data: { adapter: 'codex', connection: 'codex.terminal' },
     });
     expect(view.getByText('Starting Codex CLI…')).toBeTruthy();
     // Nothing set: the user's own defaults (Codex's Default mode, which leaves their own config).
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
-      connection: 'codex-terminal',
+      connection: 'codex.terminal',
       model: null,
       mode: null,
     });
@@ -724,15 +725,15 @@ describe('a Terminal agent’s settings', () => {
 
   it('starts Claude Code with what it is set to, chosen beside its chip, the user’s own shown', async () => {
     const { sessions, save, view } = await open({
-      data: { connection: 'terminal', settings: { claude: { model: 'haiku' } } },
+      data: { connection: 'claude-code.terminal', settings: { 'claude-code': { model: 'haiku' } } },
       options: CLAUDE,
     });
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: 'haiku',
       mode: null,
     });
-    expect(sessions.backend.options).toHaveBeenCalledWith('claude');
+    expect(sessions.backend.options).toHaveBeenCalledWith('claude-code');
     // What it starts with, the user's own where nothing is chosen.
     const button = () => view.getByRole('button', { name: 'Agent settings: a' });
     expect(button().textContent).toContain('Claude · Terminal · Haiku · Auto');
@@ -767,8 +768,8 @@ describe('a Terminal agent’s settings', () => {
     // Saved with the agent, in the canvas's file.
     fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
     const [text] = save.mock.calls.at(-1) ?? [];
-    expect(fromFile(text ?? '').nodes[0]?.data.settings).toEqual({
-      claude: { effort: 'low', mode: 'plan' },
+    expect(fromFile(text ?? '', catalog()).nodes[0]?.data.settings).toEqual({
+      'claude-code': { effort: 'low', mode: 'plan' },
     });
 
     // Its session runs as it started: restarted, it starts with these, resuming its conversation.
@@ -777,7 +778,7 @@ describe('a Terminal agent’s settings', () => {
     await settle();
     expect(sessions.backend.close).toHaveBeenCalledWith('a');
     expect(sessions.backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: null,
       mode: 'plan',
       effort: 'low',
@@ -787,7 +788,10 @@ describe('a Terminal agent’s settings', () => {
 
   it('drops an effort the model chosen does not have, and restarts only once it is done working', async () => {
     const { session, view } = await open({
-      data: { connection: 'terminal', settings: { claude: { effort: 'xhigh' } } },
+      data: {
+        connection: 'claude-code.terminal',
+        settings: { 'claude-code': { effort: 'xhigh' } },
+      },
       options: CLAUDE,
     });
     fireEvent.click(view.getByRole('button', { name: 'Agent settings: a' }));
@@ -804,7 +808,7 @@ describe('a Terminal agent’s settings', () => {
 
   it('offers a Codex agent Codex’s models, and the modes its command line starts it in', async () => {
     const { sessions, view } = await open({
-      data: { agent: 'Codex', connection: 'codex-terminal' },
+      data: { adapter: 'codex', connection: 'codex.terminal' },
       options: {
         models: [
           {
@@ -831,13 +835,16 @@ describe('a Terminal agent’s settings', () => {
 
   it('says why it cannot list the models, and still starts with what it is set to', async () => {
     const { sessions, view } = await open({
-      data: { connection: 'terminal', settings: { claude: { model: 'haiku', mode: 'plan' } } },
+      data: {
+        connection: 'claude-code.terminal',
+        settings: { 'claude-code': { model: 'haiku', mode: 'plan' } },
+      },
       options: new Error(
         "Error invoking remote method 'session:options': Error: Codex could not list its models",
       ),
     });
     expect(sessions.backend.start).toHaveBeenCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: 'haiku',
       mode: 'plan',
     });

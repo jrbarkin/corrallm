@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_ACTIONS, defaultConnection, EQUIVALENT_ACTIONS } from './agents';
-import type { AgentType } from './agents';
+import { catalog } from '../catalog';
+import { defaultConnection, equivalentAction } from './agents';
 import type { Graph } from './graph';
 import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
-
 const template: Graph = {
   nodes: [
     {
@@ -13,7 +12,7 @@ const template: Graph = {
       position: { x: 0, y: 0 },
       data: {
         label: '{{language}} tester',
-        agent: 'Codex',
+        adapter: 'codex',
         queue: [
           { id: 'write', message: 'Write failing tests for {{feature}} in {{language}}.' },
           {
@@ -102,7 +101,7 @@ describe('withAgents', () => {
         position: { x: 0, y: 0 },
         data: {
           label: 'Tester',
-          agent: 'Codex',
+          adapter: 'codex',
           queue: [
             { id: 'run', action: 'exec_command', expect: 'fails' },
             { id: 'diff', action: '/diff' },
@@ -136,8 +135,8 @@ describe('withAgents', () => {
   };
 
   it('gives each agent its chosen type, its steps the same job in that type where there is one', () => {
-    const [tester, any] = withAgents(pinned, { tester: 'Claude', any: 'Gemini' }).nodes;
-    expect(tester?.data.agent).toBe('Claude');
+    const [tester, any] = withAgents(pinned, { tester: 'claude-code', any: 'gemini' }).nodes;
+    expect(tester?.data.adapter).toBe('claude-code');
     // Codex's /diff has no Claude equivalent: it stays, for the user to see and change.
     expect(tester?.data.queue).toEqual([
       // What it is expected to do goes with it.
@@ -157,23 +156,31 @@ describe('withAgents', () => {
         otherwise: 'ask',
       },
     ]);
+    // An adapter this build lacks declares no actions: its steps stay as they were.
     expect(any?.data).toEqual({
       label: 'Any',
-      agent: 'Gemini',
-      queue: [{ id: 'run', action: 'run_shell_command' }],
+      adapter: 'gemini',
+      queue: [{ id: 'run', action: 'Bash' }],
     });
   });
 
   it('leaves an agent left open without a type, to be the default agent', () => {
     const [tester] = withAgents(pinned, { tester: undefined }).nodes;
-    expect(tester?.data.agent).toBeUndefined();
+    expect(tester?.data.adapter).toBeUndefined();
     expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash', expect: 'fails' });
   });
 
-  it('only names, as equivalents, actions each agent type has', () => {
-    for (const job of EQUIVALENT_ACTIONS) {
-      for (const [type, action] of Object.entries(job)) {
-        expect(AGENT_ACTIONS[type as AgentType].map((a) => a.name)).toContain(action);
+  it('translates each action to the one doing the same job, as the catalog declares jobs', () => {
+    const { adapters } = catalog();
+    for (const from of adapters) {
+      for (const to of adapters) {
+        for (const action of from.actions) {
+          const same =
+            from.id === to.id
+              ? action.name
+              : action.job && to.actions.find((one) => one.job === action.job)?.name;
+          expect(equivalentAction(action.name, from.id, to.id)).toBe(same);
+        }
       }
     }
   });
@@ -182,41 +189,48 @@ describe('withAgents', () => {
 describe('withConnections', () => {
   const crew: Graph = {
     nodes: [
-      { id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A', agent: 'Claude' } },
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: { label: 'A', adapter: 'claude-code' },
+      },
       {
         id: 'b',
         type: 'agent',
         position: { x: 0, y: 0 },
-        data: { label: 'B', agent: 'Codex', connection: 'app-server' },
+        data: { label: 'B', adapter: 'codex', connection: 'codex.app-server' },
       },
       { id: 'c', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'C' } },
-      { id: 'd', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'D', agent: 'Gemini' } },
+      { id: 'd', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'D', adapter: 'gemini' } },
     ],
     edges: [],
   };
 
   it('runs each agent as chosen, if its type runs that way; others keep theirs', () => {
     const run = withConnections(crew, {
-      a: 'terminal',
-      b: 'codex-terminal',
-      c: 'terminal',
-      d: 'codex-terminal',
+      a: 'claude-code.terminal',
+      b: 'codex.terminal',
+      c: 'claude-code.terminal',
+      d: 'codex.terminal',
     });
     expect(run.nodes.map((n) => n.data.connection)).toEqual([
-      'terminal',
-      'codex-terminal',
+      'claude-code.terminal',
+      'codex.terminal',
       // An agent left to the default agent (Claude) runs as Claude does.
-      'terminal',
+      'claude-code.terminal',
       // Gemini has no connector yet; an invalid connection never makes it runnable.
       undefined,
     ]);
-    expect(withConnections(crew, { a: 'sdk' }).nodes[1]?.data.connection).toBe('app-server');
+    expect(withConnections(crew, { a: 'claude-code.sdk' }).nodes[1]?.data.connection).toBe(
+      'codex.app-server',
+    );
   });
 
   it('defaults to real terminals and keeps unsupported types unavailable', () => {
-    expect(defaultConnection('Claude')).toBe('terminal');
-    expect(defaultConnection('Codex')).toBe('codex-terminal');
-    expect(defaultConnection('Qwen')).toBe('unavailable');
-    expect(defaultConnection('Gemini')).toBe('unavailable');
+    expect(defaultConnection('claude-code')).toBe('claude-code.terminal');
+    expect(defaultConnection('codex')).toBe('codex.terminal');
+    expect(defaultConnection('qwen')).toBe('unavailable');
+    expect(defaultConnection('gemini')).toBe('unavailable');
   });
 });

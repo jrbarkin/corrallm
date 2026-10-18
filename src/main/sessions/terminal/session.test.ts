@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../../shared/session';
 import type { TerminalEvent } from '../../../shared/terminal';
-import type { UsageBackend, UsageWindows } from '../../../shared/usage';
+import type { UsageBackendId } from '../../../shared/adapter';
+import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../connector';
 import { helpFlags } from '../claude';
 import { TerminalConnector } from './connector';
@@ -38,7 +39,7 @@ let fake: FakeClaudeOptions;
 let events: SessionEvent[];
 let remembered: string[];
 let sessions: LiveSession[];
-let readings: [UsageBackend, UsageWindows][];
+let readings: [UsageBackendId, UsageWindows][];
 /** What its claude's --help says. */
 let help: string;
 /** While set, the fake pty starts only once it resolves. */
@@ -290,7 +291,7 @@ describe('a Terminal session', () => {
       child.stdin.end(`${JSON.stringify(input)}\n`);
       await until(() => {
         expect(readings).toEqual([
-          ['Claude', { fiveHour: { usedPercent: 61, resetsAt: 1_791_810_000_000 } }],
+          ['claude-code', { fiveHour: { usedPercent: 61, resetsAt: 1_791_810_000_000 } }],
         ]);
       });
     },

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-import { AGENT_ACTIONS, DEFAULT_AGENT } from './agents';
+import { actionsOf, DEFAULT_AGENT } from './agents';
 import type { GraphNode } from './graph';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
@@ -51,7 +51,7 @@ export function WorkDetail({
 
   /** The part of `owner`'s queue that makes this work. */
   const part = (owner: GraphNode, add: 'nothing' | { workFor: string }) => {
-    const agent = owner.data.agent ?? DEFAULT_AGENT;
+    const agent = owner.data.adapter ?? DEFAULT_AGENT;
     return (
       <section className="graph-work-part" aria-label={`In ${name(owner)}'s queue`}>
         <h3>In {name(owner)}&apos;s queue</h3>
@@ -59,7 +59,7 @@ export function WorkDetail({
           node={owner}
           nodes={nodes}
           agent={agent}
-          actions={AGENT_ACTIONS[agent]}
+          actions={actionsOf(agent)}
           only={(item) => isWorkBetween(item, owner.id, from, to)}
           add={add}
           {...editsOf(edits, owner.id)}

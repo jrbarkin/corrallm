@@ -16,7 +16,7 @@ const agent = (id: string, y: number, queue: QueueItem[] = []): GraphNode => ({
   id,
   type: 'agent',
   position: { x: 0, y },
-  data: { label: id, connection: 'sdk', queue },
+  data: { label: id, connection: 'claude-code.sdk', queue },
 });
 
 /** a researches and hands b a message; b builds, waits for a's research, then checks. */
@@ -204,7 +204,7 @@ describe('the queues view', () => {
     act(() => {
       fake.emit(
         'a',
-        'sdk',
+        'claude-code.sdk',
         { type: 'permission', id: 'approve', tool: 'Bash', summary: 'npm test', always: null },
         { type: 'status', status: 'waiting' },
       );
@@ -242,7 +242,7 @@ describe('the queues view', () => {
       act(() => {
         fake.emit(
           'a',
-          'sdk',
+          'claude-code.sdk',
           { type: 'text', id: crypto.randomUUID(), text: verdict },
           {
             type: 'end',

@@ -11,7 +11,7 @@
         "x": 0,
         "y": 120
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "research",
@@ -32,7 +32,7 @@
         "x": 360,
         "y": 0
       },
-      "agent": "Codex",
+      "adapter": "codex",
       "queue": [
         {
           "id": "scaffold",
@@ -78,7 +78,7 @@
         "x": 720,
         "y": 0
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "built",
@@ -116,7 +116,7 @@
         "x": 720,
         "y": 240
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "read-notes",

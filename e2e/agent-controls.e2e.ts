@@ -45,9 +45,9 @@ test.afterEach(async () => {
   expect(problems).toEqual([]);
 });
 
-async function launch(connection: 'sdk' | 'terminal') {
+async function launch(connection: 'claude-code.sdk' | 'claude-code.terminal') {
   let claude = path.resolve('src/main/sessions/sdk/fake-claude.mjs');
-  if (connection === 'terminal') {
+  if (connection === 'claude-code.terminal') {
     claude = path.join(dir, 'claude');
     const fake = path.join(import.meta.dirname, 'fake-claude.mjs');
     await writeFile(claude, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
@@ -74,7 +74,7 @@ async function launch(connection: 'sdk' | 'terminal') {
   await expect(page.locator('.react-flow__pane')).toBeVisible();
 }
 
-async function openCanvas(connection: 'sdk' | 'terminal', agents: Agent[]) {
+async function openCanvas(connection: 'claude-code.sdk' | 'claude-code.terminal', agents: Agent[]) {
   const canvas = path.join(dir, 'controls.corral');
   await writeFile(
     canvas,
@@ -85,7 +85,7 @@ async function openCanvas(connection: 'sdk' | 'terminal', agents: Agent[]) {
       nodes: agents.map((agent, index) => ({
         ...agent,
         kind: 'agent',
-        agent: 'Claude',
+        adapter: 'claude-code',
         connection,
         position: { x: index * 350, y: 0 },
       })),
@@ -151,12 +151,12 @@ const nativePrompts = async () =>
   (await nativeLog()).flatMap((entry) => (entry.event === 'prompt' ? [entry.text] : []));
 
 test('Pause finishes the current turn while independent work continues and a dependent waits; Resume releases once', async () => {
-  await launch('sdk');
+  await launch('claude-code.sdk');
   const first = 'slow control first';
   const next = 'control second';
   const parallel = 'control parallel';
   const dependent = 'control dependent';
-  const queues = await openCanvas('sdk', [
+  const queues = await openCanvas('claude-code.sdk', [
     {
       id: 'builder',
       label: 'Builder',
@@ -210,11 +210,11 @@ test('Pause finishes the current turn while independent work continues and a dep
 
 test('Kill interrupts the native turn while retaining its live console for a manual Message and later Resume', async () => {
   test.skip(process.platform === 'win32', 'The fake claude is a Node script run through sh.');
-  await launch('terminal');
+  await launch('claude-code.terminal');
   const first = 'slow control current';
   const next = 'control after resume';
   const correction = 'A native correction completes the objective';
-  const queues = await openCanvas('terminal', [
+  const queues = await openCanvas('claude-code.terminal', [
     {
       id: 'builder',
       label: 'Builder',
@@ -267,10 +267,10 @@ test('Kill interrupts the native turn while retaining its live console for a man
 });
 
 test('a canvas pause chosen before Run survives reload and global Resume until that agent is resumed', async () => {
-  await launch('sdk');
+  await launch('claude-code.sdk');
   const held = 'control held before start';
   const parallel = 'control other completes';
-  let queues = await openCanvas('sdk', [
+  let queues = await openCanvas('claude-code.sdk', [
     { id: 'builder', label: 'Builder', queue: [{ id: 'held', message: held }] },
     { id: 'independent', label: 'Independent', queue: [{ id: 'parallel', message: parallel }] },
   ]);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CONNECTIONS } from '../../shared/session';
+import { catalog } from '../catalog';
 import { fakeBackend } from '../test-backend';
 import { SessionStore } from './sessions';
 
@@ -8,8 +8,10 @@ describe('authored session roles', () => {
   it('does not record the role as a manual submission or send it as a user message', async () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Persistent release reviewer instructions' }]);
-    store.send('a', 'Claude', 'Review this change');
+    store.sync([
+      { id: 'a', connection: 'claude-code.sdk', role: 'Persistent release reviewer instructions' },
+    ]);
+    store.send('a', 'claude-code', 'Review this change');
     await vi.waitFor(() => {
       expect(backend.send).toHaveBeenCalledOnce();
     });
@@ -34,17 +36,17 @@ describe('authored session roles', () => {
   it('does not interrupt active work when its desired role changes', async () => {
     const { backend, emit, sent } = fakeBackend();
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Original role' }]);
-    store.send('a', 'Claude', 'Current task');
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Original role' }]);
+    store.send('a', 'claude-code', 'Current task');
     await vi.waitFor(() => {
       expect(backend.send).toHaveBeenCalledOnce();
     });
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Revised role' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Revised role' }]);
     expect(store.of('a').running).toEqual({ role: 'Original role' });
     expect(backend.start).toHaveBeenCalledOnce();
     expect(backend.close).not.toHaveBeenCalled();
     expect(backend.interrupt).not.toHaveBeenCalled();
-    emit('a', 'sdk', {
+    emit('a', 'claude-code.sdk', {
       type: 'end',
       messages: [sent()],
       seconds: 1,
@@ -58,7 +60,7 @@ describe('authored session roles', () => {
     store.reset();
   });
 
-  it.each(CONNECTIONS)(
+  it.each(catalog().adapters.flatMap((adapter) => adapter.connections.map((one) => one.id)))(
     'starts %s with the role and captures it with its running settings',
     async (connection) => {
       const { backend } = fakeBackend();
@@ -90,9 +92,9 @@ describe('authored session roles', () => {
         }),
     );
     const store = new SessionStore(backend);
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Original role' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Original role' }]);
     store.open('a');
-    store.sync([{ id: 'a', connection: 'sdk', role: 'New role' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'New role' }]);
     store.open('a');
     expect(backend.start).toHaveBeenCalledTimes(1);
     expect(backend.close).not.toHaveBeenCalled();
@@ -106,7 +108,7 @@ describe('authored session roles', () => {
       expect(store.of('a').running).toEqual({ role: 'New role' });
     });
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
       role: 'New role',
@@ -117,13 +119,13 @@ describe('authored session roles', () => {
   it('keeps the role separate while switching CLIs and resuming another native conversation', async () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
-    const settings = { claude: { model: 'haiku' }, codex: { model: 'gpt-6-luna' } };
-    store.sync([{ id: 'a', connection: 'sdk', settings, role: 'Release reviewer' }]);
+    const settings = { 'claude-code': { model: 'haiku' }, codex: { model: 'gpt-6-luna' } };
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', settings, role: 'Release reviewer' }]);
     store.open('a');
     await vi.waitFor(() => {
       expect(store.of('a').running).toEqual({ model: 'haiku', role: 'Release reviewer' });
     });
-    store.sync([{ id: 'a', connection: 'app-server', settings, role: 'Release reviewer' }]);
+    store.sync([{ id: 'a', connection: 'codex.app-server', settings, role: 'Release reviewer' }]);
     store.open('a');
     await vi.waitFor(() => {
       expect(store.of('a').running).toEqual({ model: 'gpt-6-luna', role: 'Release reviewer' });
@@ -133,12 +135,12 @@ describe('authored session roles', () => {
       expect(backend.start).toHaveBeenCalledTimes(3);
     });
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: 'gpt-6-luna',
       mode: null,
       role: 'Release reviewer',
     });
-    expect(settings).toEqual({ claude: { model: 'haiku' }, codex: { model: 'gpt-6-luna' } });
+    expect(settings).toEqual({ 'claude-code': { model: 'haiku' }, codex: { model: 'gpt-6-luna' } });
     store.reset();
   });
 
@@ -146,40 +148,40 @@ describe('authored session roles', () => {
     const { backend } = fakeBackend();
     const store = new SessionStore(backend);
     store.sync([
-      { id: 'a', connection: 'sdk', role: 'Reviewer' },
-      { id: 'b', connection: 'sdk' },
+      { id: 'a', connection: 'claude-code.sdk', role: 'Reviewer' },
+      { id: 'b', connection: 'claude-code.sdk' },
     ]);
     store.open('a');
     store.open('b');
     expect(backend.start).toHaveBeenLastCalledWith('b', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
     });
-    store.sync([{ id: 'a', connection: 'sdk', role: ' \n ' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: ' \n ' }]);
     await store.restart('a');
     await vi.waitFor(() => {
       expect(store.of('a').running).toEqual({});
     });
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
     });
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Old role' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Old role' }]);
     store.sync([]);
-    store.sync([{ id: 'a', connection: 'sdk' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
     });
-    store.sync([{ id: 'a', connection: 'sdk', role: 'Old role' }]);
+    store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Old role' }]);
     store.reset();
     store.open('a');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
     });

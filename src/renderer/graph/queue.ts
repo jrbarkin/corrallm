@@ -1,4 +1,5 @@
-import type { UsageBackend, UsageWindow } from '../../shared/usage';
+import type { UsageBackendId } from '../../shared/adapter';
+import type { UsageWindow } from '../../shared/usage';
 import type { SubmittedMessage } from '../agent/session';
 
 /**
@@ -49,7 +50,7 @@ export type Condition =
 /** Whether a backend's usage is over `percent` of `window`. */
 export interface UsageAbove {
   kind: 'usageAbove';
-  backend: UsageBackend;
+  backend: UsageBackendId;
   window: UsageWindow;
   percent: number;
 }
@@ -98,7 +99,7 @@ export type Time = { seconds: number } | { at: string } | UsageReset;
 /** When a backend's usage window (`resets`) resets, as its latest reading says. */
 export interface UsageReset {
   resets: UsageWindow;
-  backend: UsageBackend;
+  backend: UsageBackendId;
 }
 
 export function isUsageReset(time: Time): time is UsageReset {

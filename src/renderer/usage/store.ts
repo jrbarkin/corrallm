@@ -1,18 +1,13 @@
 import { NO_USAGE } from '../../shared/usage';
-import type {
-  UsageBackend,
-  UsageReading,
-  UsageRule,
-  UsageState,
-  UsageWindows,
-} from '../../shared/usage';
+import type { UsageBackendId } from '../../shared/adapter';
+import type { UsageReading, UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import { ipcErrorMessage } from '../ipc-error';
 
 /** Main's usage readings and rules (window.api's usage functions; src/main/usage.ts). */
 export interface UsageSource {
   get: () => Promise<UsageState>;
-  setRule: (backend: UsageBackend, rule: UsageRule | null) => Promise<null>;
-  simulate: (backend: UsageBackend, windows: UsageWindows | null) => Promise<null>;
+  setRule: (backend: UsageBackendId, rule: UsageRule | null) => Promise<null>;
+  simulate: (backend: UsageBackendId, windows: UsageWindows | null) => Promise<null>;
   onChanged: (listener: (state: UsageState) => void) => () => void;
 }
 
@@ -60,7 +55,7 @@ export class UsageStore {
   snapshot = (): UsageState => this.#state;
 
   /** Sets a backend's usage rule, or (null) takes it off. */
-  setRule(backend: UsageBackend, rule: UsageRule | null): void {
+  setRule(backend: UsageBackendId, rule: UsageRule | null): void {
     if (this.#source) {
       this.#source.setRule(backend, rule).catch((error: unknown) => {
         console.error('Could not set the usage rule:', ipcErrorMessage(error));
@@ -74,7 +69,7 @@ export class UsageStore {
   }
 
   /** Simulates a backend's usage, or (null) forgets its reading. */
-  simulate(backend: UsageBackend, windows: UsageWindows | null): void {
+  simulate(backend: UsageBackendId, windows: UsageWindows | null): void {
     if (this.#source) {
       this.#source.simulate(backend, windows).catch((error: unknown) => {
         console.error('Could not simulate usage:', ipcErrorMessage(error));

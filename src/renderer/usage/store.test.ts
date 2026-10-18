@@ -6,7 +6,9 @@ import type { UsageSource } from './store';
 
 const RULE = { window: 'fiveHour', percent: 80, action: 'ask' } as const;
 const reading = (usedPercent: number): UsageState => ({
-  readings: [{ backend: 'Claude', windows: { fiveHour: { usedPercent, resetsAt: null } }, at: 1 }],
+  readings: [
+    { backend: 'claude-code', windows: { fiveHour: { usedPercent, resetsAt: null } }, at: 1 },
+  ],
   rules: {},
 });
 
@@ -71,10 +73,10 @@ describe('UsageStore', () => {
   it('asks main to set rules and simulate readings, and hears the change back', () => {
     const main = fakeSource(reading(10));
     const store = new UsageStore(main.source);
-    store.setRule('Claude', RULE);
-    expect(main.source.setRule).toHaveBeenCalledWith('Claude', RULE);
-    store.simulate('Claude', { weekly: { usedPercent: 91, resetsAt: null } });
-    expect(main.source.simulate).toHaveBeenCalledWith('Claude', {
+    store.setRule('claude-code', RULE);
+    expect(main.source.setRule).toHaveBeenCalledWith('claude-code', RULE);
+    store.simulate('claude-code', { weekly: { usedPercent: 91, resetsAt: null } });
+    expect(main.source.simulate).toHaveBeenCalledWith('claude-code', {
       weekly: { usedPercent: 91, resetsAt: null },
     });
     // Main's word is what counts.
@@ -83,21 +85,21 @@ describe('UsageStore', () => {
 
   it('keeps rules and simulated readings itself without main (as in tests)', () => {
     const store = new UsageStore(undefined, () => 5_000);
-    store.setRule('Claude', RULE);
-    store.simulate('Claude', { weekly: { usedPercent: 91, resetsAt: null } });
+    store.setRule('claude-code', RULE);
+    store.simulate('claude-code', { weekly: { usedPercent: 91, resetsAt: null } });
     expect(store.snapshot()).toEqual({
       readings: [
         {
-          backend: 'Claude',
+          backend: 'claude-code',
           windows: { weekly: { usedPercent: 91, resetsAt: null } },
           at: 5_000,
           simulated: true,
         },
       ],
-      rules: { Claude: RULE },
+      rules: { 'claude-code': RULE },
     });
-    store.setRule('Claude', null);
-    store.simulate('Claude', null);
+    store.setRule('claude-code', null);
+    store.simulate('claude-code', null);
     expect(store.snapshot()).toEqual({ readings: [], rules: {} });
   });
 });

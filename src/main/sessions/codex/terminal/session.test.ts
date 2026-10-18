@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CodexMode, SessionEvent } from '../../../../shared/session';
-import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
+import type { UsageBackendId } from '../../../../shared/adapter';
+import type { UsageWindows } from '../../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../../connector';
 import { HOOK_TOKEN } from '../../terminal/hooks';
 import type { Pty, PtyOptions } from '../../terminal/pty';
@@ -348,7 +349,7 @@ describe('Codex in a terminal, as the real one ran', () => {
       },
       now: () => 1_791_880_000_000,
     });
-    const readings: [UsageBackend, UsageWindows][] = [];
+    const readings: [UsageBackendId, UsageWindows][] = [];
     const session = await start(
       ['prompts'],
       {},
@@ -361,7 +362,7 @@ describe('Codex in a terminal, as the real one ran', () => {
       expect(readings).toHaveLength(1);
     });
     expect(readings[0]).toEqual([
-      'Codex',
+      'codex',
       {
         fiveHour: { usedPercent: 0, resetsAt: 1_791_896_263_000 },
         weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },

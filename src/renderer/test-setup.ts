@@ -1,6 +1,14 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
+import type { Catalog } from '../shared/adapter';
+import { loadCatalog } from './catalog';
+import testCatalog from './test-catalog.json';
+
+// The catalog main declares, as the app loads it before it mounts (its copy is kept by
+// src/main/sessions/adapters.test.ts).
+await loadCatalog(() => Promise.resolve(testCatalog as Catalog));
+
 // Testing Library only registers its own cleanup when test globals are enabled; they are not.
 afterEach(() => {
   cleanup();

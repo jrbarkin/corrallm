@@ -11,7 +11,7 @@
         "x": 0,
         "y": 0
       },
-      "agent": "Codex",
+      "adapter": "codex",
       "queue": [
         {
           "id": "write-tests",
@@ -45,7 +45,7 @@
         "x": 0,
         "y": 220
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "tests-ready",
@@ -85,7 +85,7 @@
         "x": 0,
         "y": 440
       },
-      "agent": "Codex",
+      "adapter": "codex",
       "queue": [
         {
           "id": "implemented",

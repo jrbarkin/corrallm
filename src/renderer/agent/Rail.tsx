@@ -1,14 +1,14 @@
 import { useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
-import type { AgentType } from '../graph/agents';
+import type { AdapterId } from '../../shared/adapter';
 import type { Session } from './session';
 
 /** An agent waiting in the rail's stack: what its card shows. */
 export interface StackedAgent {
   id: string;
   name: string;
-  agent: AgentType;
+  agent: AdapterId;
   status: Session['status'];
 }
 

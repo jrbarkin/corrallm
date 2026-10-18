@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { CONNECTIONS, MAX_ROLE_LENGTH } from '../../shared/session';
-import { parseStartArgs } from './args';
+import { MAX_ROLE_LENGTH } from '../../shared/session';
+import { CATALOG } from './adapters';
+import { parseStartArgs as parse } from './args';
+
+const parseStartArgs = (args: unknown[]) => parse(args, CATALOG);
+const CONNECTIONS = CATALOG.adapters.flatMap((adapter) => adapter.connections.map((c) => c.id));
 
 describe('session role arguments', () => {
   it.each(CONNECTIONS)('accepts a multiline role as data for %s', (connection) => {
@@ -15,10 +19,9 @@ describe('session role arguments', () => {
   it.each([undefined, '', ' \t\r\n '])(
     'omits a cleared role (%j) from the startup shape',
     (role) => {
-      expect(parseStartArgs(['a', { connection: 'sdk', model: null, mode: null, role }])).toEqual([
-        'a',
-        { connection: 'sdk', model: null, mode: null },
-      ]);
+      expect(
+        parseStartArgs(['a', { connection: 'claude-code.sdk', model: null, mode: null, role }]),
+      ).toEqual(['a', { connection: 'claude-code.sdk', model: null, mode: null }]);
     },
   );
 
@@ -26,13 +29,23 @@ describe('session role arguments', () => {
     expect(
       parseStartArgs([
         'a',
-        { connection: 'sdk', model: null, mode: null, role: 'x'.repeat(MAX_ROLE_LENGTH) },
+        {
+          connection: 'claude-code.sdk',
+          model: null,
+          mode: null,
+          role: 'x'.repeat(MAX_ROLE_LENGTH),
+        },
       ])[1].role,
     ).toHaveLength(MAX_ROLE_LENGTH);
     expect(() =>
       parseStartArgs([
         'a',
-        { connection: 'sdk', model: null, mode: null, role: 'x'.repeat(MAX_ROLE_LENGTH + 1) },
+        {
+          connection: 'claude-code.sdk',
+          model: null,
+          mode: null,
+          role: 'x'.repeat(MAX_ROLE_LENGTH + 1),
+        },
       ]),
     ).toThrow(RangeError);
   });
@@ -49,7 +62,7 @@ describe('session role arguments', () => {
     'unsafe\u0085role',
   ])('rejects an invalid role (%j)', (role) => {
     expect(() =>
-      parseStartArgs(['a', { connection: 'sdk', model: null, mode: null, role }]),
+      parseStartArgs(['a', { connection: 'claude-code.sdk', model: null, mode: null, role }]),
     ).toThrow(TypeError);
   });
 });

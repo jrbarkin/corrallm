@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { CONNECTION_CLI } from '../../shared/session';
+import type { AdapterId } from '../../shared/adapter';
 import type { InstalledClis } from '../../shared/session';
+import { catalog } from '../catalog';
 import {
-  AGENT_CONNECTIONS,
-  AgentType,
-  CONNECTION_INFO,
+  adapterName,
+  CONNECTED_AGENTS,
+  connectionInfo,
+  connectionsOf,
   DEFAULT_AGENT,
   defaultConnection,
 } from './agents';
@@ -22,7 +24,7 @@ export type TemplateUse = 'new' | 'insert';
  */
 export interface TemplateChoices {
   values: Readonly<Record<string, string>>;
-  agents: Readonly<Record<string, AgentType | undefined>>;
+  agents: Readonly<Record<string, AdapterId | undefined>>;
   connections: Readonly<Record<string, AgentConnection>>;
 }
 
@@ -79,9 +81,9 @@ export function ExampleGallery({
       new Map(
         examples.map((example) => [
           example,
-          fromFile(example.text)
+          fromFile(example.text, catalog())
             .nodes.filter((n) => n.type === 'agent')
-            .map((n) => ({ id: n.id, label: n.data.label, agent: n.data.agent })),
+            .map((n) => ({ id: n.id, label: n.data.label, agent: n.data.adapter })),
         ]),
       ),
     [examples],
@@ -168,7 +170,7 @@ export function ExampleGallery({
                     aria-label={`${role.label}'s agent`}
                     value={chosen.agents[role.id] ?? ''}
                     onChange={(event) => {
-                      const type = Object.values(AgentType).find((t) => t === event.target.value);
+                      const type = CONNECTED_AGENTS.find((t) => t === event.target.value);
                       // Another type runs as that type does, unless chosen again.
                       setChosen({
                         ...chosen,
@@ -177,14 +179,10 @@ export function ExampleGallery({
                       });
                     }}
                   >
-                    <option value="">Default ({DEFAULT_AGENT})</option>
-                    {Object.values(AgentType).map((type) => (
-                      <option
-                        key={type}
-                        value={type}
-                        disabled={AGENT_CONNECTIONS[type].length === 0}
-                      >
-                        {type}
+                    <option value="">Default ({adapterName(DEFAULT_AGENT)})</option>
+                    {CONNECTED_AGENTS.map((type) => (
+                      <option key={type} value={type}>
+                        {adapterName(type)}
                       </option>
                     ))}
                   </select>
@@ -273,18 +271,18 @@ function ConnectionSelect({
   onChange,
 }: {
   role: string;
-  agent: AgentType;
+  agent: AdapterId;
   value: AgentConnection;
   installed: InstalledClis | undefined;
   onChange: (connection: AgentConnection) => void;
 }) {
-  const ways = AGENT_CONNECTIONS[agent];
+  const ways = connectionsOf(agent);
   return (
     <select
       aria-label={`How ${role} runs`}
       value={value}
       disabled={ways.length <= 1}
-      title={CONNECTION_INFO[value].description}
+      title={connectionInfo(value).description}
       onChange={(event) => {
         const way = ways.find((connection) => connection === event.target.value);
         if (way !== undefined) onChange(way);
@@ -292,9 +290,9 @@ function ConnectionSelect({
     >
       {ways.length === 0 && <option value="unavailable">Not connected</option>}
       {ways.map((connection) => (
-        <option key={connection} value={connection} title={CONNECTION_INFO[connection].description}>
-          {CONNECTION_INFO[connection].label}
-          {installed?.[CONNECTION_CLI[connection]] === false ? ' (CLI not found)' : ''}
+        <option key={connection} value={connection} title={connectionInfo(connection).description}>
+          {connectionInfo(connection).label}
+          {installed?.[agent] === false ? ' (CLI not found)' : ''}
         </option>
       ))}
     </select>

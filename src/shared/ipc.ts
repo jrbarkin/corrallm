@@ -1,7 +1,7 @@
+import type { AdapterId, Catalog, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
-  Connection,
   FilesRewind,
   InstalledClis,
   McpChange,
@@ -11,14 +11,13 @@ import type {
   RewindResult,
   SessionAnswer,
   SessionEvent,
-  Cli,
   SessionMode,
   SessionOptions,
   SettingsOptions,
   UserMessage,
 } from './session';
 import type { TerminalEvent } from './terminal';
-import type { UsageBackend, UsageRule, UsageState, UsageWindows } from './usage';
+import type { UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
  * The IPC contract between the main process and the renderer.
@@ -37,6 +36,8 @@ import type { UsageBackend, UsageRule, UsageState, UsageWindows } from './usage'
 export interface IpcContract {
   /** Round-trip check. Resolves with a human-readable version string. */
   'app:ping': { args: []; result: string };
+  /** What every adapter declares (src/shared/adapter.ts): the renderer loads it before it mounts. */
+  'catalog:get': { args: []; result: Catalog };
   /** Restore the current named canvas or durable draft, without starting an agent. */
   'run:get': { args: []; result: RunContext };
   /** Main selects storage; the token rejects writes from an earlier canvas generation. */
@@ -78,7 +79,7 @@ export interface IpcContract {
    */
   'session:start': { args: [agentId: string, options: SessionOptions]; result: null };
   /**
-   * Which CLIs the user has (`claude`, `codex`), found as connected agents would run them: a
+   * Which agents the user has, by adapter, found as their connections would run them: a
    * template's agents run in a Terminal for those by default.
    */
   'session:clis': { args: []; result: InstalledClis };
@@ -108,8 +109,8 @@ export interface IpcContract {
   'session:stopTask': { args: [agentId: string, taskId: string]; result: null };
   /** Ends an agent's session (it can be resumed later). Resolves once its process has exited. */
   'session:close': { args: [agentId: string]; result: null };
-  /** Forgets only this CLI's remembered conversation, keeping its native history. */
-  'session:fresh': { args: [agentId: string, cli: Cli]; result: null };
+  /** Forgets only this adapter's remembered conversation, keeping its native history. */
+  'session:fresh': { args: [agentId: string, adapter: AdapterId]; result: null };
   /**
    * The conversations Claude Code kept for the canvas's project folder, most recent first, as
    * /resume lists them, saying which is the agent's own. Rejects without a project folder.
@@ -135,10 +136,10 @@ export interface IpcContract {
     result: RewindResult;
   };
   /**
-   * What an agent of a CLI can be set to run with (its models, with their efforts) and the user's
-   * own defaults, read in the canvas's project folder without a session or a prompt.
+   * What an agent of an adapter can be set to run with (its models, with their efforts) and the
+   * user's own defaults, read in the canvas's project folder without a session or a prompt.
    */
-  'session:options': { args: [cli: Cli]; result: SettingsOptions };
+  'session:options': { args: [adapter: AdapterId]; result: SettingsOptions };
   /** The MCP servers an agent's running session has, and how each is (/mcp; Agent SDK sessions). */
   'session:mcp': { args: [agentId: string]; result: McpServer[] };
   /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
@@ -179,12 +180,15 @@ export interface IpcContract {
   /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
   'usage:get': { args: []; result: UsageState };
   /** Sets a backend's usage rule, or (null) takes it off. Every renderer hears 'usage:changed'. */
-  'usage:rule': { args: [backend: UsageBackend, rule: UsageRule | null]; result: null };
+  'usage:rule': { args: [backend: UsageBackendId, rule: UsageRule | null]; result: null };
   /**
    * Simulates a backend's usage (to try rules without spending real usage), or (null) forgets
    * its reading. A real reading replaces a simulated one. Every renderer hears 'usage:changed'.
    */
-  'usage:simulate': { args: [backend: UsageBackend, windows: UsageWindows | null]; result: null };
+  'usage:simulate': {
+    args: [backend: UsageBackendId, windows: UsageWindows | null];
+    result: null;
+  };
 }
 
 /** Events main sends the renderer: each one's name, and what it carries. */
@@ -192,7 +196,7 @@ export interface IpcEvents {
   /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
   'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
-  'session:event': [agentId: string, connection: Connection, event: SessionEvent];
+  'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
   /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
   'terminal:event': [agentId: string, event: TerminalEvent];
   /**
@@ -240,6 +244,7 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  */
 export interface InvokeApi {
   ping(): Promise<IpcResult<'app:ping'>>;
+  catalog(): Promise<IpcResult<'catalog:get'>>;
   getRun(): Promise<IpcResult<'run:get'>>;
   saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
   runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
@@ -295,6 +300,7 @@ export interface AppApi extends InvokeApi, EventApi {}
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
   ping: 'app:ping',
+  catalog: 'catalog:get',
   getRun: 'run:get',
   saveRun: 'run:save',
   runReady: 'run:ready',

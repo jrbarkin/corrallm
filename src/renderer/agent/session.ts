@@ -1,11 +1,10 @@
-import { CONNECTION_CLI, DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
+import { DEFAULT_MODES, UNASKING_MODES } from '../../shared/session';
 import type {
   AgentStartSettings,
   AskedQuestion,
   BackgroundTask,
-  Cli,
   CodexMode,
-  Connection,
   DiffLine,
   EffortChoice,
   ElicitationAction,
@@ -24,7 +23,7 @@ import type {
   ToolStatus,
   TurnResult,
 } from '../../shared/session';
-import { AgentType } from '../graph/agents';
+import { adapterOf } from '../catalog';
 import type { AgentConnection } from '../graph/agents';
 import type { CardQuestion } from '../graph/Questions';
 import { mergeHistory } from './history';
@@ -106,49 +105,45 @@ export const CODEX_MODES: readonly (ModeInfo & { mode: CodexMode })[] = [
   { mode: 'plan', label: 'Plan', description: 'Explores and proposes a plan; changes nothing' },
 ];
 
-/** The modes an agent offers: a Codex agent Codex's, the others Claude Code's. */
-export function modesOf(agent: AgentType): readonly ModeInfo[] {
-  return agent === AgentType.Codex ? CODEX_MODES : MODES;
+/** Each adapter's modes, as the composer shows them. */
+const ADAPTER_MODES: Readonly<
+  Record<keyof typeof DEFAULT_MODES, readonly (ModeInfo & { mode: SessionMode })[]>
+> = { 'claude-code': MODES, codex: CODEX_MODES };
+
+/** Whether `adapter` is one whose modes the composer knows. */
+const hasModes = (adapter: AdapterId): adapter is keyof typeof DEFAULT_MODES =>
+  Object.hasOwn(ADAPTER_MODES, adapter);
+
+/** The modes an agent offers: its adapter's (none, for an adapter this build doesn't have). */
+export function modesOf(adapter: AdapterId): readonly ModeInfo[] {
+  return hasModes(adapter) ? ADAPTER_MODES[adapter] : [];
 }
 
-/** The connections whose CLI starts with what its command line says: a Terminal agent's. */
-export type TerminalConnection = 'terminal' | 'codex-terminal';
-
-/**
- * The modes each Terminal agent's CLI can be started in from its command line, besides the user's
- * own default, as its settings offer them (Settings.tsx): Claude Code's `--permission-mode`s, and
- * Codex's Read only (`-s`/`-a`; its Default is the user's own config, and its Plan is Shift+Tab in
- * its terminal). Never one that never asks: that is chosen in its terminal, each time.
- */
-export const STARTING_MODES: Readonly<Record<TerminalConnection, readonly Mode[]>> = {
-  terminal: ['manual', 'acceptEdits', 'plan', 'auto'],
-  'codex-terminal': ['read-only'],
-};
-
 /** The modes Shift+Tab cycles an agent through, in order: never one that never asks. */
-export function cycledModes(agent: AgentType): readonly Mode[] {
-  return modesOf(agent).flatMap(({ mode }) => (UNASKING_MODES.includes(mode) ? [] : [mode]));
+export function cycledModes(adapter: AdapterId): readonly Mode[] {
+  return modesOf(adapter).flatMap(({ mode }) => (UNASKING_MODES.includes(mode) ? [] : [mode]));
 }
 
 /** How an agent shows `mode`: as the mode, if it has it, else as the mode it starts in. */
-export function modeOf(agent: AgentType, mode: Mode): ModeInfo {
-  const modes = modesOf(agent);
-  const fallback = agent === AgentType.Codex ? DEFAULT_MODES.codex : DEFAULT_MODES.claude;
-  const shown = modes.find((m) => m.mode === mode) ?? modes.find((m) => m.mode === fallback);
-  if (!shown) throw new Error(`${agent} has no ${fallback} mode`);
-  return shown;
+export function modeOf(adapter: AdapterId, mode: Mode): ModeInfo {
+  const modes = modesOf(adapter);
+  const fallback = hasModes(adapter) ? DEFAULT_MODES[adapter] : mode;
+  return (
+    modes.find((m) => m.mode === mode) ??
+    modes.find((m) => m.mode === fallback) ?? { mode, label: mode, description: '' }
+  );
 }
 
 /**
- * Which conversation the transcript's messages are of: an agent's CLI's (main resumes one per CLI,
- * whichever of its connections runs it), or an unsupported submission's. An agent that runs another
- * way keeps its transcript, so it may hold several.
+ * Which conversation the transcript's messages are of: an agent's adapter's (main resumes one per
+ * adapter, whichever of its connections runs it), or an unsupported submission's ('unavailable').
+ * An agent that runs another way keeps its transcript, so it may hold several.
  */
-export type Conversation = Cli | 'unavailable';
+export type Conversation = AdapterId;
 
 /** The conversation an agent that runs as `connection` is on. */
 export function conversationOf(connection: AgentConnection): Conversation {
-  return connection === 'unavailable' ? 'unavailable' : CONNECTION_CLI[connection];
+  return adapterOf(connection);
 }
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
@@ -233,7 +228,7 @@ export type Entry =
       kind: 'notice';
       level: 'info' | 'warning' | 'error';
       text: string;
-      switchTo?: Connection;
+      switchTo?: ConnectionId;
     }
   /** Where the conversation was cleared (/clear): it starts afresh after it. */
   | { id: string; kind: 'cleared'; conversation?: Conversation }
@@ -253,7 +248,7 @@ export type Entry =
  */
 export interface Refusal {
   text: string;
-  switchTo?: Connection;
+  switchTo?: ConnectionId;
 }
 
 /** An entry the user answers while the turn waits. */
@@ -352,7 +347,7 @@ export function chatStart(
  * Claude Code). Only an Agent SDK agent rewinds.
  */
 export function rewindPoints(entries: readonly Entry[]): { id: string; text: string }[] {
-  return messagesOf(entries, 'claude').flatMap((entry) =>
+  return messagesOf(entries, 'claude-code').flatMap((entry) =>
     entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
   );
 }

@@ -90,8 +90,8 @@ async function createTemplate() {
   const gallery = page.getByRole('dialog', { name: 'Templates' });
   for (const choice of await gallery.getByRole('combobox', { name: /^How / }).all()) {
     const selected = await choice.inputValue();
-    if (selected === 'terminal') await choice.selectOption('sdk');
-    else if (selected === 'codex-terminal') await choice.selectOption('app-server');
+    if (selected === 'claude-code.terminal') await choice.selectOption('claude-code.sdk');
+    else if (selected === 'codex.terminal') await choice.selectOption('codex.app-server');
   }
   await gallery.getByRole('button', { name: 'Create canvas' }).click();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
@@ -1141,7 +1141,10 @@ test('agents show their type and ask questions, which a sidebar lists until answ
     card(label).evaluate((el) => getComputedStyle(el).borderLeftColor);
 
   // Every agent has a type, colour-coded on its card; its panel changes it.
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Claude');
+  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute(
+    'data-agent',
+    'claude-code',
+  );
   const claude = await tagColor('Agent 1');
   expect(await stripe('Agent 1')).toBe(claude);
   await a.dblclick();
@@ -1155,7 +1158,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(panel.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
   await page.keyboard.type('codex app server');
   await panel.getByRole('option', { name: /^Codex · App Server/ }).click();
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'Codex');
+  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'codex');
   expect(await tagColor('Agent 1')).not.toBe(claude);
   expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
 

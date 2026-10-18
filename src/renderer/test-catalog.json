@@ -1,0 +1,552 @@
+{
+  "adapters": [
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "accent": 0,
+      "logo": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><g stroke=\"#c15f3c\" stroke-width=\"2.6\" stroke-linecap=\"round\"><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(45 12 12)\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(90 12 12)\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(135 12 12)\"/></g></svg>\n",
+      "words": {
+        "defaults": "Yours, from Claude Code’s settings",
+        "mcpHint": "Add them with claude mcp add, or in the project’s .mcp.json."
+      },
+      "modes": [
+        {
+          "id": "manual",
+          "label": "Manual",
+          "description": "Asks before editing files or running commands",
+          "asks": true,
+          "rank": 1
+        },
+        {
+          "id": "acceptEdits",
+          "label": "Accept edits",
+          "description": "Edits files freely; asks before commands",
+          "asks": true,
+          "rank": 2
+        },
+        {
+          "id": "plan",
+          "label": "Plan",
+          "description": "Reads and proposes a plan; changes nothing",
+          "asks": true,
+          "rank": 0
+        },
+        {
+          "id": "bypassPermissions",
+          "label": "Bypass permissions",
+          "description": "Never asks",
+          "asks": false,
+          "rank": 4
+        },
+        {
+          "id": "auto",
+          "label": "Auto",
+          "description": "Decides for itself what needs your approval",
+          "asks": true,
+          "rank": 3
+        }
+      ],
+      "runtimeModes": false,
+      "role": "append",
+      "resume": true,
+      "list": true,
+      "actions": [
+        {
+          "name": "Read",
+          "description": "Read files",
+          "job": "read"
+        },
+        {
+          "name": "Write",
+          "description": "Create or overwrite files",
+          "job": "write"
+        },
+        {
+          "name": "Edit",
+          "description": "Make targeted edits to files",
+          "job": "edit"
+        },
+        {
+          "name": "NotebookEdit",
+          "description": "Edit Jupyter notebook cells"
+        },
+        {
+          "name": "Glob",
+          "description": "Find files by pattern",
+          "job": "glob"
+        },
+        {
+          "name": "Grep",
+          "description": "Search file contents",
+          "job": "grep"
+        },
+        {
+          "name": "LSP",
+          "description": "Code intelligence: definitions, references, type errors"
+        },
+        {
+          "name": "Bash",
+          "description": "Run shell commands",
+          "job": "shell"
+        },
+        {
+          "name": "PowerShell",
+          "description": "Run PowerShell commands"
+        },
+        {
+          "name": "Monitor",
+          "description": "Run a background command and watch its output"
+        },
+        {
+          "name": "WebFetch",
+          "description": "Fetch a web page",
+          "job": "web-fetch"
+        },
+        {
+          "name": "WebSearch",
+          "description": "Search the web",
+          "job": "web-search"
+        },
+        {
+          "name": "Agent",
+          "description": "Hand a task to a subagent",
+          "job": "subagent"
+        },
+        {
+          "name": "Workflow",
+          "description": "Run a script that orchestrates many subagents"
+        },
+        {
+          "name": "EnterWorktree",
+          "description": "Work in an isolated git worktree",
+          "job": "worktree"
+        },
+        {
+          "name": "/code-review",
+          "description": "Review a diff or PR for bugs",
+          "job": "code-review"
+        },
+        {
+          "name": "/security-review",
+          "description": "Check changes for security vulnerabilities"
+        },
+        {
+          "name": "/simplify",
+          "description": "Clean up changed code and apply the fixes"
+        },
+        {
+          "name": "/verify",
+          "description": "Build and run the app to confirm a change works"
+        },
+        {
+          "name": "/init",
+          "description": "Write a CLAUDE.md guide for the project",
+          "job": "init"
+        },
+        {
+          "name": "/plan",
+          "description": "Plan an approach before changing code",
+          "job": "plan"
+        },
+        {
+          "name": "/batch",
+          "description": "Split a large change into parallel units"
+        },
+        {
+          "name": "/subtask",
+          "description": "Run a task in a background subagent"
+        },
+        {
+          "name": "/goal",
+          "description": "Keep working until a condition is met",
+          "job": "goal"
+        },
+        {
+          "name": "/deep-research",
+          "description": "Research the web and write a cited report"
+        },
+        {
+          "name": "/compact",
+          "description": "Summarize the conversation to free context"
+        },
+        {
+          "name": "/clear",
+          "description": "Start over with empty context"
+        },
+        {
+          "name": "/rewind",
+          "description": "Roll code and conversation back to a checkpoint"
+        }
+      ],
+      "connections": [
+        {
+          "id": "claude-code.terminal",
+          "label": "Terminal",
+          "short": "Terminal",
+          "description": "Claude Code itself, in a terminal in its view: works with your Claude login",
+          "view": "terminal",
+          "startModes": [
+            "manual",
+            "acceptEdits",
+            "plan",
+            "auto"
+          ],
+          "live": {
+            "effort": false,
+            "stopTask": false
+          },
+          "panels": {},
+          "images": null,
+          "usage": "claude-code",
+          "keys": {
+            "shiftEnter": "\u001b\r"
+          },
+          "shellPrefix": "!"
+        },
+        {
+          "id": "claude-code.sdk",
+          "label": "Agent SDK",
+          "short": "SDK",
+          "description": "Claude Code through the Agent SDK, in corrallm’s transcript: needs an API key or a cloud provider",
+          "view": "transcript",
+          "startModes": [
+            "manual",
+            "acceptEdits",
+            "plan",
+            "auto"
+          ],
+          "live": {
+            "effort": true,
+            "stopTask": true
+          },
+          "panels": {
+            "resume": true,
+            "mcp": {
+              "changes": [
+                "reconnect",
+                "disable",
+                "enable"
+              ]
+            },
+            "rewind": {
+              "restores": [
+                "both",
+                "conversation",
+                "code"
+              ]
+            }
+          },
+          "images": {
+            "types": [
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp"
+            ],
+            "maxBytes": 5242880,
+            "max": 20
+          },
+          "usage": null,
+          "continueIn": {
+            "connection": "claude-code.terminal",
+            "commands": [
+              {
+                "name": "login",
+                "description": "Sign in to your Anthropic account",
+                "argumentHint": ""
+              },
+              {
+                "name": "logout",
+                "description": "Sign out from your Anthropic account",
+                "argumentHint": ""
+              },
+              {
+                "name": "permissions",
+                "description": "Manage allow and deny tool permission rules",
+                "argumentHint": ""
+              },
+              {
+                "name": "hooks",
+                "description": "View hook configurations for tool events",
+                "argumentHint": ""
+              },
+              {
+                "name": "memory",
+                "description": "Edit CLAUDE.md files and memory settings",
+                "argumentHint": ""
+              },
+              {
+                "name": "status",
+                "description": "Show Claude Code status: version, model, account, API connectivity",
+                "argumentHint": ""
+              },
+              {
+                "name": "export",
+                "description": "Export the current conversation to a file or clipboard",
+                "argumentHint": ""
+              },
+              {
+                "name": "add-dir",
+                "description": "Add a new working directory",
+                "argumentHint": ""
+              },
+              {
+                "name": "config",
+                "description": "Open settings",
+                "argumentHint": ""
+              },
+              {
+                "name": "theme",
+                "description": "Change the theme",
+                "argumentHint": ""
+              },
+              {
+                "name": "ide",
+                "description": "Manage IDE integrations and show status",
+                "argumentHint": ""
+              },
+              {
+                "name": "plugin",
+                "description": "Manage Claude Code plugins",
+                "argumentHint": ""
+              },
+              {
+                "name": "skills",
+                "description": "List available skills",
+                "argumentHint": ""
+              },
+              {
+                "name": "rename",
+                "description": "Rename the current conversation",
+                "argumentHint": ""
+              },
+              {
+                "name": "privacy-settings",
+                "description": "View and update your privacy settings",
+                "argumentHint": ""
+              },
+              {
+                "name": "help",
+                "description": "Show help and available commands",
+                "argumentHint": ""
+              }
+            ],
+            "shell": true,
+            "mcpSignIn": true
+          }
+        }
+      ],
+      "registerMcp": "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "accent": 1,
+      "logo": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#0e8a6b\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3.5l7.4 4.25v8.5L12 20.5l-7.4-4.25v-8.5z\"/><path d=\"M9 10l2.5 2L9 14M13 14.5h3\"/></svg>\n",
+      "words": {
+        "defaults": "Yours, from your Codex config"
+      },
+      "modes": [
+        {
+          "id": "read-only",
+          "label": "Read only",
+          "description": "Reads and runs read-only commands; asks before editing",
+          "asks": true,
+          "rank": 0
+        },
+        {
+          "id": "auto",
+          "label": "Default",
+          "description": "Edits and runs commands in the project folder; asks before going outside it",
+          "asks": true,
+          "rank": 2
+        },
+        {
+          "id": "full-access",
+          "label": "Full access",
+          "description": "Edits and runs anything, with network access; never asks",
+          "asks": false,
+          "rank": 3
+        },
+        {
+          "id": "plan",
+          "label": "Plan",
+          "description": "Explores and proposes a plan; changes nothing",
+          "asks": true,
+          "rank": 1
+        }
+      ],
+      "runtimeModes": false,
+      "role": "append-new",
+      "resume": true,
+      "list": false,
+      "actions": [
+        {
+          "name": "exec_command",
+          "description": "Run a shell command",
+          "job": "shell"
+        },
+        {
+          "name": "apply_patch",
+          "description": "Create, edit, delete or move files with a patch",
+          "job": "edit"
+        },
+        {
+          "name": "view_image",
+          "description": "Look at a local image"
+        },
+        {
+          "name": "web_search",
+          "description": "Search the web",
+          "job": "web-search"
+        },
+        {
+          "name": "image_gen.imagegen",
+          "description": "Generate or edit images"
+        },
+        {
+          "name": "spawn_agent",
+          "description": "Hand a task to a subagent",
+          "job": "subagent"
+        },
+        {
+          "name": "/review",
+          "description": "Review working-tree changes and report issues",
+          "job": "code-review"
+        },
+        {
+          "name": "/diff",
+          "description": "Show the git diff, untracked files included"
+        },
+        {
+          "name": "/init",
+          "description": "Write an AGENTS.md for the project",
+          "job": "init"
+        },
+        {
+          "name": "/plan",
+          "description": "Plan before changing code",
+          "job": "plan"
+        },
+        {
+          "name": "/goal",
+          "description": "Work toward a long-running goal",
+          "job": "goal"
+        },
+        {
+          "name": "/worktree",
+          "description": "Continue in a new git worktree",
+          "job": "worktree"
+        },
+        {
+          "name": "/fork",
+          "description": "Fork the chat into a new one"
+        },
+        {
+          "name": "/compact",
+          "description": "Summarize the conversation to free context"
+        },
+        {
+          "name": "/recap",
+          "description": "Summarize the conversation now"
+        },
+        {
+          "name": "/new",
+          "description": "Start a new chat"
+        },
+        {
+          "name": "/export",
+          "description": "Export the conversation as Markdown"
+        }
+      ],
+      "connections": [
+        {
+          "id": "codex.terminal",
+          "label": "Terminal",
+          "short": "Terminal",
+          "description": "Codex itself, in a terminal in its view",
+          "view": "terminal",
+          "startModes": [
+            "read-only"
+          ],
+          "live": {
+            "effort": false,
+            "stopTask": false
+          },
+          "panels": {},
+          "images": null,
+          "usage": "codex",
+          "keys": {
+            "shiftEnter": null
+          },
+          "shellPrefix": "!"
+        },
+        {
+          "id": "codex.app-server",
+          "label": "App Server",
+          "short": "App Server",
+          "description": "Codex through its app server, in corrallm’s transcript",
+          "view": "transcript",
+          "startModes": [
+            "read-only",
+            "auto",
+            "plan"
+          ],
+          "live": {
+            "effort": true,
+            "stopTask": false
+          },
+          "panels": {},
+          "images": {
+            "types": [
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp"
+            ],
+            "maxBytes": 5242880,
+            "max": 20
+          },
+          "usage": "codex"
+        }
+      ],
+      "registerMcp": "codex mcp add {server} --url {url} --bearer-token-env-var {var}"
+    }
+  ],
+  "usageBackends": [
+    {
+      "id": "claude-code",
+      "label": "Claude",
+      "source": "Read from Claude Code’s status line while a Terminal agent works. Agent SDK agents run on an API key, which has no usage windows: they read nothing.",
+      "windows": [
+        {
+          "id": "fiveHour",
+          "label": "5-hour",
+          "lengthMs": 18000000
+        },
+        {
+          "id": "weekly",
+          "label": "weekly",
+          "lengthMs": 604800000
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "source": "Read from Codex’s app server while an App Server agent works, and as a Terminal agent starts and after each turn (asking one of its own, which spends no usage). On an API key, Codex has no usage windows: it reads nothing.",
+      "windows": [
+        {
+          "id": "fiveHour",
+          "label": "5-hour",
+          "lengthMs": 18000000
+        },
+        {
+          "id": "weekly",
+          "label": "weekly",
+          "lengthMs": 604800000
+        }
+      ]
+    }
+  ]
+}

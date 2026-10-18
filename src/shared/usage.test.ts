@@ -68,15 +68,17 @@ describe('parseRule', () => {
 
 describe('parseBackend', () => {
   it('takes the backends whose usage corrallm reads', () => {
-    expect(parseBackend('Claude')).toBe('Claude');
-    expect(parseBackend('Codex')).toBe('Codex');
-    expect(() => parseBackend('Gemini')).toThrow();
+    const backends = ['claude-code', 'codex'];
+    expect(parseBackend('claude-code', backends)).toBe('claude-code');
+    expect(parseBackend('codex', backends)).toBe('codex');
+    expect(() => parseBackend('gemini', backends)).toThrow(/Expected one of: claude-code, codex/);
+    expect(() => parseBackend('Claude', backends)).toThrow();
   });
 });
 
 describe('usageOver', () => {
   const reading: UsageReading = {
-    backend: 'Claude',
+    backend: 'claude-code',
     windows: {
       fiveHour: { usedPercent: 85, resetsAt: NOW + HOUR },
       weekly: { usedPercent: 40, resetsAt: null },

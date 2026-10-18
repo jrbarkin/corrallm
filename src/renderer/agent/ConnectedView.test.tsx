@@ -21,7 +21,11 @@ const agent = (id: string, data: Partial<GraphNode['data']> = {}): GraphNode => 
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, connection: data.agent === 'Codex' ? 'app-server' : 'sdk', ...data },
+  data: {
+    label: id,
+    connection: data.adapter === 'codex' ? 'codex.app-server' : 'claude-code.sdk',
+    ...data,
+  },
 });
 
 /** Lets IPC replies (promises) settle. */
@@ -66,7 +70,7 @@ async function open(
   /** Main says `events` happened in a's session (connected as `data` says, or through the SDK). */
   const emit = (...events: SessionEvent[]) => {
     act(() => {
-      fake.emit('a', data.connection ?? 'sdk', ...events);
+      fake.emit('a', data.connection ?? 'claude-code.sdk', ...events);
     });
   };
   return { ...fake, container, card, view, composer, send, transcript, emit, openLink };
@@ -81,13 +85,13 @@ const SUBSCRIPTION =
 /** Main, on a Claude subscription: an Agent SDK session says why it won't start, then fails to. */
 function refuseSdk(fake: ReturnType<typeof fakeBackend>) {
   fake.backend.start.mockImplementation((_agent, options) => {
-    if (options.connection !== 'sdk') return Promise.resolve(null);
-    fake.emit('a', 'sdk', {
+    if (options.connection !== 'claude-code.sdk') return Promise.resolve(null);
+    fake.emit('a', 'claude-code.sdk', {
       type: 'notice',
       id: crypto.randomUUID(),
       level: 'error',
       text: SUBSCRIPTION,
-      switchTo: 'terminal',
+      switchTo: 'claude-code.terminal',
     });
     return Promise.reject(
       new Error(`Error invoking remote method 'session:start': Error: ${SUBSCRIPTION}`),
@@ -102,7 +106,10 @@ const MODELS = [
 
 describe('a connected Codex agent', () => {
   it('runs in a terminal or through its app server, as its chip says', async () => {
-    const { backend, card, view } = await open({ agent: 'Codex', connection: 'app-server' });
+    const { backend, card, view } = await open({
+      adapter: 'codex',
+      connection: 'codex.app-server',
+    });
     const chip = () => view.getByRole('button', { name: /^Agent: / });
     expect(chip().getAttribute('aria-label')).toBe('Agent: Codex · App Server');
     fireEvent.click(chip());
@@ -114,7 +121,7 @@ describe('a connected Codex agent', () => {
     await settle();
     // Nothing set: the user's own defaults (Codex's Default mode).
     expect(backend.start).toHaveBeenCalledWith('a', {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: null,
       mode: null,
     });
@@ -122,8 +129,8 @@ describe('a connected Codex agent', () => {
 
   it('switches between Codex’s modes, and shows its plan’s usage limits', async () => {
     const { backend, view, composer, emit } = await open({
-      agent: 'Codex',
-      connection: 'app-server',
+      adapter: 'codex',
+      connection: 'codex.app-server',
     });
     emit({ type: 'started', model: null, mode: 'auto', models: [] });
     const mode = () => view.getByRole('button', { name: /^Mode: / });
@@ -163,8 +170,8 @@ describe('a connected Codex agent', () => {
 
   it('asks to implement its plan, as Codex does, carried out in its Default mode', async () => {
     const { backend, send, sent, emit, transcript } = await open({
-      agent: 'Codex',
-      connection: 'app-server',
+      adapter: 'codex',
+      connection: 'codex.app-server',
     });
     await send('Plan the change');
     emit(
@@ -208,8 +215,8 @@ const CODEX_MODELS = [
 describe('a Codex agent’s reasoning', () => {
   it('shows its summary as Codex writes it: Markdown, a bold title first', async () => {
     const { send, sent, emit, transcript } = await open({
-      agent: 'Codex',
-      connection: 'app-server',
+      adapter: 'codex',
+      connection: 'codex.app-server',
     });
     await send('Why?');
     emit(
@@ -226,8 +233,8 @@ describe('a Codex agent’s reasoning', () => {
 describe('a Codex agent’s reasoning effort', () => {
   it('is chosen beside its model, from the efforts the model offers', async () => {
     const { backend, view, emit, send, sent } = await open({
-      agent: 'Codex',
-      connection: 'app-server',
+      adapter: 'codex',
+      connection: 'codex.app-server',
     });
     expect(view.queryByRole('button', { name: /^Effort: / })).toBeNull();
     emit({
@@ -266,7 +273,7 @@ describe('a Codex agent’s reasoning effort', () => {
     );
     await send('Again');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'app-server',
+      connection: 'codex.app-server',
       model: null,
       mode: null,
       effort: 'xhigh',
@@ -278,7 +285,11 @@ describe('a Codex agent’s reasoning effort', () => {
 describe('a connected agent', () => {
   it('is connected from its agent chip: shown on its card, its chip and its lane in All queues', async () => {
     const { backend, card, view } = await open();
-    expect(backend.start).toHaveBeenCalledWith('a', { connection: 'sdk', model: null, mode: null });
+    expect(backend.start).toHaveBeenCalledWith('a', {
+      connection: 'claude-code.sdk',
+      model: null,
+      mode: null,
+    });
     const chip = () => view.getByRole('button', { name: /^Agent: / });
     expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Agent SDK');
     expect(card().getAttribute('aria-label')).toBe('a, Claude · SDK');
@@ -291,7 +302,7 @@ describe('a connected agent', () => {
     // Its view is open: its session starts.
     await settle();
     expect(backend.start).toHaveBeenCalledWith('a', {
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       model: null,
       mode: null,
     });
@@ -365,7 +376,7 @@ describe('a connected agent', () => {
     expect(messages()).toEqual(submitted);
     const [hear] = backend.onEvent.mock.calls.at(-1) ?? [];
     act(() => {
-      hear?.('a', 'app-server', {
+      hear?.('a', 'codex.app-server', {
         type: 'history',
         events: [
           { type: 'user', id: 'x1', text: 'Review the pull request' },
@@ -387,7 +398,7 @@ describe('a connected agent', () => {
   });
 
   it('keeps the Chat fallback for restored history when no messages were submitted here', async () => {
-    const { view, emit } = await open({ connection: 'sdk' });
+    const { view, emit } = await open({ connection: 'claude-code.sdk' });
     emit({
       type: 'history',
       events: [
@@ -403,7 +414,10 @@ describe('a connected agent', () => {
   });
 
   it('does not run through the Agent SDK on a Claude subscription: it says why, and switches to Terminal', async () => {
-    const { backend, view, transcript, card } = await open({ connection: 'sdk' }, refuseSdk);
+    const { backend, view, transcript, card } = await open(
+      { connection: 'claude-code.sdk' },
+      refuseSdk,
+    );
     expect(transcript.getAllByRole('alert').map((alert) => alert.textContent)).toEqual([
       `${SUBSCRIPTION}Switch to Terminal`,
     ]);
@@ -416,14 +430,17 @@ describe('a connected agent', () => {
     await settle();
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'terminal' }),
+      expect.objectContaining({ connection: 'claude-code.terminal' }),
     );
     // Its terminal starts: the Agent SDK's refusal is not taken for the terminal's own problem.
     expect(view.getByText('Starting Claude Code…')).toBeTruthy();
   });
 
   it('keeps a message it could not send queued, not as a turn that failed', async () => {
-    const { backend, view, transcript, send } = await open({ connection: 'sdk' }, refuseSdk);
+    const { backend, view, transcript, send } = await open(
+      { connection: 'claude-code.sdk' },
+      refuseSdk,
+    );
     await send('Fix the login bug');
     expect(backend.send).not.toHaveBeenCalled();
     const queued = within(view.getByRole('list', { name: 'Queued messages' }));
@@ -446,7 +463,7 @@ describe('a connected agent', () => {
 
   it('holds the run for you when it would not start, until you switch it to Terminal', async () => {
     const { backend, view } = await open(
-      { connection: 'sdk', queue: [{ id: 'tests', action: 'Bash' }] },
+      { connection: 'claude-code.sdk', queue: [{ id: 'tests', action: 'Bash' }] },
       refuseSdk,
     );
     fireEvent.click(view.getByRole('button', { name: 'All queues' }));
@@ -478,7 +495,7 @@ describe('a connected agent', () => {
     await settle();
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'terminal' }),
+      expect.objectContaining({ connection: 'claude-code.terminal' }),
     );
     expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
@@ -498,7 +515,9 @@ describe('a connected agent', () => {
   });
 
   it('opens a link in its reply through main, which asks first; never in the app', async () => {
-    const { send, transcript, emit, sent, openLink } = await open({ connection: 'sdk' });
+    const { send, transcript, emit, sent, openLink } = await open({
+      connection: 'claude-code.sdk',
+    });
     await send('Where are the docs?');
     emit(
       { type: 'user', id: sent(), text: 'Where are the docs?' },
@@ -513,7 +532,7 @@ describe('a connected agent', () => {
   });
 
   it('switches to bypassing permissions once confirmed, and hides it where the CLI turns it off', async () => {
-    const { backend, view, emit } = await open({ connection: 'sdk' });
+    const { backend, view, emit } = await open({ connection: 'claude-code.sdk' });
     emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
     fireEvent.click(view.getByRole('button', { name: 'Mode: Manual' }));
     fireEvent.click(view.getByRole('menuitemradio', { name: /^Bypass permissions/ }));
@@ -539,12 +558,14 @@ describe('a connected agent', () => {
   });
 
   it('says what it needs to run: a project folder', async () => {
-    const { transcript } = await open({ connection: 'sdk' });
+    const { transcript } = await open({ connection: 'claude-code.sdk' });
     expect(transcript.getByText(/Choose a project folder for this canvas/)).toBeTruthy();
   });
 
   it('plays a turn from main: the reply, tool calls, a permission prompt, what it used', async () => {
-    const { backend, view, send, transcript, emit, sent } = await open({ connection: 'sdk' });
+    const { backend, view, send, transcript, emit, sent } = await open({
+      connection: 'claude-code.sdk',
+    });
     emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
     const model = view.getByRole('button', { name: /^Model: / });
     expect(model.getAttribute('aria-label')).toBe('Model: Opus');
@@ -597,7 +618,9 @@ describe('a connected agent', () => {
   });
 
   it('is interrupted from main with Escape', async () => {
-    const { backend, composer, send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, composer, send, sent, emit, transcript } = await open({
+      connection: 'claude-code.sdk',
+    });
     await send('Go');
     fireEvent.keyDown(composer, { key: 'Escape' });
     await settle();
@@ -607,7 +630,7 @@ describe('a connected agent', () => {
   });
 
   it('asks the user questions with corrallm’s question cards, in its transcript and on the canvas', async () => {
-    const { backend, view, send, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
     emit({
       type: 'question',
@@ -640,7 +663,7 @@ describe('a connected agent', () => {
   });
 
   it('shows a question’s header and what each answer means, and takes several answers with Submit', async () => {
-    const { backend, view, send, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
     const question = (id: string) => ({
       type: 'question' as const,
@@ -703,7 +726,7 @@ describe('a connected agent', () => {
 
   it('asks for your OK above its composer, where what is sent goes to Claude Code as the changes', async () => {
     const { backend, view, composer, send, emit, sent } = await open({
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [
         { id: 'ok', approve: 'the spec in SPEC.md' },
         { id: 'next', action: 'Read' },
@@ -754,7 +777,7 @@ describe('a connected agent', () => {
 
   it('takes images pasted with the changes asked for, and runs a slash command typed then', async () => {
     const { backend, view, composer, send, emit, sent } = await open({
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [{ id: 'ok', approve: 'the layout' }],
     });
     emit({
@@ -800,7 +823,7 @@ describe('a connected agent', () => {
 
   it('asks it, in its transcript, whether a condition in your words holds, and says when unclear', async () => {
     const { backend, view, emit, sent, transcript } = await open({
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [
         { id: 'flaky', if: { kind: 'freeText', text: 'a test is flaky' }, then: [] },
         { id: 'next', message: 'Carry on' },
@@ -835,7 +858,7 @@ describe('a connected agent', () => {
 
   it('lists what the run asks and what its session asks in the canvas’s Needs you sidebar', async () => {
     const { backend, view, emit } = await open({
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [
         { id: 'ask', message: 'Pick a branch' },
         { id: 'ok', approve: 'the branch' },
@@ -894,7 +917,7 @@ describe('a connected agent', () => {
   });
 
   it('asks to approve its plan, and to carry it out in a mode', async () => {
-    const { backend, send, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Plan it');
     emit({ type: 'plan', id: 'plan', plan: '1. Read the code\n2. Change it' });
     const plan = within(transcript.getByRole('group', { name: 'Plan' }));
@@ -909,7 +932,7 @@ describe('a connected agent', () => {
   });
 
   it('shows a subagent’s work under the call that started it', async () => {
-    const { send, emit, transcript } = await open({ connection: 'sdk' });
+    const { send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
     emit(
       { type: 'tool', id: 'agent-1', tool: 'Agent', summary: 'Find the bug', status: 'running' },
@@ -920,7 +943,7 @@ describe('a connected agent', () => {
   });
 
   it('completes slash commands as they are typed, and runs one picked with Enter', async () => {
-    const { backend, composer, view, emit, sent } = await open({ connection: 'sdk' });
+    const { backend, composer, view, emit, sent } = await open({ connection: 'claude-code.sdk' });
     emit({
       type: 'commands',
       commands: [
@@ -955,7 +978,7 @@ describe('a connected agent', () => {
   });
 
   it('completes @-mentions with the project folder’s files', async () => {
-    const { backend, composer, view } = await open({ connection: 'sdk' });
+    const { backend, composer, view } = await open({ connection: 'claude-code.sdk' });
     backend.files.mockResolvedValue(['src/main/', 'src/main/ipc.ts']);
     fireEvent.change(composer, { target: { value: 'look at @ma', selectionStart: 11 } });
     await act(async () => {
@@ -976,7 +999,9 @@ describe('a connected agent', () => {
   });
 
   it('sends images pasted into the message, and shows them with it', async () => {
-    const { backend, composer, view, transcript, sent } = await open({ connection: 'sdk' });
+    const { backend, composer, view, transcript, sent } = await open({
+      connection: 'claude-code.sdk',
+    });
     const png = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
     fireEvent.paste(composer, {
       clipboardData: { files: [png], getData: () => '' },
@@ -997,7 +1022,7 @@ describe('a connected agent', () => {
   });
 
   it('shows what a resumed session did before', async () => {
-    const { emit, transcript } = await open({ connection: 'sdk' });
+    const { emit, transcript } = await open({ connection: 'claude-code.sdk' });
     emit({
       type: 'history',
       events: [
@@ -1012,7 +1037,7 @@ describe('a connected agent', () => {
   });
 
   it('fills in what a resumed session did that its transcript does not show', async () => {
-    const { send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    const { send, sent, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('One');
     const one = sent();
     emit(
@@ -1040,7 +1065,7 @@ describe('a connected agent', () => {
   });
 
   it('marks where /clear cleared the conversation, keeping what came before', async () => {
-    const { send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    const { send, sent, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Hello');
     emit(
       { type: 'user', id: sent(), text: 'Hello' },
@@ -1058,7 +1083,7 @@ describe('a connected agent', () => {
   });
 
   it('words a permission prompt as the CLI does', async () => {
-    const { send, emit, transcript } = await open({ connection: 'sdk' });
+    const { send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Fetch it');
     emit({
       type: 'permission',
@@ -1087,7 +1112,9 @@ describe('a connected agent', () => {
   });
 
   it('answers a permission prompt with 1, 2 or 3, or with what to do instead', async () => {
-    const { backend, composer, send, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, composer, send, emit, transcript } = await open({
+      connection: 'claude-code.sdk',
+    });
     await send('Test it');
     const ask = (id: string) => {
       emit({
@@ -1142,7 +1169,7 @@ describe('a connected agent', () => {
   });
 
   it('shows how long a tool call has run, and how a subagent is going', async () => {
-    const { send, emit, transcript } = await open({ connection: 'sdk' });
+    const { send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');
     emit(
       {
@@ -1184,7 +1211,9 @@ describe('a connected agent', () => {
   });
 
   it('shows what runs in the background, above its composer and on its line, and stops it', async () => {
-    const { backend, view, send, sent, emit, transcript } = await open({ connection: 'sdk' });
+    const { backend, view, send, sent, emit, transcript } = await open({
+      connection: 'claude-code.sdk',
+    });
     await send('Start the dev server, and survey the code meanwhile');
     emit(
       { type: 'tool', id: 'toolu_dev', tool: 'Bash', summary: 'npm run dev', status: 'running' },
@@ -1216,7 +1245,7 @@ describe('a connected agent', () => {
   });
 
   it('offers what Claude Code predicts you send next: Tab takes it', async () => {
-    const { composer, send, sent, emit } = await open({ connection: 'sdk' });
+    const { composer, send, sent, emit } = await open({ connection: 'claude-code.sdk' });
     await send('Fix the bug');
     emit(
       { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
@@ -1230,7 +1259,7 @@ describe('a connected agent', () => {
   });
 
   it('brings back earlier messages with Up and Down, keeping the draft', async () => {
-    const { composer, send, sent, emit } = await open({ connection: 'sdk' });
+    const { composer, send, sent, emit } = await open({ connection: 'claude-code.sdk' });
     for (const text of ['First', 'Second']) {
       await send(text);
       emit({ type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false });
@@ -1249,7 +1278,7 @@ describe('a connected agent', () => {
   });
 
   it('sets its effort beside the model, when the model takes one', async () => {
-    const { backend, view, emit, send } = await open({ connection: 'sdk' });
+    const { backend, view, emit, send } = await open({ connection: 'claude-code.sdk' });
     emit({
       type: 'started',
       model: 'opus',
@@ -1292,12 +1321,12 @@ describe('a connected agent', () => {
     await send('Again');
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'sdk', model: 'old', effort: 'high' }),
+      expect.objectContaining({ connection: 'claude-code.sdk', model: 'old', effort: 'high' }),
     );
   });
 
   it('is set to what its composer chooses, in Terminal too; never to a mode that never asks', async () => {
-    const { backend, view, emit, card } = await open({ connection: 'sdk' });
+    const { backend, view, emit, card } = await open({ connection: 'claude-code.sdk' });
     emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
     fireEvent.click(view.getByRole('button', { name: 'Model: Opus' }));
     fireEvent.click(view.getByRole('menuitemradio', { name: /^Haiku/ }));
@@ -1317,7 +1346,7 @@ describe('a connected agent', () => {
     await settle();
     expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
     expect(backend.start).toHaveBeenLastCalledWith('a', {
-      connection: 'terminal',
+      connection: 'claude-code.terminal',
       model: 'haiku',
       mode: null,
     });
@@ -1326,7 +1355,7 @@ describe('a connected agent', () => {
 
 describe('an Agent SDK agent continued in Terminal', () => {
   it('offers Terminal for a command only Claude Code’s terminal runs, and runs it there', async () => {
-    const { backend, composer, view, emit, card } = await open({ connection: 'sdk' });
+    const { backend, composer, view, emit, card } = await open({ connection: 'claude-code.sdk' });
     emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
     fireEvent.change(composer, { target: { value: '/perm', selectionStart: 5 } });
     const menu = within(view.getByRole('listbox', { name: 'Commands' }));
@@ -1348,7 +1377,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
     expect(card().getAttribute('aria-label')).toBe('a, Claude · Terminal');
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'terminal' }),
+      expect.objectContaining({ connection: 'claude-code.terminal' }),
     );
     expect(backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id: expect.any(String) as unknown,
@@ -1357,7 +1386,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
   });
 
   it('offers Terminal for a shell command in Claude Code’s bash mode (“!”), and runs it there', async () => {
-    const { backend, view, send } = await open({ connection: 'sdk' });
+    const { backend, view, send } = await open({ connection: 'claude-code.sdk' });
     await send('!npm test');
     // Not sent to the Agent SDK session, where it would be a prompt: Terminal is offered.
     expect(backend.send).not.toHaveBeenCalled();
@@ -1376,7 +1405,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
   });
 
   it('takes the offer back on Cancel, and keeps the view open on Escape', async () => {
-    const { backend, send, view } = await open({ connection: 'sdk' });
+    const { backend, send, view } = await open({ connection: 'claude-code.sdk' });
     await send('/login');
     fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
     expect(view.queryByRole('group', { name: 'Continue in Terminal?' })).toBeNull();
@@ -1390,7 +1419,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
   });
 
   it('continues the conversation in Terminal from its agent chip', async () => {
-    const { backend, view } = await open({ connection: 'sdk' });
+    const { backend, view } = await open({ connection: 'claude-code.sdk' });
     fireEvent.click(view.getByRole('button', { name: /^Agent: / }));
     const first = view.getAllByRole('option')[0];
     expect(first?.textContent).toMatch(/^Continue in Terminal.*Claude Code’s own terminal/);
@@ -1402,7 +1431,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
     );
     expect(backend.start).toHaveBeenLastCalledWith(
       'a',
-      expect.objectContaining({ connection: 'terminal' }),
+      expect.objectContaining({ connection: 'claude-code.terminal' }),
     );
     expect(backend.send).not.toHaveBeenCalled();
   });
@@ -1414,7 +1443,7 @@ describe('an Agent SDK agent’s /resume', () => {
   it('lists the project folder’s other conversations, and opens the one picked in this agent', async () => {
     const now = Date.now();
     const { backend, send, view, transcript, emit, sent, composer } = await open(
-      { connection: 'sdk' },
+      { connection: 'claude-code.sdk' },
       (fake) => {
         fake.backend.sessions.mockResolvedValue([
           { id: 'own', title: 'This conversation', modified: now, current: true },
@@ -1458,7 +1487,7 @@ describe('an Agent SDK agent’s /resume', () => {
   });
 
   it('says when there is no other conversation, and why one could not be listed', async () => {
-    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+    const { backend, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
       fake.backend.sessions.mockResolvedValueOnce([
         { id: 'own', title: 'This conversation', modified: 1, current: true },
       ]);
@@ -1478,7 +1507,7 @@ describe('an Agent SDK agent’s /resume', () => {
 
 describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   it('lists them, and reconnects, disables and enables them', async () => {
-    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+    const { backend, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
       fake.backend.mcp.mockResolvedValue([
         {
           name: 'github',
@@ -1521,7 +1550,7 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   });
 
   it('signs in to a server in Terminal, where Claude Code’s own /mcp does it', async () => {
-    const { backend, send, view } = await open({ connection: 'sdk' }, (fake) => {
+    const { backend, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
       fake.backend.mcp.mockResolvedValue([{ name: 'linear', status: 'needs-auth' }]);
     });
     await send('/mcp');
@@ -1537,7 +1566,7 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   });
 
   it('says why they could not be listed', async () => {
-    const { send, view } = await open({ connection: 'sdk' }, (fake) => {
+    const { send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
       fake.backend.mcp.mockRejectedValue(
         new Error("Error invoking remote method 'session:mcp': Error: Not running."),
       );
@@ -1581,7 +1610,7 @@ describe('an MCP server asking the user (an elicitation)', () => {
   } satisfies SessionEvent;
 
   it('shows its form in the transcript, and answers with what was filled in', async () => {
-    const { backend, send, emit, sent, transcript } = await open({ connection: 'sdk' });
+    const { backend, send, emit, sent, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('File an issue');
     emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
     const form = within(transcript.getByRole('form', { name: 'github asks' }));
@@ -1613,7 +1642,9 @@ describe('an MCP server asking the user (an elicitation)', () => {
   });
 
   it('declines, and opens a link a server asks to open through main', async () => {
-    const { backend, send, emit, sent, transcript, openLink } = await open({ connection: 'sdk' });
+    const { backend, send, emit, sent, transcript, openLink } = await open({
+      connection: 'claude-code.sdk',
+    });
     await send('File an issue');
     emit({ type: 'user', id: sent(), text: 'File an issue' }, asked);
     fireEvent.click(transcript.getByRole('button', { name: 'Decline' }));
@@ -1645,7 +1676,7 @@ describe('an MCP server asking the user (an elicitation)', () => {
 describe('an Agent SDK agent rewound', () => {
   /** Agent a, through the Agent SDK, after two turns: "Fix the login bug", then "Now the cart". */
   async function talked(prepare?: (fake: ReturnType<typeof fakeBackend>) => void) {
-    const opened = await open({ connection: 'sdk' }, prepare);
+    const opened = await open({ connection: 'claude-code.sdk' }, prepare);
     const { send, emit, sent } = opened;
     const ids: string[] = [];
     for (const text of ['Fix the login bug', 'Now the cart']) {

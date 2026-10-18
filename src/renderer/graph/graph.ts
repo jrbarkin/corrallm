@@ -1,9 +1,12 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
+import { isStartMode } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { parseRole } from '../../shared/role';
-import type { AgentSettings, Cli, Connection } from '../../shared/session';
-import { AGENT_CONNECTIONS, DEFAULT_AGENT, translateActions } from './agents';
-import type { AgentConnection, AgentType } from './agents';
+import type { AgentSettings } from '../../shared/session';
+import { catalog } from '../catalog';
+import { connectionsOf, DEFAULT_AGENT, defaultConnection, translateActions } from './agents';
+import type { AgentConnection } from './agents';
 import {
   isApproval,
   isDelay,
@@ -35,18 +38,18 @@ import { sameTime } from './time';
  */
 export type NodeKind = 'agent' | 'frame';
 /**
- * `agent`: the coding agent an item runs (frames have none), and `connection`, how it runs when not
- * the native default (agents.ts); `settings`, what it is set to run with in each CLI it has run (its model,
- * effort and starting mode: src/shared/session.ts). `color`: a group's colour, an index into the
- * GROUP_COLORS palette (GraphEditor.css).
+ * `adapter`: the agent an item runs (frames have none), and `connection`, how it runs when not its
+ * adapter's first (agents.ts); `settings`, what it is set to run with by each adapter it has run
+ * (its model, effort and starting mode: src/shared/session.ts). `color`: a group's colour, an index
+ * into the GROUP_COLORS palette (GraphEditor.css).
  */
 export type GraphNode = Node<
   {
     label: string;
-    agent?: AgentType;
-    connection?: Connection;
-    settings?: Partial<Record<Cli, AgentSettings>>;
-    /** Authored instructions shared by every CLI this agent runs. */
+    adapter?: AdapterId;
+    connection?: ConnectionId;
+    settings?: Partial<Record<AdapterId, AgentSettings>>;
+    /** Authored instructions shared by every adapter this agent runs. */
     role?: string;
     queue?: QueueItem[];
     color?: number;
@@ -192,7 +195,7 @@ export function spawnAgent(
       position: { x: spot.x - origin.x, y: spot.y - origin.y },
       data: {
         label: nextLabel(nodes, 'Agent'),
-        ...newAgent(id, source.data.agent),
+        ...newAgent(id, source.data.adapter),
         ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
         ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
         ...(source.data.role === undefined ? {} : { role: source.data.role }),
@@ -211,14 +214,14 @@ export function spawnAgent(
 }
 
 /**
- * What a new agent (node `id`) starts with besides its label: its type (the default agent unless
- * given), and a queue that starts with a message to write, telling the agent what to do.
+ * What a new agent (node `id`) starts with besides its label: its adapter (the default agent's
+ * unless given), and a queue that starts with a message to write, telling the agent what to do.
  */
 function newAgent(
   id: string,
-  agent: AgentType = DEFAULT_AGENT,
-): Pick<GraphNode['data'], 'agent' | 'queue'> {
-  return { agent, queue: [{ id: `${id}/message`, message: '' }] };
+  adapter: AdapterId = DEFAULT_AGENT,
+): Pick<GraphNode['data'], 'adapter' | 'queue'> {
+  return { adapter, queue: [{ id: `${id}/message`, message: '' }] };
 }
 
 /** Sets a node's label. Any string is accepted, including an empty one. */
@@ -232,51 +235,79 @@ export function renameNode(graph: Graph, id: string, label: string): Graph {
 }
 
 /**
- * Sets the coding agent a node runs, translating steps and dropping a connection its new type
- * does not offer. Groups (frames) have none.
+ * Sets the agent a node runs (its adapter), translating steps and dropping a connection its new
+ * adapter does not offer, and a saved mode the connection it now runs does not start in. Groups
+ * (frames) have none.
  */
-export function setAgent(graph: Graph, id: string, agent: AgentType): Graph {
+export function setAgent(graph: Graph, id: string, adapter: AdapterId): Graph {
   const node = graph.nodes.find((n) => n.id === id);
-  if (node?.type !== 'agent' || node.data.agent === agent) return graph;
-  const { connection, ...data } = node.data;
-  const kept = connection !== undefined && AGENT_CONNECTIONS[agent].includes(connection);
-  const queue = data.queue && translateActions(data.queue, data.agent ?? DEFAULT_AGENT, agent);
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) =>
-      n === node
-        ? {
-            ...n,
-            data: { ...data, agent, ...(queue ? { queue } : {}), ...(kept ? { connection } : {}) },
-          }
-        : n,
-    ),
-  };
+  if (node?.type !== 'agent' || node.data.adapter === adapter) return graph;
+  const { connection, settings, ...data } = node.data;
+  const kept = connection !== undefined && connectionsOf(adapter).includes(connection);
+  const queue = data.queue && translateActions(data.queue, data.adapter ?? DEFAULT_AGENT, adapter);
+  const runs = kept ? connection : defaultConnection(adapter);
+  return replace(graph, node, {
+    ...data,
+    adapter,
+    ...(queue ? { queue } : {}),
+    ...(kept ? { connection } : {}),
+    ...fitted(settings, adapter, runs),
+  });
 }
 
 /**
- * Sets what an agent is set to run with in `cli` (what is not in `settings` is the user's own
- * default); nothing set in any CLI leaves it no settings at all.
+ * `settings`, without the mode saved for `adapter` if the connection it runs (`runs`) doesn't start
+ * in it: what a file keeps of an agent's settings always reads back (file.ts).
  */
-export function setSettings(graph: Graph, id: string, cli: Cli, settings: AgentSettings): Graph {
+function fitted(
+  settings: GraphNode['data']['settings'],
+  adapter: AdapterId,
+  runs: AgentConnection,
+): Pick<GraphNode['data'], 'settings'> {
+  if (settings === undefined) return {};
+  const mode = settings[adapter]?.mode;
+  if (mode === undefined || runs === 'unavailable') return { settings };
+  if (isStartMode(catalog(), adapter, runs, mode)) return { settings };
+  const rest = { ...settings[adapter] };
+  delete rest.mode;
+  const kept = withSettings({ ...settings, [adapter]: rest });
+  return kept === undefined ? {} : { settings: kept };
+}
+
+/** Each adapter's settings that set anything; undefined if none does. */
+function withSettings(
+  all: NonNullable<GraphNode['data']['settings']>,
+): GraphNode['data']['settings'] {
+  const kept = Object.entries(all).filter(
+    (entry): entry is [string, AgentSettings] =>
+      entry[1] !== undefined && Object.keys(entry[1]).length > 0,
+  );
+  return kept.length === 0 ? undefined : Object.fromEntries(kept);
+}
+
+/** `graph` with `node`'s data replaced by `data`. */
+function replace(graph: Graph, node: GraphNode, data: GraphNode['data']): Graph {
+  return { ...graph, nodes: graph.nodes.map((n) => (n === node ? { ...n, data } : n)) };
+}
+
+/**
+ * Sets what an agent is set to run with by `adapter` (what is not in `settings` is the user's own
+ * default); nothing set by any adapter leaves it no settings at all.
+ */
+export function setSettings(
+  graph: Graph,
+  id: string,
+  adapter: AdapterId,
+  settings: AgentSettings,
+): Graph {
   const node = graph.nodes.find((n) => n.id === id);
   if (node?.type !== 'agent') return graph;
   const { settings: before = {}, ...data } = node.data;
-  const all = { ...before, [cli]: settings };
-  const kept = Object.fromEntries(
-    Object.entries(all).filter(([, one]) => Object.keys(one).length > 0),
-  );
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) =>
-      n === node
-        ? { ...n, data: Object.keys(kept).length === 0 ? data : { ...data, settings: kept } }
-        : n,
-    ),
-  };
+  const kept = withSettings({ ...before, [adapter]: settings });
+  return replace(graph, node, kept === undefined ? data : { ...data, settings: kept });
 }
 
-/** Sets the authored role without changing the agent's per-CLI settings or active session. */
+/** Sets the authored role without changing the agent's per-adapter settings or active session. */
 export function setRole(graph: Graph, id: string, role: string | undefined): Graph {
   const node = graph.nodes.find((node) => node.id === id);
   if (node?.type !== 'agent') return graph;
@@ -291,23 +322,23 @@ export function setRole(graph: Graph, id: string, role: string | undefined): Gra
   };
 }
 
-/** Sets the native connection, if its agent type offers it. */
+/**
+ * Sets the native connection, if its adapter offers it, dropping a saved mode that connection
+ * doesn't start in.
+ */
 export function setConnection(graph: Graph, id: string, connection: AgentConnection): Graph {
   const node = graph.nodes.find((n) => n.id === id);
+  const adapter = node?.data.adapter ?? DEFAULT_AGENT;
   if (
     node?.type !== 'agent' ||
     connection === 'unavailable' ||
-    !AGENT_CONNECTIONS[node.data.agent ?? DEFAULT_AGENT].includes(connection) ||
+    !connectionsOf(adapter).includes(connection) ||
     node.data.connection === connection
   ) {
     return graph;
   }
-  const data = { ...node.data };
-  delete data.connection;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...data, connection } } : n)),
-  };
+  const { settings, ...data } = node.data;
+  return replace(graph, node, { ...data, connection, ...fitted(settings, adapter, connection) });
 }
 
 /**

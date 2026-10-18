@@ -1,19 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SyntheticEvent } from 'react';
 
+import { usageBackendIn } from '../../shared/adapter';
+import type { UsageBackendId } from '../../shared/adapter';
 import { USAGE_ACTIONS, USAGE_WINDOWS, usageOver, WINDOW_NAMES } from '../../shared/usage';
 import type {
   UsageAction,
-  UsageBackend,
   UsageReading,
   UsageRule,
   UsageState,
   UsageWindow,
   UsageWindows,
 } from '../../shared/usage';
+import { catalog } from '../catalog';
 import { parseTime } from '../graph/time';
 import { SearchPicker } from '../search/SearchPicker';
-import { ACTION_INFO, ageText, percentText, readingOf, resetTime, windowText } from './usage';
+import {
+  ACTION_INFO,
+  ageText,
+  backendName,
+  percentText,
+  readingOf,
+  resetTime,
+  windowText,
+} from './usage';
 import './Usage.css';
 
 /** A reading older than this says how old it is on its gauge, not only in its panel. */
@@ -22,14 +32,6 @@ const STALE_MS = 15 * 60_000;
 const PERCENTS = [50, 60, 70, 75, 80, 85, 90, 95];
 /** A new rule's share and window, until changed. */
 const NEW_RULE = { window: 'fiveHour', percent: 80 } as const;
-
-/** Where each backend's readings come from, as its panel says. */
-const SOURCES: Readonly<Record<UsageBackend, string>> = {
-  Claude:
-    'Read from Claude Code’s status line while a Terminal agent works. Agent SDK agents run on an API key, which has no usage windows: they read nothing.',
-  Codex:
-    'Read from Codex’s app server while an App Server agent works, and as a Terminal agent starts and after each turn (asking one of its own, which spends no usage). On an API key, Codex has no usage windows: it reads nothing.',
-};
 
 const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -59,10 +61,10 @@ export function UsageGauges({
   onRule,
   onSimulate,
 }: {
-  backends: readonly UsageBackend[];
+  backends: readonly UsageBackendId[];
   usage: UsageState;
-  onRule: (backend: UsageBackend, rule: UsageRule | null) => void;
-  onSimulate: (backend: UsageBackend, windows: UsageWindows | null) => void;
+  onRule: (backend: UsageBackendId, rule: UsageRule | null) => void;
+  onSimulate: (backend: UsageBackendId, windows: UsageWindows | null) => void;
 }) {
   const now = useNow();
   if (backends.length === 0) return null;
@@ -104,7 +106,7 @@ function UsageGauge({
   onRule,
   onSimulate,
 }: {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   reading: UsageReading | undefined;
   rule: UsageRule | undefined;
   now: number;
@@ -113,6 +115,7 @@ function UsageGauge({
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const name = backendName(backend);
   const windows = counting(reading, now);
   const over = rule !== undefined && usageOver(reading, rule.window, rule.percent, now);
   const stale = reading !== undefined && now - reading.at > STALE_MS;
@@ -151,16 +154,16 @@ function UsageGauge({
       <button
         type="button"
         className="usage-gauge"
-        aria-label={`${backend} usage: ${summary}`}
+        aria-label={`${name} usage: ${summary}`}
         aria-expanded={open}
-        title={`${backend}’s usage limits, its usage rule, and simulating usage`}
+        title={`${name}’s usage limits, its usage rule, and simulating usage`}
         data-over={over ? '' : undefined}
         data-stale={stale ? '' : undefined}
         onClick={() => {
           setOpen(!open);
         }}
       >
-        <span className="usage-name">{backend}</span>
+        <span className="usage-name">{name}</span>
         {windows.length === 0 && <span className="usage-none">{none}</span>}
         {windows.map(({ window, usedPercent }) => (
           <span
@@ -207,7 +210,7 @@ function UsagePanel({
   onRule,
   onSimulate,
 }: {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   reading: UsageReading | undefined;
   rule: UsageRule | undefined;
   now: number;
@@ -215,10 +218,11 @@ function UsagePanel({
   onSimulate: (windows: UsageWindows | null) => void;
 }) {
   const [simulating, setSimulating] = useState(false);
+  const name = backendName(backend);
   return (
-    <div className="usage-panel" role="dialog" aria-label={`${backend} usage`}>
+    <div className="usage-panel" role="dialog" aria-label={`${name} usage`}>
       <p className="usage-panel-title">
-        <strong>{backend} usage</strong>
+        <strong>{name} usage</strong>
         <span className="usage-panel-age">
           {reading === undefined
             ? 'Not read yet'
@@ -251,7 +255,7 @@ function UsagePanel({
           );
         })}
       </ul>
-      <p className="usage-panel-note">{SOURCES[backend]}</p>
+      <p className="usage-panel-note">{usageBackendIn(catalog(), backend)?.source}</p>
       <RuleEditor rule={rule} onRule={onRule} />
       {simulating ? (
         <SimulateForm
@@ -417,7 +421,7 @@ function SimulateForm({
   onSimulate,
   onCancel,
 }: {
-  backend: UsageBackend;
+  backend: UsageBackendId;
   onSimulate: (windows: UsageWindows | null) => void;
   onCancel: () => void;
 }) {
@@ -447,7 +451,11 @@ function SimulateForm({
     onSimulate(Object.keys(windows).length === 0 ? null : windows);
   };
   return (
-    <form className="usage-simulate" aria-label={`Simulate ${backend}’s usage`} onSubmit={submit}>
+    <form
+      className="usage-simulate"
+      aria-label={`Simulate ${backendName(backend)}’s usage`}
+      onSubmit={submit}
+    >
       {USAGE_WINDOWS.map((window) => (
         <p key={window}>
           <span className="usage-panel-window">{upper(windowText(window))}</span>
@@ -482,7 +490,7 @@ function SimulateForm({
         </button>
         <button
           type="button"
-          title={`Forget ${backend}’s reading`}
+          title={`Forget ${backendName(backend)}’s reading`}
           onClick={() => {
             onSimulate(null);
           }}

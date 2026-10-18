@@ -11,7 +11,7 @@
         "x": 0,
         "y": 0
       },
-      "agent": "Claude",
+      "adapter": "claude-code",
       "queue": [
         {
           "id": "brief",
@@ -63,7 +63,7 @@
         "x": 360,
         "y": 160
       },
-      "agent": "Codex"
+      "adapter": "codex"
     }
   ],
   "links": []

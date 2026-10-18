@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_ACTIONS } from '../graph/agents';
+import { actionsOf } from '../graph/agents';
 import { conditionQuestion, replyContains, stepMessage, stepVerdict, yesOrNo } from './turns';
 
 describe('what the run says to a connected agent', () => {
-  const claude = AGENT_ACTIONS.Claude;
+  const claude = actionsOf('claude-code');
   /** What a tool's step asks for at its end: how it went. */
   const VERDICT =
     ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
@@ -64,7 +64,7 @@ describe('what the run says to a connected agent', () => {
   });
 
   it('asks a Codex agent how its step went too, but not of its slash commands', () => {
-    const codex = AGENT_ACTIONS.Codex;
+    const codex = actionsOf('codex');
     expect(stepMessage('exec_command', codex)).toBe(
       `Use the exec_command tool for this step (run a shell command).${VERDICT}`,
     );

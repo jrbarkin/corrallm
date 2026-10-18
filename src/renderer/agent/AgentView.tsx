@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
+import type { AdapterId } from '../../shared/adapter';
 import type { ProjectFolder } from '../../shared/ipc';
-import { TERMINAL_CONNECTIONS } from '../../shared/session';
 import type {
-  Cli,
   ElicitationAction,
   FormValue,
   McpChange,
@@ -15,8 +14,9 @@ import type {
   RewindResult,
   SettingsOptions,
 } from '../../shared/session';
-import { AGENT_ACTIONS, AGENT_CLI, DEFAULT_AGENT } from '../graph/agents';
-import type { AgentConnection, AgentType } from '../graph/agents';
+import { isTerminal } from '../catalog';
+import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
 import type { GraphNode } from '../graph/graph';
@@ -66,7 +66,7 @@ export interface SessionControls extends ComposerControls {
   previewRewind: (messageId: string) => Promise<FilesRewind>;
   rewind: (messageId: string, restore: RewindRestore) => Promise<RewindResult>;
   /** What an agent of a CLI can be set to run with, and the user's own defaults. */
-  settingsOptions: (cli: Cli) => Promise<SettingsOptions>;
+  settingsOptions: (adapter: AdapterId) => Promise<SettingsOptions>;
   /** Starts its connected session again with what it is set to now, resuming its conversation. */
   restart: () => void;
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
@@ -170,7 +170,7 @@ export function AgentView({
   /** Where a Terminal agent's terminal comes from (the main process). */
   terminal: TerminalBackend;
   /** Sets its type and how it runs. */
-  onAgent: (agent: AgentType, connection: AgentConnection) => void;
+  onAgent: (agent: AdapterId, connection: AgentConnection) => void;
   /** Opens its Agent settings sheet (AgentSettings.tsx). */
   onOpenSettings: () => void;
   /** Switches it to Terminal, which resumes its conversation, and runs `command` there if given. */
@@ -289,7 +289,7 @@ export function AgentView({
   /** The user's messages it can rewind to (since the last /clear), oldest first. */
   const points = rewindPoints(session.entries);
   /** Whether it can be rewound now: an idle Agent SDK agent, with a message of the user's. */
-  const rewindable = connection === 'sdk' && !working && points.length > 0;
+  const rewindable = connection === 'claude-code.sdk' && !working && points.length > 0;
   const { stop } = controls;
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -372,7 +372,7 @@ export function AgentView({
 
   const label = node.data.label;
   const name = label || 'Unnamed agent';
-  const agent = node.data.agent ?? DEFAULT_AGENT;
+  const agent = node.data.adapter ?? DEFAULT_AGENT;
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
   const firstMessage = chatStart(session.entries, conversationOf(connection));
   /** The lines its edits added and removed, this session. */
@@ -386,14 +386,15 @@ export function AgentView({
   /** Its card, on top of the stack while it minimizes into the rail. */
   const itself: StackedAgent = { id: node.id, name, agent, status: session.status };
   /** The slash commands its composer completes: an Agent SDK agent's include Terminal's. */
-  const commands = connection === 'sdk' ? completedCommands(session.commands) : session.commands;
+  const commands =
+    connection === 'claude-code.sdk' ? completedCommands(session.commands) : session.commands;
   /**
    * What the composer sends: a command only Claude Code's terminal runs (one of its screens, or a
    * shell command for its bash mode) is offered there instead; while the run asks (`ask.reply`),
    * the answer, unless it is a command the session runs.
    */
   const send = (text: string, images?: MessageImage[]) => {
-    const answered = connection === 'sdk' ? viewCommand(text) : undefined;
+    const answered = connection === 'claude-code.sdk' ? viewCommand(text) : undefined;
     if (answered !== undefined) {
       controls.recordSubmission?.(text, images);
       setRewindTo(undefined);
@@ -401,7 +402,7 @@ export function AgentView({
       return;
     }
     if (
-      connection === 'sdk' &&
+      connection === 'claude-code.sdk' &&
       (terminalCommand(text, session.commands) || bashCommand(text) !== undefined)
     ) {
       setOffer(text.trim());
@@ -478,7 +479,7 @@ export function AgentView({
                 onOpen={onOpenSettings}
               />
               <AgentChip
-                agent={agent}
+                adapter={agent}
                 connection={connection}
                 onChange={onAgent}
                 onContinueInTerminal={() => {
@@ -507,7 +508,7 @@ export function AgentView({
                   node={node}
                   nodes={nodes}
                   agent={agent}
-                  actions={AGENT_ACTIONS[agent]}
+                  actions={actionsOf(agent)}
                   {...own}
                   onChooseStep={chooseStep}
                   {...(choosing ? { choosing } : {})}
@@ -535,10 +536,10 @@ export function AgentView({
                     Choose a connected agent
                   </button>
                 </section>
-              ) : TERMINAL_CONNECTIONS.includes(connection) ? (
+              ) : isTerminal(connection) ? (
                 <TerminalPane
                   agentId={node.id}
-                  cli={AGENT_CLI[agent]}
+                  cli={adapterCli(agent)}
                   backend={terminal}
                   session={session}
                   note={sessionNote(agent, connection, project)}
@@ -562,7 +563,7 @@ export function AgentView({
                     <QueueAddMenu
                       node={node}
                       nodes={nodes}
-                      actions={AGENT_ACTIONS[agent]}
+                      actions={actionsOf(agent)}
                       label="Queue something"
                       onAdd={own.onAdd}
                       onChooseStep={chooseStep}
@@ -680,7 +681,7 @@ export function AgentView({
                         <QueueAddMenu
                           node={node}
                           nodes={nodes}
-                          actions={AGENT_ACTIONS[agent]}
+                          actions={actionsOf(agent)}
                           label="Queue something"
                           onAdd={own.onAdd}
                           onChooseStep={chooseStep}
@@ -853,17 +854,17 @@ function TerminalOffer({
 
 /** What the empty transcript says about how the session runs, and what it needs. */
 function sessionNote(
-  agent: AgentType,
+  agent: AdapterId,
   connection: AgentConnection,
   project: ProjectFolder | null,
 ): string {
-  const cli = AGENT_CLI[agent];
+  const cli = adapterCli(agent);
   if (connection === 'unavailable') {
     return `${cli} has no connector yet. Choose Claude Code or Codex in Agent settings.`;
   }
-  const how = TERMINAL_CONNECTIONS.includes(connection)
+  const how = isTerminal(connection)
     ? 'in a terminal'
-    : `through ${connection === 'sdk' ? 'the Agent SDK' : 'its app server'}`;
+    : `through ${connection === 'claude-code.sdk' ? 'the Agent SDK' : 'its app server'}`;
   return project === null
     ? `Choose a project folder for this canvas (top left of the canvas) to run ${cli} in it, ${how}.`
     : `${cli} works in ${project.name}, ${how}.`;

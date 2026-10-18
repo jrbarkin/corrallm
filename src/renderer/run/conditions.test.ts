@@ -39,7 +39,7 @@ function setup(queue: QueueItem[], unheard = false) {
     id: 'a',
     type: 'agent',
     position: { x: 0, y: 0 },
-    data: { label: 'A', connection: 'sdk', queue },
+    data: { label: 'A', connection: 'claude-code.sdk', queue },
   };
   store.update([node]);
   return {

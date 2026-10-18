@@ -6,6 +6,7 @@ import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
+import { catalog } from '../catalog';
 import { readRun } from '../run/checkpoint';
 import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../test-backend';
@@ -87,7 +88,7 @@ describe('GraphEditor', () => {
         agentNode('a', 0, 0, {
           data: {
             label: 'Restored',
-            connection: 'sdk',
+            connection: 'claude-code.sdk',
             queue: [
               { id: 'done', message: 'Already finished' },
               { id: 'planned', message: 'Continue saved work' },
@@ -151,7 +152,7 @@ describe('GraphEditor', () => {
     fireEvent.keyDown(labelInput(), { key: 'Enter' });
     await waitFor(() => {
       const saved = source.save.mock.calls.at(-1)?.[1];
-      expect(saved && fromFile(saved.workflow).nodes[0]?.data.label).toBe('Shown');
+      expect(saved && fromFile(saved.workflow, catalog()).nodes[0]?.data.label).toBe('Shown');
     });
     fireEvent.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
@@ -167,7 +168,7 @@ describe('GraphEditor', () => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
     });
     const stopped = source.save.mock.calls.at(-1)?.[1];
-    expect(stopped && fromFile(stopped.workflow).nodes[0]?.data.label).toBe('Shown');
+    expect(stopped && fromFile(stopped.workflow, catalog()).nodes[0]?.data.label).toBe('Shown');
     expect(stopped && readRun(stopped.state).run).toMatchObject({
       running: false,
       paused: true,
@@ -200,8 +201,8 @@ describe('GraphEditor', () => {
               agentNode('a', 0, 0, {
                 data: {
                   label: 'a',
-                  agent: 'Codex',
-                  connection: 'app-server',
+                  adapter: 'codex',
+                  connection: 'codex.app-server',
                   queue: [{ id: 'work', message: 'Held work' }],
                 },
               }),
@@ -221,14 +222,14 @@ describe('GraphEditor', () => {
         listener({
           readings: [
             {
-              backend: 'Codex',
+              backend: 'codex',
               at: Date.now(),
               windows: {
                 fiveHour: { usedPercent: 95, resetsAt: Date.now() + 60_000 },
               },
             },
           ],
-          rules: { Codex: { window: 'fiveHour', percent: 80, action: 'ask' } },
+          rules: { codex: { window: 'fiveHour', percent: 80, action: 'ask' } },
         });
     });
     expect(screen.getByRole('button', { name: /^Codex usage: 95%/ })).toBeTruthy();
@@ -248,7 +249,7 @@ describe('GraphEditor', () => {
         agentNode('legacy', 0, 0, {
           data: {
             label: 'Legacy',
-            agent: 'Qwen',
+            adapter: 'qwen',
             queue: [{ id: 'work', message: 'Keep this work pending' }],
           },
         }),
@@ -272,7 +273,7 @@ describe('GraphEditor', () => {
     expect(fake.backend.send).not.toHaveBeenCalled();
     fireEvent.click(queues.getByRole('button', { name: 'Open Legacy' }));
     const view = within(screen.getByRole('dialog', { name: 'Legacy' }));
-    expect(view.getByText(/Qwen Code has no connector yet/)).toBeTruthy();
+    expect(view.getByText(/qwen has no connector yet/)).toBeTruthy();
     expect(view.queryByRole('textbox', { name: 'Message Legacy' })).toBeNull();
     expect(view.queryByText(/scripted session|SUCCEEDED/)).toBeNull();
     fireEvent.click(view.getByRole('button', { name: 'Choose a connected agent' }));
@@ -283,7 +284,7 @@ describe('GraphEditor', () => {
         .getAllByRole('option')
         .map((option) => option.textContent)
         .join(' '),
-    ).not.toMatch(/Simulated|Qwen|Gemini/);
+    ).not.toMatch(/Simulated|qwen|gemini/i);
   });
 
   it('holds one agent through its context menu without changing the saved canvas', async () => {
@@ -393,7 +394,7 @@ describe('GraphEditor', () => {
         agentNode('a', 0, 0, {
           data: {
             label: 'a',
-            connection: 'sdk',
+            connection: 'claude-code.sdk',
             queue: [{ id: 'planned', message: 'Do planned work' }],
           },
         }),
@@ -429,7 +430,7 @@ describe('GraphEditor', () => {
     act(() => {
       sessions.emit(
         'a',
-        'sdk',
+        'claude-code.sdk',
         { type: 'user', id: message, text: 'Inspect the failure' },
         { type: 'text', id: 'answer', text: 'I inspected it.' },
         { type: 'end', messages: [message], seconds: 1, interrupted: false, failed: false },
@@ -468,7 +469,7 @@ describe('GraphEditor', () => {
   it('records an SDK command handled locally as a completed submitted message', async () => {
     const sessions = fakeBackend();
     const initial: Graph = {
-      nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'sdk' } })],
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
       edges: [],
     };
     const { container } = render(
@@ -1145,8 +1146,8 @@ describe('GraphEditor', () => {
             ],
           },
         }),
-        agentNode('x', 0, 100, { data: { label: 'Coder', agent: 'Codex' } }),
-        agentNode('g', 0, 200, { data: { label: 'Writer', agent: 'Gemini' } }),
+        agentNode('x', 0, 100, { data: { label: 'Coder', adapter: 'codex' } }),
+        agentNode('g', 0, 200, { data: { label: 'Writer', adapter: 'gemini' } }),
       ],
       edges: [],
     });
@@ -1218,7 +1219,7 @@ describe('GraphEditor', () => {
     const { node } = setup({
       nodes: [
         agentNode('a', 0, 0),
-        agentNode('g', 0, 100, { data: { label: 'g', agent: 'Gemini' } }),
+        agentNode('g', 0, 100, { data: { label: 'g', adapter: 'gemini' } }),
       ],
       edges: [],
     });
@@ -1261,7 +1262,7 @@ describe('GraphEditor', () => {
 
   it("checks a Codex agent's usage in an If and a wait; its gauge says where readings come from", () => {
     const { node } = setup({
-      nodes: [agentNode('x', 0, 0, { data: { label: 'Coder', agent: 'Codex' } })],
+      nodes: [agentNode('x', 0, 0, { data: { label: 'Coder', adapter: 'codex' } })],
       edges: [],
     });
     fireEvent.click(screen.getByRole('button', { name: 'Codex usage: no reading' }));
@@ -1303,22 +1304,22 @@ describe('GraphEditor', () => {
   it("shows each node's agent type, and changes it from the node's panel", () => {
     const { node } = setup({
       nodes: [
-        agentNode('a', 0, 0, { data: { label: 'a', agent: 'Codex' } }),
+        agentNode('a', 0, 0, { data: { label: 'a', adapter: 'codex' } }),
         agentNode('b', 0, 100),
       ],
       edges: [],
     });
     const tag = (id: string) => node(id).querySelector('.graph-agent')?.getAttribute('data-agent');
-    expect([tag('a'), tag('b')]).toEqual(['Codex', 'Claude']);
+    expect([tag('a'), tag('b')]).toEqual(['codex', 'claude-code']);
     expect(node('a').getAttribute('aria-label')).toBe('a, Codex · Terminal');
 
     fireEvent.doubleClick(node('a'));
     const panel = within(screen.getByRole('dialog', { name: 'a' }));
     fireEvent.click(panel.getByRole('button', { name: 'Agent: Codex · Terminal' }));
-    expect(panel.queryByRole('option', { name: 'Qwen' })).toBeNull();
+    expect(panel.queryByRole('option', { name: /qwen/i })).toBeNull();
     expect(panel.queryByRole('option', { name: /Simulated/ })).toBeNull();
     fireEvent.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
-    expect(tag('a')).toBe('Claude');
+    expect(tag('a')).toBe('claude-code');
     expect(panel.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
   });
 
@@ -1678,7 +1679,7 @@ describe('GraphEditor', () => {
       });
       const [text, choose] = files.save.mock.calls[0] ?? [];
       expect(choose).toBe(false);
-      expect(fromFile(text ?? '').nodes.map((n) => n.data.label)).toEqual(['Agent 1']);
+      expect(fromFile(text ?? '', catalog()).nodes.map((n) => n.data.label)).toEqual(['Agent 1']);
 
       // Ctrl/⌘ Shift S saves as, Ctrl/⌘ S saves.
       fireEvent.keyDown(document.body, { key: 's', ctrlKey: true, shiftKey: true });
@@ -1805,7 +1806,7 @@ describe('GraphEditor', () => {
       fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
       // Each agent starts as the template names it; the Tester is left to the default agent.
       const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
-      expect((tester as HTMLSelectElement).value).toBe('Codex');
+      expect((tester as HTMLSelectElement).value).toBe('codex');
       fireEvent.change(tester, { target: { value: '' } });
       fireEvent.click(gallery.getByRole('button', { name: 'Insert into this canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -1822,15 +1823,15 @@ describe('GraphEditor', () => {
           ?.querySelector('[data-agent]')
           ?.getAttribute('data-agent');
       expect(['Tester', 'Implementer', 'Refactorer'].map(agentOf)).toEqual([
-        'Claude',
-        'Claude',
-        'Codex',
+        'claude-code',
+        'claude-code',
+        'codex',
       ]);
     });
 
     it('runs a template’s agents through native connections even before their CLI is installed', async () => {
       const sessions = fakeBackend();
-      sessions.backend.installed.mockResolvedValue({ claude: true, codex: false });
+      sessions.backend.installed.mockResolvedValue({ 'claude-code': true, codex: false });
       const { container } = render(
         <GraphEditor files={fakeFiles()} sessionBackend={sessions.backend} />,
       );
@@ -1842,23 +1843,28 @@ describe('GraphEditor', () => {
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);
       // Missing CLIs never substitute a scripted runtime: each role keeps a native connection.
       await waitFor(() => {
-        expect(how('Implementer').value).toBe('terminal');
+        expect(how('Implementer').value).toBe('claude-code.terminal');
       });
       expect(options('Implementer')).toEqual(['Terminal', 'Agent SDK']);
-      expect(how('Tester').value).toBe('codex-terminal');
+      expect(how('Tester').value).toBe('codex.terminal');
       expect(options('Tester')).toEqual(['Terminal (CLI not found)', 'App Server (CLI not found)']);
       // Another type runs as that type does by default.
       fireEvent.change(gallery.getByRole('combobox', { name: "Tester's agent" }), {
-        target: { value: 'Claude' },
+        target: { value: 'claude-code' },
       });
-      expect(how('Tester').value).toBe('terminal');
-      fireEvent.change(how('Refactorer'), { target: { value: 'app-server' } });
+      expect(how('Tester').value).toBe('claude-code.terminal');
+      fireEvent.change(how('Refactorer'), { target: { value: 'codex.app-server' } });
+      // Only adapters this build has are offered.
       expect(
         [
           ...gallery.getByRole<HTMLSelectElement>('combobox', { name: "Implementer's agent" })
             .options,
-        ].find((option) => option.value === 'Gemini')?.disabled,
-      ).toBe(true);
+        ].map((option) => [option.value, option.textContent]),
+      ).toEqual([
+        ['', 'Default (Claude)'],
+        ['claude-code', 'Claude'],
+        ['codex', 'Codex'],
+      ]);
 
       fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
       const cards = () =>
@@ -1884,7 +1890,7 @@ describe('GraphEditor', () => {
         expect(sessions.backend.start).toHaveBeenCalledTimes(1);
       });
       expect(sessions.backend.start).toHaveBeenCalledWith('implementer', {
-        connection: 'terminal',
+        connection: 'claude-code.terminal',
         model: null,
         mode: null,
       });

@@ -1,10 +1,10 @@
-import type { Connection } from '../../shared/session';
-import { CONNECTION_INFO } from '../graph/agents';
+import type { ConnectionId } from '../../shared/adapter';
+import { connectionInfo } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { agentName, itemLabel, okWhat, taskLabel, untilText } from '../graph/labels';
 import { checkedBy, findItem, isApproval, isRepeat, isWait } from '../graph/queue';
 import type { QueueItem } from '../graph/queue';
-import { holdText, resetTime } from '../usage/usage';
+import { backendName, holdText, resetTime } from '../usage/usage';
 import type { UsageHold } from '../usage/usage';
 import type { Run, TaskProblem } from './runner';
 
@@ -78,7 +78,7 @@ export function usageAnswers({
       {
         key: 'goOn',
         label: 'Go on',
-        title: `Every ${backend} agent carries on until the window resets`,
+        title: `Every ${backendName(backend)} agent carries on until the window resets`,
         primary: true,
       },
       ...(resetsAt === null
@@ -87,7 +87,7 @@ export function usageAnswers({
             {
               key: 'wait',
               label: 'Wait for the reset',
-              title: `Every ${backend} agent holds until the window resets, then goes on`,
+              title: `Every ${backendName(backend)} agent holds until the window resets, then goes on`,
             },
           ]),
       { key: 'stop', label: 'Stop here', title: 'Stop this queue here, and whatever waits on it' },
@@ -148,7 +148,7 @@ export interface HeldAsk extends Answers {
    * Held because a session would not start: whose (this agent's, or one it handed a message to),
    * and the connection Switch (`{ choice: 'switch' }`) runs it with.
    */
-  refusal?: { agent: string; switchTo?: Connection };
+  refusal?: { agent: string; switchTo?: ConnectionId };
   /** A task's known failure, cancellation, or uncertain result, awaiting a human decision. */
   problem?: TaskProblem;
 }
@@ -183,7 +183,7 @@ export function heldAsks(nodes: readonly GraphNode[], run: Run, now = Date.now()
     if (item && at.refused) {
       const { agent: to, text, switchTo } = at.refused;
       const name = agentName(nodes, to);
-      const how = switchTo === undefined ? undefined : CONNECTION_INFO[switchTo].label;
+      const how = switchTo === undefined ? undefined : connectionInfo(switchTo).label;
       return [
         {
           agent,

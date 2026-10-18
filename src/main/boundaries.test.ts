@@ -60,6 +60,8 @@ describe('ESLint’s boundaries in main', () => {
       ['src/main/sessions/terminal/session.ts', '../sdk/tools'],
       ['src/main/api/mcp.ts', '../sessions/codex/login'],
       ['src/main/settings.ts', './sessions/codex/login'],
+      ['src/main/ipc.ts', './sessions/claude-code/adapter'],
+      ['src/main/sessions/terminal/session.ts', '../claude-code/adapter'],
     ] as const) {
       expect(await importErrors(file, `import type { A } from '${from}';\n`)).toEqual([
         expect.stringContaining('adapter’s folder'),
@@ -75,6 +77,8 @@ describe('ESLint’s boundaries in main', () => {
       ['src/main/sessions/claude-settings.ts', './sdk/session'],
       ['src/main/sessions/connectors.ts', './codex/terminal/connector'],
       ['src/main/core/selftest.ts', '../sessions/sdk/inbox'],
+      ['src/main/sessions/adapters.ts', './claude-code/adapter'],
+      ['src/main/sessions/claude-code/adapter.ts', '../sdk/session'],
     ] as const) {
       expect(await importErrors(file, `import { a } from '${from}';\n`)).toEqual([]);
     }

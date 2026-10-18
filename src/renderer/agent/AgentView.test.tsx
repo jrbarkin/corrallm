@@ -22,7 +22,9 @@ function GraphEditor(props: ComponentProps<typeof NativeGraphEditor>) {
               ...node.data,
               connection:
                 node.data.connection ??
-                (node.data.agent === 'Codex' ? ('app-server' as const) : ('sdk' as const)),
+                (node.data.adapter === 'codex'
+                  ? ('codex.app-server' as const)
+                  : ('claude-code.sdk' as const)),
             },
           }
         : node,
@@ -200,7 +202,7 @@ describe('the agent view', () => {
 
   it('keeps Codex’s Full access out of Shift+Tab, and switches to it once confirmed', () => {
     const { view, composer } = open({
-      nodes: [agent('a', { data: { label: 'a', agent: 'Codex' } })],
+      nodes: [agent('a', { data: { label: 'a', adapter: 'codex' } })],
       edges: [],
     });
     const menu = () => view.getByRole('button', { name: /^Mode: / });
@@ -450,7 +452,7 @@ describe('the agent view', () => {
         agent('a', {
           parentId: 'F',
           position: { x: 20, y: 52 },
-          data: { label: 'a', agent: 'Codex' },
+          data: { label: 'a', adapter: 'codex' },
         }),
       ],
       edges: [],

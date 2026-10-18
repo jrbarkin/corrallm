@@ -117,7 +117,12 @@ describe('a session that would not start', () => {
       agents: {
         c: {
           ...at('tests', 'asking'),
-          refused: { agent: 'c', connection: 'sdk', text: why, switchTo: 'terminal' },
+          refused: {
+            agent: 'c',
+            connection: 'claude-code.sdk',
+            text: why,
+            switchTo: 'claude-code.terminal',
+          },
         },
       },
     };
@@ -129,7 +134,7 @@ describe('a session that would not start', () => {
     ]);
     expect(ask?.choices).toEqual([{ key: 'switch', label: 'Switch to Terminal', primary: true }]);
     expect(ask?.reply).toBeUndefined();
-    expect(ask?.refusal).toEqual({ agent: 'c', switchTo: 'terminal' });
+    expect(ask?.refusal).toEqual({ agent: 'c', switchTo: 'claude-code.terminal' });
   });
 
   it('explains an unavailable agent without offering a nonexistent connection', () => {
@@ -159,7 +164,12 @@ describe('a session that would not start', () => {
       agents: {
         c: {
           ...at('hand', 'asking'),
-          refused: { agent: 'r', connection: 'sdk', text: why, switchTo: 'terminal' },
+          refused: {
+            agent: 'r',
+            connection: 'claude-code.sdk',
+            text: why,
+            switchTo: 'claude-code.terminal',
+          },
         },
       },
     };
@@ -292,7 +302,7 @@ describe('a usage rule that pauses and asks', () => {
     { id: 'if', if: { kind: 'failed' }, then: [{ id: 'fix', action: 'Edit' }] },
   ]);
   const hold: UsageHold = {
-    backend: 'Claude',
+    backend: 'claude-code',
     window: 'fiveHour',
     percent: 80,
     used: 84,

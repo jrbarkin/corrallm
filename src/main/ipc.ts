@@ -1,6 +1,7 @@
 import { app, ipcMain } from 'electron';
 import type { WebContents } from 'electron';
 
+import type { Catalog } from '../shared/adapter';
 import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
 import type { IpcArgs, IpcChannel, IpcEvent, IpcEventArgs, IpcResult } from '../shared/ipc';
 import { parseRunCheckpoint } from '../shared/run';
@@ -51,12 +52,14 @@ export type IpcHandler<C extends IpcChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on: which canvas each window shows, canvas files, runs, project folders,
- * their files, links to open (and project files to show), sessions, the CLIs the user has, and
- * usage. Every service but the window map knows canvases by their ids, never windows: a handler
+ * What the handlers act on: the catalog, which canvas each window shows, canvas files, runs,
+ * project folders, their files, links to open (and project files to show), sessions, the agents
+ * the user has, and usage. Every service but the window map knows canvases by their ids, never windows: a handler
  * looks up the sender's canvas first.
  */
 export interface IpcServices {
+  /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
+  catalog: Catalog;
   windows: Pick<Windows, 'canvasOf' | 'show'>;
   canvases: Pick<CanvasFiles, 'open' | 'save'>;
   runs: Pick<RunJournal, 'get' | 'save' | 'opened' | 'saved' | 'draft'>;
@@ -91,7 +94,7 @@ export interface IpcServices {
     | 'resizeTerminal'
     | 'dropOnTerminal'
   >;
-  /** Which CLIs the user has (sessions/installed.ts). */
+  /** Which agents the user has, by adapter (sessions/installed.ts). */
   clis: { installed: () => Promise<InstalledClis> };
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
@@ -170,21 +173,28 @@ export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open' | 'link:reve
   return [url];
 }
 
-/** `ArgsParser` for usage:rule: a backend whose usage corrallm reads, and a rule or null. */
-export function parseUsageRuleArgs(args: unknown[]): IpcArgs<'usage:rule'> {
+/** The usage backends the catalog lists: those whose usage corrallm reads. */
+const backendsOf = (catalog: Catalog) => catalog.usageBackends.map((backend) => backend.id);
+
+/** `ArgsParser` for usage:rule: a backend the catalog lists, and a rule or null. */
+export function parseUsageRuleArgs(args: unknown[], catalog: Catalog): IpcArgs<'usage:rule'> {
   const [backend, rule] = args;
   if (args.length !== 2) throw new TypeError('Expected a backend and a rule (or null)');
-  return [parseBackend(backend), rule === null ? null : parseRule(rule)];
+  return [parseBackend(backend, backendsOf(catalog)), rule === null ? null : parseRule(rule)];
 }
 
 /** `ArgsParser` for usage:simulate: a backend, and its windows (checked as a reading's) or null. */
-export function parseSimulateArgs(args: unknown[]): IpcArgs<'usage:simulate'> {
+export function parseSimulateArgs(args: unknown[], catalog: Catalog): IpcArgs<'usage:simulate'> {
   const [backend, windows] = args;
   if (args.length !== 2) throw new TypeError('Expected a backend and its windows (or null)');
-  return [parseBackend(backend), windows === null ? null : parseWindows(windows, Date.now())];
+  return [
+    parseBackend(backend, backendsOf(catalog)),
+    windows === null ? null : parseWindows(windows, Date.now()),
+  ];
 }
 
 function createHandlers({
+  catalog,
   windows,
   canvases,
   runs,
@@ -201,6 +211,7 @@ function createHandlers({
   const of = (contents: WebContents) => windows.canvasOf(contents);
   return {
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
+    'catalog:get': { parseArgs: noArgs, handler: () => catalog },
     'run:get': { parseArgs: noArgs, handler: async ({ contents }) => runs.get(await of(contents)) },
     'run:save': {
       parseArgs: (args) => {
@@ -282,7 +293,7 @@ function createHandlers({
       },
     },
     'session:start': {
-      parseArgs: parseStartArgs,
+      parseArgs: (args) => parseStartArgs(args, catalog),
       handler: async ({ contents }, agentId, options) => {
         await sessions.start(await of(contents), agentId, options);
         return null;
@@ -346,9 +357,9 @@ function createHandlers({
       },
     },
     'session:fresh': {
-      parseArgs: parseFreshArgs,
-      handler: async ({ contents }, agentId, cli) => {
-        await sessions.fresh(await of(contents), agentId, cli);
+      parseArgs: (args) => parseFreshArgs(args, catalog),
+      handler: async ({ contents }, agentId, adapter) => {
+        await sessions.fresh(await of(contents), agentId, adapter);
         return null;
       },
     },
@@ -374,8 +385,9 @@ function createHandlers({
         sessions.rewind(await of(contents), agentId, messageId, restore),
     },
     'session:options': {
-      parseArgs: parseOptionsArgs,
-      handler: async ({ contents }, cli) => sessions.settingsOptions(await of(contents), cli),
+      parseArgs: (args) => parseOptionsArgs(args, catalog),
+      handler: async ({ contents }, adapter) =>
+        sessions.settingsOptions(await of(contents), adapter),
     },
     'session:mcp': {
       parseArgs: parseAgentArgs,
@@ -431,14 +443,14 @@ function createHandlers({
     },
     'usage:get': { parseArgs: noArgs, handler: () => usage.state() },
     'usage:rule': {
-      parseArgs: parseUsageRuleArgs,
+      parseArgs: (args) => parseUsageRuleArgs(args, catalog),
       handler: (_caller, backend, rule) => {
         usage.setRule(backend, rule);
         return null;
       },
     },
     'usage:simulate': {
-      parseArgs: parseSimulateArgs,
+      parseArgs: (args) => parseSimulateArgs(args, catalog),
       handler: (_caller, backend, windows) => {
         usage.simulate(backend, windows);
         return null;

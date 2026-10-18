@@ -34,14 +34,20 @@ describe('CanvasMemory', () => {
     await memory.update(TEAM, (m) => ({ ...m, project: at('/work/app') }));
     await memory.update(TEAM, (m) => ({
       ...m,
-      conversations: { claude: { a: { id: SESSION, role: 'none' } }, codex: { a: { id: THREAD } } },
+      conversations: {
+        'claude-code': { a: { id: SESSION, role: 'none' } },
+        codex: { a: { id: THREAD } },
+      },
     }));
     await memory.setFile(TEAM, at('/work/team.corral'));
 
     expect(await new CanvasMemory(file).get(TEAM)).toEqual({
       file: '/work/team.corral',
       project: '/work/app',
-      conversations: { claude: { a: { id: SESSION, role: 'none' } }, codex: { a: { id: THREAD } } },
+      conversations: {
+        'claude-code': { a: { id: SESSION, role: 'none' } },
+        codex: { a: { id: THREAD } },
+      },
     });
     expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
       version: 2,
@@ -82,7 +88,9 @@ describe('CanvasMemory', () => {
       wrongType: { id: 42 },
       bare: SESSION,
     };
-    await saved({ [TEAM]: { conversations: { claude: conversations, codex: conversations } } });
+    await saved({
+      [TEAM]: { conversations: { 'claude-code': conversations, codex: conversations } },
+    });
     const expected = {
       role: { id: SESSION, role: fingerprint },
       absent: { id: SESSION, role: 'none' },
@@ -91,7 +99,7 @@ describe('CanvasMemory', () => {
       upper: { id: SESSION },
     };
     expect(await new CanvasMemory(file).get(TEAM)).toEqual({
-      conversations: { claude: expected, codex: expected },
+      conversations: { 'claude-code': expected, codex: expected },
     });
   });
 
@@ -102,15 +110,15 @@ describe('CanvasMemory', () => {
         memory.update(TEAM, (m) => ({
           ...m,
           conversations: {
-            claude: {
-              ...m.conversations.claude,
+            'claude-code': {
+              ...m.conversations['claude-code'],
               [agent]: { id: `0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e1${String(index + 1)}` },
             },
           },
         })),
       ),
     );
-    expect((await new CanvasMemory(file).get(TEAM)).conversations.claude).toEqual({
+    expect((await new CanvasMemory(file).get(TEAM)).conversations['claude-code']).toEqual({
       a: { id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' },
       b: { id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12' },
       c: { id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13' },
@@ -119,8 +127,8 @@ describe('CanvasMemory', () => {
 
   it('reads what an update just changed, though it is still being written', async () => {
     const memory = new CanvasMemory(file);
-    void memory.update(TEAM, () => ({ conversations: { claude: { a: { id: SESSION } } } }));
-    expect((await memory.get(TEAM)).conversations.claude).toEqual({ a: { id: SESSION } });
+    void memory.update(TEAM, () => ({ conversations: { 'claude-code': { a: { id: SESSION } } } }));
+    expect((await memory.get(TEAM)).conversations['claude-code']).toEqual({ a: { id: SESSION } });
   });
 
   it('rejects flush after a write failure until a later write succeeds', async () => {
@@ -130,7 +138,9 @@ describe('CanvasMemory', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       // Ordinary updates remain nonfatal; shutdown must still see their failed write.
-      await memory.update(TEAM, () => ({ conversations: { claude: { a: { id: SESSION } } } }));
+      await memory.update(TEAM, () => ({
+        conversations: { 'claude-code': { a: { id: SESSION } } },
+      }));
       expect(logged).toHaveBeenCalledOnce();
       await expect(memory.flush()).rejects.toThrow();
 
@@ -139,7 +149,7 @@ describe('CanvasMemory', () => {
       await memory.update(TEAM, (current) => current);
       await expect(memory.flush()).resolves.toBeUndefined();
       expect((await new CanvasMemory(nested).get(TEAM)).conversations).toEqual({
-        claude: { a: { id: SESSION } },
+        'claude-code': { a: { id: SESSION } },
       });
     } finally {
       logged.mockRestore();
@@ -193,7 +203,7 @@ describe('CanvasMemory', () => {
       [TEAM]: {
         file: '/t.corral',
         project: '/p',
-        conversations: { claude: { a: { id: SESSION } } },
+        conversations: { 'claude-code': { a: { id: SESSION } } },
       },
       [OTHER]: { project: 7, conversations: {} },
       [THIRD]: 'nope',
@@ -204,7 +214,7 @@ describe('CanvasMemory', () => {
     expect(await memory.get(TEAM)).toEqual({
       file: '/t.corral',
       project: '/p',
-      conversations: { claude: { a: { id: SESSION } } },
+      conversations: { 'claude-code': { a: { id: SESSION } } },
     });
     expect(await memory.get(OTHER)).toEqual({ conversations: {} });
     expect(await memory.get(THIRD)).toEqual({ conversations: {} });

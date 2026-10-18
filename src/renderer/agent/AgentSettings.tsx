@@ -1,18 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { adapterIn } from '../../shared/adapter';
+import type { AdapterId } from '../../shared/adapter';
 import { parseRole } from '../../shared/role';
-import { CONNECTION_CLI, MAX_ROLE_LENGTH } from '../../shared/session';
-import type { AgentSettings, Cli, SettingsOptions } from '../../shared/session';
-import { CONNECTION_INFO, connectionOf, DEFAULT_AGENT } from '../graph/agents';
-import type { AgentConnection, AgentType } from '../graph/agents';
+import { MAX_ROLE_LENGTH } from '../../shared/session';
+import type { AgentSettings, SettingsOptions } from '../../shared/session';
+import { catalog, continuesIn } from '../catalog';
+import { adapterName, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import type { AgentConnection } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from './session';
 import './AgentSettings.css';
 
-type Options = (cli: Cli) => Promise<SettingsOptions>;
+type Options = (adapter: AdapterId) => Promise<SettingsOptions>;
 
 /** The same saved settings summary in a session header and in its queue's heading. */
 export function AgentSettingsSummary({
@@ -25,9 +28,9 @@ export function AgentSettingsSummary({
   onOpen: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
-  const agent = node.data.agent ?? DEFAULT_AGENT;
+  const adapter = node.data.adapter ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
-  const prefix = `${agent} · ${CONNECTION_INFO[connection].label}`;
+  const prefix = `${adapterName(adapter)} · ${connectionInfo(connection).label}`;
   const role = node.data.role?.split(/\r?\n/)[0];
   const suffix = ` · ${role ?? 'No role'}`;
   return (
@@ -44,10 +47,9 @@ export function AgentSettingsSummary({
         </button>
       ) : (
         <SettingsMenu
-          cli={CONNECTION_CLI[connection]}
+          adapter={adapter}
           connection={connection}
-          agent={agent}
-          settings={node.data.settings?.[CONNECTION_CLI[connection]] ?? {}}
+          settings={node.data.settings?.[adapter] ?? {}}
           options={options}
           running={undefined}
           working={false}
@@ -79,8 +81,8 @@ export function AgentSettingsPanel({
   options: Options;
   onRename: (name: string) => void;
   onRole: (role: string | undefined) => void;
-  onAgent: (agent: AgentType, connection: AgentConnection) => void;
-  onSettings: (cli: Cli, settings: AgentSettings) => void;
+  onAgent: (adapter: AdapterId, connection: AgentConnection) => void;
+  onSettings: (adapter: AdapterId, settings: AgentSettings) => void;
   onRestart: () => void;
   onFresh: () => void;
   onClose: () => void;
@@ -90,12 +92,12 @@ export function AgentSettingsPanel({
   const [draft, setDraft] = useState(node.data.role ?? '');
   const [problem, setProblem] = useState<string>();
   const name = node.data.label || 'Unnamed agent';
-  const agent = node.data.agent ?? DEFAULT_AGENT;
+  const adapter = node.data.adapter ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
-  const settings =
-    connection === 'unavailable' ? {} : (node.data.settings?.[CONNECTION_CLI[connection]] ?? {});
+  const settings = connection === 'unavailable' ? {} : (node.data.settings?.[adapter] ?? {});
   const running = session.running;
-  const codex = connection === 'codex-terminal' || connection === 'app-server';
+  // A resumed conversation keeps the role it started with: a changed role needs a new one.
+  const keepsRole = adapterIn(catalog(), adapter)?.role === 'append-new';
   const changedRole = running !== undefined && running.role !== node.data.role;
   const pending =
     connection !== 'unavailable' &&
@@ -195,15 +197,15 @@ export function AgentSettingsPanel({
         <div className="agent-settings-connection">
           <span>CLI and connection</span>
           <AgentChip
-            agent={agent}
+            adapter={adapter}
             connection={connection}
             onChange={onAgent}
             onContinueInTerminal={() => {
-              onAgent(agent, 'terminal');
+              onAgent(adapter, continuesIn(connection) ?? connection);
             }}
           />
         </div>
-        <p className="agent-settings-help">{CONNECTION_INFO[connection].description}.</p>
+        <p className="agent-settings-help">{connectionInfo(connection).description}.</p>
         <label className="agent-settings-field">
           Role
           <textarea
@@ -242,20 +244,19 @@ export function AgentSettingsPanel({
         {connection !== 'unavailable' && (
           <SettingsMenu
             inline
-            cli={CONNECTION_CLI[connection]}
+            adapter={adapter}
             connection={connection}
-            agent={agent}
             settings={settings}
             options={options}
             running={undefined}
             working={session.status !== 'idle'}
             onChange={(next) => {
-              onSettings(CONNECTION_CLI[connection], next);
+              onSettings(adapter, next);
             }}
             onRestart={onRestart}
           />
         )}
-        {pending && !(codex && changedRole) && (
+        {pending && !(keepsRole && changedRole) && (
           <div className="agent-settings-pending" role="status">
             <p>Changes saved. Restart this session to apply them, keeping its conversation.</p>
             <button type="button" disabled={session.status !== 'idle'} onClick={onRestart}>
@@ -264,11 +265,12 @@ export function AgentSettingsPanel({
             {session.status !== 'idle' && <p>Available when the current turn finishes.</p>}
           </div>
         )}
-        {codex && (
+        {keepsRole && (
           <div className="agent-settings-pending">
             <p>
-              Codex keeps a conversation’s original role when it resumes. Start a new conversation
-              to apply a changed role; the earlier conversation stays in Codex’s history.
+              {adapterName(adapter)} keeps a conversation’s original role when it resumes. Start a
+              new conversation to apply a changed role; the earlier conversation stays in{' '}
+              {adapterName(adapter)}’s history.
             </p>
             <button type="button" disabled={session.status !== 'idle'} onClick={onFresh}>
               {node.data.role ? 'Start new conversation with this role' : 'Start new conversation'}

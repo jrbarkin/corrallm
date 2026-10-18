@@ -24,7 +24,7 @@ const agent = (
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
-  data: { label: id, connection: 'sdk', queue },
+  data: { label: id, connection: 'claude-code.sdk', queue },
   ...(parentId ? { parentId } : {}),
 });
 const tree = () => [

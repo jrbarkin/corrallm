@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { ID_PATTERN } from '../shared/adapter';
 import { isCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
@@ -39,8 +40,6 @@ const NOTHING: Remembered = { conversations: {} };
 /** How many canvases it remembers: the ones used most recently. */
 const LIMIT = 200;
 const VERSION = 2;
-/** What names an adapter: never a key an object has of its own (as `__proto__`). */
-const ADAPTER = /^[A-Za-z][A-Za-z0-9._-]{0,31}$/;
 
 /**
  * What main remembers of each canvas between runs, by the canvas's id, in a JSON file in the app's
@@ -206,7 +205,7 @@ export function readRemembered(value: unknown): Remembered | undefined {
     ...(project === undefined ? {} : { project: mintTrustedPath(project) }),
     conversations: Object.fromEntries(
       Object.entries(isRecord(conversations) ? conversations : {}).flatMap(([adapter, agents]) =>
-        ADAPTER.test(adapter) && isRecord(agents) ? [[adapter, readConversations(agents)]] : [],
+        ID_PATTERN.test(adapter) && isRecord(agents) ? [[adapter, readConversations(agents)]] : [],
       ),
     ),
   };

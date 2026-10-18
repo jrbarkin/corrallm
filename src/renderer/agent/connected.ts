@@ -1,8 +1,8 @@
-import { CONNECTION_CLI, isModeOf, turnResult } from '../../shared/session';
+import { isStartMode } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
+import { isSessionMode, turnResult } from '../../shared/session';
 import type {
   AgentStartSettings,
-  Cli,
-  Connection,
   FilesRewind,
   InstalledClis,
   McpChange,
@@ -18,6 +18,7 @@ import type {
   UserMessage,
   TurnResult,
 } from '../../shared/session';
+import { adapterOf, catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import type { DriverDone, DriverIO, SessionDriver, Turn } from './driver';
 import { NEW_SESSION, reduce } from './session';
@@ -37,11 +38,11 @@ export interface SessionBackend {
   stopTask(agentId: string, taskId: string): Promise<null>;
   close(agentId: string): Promise<null>;
   /** Ends the agent's live session and forgets only this CLI's remembered conversation. */
-  fresh(agentId: string, cli: Cli): Promise<null>;
+  fresh(agentId: string, adapter: AdapterId): Promise<null>;
   /** The project folder's files and folders that match `query`, for an @-mention. */
   files(query: string): Promise<string[]>;
-  /** What an agent of `cli` can be set to run with, and the user's own defaults (session:options). */
-  options(cli: Cli): Promise<SettingsOptions>;
+  /** What an agent of `adapter` can be set to run with, and the user's own defaults (session:options). */
+  options(adapter: AdapterId): Promise<SettingsOptions>;
   /** The conversations Claude Code kept for the project folder (/resume), the agent's marked. */
   sessions(agentId: string): Promise<PastSession[]>;
   /** Makes one of them the agent's own: its session ends, and resumes it when it starts again. */
@@ -59,7 +60,7 @@ export interface SessionBackend {
   changeMcp(agentId: string, server: string, change: McpChange): Promise<McpServer[]>;
   /** Listens for what sessions do; returns a function that stops listening. */
   onEvent(
-    listener: (agentId: string, connection: Connection, event: SessionEvent) => void,
+    listener: (agentId: string, connection: ConnectionId, event: SessionEvent) => void,
   ): () => void;
 }
 
@@ -110,7 +111,7 @@ interface SentTurn {
  * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's.
  */
 export class ConnectedDriver implements SessionDriver {
-  readonly connection: Connection;
+  readonly connection: ConnectionId;
   readonly #agentId: string;
   readonly #backend: SessionBackend;
   readonly #io: DriverIO;
@@ -128,7 +129,7 @@ export class ConnectedDriver implements SessionDriver {
   #refusal: Refusal | undefined;
   #closed = false;
 
-  constructor(agentId: string, connection: Connection, backend: SessionBackend, io: DriverIO) {
+  constructor(agentId: string, connection: ConnectionId, backend: SessionBackend, io: DriverIO) {
     this.#agentId = agentId;
     this.connection = connection;
     this.#backend = backend;
@@ -291,7 +292,7 @@ export class ConnectedDriver implements SessionDriver {
               kind: 'user',
               text: event.text,
               reached: true,
-              conversation: CONNECTION_CLI[this.connection],
+              conversation: adapterOf(this.connection),
             },
           });
         } else if (known.kind === 'user' && known.reached !== true) {
@@ -431,7 +432,7 @@ export class ConnectedDriver implements SessionDriver {
         if (!find(event.id)) {
           io.dispatch({
             type: 'add',
-            entry: { id: event.id, kind: 'cleared', conversation: CONNECTION_CLI[this.connection] },
+            entry: { id: event.id, kind: 'cleared', conversation: adapterOf(this.connection) },
           });
         }
         return;
@@ -477,10 +478,13 @@ export class ConnectedDriver implements SessionDriver {
     if (this.#closed) return Promise.reject(new Error('This session was closed.'));
     if (!this.#running) {
       const settings = this.#io.settings();
-      const cli = CONNECTION_CLI[this.connection];
-      // Only a mode of its CLI's (one that asks: settings never hold another).
+      // Only a mode its connection starts in (each asks: settings never hold another).
       const mode =
-        settings.mode !== undefined && isModeOf(cli, settings.mode) ? settings.mode : null;
+        settings.mode !== undefined &&
+        isSessionMode(settings.mode) &&
+        isStartMode(catalog(), adapterOf(this.connection), this.connection, settings.mode)
+          ? settings.mode
+          : null;
       const given: AgentStartSettings = {
         ...(settings.model === undefined ? {} : { model: settings.model }),
         ...(settings.effort === undefined ? {} : { effort: settings.effort }),
@@ -539,7 +543,7 @@ export class ConnectedDriver implements SessionDriver {
   #notice(
     level: 'info' | 'warning' | 'error',
     text: string,
-    { id = this.#io.newId(), switchTo }: { id?: string; switchTo?: Connection } = {},
+    { id = this.#io.newId(), switchTo }: { id?: string; switchTo?: ConnectionId } = {},
   ): void {
     if (level === 'error') this.#lastError = text;
     const last = this.#io.session().entries.at(-1);
@@ -597,7 +601,11 @@ export class ConnectedDriver implements SessionDriver {
 }
 
 /** The entries a resumed session's past events make, played onto a session of their own. */
-function replay(events: readonly SessionEvent[], agentId: string, connection: Connection): Entry[] {
+function replay(
+  events: readonly SessionEvent[],
+  agentId: string,
+  connection: ConnectionId,
+): Entry[] {
   let session: Session = NEW_SESSION;
   const driver = new ConnectedDriver(agentId, connection, NO_BACKEND, {
     dispatch: (action) => {

@@ -5,3 +5,4 @@ out/
 coverage/
 playwright-report/
 test-results/
+src/renderer/test-catalog.json

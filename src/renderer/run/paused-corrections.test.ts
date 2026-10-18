@@ -11,7 +11,7 @@ const nodes: GraphNode[] = [
     position: { x: 0, y: 0 },
     data: {
       label: 'A',
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [
         { id: 'build', action: 'Read', instruction: 'Inspect the release' },
         { id: 'next', message: 'Ship it' },
@@ -24,7 +24,7 @@ const nodes: GraphNode[] = [
     position: { x: 400, y: 0 },
     data: {
       label: 'B',
-      connection: 'sdk',
+      connection: 'claude-code.sdk',
       queue: [
         { id: 'wait', waitFor: [{ agent: 'a', item: 'build' }] },
         { id: 'verify', message: 'Verify it' },
@@ -132,7 +132,7 @@ describe('native corrections while paused', () => {
         position: { x: 0, y: 0 },
         data: {
           label: 'A',
-          connection: 'sdk',
+          connection: 'claude-code.sdk',
           queue: [
             { id: 'before', message: 'Inspect the release' },
             { id: 'check', if: { kind: 'freeText', text: 'the release is ready' }, then: [] },

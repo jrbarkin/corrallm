@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CodexMode, SessionEvent } from '../../../../shared/session';
-import type { UsageBackend, UsageWindows } from '../../../../shared/usage';
+import type { UsageBackendId } from '../../../../shared/adapter';
+import type { UsageWindows } from '../../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../../connector';
 import { AppServerConnector } from './connector';
 import type { AppServerConnectorDeps } from './connector';
@@ -344,12 +345,12 @@ describe('the App Server connection', () => {
   });
 
   it('passes Codex’s usage limits on to the usage readings: as it connects, and as they change', async () => {
-    const readings: [UsageBackend, UsageWindows][] = [];
+    const readings: [UsageBackendId, UsageWindows][] = [];
     const { turn } = await start({}, {}, { usage: (...reading) => readings.push(reading) });
     const now = Date.now();
     expect(readings).toEqual([
       [
-        'Codex',
+        'codex',
         {
           fiveHour: { usedPercent: 12, resetsAt: expect.any(Number) as number },
           weekly: { usedPercent: 3, resetsAt: expect.any(Number) as number },
@@ -360,7 +361,7 @@ describe('the App Server connection', () => {
     // Codex tells them again after a turn.
     await turn('Hello', 'm1');
     expect(readings).toHaveLength(2);
-    expect(readings[1]?.[0]).toBe('Codex');
+    expect(readings[1]?.[0]).toBe('codex');
   });
 
   it('asks before running a command in Read only, and runs it once allowed', async () => {
@@ -762,7 +763,7 @@ describe('the App Server connection', () => {
     });
 
     it('reads the plan’s usage without asking: reading it uses no model', async () => {
-      const readings: [UsageBackend, UsageWindows][] = [];
+      const readings: [UsageBackendId, UsageWindows][] = [];
       const consent = kept();
       const { events } = await start({}, CHATGPT, {
         consent,
@@ -770,7 +771,7 @@ describe('the App Server connection', () => {
       });
       expect(
         readings.map(([backend, windows]) => [backend, windows.fiveHour?.usedPercent]),
-      ).toEqual([['Codex', 12]]);
+      ).toEqual([['codex', 12]]);
       expect(consent.given).not.toHaveBeenCalled();
       expect(events.some((e) => e.type === 'permission')).toBe(false);
     });

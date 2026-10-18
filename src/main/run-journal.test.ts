@@ -58,7 +58,7 @@ describe('RunJournal', () => {
     expect(context).toMatchObject({ id: canvas, checkpoint: null, name: null });
     await memory.update(canvas, () => ({
       project: mintTrustedPath('/work/project'),
-      conversations: { claude: { a: { id: SESSION } } },
+      conversations: { 'claude-code': { a: { id: SESSION } } },
     }));
     await first.save(canvas, context.token, checkpoint);
     expect(await first.get(canvas)).toMatchObject({ checkpoint, token: context.token });
@@ -71,7 +71,7 @@ describe('RunJournal', () => {
       name: null,
       project: { path: '/work/project' },
     });
-    expect((await memory.get(canvas)).conversations.claude?.a?.id).toBe(SESSION);
+    expect((await memory.get(canvas)).conversations['claude-code']?.a?.id).toBe(SESSION);
     expect(
       (await readdir(path.join(directory, 'runs', canvas))).some((name) =>
         name.endsWith('.partial'),
@@ -137,7 +137,7 @@ describe('RunJournal', () => {
     await memory.update(canvas, () => ({
       project: mintTrustedPath('/work/project'),
       conversations: {
-        claude: { a: { id: SESSION, role: 'a'.repeat(64) } },
+        'claude-code': { a: { id: SESSION, role: 'a'.repeat(64) } },
         codex: { a: { id: SESSION, role: 'none' } },
       },
     }));
@@ -159,7 +159,7 @@ describe('RunJournal', () => {
       file: mintTrustedPath(file),
       project: mintTrustedPath('/work/project'),
       conversations: {
-        claude: { a: { id: SESSION, role: 'a'.repeat(64) } },
+        'claude-code': { a: { id: SESSION, role: 'a'.repeat(64) } },
         codex: { b: { id: THREAD, role: 'none' } },
       },
     };

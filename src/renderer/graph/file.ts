@@ -1,19 +1,14 @@
 import type { Edge } from '@xyflow/react';
 
+import { adapterIn, connectionIn, ID_PATTERN, isStartMode } from '../../shared/adapter';
+import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
 import { CANVAS_VERSION, canvasHeader } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import { parseRole } from '../../shared/role';
-import {
-  CLI_MODES,
-  CLIS,
-  CONNECTIONS,
-  EFFORT_PATTERN,
-  MODEL_PATTERN,
-  UNASKING_MODES,
-} from '../../shared/session';
-import type { AgentSettings, Cli, Connection } from '../../shared/session';
-import { USAGE_BACKENDS, USAGE_WINDOWS } from '../../shared/usage';
-import { AGENT_CONNECTIONS, AgentType, DEFAULT_AGENT } from './agents';
+import { EFFORT_PATTERN, MODEL_PATTERN } from '../../shared/session';
+import type { AgentSettings } from '../../shared/session';
+import { USAGE_WINDOWS } from '../../shared/usage';
+import { DEFAULT_AGENT } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
@@ -36,29 +31,33 @@ import type {
  * That is its id (a UUID: what main remembers of it is kept by it, src/shared/canvas.ts), its
  * agents and groups (where they are, what holds them, their queues) and the links between agents.
  * Selection and sizes (groups fit what they hold) are left out. A file of another version is
- * refused.
+ * refused. The agents' adapters, connections and modes are read against the catalog
+ * (src/shared/adapter.ts).
  *
  *   { "format": "corrallm", "version": 2, "id",
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
- *                 "parent"?, "agent"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
+ *                 "parent"?, "adapter"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
  *
- * A node's position is relative to its parent's, as React Flow keeps it. An agent's connection is
- * how it runs, or its native Terminal default when omitted (a Claude agent's "terminal" or "sdk", a Codex agent's
- * "codex-terminal" or "app-server": agents.ts); where it runs (the project
- * folder) is not in the file, which main remembers per file instead. An agent's settings are what
- * it is set to run with in each CLI it has run, { "claude"?: { "model"?, "effort"?, "mode"? },
- * "codex"?: { … } }, each only if set (else the user's own default applies): a model's name, a
- * reasoning effort, and the mode its sessions start in, one of that CLI's that asks first (never
- * bypassing permissions or Codex's Full access, which are chosen in a session, each time). Queue items are as queue.ts
- * has them; a step may say what it is to do ("instruction", text: none when empty), and that it is
- * expected to fail ("expect": "fails"); a wait's targets are { "agent", "item"? }, and its time limit, if it has one, is
- * "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is { "seconds" }, a
- * whole number from 1 to 604800 (7 days), { "at": "HH:MM" }, a 24-hour local time of day, or
- * { "resets": "fiveHour" | "weekly", "backend": "Claude" | "Codex" }, when that backend's usage
- * window resets (by its latest reading). An if-then's condition may be { "kind": "usageAbove",
- * "backend", "window", "percent" }: whether the backend's usage is over that share (1 to 99) of
- * the window. Usage rules are not in the file: they are the user's, kept by main. An OK
+ * A node's position is relative to its parent's, as React Flow keeps it. An agent's adapter is the
+ * agent it runs (the default agent's when omitted, as a template may leave it), and its connection
+ * how it runs (its adapter's first when omitted); where it runs (the project folder) is not in the
+ * file, which main remembers per file instead. An adapter or connection the catalog lacks opens as
+ * Not connected, and is saved back as it was, with that adapter's settings (checked for shape
+ * only); a connection the catalog has under another adapter is refused. An agent's settings are
+ * what it is set to run with by each adapter it has run, { "<adapter>": { "model"?, "effort"?,
+ * "mode"? } }, each only if set (else the user's own default applies): a model's name, a reasoning
+ * effort, and the mode its sessions start in, one that asks which its connection starts in (for
+ * its own adapter, the connection it runs; for another, any of that adapter's): never one that
+ * never asks, which is chosen in a session, each time. Queue items are as queue.ts has them; a
+ * step may say what it is to do ("instruction", text: none when empty), and that it is expected to
+ * fail ("expect": "fails"); a wait's targets are { "agent", "item"? }, and its time limit, if it
+ * has one, is "timeout". A delay is { "id", "delay" }. A time (a delay's, or a time limit) is
+ * { "seconds" }, a whole number from 1 to 604800 (7 days), { "at": "HH:MM" }, a 24-hour local time
+ * of day, or { "resets": "fiveHour" | "weekly", "backend" }, when that usage backend's window
+ * resets (by its latest reading). An if-then's condition may be { "kind": "usageAbove", "backend",
+ * "window", "percent" }: whether the backend's usage is over that share (1 to 99) of the window.
+ * A backend is named by its id: one the catalog lacks is kept, and has no reading. Usage rules are not in the file: they are the user's, kept by main. An OK
  * is { "id", "approve" }: what the user checks, in their words ("" for the work before it). A
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
  * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
@@ -78,9 +77,9 @@ interface FileNode {
   label: string;
   position: { x: number; y: number };
   parent?: string;
-  agent?: AgentType;
-  connection?: Connection;
-  settings?: Partial<Record<Cli, AgentSettings>>;
+  adapter?: AdapterId;
+  connection?: ConnectionId;
+  settings?: Partial<Record<AdapterId, AgentSettings>>;
   role?: string;
   color?: number;
   queue?: QueueItem[];
@@ -94,7 +93,7 @@ interface FileLink {
 /** Canvas `id`'s graph as the text of a `.corral` file. */
 export function toFile(graph: Graph, id: CanvasId): string {
   const nodes = graph.nodes.map((n): FileNode => {
-    const { label, agent, connection, settings, color, queue } = n.data;
+    const { label, adapter, connection, settings, color, queue } = n.data;
     if (n.type === 'frame' && n.data.role !== undefined)
       throw new TypeError('A group has no role.');
     const role = readRole(n.data.role, `${n.id}.role`);
@@ -104,7 +103,7 @@ export function toFile(graph: Graph, id: CanvasId): string {
       label,
       position: { x: n.position.x, y: n.position.y },
       ...(n.parentId === undefined ? {} : { parent: n.parentId }),
-      ...(agent === undefined ? {} : { agent }),
+      ...(adapter === undefined ? {} : { adapter }),
       ...(connection === undefined ? {} : { connection }),
       ...(settings === undefined ? {} : { settings }),
       ...(role === undefined ? {} : { role }),
@@ -120,10 +119,10 @@ export function toFile(graph: Graph, id: CanvasId): string {
 }
 
 /**
- * The graph a `.corral` file holds (its id is main's to read: canvasIdOf). Throws, saying what is
- * wrong and where, for anything that is not a canvas this version can read.
+ * The graph a `.corral` file holds (its id is main's to read: canvasIdOf), read against `catalog`.
+ * Throws, saying what is wrong and where, for anything that is not a canvas this version can read.
  */
-export function fromFile(text: string): Graph {
+export function fromFile(text: string, catalog: Catalog): Graph {
   let file: unknown;
   try {
     file = JSON.parse(text);
@@ -133,7 +132,7 @@ export function fromFile(text: string): Graph {
   if (!isRecord(file)) throw new Error(NOT_A_CANVAS);
   canvasHeader(file);
 
-  const nodes = list(file.nodes, 'nodes', readNode);
+  const nodes = list(file.nodes, 'nodes', (value, where) => readNode(value, where, catalog));
   const byId = new Map<string, FileNode>();
   for (const [i, node] of nodes.entries()) {
     if (byId.has(node.id)) throw new Error(`nodes[${String(i)}].id: "${node.id}" is used twice`);
@@ -192,7 +191,7 @@ function toGraphNode({
   label,
   position,
   parent,
-  agent,
+  adapter,
   connection,
   settings,
   role,
@@ -206,7 +205,7 @@ function toGraphNode({
     ...(parent === undefined ? {} : { parentId: parent }),
     data: {
       label,
-      ...(agent === undefined ? {} : { agent }),
+      ...(adapter === undefined ? {} : { adapter }),
       ...(connection === undefined ? {} : { connection }),
       ...(settings === undefined ? {} : { settings }),
       ...(role === undefined ? {} : { role }),
@@ -216,7 +215,7 @@ function toGraphNode({
   };
 }
 
-function readNode(value: unknown, where: string): FileNode {
+function readNode(value: unknown, where: string, catalog: Catalog): FileNode {
   const node = record(value, where);
   const id = name(node.id, `${where}.id`);
   const { kind } = node;
@@ -224,30 +223,23 @@ function readNode(value: unknown, where: string): FileNode {
     throw new Error(`${where}.kind must be "agent" or "group"`);
   }
   const position = record(node.position, `${where}.position`);
-  const agents: readonly string[] = Object.values(AgentType);
-  const agent = optional(node.agent, `${where}.agent`, (v, at) => {
-    if (kind === 'group') throw new Error(`${at}: a group has no agent`);
-    const found = Object.values(AgentType).find((type) => type === v);
-    if (found === undefined) throw new Error(`${at} must be one of: ${agents.join(', ')}`);
-    return found;
+  const adapter = optional(node.adapter, `${where}.adapter`, (v, at) => {
+    if (kind === 'group') throw new Error(`${at}: a group has no adapter`);
+    return catalogId(v, at, 'an adapter');
   });
   const connection = optional(node.connection, `${where}.connection`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no connection`);
-    const all = CONNECTIONS;
-    const found = all.find((c) => c === v);
-    if (found === undefined) throw new Error(`${at} must be one of: ${all.join(', ')}`);
-    const type = agent ?? DEFAULT_AGENT;
-    const offered = AGENT_CONNECTIONS[type];
-    if (offered.length === 0) throw new Error(`${at}: ${type} has no connector yet`);
-    if (!offered.includes(found)) {
-      const ways = `${offered.slice(0, -1).join(', ')}${offered.length > 1 ? ' or ' : ''}${offered.at(-1) ?? ''}`;
-      throw new Error(`${at}: ${type} agents run only ${ways}`);
+    const named = catalogId(v, at, 'a connection');
+    const owner = connectionIn(catalog, named)?.adapter.id;
+    const runs = adapter ?? DEFAULT_AGENT;
+    if (owner !== undefined && owner !== runs) {
+      throw new Error(`${at}: "${named}" is a connection of ${owner}, not of ${runs}`);
     }
-    return found;
+    return named;
   });
   const settings = optional(node.settings, `${where}.settings`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no settings`);
-    return readSettings(v, at);
+    return readSettings(v, at, catalog, adapter ?? DEFAULT_AGENT, connection);
   });
   const role = optional(node.role, `${where}.role`, (v, at) => {
     if (kind === 'group') throw new TypeError(`${at}: a group has no role`);
@@ -272,7 +264,7 @@ function readNode(value: unknown, where: string): FileNode {
       y: number(position.y, `${where}.position.y`),
     },
     ...(node.parent === undefined ? {} : { parent: name(node.parent, `${where}.parent`) }),
-    ...(agent === undefined ? {} : { agent }),
+    ...(adapter === undefined ? {} : { adapter }),
     ...(connection === undefined ? {} : { connection }),
     ...(settings === undefined ? {} : { settings }),
     ...(role === undefined ? {} : { role }),
@@ -290,13 +282,22 @@ function readRole(value: unknown, where: string): string | undefined {
   }
 }
 
-/** An agent's settings, by CLI: undefined if nothing is set. */
-function readSettings(value: unknown, where: string): FileNode['settings'] {
-  const all: Partial<Record<Cli, AgentSettings>> = {};
-  for (const [cli, given] of Object.entries(record(value, where))) {
-    const at = `${where}.${cli}`;
-    const known = CLIS.find((one) => one === cli);
-    if (known === undefined) throw new Error(`${at}: settings are for ${CLIS.join(' or ')}`);
+/**
+ * An agent's settings, by adapter: undefined if nothing is set. A mode must be one its adapter's
+ * connection starts in: for the agent's own adapter (`adapter`), the connection it runs; for
+ * another, any of that one's. An adapter the catalog lacks has its settings checked for shape only.
+ */
+function readSettings(
+  value: unknown,
+  where: string,
+  catalog: Catalog,
+  adapter: AdapterId,
+  connection: ConnectionId | undefined,
+): FileNode['settings'] {
+  const all: Partial<Record<AdapterId, AgentSettings>> = {};
+  for (const [key, given] of Object.entries(record(value, where))) {
+    const at = `${where}.${key}`;
+    if (!ID_PATTERN.test(key)) throw new Error(`${at}: settings are by adapter`);
     const settings = record(given, at);
     if (Object.keys(settings).some((key) => !['model', 'effort', 'mode'].includes(key))) {
       throw new Error(`${at}: only model, effort and mode can be set`);
@@ -313,14 +314,24 @@ function readSettings(value: unknown, where: string): FileNode['settings'] {
       }
       return v;
     });
-    const asking = CLI_MODES[known].filter((mode) => !UNASKING_MODES.includes(mode));
-    const mode = optional(settings.mode, `${at}.mode`, (v, there) => oneOf(v, there, asking));
+    const known = adapterIn(catalog, key);
+    // Its own adapter's settings start the connection it runs (its first, unless it names one);
+    // another adapter's, or those of a connection its adapter lacks, any of that adapter's.
+    const own = key === adapter ? (connection ?? known?.connections[0]?.id) : undefined;
+    const runs = known?.connections.some((one) => one.id === own) ? own : undefined;
+    const mode = optional(settings.mode, `${at}.mode`, (v, there) => {
+      if (!known) return catalogId(v, there, 'a mode');
+      const starts = known.modes
+        .map((one) => one.id)
+        .filter((one) => isStartMode(catalog, key, runs, one));
+      return oneOf(v, there, starts);
+    });
     const set: AgentSettings = {
       ...(model === undefined ? {} : { model }),
       ...(effort === undefined ? {} : { effort }),
       ...(mode === undefined ? {} : { mode }),
     };
-    if (Object.keys(set).length > 0) all[known] = set;
+    if (Object.keys(set).length > 0) all[key] = set;
   }
   return Object.keys(all).length === 0 ? undefined : all;
 }
@@ -447,7 +458,7 @@ function readTime(value: unknown, where: string): Time {
   if ('resets' in time) {
     return {
       resets: oneOf(time.resets, `${where}.resets`, USAGE_WINDOWS),
-      backend: oneOf(time.backend, `${where}.backend`, USAGE_BACKENDS),
+      backend: catalogId(time.backend, `${where}.backend`, 'a usage backend'),
     };
   }
   if ('at' in time) {
@@ -497,7 +508,7 @@ function readCondition(value: unknown, where: string): Condition {
       }
       return {
         kind: 'usageAbove',
-        backend: oneOf(condition.backend, `${where}.backend`, USAGE_BACKENDS),
+        backend: catalogId(condition.backend, `${where}.backend`, 'a usage backend'),
         window: oneOf(condition.window, `${where}.window`, USAGE_WINDOWS),
         percent,
       };
@@ -618,6 +629,14 @@ function record(value: unknown, where: string): Record<string, unknown> {
 
 function text(value: unknown, where: string): string {
   if (typeof value !== 'string') throw new Error(`${where} must be text`);
+  return value;
+}
+
+/** An id the catalog's ids look like (`what`: what it names, for the message). */
+function catalogId(value: unknown, where: string, what: string): string {
+  if (typeof value !== 'string' || !ID_PATTERN.test(value)) {
+    throw new Error(`${where} must be ${what}'s id`);
+  }
   return value;
 }
 
