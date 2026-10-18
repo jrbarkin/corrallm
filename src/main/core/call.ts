@@ -11,6 +11,8 @@ import type { Caller, TokenCaller } from './caller';
 import { notPlainData } from './link';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
+import { Requests } from './requests';
+import type { Attempt } from './requests';
 import { Scopes, Superseded } from './scopes';
 import { Throttle } from './throttle';
 
@@ -92,8 +94,6 @@ export interface Dispatcher {
   ): Promise<OpResult<unknown>>;
 }
 
-/** How many recent requests' results are kept, for a repeated call. */
-const REMEMBERED_REQUESTS = 1000;
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
 const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId']);
 /** How a refusal names a party that isn't in an op's audience. */
@@ -109,7 +109,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
   const { isLead, resolvers = {}, check = false, now = Date.now } = options;
   const scopes = new Scopes();
   const throttle = new Throttle(now);
-  const requests = new Map<string, Promise<OpResult<unknown>>>();
+  const requests = new Requests();
 
   /** Op `name`'s surface, schemas and implementation, or throws not-found. */
   function opOf(name: string): [Surface, OpDef, Implementation] {
@@ -145,28 +145,20 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     }
   }
 
-  /** Returns a repeated request's first result, or runs it and keeps its result a while. */
-  function remembered(
-    key: string,
-    run: () => Promise<OpResult<unknown>>,
-  ): Promise<OpResult<unknown>> {
-    const known = requests.get(key);
-    if (known) return known;
-    const result = run();
-    requests.set(key, result);
-    const oldest = requests.size > REMEMBERED_REQUESTS ? requests.keys().next().value : undefined;
-    if (oldest !== undefined) requests.delete(oldest);
-    return result;
-  }
-
-  /** Checks a token's rules, then runs the op in its scope. */
+  /**
+   * Checks a token's rules, then runs the op in its scope: its result, kept for a repeat of its
+   * request unless the op failed for being cancelled (its caller left, a preempting op stopped it)
+   * or with what nobody expected, which applied nothing a retry can count on.
+   */
   async function apply(
     [surface, def, implementation]: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
     party: Party,
     signal: AbortSignal | undefined,
-  ): Promise<OpResult<unknown>> {
+  ): Promise<Attempt> {
+    /** The signal the op ran with, once it runs: aborted if it was superseded or its caller left. */
+    let ran: AbortSignal | undefined;
     try {
       if (caller.kind !== 'human') {
         for (const rule of surface.rules ?? []) {
@@ -174,20 +166,30 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           if (!checkRule) throw new OpFailure('refused', `No check is kept for the rule ${rule}.`);
           const outcome = await checkRule(args as never, { caller, party });
           if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
-          if (outcome) return { ok: true, value: { proposed: outcome.propose } };
+          if (outcome) {
+            return { result: { ok: true, value: { proposed: outcome.propose } }, kept: true };
+          }
         }
       }
       const value = await scopes.run(
         scopeOf(surface, args),
         surface.preempt === true,
         signal,
-        (opSignal) =>
-          Promise.resolve(implementation(args as never, { caller, party, signal: opSignal })),
+        (opSignal) => {
+          ran = opSignal;
+          return Promise.resolve(
+            implementation(args as never, { caller, party, signal: opSignal }),
+          );
+        },
       );
       if (check) checkResult(def, value);
-      return { ok: true, value };
+      return { result: { ok: true, value }, kept: true };
     } catch (error) {
-      return { ok: false, error: errorOf(error, signal) };
+      const cancelled = signal?.aborted === true || ran?.aborted === true;
+      return {
+        result: { ok: false, error: errorOf(error, signal) },
+        kept: error instanceof OpFailure && !cancelled,
+      };
     }
   }
 
@@ -224,9 +226,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       }
       const run = () => apply(op, args, caller, party, signal);
       const { request } = args as { request?: unknown };
-      return await (typeof request === 'string'
-        ? remembered(`${callerKey(caller)}|${name}|${request}`, run)
-        : run());
+      return typeof request === 'string'
+        ? await requests.remembered(callerKey(caller), `${name}|${request}`, run)
+        : (await run()).result;
     } catch (error) {
       return { ok: false, error: errorOf(error, signal) };
     } finally {

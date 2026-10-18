@@ -5,6 +5,7 @@ import { createDispatcher, OpFailure } from './call';
 import type { DispatchOptions } from './call';
 import { asHuman, partyOf } from './caller';
 import type { AgentCaller, Caller } from './caller';
+import { REMEMBERED_REQUESTS } from './requests';
 import { CALLERS, CANVAS, isLead, PROPOSAL, RESOLVERS, testRegistry } from './test-registry';
 
 const REQUEST = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60';
@@ -211,6 +212,113 @@ describe('core.call', () => {
     ]);
     expect(both[0]).toEqual(both[1]);
     expect(calls['test.agent']).toHaveLength(1);
+  });
+
+  it('runs a request again whose first call was cancelled, once that call has unwound', async () => {
+    const { core, registry } = setup();
+    const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+    const unwound = Promise.withResolvers<undefined>();
+    let runs = 0;
+    // An op that, aborted, takes a while to unwind, applying nothing.
+    registry.implementations['test.agent'] = async (_args, { signal }) => {
+      runs++;
+      if (runs > 1) return { agent: 'helper' };
+      await new Promise((resolve) => {
+        signal.addEventListener('abort', resolve, { once: true });
+      });
+      await unwound.promise;
+      throw signal.reason as Error;
+    };
+    const caller = new AbortController();
+    const first = core.call('test.agent', args, CALLERS['outside-write'], caller.signal);
+    await vi.waitFor(() => {
+      expect(runs).toBe(1);
+    });
+    // The client's connection drops, and it retries at once.
+    caller.abort(new Error('The connection closed.'));
+    const retry = core.call('test.agent', args, CALLERS['outside-write']);
+    await Promise.resolve();
+    expect(runs).toBe(1);
+    unwound.resolve(undefined);
+    expect(await first).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'The call was cancelled.' },
+    });
+    expect(await retry).toEqual({ ok: true, value: { agent: 'helper' } });
+    expect(runs).toBe(2);
+    // The retry's result is the one kept.
+    expect(await core.call('test.agent', args, CALLERS['outside-write'])).toEqual({
+      ok: true,
+      value: { agent: 'helper' },
+    });
+    expect(runs).toBe(2);
+  });
+
+  it('keeps a request’s result only when its op came to it by itself', async () => {
+    const { core, registry } = setup();
+    const outcomes: (() => unknown)[] = [];
+    registry.implementations['test.agent'] = async (_args, { signal }) => {
+      const outcome = outcomes.shift();
+      if (outcome) return outcome();
+      // Held until stopped, then failing as an op that unwinds does.
+      await new Promise((resolve) => {
+        signal.addEventListener('abort', resolve, { once: true });
+      });
+      throw new OpFailure('refused', 'Stopped before it began.');
+    };
+    const call = (request: string) =>
+      core.call('test.agent', { canvas: CANVAS, agent: 'helper', request }, CALLERS.you);
+    const runsOf = async (request: string, outcome: () => unknown) => {
+      outcomes.push(outcome, () => ({ agent: 'again' }));
+      const first = await call(request);
+      const again = await call(request);
+      outcomes.length = 0;
+      return { first, again };
+    };
+    // A failure it came to by itself is its result.
+    const conflict = await runsOf(crypto.randomUUID(), () => {
+      throw new OpFailure('conflict', 'Someone else got there first.');
+    });
+    expect(conflict.again).toEqual(conflict.first);
+    // A failure nobody expected is run again.
+    const broken = await runsOf(crypto.randomUUID(), () => {
+      throw new Error('The disk is full.');
+    });
+    expect(broken.first).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+    expect(broken.again).toEqual({ ok: true, value: { agent: 'again' } });
+    // So is one a preempting op stopped, whatever it threw as it unwound.
+    const stopped = crypto.randomUUID();
+    const holding = call(stopped);
+    await vi.waitFor(async () => {
+      expect(
+        (await core.call('test.stop', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).ok,
+      ).toBe(true);
+      expect(await holding).toEqual({
+        ok: false,
+        error: { code: 'refused', sentence: 'Stopped before it began.' },
+      });
+    });
+    outcomes.push(() => ({ agent: 'again' }));
+    expect(await call(stopped)).toEqual({ ok: true, value: { agent: 'again' } });
+  });
+
+  it('keeps each caller’s recent requests apart, so none pushes out another’s', async () => {
+    const { core, calls } = setup();
+    await core.call('test.message', message({ request: REQUEST }), CALLERS.worker);
+    const flood = Array.from({ length: REMEMBERED_REQUESTS + 1 }, () => crypto.randomUUID());
+    for (const request of flood) {
+      await core.call('test.agent', { canvas: CANVAS, agent: 'helper', request }, CALLERS.you);
+    }
+    expect(calls['test.agent']).toHaveLength(flood.length);
+    await core.call('test.message', message({ request: REQUEST }), CALLERS.worker);
+    expect(calls['test.message']).toHaveLength(1);
+    // The caller's own oldest request is forgotten: a repeat of it runs again.
+    await core.call(
+      'test.agent',
+      { canvas: CANVAS, agent: 'helper', request: flood[0] },
+      CALLERS.you,
+    );
+    expect(calls['test.agent']).toHaveLength(flood.length + 1);
   });
 
   it('limits a token’s calls in flight', async () => {

@@ -73,6 +73,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 (no token is ever you); scopes.ts the order ops run in (one at a time per scope; a
                 preempting op aborts what runs beneath it first, never another preempting op, and
                 those that overlap run in turn, ahead of the queue); throttle.ts the limits per token;
+                requests.ts the repeated requests (each caller's own; a result kept only when its op
+                came to it by itself, so a cancelled call's retry runs again);
                 reach.ts resolves the ids a token names against its reach; ops/ is each op's
                 implementation, by area; core.ts is createCore, the operations composed over the
                 Electron-free services, kept in a profile folder (in milestone 1, only in tests and,
