@@ -16,7 +16,7 @@ import { foreignRequest } from '../../loopback';
  * corrallm only listens: it answers every hook with no decision, so the CLI behaves as it would
  * without them, and the user answers in the terminal. Like the MCP server, the server refuses a
  * foreign Host or any Origin before it reads the token (loopback.ts); it checks no media type until
- * a recording says what Claude Code's HTTP hooks send.
+ * a recording says what the CLIs' HTTP hooks send (Build Plan Q26).
  */
 
 /** The variable in a session's environment that holds its hooks' token. */

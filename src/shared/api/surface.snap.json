@@ -1,0 +1,42 @@
+{
+  "gui": [],
+  "mcp": {
+    "lead": [
+      "app_info",
+      "usage_get"
+    ],
+    "worker": [
+      "app_info",
+      "usage_get"
+    ],
+    "outside-read": [
+      "app_info",
+      "usage_get"
+    ],
+    "outside-write": [
+      "app_info",
+      "usage_get"
+    ]
+  },
+  "counts": {
+    "lead": 2,
+    "worker": 2,
+    "outside-read": 2,
+    "outside-write": 2
+  },
+  "unhosted": {
+    "app.info": "B8",
+    "usage.get": "B8"
+  },
+  "deviations": {},
+  "schemas": {
+    "app.info": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "fb1ca6c18e59cdb2"
+    },
+    "usage.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "30335980ed3a79b2"
+    }
+  }
+}
