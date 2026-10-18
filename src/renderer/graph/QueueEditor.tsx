@@ -4,31 +4,35 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 import { USAGE_WINDOWS } from '../../shared/usage';
 import type { AdapterId, UsageBackendId } from '../../shared/adapter';
 import type { UsageWindow } from '../../shared/usage';
-import { threadTitle } from '../agent/session';
+import { threadTitle } from '../../shared/model/session';
 import { catalog as loadedCatalog } from '../catalog';
-import { answersOf, usageAnswers } from '../run/asks';
-import type { Answers } from '../run/asks';
-import type { EngineCatalog } from '../run/catalog';
-import type { Answer, TaskAttempt, TaskProblem } from '../run/runner';
+import { answersOf, usageAnswers } from '../../shared/engine/run/asks';
+import type { Answers } from '../../shared/engine/run/asks';
+import type { EngineCatalog } from '../../shared/engine/catalog';
+import type { Answer, TaskAttempt, TaskProblem } from '../../shared/engine/run/runner';
 import { SearchPicker } from '../search/SearchPicker';
-import { backendOfType, windowText } from '../usage/usage';
-import { DEFAULT_AGENT, runCatalog } from './agents';
-import type { AgentAction } from './agents';
-import type { GraphNode } from './graph';
-import type { RepeatChange } from './edits';
+import { backendOfType } from '../usage/usage';
 import {
-  agentName,
   andList,
   describe,
   expectedText,
   ifText,
   itemLabel,
+  leftText,
+  limitText,
   okWhat,
   otherwiseText,
   roundsText,
+  timeText,
   untilText,
   waitTargetLabel,
-} from './labels';
+  windowText,
+} from '../../shared/model/words';
+import { DEFAULT_AGENT, runCatalog } from './agents';
+import type { AgentAction } from './agents';
+import type { GraphNode } from './graph';
+import type { RepeatChange } from './edits';
+import { agentName } from '../../shared/model/queries';
 import {
   CONDITIONS,
   isApproval,
@@ -53,13 +57,13 @@ import type {
   QueueRepeat,
   QueueStep,
   QueueWait,
-  RepeatEnds,
   RepeatedItem,
+  RepeatEnds,
   Time,
   Until,
   WaitTarget,
 } from '../../shared/model/queue';
-import { leftText, limitText, parseTime, TIME_PRESETS, timeText } from './time';
+import { parseTime, TIME_PRESETS } from '../../shared/model/time';
 import { SortableList } from './SortableList';
 import type { HandleProps } from './SortableList';
 import '../run/run.css';
@@ -611,7 +615,7 @@ function TextPrompt({
 const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
- * Picks a time by typing: a length, or a time of day (time.ts reads what is typed, and lists what
+ * Picks a time by typing: a length, or a time of day (src/shared/model/time.ts reads what is typed, and lists what
  * it can mean first), or one of the presets. With `current`, its words are typed in to start
  * from. With `allowNone`, "No time limit" comes first, which picks undefined.
  */
@@ -1499,7 +1503,7 @@ function ApprovalRow({
 }
 
 /**
- * How to answer at an item the run holds its queue at for the user (asks.ts answersOf): the
+ * How to answer at an item the run holds its queue at for the user (src/shared/engine/run/asks.ts answersOf): the
  * primary choice, filled; an answer in the user's own words, in a multi-line prompt (Enter sends,
  * Shift+Enter starts a new line, Esc cancels); then the other choices. Shown on the row whenever
  * the run waits for the user, never hidden. A plain div, so All queues' groups stay as they are.
@@ -1662,7 +1666,7 @@ type Place = 'queue' | 'repeat' | 'if';
 
 /**
  * What may sit where, in the order the ⊕ offers it, before the agent's actions (which go
- * anywhere). file.ts rejects the rest ("an if-then cannot hold …", "a repeat cannot hold …").
+ * anywhere). The file's reader (src/shared/model/file.ts) rejects the rest ("an if-then cannot hold …", "a repeat cannot hold …").
  */
 const PLACES: Readonly<Record<Place, readonly (keyof typeof CHOICE_TEXT)[]>> = {
   queue: ['if', 'repeat', 'wait', 'delay', 'ok', 'message'],

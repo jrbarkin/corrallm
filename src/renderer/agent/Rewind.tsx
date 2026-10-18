@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FilesRewind, RewindRestore, RewindResult } from '../../shared/session';
 import { ipcErrorMessage } from '../ipc-error';
 import { SearchPicker } from '../search/SearchPicker';
-import { threadTitle } from './session';
+import { threadTitle } from '../../shared/model/session';
 
 /** A message of the user's it can rewind to. */
 export interface RewindPoint {

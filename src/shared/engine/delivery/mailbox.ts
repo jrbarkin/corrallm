@@ -1,0 +1,830 @@
+import type { AdapterId, ConnectionId } from '../../adapter';
+import type { SubmittedMessage } from '../../model/queue';
+import { turnResult } from '../../session';
+import { parseRole } from '../../role';
+import type {
+  AgentSettings,
+  ElicitationAction,
+  FilesRewind,
+  FormValue,
+  McpChange,
+  McpServer,
+  PastSession,
+  RewindRestore,
+  RewindResult,
+  SettingsOptions,
+  TurnResult,
+} from '../../session';
+import type { EngineCatalog } from '../catalog';
+import { ConnectedDriver, NO_BACKEND } from '../transcript/receive';
+import type { SessionBackend } from '../transcript/receive';
+import type { DriverIO, SessionDriver } from '../transcript/driver';
+import { UnavailableDriver } from '../transcript/unavailable';
+import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
+import { answersOf, NEW_SESSION, threadTitle, turnReply } from '../../model/session';
+import { reduce } from '../transcript/reduce';
+import type { Answer, MessageImage, Mode, PlanAnswer, Refusal, Session } from '../../model/session';
+import type { SessionAction } from '../transcript/reduce';
+
+export interface SubmissionObserver {
+  submitted?: (agentId: string, message: SubmittedMessage) => void;
+  ended?: (agentId: string, id: string, reply: string, result: TurnResult) => void;
+}
+
+/** An agent's driver, how it runs, and whether it is being let go. */
+interface Driving {
+  connection: ConnectionId;
+  driver: SessionDriver;
+  closing: boolean;
+}
+
+/**
+ * Every agent's session, by agent id, outside any view (the renderer's components read it with
+ * useSyncExternalStore), so that turns keep playing while their agent's view is closed. Each
+ * agent's session is driven by a driver (transcript/driver.ts) connected to a session main's
+ * SessionManager runs (transcript/receive.ts, through `backend`). A message sent while an agent
+ * works is queued, and sent once the turn ends, interrupted or not. Whoever sends a message can
+ * hear when the turn it starts ends, and what the agent replied in it, and can take the message
+ * back (the queues' run, run/runner.ts). A session that would not start (an Agent SDK agent on a
+ * Claude subscription) keeps its messages queued, unsent, and says so to whoever sent them, until
+ * the agent runs another way (or the session starts after all). Each agent's adapter and
+ * connection are read in the catalog it is given (the run's: catalog.ts).
+ */
+export class SessionStore {
+  #sessions: Readonly<Record<string, Session>> = {};
+  readonly #listeners = new Set<() => void>();
+  readonly #catalog: EngineCatalog;
+  readonly #backend: SessionBackend;
+  readonly #drivers = new Map<string, Driving>();
+  /** How each agent runs, as the canvas last said (`sync`). */
+  readonly #connections = new Map<string, ConnectionId>();
+  /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
+  readonly #settings = new Map<string, Partial<Record<AdapterId, AgentSettings>>>();
+  /** The authored role is independent of the settings remembered for each CLI. */
+  readonly #roles = new Map<string, string>();
+  /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
+  readonly #options = new Map<AdapterId, Promise<SettingsOptions>>();
+  /** Each agent's adapter, as it was last sent a message: how it runs, if the canvas never said. */
+  readonly #types = new Map<string, AdapterId>();
+  /**
+   * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
+   * (queued or not) until then.
+   */
+  readonly #onDone = new Map<
+    string,
+    (interrupted: boolean, reply: string, result?: TurnResult) => void
+  >();
+  /** Who to tell when a message's session would not start (it stays queued), by its id. */
+  readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
+  /** The message whose turn each agent's session is on, by agent id. */
+  readonly #turns = new Map<string, string>();
+  /** Runtime holds stop automatic queue draining, while allowing fresh manual intervention. */
+  readonly #heldQueues = new Set<string>();
+  /**
+   * What the user had queued when they stopped an agent the run holds (Kill): set aside until the
+   * hold is released, as an interrupt in Claude Code sends nothing it had queued.
+   */
+  readonly #setAside = new Map<string, ReadonlySet<string>>();
+  /** A durable conversation replacement gates new sends until the new driver can start. */
+  readonly #freshening = new Map<string, Promise<void>>();
+  /** A pending interrupt belongs to this turn; duplicate stop callbacks must not send another. */
+  readonly #stopping = new Set<string>();
+  /** Automation already has a queue row; its prompt and native echoes must not create another. */
+  readonly #queueMessages = new Set<string>();
+  /**
+   * What the user typed that the run sent (an OK's changes, a repeat's next try): a Message row
+   * like any of theirs, but the run's own attempt, never taken for a correction typed in.
+   */
+  readonly #runMessages = new Set<string>();
+  readonly #displayTexts = new Map<string, string>();
+  readonly #observer: SubmissionObserver;
+  readonly #position: (agentId: string) => string | undefined;
+  /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
+  readonly #onceIn = new Map<
+    string,
+    { connection: ConnectionId; agent: AdapterId; text: string }
+  >();
+  #unsubscribe: (() => void) | undefined;
+
+  constructor(
+    catalog: EngineCatalog,
+    backend: SessionBackend = NO_BACKEND,
+    position: (agentId: string) => string | undefined = () => undefined,
+    observer: SubmissionObserver = {},
+  ) {
+    this.#catalog = catalog;
+    this.#backend = backend;
+    this.#position = position;
+    this.#observer = observer;
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  };
+
+  /** Every session, by agent id: a new object after each change. */
+  snapshot = (): Readonly<Record<string, Session>> => this.#sessions;
+
+  of(agentId: string): Session {
+    return this.#sessions[agentId] ?? NEW_SESSION;
+  }
+
+  /**
+   * The agents on the canvas, how each runs, and what each is set to run with (its settings, by
+   * CLI: what its connected sessions start with). The session of an agent that is gone ends and is
+   * forgotten; one whose agent runs another way now ends its turn and goes on with a new driver. A
+   * session that runs keeps the settings it started with until it is restarted (`restart`).
+   */
+  sync(
+    agents: readonly {
+      id: string;
+      connection: ConnectionId;
+      settings?: Partial<Record<AdapterId, AgentSettings>> | undefined;
+      role?: string | undefined;
+    }[],
+  ): void {
+    const roles = agents.map(({ id, role }) => [id, parseRole(role)] as const);
+    const wanted = new Map(agents.map(({ id, connection }) => [id, connection]));
+    const known = new Set([
+      ...Object.keys(this.#sessions),
+      ...this.#drivers.keys(),
+      ...this.#heldQueues,
+      ...this.#freshening.keys(),
+    ]);
+    for (const id of known) if (!wanted.has(id)) this.#forget(id);
+    for (const id of this.#connections.keys()) if (!wanted.has(id)) this.#connections.delete(id);
+    this.#settings.clear();
+    this.#roles.clear();
+    for (const { id, settings } of agents) if (settings) this.#settings.set(id, settings);
+    for (const [id, role] of roles) if (role !== undefined) this.#roles.set(id, role);
+    for (const [id, connection] of wanted) {
+      if (this.#connections.get(id) !== connection) this.#freshening.delete(id);
+      this.#connections.set(id, connection);
+      const driving = this.#drivers.get(id);
+      if (driving && driving.connection !== connection) {
+        this.#letGo(id);
+        this.#idle(id);
+      }
+      const once = this.#onceIn.get(id);
+      if (once?.connection === connection) {
+        this.#onceIn.delete(id);
+        this.send(id, once.agent, once.text);
+      }
+    }
+  }
+
+  /** Makes sure the agent's session runs, as when its view opens. */
+  open(agentId: string): void {
+    if (this.#freshening.has(agentId)) return;
+    this.#driver(agentId).open();
+  }
+
+  /** Holds waiting messages after the current turn; releasing sends them in their original order. */
+  holdQueue(agentId: string, held: boolean): void {
+    if (held) this.#heldQueues.add(agentId);
+    else {
+      this.#heldQueues.delete(agentId);
+      this.#setAside.delete(agentId);
+      // A canvas reset may release its run holds immediately before forgetting these sessions.
+      // Re-check the live queue and hold after that same-stack transition has completed.
+      queueMicrotask(() => {
+        this.#idle(agentId);
+      });
+    }
+  }
+
+  /**
+   * Starts the agent's connected session again, with what the agent is set to run with now: main
+   * ends it first, and resumes its conversation as it starts it. A turn going on ends, interrupted.
+   */
+  async restart(agentId: string): Promise<void> {
+    if (!this.#drivers.has(agentId)) return;
+    await this.#backend.close(agentId).catch(() => null);
+    this.#letGo(agentId);
+    this.#driver(agentId).open();
+  }
+
+  /**
+   * Starts a new native conversation with the current role and settings, without a prompt.
+   * Main first durably forgets the selected CLI's remembered id; previous native history and
+   * observed manual rows remain available. Active turns are never interrupted by this action.
+   */
+  fresh(agentId: string): Promise<void> {
+    const existing = this.#freshening.get(agentId);
+    if (existing) return existing;
+    const connection = this.#connections.get(agentId);
+    if (!connection || connection === 'unavailable' || this.of(agentId).status !== 'idle') {
+      return Promise.resolve();
+    }
+    const pending = Promise.resolve().then(async () => {
+      try {
+        if (this.#freshening.get(agentId) !== pending) return;
+        await this.#backend.fresh(agentId, this.#catalog.adapterOf(connection));
+        if (this.#freshening.get(agentId) !== pending) return;
+        this.#letGo(agentId);
+        this.#dispatch(agentId, { type: 'clear' });
+        this.#driver(agentId).open();
+        this.#freshening.delete(agentId);
+        this.#idle(agentId);
+      } finally {
+        if (this.#freshening.get(agentId) === pending) this.#freshening.delete(agentId);
+      }
+    });
+    this.#freshening.set(agentId, pending);
+    return pending;
+  }
+
+  /**
+   * What an agent of `adapter` can be set to run with, and the user's own defaults: asked of main
+   * once, then kept (until `forgetOptions`, or a failure, which is asked again next time).
+   */
+  settingsOptions(adapter: AdapterId): Promise<SettingsOptions> {
+    let options = this.#options.get(adapter);
+    if (!options) {
+      options = this.#backend.options(adapter);
+      options.catch(() => {
+        if (this.#options.get(adapter) === options) this.#options.delete(adapter);
+      });
+      this.#options.set(adapter, options);
+    }
+    return options;
+  }
+
+  /** What adapters' agents can be set to is read again when next asked (another project folder). */
+  forgetOptions(): void {
+    this.#options.clear();
+  }
+
+  /**
+   * Sends the user's message (with the images pasted into it): a new turn, or queued while one is
+   * going on (or while messages kept from a session that would not start wait: they go first, and
+   * the session is tried again). A queue hold keeps earlier messages waiting, while fresh user
+   * input can intervene once idle. `onDone` hears when that turn ends (`interrupted` too if the
+   * message is taken off the queue before it is sent, or the turn failed), with what the agent
+   * replied in it (turnReply). `onRefused` hears each time the session would not start while the
+   * message waits to go (kept, queued). Returns a function that takes the message back: off the
+   * queue while it waits there, or interrupting its turn while that goes on (and nothing once it
+   * has ended).
+   */
+  send(
+    agentId: string,
+    agent: AdapterId,
+    text: string,
+    onDone?: (interrupted: boolean, reply: string, result?: TurnResult) => void,
+    images?: MessageImage[],
+    onRefused?: (refusal: Refusal) => void,
+    origin: 'user' | 'queue' | 'run' = 'user',
+    displayText?: string,
+  ): () => void {
+    this.#types.set(agentId, agent);
+    const id = crypto.randomUUID();
+    if (origin === 'queue') this.#queueMessages.add(id);
+    else if (origin === 'run') this.#runMessages.add(id);
+    if (displayText !== undefined) this.#displayTexts.set(id, displayText);
+    if (onDone) this.#onDone.set(id, onDone);
+    if (onRefused) this.#onRefused.set(id, onRefused);
+    const session = this.of(agentId);
+    const held = this.#heldQueues.has(agentId);
+    if (
+      !this.#freshening.has(agentId) &&
+      session.status === 'idle' &&
+      (held ? origin !== 'queue' : session.queued.length === 0)
+    ) {
+      this.#start(agentId, { text, images }, id);
+    } else {
+      this.#dispatch(agentId, {
+        type: 'queue',
+        id,
+        text,
+        ...(images === undefined || images.length === 0 ? {} : { images }),
+      });
+      this.#idle(agentId);
+    }
+    return () => {
+      if (this.of(agentId).queued.some((queued) => queued.id === id)) this.unqueue(agentId, id);
+      else if (this.#turns.get(agentId) === id) this.stop(agentId);
+    };
+  }
+
+  /**
+   * Sends a message once the agent runs with `connection`, as the canvas switches it (`sync`): a
+   * command typed for Claude Code's terminal, sent there once the agent continues in Terminal.
+   */
+  sendOnceIn(agentId: string, connection: ConnectionId, agent: AdapterId, text: string): void {
+    if (this.#connections.get(agentId) === connection) {
+      this.send(agentId, agent, text);
+      return;
+    }
+    this.#onceIn.set(agentId, { connection, agent, text });
+  }
+
+  /** Records a submitted command handled by the view itself, without dispatching a CLI turn. */
+  recordSubmission(agentId: string, text: string, images?: MessageImage[]): void {
+    const session = this.of(agentId);
+    const after = this.#position(agentId);
+    const result: TurnResult = { status: 'completed', reason: 'completed' };
+    const message: SubmittedMessage = {
+      id: crypto.randomUUID(),
+      text,
+      status: 'completed',
+      result,
+      ...(images?.length ? { images } : {}),
+      ...(after === undefined ? {} : { after }),
+    };
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...session,
+        submissions: pruneSubmissions([...(session.submissions ?? []), message]),
+      },
+    };
+    this.#notify();
+    this.#observer.submitted?.(agentId, message);
+    this.#observer.ended?.(agentId, message.id, '', result);
+  }
+
+  /** Tells the user something in the agent's session (a notice in its transcript). */
+  notice(agentId: string, level: 'info' | 'warning' | 'error', text: string): void {
+    this.#dispatch(agentId, {
+      type: 'add',
+      entry: { id: crypto.randomUUID(), kind: 'notice', level, text },
+    });
+  }
+
+  /** The files and folders of the canvas's project folder that match `query`, for an @-mention. */
+  findFiles(query: string): Promise<string[]> {
+    return this.#backend.files(query);
+  }
+
+  /** The conversations Claude Code kept for the project folder, for /resume. */
+  pastSessions(agentId: string): Promise<PastSession[]> {
+    return this.#backend.sessions(agentId);
+  }
+
+  /**
+   * Opens another conversation in the agent (/resume), one main listed: main makes it the agent's
+   * own, ending its session; its driver goes (a turn going on ends, interrupted), the transcript
+   * empties, and the session starts again resuming that conversation, whose history fills the
+   * transcript. If main refuses, nothing changes.
+   */
+  async resume(agentId: string, sessionId: string): Promise<void> {
+    await this.#backend.resume(agentId, sessionId);
+    this.#letGo(agentId);
+    this.#dispatch(agentId, { type: 'clear' });
+    this.#driver(agentId).open();
+    // What was queued goes on, to that conversation.
+    this.#idle(agentId);
+  }
+
+  /** What restoring the agent's files to before one of its messages would change. */
+  previewRewind(agentId: string, messageId: string): Promise<FilesRewind> {
+    return this.#backend.previewRewind(agentId, messageId);
+  }
+
+  /**
+   * Rewinds the agent's session to before one of its messages (`messageId`, a user entry): its
+   * files, its conversation, or both, as main does them, then says what it did. The conversation
+   * goes back as a copy up to there, which main makes the agent's own: its driver goes, the
+   * transcript empties, and the session starts again on the copy, whose history fills it.
+   */
+  async rewind(agentId: string, messageId: string, restore: RewindRestore): Promise<RewindResult> {
+    const message = this.of(agentId).entries.find((entry) => entry.id === messageId);
+    const before = `before “${message?.kind === 'user' ? threadTitle(message.text, 60) : 'that message'}”`;
+    const result = await this.#backend.rewind(agentId, messageId, restore);
+    const { files, conversation } = result;
+    if (conversation) {
+      this.#letGo(agentId);
+      this.#dispatch(agentId, { type: 'clear' });
+      this.#driver(agentId).open();
+    }
+    const text = conversation
+      ? `Rewound the conversation to ${before}${files && files.files.length > 0 ? `, and restored ${restored(files)}` : ''}.`
+      : files && files.files.length > 0
+        ? `Restored ${restored(files)} to how ${files.files.length === 1 ? 'it was' : 'they were'} ${before}.`
+        : `No files to restore: nothing changed since ${before.slice('before '.length)}.`;
+    this.notice(agentId, 'info', text);
+    if (conversation) this.#idle(agentId);
+    return result;
+  }
+
+  /** The MCP servers of the agent's running session (/mcp). */
+  mcpServers(agentId: string): Promise<McpServer[]> {
+    return this.#backend.mcp(agentId);
+  }
+
+  /** Reconnects, enables or disables one of them; resolves with them all as they are then. */
+  changeMcpServer(agentId: string, server: string, change: McpChange): Promise<McpServer[]> {
+    return this.#backend.changeMcp(agentId, server, change);
+  }
+
+  /** Answers an MCP server's request: accepted (with the form's values), declined or cancelled. */
+  answerElicitation(
+    agentId: string,
+    promptId: string,
+    action: ElicitationAction,
+    values?: Record<string, FormValue>,
+  ): void {
+    this.#drivers.get(agentId)?.driver.answer(promptId, {
+      kind: 'elicitation',
+      action,
+      ...(values === undefined ? {} : { values }),
+    });
+  }
+
+  /** Answers a permission prompt; with a no, `feedback` tells Claude what to do instead. */
+  answer(agentId: string, permissionId: string, answer: Answer, feedback?: string): void {
+    this.#drivers.get(agentId)?.driver.answer(permissionId, {
+      kind: 'permission',
+      answer,
+      ...(feedback === undefined || feedback.trim() === '' ? {} : { feedback: feedback.trim() }),
+    });
+  }
+
+  /** Answers one of the questions of a question prompt; once all have answers, they go. */
+  answerQuestion(agentId: string, promptId: string, index: number, answer: string): void {
+    this.#dispatch(agentId, { type: 'answerQuestion', id: promptId, index, answer });
+    const answers = answersOf(this.of(agentId), promptId);
+    if (answers) {
+      this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'question', answers });
+    }
+  }
+
+  /** Approves a plan, or not. */
+  answerPlan(agentId: string, promptId: string, answer: PlanAnswer): void {
+    this.#drivers.get(agentId)?.driver.answer(promptId, { kind: 'plan', answer });
+  }
+
+  /** Interrupts the turn going on, if any. */
+  stop(agentId: string): void {
+    if (this.of(agentId).status === 'idle' || this.#stopping.has(agentId)) return;
+    const driver = this.#drivers.get(agentId)?.driver;
+    if (!driver) return;
+    this.#stopping.add(agentId);
+    if (this.#heldQueues.has(agentId)) {
+      this.#setAside.set(agentId, new Set(this.of(agentId).queued.map(({ id }) => id)));
+    }
+    driver.stop();
+  }
+
+  unqueue(agentId: string, queuedId: string): void {
+    if (!this.of(agentId).queued.some(({ id }) => id === queuedId)) return;
+    const result: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+    this.#settleSubmissions(agentId, result, queuedId);
+    this.#dispatch(agentId, { type: 'unqueue', id: queuedId });
+    this.#heard(queuedId)?.(true, '', result);
+  }
+
+  /**
+   * The user chose a mode for the agent's session: it switches to it (once it runs). What it starts
+   * in is the agent's settings' (`sync`).
+   */
+  setMode(agentId: string, mode: Mode): void {
+    this.#dispatch(agentId, { type: 'mode', mode });
+    this.#drivers.get(agentId)?.driver.setMode(mode);
+  }
+
+  /** The user chose a model for the agent's session: it switches to it (once it runs). */
+  setModel(agentId: string, model: string): void {
+    this.#dispatch(agentId, { type: 'model', model });
+    this.#drivers.get(agentId)?.driver.setModel(model);
+  }
+
+  /** The user chose how hard its model reasons (null: the model's default): its session switches. */
+  setEffort(agentId: string, effort: string | null): void {
+    this.#dispatch(agentId, { type: 'effort', effort });
+    this.#drivers.get(agentId)?.driver.setEffort(effort);
+  }
+
+  /** Stops a task the agent's session runs in the background. */
+  stopTask(agentId: string, taskId: string): void {
+    this.#drivers.get(agentId)?.driver.stopTask(taskId);
+  }
+
+  /** Forgets every session, as for another canvas: turns going on end, connected ones close. */
+  reset(): void {
+    this.#freshening.clear();
+    for (const id of [...this.#drivers.keys()]) this.#letGo(id);
+    const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
+    for (const id of Object.keys(this.#sessions)) this.#settleSubmissions(id, result);
+    for (const onDone of this.#onDone.values()) onDone(true, '', result);
+    this.#onDone.clear();
+    this.#onRefused.clear();
+    this.#turns.clear();
+    this.#heldQueues.clear();
+    this.#stopping.clear();
+    this.#queueMessages.clear();
+    this.#runMessages.clear();
+    this.#setAside.clear();
+    this.#displayTexts.clear();
+    this.#onceIn.clear();
+    this.#settings.clear();
+    this.#roles.clear();
+    this.#options.clear();
+    this.#unsubscribe?.();
+    this.#unsubscribe = undefined;
+    this.#sessions = {};
+    this.#notify();
+  }
+
+  /** Starts a turn with message `id` (a queued message keeps its own). */
+  #start(
+    agentId: string,
+    { text, images }: { text: string; images: MessageImage[] | undefined },
+    id: string,
+  ): void {
+    const pasted = images === undefined || images.length === 0 ? {} : { images };
+    this.#turns.set(agentId, id);
+    // Its adapter's conversation (model/session.ts Conversation): an unsupported submission's
+    // ('unavailable') stays separate from native conversation history.
+    const conversation = this.#catalog.adapterOf(this.#connection(agentId));
+    this.#dispatch(agentId, {
+      type: 'start',
+      entry: { id, kind: 'user', text, ...pasted, conversation },
+    });
+    this.#driver(agentId).start({ id, text, ...pasted }, (interrupted, result) => {
+      // The next queued message may have started already.
+      if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
+      this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id), result);
+    });
+  }
+
+  /** Who hears when message `id`'s turn ends, now that it does: forgotten, as it ends once. */
+  #heard(
+    id: string,
+  ): ((interrupted: boolean, reply: string, result?: TurnResult) => void) | undefined {
+    const onDone = this.#onDone.get(id);
+    this.#onDone.delete(id);
+    this.#onRefused.delete(id);
+    this.#displayTexts.delete(id);
+    return onDone;
+  }
+
+  /**
+   * The agent's session would not start, so message `id`'s turn never went: it goes back to the
+   * head of the queue, and whoever sent a message still queued hears why (none can go until the
+   * agent runs another way, or the session starts after all).
+   */
+  #refused(agentId: string, id: string, refusal: Refusal): void {
+    this.#dispatch(agentId, { type: 'refuse', id });
+    if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
+    const ids = this.of(agentId).queued.map(({ id }) => id);
+    const driving = this.#drivers.get(agentId);
+    // Native starts are asynchronous. Keep the same ordering for unavailable connections, so
+    // a runner can publish its held task before hearing the refusal. A same-stack switch or
+    // removal may already have dispatched/withdrawn these messages before this notification.
+    queueMicrotask(() => {
+      if (this.#drivers.get(agentId) !== driving) return;
+      const queued = new Set(this.of(agentId).queued.map(({ id }) => id));
+      for (const id of ids) if (queued.has(id)) this.#onRefused.get(id)?.(refusal);
+    });
+  }
+
+  /** The session is idle: its next queued message, if any, starts. */
+  #idle(agentId: string): void {
+    if (this.#freshening.has(agentId)) return;
+    const session = this.of(agentId);
+    // While the run holds the agent, what the user typed still goes; only the run's own waits,
+    // and what a Stop set aside.
+    const aside = this.#setAside.get(agentId);
+    const next = this.#heldQueues.has(agentId)
+      ? session.queued.find(({ id }) => !this.#queueMessages.has(id) && aside?.has(id) !== true)
+      : session.queued[0];
+    if (!next || session.status !== 'idle') return;
+    this.#dispatch(agentId, { type: 'unqueue', id: next.id });
+    this.#start(agentId, { text: next.text, images: next.images }, next.id);
+  }
+
+  /** Missing runtime configuration follows the same native default as an authored agent. */
+  #connection(agentId: string): ConnectionId {
+    const adapter = this.#types.get(agentId);
+    return (
+      this.#connections.get(agentId) ??
+      this.#catalog.connectionOf(adapter === undefined ? {} : { adapter })
+    );
+  }
+
+  /** The agent's driver, made as the agent runs if it has none. */
+  #driver(agentId: string): SessionDriver {
+    const existing = this.#drivers.get(agentId);
+    if (existing) return existing.driver;
+    const connection = this.#connection(agentId);
+    // The driver's io needs its entry, and the driver its io.
+    const driving = { connection, closing: false } as Driving;
+    const io = this.#io(agentId, driving);
+    if (connection === 'unavailable') {
+      driving.driver = new UnavailableDriver(io);
+    } else {
+      this.#listen();
+      driving.driver = new ConnectedDriver(agentId, connection, this.#catalog, this.#backend, io);
+    }
+    this.#drivers.set(agentId, driving);
+    return driving.driver;
+  }
+
+  /**
+   * What a driver is given. A driver let go may still end its turn, but starts nothing more; once
+   * gone, it is not heard at all.
+   */
+  #io(agentId: string, driving: Driving): DriverIO {
+    const current = () => this.#drivers.get(agentId) === driving;
+    return {
+      dispatch: (action) => {
+        if (current()) this.#dispatch(agentId, action);
+      },
+      session: () => this.of(agentId),
+      settings: () => {
+        const settings =
+          driving.connection === 'unavailable'
+            ? {}
+            : (this.#settings.get(agentId)?.[this.#catalog.adapterOf(driving.connection)] ?? {});
+        const role = this.#roles.get(agentId);
+        return { ...settings, ...(role === undefined ? {} : { role }) };
+      },
+      idle: () => {
+        if (current() && !driving.closing) this.#idle(agentId);
+      },
+      refused: (id, refusal) => {
+        if (current() && !driving.closing) this.#refused(agentId, id, refusal);
+      },
+      newId: () => crypto.randomUUID(),
+      now: () => Date.now(),
+    };
+  }
+
+  /** Hears connected sessions' events, from the first connected driver on. */
+  #listen(): void {
+    this.#unsubscribe ??= this.#backend.onEvent((agentId, connection, event) => {
+      const driving = this.#drivers.get(agentId);
+      if (driving?.driver instanceof ConnectedDriver && driving.connection === connection) {
+        driving.driver.receive(event);
+      }
+    });
+  }
+
+  /** Lets the agent's driver go: its turn ends, and a connected session closes. */
+  #letGo(agentId: string): void {
+    this.#stopping.delete(agentId);
+    const driving = this.#drivers.get(agentId);
+    if (!driving) return;
+    driving.closing = true;
+    driving.driver.close();
+    this.#drivers.delete(agentId);
+  }
+
+  /** The agent is gone: its session ends, and whoever waits on its queued messages hears. */
+  #forget(agentId: string): void {
+    this.#freshening.delete(agentId);
+    this.#letGo(agentId);
+    this.#roles.delete(agentId);
+    this.#heldQueues.delete(agentId);
+    this.#onceIn.delete(agentId);
+    const result: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
+    this.#settleSubmissions(agentId, result);
+    for (const { id } of this.of(agentId).queued) this.#heard(id)?.(true, '', result);
+    this.#turns.delete(agentId);
+    this.#sessions = Object.fromEntries(
+      Object.entries(this.#sessions).filter(([id]) => id !== agentId),
+    );
+    this.#types.delete(agentId);
+    this.#notify();
+  }
+
+  #dispatch(agentId: string, action: SessionAction): void {
+    if (
+      action.type === 'start' ||
+      action.type === 'end' ||
+      action.type === 'refuse' ||
+      (action.type === 'add' && action.entry.kind === 'notice' && action.entry.level === 'error')
+    ) {
+      this.#stopping.delete(agentId);
+    }
+    const session = this.of(agentId);
+    let submissions = session.submissions;
+    let created: SubmittedMessage | undefined;
+    const ended: (SubmittedMessage & { result: TurnResult })[] = [];
+    if (action.type === 'start' || action.type === 'queue') {
+      const message = action.type === 'start' ? action.entry : action;
+      if (!this.#queueMessages.has(message.id)) {
+        const status = action.type === 'start' ? 'running' : 'queued';
+        if (submissions?.some(({ id }) => id === message.id)) {
+          submissions = submissions.map((entry) =>
+            entry.id === message.id ? { ...entry, status } : entry,
+          );
+        } else {
+          const after = this.#position(agentId);
+          created = {
+            id: message.id,
+            text: this.#displayTexts.get(message.id) ?? message.text,
+            status,
+            ...(message.images?.length ? { images: message.images } : {}),
+            ...(after === undefined ? {} : { after }),
+          };
+          submissions = pruneSubmissions([...(submissions ?? []), created]);
+        }
+      }
+    } else if (action.type === 'refuse') {
+      submissions = submissions?.map((entry) =>
+        entry.id === action.id ? { ...entry, status: 'queued' } : entry,
+      );
+    } else if (action.type === 'end') {
+      const result = turnResult(action);
+      submissions = submissions?.map((entry) => {
+        if (
+          entry.status !== 'running' ||
+          (action.messages !== undefined && !action.messages.includes(entry.id))
+        )
+          return entry;
+        const next = {
+          ...entry,
+          status: result.status,
+          result,
+          reply: turnReply(session, entry.id),
+        };
+        ended.push(next);
+        return next;
+      });
+    }
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...reduce(session, action),
+        ...(submissions === undefined ? {} : { submissions }),
+      },
+    };
+    this.#notify();
+    if (created && !this.#runMessages.has(created.id)) this.#observer.submitted?.(agentId, created);
+    for (const message of ended) {
+      if (this.#runMessages.has(message.id)) continue;
+      this.#observer.ended?.(agentId, message.id, message.reply ?? '', message.result);
+    }
+  }
+
+  /** Ends outstanding submissions without inventing a native reply. */
+  #settleSubmissions(agentId: string, result: TurnResult, id?: string): void {
+    const session = this.of(agentId);
+    if (!session.submissions) return;
+    const ended: SubmittedMessage[] = [];
+    const submissions = session.submissions.map((entry) => {
+      if (
+        (entry.status !== 'running' && entry.status !== 'queued') ||
+        (id !== undefined && entry.id !== id)
+      )
+        return entry;
+      const next = { ...entry, status: result.status, result, reply: turnReply(session, entry.id) };
+      ended.push(next);
+      return next;
+    });
+    if (ended.length === 0) return;
+    this.#sessions = { ...this.#sessions, [agentId]: { ...session, submissions } };
+    this.#notify();
+    for (const message of ended)
+      this.#observer.ended?.(agentId, message.id, message.reply ?? '', result);
+  }
+
+  /** Associates a correction with a held task without dispatching or re-observing it. */
+  tagSubmission(agentId: string, messageId: string, owner: string, item: string): void {
+    const session = this.of(agentId);
+    if (!session.submissions?.some(({ id }) => id === messageId)) return;
+    this.#sessions = {
+      ...this.#sessions,
+      [agentId]: {
+        ...session,
+        submissions: session.submissions.map((message) =>
+          message.id === messageId ? { ...message, task: { agent: owner, item } } : message,
+        ),
+      },
+    };
+    this.#notify();
+  }
+
+  serializeSubmissions(): string {
+    return encodeSubmissions(this.#sessions);
+  }
+
+  /** Restores records only: unresolved work never silently re-sends after a restart. */
+  restoreSubmissions(serialized: string): void {
+    const decoded = decodeSubmissions(serialized);
+    const next = { ...this.#sessions };
+    for (const [id, submissions] of decoded) next[id] = { ...this.of(id), submissions };
+    this.#sessions = next;
+    this.#notify();
+  }
+
+  #notify(): void {
+    for (const listener of this.#listeners) listener();
+  }
+}
+
+/** The files a rewind restored, as a notice names them: "notes.txt (+1 −1)", "4 files (a, b, c and 1 more; +4 −2)". */
+function restored({ files, added, removed }: FilesRewind): string {
+  const counts = `+${String(added)} −${String(removed)}`;
+  if (files.length === 1) return `${files[0] ?? ''} (${counts})`;
+  const named =
+    files.length <= 3
+      ? files.join(', ')
+      : `${files.slice(0, 3).join(', ')} and ${String(files.length - 3)} more`;
+  return `${String(files.length)} files (${named}; ${counts})`;
+}

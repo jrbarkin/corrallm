@@ -1,20 +1,12 @@
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId, Catalog, UsageBackendId } from '../../shared/adapter';
-import { WINDOW_NAMES } from '../../shared/usage';
-import type {
-  UsageAction,
-  UsageReading,
-  UsageRule,
-  UsageState,
-  UsageWindow,
-} from '../../shared/usage';
-import type { EngineCatalog } from '../run/catalog';
+import type { UsageAction, UsageReading, UsageRule, UsageState } from '../../shared/usage';
+import { windowText } from '../../shared/model/words';
 
 /*
- * Usage readings and rules as the renderer shows and runs them (src/shared/usage.ts): which
- * backends a canvas's agents spend, and how readings, holds and rules read. The backend one agent
- * spends, and how a backend is named, are the run's catalog's to say (run/catalog.ts
- * usageBackendOf, backendName).
+ * Usage readings and rules as the renderer shows them (src/shared/usage.ts): which backends a
+ * canvas's agents spend, and how readings and rules read. How a hold reads, and the backend one
+ * agent spends, are the engine's (src/shared/model/words.ts, src/shared/engine/catalog.ts).
  */
 
 /** The backend an adapter's agents spend in `catalog`: the first its connections declare, if any. */
@@ -34,32 +26,6 @@ export function readingOf(state: UsageState, backend: UsageBackendId): UsageRead
   return state.readings.find((reading) => reading.backend === backend);
 }
 
-/** A share used, as a gauge shows it: "42%", or "<1%" for a little. */
-export function percentText(used: number): string {
-  if (used > 0 && used < 1) return '<1%';
-  return `${String(Math.round(used))}%`;
-}
-
-/**
- * When a window resets, as a gauge says it: "3:40 PM" today, "Thu 9:00 AM" within a week, or the
- * date further off (in `locale`'s way).
- */
-export function resetTime(at: number, now: number, locale?: string): string {
-  const day = new Date(at);
-  const today = new Date(now);
-  const clock = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' })
-    .format(day)
-    // Some locales put a narrow no-break space before AM and PM.
-    .replace(/\s/gu, ' ');
-  if (day.toDateString() === today.toDateString()) return clock;
-  const days = (at - now) / 86_400_000;
-  const date =
-    days > 0 && days < 6.5
-      ? new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day)
-      : new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(day);
-  return `${date} ${clock}`;
-}
-
 /** How long ago a reading was taken: "just now", "4 min ago", "3 h ago", "2 days ago". */
 export function ageText(at: number, now: number): string {
   const minutes = Math.floor((now - at) / 60_000);
@@ -70,9 +36,6 @@ export function ageText(at: number, now: number): string {
   const days = Math.floor(hours / 24);
   return `${String(days)} day${days === 1 ? '' : 's'} ago`;
 }
-
-/** How a window is named on its own: "5-hour window". */
-export const windowText = (window: UsageWindow): string => `${WINDOW_NAMES[window]} window`;
 
 /** What each action of a usage rule is called, and what it does. */
 export const ACTION_INFO: Readonly<Record<UsageAction, { label: string; detail: string }>> = {
@@ -91,45 +54,4 @@ export const ACTION_INFO: Readonly<Record<UsageAction, { label: string; detail: 
 export function ruleText(rule: UsageRule): string {
   const action = ACTION_INFO[rule.action].label;
   return `Over ${String(rule.percent)}% of the ${windowText(rule.window)}: ${action.charAt(0).toLowerCase()}${action.slice(1)}`;
-}
-
-/**
- * Where a usage rule holds an agent, before its next task (run/runner.ts AgentRun.usage): whose
- * usage, which window, the rule's share, how much was used then and when the window resets.
- */
-export interface UsageHold {
-  backend: UsageBackendId;
-  window: UsageWindow;
-  /** The rule's share. */
-  percent: number;
-  /** The share used, by the reading that held it. */
-  used: number;
-  /** When the window resets (epoch ms), if the reading says. */
-  resetsAt: number | null;
-}
-
-/**
- * What a usage rule's hold says, the backend named by `catalog`: "Claude has used 84% of its
- * 5-hour window (over 80%)".
- */
-export function holdText(
-  { backend, window, percent, used }: UsageHold,
-  catalog: EngineCatalog,
-): string {
-  return `${catalog.backendName(backend)} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
-}
-
-/**
- * What a usage rule's warning says, in the agent's session: "Claude has used 84% of its 5-hour
- * window (over 80%). It resets at 3:40 PM."
- */
-export function warningText(
-  hold: UsageHold,
-  catalog: EngineCatalog,
-  now: number,
-  locale?: string,
-): string {
-  const reset =
-    hold.resetsAt === null ? '' : ` It resets at ${resetTime(hold.resetsAt, now, locale)}.`;
-  return `${holdText(hold, catalog)}.${reset}`;
 }

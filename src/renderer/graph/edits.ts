@@ -1,4 +1,4 @@
-import type { Answer } from '../run/runner';
+import type { Answer } from '../../shared/engine/run/runner';
 import type { QueueEntry } from './QueueEditor';
 import type { Condition, QueueRepeat, QueueStep, Time, WaitTarget } from '../../shared/model/queue';
 

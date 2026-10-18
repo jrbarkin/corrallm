@@ -3,11 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { CanvasId } from '../../shared/canvas';
 import { catalog } from '../catalog';
-import { fromFile, toFile } from './file';
-import { setAgent, setConnection, setRole } from './graph';
+import { fromFile, toFile } from '../../shared/model/file';
+import { documentOf, graphOf, setAgent, setConnection, setRole } from './graph';
 import type { Graph } from './graph';
 import { insertGraph } from './insert';
 import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
+import { DEFAULT_AGENT } from './agents';
 
 const graph = (): Graph => ({
   nodes: [
@@ -46,14 +47,18 @@ describe('authored roles in graphs and files', () => {
 
   it('round-trips the authored role and omits absent or blank roles from saved data', () => {
     const before = graph();
-    expect(fromFile(toFile(before, ID), catalog()).nodes[0]?.data.role).toBe(
-      before.nodes[0]?.data.role,
-    );
-    expect(toFile(fromFile(file(' \t\n '), catalog()), ID)).not.toContain('"role"');
-    expect(toFile(setRole(before, 'a', undefined), ID)).not.toContain('"role"');
-    expect(fromFile(file('  Reviewer.\n\tCheck carefully.  '), catalog()).nodes[0]?.data.role).toBe(
-      'Reviewer.\n\tCheck carefully.',
-    );
+    expect(
+      graphOf(fromFile(toFile(documentOf(before, ID)), catalog(), DEFAULT_AGENT)).nodes[0]?.data
+        .role,
+    ).toBe(before.nodes[0]?.data.role);
+    expect(
+      toFile(documentOf(graphOf(fromFile(file(' \t\n '), catalog(), DEFAULT_AGENT)), ID)),
+    ).not.toContain('"role"');
+    expect(toFile(documentOf(setRole(before, 'a', undefined), ID))).not.toContain('"role"');
+    expect(
+      graphOf(fromFile(file('  Reviewer.\n\tCheck carefully.  '), catalog(), DEFAULT_AGENT))
+        .nodes[0]?.data.role,
+    ).toBe('Reviewer.\n\tCheck carefully.');
   });
 
   it.each([
@@ -67,24 +72,28 @@ describe('authored roles in graphs and files', () => {
     'bad\u0085role',
     'x'.repeat(MAX_ROLE_LENGTH + 1),
   ])('rejects an invalid file role (%j)', (role) => {
-    expect(() => fromFile(file(role), catalog())).toThrow(/role/i);
+    expect(() => graphOf(fromFile(file(role), catalog(), DEFAULT_AGENT))).toThrow(/role/i);
   });
 
   it('validates in-memory authored roles before saving, and keeps roles off frames', () => {
     const before = graph();
     expect(() =>
       toFile(
-        {
-          ...before,
-          nodes: before.nodes.map((node) => ({
-            ...node,
-            data: { ...node.data, role: 'unsafe\0role' },
-          })),
-        },
-        ID,
+        documentOf(
+          {
+            ...before,
+            nodes: before.nodes.map((node) => ({
+              ...node,
+              data: { ...node.data, role: 'unsafe\0role' },
+            })),
+          },
+          ID,
+        ),
       ),
     ).toThrow(/role/i);
-    expect(() => fromFile(file('Frame role', 'group'), catalog())).toThrow(/role/i);
+    expect(() => graphOf(fromFile(file('Frame role', 'group'), catalog(), DEFAULT_AGENT))).toThrow(
+      /role/i,
+    );
     const frame: Graph = {
       nodes: [{ id: 'g', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Group' } }],
       edges: [],
@@ -111,7 +120,7 @@ describe('authored roles in graphs and files', () => {
     expect(template.nodes[0]?.data.connection).toBe('codex.app-server');
     const switched = setConnection(setAgent(before, 'a', 'codex'), 'a', 'codex.app-server');
     expect(switched.nodes[0]?.data.role).toBe(before.nodes[0]?.data.role);
-    const imported = fromFile(toFile(switched, ID), catalog());
+    const imported = graphOf(fromFile(toFile(documentOf(switched, ID)), catalog(), DEFAULT_AGENT));
     let count = 0;
     const inserted = insertGraph({ nodes: [], edges: [] }, imported, {
       group: 'group',

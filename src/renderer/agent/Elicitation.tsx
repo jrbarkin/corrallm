@@ -3,7 +3,7 @@ import type { SyntheticEvent } from 'react';
 
 import type { ElicitationAction, FormField, FormValue } from '../../shared/session';
 import { OpenLinkContext } from '../open-link';
-import type { Entry } from './session';
+import type { Entry } from '../../shared/model/session';
 
 /**
  * An MCP server asking the user something (an elicitation), in the transcript: a form to fill in

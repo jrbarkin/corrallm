@@ -12,7 +12,7 @@ import type { AgentConnection } from '../graph/agents';
 import type { GraphNode } from '../graph/graph';
 import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
-import type { Session } from './session';
+import type { Session } from '../../shared/model/session';
 import './AgentSettings.css';
 
 type Options = (adapter: AdapterId) => Promise<SettingsOptions>;

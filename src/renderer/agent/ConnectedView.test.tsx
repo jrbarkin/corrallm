@@ -5,7 +5,7 @@ import type { SessionEvent } from '../../shared/session';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { OpenLinkContext } from '../open-link';
-import { fakeBackend } from '../test-backend';
+import { fakeBackend } from '../../shared/engine/test-backend';
 
 // jsdom cannot draw xterm.js: a fake terminal stands in, for an agent switched to Terminal.
 vi.mock('../terminal/screen', async () => {
@@ -13,7 +13,7 @@ vi.mock('../terminal/screen', async () => {
   return { createScreen: fakeScreens.create };
 });
 
-/** What the run asks at the end of a tool's step: how it went (run/turns.ts). */
+/** What the run asks at the end of a tool's step: how it went (src/shared/engine/run/turns.ts). */
 const VERDICT =
   ' End your reply with SUCCEEDED or FAILED on a line of its own: whether the step succeeded (a command: whether it exited with status 0; tests: whether they all passed), even if you expected it to fail.';
 
@@ -93,9 +93,7 @@ function refuseSdk(fake: ReturnType<typeof fakeBackend>) {
       text: SUBSCRIPTION,
       switchTo: 'claude-code.terminal',
     });
-    return Promise.reject(
-      new Error(`Error invoking remote method 'session:start': Error: ${SUBSCRIPTION}`),
-    );
+    return Promise.reject(new Error(SUBSCRIPTION));
   });
 }
 

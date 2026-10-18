@@ -10,8 +10,8 @@ import { setAgent, setConnection, setRole } from '../graph/graph';
 import type { GraphNode } from '../graph/graph';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
 import { SettingsMenu } from './Settings';
-import { NEW_SESSION } from './session';
-import type { Session } from './session';
+import { NEW_SESSION } from '../../shared/model/session';
+import type { Session } from '../../shared/model/session';
 
 const agent = (data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id: 'a',

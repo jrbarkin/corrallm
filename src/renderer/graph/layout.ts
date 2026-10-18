@@ -1,6 +1,7 @@
 import { Graph as Layered, layout } from '@dagrejs/dagre';
 import type { EdgeLabel, GraphLabel, NodeLabel } from '@dagrejs/dagre';
-import { autosize, NODE_GAP, PADDING, RANK_GAP, size, topInset } from './graph';
+import { autosize, NODE_GAP, RANK_GAP, size, topInset } from './graph';
+import { PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
 import { workEdges } from './work';
 

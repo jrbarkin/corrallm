@@ -1,0 +1,25 @@
+{
+  "format": "corrallm",
+  "version": 2,
+  "id": "4b1f6c2e-8d3a-4e5f-9a0b-7c6d5e4f3a2b",
+  "nodes": [
+    {
+      "id": "worker",
+      "kind": "agent",
+      "label": "Worker",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "adapter": "codex",
+      "connection": "codex.app-server",
+      "queue": [
+        {
+          "id": "hello",
+          "message": "Say hello"
+        }
+      ]
+    }
+  ],
+  "links": []
+}

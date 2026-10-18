@@ -26,21 +26,24 @@ import type { AgentSettings, InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
-import { NO_BACKEND } from '../agent/connected';
-import type { SessionBackend } from '../agent/connected';
-import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
-import type { AskedInSession, CardQuestion } from '../agent/session';
-import { SessionStore } from '../agent/sessions';
+import { NO_BACKEND } from '../../shared/engine/transcript/receive';
+import type { SessionBackend } from '../../shared/engine/transcript/receive';
+import { NEW_SESSION, pendingSessionQuestions } from '../../shared/model/session';
+import type { AskedInSession, CardQuestion } from '../../shared/model/session';
 import { adapterOf, catalog, continuesIn, isTerminal } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import { withSubmissions } from '../queues/submissions';
-import { heldAsks } from '../run/asks';
-import { RunStore } from '../run/runner';
-import { groupControlText, groupPaused, individualPaused, queueControlText } from '../run/controls';
-import { readRun } from '../run/checkpoint';
+import { Engine } from '../../shared/engine/engine';
+import { heldAsks } from '../../shared/engine/run/asks';
+import {
+  groupControlText,
+  groupPaused,
+  individualPaused,
+  queueControlText,
+} from '../../shared/engine/run/controls';
 import { RunPersistence } from '../run/persistence';
 import type { RunSource } from '../run/persistence';
 import { UsageStore } from '../usage/store';
@@ -57,15 +60,16 @@ import {
   addAgent,
   addParent,
   addToQueue,
-  areLinked,
   autosize,
   canConnect,
   canvasNodes,
   connect,
   deleteEdge,
   deleteSelection,
+  documentOf,
   editMessage,
   EMPTY_GRAPH,
+  graphOf,
   groupColors,
   groupMembers,
   groupSelection,
@@ -76,25 +80,26 @@ import {
   selectOnly,
   setAgent,
   setApproval,
-  setRepeat,
   setCondition,
   setConnection,
   setExpect,
-  setSettings,
-  setRole,
   setInstruction,
+  setRepeat,
+  setRole,
+  setSettings,
   setTime,
   setWaitFor,
   spawnAgent,
   ungroupSelection,
 } from './graph';
+import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/model/queries';
 import type { Graph, GraphNode } from './graph';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import { EXAMPLES } from './examples';
 import type { Example } from './examples';
 import { FileBar } from './FileBar';
-import { fromFile, toFile } from './file';
+import { fromFile, toFile } from '../../shared/model/file';
 import { fillTemplate, withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
@@ -104,7 +109,6 @@ import { ConnectMenu } from './ConnectMenu';
 import type { MenuPlace } from './ConnectMenu';
 import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
-import { groupMembers as groupAgentIds, isGroup } from './group-members';
 import type { WorkFlowEdge } from './nodes';
 import { QuestionsSidebar } from './Questions';
 import { workEdges } from './work';
@@ -187,7 +191,10 @@ export function GraphEditor({
 /** A template as a canvas: its blanks filled in, its agents given their types and connections. */
 function fromTemplate(example: Example, { values, agents, connections }: TemplateChoices): Graph {
   return withConnections(
-    withAgents(fillTemplate(fromFile(example.text, catalog()), values), agents),
+    withAgents(
+      fillTemplate(graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT)), values),
+      agents,
+    ),
     connections,
   );
 }
@@ -247,38 +254,17 @@ function Editor({
    * start is switched to the connection the user chose for it there.
    */
   const [{ engine, sessionStore, runStore, persistence, documentState }] = useState(() => {
-    const engine = runCatalog();
-    let runner: RunStore | undefined = undefined;
     let persistence: RunPersistence | undefined = undefined;
-    let workflow = toFile(initialGraph, canvasId);
+    let workflow = toFile(documentOf(initialGraph, canvasId));
     const documentState = {
       read: () => workflow,
       write: (next: string) => {
         workflow = next;
       },
     };
-    const sessionStore = new SessionStore(
-      engine,
-      sessionBackend,
-      (id) => {
-        const at = runner?.snapshot().agents[id];
-        return at?.current ?? Object.keys(at?.outcomes ?? {}).at(-1);
-      },
-      {
-        submitted: (agent, message) => {
-          if (message.text.trim().startsWith('/')) return;
-          const task = runner?.observeSubmission(agent, message.id, message.text);
-          if (task) sessionStore.tagSubmission(agent, message.id, task.agent, task.item);
-        },
-        ended: (agent, message, reply, result) => {
-          runner?.observeEnd(agent, message, reply, result);
-        },
-      },
-    );
-    runner = new RunStore(engine, {
-      hold: (agent, held) => {
-        sessionStore.holdQueue(agent, held);
-      },
+    const engine = new Engine({
+      catalog: runCatalog(),
+      backend: sessionBackend ?? NO_BACKEND,
       ...(runSource
         ? {
             beforeSend: () => {
@@ -288,26 +274,9 @@ function Editor({
             },
           }
         : {}),
-      send: (agent, text, done, images, refused, origin, displayText) =>
-        sessionStore.send(
-          agent.id,
-          agent.data.adapter ?? DEFAULT_AGENT,
-          text,
-          (failed, reply, result) => {
-            done({ failed, reply, ...(result ? { result } : {}) });
-          },
-          images && [...images],
-          refused,
-          // What the user typed for the run (an OK's changes) is theirs, but the run's attempt.
-          origin === 'user' ? 'run' : 'queue',
-          displayText,
-        ),
-      tell: (agent, text) => {
-        sessionStore.notice(agent.id, 'warning', text);
-      },
       connect: (agent, connection) => {
         // How an agent runs changes nothing laid out.
-        setRawGraph((g) => setConnection(g, agent.id, connection));
+        setRawGraph((g) => setConnection(g, agent, connection));
       },
       later: (run, ms) => {
         const timer = setTimeout(run, ms);
@@ -318,16 +287,14 @@ function Editor({
       // The real clock, read when asked: delays and time limits use the real clock.
       now: () => Date.now(),
       usage: () => usageStore.current?.snapshot() ?? NO_USAGE,
-      unheard: (agent) => sessionStore.of(agent.id).unheard !== undefined,
     });
-    const runStore = runner;
+    const { sessions: sessionStore, run: runStore } = engine;
     if (runSource)
       persistence = new RunPersistence(runSource, {
         capture: () => ({
           version: 2,
           workflow: documentState.read(),
-          state: runStore.checkpoint(),
-          messages: sessionStore.serializeSubmissions(),
+          ...engine.checkpoint(),
           updatedAt: Date.now(),
         }),
         freeze: () => {
@@ -339,44 +306,22 @@ function Editor({
         restore: (context) => {
           const checkpoint = context.checkpoint;
           const next = checkpoint
-            ? fromFile(checkpoint.workflow, catalog())
+            ? graphOf(fromFile(checkpoint.workflow, catalog(), DEFAULT_AGENT))
             : context.savedText
-              ? fromFile(context.savedText, catalog())
+              ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
               : undefined;
           const savedGraph = context.savedText
-            ? fromFile(context.savedText, catalog())
+            ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
             : EMPTY_GRAPH;
-          if (checkpoint) {
-            readRun(checkpoint.state);
-            const check = new SessionStore(engine);
-            check.restoreSubmissions(checkpoint.messages);
-          }
+          if (checkpoint) Engine.check(checkpoint);
           setCanvasId(context.id);
           if (next) {
-            runStore.reset();
-            sessionStore.reset();
-            documentState.write(toFile(next, context.id));
+            engine.reset();
+            documentState.write(toFile(documentOf(next, context.id)));
             setLoads((n) => n + 1);
             setRawGraph(next);
-            sessionStore.sync(
-              next.nodes.flatMap((n) =>
-                n.type === 'agent'
-                  ? [
-                      {
-                        id: n.id,
-                        connection: connectionOf(n.data),
-                        settings: n.data.settings,
-                        role: n.data.role,
-                      },
-                    ]
-                  : [],
-              ),
-            );
-            runStore.update(canvasNodes(next.nodes));
-            if (checkpoint) {
-              sessionStore.restoreSubmissions(checkpoint.messages);
-              runStore.restore(checkpoint.state);
-            }
+            engine.update(canvasNodes(next.nodes));
+            if (checkpoint) engine.restore(checkpoint);
             setSaved({ name: context.name ?? undefined, graph: savedGraph });
           }
           setProject(context.project ?? null);
@@ -426,7 +371,7 @@ function Editor({
     };
   }, [persistence, runStore, sessionStore]);
   useEffect(() => {
-    documentState.write(toFile(graph, canvasId));
+    documentState.write(toFile(documentOf(graph, canvasId)));
     persistence?.changed();
   }, [graph, canvasId, documentState, persistence]);
   /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
@@ -437,7 +382,7 @@ function Editor({
   /** The canvas's nodes as the run reads them (the model's, src/shared/model/canvas.ts). */
   const runNodes = useMemo(() => canvasNodes(graph.nodes), [graph.nodes]);
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
-  const asks = useMemo(() => heldAsks(runNodes, run, engine), [runNodes, run, engine]);
+  const asks = useMemo(() => heldAsks(runNodes, run, engine.catalog), [runNodes, run, engine]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
   const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
   const marks = useMemo(() => {
@@ -446,41 +391,18 @@ function Editor({
         session.status === 'waiting' ? [id] : [],
       ),
     );
-    return queueMarks(layout, run, asking, engine);
+    return queueMarks(layout, run, asking, engine.catalog);
   }, [layout, run, sessions, engine]);
-  // Sessions follow the agents on the canvas, and how each runs. Before the run reads the queues,
-  // which may send agents messages.
+  // The engine follows the canvas as it is edited: its sessions the agents and how each runs, then
+  // its run the queues.
   useEffect(() => {
-    sessionStore.sync(
-      graph.nodes.flatMap((n) =>
-        n.type === 'agent'
-          ? [
-              {
-                id: n.id,
-                connection: connectionOf(n.data),
-                settings: n.data.settings,
-                role: n.data.role,
-              },
-            ]
-          : [],
-      ),
-    );
-  }, [graph.nodes, sessionStore]);
+    engine.update(runNodes);
+  }, [runNodes, engine]);
   useEffect(
     () => () => {
-      sessionStore.reset();
+      engine.reset();
     },
-    [sessionStore],
-  );
-  // The run reads the queues as they are edited.
-  useEffect(() => {
-    runStore.update(runNodes);
-  }, [runNodes, runStore]);
-  useEffect(
-    () => () => {
-      runStore.reset();
-    },
-    [runStore],
+    [engine],
   );
   // Usage rules are checked again with each reading.
   useEffect(() => {
@@ -507,8 +429,11 @@ function Editor({
       }}
     />
   );
-  const text = useMemo(() => toFile(graph, canvasId), [graph, canvasId]);
-  const savedText = useMemo(() => toFile(saved.graph, canvasId), [saved.graph, canvasId]);
+  const text = useMemo(() => toFile(documentOf(graph, canvasId)), [graph, canvasId]);
+  const savedText = useMemo(
+    () => toFile(documentOf(saved.graph, canvasId)),
+    [saved.graph, canvasId],
+  );
   const edited = text !== savedText;
   /** What would discard unsaved changes, while the user is asked first. */
   const [discarding, setDiscarding] = useState<{ run: () => void }>();
@@ -764,7 +689,7 @@ function Editor({
   const load = useCallback(
     (next: Graph, name: string | undefined, id: CanvasId) => {
       setCanvasId(id);
-      documentState.write(toFile(next, id));
+      documentState.write(toFile(documentOf(next, id)));
       setLoads((n) => n + 1);
       setRawGraph(next);
       runStore.reset();
@@ -855,7 +780,7 @@ function Editor({
           files.open().then((file) => {
             if (!file) return;
             try {
-              load(fromFile(file.text, catalog()), file.name, file.id);
+              load(graphOf(fromFile(file.text, catalog(), DEFAULT_AGENT)), file.name, file.id);
               setProject(file.project ?? null);
             } catch (error) {
               setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
@@ -910,7 +835,8 @@ function Editor({
             .then(() =>
               persistence.transition(async () => {
                 const name = await files.save(text, choose);
-                if (name !== null) setSaved({ name, graph: fromFile(text, catalog()) });
+                if (name !== null)
+                  setSaved({ name, graph: graphOf(fromFile(text, catalog(), DEFAULT_AGENT)) });
               }, false),
             )
             .then(() => {
@@ -919,7 +845,8 @@ function Editor({
           return;
         }
         files.save(text, choose).then((name) => {
-          if (name !== null) setSaved({ name, graph: fromFile(text, catalog()) });
+          if (name !== null)
+            setSaved({ name, graph: graphOf(fromFile(text, catalog(), DEFAULT_AGENT)) });
         }, failed('save the canvas'));
       },
     };
@@ -1603,7 +1530,7 @@ function Editor({
           <ConnectMenu
             fromName={nameOf(drawn.source)}
             toName={nameOf(drawn.target)}
-            linked={areLinked(graph, drawn.source, drawn.target)}
+            linked={areLinked(graph.edges, drawn.source, drawn.target)}
             at={drawn.at}
             onTalk={() => {
               setGraph((g) => connect(g, drawn));

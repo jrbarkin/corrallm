@@ -13,7 +13,8 @@ import {
 } from './agents';
 import type { AgentConnection } from './agents';
 import type { Example } from './examples';
-import { fromFile } from './file';
+import { fromFile } from '../../shared/model/file';
+import { graphOf } from './graph';
 
 /** How a template is used: as a new canvas, or inserted into this one as a group. */
 export type TemplateUse = 'new' | 'insert';
@@ -81,7 +82,7 @@ export function ExampleGallery({
       new Map(
         examples.map((example) => [
           example,
-          fromFile(example.text, catalog())
+          graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT))
             .nodes.filter((n) => n.type === 'agent')
             .map((n) => ({ id: n.id, label: n.data.label, agent: n.data.adapter })),
         ]),

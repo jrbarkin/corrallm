@@ -1,20 +1,19 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { NEW_SESSION } from '../agent/session';
-import type { SubmittedMessage } from '../../shared/model/queue';
+import { NEW_SESSION } from '../../shared/model/session';
+import type { QueueItem, QueueMessage, SubmittedMessage } from '../../shared/model/queue';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
-import type { Run } from '../run/runner';
-import { heldAsks } from '../run/asks';
+import type { Run } from '../../shared/engine/run/runner';
+import { heldAsks } from '../../shared/engine/run/asks';
 import { QuestionsSidebar } from './Questions';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
 import { canvasNodes } from './graph';
 import type { GraphNode } from './graph';
-import type { QueueItem, QueueMessage } from '../../shared/model/queue';
 import { QueueEditor } from './QueueEditor';
 
 function edits(): QueueEdits {

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import type { Session } from '../agent/session';
+import type { Session } from '../../shared/model/session';
 import { OpenLinkContext } from '../open-link';
 import type { TerminalBackend } from './backend';
 import { isMac, useOptionIsMeta } from './keyboard';

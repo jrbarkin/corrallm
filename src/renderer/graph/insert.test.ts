@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { absolutePosition, CARD_SIZE, edgeId } from './graph';
+import { absolutePosition, edgeId } from './graph';
+import { CARD_SIZE } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
 import { insertGraph } from './insert';
 import type { QueueItem, QueueRepeat, Until } from '../../shared/model/queue';

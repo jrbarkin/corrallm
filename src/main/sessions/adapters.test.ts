@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ID_PATTERN } from '../../shared/adapter';
 import type { AdapterDescriptor } from '../../shared/adapter';
 import type { Adapter } from './adapter';
-import { ADAPTERS, CATALOG, catalogOf } from './adapters';
+import { ADAPTERS, CATALOG, catalogOf, DEFAULT_ADAPTER } from './adapters';
 import { createConnectors, createOptions } from './connectors';
 
 /*
@@ -97,15 +97,20 @@ describe('the catalog', () => {
     }
   });
 
+  it('runs an agent naming no adapter with Claude Code, as the renderer does (DEFAULT_AGENT)', () => {
+    expect(DEFAULT_ADAPTER).toBe('claude-code');
+  });
+
   it('is plain data, so that it crosses to the renderer as it is', () => {
     expect(JSON.parse(JSON.stringify(CATALOG))).toEqual(CATALOG);
     expect(ADAPTERS.map((adapter) => adapter.descriptor.id).sort()).toEqual(ids(CATALOG.adapters));
   });
 
-  it('is the catalog the renderer’s tests load', async () => {
-    // The renderer can't import main: its tests read this copy, rewritten with vitest -u.
+  it('is the catalog the renderer’s and the engine’s tests load', async () => {
+    // Neither the renderer nor shared code can import main: their tests read this copy, rewritten
+    // with vitest -u.
     await expect(`${JSON.stringify(CATALOG, null, 2)}\n`).toMatchFileSnapshot(
-      '../../renderer/test-catalog.json',
+      '../../shared/test-catalog.json',
     );
   });
 });

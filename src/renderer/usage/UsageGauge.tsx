@@ -14,9 +14,10 @@ import type {
 } from '../../shared/usage';
 import { catalog } from '../catalog';
 import { runCatalog } from '../graph/agents';
-import { parseTime } from '../graph/time';
+import { parseTime } from '../../shared/model/time';
 import { SearchPicker } from '../search/SearchPicker';
-import { ACTION_INFO, ageText, percentText, readingOf, resetTime, windowText } from './usage';
+import { ACTION_INFO, ageText, readingOf } from './usage';
+import { percentText, resetTime, windowText } from '../../shared/model/words';
 import './Usage.css';
 
 /** A reading older than this says how old it is on its gauge, not only in its panel. */

@@ -2,7 +2,10 @@ import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { isStartMode } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
-import type { AgentData, CanvasNode } from '../../shared/model/canvas';
+import type { CanvasId } from '../../shared/canvas';
+import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
+import { CARD_SIZE, EMPTY_FRAME, GROUP_COLORS, HEADER, PADDING } from '../../shared/model/geometry';
+import { areLinked } from '../../shared/model/queries';
 import { parseRole } from '../../shared/role';
 import type { AgentSettings } from '../../shared/session';
 import { catalog } from '../catalog';
@@ -27,7 +30,7 @@ import type {
   Time,
   WaitTarget,
 } from '../../shared/model/queue';
-import { sameTime } from './time';
+import { sameTime } from '../../shared/model/time';
 
 /**
  * `item`: a labelled node with a target handle (top) and a source handle (bottom). While it has
@@ -68,20 +71,44 @@ export function canvasNodes(nodes: readonly GraphNode[]): CanvasNode[] {
   });
 }
 
+/**
+ * A canvas as React Flow draws it (its file's, src/shared/model/file.ts): its nodes, groups sized to
+ * fit what they hold, and its links as edges between the dots they were drawn between.
+ */
+export function graphOf({ nodes, links }: CanvasDocument): Graph {
+  return {
+    nodes: autosize(
+      nodes.map(({ id, type, position, parentId, data }): GraphNode => ({
+        id,
+        type,
+        position,
+        ...(parentId === undefined ? {} : { parentId }),
+        data,
+      })),
+    ),
+    edges: links.map(({ source, target, dots }) => ({
+      id: edgeId(source, target),
+      source,
+      target,
+      ...(dots ? { sourceHandle: dots[0], targetHandle: dots[1] } : {}),
+    })),
+  };
+}
+
+/** The graph as the model keeps canvas `id` (what its file saves): its nodes, and its links. */
+export function documentOf(graph: Graph, id: CanvasId): CanvasDocument {
+  return {
+    id,
+    nodes: canvasNodes(graph.nodes),
+    links: graph.edges.map(({ source, target, sourceHandle, targetHandle }) => ({
+      source,
+      target,
+      ...(sourceHandle && targetHandle ? { dots: [sourceHandle, targetHandle] } : {}),
+    })),
+  };
+}
+
 export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
-/** An item's card: 150px wide, a 32px label inside a 1px border. Matches `.graph-card`. */
-export const CARD_SIZE = { width: 150, height: 34 } as const;
-/** Height of a container's header zone (a frame's label bar). Matches `.graph-label` in GraphEditor.css. */
-export const HEADER = 32;
-/** Space between a container's edges (below its label bar or card) and its children. */
-export const PADDING = 20;
-/** A frame without children: room for one item. */
-export const EMPTY_FRAME = {
-  width: CARD_SIZE.width + 2 * PADDING,
-  height: HEADER + 2 * PADDING,
-} as const;
-/** How many colours groups take turns with (`.group-color-0` … in GraphEditor.css). */
-export const GROUP_COLORS = 8;
 /** Space between neighbouring nodes in a row, and between rows, as the canvas lays them out. */
 export const NODE_GAP = 40;
 export const RANK_GAP = 60;
@@ -264,7 +291,7 @@ export function setAgent(graph: Graph, id: string, adapter: AdapterId): Graph {
 
 /**
  * `settings`, without the mode saved for `adapter` if the connection it runs (`runs`) doesn't start
- * in it: what a file keeps of an agent's settings always reads back (file.ts).
+ * in it: what a file keeps of an agent's settings always reads back (src/shared/model/file.ts).
  */
 function fitted(
   settings: GraphNode['data']['settings'],
@@ -604,13 +631,6 @@ export function canConnect(graph: Graph, connection: { source: string; target: s
   return source !== target && isAgent(source) && isAgent(target);
 }
 
-/** Whether agents `a` and `b` are linked (can talk to each other), whichever way it was drawn. */
-export function areLinked(graph: Graph, a: string, b: string): boolean {
-  return graph.edges.some(
-    (e) => (e.source === a && e.target === b) || (e.source === b && e.target === a),
-  );
-}
-
 /**
  * Links two agents so they can talk to each other: an edge with no direction (and no arrowhead),
  * between the dots it was drawn between. The graph's stored edges are these links; the work queues
@@ -627,7 +647,7 @@ export function connect(
   },
 ): Graph {
   const { source, target, sourceHandle, targetHandle } = connection;
-  if (!canConnect(graph, connection) || areLinked(graph, source, target)) return graph;
+  if (!canConnect(graph, connection) || areLinked(graph.edges, source, target)) return graph;
   const edge: Edge = { id: edgeId(source, target), source, target };
   if (sourceHandle) edge.sourceHandle = sourceHandle;
   if (targetHandle) edge.targetHandle = targetHandle;

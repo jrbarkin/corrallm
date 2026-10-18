@@ -43,7 +43,7 @@ const VERSION = 2;
 
 /**
  * What main remembers of each canvas between runs, by the canvas's id, in a JSON file in the app's
- * user data. The canvas file itself only holds what the canvas means (src/renderer/graph/file.ts),
+ * user data. The canvas file itself only holds what the canvas means (src/shared/model/file.ts),
  * so it can be shared: where it is and where it runs on this machine is kept here.
  *
  *   { "version": 2, "canvases": { "<canvas id>": { "file"?, "project"?,
