@@ -135,7 +135,7 @@ export class Engines {
 
   /**
    * Hears every canvas the core runs, from now on: each message added, and what newly waits for an
-   * answer (what waits already, on each canvas open, at once).
+   * answer (the first watcher of needs hears at once what waits already).
    */
   watch(watcher: Watcher): () => void {
     this.#watchers.add(watcher);
