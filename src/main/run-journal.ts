@@ -42,6 +42,7 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  *
  * Every write goes through one queue, in order: a message's record appended durably (forced to
  * disk) is on disk before anything journaled after it.
+ *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
  * canvas memory lost it. A window's renderer saves with the token of the canvas it showed: a save
  * meant for a canvas it has since replaced (or opened again) is refused. A record that can't be

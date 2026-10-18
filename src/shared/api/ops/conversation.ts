@@ -5,7 +5,7 @@ import { NEED_KINDS } from '../../model/needs';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, CanvasId, MessageId } from '../ids';
+import { AgentId, MessageId, OpCanvas } from '../ids';
 import { MAX_MESSAGE_BYTES, MAX_PAGE } from '../limits';
 import type { OpName } from '../surface';
 
@@ -86,8 +86,7 @@ export const NeedsItem = z.strictObject({
 /** How an agent is now: waiting for you, working, paused (its queue held), or idle. */
 export const AGENT_STATES = ['waiting', 'working', 'paused', 'idle'] as const;
 
-/** The canvas: left out by a caller with exactly one (an agent's own, a token's only one). */
-const canvas = CanvasId.optional();
+const canvas = OpCanvas;
 
 /** At most MAX_MESSAGE_BYTES of UTF-8. */
 const Body = z

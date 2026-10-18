@@ -934,14 +934,14 @@ function Editor({
   }, [displayNodes, sessions, run]);
   /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
   const needed = useMemo(() => {
-    const canvas = {
+    const input = {
       canvas: canvasId,
       nodes: runNodes,
       run,
       sessions,
       catalog: engine.catalog,
     };
-    return { canvas, needs: needsOf(canvas) };
+    return { input, needs: needsOf(input) };
   }, [canvasId, runNodes, run, sessions, engine]);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
@@ -1229,7 +1229,7 @@ function Editor({
             <Panel position="top-right">
               <QuestionsSidebar
                 needs={needed.needs}
-                canvas={needed.canvas}
+                input={needed.input}
                 onDecide={edits.decide}
                 onAnswer={(agentId, promptId, index, answer) => {
                   sessionStore.answerQuestion(agentId, promptId, index, answer);

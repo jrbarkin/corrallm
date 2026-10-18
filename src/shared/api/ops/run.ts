@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { PARTY_PATTERN } from '../../model/messages';
-import { AgentId, CanvasId, NodeId } from '../ids';
+import { AgentId, NodeId, OpCanvas } from '../ids';
 import type { OpName } from '../surface';
 
 /** The run (Core Server §4 F): holding and releasing an agent's queue, or a group's. */
 
-const canvas = CanvasId.optional();
+const canvas = OpCanvas;
 
 /** A party: you, corrallm, an agent (`agent:<id>`) or an outside orchestrator (`outside:<name>`). */
 const Party = z.string().regex(PARTY_PATTERN);

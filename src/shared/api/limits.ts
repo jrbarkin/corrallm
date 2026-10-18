@@ -41,9 +41,9 @@ export const MAX_PAGE = 200;
 /** How many a page of a list holds when a call doesn't say. */
 export const DEFAULT_PAGE = 50;
 /**
- * The most bytes of JSON a page of a list holds, whatever it was asked for (Claude Code caps an MCP
- * tool's result at 25K tokens): a page ends early rather than pass it, and holds at least one
- * entry, cut to fit when it alone wouldn't (the whole of it stays where it is kept).
+ * The most bytes of JSON a page of a list holds, whatever it was asked for (an MCP client may cap
+ * what one tool's result holds: Core Server §4 G): a page ends early rather than pass it, and holds
+ * at least one entry, cut to fit when it alone wouldn't (the whole of it stays where it is kept).
  */
 export const MAX_PAGE_BYTES = 60 * 1024;
 

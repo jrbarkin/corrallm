@@ -341,14 +341,14 @@ export function SessionAskCard({ need, agent }: { need: NeedsItem; agent: Asker 
  */
 export function QuestionsSidebar({
   needs,
-  canvas,
+  input,
   onDecide,
   onAnswer,
   onOpen,
 }: {
   needs: readonly Need[];
   /** What the needs are worded with, for those shown in their words. */
-  canvas: Omit<NeedsInput, 'stuck'>;
+  input: Omit<NeedsInput, 'stuck'>;
   onDecide: (agentId: string, itemId: string, answer: Answer) => void;
   /** Answers question `index` of the question prompt `promptId`. */
   onAnswer: (agentId: string, promptId: string, index: number, answer: string) => void;
@@ -401,7 +401,7 @@ export function QuestionsSidebar({
         return [
           <SessionAskCard
             key={`${agent.id}/${need.prompt.id}`}
-            need={needsItem(need, canvas)}
+            need={needsItem(need, input)}
             agent={asker}
           />,
         ];

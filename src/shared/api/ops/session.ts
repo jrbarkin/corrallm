@@ -3,14 +3,14 @@ import { z } from 'zod';
 import { ELICITATION_ACTIONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, CanvasId } from '../ids';
+import { AgentId, OpCanvas } from '../ids';
 import { MAX_PAGE } from '../limits';
 import type { OpName } from '../surface';
 import { TurnResult } from './conversation';
 
 /** Sessions (Core Server §4 G): an agent's session as it is, its transcript, and interrupting it. */
 
-const canvas = CanvasId.optional();
+const canvas = OpCanvas;
 
 const ToolDetail = z.union([
   z.strictObject({

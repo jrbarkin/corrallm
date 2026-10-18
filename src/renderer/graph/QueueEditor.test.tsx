@@ -143,7 +143,7 @@ describe('task recovery in the shared queue row', () => {
   });
   it('uses the same recovery choices in the canvas Needs you sidebar', () => {
     const decide = vi.fn();
-    const canvas = {
+    const input = {
       canvas: newCanvasId(),
       nodes: canvasNodes([node]),
       run: run(),
@@ -153,8 +153,8 @@ describe('task recovery in the shared queue row', () => {
     };
     render(
       <QuestionsSidebar
-        needs={needsOf(canvas)}
-        canvas={canvas}
+        needs={needsOf(input)}
+        input={input}
         onDecide={decide}
         onAnswer={vi.fn()}
         onOpen={vi.fn()}

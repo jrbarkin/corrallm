@@ -1,4 +1,5 @@
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
+import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs, withoutChoices } from '../../../shared/engine/needs';
 import type { NeedsInput } from '../../../shared/engine/needs';
 import { isOpen } from '../../../shared/model/session';
@@ -158,10 +159,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
 }
 
 /** How an agent is now: waiting for you, working, paused, or idle. */
-export function stateOf(
-  { engine }: OpenCanvas,
-  id: string,
-): 'waiting' | 'working' | 'paused' | 'idle' {
+export function stateOf({ engine }: OpenCanvas, id: string): (typeof AGENT_STATES)[number] {
   const session = engine.sessions.of(id);
   if (session.status === 'waiting' || (session.asking?.length ?? 0) > 0) return 'waiting';
   if (session.status === 'working') return 'working';

@@ -146,7 +146,8 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
     CALLERS.you,
   );
   if (!paused.ok) throw new Error(paused.error.sentence);
-  // Shell's Terminal has refused to start once, so nothing sent it is tried again.
+  // Shell's Terminal has refused to start, so nothing sent it within the next minute (RETRY_AFTER,
+  // on the real clock) tries it again: the generated tests finish well within that.
   const tried = await core.call(
     'message',
     { canvas: CANVAS, to: 'shell', body: 'Start' },
