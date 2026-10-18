@@ -10,6 +10,11 @@ export interface AppSettings {
    * asks it by (connectors.ts), so that adapter no longer asks each session.
    */
   consents: Readonly<Record<string, Readonly<Record<string, true>>>>;
+  /**
+   * The API server's own settings: the port it listens on, chosen free once and kept, so that what
+   * orchestrators registered it by survives restarts (API Spec §8.1).
+   */
+  api?: { port: number };
 }
 
 /** A consent only the user gives: whether they gave it for good, and giving it. */
@@ -23,7 +28,7 @@ const VERSION = 2;
 /**
  * The user's settings for the app, kept between runs in a JSON file in the app's user data:
  *
- *   { "version": 2, "consents": { "<adapter>": { "<key>": true } } }
+ *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" } }
  *
  * Updates are applied one at a time, in order, and written whole. A file of another version reads
  * as nothing chosen.
@@ -55,6 +60,16 @@ export class Settings {
           },
         })),
     };
+  }
+
+  /** The port the API server listens on, if one was kept. */
+  async apiPort(): Promise<number | undefined> {
+    return (await this.get()).api?.port;
+  }
+
+  /** Keeps the port the API server listens on, for the next time it starts. */
+  keepApiPort(port: number): Promise<void> {
+    return this.#update((settings) => ({ ...settings, api: { port } }));
   }
 
   /** Resolves once every update so far is written: before the app quits. */
@@ -91,7 +106,9 @@ function parse(text: string): AppSettings {
   }
   if (!isRecord(file) || file.version !== VERSION) return { consents: {} };
   const consents = isRecord(file.consents) ? file.consents : {};
+  const port = isRecord(file.api) ? file.api.port : undefined;
   return {
+    ...(isPort(port) ? { api: { port } } : {}),
     consents: Object.fromEntries(
       Object.entries(consents).flatMap(([adapter, given]) => {
         if (!ID_PATTERN.test(adapter) || !isRecord(given)) return [];
@@ -105,6 +122,11 @@ function parse(text: string): AppSettings {
       }),
     ),
   };
+}
+
+/** Whether a value is a port a server may listen on. */
+function isPort(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65535;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

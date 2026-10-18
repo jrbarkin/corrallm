@@ -5,6 +5,7 @@ import path from 'node:path';
 import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
+import { PARTY_PATTERN } from '../shared/model/messages';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { mintTrustedPath } from './core/host';
@@ -17,12 +18,18 @@ interface Entry {
   token: string;
   warning?: string;
 }
+/**
+ * Where each party has read to in a canvas's message store, by party: the place of the last message
+ * its `wait` returned (API Spec §7.7).
+ */
+export type ReadPositions = Readonly<Record<string, number>>;
 /** A canvas's run record, as written (runs/<id>/record.json). */
 interface RecordFile {
   checkpoint: RunCheckpoint;
   /** The canvas's file, and what memory has of it besides: recovered if memory lost it. */
   file?: TrustedPath;
   remembered?: Remembered;
+  reads?: ReadPositions;
 }
 interface JournalDeps {
   memory: CanvasMemory;
@@ -36,7 +43,8 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  * Each canvas's run, journaled atomically by the canvas's id, its messages, and the canvas the
  * profile had open last:
  *
- *   runs/<canvas id>/record.json     { "version": 2, "id", "file"?, "checkpoint", "remembered"? }
+ *   runs/<canvas id>/record.json     { "version": 2, "id", "file"?, "checkpoint", "remembered"?,
+ *                                      "reads"? }
  *   runs/<canvas id>/messages.jsonl  the canvas's message store's log, appended (a line a change)
  *   runs/last.json                   { "version": 2, "canvas" }
  *
@@ -44,7 +52,8 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  * disk) is on disk before anything journaled after it.
  *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
- * canvas memory lost it. A window's renderer saves with the token of the canvas it showed: a save
+ * canvas memory lost it, and where each party's `wait` has read to in its messages, which a save
+ * that doesn't say (the app's, which never waits) keeps as they were. A window's renderer saves with the token of the canvas it showed: a save
  * meant for a canvas it has since replaced (or opened again) is refused. A record that can't be
  * read as one is set aside, saying where; a last canvas of another version reads as none.
  */
@@ -52,6 +61,8 @@ export class RunJournal {
   readonly #directory: string;
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
+  /** Each canvas's read positions, as its record last had them, once read or written. */
+  readonly #reads = new Map<CanvasId, ReadPositions>();
   #writing: Promise<void> = Promise.resolve();
 
   constructor(directory: string, deps: JournalDeps) {
@@ -113,8 +124,22 @@ export class RunJournal {
     };
   }
 
-  /** Journals a canvas's run (null: none), for the renderer whose token is its canvas's. */
-  async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
+  /** Where each party's `wait` has read to in the canvas's messages, as its record keeps it. */
+  async reads(canvas: CanvasId): Promise<ReadPositions> {
+    await this.flush();
+    return this.#reads.get(canvas) ?? (await this.#read(canvas, this.#entry(canvas)))?.reads ?? {};
+  }
+
+  /**
+   * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, with where
+   * each party's `wait` has read to (kept as they were, if not given).
+   */
+  async save(
+    canvas: CanvasId,
+    token: string,
+    checkpoint: RunCheckpoint | null,
+    reads?: ReadPositions,
+  ): Promise<void> {
     const entry = this.#entry(canvas);
     if (entry.token !== token) throw new Error('This run belongs to an earlier canvas');
     if (checkpoint !== null) {
@@ -128,7 +153,7 @@ export class RunJournal {
         throw new Error('This run belongs to an earlier canvas');
       }
       if (checkpoint === null) await rm(this.#recordFile(canvas), { force: true });
-      else await this.#write(canvas, checkpoint);
+      else await this.#write(canvas, checkpoint, reads);
       await this.#last(canvas);
     });
   }
@@ -154,7 +179,7 @@ export class RunJournal {
   async saved(canvas: CanvasId): Promise<void> {
     const record = await this.#read(canvas, this.#entry(canvas));
     await this.#serialize(async () => {
-      if (record !== undefined) await this.#write(canvas, record.checkpoint);
+      if (record !== undefined) await this.#write(canvas, record.checkpoint, record.reads);
       await this.#last(canvas);
     });
   }
@@ -250,10 +275,13 @@ export class RunJournal {
         throw new Error('The saved run is invalid');
       }
       const remembered = readRemembered(value.remembered);
+      const reads = readPositions(value.reads);
+      this.#reads.set(canvas, reads);
       return {
         checkpoint: parseRunCheckpoint(value.checkpoint),
         ...(value.file === undefined ? {} : { file: mintTrustedPath(value.file) }),
         ...(remembered === undefined ? {} : { remembered }),
+        reads,
       };
     } catch {
       const rejected = file.replace(/\.json$/, `.rejected-${randomUUID()}.json`);
@@ -263,8 +291,10 @@ export class RunJournal {
     }
   }
 
-  async #write(canvas: CanvasId, checkpoint: RunCheckpoint): Promise<void> {
+  /** Writes a canvas's record: with `reads`, else the read positions it had. */
+  async #write(canvas: CanvasId, checkpoint: RunCheckpoint, given?: ReadPositions): Promise<void> {
     const { file, ...remembered } = await this.#deps.memory.get(canvas);
+    const reads = given ?? this.#reads.get(canvas) ?? (await this.#keptReads(canvas));
     await mkdir(path.dirname(this.#recordFile(canvas)), { recursive: true });
     await writeWhole(
       this.#recordFile(canvas),
@@ -274,8 +304,20 @@ export class RunJournal {
         ...(file === undefined ? {} : { file }),
         checkpoint,
         remembered,
+        ...(Object.keys(reads).length === 0 ? {} : { reads }),
       }),
     );
+    this.#reads.set(canvas, reads);
+  }
+
+  /** The read positions a canvas's record has on disk, read leniently: none if it has none. */
+  async #keptReads(canvas: CanvasId): Promise<ReadPositions> {
+    try {
+      const value: unknown = JSON.parse(await readFile(this.#recordFile(canvas), 'utf8'));
+      return isRecord(value) ? readPositions(value.reads) : {};
+    } catch {
+      return {};
+    }
   }
 
   async #last(canvas: CanvasId): Promise<void> {
@@ -305,6 +347,16 @@ export class RunJournal {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+/** Read positions as written: each a party's place in the store, the others left out. */
+function readPositions(value: unknown): ReadPositions {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([party, seq]) =>
+        PARTY_PATTERN.test(party) && Number.isSafeInteger(seq) && (seq as number) >= 0,
+    ),
+  ) as ReadPositions;
 }
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);

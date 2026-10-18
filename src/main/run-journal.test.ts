@@ -196,6 +196,47 @@ describe('RunJournal', () => {
     expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({ file: target });
   });
 
+  it('keeps each party’s wait read position in the record, whoever journals the run next', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    expect(await runs.reads(canvas)).toEqual({});
+    await runs.save(canvas, token, checkpoint, { 'outside:orchestrator': 7 });
+    expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({
+      reads: { 'outside:orchestrator': 7 },
+    });
+
+    // The app journals the run with no read positions of its own: they are kept as they were.
+    const app = journal();
+    const context = await app.get(canvas);
+    await app.save(canvas, context.token, { ...checkpoint, updatedAt: 456 });
+    await app.saved(canvas);
+    expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 7 });
+
+    // And moved on by the next save that names them.
+    await runs.save(canvas, token, checkpoint, { 'outside:orchestrator': 9, 'outside:other': 2 });
+    expect(await journal().reads(canvas)).toEqual({
+      'outside:orchestrator': 9,
+      'outside:other': 2,
+    });
+  });
+
+  it('reads no read position that isn’t a party’s place in the store', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    await runs.save(canvas, token, checkpoint);
+    const kept = JSON.parse(await readFile(record(canvas), 'utf8')) as Record<string, unknown>;
+    await writeFile(
+      record(canvas),
+      JSON.stringify({
+        ...kept,
+        reads: { 'outside:ok': 3, nobody: 4, 'outside:neg': -1, 'outside:half': 1.5 },
+      }),
+    );
+    expect(await journal().reads(canvas)).toEqual({ 'outside:ok': 3 });
+  });
+
   it('refuses a save of the canvas a window showed before it opened or began another', async () => {
     const runs = journal();
     const first = await runs.last();

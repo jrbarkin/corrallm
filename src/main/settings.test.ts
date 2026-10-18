@@ -69,6 +69,25 @@ describe('Settings', () => {
     expect(await new Settings(file).get()).toEqual({ consents: { codex: { other: true } } });
   });
 
+  it('keeps the port the API server listens on, so registrations survive restarts', async () => {
+    const settings = new Settings(file);
+    expect(await settings.apiPort()).toBeUndefined();
+    await settings.consent('codex', 'plan').give();
+    await settings.keepApiPort(47123);
+    expect(await settings.apiPort()).toBe(47123);
+    expect(await new Settings(file).apiPort()).toBe(47123);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { codex: { plan: true } },
+      api: { port: 47123 },
+    });
+    // A port that isn't one is none.
+    for (const port of [0, 65536, 1.5, '47123', null]) {
+      await writeFile(file, JSON.stringify({ version: 2, consents: {}, api: { port } }));
+      expect(await new Settings(file).apiPort()).toBeUndefined();
+    }
+  });
+
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));

@@ -3,9 +3,13 @@ import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { EngineCatalog } from '../../shared/engine/catalog';
 import { Engine } from '../../shared/engine/engine';
+import { needs } from '../../shared/engine/needs';
+import type { NeedsInput } from '../../shared/engine/needs';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { fromFile, toFile } from '../../shared/model/file';
+import type { Message } from '../../shared/model/messages';
+import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
 import type { SessionEvent } from '../../shared/session';
@@ -17,6 +21,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import { Delivery } from './delivery/delivery';
 import { MessageStore } from './delivery/messages';
+import { ReadPositions } from './delivery/reads';
 
 /*
  * The canvases the core runs, each with its engine (src/shared/engine/engine.ts): the run and the
@@ -28,7 +33,9 @@ import { MessageStore } from './delivery/messages';
  * canvas whose file holds another canvas. Whatever its engine does is journaled again: at most
  * one write per COALESCE_MS, and one before every message the run sends, so a sent message's
  * record is always on disk first; its messages are journaled beside its run, each one delivering
- * forced to disk before it is sent.
+ * forced to disk before it is sent, and so is where each party's `wait` has read to in them, before
+ * the `wait` that moved it returns. Whoever watches hears each message added to a canvas's store,
+ * and each thing newly waiting for an answer on it (`corrallm serve` logs them).
  */
 
 const COALESCE_MS = 250;
@@ -61,6 +68,16 @@ export interface OpenCanvas {
   engine: Engine;
   messages: MessageStore;
   delivery: Delivery;
+  /** Where each party's `wait` has read to in its messages. */
+  reads: ReadPositions;
+}
+
+/** What hears the canvases the core runs. */
+export interface Watcher {
+  /** A message added to a canvas's store. */
+  message?(message: Message): void;
+  /** Something newly waiting for an answer on a canvas: a hold of the run, a session's prompt. */
+  need?(canvas: CanvasId, item: NeedsItem): void;
 }
 
 /** A canvas the core runs, with its sessions' listeners and its journal. */
@@ -72,6 +89,10 @@ interface Running extends OpenCanvas {
   timer: ReturnType<typeof setTimeout> | undefined;
   /** What stops it hearing its engine change, and usage readings. */
   stop: () => void;
+  /** The ids of what waited for an answer on it when watchers last looked. */
+  needs: Set<string>;
+  /** Whether watchers look at what waits on it again soon. */
+  looking: boolean;
 }
 
 export class Engines {
@@ -79,6 +100,7 @@ export class Engines {
   readonly #running = new Map<CanvasId, Promise<Running>>();
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
+  readonly #watchers = new Set<Watcher>();
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
@@ -109,6 +131,18 @@ export class Engines {
       this.#running.set(canvas, running);
     }
     return running.then(({ engine }) => engine);
+  }
+
+  /**
+   * Hears every canvas the core runs, from now on: each message added, and what newly waits for an
+   * answer (what waits already, on each canvas open, at once).
+   */
+  watch(watcher: Watcher): () => void {
+    this.#watchers.add(watcher);
+    for (const running of this.#canvases.values()) this.#look(running);
+    return () => {
+      this.#watchers.delete(watcher);
+    };
   }
 
   /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
@@ -170,7 +204,10 @@ export class Engines {
       token: context.token,
       listeners,
       timer: undefined,
+      needs: new Set(),
+      looking: false,
     } as Running;
+    running.reads = new ReadPositions(await journal.reads(canvas), () => this.#write(running));
     const engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -216,9 +253,17 @@ export class Engines {
         });
       }, COALESCE_MS);
     };
+    const look = () => {
+      this.#look(running);
+    };
     const unsubscribe = [
       engine.run.subscribe(changed),
       engine.sessions.subscribe(changed),
+      engine.run.subscribe(look),
+      engine.sessions.subscribe(look),
+      messages.subscribe((message) => {
+        for (const watcher of this.#watchers) watcher.message?.(message);
+      }),
       // Usage rules are checked again with each reading.
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
@@ -231,7 +276,29 @@ export class Engines {
       running.timer = undefined;
     };
     this.#canvases.set(canvas, running);
+    this.#look(running);
     return running;
+  }
+
+  /**
+   * Soon tells the watchers that hear needs what newly waits for an answer on a canvas: once,
+   * however often asked before then.
+   */
+  #look(running: Running): void {
+    if (running.looking || ![...this.#watchers].some((watcher) => watcher.need !== undefined)) {
+      return;
+    }
+    running.looking = true;
+    queueMicrotask(() => {
+      running.looking = false;
+      if (this.#canvases.get(running.document.id) !== running) return;
+      const items = needs(needsInput(running, this.#deps.locale));
+      for (const item of items) {
+        if (running.needs.has(item.id)) continue;
+        for (const watcher of this.#watchers) watcher.need?.(running.document.id, item);
+      }
+      running.needs = new Set(items.map(({ id }) => id));
+    });
   }
 
   /**
@@ -258,7 +325,12 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    return this.#deps.journal.save(running.document.id, running.token, checkpoint);
+    return this.#deps.journal.save(
+      running.document.id,
+      running.token,
+      checkpoint,
+      running.reads.all(),
+    );
   }
 
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */
@@ -298,4 +370,20 @@ export class Engines {
       },
     };
   }
+}
+
+/** What an open canvas's needs are worded from. */
+export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsInput {
+  const { document, engine, delivery } = open;
+  return {
+    canvas: document.id,
+    nodes: document.nodes,
+    run: engine.run.snapshot(),
+    sessions: engine.sessions.snapshot(),
+    catalog: engine.catalog,
+    now: Date.now(),
+    stuck: delivery.stuck(),
+    unasking: delivery.unasking(),
+    ...(locale === undefined ? {} : { locale }),
+  };
 }

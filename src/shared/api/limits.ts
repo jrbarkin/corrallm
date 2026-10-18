@@ -57,7 +57,18 @@ export const MAX_DETAIL_LINES = 12;
  */
 export const MAX_CREATED_AGENTS = 8;
 
-/** At most this many calls in flight per token (Core Server §6.7); you are never limited. */
+/** The longest a `wait` waits for what comes, in seconds (API Spec §7.7). */
+export const MAX_WAIT_SECONDS = 3600;
+
+/** How long an outside token lasts unless its maker says otherwise, in hours (decision 8). */
+export const DEFAULT_TOKEN_HOURS = 1;
+/** The longest an outside token may last, in hours (decision 8). */
+export const MAX_TOKEN_HOURS = 12;
+
+/**
+ * At most this many calls in flight per token (Core Server §6.7), `wait` aside; you are never
+ * limited.
+ */
 export const TOKEN_IN_FLIGHT = 8;
 /** At most this many writes a second per token. */
 export const TOKEN_WRITES_PER_SECOND = 30;

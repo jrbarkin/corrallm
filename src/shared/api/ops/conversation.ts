@@ -6,7 +6,7 @@ import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, MessageId, OpCanvas } from '../ids';
-import { MAX_MESSAGE_BYTES, MAX_PAGE } from '../limits';
+import { MAX_MESSAGE_BYTES, MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 
 /**
@@ -165,6 +165,20 @@ export const conversationOps = {
       'once, with the message’s id.',
     input: z.strictObject({ canvas, to: AgentId, body: Body, replyTo: MessageId.optional() }),
     output: z.strictObject({ id: z.uuid() }),
+  }),
+  wait: define('wait', {
+    summary:
+      'Returns the messages addressed to you on your canvases (replies, corrallm’s notices) after ' +
+      '`after`, oldest first, or waits up to timeoutSeconds for the next. Without `after`, it ' +
+      'starts where your last wait without `for` ended; `for` keeps those about one message. ' +
+      '`next` is where to read on. Keep waits under 2 minutes here; for longer, run `corrallm ' +
+      'wait` in a background command.',
+    input: z.strictObject({
+      after: Cursor.optional(),
+      for: MessageId.optional(),
+      timeoutSeconds: z.int().min(0).max(MAX_WAIT_SECONDS),
+    }),
+    output: z.strictObject({ messages: z.array(Message), next: Cursor }),
   }),
   withdraw: define('withdraw', {
     summary:

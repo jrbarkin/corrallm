@@ -1,16 +1,16 @@
 import { DEFAULT_PAGE } from '../../../shared/api/limits';
 import type { AGENT_STATES } from '../../../shared/api/ops/conversation';
 import { needs, withoutChoices } from '../../../shared/engine/needs';
-import type { NeedsInput } from '../../../shared/engine/needs';
 import { isOpen } from '../../../shared/model/session';
 import type { CanvasId } from '../../../shared/canvas';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { agentName, areLinked, teamOf } from '../../../shared/model/queries';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
-import { partyIdOf } from '../caller';
+import { canvasesOf, isTokenCaller, partyIdOf } from '../caller';
 import { DeliveryError } from '../delivery/delivery';
 import { cursorOf, readCursor } from '../delivery/messages';
+import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
 import { agentOf, openCanvas, pageOf, reachFor } from './open';
@@ -82,7 +82,17 @@ export function conversationOps(
           };
         }),
         waitingForYou: waiting(open, ctx, reach).map(withoutChoices),
-        next: cursorOf({ [open.document.id]: open.messages.end() }),
+        // At the end of every canvas the caller has, so a `wait` from it reads only what comes.
+        next: cursorOf(
+          Object.fromEntries(
+            (isTokenCaller(ctx.caller) ? canvasesOf(ctx.caller) : engines.opened()).flatMap(
+              (id) => {
+                const one = engines.canvas(id);
+                return one ? [[id, one.messages.end()]] : [];
+              },
+            ),
+          ),
+        ),
       };
     },
     needs: ({ canvas }, ctx) => {
@@ -141,22 +151,6 @@ export function conversationOps(
 function failed(error: unknown): never {
   if (error instanceof DeliveryError) throw new OpFailure(error.code, error.message);
   throw error;
-}
-
-/** What an open canvas's needs are worded from. */
-export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsInput {
-  const { document, engine, delivery } = open;
-  return {
-    canvas: document.id,
-    nodes: document.nodes,
-    run: engine.run.snapshot(),
-    sessions: engine.sessions.snapshot(),
-    catalog: engine.catalog,
-    now: Date.now(),
-    stuck: delivery.stuck(),
-    unasking: delivery.unasking(),
-    ...(locale === undefined ? {} : { locale }),
-  };
 }
 
 /** How an agent is now: waiting for you, working, paused, or idle. */

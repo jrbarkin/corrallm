@@ -9,6 +9,7 @@ import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core } from './core';
+import { cursorOf } from './delivery/messages';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 
@@ -20,7 +21,8 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * nobody. Nothing they are sent ever runs a turn, so what every call reads stays still: `peer` runs
  * an adapter this build lacks, and `shell`'s Terminal won't start; the others are never sent
  * anything. Its message store starts with a message waiting for `peer` from each party that may
- * take one back, and the lead is paused, by you.
+ * take one back, and a notice corrallm sent the read-only token's party; and the lead is paused,
+ * by you.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -30,6 +32,12 @@ export const SEEDED = {
   worker: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a52',
   orchestrator: '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a53',
 } as const;
+
+/** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
+export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
+
+/** A cursor at the start of the canvas's messages. */
+const START = cursorOf({ [CANVAS]: 0 });
 
 /** Who sent each seeded message: yours is from another outside party, which you may take back. */
 const SENDERS = {
@@ -99,10 +107,20 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
   );
   const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
   await mkdir(path.dirname(log), { recursive: true });
+  const notice = {
+    id: NOTICE,
+    canvas: CANVAS,
+    from: 'corrallm',
+    to: 'outside:watcher',
+    kind: 'notice',
+    body: 'Noted',
+    state: 'delivered',
+    at: 1,
+  };
   await writeFile(
     log,
-    Object.entries(SEEDED)
-      .map(([party, id], i) =>
+    [
+      ...Object.entries(SEEDED).map(([party, id], i) =>
         JSON.stringify({
           seq: i + 1,
           message: {
@@ -116,8 +134,9 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
             at: 1,
           },
         }),
-      )
-      .join('\n'),
+      ),
+      JSON.stringify({ seq: Object.keys(SEEDED).length + 1, message: notice }),
+    ].join('\n'),
   );
   let clock = 0;
   const core = await createCore(
@@ -281,6 +300,30 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     meetsRule: { sticky: { canvas: CANVAS, target: { agent: 'lead' }, request: request(70) } },
   },
   'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
+  // From the start first, which moves each party's read position past all it was sent: a wait
+  // with no cursor then answers alike however often it is called.
+  wait: {
+    valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],
+    by: {
+      'outside-write': [
+        { timeoutSeconds: 0, after: START },
+        { timeoutSeconds: 0, for: SEEDED.orchestrator },
+      ],
+      'outside-read': [
+        { timeoutSeconds: 0, after: START },
+        { timeoutSeconds: 0, for: NOTICE },
+      ],
+    },
+    invalid: [
+      {},
+      { timeoutSeconds: -1 },
+      { timeoutSeconds: 3601 },
+      { timeoutSeconds: 0, after: '' },
+      { timeoutSeconds: 0, after: 'not a cursor' },
+      { timeoutSeconds: 0, for: 'nope' },
+      { timeoutSeconds: 0, canvas: CANVAS },
+    ],
+  },
 };
 
 /** The agents each agent doesn't reach on the canvas, as far as an op lets it. */
@@ -299,9 +342,9 @@ const AGENTS_OUT_OF_REACH: Readonly<Record<string, Partial<Record<Reach, readonl
 
 /** The messages each token party doesn't reach: every seeded one it neither sent nor received. */
 const MESSAGES_OUT_OF_REACH: Readonly<Record<string, readonly string[]>> = {
-  lead: [SEEDED.you, SEEDED.worker, SEEDED.orchestrator],
-  worker: [SEEDED.you, SEEDED.lead, SEEDED.orchestrator],
-  orchestrator: [SEEDED.you, SEEDED.lead, SEEDED.worker],
+  lead: [SEEDED.you, SEEDED.worker, SEEDED.orchestrator, NOTICE],
+  worker: [SEEDED.you, SEEDED.lead, SEEDED.orchestrator, NOTICE],
+  orchestrator: [SEEDED.you, SEEDED.lead, SEEDED.worker, NOTICE],
   watcher: [SEEDED.you, SEEDED.lead, SEEDED.worker, SEEDED.orchestrator],
 };
 

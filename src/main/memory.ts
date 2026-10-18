@@ -160,12 +160,13 @@ function withFile(remembered: Remembered, file: TrustedPath | undefined): Rememb
 
 /**
  * Writes a file whole: beside it, then moved over it, so it is never left half written. Each write
- * has its own file beside it, so writes of the same file at once never move each other's.
+ * has its own file beside it, so writes of the same file at once never move each other's. `mode`:
+ * the file's permissions (0o600: only the user may read it), else the process's default.
  */
-export async function writeWhole(file: string, text: string): Promise<void> {
+export async function writeWhole(file: string, text: string, mode?: number): Promise<void> {
   const partial = `${file}.${randomUUID()}.partial`;
   try {
-    await writeFile(partial, text, 'utf8');
+    await writeFile(partial, text, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
     await rename(partial, file);
   } catch (error) {
     await rm(partial, { force: true });

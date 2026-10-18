@@ -24,4 +24,7 @@ export const REASONS = {
 export type Reason = keyof typeof REASONS;
 
 /** Each operation on one surface only, with its reason. */
-export const DEVIATIONS: Partial<Record<OpName, Reason>> = {};
+export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
+  // The GUI's half, topics, comes with B8.
+  wait: 'transport',
+};

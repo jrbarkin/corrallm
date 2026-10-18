@@ -57,6 +57,8 @@ export class MessageStore {
   readonly #now: () => number;
   /** Every message kept, by id, in the store's order. */
   #kept = new Map<string, Kept>();
+  /** What hears each message added. */
+  readonly #listeners = new Set<(message: Message) => void>();
   /** The last place given in the store's order. */
   #seq = 0;
   /** Records changed since the log was last written to, in order. */
@@ -193,7 +195,16 @@ export class MessageStore {
   add(draft: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     this.#keep({ seq: ++this.#seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
+    for (const listener of this.#listeners) listener(message);
     return message;
+  }
+
+  /** Hears each message added from now on, as it is kept (a `wait` wakes on it). */
+  subscribe(listener: (message: Message) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
   /** The keys of what the notices kept told about messages still waiting. */

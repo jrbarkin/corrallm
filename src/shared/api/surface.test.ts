@@ -60,6 +60,7 @@ const ID_KEYS = new Set([
   'to',
   'replyTo',
   'from',
+  'for',
   'a',
   'b',
   'frame',

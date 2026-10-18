@@ -1,6 +1,8 @@
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ConnectionId } from '../../shared/adapter';
+import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
 import { OPS } from '../../shared/api/registry';
@@ -8,6 +10,7 @@ import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
+import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
@@ -24,18 +27,20 @@ import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { Caller } from './caller';
 import { Engines } from './engines';
+import type { Watcher } from './engines';
 import type { HostServices } from './host';
 import { implementations } from './ops';
 import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
+import { TokenStore } from './tokens';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
  * on, kept in a profile folder (the app's user data, or `corrallm serve --profile`), and asking
  * whatever needs the desktop of its host. It runs each canvas it opens with an engine of its own
- * (engines.ts), whose agents' sessions its SessionManager runs in this process. In milestone 1 it
- * is composed only in tests and under `corrallm serve` (B7); B8 composes it in the app's core
- * process.
+ * (engines.ts), whose agents' sessions its SessionManager runs in this process, and keeps the
+ * outside tokens orchestrators call it with (tokens.ts). In milestone 1 it is composed only in
+ * tests and under `corrallm serve` (B7); B8 composes it in the app's core process.
  */
 
 export interface CoreConfig {
@@ -81,6 +86,19 @@ export interface Core extends Dispatcher {
   ): Promise<OpResult<ResultOf<N>>>;
   /** The canvases it runs, each with its engine. */
   engines: Engines;
+  /** The outside tokens, kept in the profile's tokens.json. */
+  tokens: TokenStore;
+  /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
+  settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
+  /**
+   * Opens the canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvases.json
+   * names that file for the canvas it holds, and keeps a project folder for it, both picked in the
+   * app. Rejects, saying what to do in the app, for any other file: one corrallm doesn't keep, a
+   * copy of one it does, or one with no project folder. Its id.
+   */
+  openFile(file: string): Promise<CanvasId>;
+  /** Hears every canvas it runs: each message, and what newly waits for an answer. */
+  watch(watcher: Watcher): () => void;
   /**
    * Stops: each canvas's run held where it is and journaled, every session closed, and what the
    * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
@@ -95,6 +113,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     backends: CATALOG.usageBackends.map((backend) => backend.id),
   });
   await usage.load();
+  const tokens = new TokenStore(path.join(profile, 'tokens.json'));
+  await tokens.load();
   const memory = new CanvasMemory(path.join(profile, 'canvases.json'));
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
@@ -151,6 +171,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         engines,
         isLead,
         host,
+        tokens,
         ...(config.locale === undefined ? {} : { locale: config.locale }),
       }),
       rules: ruleChecks(engines),
@@ -171,13 +192,61 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
       dispatcher.call(name, raw, caller, signal) as Promise<OpResult<ResultOf<N>>>,
     engines,
+    tokens,
+    settings,
+    openFile: async (file) => {
+      const canvas = await keptCanvas(file, memory);
+      await engines.open(canvas);
+      return canvas;
+    },
+    watch: (watcher) => engines.watch(watcher),
     close: async () => {
       try {
         await engines.close();
       } finally {
         // What the core keeps is written out even if a canvas's run couldn't be.
-        await Promise.all([memory.flush(), settings.flush(), usage.flush()]);
+        await Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush()]);
       }
     },
   };
+}
+
+/**
+ * The canvas `file` holds, if canvases.json names that very file for it (by its real path) and
+ * keeps a project folder for it; else rejects, saying what to do in the app. The file is only read
+ * for the id it holds: the canvas opens from the file canvases.json names, never from `file`.
+ */
+async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId> {
+  const name = path.basename(file);
+  let canvas: CanvasId;
+  try {
+    if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('it is too large');
+    canvas = canvasIdOf(await readFile(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${name} can’t be served: ${reasonOf(error)}`, { cause: error });
+  }
+  const { file: kept, project } = await memory.get(canvas);
+  const open = `open ${name} in corrallm and choose its project folder there`;
+  if (kept === undefined) {
+    throw new Error(`${name} isn’t a canvas corrallm keeps: ${open}, then save it.`);
+  }
+  const [asked, keeps] = await Promise.all([realpath(file), realpath(kept).catch(() => undefined)]);
+  if (keeps === undefined) {
+    throw new Error(
+      `${name} holds a canvas corrallm keeps at ${kept}, which isn’t there any more: ${open}.`,
+    );
+  }
+  if (asked !== keeps) {
+    throw new Error(
+      `${name} is a copy of a canvas corrallm keeps at ${kept}: serve that file, or ${open} (it opens as a canvas of its own).`,
+    );
+  }
+  if (project === undefined) {
+    throw new Error(`${name} has no project folder: ${open}, so its agents can work.`);
+  }
+  return canvas;
+}
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
