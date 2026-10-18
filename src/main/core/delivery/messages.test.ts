@@ -121,17 +121,31 @@ describe('the message store', () => {
     expect(again.warning).toBeUndefined();
   });
 
-  it('sets aside a log corrupt in the middle, and starts empty', async () => {
+  it('sets aside a log corrupt in the middle, keeping what it reads of it, its order going on', async () => {
     const messages = await store();
-    messages.add(draft('outside:orchestrator', 'agent:builder'));
-    messages.add(draft('outside:orchestrator', 'agent:builder'));
+    const waiting = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    const reply = messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+    const last = messages.add(draft('outside:orchestrator', 'agent:checker'));
     await messages.durable();
-    const [first, second] = (await readFile(logFile(), 'utf8')).trim().split('\n');
-    await writeFile(logFile(), `${String(first)}\nnot json\n${String(second)}\n`);
+    const lines = (await readFile(logFile(), 'utf8')).trim().split('\n');
+    await writeFile(logFile(), `${String(lines[0])}\nnot json\n${lines.slice(1).join('\n')}\n`);
     const again = await store();
-    expect(again.all()).toEqual([]);
+    expect(again.warning).toMatch(
+      /^The canvas’s messages could not all be read, and were moved to /,
+    );
+    expect(again.all().map(({ id }) => id)).toEqual([waiting.id, reply.id, last.id]);
+    // What became of a message that waited is unknown: it is never sent.
+    expect([...again.doubtful]).toEqual([waiting.id, last.id]);
+    // Its order goes on from the log's, so a cursor into it still reads what comes next.
+    const next = again.add(draft('outside:orchestrator', 'agent:builder'));
+    expect(again.seqOf(next.id)).toBeGreaterThan(again.seqOf(last.id) ?? Infinity);
     const kept = await readdir(path.join(profile, 'runs', CANVAS));
     expect(kept.some((name) => /^messages\.rejected-.+\.jsonl$/.test(name))).toBe(true);
+    await again.durable();
+    // Written anew, it reads back whole.
+    const third = await store();
+    expect(third.warning).toBeUndefined();
+    expect(third.all().map(({ id }) => id)).toEqual([waiting.id, reply.id, last.id, next.id]);
   });
 
   it('keeps the newest settled messages per party, and every pending and unresolved one', async () => {

@@ -124,11 +124,14 @@ export class Delivery {
   /**
    * Starts delivering, as the canvas opens: a message that was being delivered, or delivered with
    * no turn end, when the core last stopped is unresolved (its sender told so), and never sent
-   * again; what was waiting goes once it can.
+   * again, and so is one that waited in a log the store set aside as broken (it may have gone);
+   * what was waiting goes once it can.
    */
   async start(): Promise<void> {
-    for (const message of this.#deps.store.all()) {
+    const { store } = this.#deps;
+    for (const message of store.all()) {
       if (this.#inFlight(message)) this.#cutOff(message);
+      else if (message.state === 'pending' && store.doubtful.has(message.id)) this.#unread(message);
     }
     await this.#deps.store.durable();
     this.schedule();
@@ -544,6 +547,14 @@ export class Delivery {
         TAKEN_BACK,
       );
     }
+  }
+
+  /** A message that waited in a log set aside as broken: unresolved, never sent, its sender told. */
+  #unread(message: Message): void {
+    const text = `Your message to ${this.#nameOf(message.to)} couldn’t be read back when corrallm opened the canvas, so it won’t be sent.`;
+    const turn: TurnResult = { status: 'failed', reason: 'error', message: text };
+    this.#deps.store.update(message.id, { state: 'unresolved', turn });
+    this.#notice(message, text, turn);
   }
 
   /** A message cut off as the core stopped: unresolved, never sent again, its sender told. */

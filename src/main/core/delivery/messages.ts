@@ -22,7 +22,8 @@ import type { Message, PartyId } from '../../../shared/model/messages';
  * caller asks for its record on disk (`durable`), which rejects then; and once a write fails, the
  * next writes the log anew, whole (a line a failed append tore included). A torn last line of its
  * log is left out, and written out of the log as it loads (or with the next write, if that fails);
- * a log broken before that is set aside, and the store starts empty. A log it can't read, or a
+ * a log broken before that is set aside, and written anew from the records that could be read, the
+ * store's order going on past it; what it waited to send is never sent. A log it can't read, or a
  * broken one it can't set aside, is left as it is, for corrallm to read when it opens the canvas
  * again: the store starts empty and journals nothing meanwhile, so `durable` rejects, and nothing is
  * sent without its record.
@@ -72,8 +73,14 @@ export class MessageStore {
   /** Whether anything changed that wasn't journaled, as the store journals nothing. */
   #lost = false;
   readonly #listeners = new Set<() => void>();
-  /** Why the store started empty, if it couldn't read its log as it loaded. */
+  /** Why the store couldn't read all of its log as it loaded, if it couldn't. */
   warning: string | undefined;
+  /**
+   * The messages that waited in a log set aside as broken, as the store loaded: what became of each
+   * after its last record that could be read is unknown (it may have been sent), so delivery never
+   * sends them.
+   */
+  doubtful: ReadonlySet<string> = new Set();
 
   constructor(canvas: CanvasId, log: MessageLog, now: () => number) {
     this.canvas = canvas;
@@ -84,7 +91,9 @@ export class MessageStore {
   /**
    * Reads what the log keeps of the canvas's messages. A last line torn as it was written (or that
    * lost its newline) is written out of the log before anything is appended after it, which would
-   * otherwise join it on one line. Never rejects.
+   * otherwise join it on one line. A log broken before its last line is set aside, and written
+   * anew from the records that could be read; what it waited to send is `doubtful`. Either way the
+   * store's order goes on past every place a line of the log gave. Never rejects.
    */
   async load(): Promise<void> {
     let text: string | undefined;
@@ -99,27 +108,36 @@ export class MessageStore {
     if (lines.at(-1) === '') lines.pop();
     const read = new Map<string, Kept>();
     let torn = text !== '' && !text.endsWith('\n');
+    /** Whether a line before the last isn't a record: the log is broken in the middle. */
+    let broken = false;
     for (const [i, line] of lines.entries()) {
       const kept = this.#record(line);
-      if (kept) {
-        read.set(kept.message.id, kept);
-        this.#seq = Math.max(this.#seq, kept.seq);
-      } else if (i < lines.length - 1) {
-        this.#seq = 0;
-        try {
-          const where = await this.#log.setAsideMessages(this.canvas);
-          this.warning = `The canvas’s messages could not be read, and were moved to ${where}.`;
-        } catch (error) {
-          this.#journalNothing(
-            `The canvas’s messages could not be read, nor moved aside (${reason(error)})`,
-          );
-        }
-        return;
-      } else {
-        torn = true;
-      }
+      // A cursor may point at any place the log gave, read or not.
+      this.#seq = Math.max(this.#seq, kept?.seq ?? placeIn(line));
+      if (kept) read.set(kept.message.id, kept);
+      else if (i < lines.length - 1) broken = true;
+      else torn = true;
     }
     this.#kept = new Map([...read].sort(([, a], [, b]) => a.seq - b.seq));
+    if (broken) {
+      try {
+        const where = await this.#log.setAsideMessages(this.canvas);
+        this.warning = `The canvas’s messages could not all be read, and were moved to ${where}.`;
+      } catch (error) {
+        this.#kept = new Map();
+        this.#journalNothing(
+          `The canvas’s messages could not be read, nor moved aside (${reason(error)})`,
+        );
+        return;
+      }
+      this.doubtful = new Set(
+        this.all()
+          .filter(({ state }) => state === 'pending')
+          .map(({ id }) => id),
+      );
+      // The log is written anew from what was read.
+      torn = true;
+    }
     this.#prune();
     if (!torn) {
       this.#size = Buffer.byteLength(text);
@@ -332,6 +350,16 @@ export function readCursor(cursor: string): Readonly<Record<string, number>> | u
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** The place in the store's order a line of its log gives, though it isn't a record it reads. */
+function placeIn(line: string): number {
+  try {
+    const value: unknown = JSON.parse(line);
+    return isRecord(value) && Number.isSafeInteger(value.seq) ? (value.seq as number) : 0;
+  } catch {
+    return 0;
   }
 }
 

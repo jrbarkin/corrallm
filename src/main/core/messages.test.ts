@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -969,6 +969,38 @@ describe('a restart', () => {
     ]);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(restarted.started).toEqual([]);
+  });
+
+  it('tells whoever waited in a log set aside as broken, and a cursor from before reads on', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const waited = await send('builder', 'First');
+    await send('helper', 'Hello');
+    await vi.waitFor(async () => {
+      expect((await inbox()).some(({ replyTo }) => replyTo !== undefined)).toBe(true);
+    });
+    const { next } = await ok<{ next: string }>('status', {});
+    await core?.close();
+    core = undefined;
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    const lines = (await readFile(log, 'utf8')).trimEnd().split('\n');
+    await writeFile(log, `${String(lines[0])}\nnot json\n${lines.slice(1).join('\n')}\n`);
+
+    await start();
+    expect(await find(waited)).toMatchObject({ state: 'unresolved' });
+    const told = await notices();
+    expect(told).toEqual([
+      expect.objectContaining({
+        replyTo: waited,
+        body: 'Your message to Builder couldn’t be read back when corrallm opened the canvas, so it won’t be sent.',
+        turn: expect.objectContaining({ status: 'failed', reason: 'error' }) as unknown,
+      }),
+    ]);
+    // What comes after the cursor status gave before is read from it.
+    const after = await ok<{ items: Message[] }>('messages', { after: next });
+    expect(after.items.map(({ id }) => id)).toEqual([told[0]?.id]);
+    expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
   });
 
   it('leaves a message journaled as delivering unresolved after a crash, and sends what was pending', async () => {
