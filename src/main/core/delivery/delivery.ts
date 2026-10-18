@@ -9,6 +9,7 @@ import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import { agentOf, agentParty } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { agentName } from '../../../shared/model/queries';
+import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
 import type { TurnResult } from '../../../shared/session';
@@ -61,6 +62,16 @@ const NO_CONNECTION = 'it has no connection corrallm can run.';
 const CUT_OFF: TurnResult = { status: 'cancelled', reason: 'connection-closed' };
 /** What a message taken back is said to have been. */
 const TAKEN_BACK: TurnResult = { status: 'cancelled', reason: 'taken-back' };
+/**
+ * The most characters of a prompt's title, or an agent's name, a notice quotes, on one line and
+ * cut at a word: a capped title, never a whole command (API Spec §5.8).
+ */
+const TITLE = 120;
+/**
+ * The most characters of why a session won't start, or a message couldn't be recorded, a notice
+ * quotes: with its titles and names, a notice stays far within MAX_MESSAGE_BYTES.
+ */
+const REASON = 1000;
 /** How a reply cut to the most a message holds is marked. */
 const CUT = '\n\n[corrallm: cut here; the whole reply is in its transcript]';
 
@@ -261,7 +272,7 @@ export class Delivery {
           this.#tell(
             `stuck:${node.id}:${message.from}`,
             message,
-            `${this.#name(node.id)} can’t start, so your message waits: ${hold.text}`,
+            `${this.#name(node.id)} can’t start, so your message waits: ${threadTitle(hold.text, REASON)}`,
           );
         }
         if (hold.kind === 'usage') {
@@ -374,7 +385,7 @@ export class Delivery {
         this.#writing.delete(node.id);
         const now = this.#deps.store.get(message.id);
         if (now?.state !== 'delivering') return;
-        const why = error instanceof Error ? error.message : String(error);
+        const why = threadTitle(error instanceof Error ? error.message : String(error), REASON);
         this.#deps.store.update(message.id, {
           state: 'unresolved',
           turn: { status: 'failed', reason: 'error', message: why },
@@ -533,7 +544,7 @@ export class Delivery {
         this.#tell(
           `waiting:${message.id}`,
           message,
-          `${this.#name(agent)} is waiting for you: ${needsItem(need, input).title}`,
+          `${this.#name(agent)} is waiting for you: ${threadTitle(needsItem(need, input).title, TITLE)}`,
         );
       }
     }
@@ -606,9 +617,9 @@ export class Delivery {
     this.#alarm = { at, cancel };
   }
 
-  /** An agent's name. */
+  /** An agent's name, as a notice or a frame quotes it: on one line, capped. */
   #name(agent: string): string {
-    return agentName(this.#deps.nodes(), agent);
+    return threadTitle(agentName(this.#deps.nodes(), agent), TITLE);
   }
 
   /** A party, as a notice names it. */

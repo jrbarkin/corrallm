@@ -9,7 +9,7 @@ import type { Message } from '../../shared/model/messages';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
-import type { SessionMode } from '../../shared/session';
+import type { SessionEvent, SessionMode } from '../../shared/session';
 import { callTool } from '../api/mcp';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
@@ -192,19 +192,20 @@ function sent(connector: FakeConnector): string[] {
   return connector.sessions.flatMap((session) => session.sent.map(({ text }) => text));
 }
 
-/** A connector whose sessions won't start: it says why, as a login it can't run on does. */
-const REFUSING: Connector<SessionMode> = {
+/** A connector whose sessions won't start: it says why (`text`), as a login it can't run on does. */
+const refusing = (text = 'This login can’t run here.'): Connector<SessionMode> => ({
   start: (_spec, host) => {
     host.emit({
       type: 'notice',
       id: crypto.randomUUID(),
       level: 'error',
-      text: 'This login can’t run here.',
+      text,
       switchTo: 'codex.terminal',
     });
-    return Promise.reject(new Error('This login can’t run here.'));
+    return Promise.reject(new Error(text));
   },
-};
+});
+const REFUSING = refusing();
 
 const FRAME = (id: string) =>
   `[corrallm] Message from "orchestrator" (an orchestrator outside corrallm, not the user; message ${id}):\n`;
@@ -357,6 +358,22 @@ describe('delivery', () => {
     }
   });
 
+  it('quotes a long name, and a long reason a session won’t start, cut short', async () => {
+    await keepCanvas([{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_MESSAGE_BYTES)}` }], []);
+    await start({
+      appServer: refusing(`This login can’t run here: ${'because '.repeat(MAX_MESSAGE_BYTES / 8)}`),
+    });
+    await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    const [notice] = await notices();
+    expect(notice?.body).toMatch(
+      /^Builder x+… can’t start, so your message waits: This login can’t run here: (because )*because…/,
+    );
+    expect(new TextEncoder().encode(notice?.body).length).toBeLessThan(MAX_MESSAGE_BYTES / 8);
+  });
+
   it('refuses a body over 16 KB, counted in bytes', async () => {
     await keepCanvas();
     await start();
@@ -487,6 +504,71 @@ describe('a turn waiting for you', () => {
       expect((await find(id))?.state).toBe('replied');
     });
     expect(await notices()).toEqual([]);
+  });
+
+  /** A connector whose every turn waits on what `prompt` asks, for the message it was sent. */
+  const asking = (prompt: (message: string) => SessionEvent): Connector<SessionMode> => ({
+    start: (_spec, host) => {
+      host.emit({ type: 'started', model: 'default', mode: 'auto', models: [] });
+      const idle = () => Promise.resolve();
+      return Promise.resolve({
+        send: (message) => {
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({ type: 'status', status: 'working' });
+          host.emit(prompt(message.id));
+          host.emit({ type: 'status', status: 'waiting' });
+          return idle();
+        },
+        answer: idle,
+        interrupt: idle,
+        setMode: idle,
+        setModel: idle,
+        close: idle,
+      });
+    },
+  });
+
+  it.each<[string, (message: string) => SessionEvent]>([
+    [
+      'a very long one-line command',
+      (message) => ({
+        type: 'permission',
+        id: `${message}/permission`,
+        tool: 'Bash',
+        summary: `echo ${'a'.repeat(MAX_MESSAGE_BYTES)}`,
+        always: null,
+      }),
+    ],
+    [
+      'a very long question',
+      (message) => ({
+        type: 'question',
+        id: `${message}/question`,
+        questions: [
+          {
+            header: 'Which',
+            text: `Which of these ${'very '.repeat(MAX_MESSAGE_BYTES / 4)}long names?`,
+            options: [{ label: 'This one', description: '' }],
+            multiple: false,
+          },
+        ],
+      }),
+    ],
+  ])('quotes %s in a waiting notice cut short, within a message’s size', async (_, prompt) => {
+    await keepCanvas();
+    await start({ appServer: asking(prompt) });
+    const id = await send('builder', 'Go on');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    const [notice] = await notices();
+    expect(notice).toMatchObject({
+      replyTo: id,
+      body: expect.stringMatching(
+        /^Builder is waiting for you: (Approve Bash: echo a+|Which of these (very )*very)…$/,
+      ) as string,
+    });
+    expect(new TextEncoder().encode(notice?.body).length).toBeLessThan(MAX_MESSAGE_BYTES / 16);
   });
 
   it('names what the turn itself waits on, never a hold of the run’s', async () => {
