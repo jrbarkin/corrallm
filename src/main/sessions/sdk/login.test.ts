@@ -65,7 +65,9 @@ describe('authStatus', () => {
     dir = await mkdtemp(path.join(tmpdir(), 'corrallm-login-'));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    // A CLI killed for taking too long may still be exiting, and Windows keeps the folder it works
+    // in busy until it has.
+    await rm(dir, { recursive: true, force: true, maxRetries: 10 });
   });
 
   /** A fake `claude` (run with node) whose body is `code`; returns its path. */
