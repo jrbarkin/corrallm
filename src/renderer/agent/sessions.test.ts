@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionStore } from './sessions';
 import { NEW_SESSION } from './session';
-import type { SubmittedMessage } from './session';
+import type { SubmittedMessage } from '../../shared/model/queue';
 import { decodeSubmissions, encodeSubmissions } from './submission-state';
 import { fakeBackend } from '../test-backend';
+import { runCatalog } from '../graph/agents';
+
+/** The run's catalog, as the app gives the sessions. */
+const engine = runCatalog();
 
 afterEach(() => {
   vi.useRealTimers();
@@ -15,7 +19,7 @@ describe('SessionStore', () => {
     // An OK's "ask for changes", a repeat's "try this": the run knows which task they are for.
     const { backend, emit, sent } = fakeBackend();
     const submitted = vi.fn();
-    const store = new SessionStore(backend, undefined, { submitted });
+    const store = new SessionStore(engine, backend, undefined, { submitted });
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.send('a', 'claude-code', 'Use tabs, please', undefined, undefined, undefined, 'run');
     await Promise.resolve();
@@ -41,7 +45,7 @@ describe('SessionStore', () => {
       'does not dispatch a released queue if %s supersedes it in the same call stack',
       async (next) => {
         const { backend } = fakeBackend();
-        const store = new SessionStore(backend);
+        const store = new SessionStore(engine, backend);
         store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
         store.holdQueue('a', true);
         store.send(
@@ -80,7 +84,7 @@ describe('SessionStore', () => {
     it('finishes the active turn, still sends what the user queued, in order, and holds the run’s own until released', async () => {
       const { backend, emit, sent } = fakeBackend();
       const submitted = vi.fn();
-      const store = new SessionStore(backend, undefined, { submitted });
+      const store = new SessionStore(engine, backend, undefined, { submitted });
       store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       const firstDone = vi.fn();
       store.send('a', 'claude-code', 'Active work', firstDone, undefined, undefined, 'queue');
@@ -159,7 +163,7 @@ describe('SessionStore', () => {
 
     it('queues new automation while idle and held without blocking another agent or raw terminal prompts', async () => {
       const { backend, emit } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([
         { id: 'a', connection: 'claude-code.terminal' },
         { id: 'b', connection: 'claude-code.sdk' },
@@ -203,7 +207,7 @@ describe('SessionStore', () => {
             ready = resolve;
           }),
       );
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       store.holdQueue('a', true);
       const done = vi.fn();
@@ -241,7 +245,7 @@ describe('SessionStore', () => {
 
     it('interrupts an active turn once and keeps queued work held and the console connected', async () => {
       const { backend, emit, sent } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       store.send('a', 'claude-code', 'Active');
       await Promise.resolve();
@@ -278,7 +282,7 @@ describe('SessionStore', () => {
       'clears runtime holds on %s, including agents with no session yet',
       async (action) => {
         const { backend } = fakeBackend();
-        const store = new SessionStore(backend);
+        const store = new SessionStore(engine, backend);
         store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
         store.holdQueue('a', true);
         if (action === 'reset') store.reset();
@@ -306,7 +310,7 @@ describe('SessionStore', () => {
     it('allows an interrupt retry after main reports that the first request failed', async () => {
       const { backend } = fakeBackend();
       backend.interrupt.mockRejectedValueOnce(new Error('The interrupt did not reach the CLI'));
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
       store.send('a', 'claude-code', 'Active');
       await Promise.resolve();
@@ -333,7 +337,7 @@ describe('SessionStore', () => {
     const { backend, emit, sent } = fakeBackend();
     const submitted = vi.fn();
     const ended = vi.fn();
-    const store = new SessionStore(backend, undefined, { submitted, ended });
+    const store = new SessionStore(engine, backend, undefined, { submitted, ended });
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.send('a', 'claude-code', 'Previous');
     await Promise.resolve();
@@ -374,7 +378,7 @@ describe('SessionStore', () => {
 
   it('preserves a typed failure and its reset through callbacks and the submitted row', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     const done = vi.fn();
     store.send('a', 'claude-code', 'Work', done);
@@ -410,7 +414,7 @@ describe('SessionStore', () => {
     const { backend, emit, sent } = fakeBackend();
     const submitted = vi.fn();
     const ended = vi.fn();
-    const store = new SessionStore(backend, undefined, { submitted, ended });
+    const store = new SessionStore(engine, backend, undefined, { submitted, ended });
     store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     submitted.mockImplementation((agentId: string, message: { id: string; text: string }) => {
       expect(store.of(agentId).submissions?.some(({ id }) => id === message.id)).toBe(true);
@@ -488,7 +492,7 @@ describe('SessionStore', () => {
 
   it('serializes only submission records and restores unresolved work without dispatching it', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.send('a', 'claude-code', 'Finished');
     await Promise.resolve();
@@ -512,7 +516,7 @@ describe('SessionStore', () => {
     expect(serialized).not.toContain('Do not persist this transcript.');
     const freshBackend = fakeBackend();
     const observer = { submitted: vi.fn(), ended: vi.fn() };
-    const restored = new SessionStore(freshBackend.backend, undefined, observer);
+    const restored = new SessionStore(engine, freshBackend.backend, undefined, observer);
     restored.restoreSubmissions(serialized);
     expect(restored.of('a').submissions).toMatchObject([
       { text: 'Finished', status: 'completed' },
@@ -557,7 +561,7 @@ describe('SessionStore', () => {
   });
 
   it('saves submission text without images and leaves live images intact', () => {
-    const store = new SessionStore();
+    const store = new SessionStore(engine);
     const images = [{ mediaType: 'image/png', data: 'cGljdHVyZQ==' }] as const;
     store.recordSubmission('a', 'Check this screenshot', [...images]);
 
@@ -566,7 +570,7 @@ describe('SessionStore', () => {
     expect(serialized).not.toContain(images[0].data);
     expect(store.of('a').submissions?.[0]?.images).toEqual(images);
 
-    const restored = new SessionStore();
+    const restored = new SessionStore(engine);
     restored.restoreSubmissions(serialized);
     expect(restored.of('a').submissions).toEqual([
       expect.objectContaining({ text: 'Check this screenshot', status: 'completed' }),
@@ -626,7 +630,7 @@ describe('SessionStore', () => {
       b: { ...NEW_SESSION, submissions },
     });
     expect(new TextEncoder().encode(serialized).length).toBeLessThanOrEqual(4 * 1024 * 1024);
-    const restored = new SessionStore();
+    const restored = new SessionStore(engine);
     restored.restoreSubmissions(serialized);
     expect(restored.of('active').submissions).toMatchObject([
       { id: 'active', text, status: 'cancelled', unresolved: true },
@@ -662,7 +666,7 @@ describe('SessionStore', () => {
 
   it('records commands handled locally without sending a turn', () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.recordSubmission('a', '/mcp');
     expect(store.of('a').submissions).toMatchObject([{ text: '/mcp', status: 'completed' }]);
     expect(backend.send).not.toHaveBeenCalled();
@@ -671,7 +675,7 @@ describe('SessionStore', () => {
 
   it('keeps one manual message queued after refusal and sends it once after switching', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     backend.start.mockImplementationOnce(() => {
       emit('a', 'claude-code.sdk', {
@@ -706,7 +710,7 @@ describe('SessionStore', () => {
   });
   it('records each manual submission once, including queued images and cancellation', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend, () => 'held-step');
+    const store = new SessionStore(engine, backend, () => 'held-step');
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.send('a', 'claude-code', 'First');
     store.send('a', 'claude-code', '', undefined, [{ mediaType: 'image/png', data: 'picture' }]);
@@ -759,7 +763,7 @@ describe('SessionStore', () => {
     'records live %s prompts, excludes automation and restored history, and correlates turn ends',
     async (connection) => {
       const { backend, emit, sent } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection }]);
       store.send('a', 'claude-code', 'Automated step', undefined, undefined, undefined, 'queue');
       await Promise.resolve();
@@ -816,7 +820,7 @@ describe('SessionStore', () => {
   );
   it('tells whoever sent a message when the native turn it starts ends, queued or not', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     const heard: string[] = [];
     const tell = (text: string) => (interrupted: boolean) => {
@@ -856,7 +860,7 @@ describe('SessionStore', () => {
   });
 
   it('tells the user what the run says, in the agent’s session', () => {
-    const store = new SessionStore();
+    const store = new SessionStore(engine);
     store.notice('a', 'warning', 'corrallm took that as no: the answer wasn’t a clear yes or no.');
     expect(store.of('a').entries).toMatchObject([
       {
@@ -870,7 +874,7 @@ describe('SessionStore', () => {
 
   it('sends a message sent as a native turn ends after the ones already queued', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk' }]);
     store.send('a', 'claude-code', 'First', () => {
       store.send('a', 'claude-code', 'Next');
@@ -899,7 +903,7 @@ describe('SessionStore', () => {
 describe('submission retention', () => {
   it('keeps the newest 100 settled records and every queued, running or unresolved record', () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.restoreSubmissions(
       JSON.stringify({
         version: 1,
@@ -936,7 +940,7 @@ describe('submission retention', () => {
 
   it('prunes older settled records when a native prompt is added', () => {
     const { backend, emit } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
     store.open('a');
     for (let index = 0; index < 105; index++) {

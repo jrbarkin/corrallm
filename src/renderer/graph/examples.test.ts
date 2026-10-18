@@ -6,8 +6,16 @@ import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from './examples';
 import { fromFile, toFile } from './file';
 import { placeholdersOf } from './templates';
-import { findItem, isApproval, isDelay, isIf, isRepeat, isRepeatEnds, isWait } from './queue';
-import type { QueueItem } from './queue';
+import {
+  findItem,
+  isApproval,
+  isDelay,
+  isIf,
+  isRepeat,
+  isRepeatEnds,
+  isWait,
+} from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
 import { workEdges } from './work';
 
 describe.each(EXAMPLES)('the $name example', (example) => {

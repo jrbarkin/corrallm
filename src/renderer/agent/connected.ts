@@ -1,4 +1,3 @@
-import { isStartMode } from '../../shared/adapter';
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { isSessionMode, turnResult } from '../../shared/session';
 import type {
@@ -18,8 +17,8 @@ import type {
   UserMessage,
   TurnResult,
 } from '../../shared/session';
-import { adapterOf, catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
+import type { EngineCatalog } from '../run/catalog';
 import type { DriverDone, DriverIO, SessionDriver, Turn } from './driver';
 import { NEW_SESSION, reduce } from './session';
 import type { Entry, Refusal, Session } from './session';
@@ -108,11 +107,14 @@ interface SentTurn {
  * status, mode, model and effort, usage, and each turn's end. Mode, model and effort changes,
  * answers and interrupts go to main. A session that would not start says why (a notice offering
  * another connection) before its start fails: the turn that started it never was, and the store
- * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's.
+ * keeps its message (DriverIO.refused). Main's echo of a message marks it as the CLI's. Which
+ * conversation a message is of, and the modes its connection starts in, it reads in the catalog it
+ * is given (the store's: run/catalog.ts).
  */
 export class ConnectedDriver implements SessionDriver {
   readonly connection: ConnectionId;
   readonly #agentId: string;
+  readonly #catalog: EngineCatalog;
   readonly #backend: SessionBackend;
   readonly #io: DriverIO;
   /** Resolves once the session runs; undefined until it is started, and once it has stopped. */
@@ -129,9 +131,16 @@ export class ConnectedDriver implements SessionDriver {
   #refusal: Refusal | undefined;
   #closed = false;
 
-  constructor(agentId: string, connection: ConnectionId, backend: SessionBackend, io: DriverIO) {
+  constructor(
+    agentId: string,
+    connection: ConnectionId,
+    catalog: EngineCatalog,
+    backend: SessionBackend,
+    io: DriverIO,
+  ) {
     this.#agentId = agentId;
     this.connection = connection;
+    this.#catalog = catalog;
     this.#backend = backend;
     this.#io = io;
   }
@@ -276,7 +285,7 @@ export class ConnectedDriver implements SessionDriver {
       case 'history': {
         // What the transcript shows already (the session was resumed after it closed, or the
         // agent ran in a Terminal meanwhile) is not shown again; the rest goes where it happened.
-        const entries = replay(event.events, this.#agentId, this.connection);
+        const entries = replay(event.events, this.#agentId, this.connection, this.#catalog);
         if (entries.length > 0) io.dispatch({ type: 'restore', entries });
         return;
       }
@@ -292,7 +301,7 @@ export class ConnectedDriver implements SessionDriver {
               kind: 'user',
               text: event.text,
               reached: true,
-              conversation: adapterOf(this.connection),
+              conversation: this.#catalog.adapterOf(this.connection),
             },
           });
         } else if (known.kind === 'user' && known.reached !== true) {
@@ -432,7 +441,11 @@ export class ConnectedDriver implements SessionDriver {
         if (!find(event.id)) {
           io.dispatch({
             type: 'add',
-            entry: { id: event.id, kind: 'cleared', conversation: adapterOf(this.connection) },
+            entry: {
+              id: event.id,
+              kind: 'cleared',
+              conversation: this.#catalog.adapterOf(this.connection),
+            },
           });
         }
         return;
@@ -482,7 +495,7 @@ export class ConnectedDriver implements SessionDriver {
       const mode =
         settings.mode !== undefined &&
         isSessionMode(settings.mode) &&
-        isStartMode(catalog(), adapterOf(this.connection), this.connection, settings.mode)
+        this.#catalog.isStartMode(this.connection, settings.mode)
           ? settings.mode
           : null;
       const given: AgentStartSettings = {
@@ -605,9 +618,10 @@ function replay(
   events: readonly SessionEvent[],
   agentId: string,
   connection: ConnectionId,
+  catalog: EngineCatalog,
 ): Entry[] {
   let session: Session = NEW_SESSION;
-  const driver = new ConnectedDriver(agentId, connection, NO_BACKEND, {
+  const driver = new ConnectedDriver(agentId, connection, catalog, NO_BACKEND, {
     dispatch: (action) => {
       session = reduce(session, action);
     },

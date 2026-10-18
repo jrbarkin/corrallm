@@ -1,4 +1,5 @@
-import type { AdapterId } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
+import type { SubmittedMessage } from '../../shared/model/queue';
 import { turnResult } from '../../shared/session';
 import { parseRole } from '../../shared/role';
 import type {
@@ -14,15 +15,13 @@ import type {
   SettingsOptions,
   TurnResult,
 } from '../../shared/session';
-import { adapterOf } from '../catalog';
-import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
-import type { AgentConnection } from '../graph/agents';
+import type { EngineCatalog } from '../run/catalog';
 import { ConnectedDriver, NO_BACKEND } from './connected';
 import type { SessionBackend } from './connected';
 import type { DriverIO, SessionDriver } from './driver';
 import { UnavailableDriver } from './unavailable';
 import { decodeSubmissions, encodeSubmissions, pruneSubmissions } from './submission-state';
-import { answersOf, conversationOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
+import { answersOf, NEW_SESSION, reduce, threadTitle, turnReply } from './session';
 import type {
   Answer,
   MessageImage,
@@ -31,7 +30,6 @@ import type {
   Refusal,
   Session,
   SessionAction,
-  SubmittedMessage,
 } from './session';
 
 export interface SubmissionObserver {
@@ -41,7 +39,7 @@ export interface SubmissionObserver {
 
 /** An agent's driver, how it runs, and whether it is being let go. */
 interface Driving {
-  connection: AgentConnection;
+  connection: ConnectionId;
   driver: SessionDriver;
   closing: boolean;
 }
@@ -55,22 +53,24 @@ interface Driving {
  * agent replied in it, and can take the message back (the queues' run, run/runner.ts). A session
  * that would not start (an Agent SDK agent on a Claude subscription) keeps its messages queued,
  * unsent, and says so to whoever sent them, until the agent runs another way (or the session
- * starts after all).
+ * starts after all). Each agent's adapter and connection are read in the catalog it is given (the
+ * run's: run/catalog.ts).
  */
 export class SessionStore {
   #sessions: Readonly<Record<string, Session>> = {};
   readonly #listeners = new Set<() => void>();
+  readonly #catalog: EngineCatalog;
   readonly #backend: SessionBackend;
   readonly #drivers = new Map<string, Driving>();
   /** How each agent runs, as the canvas last said (`sync`). */
-  readonly #connections = new Map<string, AgentConnection>();
+  readonly #connections = new Map<string, ConnectionId>();
   /** What each agent is set to run with in each CLI, as the canvas last said (`sync`). */
   readonly #settings = new Map<string, Partial<Record<AdapterId, AgentSettings>>>();
   /** The authored role is independent of the settings remembered for each CLI. */
   readonly #roles = new Map<string, string>();
   /** What each CLI's agents can be set to (read from main once asked, until `forgetOptions`). */
   readonly #options = new Map<AdapterId, Promise<SettingsOptions>>();
-  /** Each agent's type, as it was last sent a message: its default connection and queue sends. */
+  /** Each agent's adapter, as it was last sent a message: how it runs, if the canvas never said. */
   readonly #types = new Map<string, AdapterId>();
   /**
    * Who to tell when the turn a message starts ends, by the message's id, from when it is sent
@@ -108,15 +108,17 @@ export class SessionStore {
   /** A message to send each agent once it runs another way (`sendOnceIn`), by agent id. */
   readonly #onceIn = new Map<
     string,
-    { connection: AgentConnection; agent: AdapterId; text: string }
+    { connection: ConnectionId; agent: AdapterId; text: string }
   >();
   #unsubscribe: (() => void) | undefined;
 
   constructor(
+    catalog: EngineCatalog,
     backend: SessionBackend = NO_BACKEND,
     position: (agentId: string) => string | undefined = () => undefined,
     observer: SubmissionObserver = {},
   ) {
+    this.#catalog = catalog;
     this.#backend = backend;
     this.#position = position;
     this.#observer = observer;
@@ -145,7 +147,7 @@ export class SessionStore {
   sync(
     agents: readonly {
       id: string;
-      connection: AgentConnection;
+      connection: ConnectionId;
       settings?: Partial<Record<AdapterId, AgentSettings>> | undefined;
       role?: string | undefined;
     }[],
@@ -226,7 +228,7 @@ export class SessionStore {
     const pending = Promise.resolve().then(async () => {
       try {
         if (this.#freshening.get(agentId) !== pending) return;
-        await this.#backend.fresh(agentId, adapterOf(connection));
+        await this.#backend.fresh(agentId, this.#catalog.adapterOf(connection));
         if (this.#freshening.get(agentId) !== pending) return;
         this.#letGo(agentId);
         this.#dispatch(agentId, { type: 'clear' });
@@ -297,7 +299,7 @@ export class SessionStore {
       session.status === 'idle' &&
       (held ? origin !== 'queue' : session.queued.length === 0)
     ) {
-      this.#start(agentId, agent, { text, images }, id);
+      this.#start(agentId, { text, images }, id);
     } else {
       this.#dispatch(agentId, {
         type: 'queue',
@@ -317,7 +319,7 @@ export class SessionStore {
    * Sends a message once the agent runs with `connection`, as the canvas switches it (`sync`): a
    * command typed for Claude Code's terminal, sent there once the agent continues in Terminal.
    */
-  sendOnceIn(agentId: string, connection: AgentConnection, agent: AdapterId, text: string): void {
+  sendOnceIn(agentId: string, connection: ConnectionId, agent: AdapterId, text: string): void {
     if (this.#connections.get(agentId) === connection) {
       this.send(agentId, agent, text);
       return;
@@ -536,19 +538,19 @@ export class SessionStore {
   /** Starts a turn with message `id` (a queued message keeps its own). */
   #start(
     agentId: string,
-    agent: AdapterId,
     { text, images }: { text: string; images: MessageImage[] | undefined },
     id: string,
   ): void {
     const pasted = images === undefined || images.length === 0 ? {} : { images };
     this.#turns.set(agentId, id);
-    // An unsupported submission stays separate from native conversation history.
-    const conversation = conversationOf(this.#connection(agentId));
+    // Its adapter's conversation (session.ts Conversation): an unsupported submission's
+    // ('unavailable') stays separate from native conversation history.
+    const conversation = this.#catalog.adapterOf(this.#connection(agentId));
     this.#dispatch(agentId, {
       type: 'start',
       entry: { id, kind: 'user', text, ...pasted, conversation },
     });
-    this.#driver(agentId).start({ id, text, agent, ...pasted }, (interrupted, result) => {
+    this.#driver(agentId).start({ id, text, ...pasted }, (interrupted, result) => {
       // The next queued message may have started already.
       if (this.#turns.get(agentId) === id) this.#turns.delete(agentId);
       this.#heard(id)?.(interrupted, turnReply(this.of(agentId), id), result);
@@ -598,19 +600,15 @@ export class SessionStore {
       : session.queued[0];
     if (!next || session.status !== 'idle') return;
     this.#dispatch(agentId, { type: 'unqueue', id: next.id });
-    this.#start(
-      agentId,
-      this.#types.get(agentId) ?? DEFAULT_AGENT,
-      { text: next.text, images: next.images },
-      next.id,
-    );
+    this.#start(agentId, { text: next.text, images: next.images }, next.id);
   }
 
   /** Missing runtime configuration follows the same native default as an authored agent. */
-  #connection(agentId: string): AgentConnection {
+  #connection(agentId: string): ConnectionId {
+    const adapter = this.#types.get(agentId);
     return (
       this.#connections.get(agentId) ??
-      connectionOf({ adapter: this.#types.get(agentId) ?? DEFAULT_AGENT })
+      this.#catalog.connectionOf(adapter === undefined ? {} : { adapter })
     );
   }
 
@@ -626,7 +624,7 @@ export class SessionStore {
       driving.driver = new UnavailableDriver(io);
     } else {
       this.#listen();
-      driving.driver = new ConnectedDriver(agentId, connection, this.#backend, io);
+      driving.driver = new ConnectedDriver(agentId, connection, this.#catalog, this.#backend, io);
     }
     this.#drivers.set(agentId, driving);
     return driving.driver;
@@ -647,7 +645,7 @@ export class SessionStore {
         const settings =
           driving.connection === 'unavailable'
             ? {}
-            : (this.#settings.get(agentId)?.[adapterOf(driving.connection)] ?? {});
+            : (this.#settings.get(agentId)?.[this.#catalog.adapterOf(driving.connection)] ?? {});
         const role = this.#roles.get(agentId);
         return { ...settings, ...(role === undefined ? {} : { role }) };
       },

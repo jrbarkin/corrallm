@@ -1,4 +1,4 @@
-import type { AgentAction } from '../graph/agents';
+import type { AgentAction } from '../../shared/adapter';
 
 /*
  * What the queues' run says to a connected agent, as messages to its session, and how it reads
@@ -24,9 +24,10 @@ const VERDICT =
  * What a step asks of a connected agent: a slash command is sent as that command, with what the
  * step is to do (`instruction`, the user's words) as its arguments; a tool, as a short instruction
  * to use it for the step, then what the step is to do ("Use the Bash tool for this step: run npm
- * test"), or else what the tool does (`actions`: its agent type's, from agents.ts), and whose work
- * it acts on when that is another agent's (`other`, its name). A tool's step then asks how it went
- * (VERDICT, read by stepVerdict), after the user's words in a paragraph of its own, as they are.
+ * test"), or else what the tool does (`actions`: its adapter's, as the catalog declares them), and
+ * whose work it acts on when that is another agent's (`other`, its name). A tool's step then asks
+ * how it went (VERDICT, read by stepVerdict), after the user's words in a paragraph of its own, as
+ * they are.
  */
 export function stepMessage(
   action: string,

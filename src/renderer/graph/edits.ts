@@ -1,6 +1,6 @@
 import type { Answer } from '../run/runner';
 import type { QueueEntry } from './QueueEditor';
-import type { Condition, QueueRepeat, QueueStep, Time, WaitTarget } from './queue';
+import type { Condition, QueueRepeat, QueueStep, Time, WaitTarget } from '../../shared/model/queue';
 
 /** What changes about a repeat: when it stops, how many rounds it runs at most, and then what. */
 export type RepeatChange = Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>;

@@ -4,20 +4,23 @@ import type { MessageImage, TurnResult } from '../../shared/session';
 import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
 import type { UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import { catalog } from '../catalog';
-import { connectionsOf, DEFAULT_AGENT } from '../graph/agents';
+import { connectionsOf, DEFAULT_AGENT, runCatalog } from '../graph/agents';
 import { EXAMPLES } from '../graph/examples';
 import { fromFile } from '../graph/file';
-import { setAgent } from '../graph/graph';
-import type { GraphNode } from '../graph/graph';
-import { findItem } from '../graph/queue';
-import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
+import { canvasNodes, setAgent } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
+import { findItem } from '../../shared/model/queue';
+import type { QueueItem, QueueRepeat, RepeatedItem } from '../../shared/model/queue';
 import { fillTemplate } from '../graph/templates';
 import { readRun } from './checkpoint';
 import { heldAsks } from './asks';
 import { RunStore } from './runner';
 import type { Refusal, TurnEnd } from './runner';
 
-const agent = (id: string, queue: QueueItem[] = [], label = id): GraphNode => ({
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
+
+const agent = (id: string, queue: QueueItem[] = [], label = id): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -37,12 +40,14 @@ const connected = (
 const exampleNodes = (name: string) => {
   const example = EXAMPLES.find((e) => e.name === name);
   const values = Object.fromEntries((example?.fields ?? []).map((f) => [f.key, f.example]));
-  return fillTemplate(fromFile(example?.text ?? '', catalog()), values).nodes.map((node) => {
-    const connection = connectionsOf(node.data.adapter ?? DEFAULT_AGENT)[0];
-    return node.type === 'agent' && connection
-      ? { ...node, data: { ...node.data, connection } }
-      : node;
-  });
+  return canvasNodes(
+    fillTemplate(fromFile(example?.text ?? '', catalog()), values).nodes.map((node) => {
+      const connection = connectionsOf(node.data.adapter ?? DEFAULT_AGENT)[0];
+      return node.type === 'agent' && connection
+        ? { ...node, data: { ...node.data, connection } }
+        : node;
+    }),
+  );
 };
 
 /** Explicit native turns stay under the test's control instead of the scripted callback fixture. */
@@ -59,7 +64,7 @@ const MINUTE = 60_000;
  * `withdrawn`; what the run told the user in an agent's session is `told`.
  */
 function setup(
-  initial: GraphNode[],
+  initial: readonly CanvasNode[],
   results: typeof manual | (() => FixtureResult) = () => true,
   unheard: ReadonlySet<string> = new Set(),
 ) {
@@ -80,7 +85,7 @@ function setup(
   /** The connections the run switched agents to, as the user chose. */
   const connects: [string, ConnectionId][] = [];
   let usage: UsageState = { readings: [], rules: {} };
-  const store = new RunStore({
+  const store = new RunStore(engine, {
     send: (to, text, done, images, refused, origin) => {
       const message: (typeof sent)[number] = {
         agent: to.id,
@@ -193,7 +198,7 @@ function setup(
     armed,
     /** How many timers are set. */
     pending: () => timers.length,
-    edit: (next: GraphNode[]) => {
+    edit: (next: readonly CanvasNode[]) => {
       store.update(next);
     },
     /** The time now on the run's clock. */
@@ -334,17 +339,17 @@ describe('RunStore', () => {
     const node = agent('a', [
       { id: 'search', action: 'WebSearch', instruction: 'Find references' },
     ]);
-    const gemini: GraphNode = { ...node, data: { ...node.data, adapter: 'gemini' } };
+    const gemini: AgentNode = { ...node, data: { ...node.data, adapter: 'gemini' } };
     const { store, sent, where, edit, reply } = setup([gemini], manual);
     store.start();
     expect(where()).toEqual({ a: 'asking search' });
-    const [ask] = heldAsks([gemini], store.snapshot());
+    const [ask] = heldAsks([gemini], store.snapshot(), engine);
     expect(ask?.text).toBe(
       'This agent has no connection; choose Claude or Codex in Agent settings.',
     );
     expect(ask?.choices).toEqual([]);
     expect(sent).toHaveLength(0);
-    edit(setAgent({ nodes: [gemini], edges: [] }, 'a', 'claude-code').nodes);
+    edit(canvasNodes(setAgent({ nodes: [gemini], edges: [] }, 'a', 'claude-code').nodes));
     expect(where()).toEqual({ a: 'running search' });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.text).toContain('WebSearch');
@@ -1685,7 +1690,7 @@ describe('RunStore', () => {
           const { agent: tester = '', step = '' } = red[0] ?? {};
           /** Runs to the red step (every turn before it ends well, every OK given), then says how it went. */
           const run = (verdict: string) => {
-            const { store, reply, sent } = setup(nodes, manual);
+            const { store, reply, sent } = setup(canvasNodes(nodes), manual);
             store.start();
             for (let turn = 0; turn < 20; turn++) {
               const { agents } = store.snapshot();
@@ -1866,7 +1871,7 @@ describe('RunStore', () => {
               : ('claude-code.sdk' as const),
         },
       }));
-      const { store, reply, where, sent } = setup(nodes, manual);
+      const { store, reply, where, sent } = setup(canvasNodes(nodes), manual);
       store.start();
       reply('coder');
       reply('reviewer', false, 'NOT APPROVED');

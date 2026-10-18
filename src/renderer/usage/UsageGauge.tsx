@@ -13,17 +13,10 @@ import type {
   UsageWindows,
 } from '../../shared/usage';
 import { catalog } from '../catalog';
+import { runCatalog } from '../graph/agents';
 import { parseTime } from '../graph/time';
 import { SearchPicker } from '../search/SearchPicker';
-import {
-  ACTION_INFO,
-  ageText,
-  backendName,
-  percentText,
-  readingOf,
-  resetTime,
-  windowText,
-} from './usage';
+import { ACTION_INFO, ageText, percentText, readingOf, resetTime, windowText } from './usage';
 import './Usage.css';
 
 /** A reading older than this says how old it is on its gauge, not only in its panel. */
@@ -115,7 +108,7 @@ function UsageGauge({
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const name = backendName(backend);
+  const name = runCatalog().backendName(backend);
   const windows = counting(reading, now);
   const over = rule !== undefined && usageOver(reading, rule.window, rule.percent, now);
   const stale = reading !== undefined && now - reading.at > STALE_MS;
@@ -218,7 +211,7 @@ function UsagePanel({
   onSimulate: (windows: UsageWindows | null) => void;
 }) {
   const [simulating, setSimulating] = useState(false);
-  const name = backendName(backend);
+  const name = runCatalog().backendName(backend);
   return (
     <div className="usage-panel" role="dialog" aria-label={`${name} usage`}>
       <p className="usage-panel-title">
@@ -453,7 +446,7 @@ function SimulateForm({
   return (
     <form
       className="usage-simulate"
-      aria-label={`Simulate ${backendName(backend)}’s usage`}
+      aria-label={`Simulate ${runCatalog().backendName(backend)}’s usage`}
       onSubmit={submit}
     >
       {USAGE_WINDOWS.map((window) => (
@@ -490,7 +483,7 @@ function SimulateForm({
         </button>
         <button
           type="button"
-          title={`Forget ${backendName(backend)}’s reading`}
+          title={`Forget ${runCatalog().backendName(backend)}’s reading`}
           onClick={() => {
             onSimulate(null);
           }}

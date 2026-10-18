@@ -1,7 +1,14 @@
 import { autosize, bounds, edgeId, nextGroupColor, PADDING, topInset } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { isApproval, isDelay, isIf, isRepeat, isRepeatEnds, isWait } from './queue';
-import type { QueueItem } from './queue';
+import {
+  isApproval,
+  isDelay,
+  isIf,
+  isRepeat,
+  isRepeatEnds,
+  isWait,
+} from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
 
 /** Space between what is on the canvas and a group inserted beside it. */
 const GAP = 120;

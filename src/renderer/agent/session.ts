@@ -23,9 +23,7 @@ import type {
   ToolStatus,
   TurnResult,
 } from '../../shared/session';
-import { adapterOf } from '../catalog';
-import type { AgentConnection } from '../graph/agents';
-import type { CardQuestion } from '../graph/Questions';
+import type { SubmittedMessage } from '../../shared/model/queue';
 import { mergeHistory } from './history';
 
 export type {
@@ -136,15 +134,11 @@ export function modeOf(adapter: AdapterId, mode: Mode): ModeInfo {
 
 /**
  * Which conversation the transcript's messages are of: an agent's adapter's (main resumes one per
- * adapter, whichever of its connections runs it), or an unsupported submission's ('unavailable').
- * An agent that runs another way keeps its transcript, so it may hold several.
+ * adapter, whichever of its connections runs it: the catalog's adapterOf), or an unsupported
+ * submission's ('unavailable'). An agent that runs another way keeps its transcript, so it may
+ * hold several.
  */
 export type Conversation = AdapterId;
-
-/** The conversation an agent that runs as `connection` is on. */
-export function conversationOf(connection: AgentConnection): Conversation {
-  return adapterOf(connection);
-}
 
 /** How the user answered a permission prompt: allow this once, always allow the tool, or deny. */
 export type Answer = 'once' | 'always' | 'deny';
@@ -253,22 +247,6 @@ export interface Refusal {
 
 /** An entry the user answers while the turn waits. */
 export type Prompt = Extract<Entry, { kind: 'permission' | 'question' | 'plan' | 'elicitation' }>;
-
-/** A live user submission, displayed as a Message in the queue without dispatching it again. */
-export interface SubmittedMessage {
-  id: string;
-  text: string;
-  images?: MessageImage[];
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  /** The planned task at which it was submitted; absent before the planned queue. */
-  after?: string;
-  result?: TurnResult;
-  /** The live reply; omitted from persisted submission records. */
-  reply?: string;
-  task?: { agent: string; item: string };
-  /** The previous process stopped before this submission had a definitive result. */
-  unresolved?: boolean;
-}
 
 export interface Session {
   entries: Entry[];
@@ -662,6 +640,20 @@ export function turnReply(session: Session, id: string): string {
         : [],
     )
     .join('\n\n');
+}
+
+/**
+ * What a question card asks (graph/Questions.tsx): one an agent asks in its session (a `question`
+ * entry), offering its answers by name; it may also have a header (a chip), say what each answer
+ * means, and take several answers (`multiple`).
+ */
+export interface CardQuestion {
+  id: string;
+  text: string;
+  header?: string;
+  options?: readonly (string | { label: string; description?: string })[];
+  multiple?: boolean;
+  answer?: string;
 }
 
 /** A question asked in a session, as corrallm's question cards show it (graph/Questions.tsx). */

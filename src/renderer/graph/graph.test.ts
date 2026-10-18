@@ -1,6 +1,7 @@
 import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
-import type { QueueItem } from './queue';
+
+import type { QueueItem } from '../../shared/model/queue';
 
 import {
   absolutePosition,
@@ -11,6 +12,7 @@ import {
   autosize,
   canConnect,
   canUngroup,
+  canvasNodes,
   connect,
   containerAt,
   deleteEdge,
@@ -1274,5 +1276,56 @@ describe('containerAt', () => {
   it('ignores items without children and empty canvas', () => {
     expect(containerAt(nodes, { x: 1050, y: 510 })).toBeUndefined();
     expect(containerAt(nodes, { x: 900, y: 900 })).toBeUndefined();
+  });
+});
+
+describe('canvasNodes', () => {
+  it('are the model’s nodes: agents and groups, without how the view draws them', () => {
+    const { nodes } = graphOf([
+      selected(frame('F', 0, 0, 300, 200)),
+      inside(
+        'F',
+        agentNode('a', 20, 52, {
+          data: {
+            label: 'Builder',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            role: 'Builds',
+            queue: [{ id: 'm', message: 'Build it' }],
+            color: 2,
+          },
+          dragging: true,
+        }),
+      ),
+      agentNode('b', 400, 0),
+    ]);
+    expect(canvasNodes(nodes)).toEqual([
+      { id: 'F', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'F' } },
+      {
+        id: 'a',
+        type: 'agent',
+        position: { x: 20, y: 52 },
+        parentId: 'F',
+        data: {
+          label: 'Builder',
+          adapter: 'codex',
+          connection: 'codex.app-server',
+          role: 'Builds',
+          queue: [{ id: 'm', message: 'Build it' }],
+          color: 2,
+        },
+      },
+      { id: 'b', type: 'agent', position: { x: 400, y: 0 }, data: { label: 'b' } },
+    ]);
+  });
+
+  it('keep a group’s label and colour, and nothing only an agent has, on a frame', () => {
+    const team = {
+      ...frame('F', 0, 0, 100, 100),
+      data: { label: 'Team', color: 3, queue: [{ id: 'm', message: 'Stray' }] },
+    };
+    expect(canvasNodes(graphOf([team]).nodes)).toEqual([
+      { id: 'F', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Team', color: 3 } },
+    ]);
   });
 });

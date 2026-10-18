@@ -2,18 +2,19 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { NEW_SESSION } from '../agent/session';
-import type { SubmittedMessage } from '../agent/session';
+import type { SubmittedMessage } from '../../shared/model/queue';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
 import type { Run } from '../run/runner';
 import { heldAsks } from '../run/asks';
 import { QuestionsSidebar } from './Questions';
-import { actionsOf } from './agents';
+import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
+import { canvasNodes } from './graph';
 import type { GraphNode } from './graph';
-import type { QueueItem, QueueMessage } from './queue';
+import type { QueueItem, QueueMessage } from '../../shared/model/queue';
 import { QueueEditor } from './QueueEditor';
 
 function edits(): QueueEdits {
@@ -87,7 +88,7 @@ describe('task recovery in the shared queue row', () => {
   });
   it('shows the reason, attempt history, and choices on the original step', () => {
     const edit = edits();
-    const marks = queueMarks(lanesOf([node]), run(), new Set());
+    const marks = queueMarks(lanesOf([node]), run(), new Set(), runCatalog());
     render(
       <QueueEditor
         node={node}
@@ -144,7 +145,7 @@ describe('task recovery in the shared queue row', () => {
     const decide = vi.fn();
     render(
       <QuestionsSidebar
-        asks={heldAsks([node], run())}
+        asks={heldAsks(canvasNodes([node]), run(), runCatalog())}
         pending={[]}
         onDecide={decide}
         onAnswer={vi.fn()}
@@ -182,6 +183,7 @@ describe('condition query recovery in the shared queue row', () => {
           agents: { a: { current: 'gate', status: 'asking', outcomes: {}, problem } },
         },
         new Set(),
+        runCatalog(),
       );
       const edit = edits();
       render(

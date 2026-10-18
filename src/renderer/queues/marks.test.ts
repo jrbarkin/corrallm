@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { QueueItem } from '../../shared/model/queue';
+import { runCatalog } from '../graph/agents';
 import type { AgentRun } from '../run/runner';
 import { lanesOf } from './lanes';
 import { queueMarks } from './marks';
+
+/** What names a usage backend: the catalog main declares, as the run reads it. */
+const engine = runCatalog();
 
 const agent = (id: string, queue: QueueItem[]): GraphNode => ({
   id,
@@ -21,7 +25,7 @@ const layout = lanesOf([
   agent('b', [{ id: 'w', waitFor: [{ agent: 'a', item: 'ok' }] }]),
 ]);
 const marksOf = (a: AgentRun, { running = true, asking = [] as string[] } = {}) =>
-  queueMarks(layout, { running, agents: { a } }, new Set(asking));
+  queueMarks(layout, { running, agents: { a } }, new Set(asking), engine);
 
 describe('queueMarks', () => {
   it('projects a condition query’s recovery key only onto the held row', () => {
@@ -66,6 +70,7 @@ describe('queueMarks', () => {
       layout,
       { running: false, paused: true, agents: { a: recovery } },
       new Set(),
+      engine,
     );
     expect(paused('a', 'build')).toMatchObject({
       'data-problem': 'uncertain',
@@ -75,7 +80,12 @@ describe('queueMarks', () => {
       'data-decide': undefined,
       'data-attempts': JSON.stringify([attempt]),
     });
-    const resumed = queueMarks(layout, { running: true, agents: { a: recovery } }, new Set());
+    const resumed = queueMarks(
+      layout,
+      { running: true, agents: { a: recovery } },
+      new Set(),
+      engine,
+    );
     expect(resumed('a', 'build')['data-decide']).toBe('');
     const held = marksOf({ ...recovery, paused: true });
     expect(held('a', 'build')).toMatchObject({
@@ -102,7 +112,7 @@ describe('queueMarks', () => {
           },
         ]),
       ]);
-      const marks = queueMarks(live, { running: false, agents: {} }, new Set(['a']));
+      const marks = queueMarks(live, { running: false, agents: {} }, new Set(['a']), engine);
       expect(marks('a', 'live')['data-run']).toBe(status);
       expect(marks('a', 'live')['data-decide']).toBeUndefined();
     },
@@ -180,6 +190,7 @@ describe('queueMarks', () => {
         },
       },
       new Set(),
+      engine,
     );
     expect(marks('a', 'red')).toMatchObject({ 'data-run': 'succeeded', 'data-expected': 'met' });
     expect(marks('a', 'again')).toMatchObject({ 'data-run': 'failed', 'data-expected': 'unmet' });
@@ -224,7 +235,8 @@ describe('queueMarks', () => {
       ]),
       agent('b', [{ id: 'build', action: 'Edit' }]),
     ]);
-    const marks = (a: AgentRun) => queueMarks(looped, { running: true, agents: { a } }, new Set());
+    const marks = (a: AgentRun) =>
+      queueMarks(looped, { running: true, agents: { a } }, new Set(), engine);
 
     it('says which round it is on while the run is in it, and how many it took once over', () => {
       const inside = marks({
@@ -314,6 +326,7 @@ describe('queueMarks', () => {
         },
       },
       new Set(),
+      engine,
     );
     expect(marks('b', 'follow')).toMatchObject({
       'data-round': 'Round 2 of 5',
@@ -325,6 +338,7 @@ describe('queueMarks', () => {
       lanesOf([agent('a', [repeat('r', 'b', 'r', 3)]), agent('b', [repeat('r', 'a', 'r', 3)])]),
       { running: false, agents: {} },
       new Set(),
+      engine,
     );
     expect([stuck('a', 'r')['data-mark'], stuck('b', 'r')['data-mark']]).toEqual([
       'stuck',

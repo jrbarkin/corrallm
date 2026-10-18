@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { adapterOf, catalog } from '../catalog';
 import { fakeBackend } from '../test-backend';
 import { SessionStore } from './sessions';
+import { runCatalog } from '../graph/agents';
+
+/** The run's catalog, as the app gives the sessions. */
+const engine = runCatalog();
 
 const settled = async () => {
   await Promise.resolve();
@@ -24,7 +28,7 @@ describe('starting a fresh native conversation', () => {
     'opens %s with the latest role and settings without resending any user message',
     async (connection) => {
       const { backend, emit, sent } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection, role: 'Old role' }]);
       store.send('a', 'claude-code', 'Earlier manual work');
       await vi.waitFor(() => {
@@ -74,7 +78,7 @@ describe('starting a fresh native conversation', () => {
 
   it('can replace a restored Codex conversation before any renderer driver exists', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'codex.app-server', role: 'New role' }]);
     await store.fresh('a');
     await settled();
@@ -94,7 +98,7 @@ describe('starting a fresh native conversation', () => {
     'does not clear or interrupt a %s conversation',
     async (status) => {
       const { backend, emit } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'codex.app-server' }]);
       store.send('a', 'codex', 'Current work');
       await settled();
@@ -110,7 +114,7 @@ describe('starting a fresh native conversation', () => {
 
   it('does nothing for unsupported or unknown agents', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'unavailable', role: 'A role' }]);
     await store.fresh('a');
     await store.fresh('missing');
@@ -121,7 +125,7 @@ describe('starting a fresh native conversation', () => {
 
   it('leaves the visible conversation intact when the durable clear fails', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'codex.app-server' }]);
     store.open('a');
     await settled();
@@ -141,7 +145,7 @@ describe('starting a fresh native conversation', () => {
       const { backend } = fakeBackend();
       const pending = deferred();
       backend.fresh.mockReturnValueOnce(pending.promise);
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection: 'codex.app-server' }]);
       const fresh = store.fresh('a');
       await settled();
@@ -161,7 +165,7 @@ describe('starting a fresh native conversation', () => {
     const { backend } = fakeBackend();
     const pending = deferred();
     backend.fresh.mockReturnValueOnce(pending.promise);
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'codex.app-server', role: 'Reviewer' }]);
     const fresh = store.fresh('a');
     const again = store.fresh('a');

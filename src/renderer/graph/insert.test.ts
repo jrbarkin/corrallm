@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { absolutePosition, CARD_SIZE, edgeId } from './graph';
 import type { Graph, GraphNode } from './graph';
 import { insertGraph } from './insert';
-import type { QueueItem, QueueRepeat, Until } from './queue';
+import type { QueueItem, QueueRepeat, Until } from '../../shared/model/queue';
 
 const agent = (
   id: string,

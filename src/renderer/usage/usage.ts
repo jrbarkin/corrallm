@@ -1,5 +1,5 @@
-import { adapterIn, connectionIn, usageBackendIn } from '../../shared/adapter';
-import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
+import { adapterIn } from '../../shared/adapter';
+import type { AdapterId, Catalog, UsageBackendId } from '../../shared/adapter';
 import { WINDOW_NAMES } from '../../shared/usage';
 import type {
   UsageAction,
@@ -8,44 +8,25 @@ import type {
   UsageState,
   UsageWindow,
 } from '../../shared/usage';
-import { catalog } from '../catalog';
-import { connectionOf, DEFAULT_AGENT } from '../graph/agents';
+import type { EngineCatalog } from '../run/catalog';
 
 /*
  * Usage readings and rules as the renderer shows and runs them (src/shared/usage.ts): which
- * backend an agent spends, and how readings, holds and rules read.
+ * backends a canvas's agents spend, and how readings, holds and rules read. The backend one agent
+ * spends, and how a backend is named, are the run's catalog's to say (run/catalog.ts
+ * usageBackendOf, backendName).
  */
 
-/**
- * The backend whose usage limits an agent spends, which its usage rule applies to: its
- * connection's, as the catalog declares it (none where corrallm can read none, as on an API key).
- */
-export function usageBackendOf(data: {
-  adapter?: AdapterId;
-  connection?: ConnectionId;
-}): UsageBackendId | undefined {
-  const connection = connectionOf(data);
-  if (connection === 'unavailable') return undefined;
-  return connectionIn(catalog(), connection)?.connection.usage ?? undefined;
-}
-
-/** The backend an adapter's agents spend: the first its connections declare, if any. */
-export function backendOfType(adapter: AdapterId): UsageBackendId | undefined {
-  const found = adapterIn(catalog(), adapter);
+/** The backend an adapter's agents spend in `catalog`: the first its connections declare, if any. */
+export function backendOfType(catalog: Catalog, adapter: AdapterId): UsageBackendId | undefined {
+  const found = adapterIn(catalog, adapter);
   return found?.connections.find((connection) => connection.usage !== null)?.usage ?? undefined;
 }
 
-/** The backends the agents on a canvas use (by their adapters), in the order backends are listed. */
-export function backendsOf(agents: readonly { adapter?: AdapterId }[]): UsageBackendId[] {
-  const used = new Set(agents.map((data) => backendOfType(data.adapter ?? DEFAULT_AGENT)));
-  return catalog()
-    .usageBackends.map((backend) => backend.id)
-    .filter((backend) => used.has(backend));
-}
-
-/** How a backend is named ("Claude"): the catalog's label, else its id. */
-export function backendName(backend: UsageBackendId): string {
-  return usageBackendIn(catalog(), backend)?.label ?? backend;
+/** The backends the agents of `adapters` use, in the order `catalog` lists backends. */
+export function backendsOf(catalog: Catalog, adapters: readonly AdapterId[]): UsageBackendId[] {
+  const used = new Set(adapters.map((adapter) => backendOfType(catalog, adapter)));
+  return catalog.usageBackends.map((backend) => backend.id).filter((backend) => used.has(backend));
 }
 
 /** A backend's latest reading, if it has one. */
@@ -127,17 +108,28 @@ export interface UsageHold {
   resetsAt: number | null;
 }
 
-/** What a usage rule's hold says: "Claude has used 84% of its 5-hour window (over 80%)". */
-export function holdText({ backend, window, percent, used }: UsageHold): string {
-  return `${backendName(backend)} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
+/**
+ * What a usage rule's hold says, the backend named by `catalog`: "Claude has used 84% of its
+ * 5-hour window (over 80%)".
+ */
+export function holdText(
+  { backend, window, percent, used }: UsageHold,
+  catalog: EngineCatalog,
+): string {
+  return `${catalog.backendName(backend)} has used ${percentText(used)} of its ${windowText(window)} (over ${String(percent)}%)`;
 }
 
 /**
  * What a usage rule's warning says, in the agent's session: "Claude has used 84% of its 5-hour
  * window (over 80%). It resets at 3:40 PM."
  */
-export function warningText(hold: UsageHold, now: number, locale?: string): string {
+export function warningText(
+  hold: UsageHold,
+  catalog: EngineCatalog,
+  now: number,
+  locale?: string,
+): string {
   const reset =
     hold.resetsAt === null ? '' : ` It resets at ${resetTime(hold.resetsAt, now, locale)}.`;
-  return `${holdText(hold)}.${reset}`;
+  return `${holdText(hold, catalog)}.${reset}`;
 }

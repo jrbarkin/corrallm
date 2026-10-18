@@ -1,5 +1,5 @@
 import type { GraphNode } from '../graph/graph';
-import { isWait, withRepeated } from '../graph/queue';
+import { isWait, withRepeated } from '../../shared/model/queue';
 
 /** One end of a link: an item in a column's queue, or (null) the end of that queue. */
 export interface LinkEnd {

@@ -1,7 +1,7 @@
-import type { GraphNode } from './graph';
+import type { NodeLike } from '../../shared/model/canvas';
 
 /** Frames are groups even when empty; an agent becomes a group when it has children. */
-export function isGroup(nodes: readonly GraphNode[], id: string): boolean {
+export function isGroup(nodes: readonly NodeLike[], id: string): boolean {
   const node = nodes.find((node) => node.id === id);
   return (
     node?.type === 'frame' ||
@@ -10,7 +10,7 @@ export function isGroup(nodes: readonly GraphNode[], id: string): boolean {
 }
 
 /** The group's agents, including an agent parent, in their order on the canvas. */
-export function groupMembers(nodes: readonly GraphNode[], id: string): string[] {
+export function groupMembers(nodes: readonly NodeLike[], id: string): string[] {
   if (!isGroup(nodes, id)) return [];
   const children = new Map<string, string[]>();
   for (const node of nodes) {

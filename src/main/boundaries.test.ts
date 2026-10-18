@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ESLint, Linter } from 'eslint';
@@ -6,9 +6,9 @@ import tseslint from 'typescript-eslint';
 import { describe, expect, it } from 'vitest';
 
 /*
- * The boundaries kept in src/main: what ESLint lets each file import (eslint.config.ts), checked on
- * fixtures, as the config resolved for each path says; and, scanned, which files import Electron
- * and which mint trusted paths.
+ * The boundaries kept in src/main, and around the run in the renderer: what ESLint lets each file
+ * import (eslint.config.ts), checked on fixtures, as the config resolved for each path says; and,
+ * scanned, which files import Electron, which mint trusted paths, and what the run imports.
  */
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
@@ -52,6 +52,44 @@ function mainFiles(dir = 'src/main'): string[] {
   });
 }
 const read = (file: string) => readFileSync(path.join(ROOT, file), 'utf8');
+
+/** What `file` imports: its imports' and re-exports' specifiers, as written. */
+function importsOf(file: string): string[] {
+  const text = read(file);
+  return [
+    ...text.matchAll(/^(?:import|export)\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/gm),
+    ...text.matchAll(/^import\s*['"]([^'"]+)['"]/gm),
+  ].flatMap(([, from]) => (from === undefined ? [] : [from]));
+}
+
+/** The source file a relative import in `file` names (from the root), if it is one. */
+function resolve(file: string, from: string): string | undefined {
+  const base = path.posix.join(path.posix.dirname(file), from);
+  return [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, base].find(
+    (candidate) => /\.tsx?$/.test(candidate) && existsSync(path.join(ROOT, candidate)),
+  );
+}
+
+/** Every source file `entries` import, themselves and their imports' imports included. */
+function closure(entries: readonly string[]): Set<string> {
+  const files = new Set(entries);
+  for (const file of files) {
+    for (const from of importsOf(file)) {
+      const found = from.startsWith('.') ? resolve(file, from) : undefined;
+      if (found !== undefined) files.add(found);
+    }
+  }
+  return files;
+}
+
+/** The run and the sessions it sends to: the files B5b moves, and what they import comes along. */
+const RUN_ENTRIES = [
+  ...readdirSync(path.join(ROOT, 'src/renderer/run'))
+    .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+    .map((name) => `src/renderer/run/${name}`),
+  'src/renderer/agent/sessions.ts',
+  'src/renderer/agent/connected.ts',
+];
 
 describe('ESLint’s boundaries in main', () => {
   it('keeps platform files from importing an adapter’s folder', async () => {
@@ -144,6 +182,103 @@ describe('ESLint’s boundaries in main', () => {
         "import { dialog } from 'electron';\nimport { mintTrustedPath } from '../core/host';\n",
       ),
     ).toEqual([]);
+  });
+});
+
+describe('ESLint’s boundary around the run', () => {
+  const RUN_ERROR = 'The run never reads';
+  /** React Flow's nodes, the renderer's CLI tables and the catalog it loaded. */
+  const BANNED_FROM_RUN = [
+    'src/renderer/graph/graph.ts',
+    'src/renderer/graph/agents.ts',
+    'src/renderer/catalog.ts',
+  ];
+
+  it('keeps the run and its helpers from React Flow, the renderer’s CLI tables and its catalog', async () => {
+    for (const [file, from] of [
+      ['src/renderer/run/runner.ts', '@xyflow/react'],
+      ['src/renderer/run/runner.ts', '../graph/agents'],
+      ['src/renderer/run/runner.ts', '../catalog'],
+      ['src/renderer/run/asks.ts', '../graph/graph'],
+      ['src/renderer/run/controls.ts', '@xyflow/system'],
+      ['src/renderer/agent/sessions.ts', '../graph/agents'],
+      ['src/renderer/agent/connected.ts', '../graph/graph'],
+      ['src/renderer/agent/connected.ts', '../catalog'],
+      ['src/renderer/agent/session.ts', '../graph/agents'],
+      ['src/renderer/agent/session.ts', '../catalog'],
+      ['src/renderer/graph/labels.ts', './graph'],
+      ['src/renderer/graph/labels.ts', '../catalog'],
+      ['src/renderer/graph/time.ts', './agents'],
+      ['src/renderer/graph/time.ts', '../catalog'],
+      ['src/renderer/graph/group-members.ts', './graph'],
+      ['src/renderer/usage/usage.ts', '../graph/agents'],
+      ['src/renderer/usage/usage.ts', '../catalog'],
+      ['src/shared/model/canvas.ts', '../../renderer/graph/graph'],
+      ['src/shared/model/queue.ts', '../../renderer/catalog'],
+    ] as const) {
+      const errors = await importErrors(file, `import type { A } from '${from}';\n`);
+      expect(
+        errors.filter((error) => error.includes(RUN_ERROR)),
+        `${file} importing ${from}`,
+      ).toHaveLength(1);
+    }
+  });
+
+  it('lets the run read the model, the catalog it is given and the shared types', async () => {
+    expect(
+      await importErrors(
+        'src/renderer/run/runner.ts',
+        "import type { AgentNode } from '../../shared/model/canvas';\n" +
+          "import type { EngineCatalog } from './catalog';\n" +
+          "import { agentName } from '../graph/labels';\n" +
+          "import type { AgentAction } from '../../shared/adapter';\n",
+      ),
+    ).toEqual([]);
+    expect(
+      await importErrors(
+        'src/renderer/agent/connected.ts',
+        "import type { EngineCatalog } from '../run/catalog';\n",
+      ),
+    ).toEqual([]);
+  });
+
+  it('lets the views, and the run’s tests, use React Flow, the renderer’s tables and catalog', async () => {
+    for (const file of ['src/renderer/graph/edits.ts', 'src/renderer/run/runner.test.ts']) {
+      expect(
+        await importErrors(
+          file,
+          "import type { Node } from '@xyflow/react';\nimport { actionsOf } from '../graph/agents';\n" +
+            "import { catalog } from '../catalog';\n",
+        ),
+        file,
+      ).toEqual([]);
+    }
+  });
+
+  it('covers every file the run imports, none of which imports React Flow, the CLI tables or the catalog', async () => {
+    const files = [...closure(RUN_ENTRIES)].filter((file) => file.startsWith('src/'));
+    expect(files).toContain('src/renderer/run/runner.ts');
+    expect(files).toContain('src/shared/model/canvas.ts');
+    for (const file of files) {
+      expect(
+        importsOf(file).filter((from) => from.startsWith('@xyflow/')),
+        file,
+      ).toEqual([]);
+      expect(
+        importsOf(file).flatMap((from) => {
+          const found = from.startsWith('.') ? resolve(file, from) : undefined;
+          return found !== undefined && BANNED_FROM_RUN.includes(found) ? [found] : [];
+        }),
+        file,
+      ).toEqual([]);
+      if (file.startsWith('src/renderer/')) {
+        const errors = await importErrors(file, "import type { Node } from '@xyflow/react';\n");
+        expect(
+          errors.filter((error) => error.includes(RUN_ERROR)),
+          `${file}: add it to the run's files in eslint.config.ts`,
+        ).toHaveLength(1);
+      }
+    }
   });
 });
 

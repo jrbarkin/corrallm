@@ -1,4 +1,4 @@
-import type { GraphNode } from '../graph/graph';
+import type { NodeLike } from '../../shared/model/canvas';
 import { groupMembers } from '../graph/group-members';
 import type { Run } from './runner';
 
@@ -13,7 +13,7 @@ export function groupPaused(run: Run, group: string): boolean {
 
 /** A group finishes its active member turns before its pause takes full effect. */
 export function groupControlText(
-  nodes: readonly GraphNode[],
+  nodes: readonly NodeLike[],
   run: Run,
   group: string,
 ): 'Pausing' | 'Paused' | undefined {

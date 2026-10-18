@@ -11,7 +11,7 @@ import { USAGE_WINDOWS } from '../../shared/usage';
 import { DEFAULT_AGENT } from './agents';
 import { autosize, edgeId, GROUP_COLORS } from './graph';
 import type { Graph, GraphNode } from './graph';
-import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
+import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from '../../shared/model/queue';
 import type {
   Condition,
   QueueDelay,
@@ -24,7 +24,7 @@ import type {
   Time,
   Until,
   WaitTarget,
-} from './queue';
+} from '../../shared/model/queue';
 
 /*
  * A canvas saved as a file (a `.corral`): JSON, versioned, holding only what the canvas means.

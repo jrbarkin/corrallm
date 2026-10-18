@@ -1,7 +1,7 @@
 import type { Session } from '../agent/session';
 import type { GraphNode } from '../graph/graph';
-import { findItem } from '../graph/queue';
-import type { QueueMessage } from '../graph/queue';
+import { findItem } from '../../shared/model/queue';
+import type { QueueMessage } from '../../shared/model/queue';
 
 /**
  * Projects live manual submissions into the displayed queue. The saved workflow and runner

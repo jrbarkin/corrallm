@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
-import type { QueueItem } from '../graph/queue';
+import type { AgentNode } from '../../shared/model/canvas';
+import type { QueueItem } from '../../shared/model/queue';
+import { runCatalog } from '../graph/agents';
 import { RunStore } from './runner';
 import type { RunIO, TurnEnd } from './runner';
+
+/** The run's catalog, as the app gives it. */
+const engine = runCatalog();
 
 function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
   const sent: {
@@ -28,13 +32,13 @@ function setup(queue: QueueItem[], overrides: Partial<RunIO> = {}) {
     now: () => 1234,
     ...overrides,
   };
-  const node: GraphNode = {
+  const node: AgentNode = {
     id: 'a',
     type: 'agent',
     position: { x: 0, y: 0 },
     data: { label: 'A', connection: 'claude-code.sdk', queue },
   };
-  const store = new RunStore(io);
+  const store = new RunStore(engine, io);
   store.update([node]);
   return {
     store,

@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import type { AdapterId } from '../../shared/adapter';
 import type { TerminalAsk } from '../../shared/session';
 import { Markdown } from '../agent/Markdown';
+import type { CardQuestion } from '../agent/session';
 import { ToolDetailView } from '../agent/ToolDetail';
 import { permissionQuestion } from '../agent/tools';
 import type { AskChoice, HeldAsk } from '../run/asks';
@@ -156,20 +157,6 @@ export function AskCard({
       )}
     </div>
   );
-}
-
-/**
- * What a question card asks: one an agent asks in its session (Claude Code's AskUserQuestion,
- * Codex's request_user_input), offering its answers by name; it may also have a header (a chip),
- * say what each answer means, and take several answers (`multiple`).
- */
-export interface CardQuestion {
-  id: string;
-  text: string;
-  header?: string;
-  options?: readonly (string | { label: string; description?: string })[];
-  multiple?: boolean;
-  answer?: string;
 }
 
 const ANSWER = { label: 'Your answer', button: 'Reply' };

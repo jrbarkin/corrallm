@@ -29,7 +29,7 @@ import { AgentSettingsPanel } from '../agent/AgentSettings';
 import { NO_BACKEND } from '../agent/connected';
 import type { SessionBackend } from '../agent/connected';
 import { NEW_SESSION, pendingSessionQuestions } from '../agent/session';
-import type { AskedInSession } from '../agent/session';
+import type { AskedInSession, CardQuestion } from '../agent/session';
 import { SessionStore } from '../agent/sessions';
 import { adapterOf, catalog, continuesIn, isTerminal } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
@@ -50,7 +50,7 @@ import { backendsOf } from '../usage/usage';
 import { NO_TERMINAL } from '../terminal/backend';
 import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
-import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
+import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
 import type { GraphActions } from './actions';
 import {
   absolutePosition,
@@ -60,6 +60,7 @@ import {
   areLinked,
   autosize,
   canConnect,
+  canvasNodes,
   connect,
   deleteEdge,
   deleteSelection,
@@ -106,7 +107,6 @@ import { AgentContextMenu } from './AgentContextMenu';
 import { groupMembers as groupAgentIds, isGroup } from './group-members';
 import type { WorkFlowEdge } from './nodes';
 import { QuestionsSidebar } from './Questions';
-import type { CardQuestion } from './Questions';
 import { workEdges } from './work';
 import { WorkDetail } from './WorkDetail';
 import type { QueueEdits } from './edits';
@@ -246,7 +246,8 @@ function Editor({
    * steps and questions through their native connections. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
-  const [{ sessionStore, runStore, persistence, documentState }] = useState(() => {
+  const [{ engine, sessionStore, runStore, persistence, documentState }] = useState(() => {
+    const engine = runCatalog();
     let runner: RunStore | undefined = undefined;
     let persistence: RunPersistence | undefined = undefined;
     let workflow = toFile(initialGraph, canvasId);
@@ -257,6 +258,7 @@ function Editor({
       },
     };
     const sessionStore = new SessionStore(
+      engine,
       sessionBackend,
       (id) => {
         const at = runner?.snapshot().agents[id];
@@ -273,7 +275,7 @@ function Editor({
         },
       },
     );
-    runner = new RunStore({
+    runner = new RunStore(engine, {
       hold: (agent, held) => {
         sessionStore.holdQueue(agent, held);
       },
@@ -346,7 +348,7 @@ function Editor({
             : EMPTY_GRAPH;
           if (checkpoint) {
             readRun(checkpoint.state);
-            const check = new SessionStore();
+            const check = new SessionStore(engine);
             check.restoreSubmissions(checkpoint.messages);
           }
           setCanvasId(context.id);
@@ -370,7 +372,7 @@ function Editor({
                   : [],
               ),
             );
-            runStore.update(next.nodes);
+            runStore.update(canvasNodes(next.nodes));
             if (checkpoint) {
               sessionStore.restoreSubmissions(checkpoint.messages);
               runStore.restore(checkpoint.state);
@@ -381,7 +383,7 @@ function Editor({
           if (context.warning) setProblem(context.warning);
         },
       });
-    return { sessionStore, runStore, persistence, documentState };
+    return { engine, sessionStore, runStore, persistence, documentState };
   });
   const sessions = useSyncExternalStore(sessionStore.subscribe, sessionStore.snapshot);
   const run = useSyncExternalStore(runStore.subscribe, runStore.snapshot);
@@ -432,8 +434,10 @@ function Editor({
     () => withSubmissions(graph.nodes, sessions),
     [graph.nodes, sessions],
   );
+  /** The canvas's nodes as the run reads them (the model's, src/shared/model/canvas.ts). */
+  const runNodes = useMemo(() => canvasNodes(graph.nodes), [graph.nodes]);
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
-  const asks = useMemo(() => heldAsks(graph.nodes, run), [graph.nodes, run]);
+  const asks = useMemo(() => heldAsks(runNodes, run, engine), [runNodes, run, engine]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
   const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
   const marks = useMemo(() => {
@@ -442,8 +446,8 @@ function Editor({
         session.status === 'waiting' ? [id] : [],
       ),
     );
-    return queueMarks(layout, run, asking);
-  }, [layout, run, sessions]);
+    return queueMarks(layout, run, asking, engine);
+  }, [layout, run, sessions, engine]);
   // Sessions follow the agents on the canvas, and how each runs. Before the run reads the queues,
   // which may send agents messages.
   useEffect(() => {
@@ -470,8 +474,8 @@ function Editor({
   );
   // The run reads the queues as they are edited.
   useEffect(() => {
-    runStore.update(graph.nodes);
-  }, [graph.nodes, runStore]);
+    runStore.update(runNodes);
+  }, [runNodes, runStore]);
   useEffect(
     () => () => {
       runStore.reset();
@@ -484,7 +488,11 @@ function Editor({
   }, [usage, runStore]);
   /** A usage gauge for each backend the agents use, with its rule and Simulate usage…. */
   const backends = useMemo(
-    () => backendsOf(graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data] : []))),
+    () =>
+      backendsOf(
+        catalog(),
+        graph.nodes.flatMap((n) => (n.type === 'agent' ? [n.data.adapter ?? DEFAULT_AGENT] : [])),
+      ),
     [graph.nodes],
   );
   const gauges = (

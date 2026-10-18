@@ -1,7 +1,8 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
 import { isStartMode } from '../../shared/adapter';
-import type { AdapterId, ConnectionId } from '../../shared/adapter';
+import type { AdapterId } from '../../shared/adapter';
+import type { AgentData, CanvasNode } from '../../shared/model/canvas';
 import { parseRole } from '../../shared/role';
 import type { AgentSettings } from '../../shared/session';
 import { catalog } from '../catalog';
@@ -16,7 +17,7 @@ import {
   isWait,
   MAX_ROUNDS,
   sameTarget,
-} from './queue';
+} from '../../shared/model/queue';
 import type {
   Condition,
   QueueItem,
@@ -25,7 +26,7 @@ import type {
   QueueStep,
   Time,
   WaitTarget,
-} from './queue';
+} from '../../shared/model/queue';
 import { sameTime } from './time';
 
 /**
@@ -38,27 +39,33 @@ import { sameTime } from './time';
  */
 export type NodeKind = 'agent' | 'frame';
 /**
- * `adapter`: the agent an item runs (frames have none), and `connection`, how it runs when not its
- * adapter's first (agents.ts); `settings`, what it is set to run with by each adapter it has run
- * (its model, effort and starting mode: src/shared/session.ts). `color`: a group's colour, an index
- * into the GROUP_COLORS palette (GraphEditor.css).
+ * A node as React Flow draws it, wrapping what the model keeps of an agent (AgentData,
+ * src/shared/model/canvas.ts: frames use only its label and colour) as the record React Flow takes
+ * for a node's data. `color`: a group's colour, an index into the GROUP_COLORS palette
+ * (GraphEditor.css). The run reads the model's nodes instead (canvasNodes).
  */
-export type GraphNode = Node<
-  {
-    label: string;
-    adapter?: AdapterId;
-    connection?: ConnectionId;
-    settings?: Partial<Record<AdapterId, AgentSettings>>;
-    /** Authored instructions shared by every adapter this agent runs. */
-    role?: string;
-    queue?: QueueItem[];
-    color?: number;
-  },
-  NodeKind
->;
+export type GraphNode = Node<{ [Key in keyof AgentData]: AgentData[Key] }, NodeKind>;
 export interface Graph {
   nodes: GraphNode[];
   edges: Edge[];
+}
+
+/**
+ * The graph's nodes as the model keeps them (src/shared/model/canvas.ts), as the run reads them:
+ * who each is and holds, and where, without what React Flow adds (selection, sizes, dragging). A
+ * frame keeps its label and colour.
+ */
+export function canvasNodes(nodes: readonly GraphNode[]): CanvasNode[] {
+  return nodes.map(({ id, type, position, parentId, data }): CanvasNode => {
+    const at = {
+      id,
+      position: { x: position.x, y: position.y },
+      ...(parentId === undefined ? {} : { parentId }),
+    };
+    if (type !== 'frame') return { ...at, type: 'agent', data };
+    const { label, color } = data;
+    return { ...at, type: 'frame', data: { label, ...(color === undefined ? {} : { color }) } };
+  });
 }
 
 export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };

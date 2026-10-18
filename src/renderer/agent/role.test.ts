@@ -3,11 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { catalog } from '../catalog';
 import { fakeBackend } from '../test-backend';
 import { SessionStore } from './sessions';
+import { runCatalog } from '../graph/agents';
+
+/** The run's catalog, as the app gives the sessions. */
+const engine = runCatalog();
 
 describe('authored session roles', () => {
   it('does not record the role as a manual submission or send it as a user message', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([
       { id: 'a', connection: 'claude-code.sdk', role: 'Persistent release reviewer instructions' },
     ]);
@@ -35,7 +39,7 @@ describe('authored session roles', () => {
 
   it('does not interrupt active work when its desired role changes', async () => {
     const { backend, emit, sent } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Original role' }]);
     store.send('a', 'claude-code', 'Current task');
     await vi.waitFor(() => {
@@ -64,7 +68,7 @@ describe('authored session roles', () => {
     'starts %s with the role and captures it with its running settings',
     async (connection) => {
       const { backend } = fakeBackend();
-      const store = new SessionStore(backend);
+      const store = new SessionStore(engine, backend);
       store.sync([{ id: 'a', connection, role: '  Review releases.\n\tCheck the rollout.  ' }]);
       store.open('a');
       expect(backend.start).toHaveBeenCalledExactlyOnceWith('a', {
@@ -91,7 +95,7 @@ describe('authored session roles', () => {
           };
         }),
     );
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'Original role' }]);
     store.open('a');
     store.sync([{ id: 'a', connection: 'claude-code.sdk', role: 'New role' }]);
@@ -118,7 +122,7 @@ describe('authored session roles', () => {
 
   it('keeps the role separate while switching CLIs and resuming another native conversation', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     const settings = { 'claude-code': { model: 'haiku' }, codex: { model: 'gpt-6-luna' } };
     store.sync([{ id: 'a', connection: 'claude-code.sdk', settings, role: 'Release reviewer' }]);
     store.open('a');
@@ -146,7 +150,7 @@ describe('authored session roles', () => {
 
   it('clears a removed role on restart, removal and reset without leaking into another agent', async () => {
     const { backend } = fakeBackend();
-    const store = new SessionStore(backend);
+    const store = new SessionStore(engine, backend);
     store.sync([
       { id: 'a', connection: 'claude-code.sdk', role: 'Reviewer' },
       { id: 'b', connection: 'claude-code.sdk' },

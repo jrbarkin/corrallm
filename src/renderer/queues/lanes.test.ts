@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphNode } from '../graph/graph';
-import type { QueueItem, QueueRepeat, RepeatedItem } from '../graph/queue';
+import type { QueueItem, QueueRepeat, RepeatedItem } from '../../shared/model/queue';
 import { lanesOf } from './lanes';
 
 const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
