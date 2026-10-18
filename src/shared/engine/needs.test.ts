@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_DETAIL_LINES } from '../api/limits';
 import type { CanvasId } from '../canvas';
 import type { AgentNode } from '../model/canvas';
 import type { QueueItem } from '../model/queue';
@@ -144,6 +145,176 @@ describe('needs', () => {
       ['hold', 's'],
     ]);
     expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);
+  });
+
+  it('marks each choice only you may make, saying why', () => {
+    const step = (id: string, label: string) => agent(id, label, [{ id: 'step', message: 'Go' }]);
+    const asks = (more: object) => ({
+      status: 'asking' as const,
+      current: 'step',
+      outcomes: {},
+      ...more,
+    });
+    const resetsAt = Date.now() + 3_600_000;
+    const items = needs(
+      input({
+        nodes: [step('u', 'Usage'), step('c', 'Condition'), step('s', 'Switch'), builder],
+        run: {
+          running: true,
+          agents: {
+            u: asks({
+              usage: { backend: 'codex', window: 'fiveHour', percent: 50, used: 80, resetsAt },
+            }),
+            c: asks({
+              problem: {
+                kind: 'uncertain',
+                reason: 'condition',
+                text: 'Is it done?',
+                agent: 'c',
+                conditionKey: 'step',
+              },
+            }),
+            s: asks({
+              refused: {
+                agent: 's',
+                connection: 'claude-code.sdk',
+                text: 'Use Terminal',
+                switchTo: 'claude-code.terminal',
+              },
+            }),
+          },
+        },
+        sessions: {
+          b: {
+            ...asking,
+            entries: [
+              { id: 'm1', kind: 'user', text: 'Run the tests' },
+              {
+                id: 'm1/permission',
+                kind: 'permission',
+                tool: 'Bash',
+                summary: 'npm test',
+                always: 'Always allow npm test',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const marks = (agentId: string) =>
+      Object.fromEntries(
+        (items.find((item) => item.agent === agentId)?.choices ?? []).map(
+          ({ value, humanOnly }) => [value, humanOnly],
+        ),
+      );
+    expect(marks('u')).toEqual({
+      goOn: 'Only you decide to spend more of a usage window.',
+      wait: 'Only you decide to spend more of a usage window.',
+      stop: undefined,
+    });
+    expect(items.find((item) => item.agent === 'u')?.until).toBe(resetsAt);
+    expect(marks('c')).toMatchObject({
+      yes: 'Only you judge a condition.',
+      no: 'Only you judge a condition.',
+    });
+    expect(marks('s')).toEqual({ switch: 'Only you switch how an agent runs.' });
+    expect(marks('b')).toEqual({
+      once: undefined,
+      always: 'Only you allow it always.',
+      deny: undefined,
+    });
+  });
+
+  it('lists only a question prompt’s questions still unanswered, and cuts a long detail short', () => {
+    const output = Array.from({ length: 20 }, (_, i) => `line ${String(i + 1)}`).join('\n');
+    const items = needs(
+      input({
+        sessions: {
+          b: {
+            ...NEW_SESSION,
+            status: 'waiting',
+            entries: [
+              {
+                id: 'q',
+                kind: 'question',
+                questions: [
+                  { header: 'A', text: 'First?', options: [], multiple: false, answer: 'yes' },
+                  { header: 'B', text: 'Second?', options: [], multiple: false },
+                ],
+              },
+            ],
+          },
+          p: {
+            ...asking,
+            entries: [
+              {
+                id: 'p1',
+                kind: 'permission',
+                tool: 'Bash',
+                summary: 'npm test',
+                always: null,
+                detail: { kind: 'output', text: output },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(items[0]).toMatchObject({ title: 'Second?' });
+    expect(items[0]?.questions?.map(({ text }) => text)).toEqual(['Second?']);
+    const detail = items[1]?.detail?.split('\n') ?? [];
+    expect(detail).toHaveLength(MAX_DETAIL_LINES + 1);
+    expect(detail.at(-1)).toBe(`… ${String(20 - MAX_DETAIL_LINES)} more lines`);
+  });
+
+  it('tells every time of day in a hold’s words in the host’s locale', () => {
+    // A delay until 18:00 the run holds at, as a problem and as a session that won't start; and a
+    // usage rule's hold before a message, its window resetting at 18:00. (An OK's own words tell
+    // a wait's time, above: a delay right before it is passed over.)
+    const queue: QueueItem[] = [
+      { id: 'pause', delay: { at: '18:00' } },
+      { id: 'say', message: 'Hello' },
+    ];
+    const resetsAt = new Date();
+    resetsAt.setHours(18, 0, 0, 0);
+    if (resetsAt.getTime() < Date.now()) resetsAt.setDate(resetsAt.getDate() + 1);
+    const asks = (current: string, more: object) => ({
+      status: 'asking' as const,
+      current,
+      outcomes: {},
+      ...more,
+    });
+    const run: Run = {
+      running: true,
+      agents: {
+        x: asks('pause', {
+          problem: { kind: 'failed', reason: 'error', text: 'Failed.', agent: 'x' },
+        }),
+        y: asks('pause', { refused: { agent: 'y', connection: 'claude-code.sdk', text: 'No.' } }),
+        w: asks('say', {
+          usage: {
+            backend: 'codex',
+            window: 'fiveHour',
+            percent: 50,
+            used: 80,
+            resetsAt: resetsAt.getTime(),
+          },
+        }),
+      },
+    };
+    const nodes = ['x', 'y', 'w'].map((id) => agent(id, id.toUpperCase(), queue));
+    const details = (locale: string) =>
+      needs(input({ nodes, run, locale })).map(({ detail }) => detail);
+    expect(details('en-GB')).toEqual([
+      'Wait until 18:00',
+      'Wait until 18:00 waits until Y can start',
+      expect.stringMatching(/^Before “Hello” · resets (\w+ )?18:00$/) as string,
+    ]);
+    expect(details('en-US')).toEqual([
+      'Wait until 6:00 PM',
+      'Wait until 6:00 PM waits until Y can start',
+      expect.stringMatching(/^Before “Hello” · resets (\w+ )?6:00 PM$/) as string,
+    ]);
   });
 
   it('shows a token your items without their choices', () => {

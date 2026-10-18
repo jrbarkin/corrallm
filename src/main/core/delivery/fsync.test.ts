@@ -264,6 +264,30 @@ it('keeps waiting what it couldn’t record as delivering, and sends it once its
   ]);
 });
 
+it('holds a party’s message in its session’s queue when its agent is paused while it was journaled', async () => {
+  const codex = new FakeConnector({ adapter: 'codex' });
+  const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
+  await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+  const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Wait for me' });
+  // Its delivering record is held on its way to disk; meanwhile its agent is paused again.
+  const held = Promise.withResolvers<undefined>();
+  gate.held = held.promise;
+  await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(messages?.get(id)?.state).toBe('delivering');
+  });
+  await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
+  gate.held = undefined;
+  held.resolve(undefined);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Handed to its session, it waits in its queue there, as the run's own sends do.
+  expect(codex.sessions.flatMap((session) => session.sent)).toEqual([]);
+  await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
+  await vi.waitFor(() => {
+    expect(messages?.get(id)?.state).toBe('replied');
+  });
+});
+
 it('refuses a message whose record can’t be forced to disk, and never sends it', async () => {
   const codex = new FakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;

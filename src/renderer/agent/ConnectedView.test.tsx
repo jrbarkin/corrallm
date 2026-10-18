@@ -660,6 +660,45 @@ describe('a connected agent', () => {
     expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
   });
 
+  it('answers each question of a prompt from the canvas’s sidebar as that question', async () => {
+    const { backend, view, send, emit } = await open({ connection: 'claude-code.sdk' });
+    await send('Go');
+    emit({
+      type: 'question',
+      id: 'q',
+      questions: [
+        {
+          header: 'Branch',
+          text: 'Which branch?',
+          options: [
+            { label: 'main', description: '' },
+            { label: 'develop', description: '' },
+          ],
+          multiple: false,
+        },
+        {
+          header: 'Speed',
+          text: 'How fast?',
+          options: [
+            { label: 'fast', description: '' },
+            { label: 'careful', description: '' },
+          ],
+          multiple: false,
+        },
+      ],
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
+    // The second first: each answer is its own question's.
+    fireEvent.click(sidebar().getByRole('button', { name: 'careful' }));
+    fireEvent.click(sidebar().getByRole('button', { name: 'main' }));
+    await settle();
+    expect(backend.answer).toHaveBeenCalledWith('a', 'q', {
+      kind: 'question',
+      answers: ['main', 'careful'],
+    });
+  });
+
   it('shows a question’s header and what each answer means, and takes several answers with Submit', async () => {
     const { backend, view, send, emit, transcript } = await open({ connection: 'claude-code.sdk' });
     await send('Go');

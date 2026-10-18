@@ -190,7 +190,8 @@ async function ok<T = Record<string, unknown>>(
 /** What `caller` may read of the canvas's messages, oldest first. */
 async function inbox(caller: Caller = OUTSIDE): Promise<Message[]> {
   const all: Message[] = [];
-  for (let after: string | undefined; ;) {
+  let after: string | undefined;
+  for (let pages = 0; pages < 100; pages++) {
     const page: { items: Message[]; next: string } = await ok(
       'messages',
       after === undefined ? {} : { after },
@@ -200,6 +201,7 @@ async function inbox(caller: Caller = OUTSIDE): Promise<Message[]> {
     all.push(...page.items);
     after = page.next;
   }
+  throw new Error('The messages never end: a page doesn’t read on from its cursor.');
 }
 
 /** A message `caller` sent, as it is now. */
@@ -545,6 +547,11 @@ describe('delivery', () => {
       expect((await find(going))?.state).toBe('withdrawn');
     });
     expect((await inbox()).filter((message) => message.replyTo === going)).toEqual([]);
+    // Its turn ended interrupted, not run to its end.
+    const builder = core?.engines.canvas(CANVAS)?.engine.sessions.of('builder');
+    expect(builder?.entries.findLast((entry) => entry.kind === 'end')).toMatchObject({
+      interrupted: true,
+    });
     // A party names only its own messages.
     const builders = await send('helper', 'Hello', BUILDER);
     expect(await core?.call('withdraw', { canvas: CANVAS, id: builders }, OUTSIDE)).toMatchObject({
@@ -736,6 +743,92 @@ describe('delivery', () => {
   });
 });
 
+describe('an agent that isn’t idle', () => {
+  it('keeps a party’s message waiting while a turn of yours goes on, and delivers it after', async () => {
+    await keepCanvas();
+    const slow = new FakeConnector({ adapter: 'codex', pause: 150 });
+    await start({ appServer: slow });
+    const yours = await send('builder', 'A long job', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('delivered');
+    });
+    const theirs = await send('builder', 'Then this');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await find(yours, YOU))?.state).toBe('delivered');
+    expect((await find(theirs))?.state).toBe('pending');
+    await vi.waitFor(
+      async () => {
+        expect((await find(theirs))?.state).toBe('replied');
+      },
+      { timeout: 3000 },
+    );
+    expect(sent(slow)).toEqual(['A long job', `${FRAME(theirs)}Then this`]);
+  });
+
+  /** A Terminal whose CLI asks `asks` in its terminal, whenever a test says (`ask`). */
+  function asksInTerminal() {
+    let host: Parameters<Connector<SessionMode>['start']>[1] | undefined;
+    const connector: Connector<SessionMode> = {
+      start: async (spec, given) => {
+        host = given;
+        return terminal.start(spec, given);
+      },
+    };
+    return {
+      connector,
+      ask: (asks: { kind: 'other'; id: string; text: string }[]) => {
+        host?.emit({ type: 'asking', asks });
+      },
+    };
+  }
+
+  it('keeps a party’s message waiting while a Terminal’s CLI asks something in its terminal', async () => {
+    await keepCanvas();
+    const shell = asksInTerminal();
+    await start({ terminal: shell.connector });
+    // Its session runs.
+    const yours = await send('shell', 'Hello', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    shell.ask([{ kind: 'other', id: 'login', text: 'Log in to continue' }]);
+    const theirs = await send('shell', 'Then this');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await find(theirs))?.state).toBe('pending');
+    // It went on: the message goes.
+    shell.ask([]);
+    await vi.waitFor(async () => {
+      expect((await find(theirs))?.state).toBe('replied');
+    });
+  });
+
+  it('tells no one a turn waits for you over what a Terminal asks while it still works', async () => {
+    await keepCanvas();
+    const shell = asksInTerminal();
+    await start({
+      terminal: {
+        // Its turn works on, and its CLI lists what it asks (no status report says it waits).
+        start: async (spec, host) => {
+          const session = await shell.connector.start(spec, host);
+          session.send = (message) => {
+            host.emit({ type: 'user', id: message.id, text: message.text });
+            host.emit({ type: 'status', status: 'working' });
+            shell.ask([{ kind: 'other', id: 'login', text: 'Log in to continue' }]);
+            return Promise.resolve();
+          };
+          return session;
+        },
+      },
+    });
+    const id = await send('shell', 'Go on');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('delivered');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await notices()).toEqual([]);
+  });
+});
+
 describe('a turn waiting for you', () => {
   /** A canvas whose Builder and Checker each hold an OK on their queue, the run asking for both. */
   async function heldAtOks() {
@@ -846,16 +939,16 @@ describe('the shell prefix', () => {
   it('refuses a token’s body a Terminal agent would run as a shell command, naming the prefix', async () => {
     await keepCanvas();
     await start();
-    expect(
-      await core?.call('message', { canvas: CANVAS, to: 'shell', body: '!ls' }, OUTSIDE),
-    ).toEqual({
-      ok: false,
-      error: {
-        code: 'refused',
-        sentence:
-          'It starts with "!", which Codex · Terminal runs as a shell command without asking: only you may send that.',
-      },
-    });
+    for (const body of ['!ls', '  !ls']) {
+      expect(await core?.call('message', { canvas: CANVAS, to: 'shell', body }, OUTSIDE)).toEqual({
+        ok: false,
+        error: {
+          code: 'refused',
+          sentence:
+            'It starts with "!", which Codex · Terminal runs as a shell command without asking: only you may send that.',
+        },
+      });
+    }
     expect(await inbox()).toEqual([]);
   });
 
@@ -1294,6 +1387,37 @@ describe('pauses', () => {
     ]);
   });
 
+  it('refuses a token releasing another token’s pause', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, OTHER);
+    expect(
+      await core?.call('run.unpause', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE),
+    ).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({ held: [] });
+  });
+
+  it('lets a token release a kill it made', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.kill', { target: { agent: 'builder' } });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({ held: [] });
+    const id = await send('builder', 'Back again');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+  });
+
+  it('holds every member’s messages while their group is paused', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    await ok('run.pause', { target: { group: 'team' } });
+    const ids = [await send('builder', 'One'), await send('helper', 'Two')];
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const id of ids) expect((await find(id))?.state).toBe('pending');
+    expect(appServer.started).toEqual([]);
+  });
+
   it('lets a token release only the pauses its own party set', async () => {
     await keepCanvas();
     await start();
@@ -1314,6 +1438,29 @@ describe('pauses', () => {
 });
 
 describe('a kill', () => {
+  /** Builder and Helper in the group Team. */
+  const TEAM = AGENTS.map((agent) =>
+    agent.id === 'builder' || agent.id === 'helper' ? { ...agent, parent: 'team' } : agent,
+  );
+
+  it('takes back what waits for every member of a group it kills', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    await ok('run.pause', { target: { group: 'team' } }, YOU);
+    const ids = [await send('builder', 'One'), await send('helper', 'Two')];
+    await ok('run.kill', { target: { group: 'team' } }, YOU);
+    for (const id of ids) expect(await find(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
+  });
+
+  it('takes back what a killed agent sent that still waits', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'checker' } }, YOU);
+    const id = await send('checker', 'Check this', BUILDER);
+    await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    expect(await find(id, BUILDER)).toMatchObject({ state: 'withdrawn', by: 'you' });
+  });
+
   it('takes back what waits for a killed agent and interrupts its turn, telling each sender', async () => {
     await keepCanvas();
     await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
@@ -1572,6 +1719,114 @@ describe('reads', () => {
     });
     expect(await started.call('withdraw', { id }, both)).toEqual({ ok: true, value: {} });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
+  });
+
+  it('pages a party’s messages from a cursor, and keeps those with one party', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    await ok('run.pause', { target: { agent: 'helper' } }, YOU);
+    const toBuilder = [await send('builder', 'One'), await send('builder', 'Two')];
+    const toHelper = await send('helper', 'Three');
+    const texts = async (args: Record<string, unknown>) =>
+      (await ok<{ items: Message[]; next: string }>('messages', args)).items
+        .filter(({ kind }) => kind === 'text')
+        .map(({ id }) => id);
+    const first = await ok<{ items: Message[]; next: string }>('messages', { limit: 1 });
+    expect(first.items.map(({ id }) => id)).toEqual([toBuilder[0]]);
+    const rest = await texts({ after: first.next });
+    expect(rest).toEqual([toBuilder[1], toHelper]);
+    expect(await texts({ with: 'agent:helper' })).toEqual([toHelper]);
+    // Read from where the last page ended, nothing is read again.
+    const all = await ok<{ items: Message[]; next: string }>('messages', {});
+    expect((await ok<{ items: Message[] }>('messages', { after: all.next })).items).toEqual([]);
+  });
+
+  it('says how each agent is, the message its turn is on, and what waits for you', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'helper' } }, YOU);
+    interface Status {
+      agents: { id: string; state: string; message: string | null }[];
+      waitingForYou: NeedsItem[];
+      next: string;
+    }
+    const before: Status = await ok('status', {});
+    // Checker, in Read only, asks before it acts.
+    const id = await send('checker', 'Run the tests');
+    await vi.waitFor(async () => {
+      expect((await ok<Status>('status', {})).waitingForYou).toHaveLength(1);
+    });
+    const now: Status = await ok('status', {});
+    expect(now.agents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'checker', state: 'waiting', message: id }),
+        expect.objectContaining({ id: 'helper', state: 'paused', message: null }),
+        expect.objectContaining({ id: 'builder', state: 'idle', message: null }),
+      ]),
+    );
+    expect(now.waitingForYou).toEqual([
+      expect.objectContaining({ kind: 'prompt', agent: 'checker', choices: [] }),
+    ]);
+    // Its cursor is at the end: what came since is after it.
+    const since = await ok<{ items: Message[] }>('messages', { after: before.next });
+    expect(since.items.map((message) => message.id)).toContain(id);
+    expect((await ok<{ items: Message[] }>('messages', { after: now.next })).items).toEqual([]);
+  });
+
+  it('says whether an agent is paused, and what it replied last', async () => {
+    await keepCanvas();
+    await start();
+    const id = await send('builder', 'Say hello');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    expect(await ok('session.get', { agent: 'builder' })).toMatchObject({
+      paused: true,
+      status: 'idle',
+      reply: `You said: ${FRAME(id)}Say hello`,
+    });
+  });
+
+  it('refuses a transcript cursor it doesn’t know, and counts a message’s images', async () => {
+    await keepCanvas();
+    const engine = await (await start()).engines.open(CANVAS);
+    engine.sessions.send('builder', 'codex', 'Look', undefined, [
+      { mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+      { mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+    ]);
+    await vi.waitFor(() => {
+      expect(engine.sessions.of('builder').status).toBe('idle');
+      expect(engine.sessions.of('builder').entries.some(({ kind }) => kind === 'end')).toBe(true);
+    });
+    const { entries } = await ok<{ entries: { kind: string; images?: number }[] }>(
+      'session.transcript',
+      { agent: 'builder' },
+    );
+    expect(entries[0]).toMatchObject({ kind: 'user', images: 2 });
+    expect(
+      await core?.call(
+        'session.transcript',
+        { canvas: CANVAS, agent: 'builder', after: 'no-such-entry' },
+        OUTSIDE,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+  });
+
+  it('refuses a reply to a message there isn’t, from you too', async () => {
+    await keepCanvas();
+    await start();
+    for (const caller of [OUTSIDE, YOU]) {
+      expect(
+        await core?.call(
+          'message',
+          { canvas: CANVAS, to: 'builder', body: 'About that', replyTo: crypto.randomUUID() },
+          caller,
+        ),
+      ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+    }
+    expect(await inbox(YOU)).toEqual([]);
   });
 
   it('lists the agents each caller reaches, and their state', async () => {

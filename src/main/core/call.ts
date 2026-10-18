@@ -270,7 +270,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
  * The scope an op runs in, from the canvas and agent its arguments name (null: none). An op aimed
  * at a group runs in its canvas's scope, which holds every member's.
  */
-function scopeOf(surface: Surface, args: unknown): string[] | null {
+export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[] | null {
   const { canvas, agent, to, target } = args as {
     canvas?: unknown;
     agent?: unknown;

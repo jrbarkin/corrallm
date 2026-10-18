@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
-import { createDispatcher, OpFailure } from './call';
+import { createDispatcher, OpFailure, scopeOf } from './call';
 import type { DispatchOptions } from './call';
 import { asHuman, partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
@@ -47,6 +47,26 @@ describe('partyOf', () => {
     expect(partyOf(lead, now)).toBe('worker');
     expect(partyOf(CALLERS['outside-read'])).toBe('outside-read');
     expect(partyOf(CALLERS['outside-write'])).toBe('outside-write');
+  });
+});
+
+describe('scopeOf', () => {
+  it('runs an op aimed at a group in its canvas’s scope, which holds every member’s', () => {
+    const agentScoped = { scope: 'agent' } as const;
+    expect(scopeOf(agentScoped, { canvas: CANVAS, target: { group: 'team' } })).toEqual([
+      'app',
+      CANVAS,
+    ]);
+    expect(scopeOf(agentScoped, { canvas: CANVAS, target: { agent: 'helper' } })).toEqual([
+      'app',
+      CANVAS,
+      'helper',
+    ]);
+    expect(scopeOf(agentScoped, { canvas: CANVAS, to: 'helper' })).toEqual([
+      'app',
+      CANVAS,
+      'helper',
+    ]);
   });
 });
 
