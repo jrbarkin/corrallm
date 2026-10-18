@@ -179,11 +179,7 @@ export class Delivery {
     try {
       await store.durable();
     } catch (error) {
-      const why = threadTitle(error instanceof Error ? error.message : String(error), REASON);
-      store.update(message.id, {
-        state: 'unresolved',
-        turn: { status: 'failed', reason: 'error', message: why },
-      });
+      store.update(message.id, { state: 'unresolved', turn: unrecorded(error) });
       throw error;
     } finally {
       this.#recording.delete(message.id);
@@ -429,15 +425,12 @@ export class Delivery {
         this.#writing.delete(node.id);
         const now = this.#deps.store.get(message.id);
         if (now?.state !== 'delivering') return;
-        const why = threadTitle(error instanceof Error ? error.message : String(error), REASON);
-        this.#deps.store.update(message.id, {
-          state: 'unresolved',
-          turn: { status: 'failed', reason: 'error', message: why },
-        });
+        const turn = unrecorded(error);
+        this.#deps.store.update(message.id, { state: 'unresolved', turn });
         this.#notice(
           message,
-          `Your message to ${this.#name(node.id)} wasn’t sent: corrallm couldn’t record it (${why}).`,
-          { status: 'failed', reason: 'error', message: why },
+          `Your message to ${this.#name(node.id)} wasn’t sent: corrallm couldn’t record it (${turn.message}).`,
+          turn,
         );
         this.schedule();
       },
@@ -709,4 +702,10 @@ function cut(reply: string): string {
   // Cut on a character's boundary: the decoder drops a partial last one.
   const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
   return `${kept.replace(/�$/u, '')}${CUT}`;
+}
+
+/** How a message whose record couldn't be written ended: failed, saying why (capped). */
+function unrecorded(error: unknown): TurnResult & { message: string } {
+  const why = error instanceof Error ? error.message : String(error);
+  return { status: 'failed', reason: 'error', message: threadTitle(why, REASON) };
 }
