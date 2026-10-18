@@ -67,8 +67,5 @@ function processPort(child: UtilityProcess, exited: Promise<number>): LinkPort {
         gone(`the core process exited with code ${String(code)}`);
       });
     },
-    close: () => {
-      child.kill();
-    },
   };
 }

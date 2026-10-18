@@ -46,9 +46,6 @@ function portOf(port: MessagePort): LinkPort {
         gone('the port closed');
       });
     },
-    close: () => {
-      port.close();
-    },
   };
 }
 

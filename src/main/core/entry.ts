@@ -21,9 +21,6 @@ function parentPortOf(parent: Electron.ParentPort): LinkPort {
         receive(data);
       });
     },
-    close: () => {
-      parent.removeAllListeners('message');
-    },
   };
 }
 

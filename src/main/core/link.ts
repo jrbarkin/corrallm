@@ -41,7 +41,6 @@ export interface LinkPort {
    * when the other end is gone (never, for a port that cannot outlive the other end).
    */
   start(receive: (message: unknown) => void, gone: (why: string) => void): void;
-  close(): void;
 }
 
 export interface LinkOptions {
@@ -122,12 +121,6 @@ export class CoreLink<Local extends LinkContract, Remote extends LinkContract> {
     return () => {
       listeners.delete(heard);
     };
-  }
-
-  /** Closes the port: what is pending rejects. */
-  close(): void {
-    this.#end('the link was closed');
-    this.#port.close();
   }
 
   #receive(message: unknown): void {
