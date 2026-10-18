@@ -10,6 +10,9 @@ export interface Pty {
   resize(cols: number, rows: number): void;
   /** Ends the process: SIGHUP by default; Windows takes no signal. */
   kill(signal?: string): void;
+  /** Stops reading what the process prints (it blocks once its buffer is full), until `resume`. */
+  pause(): void;
+  resume(): void;
   onData(listener: (data: string) => void): unknown;
   onExit(listener: (exit: { exitCode: number; signal?: number }) => void): unknown;
 }

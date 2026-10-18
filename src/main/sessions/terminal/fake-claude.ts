@@ -66,6 +66,11 @@ export class FakeClaude implements Pty {
   #invisible = false;
   #state: 'starting' | 'idle' | 'working' | 'blocked' | 'done' | 'error' = 'starting';
   #mode = 'default';
+  /** Paused (as a pty stops reading its CLI's output): what it prints meanwhile waits. */
+  paused = false;
+  /** How many times it was paused. */
+  pauses = 0;
+  readonly #held: string[] = [];
 
   constructor(file: string, args: readonly string[], options: PtyOptions, fake: FakeClaudeOptions) {
     this.file = file;
@@ -107,9 +112,31 @@ export class FakeClaude implements Pty {
     this.exit(0);
   }
 
+  pause(): void {
+    if (!this.paused) this.pauses += 1;
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+    // Read again later, as a pty's next read is.
+    setTimeout(() => {
+      while (!this.paused && this.#held.length > 0) this.print(this.#held.shift() ?? '');
+    }, 0);
+  }
+
+  /** Whether everything it printed has been read. */
+  get drained(): boolean {
+    return !this.paused && this.#held.length === 0;
+  }
+
   /** Prints to the terminal. */
   print(data: string): void {
     if (this.exited) return;
+    if (this.paused) {
+      this.#held.push(data);
+      return;
+    }
     for (const listener of this.#data) listener(data);
   }
 

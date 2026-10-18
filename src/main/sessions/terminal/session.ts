@@ -475,6 +475,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       },
       // A view's terminal answers what the CLI asks; with none, this screen does.
       answersQueries: () => this.#link === undefined,
+      flow: (paused) => {
+        if (paused) this.#pty?.pause();
+        else this.#pty?.resume();
+      },
     });
   }
 

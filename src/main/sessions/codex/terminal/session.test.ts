@@ -74,6 +74,14 @@ class Replay implements Pty {
     // A recording does not redraw.
   }
 
+  pause(): void {
+    // A recording never prints enough to fill the screen's buffer.
+  }
+
+  resume(): void {
+    // Likewise.
+  }
+
   kill(): void {
     this.#end(0);
   }
