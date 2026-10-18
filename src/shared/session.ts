@@ -217,6 +217,12 @@ export const UNASKING_MODES: readonly SessionMode[] = ['bypassPermissions', 'ful
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];
 
+/** How many bytes an image's base64 holds. */
+export function imageBytes(data: string): number {
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+  return Math.floor(data.length / 4) * 3 - padding;
+}
+
 /** An image the user pasted into a message: its kind, and its bytes, base64-encoded. */
 export interface MessageImage {
   mediaType: ImageType;
@@ -551,10 +557,6 @@ export const MAX_ID_LENGTH = 200;
 export const MAX_MESSAGE_LENGTH = 200_000;
 /** The longest answer to a question or a plan. */
 export const MAX_ANSWER_LENGTH = 20_000;
-/** At most this many images in one message. */
-export const MAX_IMAGES = 20;
-/** The largest image the user may paste, in bytes (the Claude API's limit). */
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** The longest text searched for when completing a file mention. */
 export const MAX_FILE_QUERY_LENGTH = 500;
 /** At most this many files are offered for a file mention. */

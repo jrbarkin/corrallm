@@ -169,9 +169,7 @@ export class CoreLink<Local extends LinkContract, Remote extends LinkContract> {
   }
 
   #fault(root: string, value: unknown): string | undefined {
-    if (!this.#check) return undefined;
-    const fault = plainDataFault(value, root, new Set());
-    return fault && `${fault.path} is ${fault.what}, not plain data`;
+    return this.#check ? notPlainData(value, root) : undefined;
   }
 
   #end(why: string): void {
@@ -224,6 +222,16 @@ const PLAIN_BUILT_INS: readonly object[] = [
   Date.prototype,
   Uint8Array.prototype,
 ];
+
+/**
+ * Where in `value` (called `root`) the first thing that is not plain data is, and what it is, as
+ * "args[0].x is a Foo, not plain data"; undefined if it is all plain data. core.call checks what
+ * its operations take and return the same way (in dev and tests).
+ */
+export function notPlainData(value: unknown, root: string): string | undefined {
+  const fault = plainDataFault(value, root, new Set());
+  return fault && `${fault.path} is ${fault.what}, not plain data`;
+}
 
 /** Where in `value` the first thing that is not plain data is, and what it is, if any. */
 function plainDataFault(

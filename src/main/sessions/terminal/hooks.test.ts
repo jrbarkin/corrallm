@@ -125,6 +125,38 @@ describe('HookServer', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it('refuses a foreign Host or any Origin before it reads the token', async () => {
+    const server = new HookServer();
+    const listener = vi.fn<(event: HookEvent) => void>();
+    const status = vi.fn<(input: HookEvent) => void>();
+    const { url, statusUrl, token } = await register(server, listener, status);
+    const port = new URL(url).port;
+    const auth = { Authorization: `Bearer ${token}` };
+
+    // A page in a browser reaching the server through a name of its own (DNS rebinding).
+    for (const host of ['evil.example', `evil.example:${port}`, '127.0.0.1:1', 'localhost']) {
+      expect((await post(url, '{}', { ...auth, Host: host })).status).toBe(403);
+      // Refused as such, not for the missing token.
+      expect((await post(url, '{}', { Host: host })).status).toBe(403);
+      expect((await post(statusUrl, '{}', { ...auth, Host: host })).status).toBe(403);
+    }
+    // A browser's request, even from the server's own origin.
+    for (const origin of ['http://evil.example', 'null', `http://127.0.0.1:${port}`]) {
+      expect((await post(url, '{}', { ...auth, Origin: origin })).status).toBe(403);
+      expect((await post(url, '{}', { Origin: origin })).status).toBe(403);
+      expect((await post(statusUrl, '{}', { ...auth, Origin: origin })).status).toBe(403);
+    }
+    expect(listener).not.toHaveBeenCalled();
+    expect(status).not.toHaveBeenCalled();
+
+    // Its own host, by either name.
+    expect((await post(url, '{}', { ...auth, Host: `localhost:${port}` })).status).toBe(200);
+    expect((await post(url, '{}', { ...auth, Host: `127.0.0.1:${port}` })).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('stops hearing a session once released, and closes when no session is left', async () => {
     const server = new HookServer();
     const listener = vi.fn<(event: HookEvent) => void>();

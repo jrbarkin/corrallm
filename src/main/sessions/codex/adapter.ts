@@ -1,4 +1,5 @@
-import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/session';
+import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
+import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
 import logo from './logo.svg?raw';
 

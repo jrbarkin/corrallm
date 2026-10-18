@@ -26,6 +26,7 @@
     "make": "electron-forge make",
     "build:cli": "vite build --config vite.cli.config.mts",
     "corrallm": "node scripts/corrallm.mjs",
+    "api:surface": "vitest run --project main src/shared/api/surface.test.ts --update",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -87,7 +88,8 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.71.1",
     "vite": "^8.3.4",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "electron-winstaller": "^5.4.0"

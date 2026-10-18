@@ -1021,6 +1021,26 @@ describe('a connected agent', () => {
     expect(view.queryByRole('list', { name: 'Images' })).toBeNull();
   });
 
+  it('refuses an image that takes the message’s images past 20 MB together, saying so', async () => {
+    const { composer, view } = await open({ connection: 'claude-code.sdk' });
+    // Each as large as the composer is told it is: four fit in 20 MB, a fifth does not.
+    const files = Array.from({ length: 5 }, (_, i) => {
+      const file = new File([new Uint8Array([137, 80, 78, 71])], `shot-${String(i + 1)}.png`, {
+        type: 'image/png',
+      });
+      Object.defineProperty(file, 'size', { value: 4.5 * 1024 * 1024 });
+      return file;
+    });
+    fireEvent.paste(composer, { clipboardData: { files, getData: () => '' } });
+    expect(
+      await view.findByText(
+        'shot-5.png would take the images past 20 MB: a message’s images can be up to 20 MB together.',
+      ),
+    ).toBeTruthy();
+    await view.findByRole('img', { name: 'Image 4' });
+    expect(view.queryByRole('img', { name: 'Image 5' })).toBeNull();
+  });
+
   it('shows what a resumed session did before', async () => {
     const { emit, transcript } = await open({ connection: 'claude-code.sdk' });
     emit({

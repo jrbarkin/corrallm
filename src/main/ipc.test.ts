@@ -12,13 +12,12 @@ vi.mock('electron', () => ({
 
 import { newCanvasId } from '../shared/canvas';
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
+import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../shared/api/limits';
 import {
   MAX_ANSWER_LENGTH,
   MAX_FILE_MATCHES,
   MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
-  MAX_IMAGE_BYTES,
-  MAX_IMAGES,
   MAX_MESSAGE_LENGTH,
 } from '../shared/session';
 import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../shared/terminal';
@@ -421,6 +420,21 @@ describe('session:* handlers', () => {
       text: '',
       images: [image],
     });
+    // As many images as fit in a message's limit together, each as large as one may be.
+    const largest = {
+      mediaType: 'image/png',
+      data: 'A'.repeat(Math.floor(MAX_IMAGE_BYTES / 3) * 4),
+    };
+    const images = Array.from(
+      { length: Math.floor(MAX_IMAGE_TOTAL / MAX_IMAGE_BYTES) },
+      () => largest,
+    );
+    await invoke('session:send', ['a', { id: 'm3', text: 'Four', images }], sender);
+    expect(services.sessions.send).toHaveBeenLastCalledWith(CANVAS, 'a', {
+      id: 'm3',
+      text: 'Four',
+      images,
+    });
     await invoke('session:answer', ['a', 'p1', { kind: 'question', answers: ['Yes'] }], sender);
     expect(services.sessions.answer).toHaveBeenCalledWith(CANVAS, 'a', 'p1', {
       kind: 'question',
@@ -612,6 +626,23 @@ describe('session:* handlers', () => {
         },
       ],
       /too large/,
+    ],
+    [
+      'session:send',
+      'images too large together',
+      [
+        'a',
+        {
+          id: 'm',
+          text: 'Hi',
+          // Each under the limit for one, five over the limit for a message's images together.
+          images: Array.from({ length: 5 }, () => ({
+            mediaType: 'image/png',
+            data: 'A'.repeat(Math.ceil((MAX_IMAGE_TOTAL / 5 + 3) / 3) * 4),
+          })),
+        },
+      ],
+      /together/,
     ],
     [
       'session:send',

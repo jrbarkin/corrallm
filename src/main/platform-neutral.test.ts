@@ -28,7 +28,6 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
-  'src/main/api/operations.ts': 2,
   'src/main/core/selftest-claude.mjs': 2,
   'src/main/core/selftest.ts': 21,
   'src/main/files.ts': 1,
@@ -105,7 +104,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/terminal/screen.ts': 4,
   'src/renderer/usage/usage.ts': 3,
   'src/shared/ipc.ts': 4,
-  'src/shared/session.ts': 44,
+  'src/shared/session.ts': 43,
   'src/shared/terminal.ts': 1,
   'src/shared/usage.ts': 2,
 };

@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { foreignRequest } from '../../loopback';
+
 /*
  * Claude Code's hooks, reporting to corrallm. A Terminal session's CLI is started with settings
  * (`hookSettings`) that add HTTP hooks to the user's own: on the events corrallm follows, Claude
@@ -12,7 +14,9 @@ import type { AddressInfo } from 'node:net';
  * reply, why a turn failed, the permission mode and the model, and what Claude Code asks the user
  * in its terminal (a permission, its questions, a plan to approve, what its notifications say).
  * corrallm only listens: it answers every hook with no decision, so the CLI behaves as it would
- * without them, and the user answers in the terminal.
+ * without them, and the user answers in the terminal. Like the MCP server, the server refuses a
+ * foreign Host or any Origin before it reads the token (loopback.ts); it checks no media type until
+ * a recording says what the CLIs' HTTP hooks send (Build Plan Q26).
  */
 
 /** The variable in a session's environment that holds its hooks' token. */
@@ -155,6 +159,12 @@ export class HookServer {
       response.writeHead(status, { 'Content-Type': 'application/json' });
       response.end(status === 200 ? '{}' : '');
     };
+    // Before the token: a page in a browser is refused as such (loopback.ts).
+    if (foreignRequest(request) !== undefined) {
+      request.resume();
+      reply(403);
+      return;
+    }
     const token = /^Bearer ([0-9a-f]+)$/.exec(request.headers.authorization ?? '')?.[1];
     const known = token !== undefined && this.#listeners.has(token);
     const route = request.url === '/hook' || request.url === '/status' ? request.url : undefined;
