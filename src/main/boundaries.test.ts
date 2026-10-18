@@ -74,6 +74,7 @@ describe('ESLint’s boundaries in main', () => {
       ['src/main/sessions/terminal/claude-code.ts', '../sdk/tools'],
       ['src/main/sessions/claude-settings.ts', './sdk/session'],
       ['src/main/sessions/connectors.ts', './codex/terminal/connector'],
+      ['src/main/core/selftest.ts', '../sessions/sdk/inbox'],
     ] as const) {
       expect(await importErrors(file, `import { a } from '${from}';\n`)).toEqual([]);
     }

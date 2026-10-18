@@ -22,13 +22,13 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
   'src/main/api/operations.ts': 2,
+  'src/main/core/selftest-claude.mjs': 2,
+  'src/main/core/selftest.ts': 21,
   'src/main/files.ts': 1,
   'src/main/forge-env.d.ts': 2,
   'src/main/host/reveal.ts': 1,
   'src/main/index.ts': 2,
-  'src/main/native-selftest.ts': 3,
-  'src/main/selftest-claude.mjs': 2,
-  'src/main/selftest.ts': 19,
+  'src/main/native-selftest.ts': 2,
   'src/main/sessions/args.ts': 8,
   'src/main/sessions/claude-errors.ts': 6,
   'src/main/sessions/claude-settings.ts': 27,

@@ -13,15 +13,17 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 | `pnpm lint`      | ESLint, type-aware, zero warnings allowed (`lint:fix` to autofix)                                      |
 | `pnpm format`    | Prettier write (`format:check` to verify)                                                              |
 | `pnpm test`      | Vitest: `main`, `preload` (Node) and `renderer` (jsdom) projects                                       |
-| `pnpm test:e2e`  | Playwright; its global setup first builds the app unsigned (`electron-forge package`)                  |
+| `pnpm test:e2e`  | Playwright; its global setup first builds the app unsigned (`electron-forge package`) and the CLI      |
 | `pnpm package`   | Packaged app for the current OS in `out/`                                                              |
 | `pnpm make`      | Installers for the current OS in `out/make/`                                                           |
+| `pnpm build:cli` | The `corrallm` CLI for plain Node (`vite.cli.config.mts`) in `dist-cli/corrallm.cjs`                   |
+| `pnpm corrallm`  | Runs the CLI bundle (`scripts/corrallm.mjs`; it says to run `pnpm build:cli` when it is missing)       |
 
 - Run one Vitest project with `pnpm exec vitest run --project main`.
-- `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` (note `pnpm dev` overwrites it). Headless Linux: `xvfb-run -a pnpm test:e2e`.
+- `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` and the CLI bundle in `dist-cli/` (note `pnpm dev` overwrites `.vite/`). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - `CORRALLM_CLAUDE_PATH=/path/to/claude` makes connected agents run that `claude` instead of the user's own, and only that one: main looks nowhere else, even if nothing can run there (the e2e tests point it at a fake: `e2e/fake-claude.mjs` for Terminal agents, `src/main/sessions/sdk/fake-claude.mjs` for the Agent SDK). `CORRALLM_CODEX_PATH` does the same for `codex`. Set empty, the user's own are found as usual.
 - `CORRALLM_DISTRIBUTION=commercial` (or `hosted`) when building (`pnpm package`, `pnpm make`) makes a build for a commercial or hosted product, whose App Server connection refuses a ChatGPT login (see Codex); the default is `local`.
-- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). `runNativeSelfTest` (`src/main/native-selftest.ts`) runs a shell that exits in a node-pty pseudo-terminal (through `spawnPty`, as Terminal agents run), then `src/main/selftest.ts`'s checks: main's terminal screen copy (@xterm/headless and its addons) reads a status report and snapshots, and the bundled Agent SDK (its `import.meta.url` define, its spawning) runs a query against `src/main/selftest-claude.mjs`, a tiny fake `claude` bundled as text (`?raw`, typed in `src/main/raw.d.ts`) only for this, written to a temporary folder and run with the `node` on the PATH (no login). It exits 0 on success, 2 if a check fails (saying which), 3 on a timeout. CI runs this on all three OSes; `src/main/selftest.test.ts` runs the same checks in the unit tests.
+- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). `runNativeSelfTest` (`src/main/native-selftest.ts`) runs `src/main/core/selftest.ts`'s checks in main, then forks the core process (`core.cjs`, an Electron utility process: `host/core-process.ts`) and asks it over CoreLink to run them there too, printing how soon it was ready after the fork and its memory. The checks (Electron-free): a shell that exits in a node-pty pseudo-terminal (through `spawnPty`, as Terminal agents run); a terminal screen copy (@xterm/headless and its addons) reads a status report and snapshots; the bundled Agent SDK (its `import.meta.url` define, its spawning) runs a query against `src/main/core/selftest-claude.mjs`, a tiny fake `claude` bundled as text (`?raw`, typed in `src/main/raw.d.ts`) only for this, written to a temporary folder and run with the `node` on the PATH (no login); a loopback HTTP server is called; a shell is spawned; and, packaged, `child_process.fork` throws (the RunAsNode fuse). It exits 0 on success, 2 if a check fails (saying which) or the core process does, 3 on a timeout, 4 on an uncaught error. CI runs this on all three OSes; `scripts/check-linux.sh` runs it (and the launch-switch checks, and the CLI's) for Linux arm64 in Docker; `src/main/core/selftest.test.ts` runs the checks in the unit tests, and `e2e/selftest.e2e.ts` runs the unpackaged build's in main and its core process. `CORRALLM_NATIVE_SELFTEST=1 pnpm corrallm` runs them under plain Node, in the CLI bundle (built by `pnpm build:cli`), exiting the same way.
 
 ## Testing
 
@@ -52,16 +54,27 @@ src/main/       Main process (Node). index.ts is the entry; security.ts, app-pro
                 app server may use their ChatGPT plan without asking). usage.ts keeps every
                 backend's latest usage reading and its usage rule (see Usage readings and rules),
                 remembered in the app's user data, for the usage:* channels.
-src/main/core/  What will be the core (it never runs in main's process, so never imports Electron
-                or src/main/host/: ESLint's app/boundaries-core): host.ts is HostServices, what it
-                asks of the app that hosts it (the open, save and folder dialogs), and TrustedPath,
-                the only paths a canvas is opened from or saved to and the only project folders.
-src/main/host/  Main only: services.ts is main's HostServices (dialogs.ts: the dialogs, which mint
-                TrustedPaths); windows.ts keeps which canvas each window shows, restores the last
-                one for a new window, and ends a canvas's sessions when its window reloads, crashes,
-                closes or shows another; links.ts opens the links users click (link:open), asking
-                first; reveal.ts shows a file:// link's file in the file manager (link:reveal) if it
-                is in the project folder (see Security rules).
+src/main/core/  The core: corrallm's one server, which will own the canvas, the run, messages and
+                sessions, in an Electron utility process in the app and under plain Node headless.
+                Electron-free: it never imports Electron or src/main/host/ (ESLint's
+                app/boundaries-core); what differs between hosts is passed in. Today: host.ts is
+                HostServices, what it asks of the app that hosts it (the open, save and folder
+                dialogs), and TrustedPath, the only paths a canvas is opened from or saved to and
+                the only project folders; entry.ts, the core process's entry (core.cjs), with only a
+                self-test mode; link.ts, CoreLink: typed requests (answers as values: a result or
+                an error) and events over a port, which checks that only plain data crosses;
+                protocol.ts, what main and the core process ask and tell each other; selftest.ts
+                (and selftest-claude.mjs), the native self-test's checks, run by main, the core
+                process and the CLI.
+src/main/host/  Main only, as the core's host: services.ts is main's HostServices (dialogs.ts: the
+                dialogs, which mint TrustedPaths); windows.ts keeps which canvas each window shows,
+                restores the last one for a new window, and ends a canvas's sessions when its window
+                reloads, crashes, closes or shows another; links.ts opens the links users click
+                (link:open), asking first; reveal.ts shows a file:// link's file in the file manager
+                (link:reveal) if it is in the project folder (see Security rules); core-process.ts
+                forks the core process (utilityProcess.fork, stdio piped back, a CoreLink over its
+                parentPort); supervise.ts is what to do when it exits (restart a crash at most 3
+                times in 60 s, then give up; a clean exit is none).
 src/main/sessions/  Connected sessions (see Connected sessions): connector.ts is the interface a
                 connection implements, manager.ts runs every session for the session:* channels
                 (and shows Terminal sessions' screens for the terminal:* channels), connectors.ts
@@ -119,7 +132,9 @@ src/main/sessions/codex/app-server/  The App Server connection (see Codex below)
                 are its slash commands (and /diff's git), protocol.ts what corrallm sends.
                 recorded.ts reads fixtures/; replay.ts replays one as an app server, for tests.
 src/main/files.ts   The project folder's files for @-mentions (project:files): git's list, or a walk.
-src/main/native-selftest.ts, selftest.ts, selftest-claude.mjs  The packaged app's self-test (see Commands).
+src/main/native-selftest.ts  The native self-test in the app: main's checks, then the core process's (see Commands).
+src/main/cli/   The `corrallm` Node CLI (index.ts), the core's code under plain Node, built into
+                dist-cli/ (git-ignored) by `pnpm build:cli`; today it only runs the native self-test.
 src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts
                 is where clicked links go (main's link:open, or link:reveal for a file:// link;
@@ -303,6 +318,7 @@ e2e/            Playwright Electron tests (*.e2e.ts) and their global setup. Lau
                 launchApp() (launch.ts): a throwaway profile, so the real app's saved state never leaks in,
                 and no `claude` or `codex` unless the test points the app at a fake.
 build/          Packaging resources (macOS entitlements, patched rpm spec template).
+scripts/        corrallm.mjs (`pnpm corrallm`); check-linux.sh, the packaged Linux arm64 check in Docker.
 ```
 
 Queues: there is one queue component, QueueEditor.tsx. Every queue the app shows (an agent's own, the one shown beside it to pick from, the work panel between two agents, the lanes of All queues) is built from its rows (`QueueRow`), its end (`QueueEnd`) and its picking (`PickTask`), styled once in GraphEditor.css (cards at rest; what edits a task shows on the one pointed at; the drag handle always shows). Bind edits to an agent with `editsOf` (graph/edits.ts), word tasks with labels.ts, and mark them with `queueMarks` (queues/marks.ts) rather than adding another copy.
@@ -311,7 +327,7 @@ TypeScript: `tsconfig.json` is solution-style and references `tsconfig.node.json
 
 ESLint enforces the process boundaries: renderer and shared code cannot import Electron, Node built-ins or main/preload code; the preload cannot import Node built-ins. In main, `app/boundaries-core` keeps `src/main/{core,sessions,api,cli}/` and the Electron-free services (memory, settings, usage, files, git, canvas, project, run-journal) from importing Electron or `src/main/host/` (what needs the desktop is a `HostServices` request, `core/host.ts`), and `app/adapters` keeps platform files from importing an adapter's folder (`sessions/sdk/`, `sessions/codex/`; Claude's own files outside its folder and today's importers are allowed, each to go). `src/main/boundaries.test.ts` checks both on fixtures, that only the host, index.ts, window.ts, security.ts, app-protocol.ts, ipc.ts, run-shutdown.ts and native-selftest.ts import Electron, and that only `host/dialogs.ts`, memory.ts and run-journal.ts mint a `TrustedPath`. `src/main/platform-neutral.test.ts` keeps the platform (src/shared, src/preload, src/main outside the adapters' folders, src/renderer with its templates; never tests) from naming a CLI: each file that does today is allowed exactly as many names as it has, so a new one fails, and a file that names fewer lowers its count.
 
-Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/preload/index.ts` to `.vite/build/preload.cjs`, and the renderer to `.vite/renderer/main_window/`.
+Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/main/core/entry.ts` to `.vite/build/core.cjs` (with main's config), `src/preload/index.ts` to `.vite/build/preload.cjs`, and the renderer to `.vite/renderer/main_window/`. `pnpm build:cli` builds `src/main/cli/index.ts` for plain Node to `dist-cli/corrallm.cjs`, outside `.vite/`, which Forge empties on every `pnpm dev` and `pnpm package`.
 
 ## Run recovery and persistence
 
@@ -344,7 +360,7 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/p
 - Only one app instance may use a profile (`requestSingleInstanceLock` in index.ts). A window that crashes ends its canvas's sessions as one that reloads or is destroyed does (`host/windows.ts`).
 - Read-only Git commands share `SAFE_GIT_OPTIONS` (`main/git.ts`), disabling fsmonitor and implicit bare repositories. The App Server's `/diff` also disables external diff, textconv and filter drivers; file suggestions must never run a repository's fsmonitor.
 - Packaged builds exit if launched with a switch in `FORBIDDEN_SWITCHES` (`src/main/index.ts`): remote debugging, or launcher prefixes such as `--gpu-launcher` that would make the app run an arbitrary executable. CI asserts this.
-- Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork` or `spawn`), and Playwright cannot drive the packaged app.
+- Fuses (`forge.config.mts`) must stay as configured: RunAsNode, `NODE_OPTIONS` and Node inspect flags disabled; ASAR integrity and OnlyLoadAppFromAsar enabled (integrity is enforced on macOS and Windows only). Consequences: `child_process.fork` throws in packaged builds (use `utilityProcess.fork`, as the core process is forked, or `spawn`; the packaged self-test checks it throws), and Playwright cannot drive the packaged app.
 - Credentials only come from environment variables (see `.env.example`). Never commit `.env` or key files; `pnpm dev` strips the signing variables before launching the app. Agents use the `claude` and `codex` CLIs' own logins; corrallm never reads, stores or passes credentials (the Agent SDK connection asks `claude auth status` only what kind of login it has, the App Server connection asks Codex's `account/read` the same).
 - Agents run only in the project folder the user picked in main's folder dialog (`project.ts`, through `HostServices.pickFolder`): that choice is the trust gate (SDK sessions skip Claude Code's own trust dialog, Codex is told the folder is trusted for its session alone). The renderer never passes a path, a command line or an environment, and names a session to resume only by picking one main listed for the canvas's project folder (`session:list`, then `session:resume`): main resolves `claude` (`sessions/claude.ts`) and `codex` (`sessions/codex/codex.ts`), the environment and the folder, and remembers session ids itself. The one path that crosses is a file dropped on a terminal: the page passes the dropped `File` objects, the preload reads their paths with `webUtils.getPathForFile` (a file the page made has none), and main checks them (`terminal:drop`: absolute, length-capped, no control characters; then that they exist) before pasting them, quoted, into that terminal, never using them otherwise. Connectors use an agent's id only to route events, never in a path or a command line. What an agent is set to run with goes on its CLI's command line only as checked values, from the renderer and from `.corral` files alike: a model's name (`MODEL_PATTERN`: never with a dash first, which would read as a flag), an effort (`EFFORT_PATTERN`; Claude Code's only one of its levels) and a mode of its CLI (a file never sets one that never asks). Canvases are opened from and saved to, and agents run in, only a `TrustedPath` (`core/host.ts`): one the user picked in the app's dialogs (`host/dialogs.ts`), or one memory or the journal wrote and reads back; no command line mints one. Every session's process is closed before the app quits. A Terminal view sends only keystrokes, its size and dropped files; its CLI's hooks post to a server on 127.0.0.1 that needs the session's own token (from its environment), and corrallm only listens to them (it never answers with a decision, and never answers what the CLI asks in its terminal). corrallm only reads Claude Code's settings files (the user's, the project's and the organization's managed ones) to tell whether they turn its hooks off (`hooks-off.ts`), and never overrides them (its `--settings` never set `disableAllHooks` or the hook allowlists). Codex's hooks are given and trusted for its session alone, on its command line: corrallm never writes the user's config.toml, and never runs Codex with `--dangerously-bypass-hook-trust` (which would also run the user's and the project's untrusted hooks). Claude Code's status line posts to that server too, with the token read from a file only the user can read (never on a command line), and never puts what Claude Code gives it into a command line; Codex's are read from its app server (a Codex · Terminal session asks a private one nothing but `account/rateLimits/read`). Usage readings keep only shares and times.
 
@@ -443,9 +459,9 @@ A backend's usage limits belong to its account, so main keeps one reading per ba
 ## Native modules
 
 - Forge's Vite plugin packages only `.vite/`. `package.json` `dependencies` therefore holds only native modules that ship unbundled; everything Vite bundles (React, electron-squirrel-startup, …) belongs in `devDependencies`.
-- To add one (e.g. `better-sqlite3`): add it to `dependencies`; add it to `external` in `vite.main.config.mts`; add it to `NATIVE_MODULES` in `forge.config.mts` (runtime files, build-only deps); extend `asar.unpack` so its binaries are real files; keep it in `rebuildConfig.ignoreModules` if it ships Node-API prebuilds; approve its install script in `pnpm-workspace.yaml` `allowBuilds` only if it needs one. Then load and exercise it in `runNativeSelfTest` (`src/main/native-selftest.ts`) so the packaged self-test and CI cover it.
+- To add one (e.g. `better-sqlite3`): add it to `dependencies`; add it to `NATIVE_EXTERNALS` in `vite.main.config.mts` (external in main's, the core's and the CLI's bundles); add it to `NATIVE_MODULES` in `forge.config.mts` (runtime files, build-only deps); extend `asar.unpack` so its binaries are real files; keep it in `rebuildConfig.ignoreModules` if it ships Node-API prebuilds; approve its install script in `pnpm-workspace.yaml` `allowBuilds` only if it needs one. Then load and exercise it in the native self-test's checks (`src/main/core/selftest.ts`) so the packaged self-test (in main and in the core process), the CLI's and CI cover it.
 - node-pty is pinned to `1.2.0-beta.14` exactly: 1.1.0 ships a non-executable macOS `spawn-helper` and no Linux prebuilds; beta.15 has a Windows regression (microsoft/node-pty#955).
-- node-pty runs Terminal agents (`sessions/terminal/pty.ts`, loaded only when one starts) and the packaged self-test.
+- node-pty runs Terminal agents (`sessions/terminal/pty.ts`, loaded only when one starts) and the native self-test. Its Node-API prebuild loads under plain Node too (the CLI bundle).
 - node-pty on Windows: pass `useConptyDll: true` (its default `kill()` path uses `child_process.fork`, which the RunAsNode fuse breaks). The bundled ConPTY sends a DA1 query (`ESC[c`) at startup and holds output for about 3 s until answered: attach the pty to xterm.js (which answers) or, for headless consumers, reply `\x1b[?1;2c` when the query appears. Kill or await every pty before the app quits (teardown crashes, node-pty #904/#951).
 - Unit tests must never import native modules or the real `electron` module: `vi.mock('electron', ...)` (importing it downloads the Electron binary).
 
@@ -459,5 +475,6 @@ A backend's usage limits belong to its account, so main keeps one reading per ba
 - Unsigned macOS builds are re-signed ad hoc in the `postPackage` hook so the bundle signature verifies. Signing and notarization turn on from env vars (`.env.example`); `CORRALLM_UNSIGNED=1` forces an unsigned build.
 - `build/rpm.spec.ejs` is a patched copy of electron-installer-redhat's template (rpmbuild >= 4.20 fix); delete it once upstream ships the fix.
 - Forge 8's terminal UI hides plain logs; set `CI=1` for linear output.
-- The main bundle is CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` and the packaged self-test would catch it.
+- The main, core and CLI bundles are CommonJS, where `import.meta` does not exist: `vite.main.config.mts` defines `import.meta.url` as the bundle's own file URL (`mainDefine`, which `vite.cli.config.mts` reuses; the Agent SDK uses it when loaded). Without it the bundler writes `{}.url` and main crashes at start; `e2e/sdk.e2e.ts` and the native self-test (packaged, and the CLI's) would catch it.
+- The CLI bundle must not import Electron: `vite.cli.config.mts` fails the build if it does.
 - Auto-update is a TODO in `src/main/index.ts` (Squirrel + ZIP makers are compatible with `update-electron-app`).

@@ -62,10 +62,11 @@ jobs:
       - run: pnpm run test
       - run: pnpm run package
 
-      # Checks the packaged, fused app on every OS: node-pty loads and spawns in the main process,
-      # main's terminal screen (@xterm/headless) works, the bundled Agent SDK runs a query against
-      # the self-test's own fake claude (with the node set up above), and launch switches that
-      # could hijack the app are refused.
+      # Checks the packaged, fused app on every OS, in the main process and then in its core
+      # process (a utility process): node-pty loads and spawns, a terminal screen (@xterm/headless)
+      # works, the bundled Agent SDK runs a query against the self-test's own fake claude (with the
+      # node set up above), loopback HTTP and spawning work, and child_process.fork is refused.
+      # Then that launch switches that could hijack the app are refused.
       - name: Allow Chromium sandbox (Linux)
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -96,3 +97,12 @@ jobs:
               exit 1
             fi
           done
+
+      # The same checks under plain Node, in the `corrallm` CLI bundle.
+      - name: CLI bundle check
+        timeout-minutes: 5
+        run: |
+          pnpm run build:cli
+          pnpm run corrallm
+        env:
+          CORRALLM_NATIVE_SELFTEST: '1'

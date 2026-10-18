@@ -27,15 +27,16 @@ const ADAPTER_IMPORTERS = [
   'src/main/sessions/codex/**',
   'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
   'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
-  'src/main/{index,forge-env.d,selftest}.ts',
+  'src/main/{index,forge-env.d}.ts',
+  'src/main/core/selftest.ts',
   'src/main/sessions/{manager,installed,connectors}.ts',
   '**/*.test.ts',
 ];
 
 /**
- * The core's side of main, which never runs in main's process (src/main/core/host.ts): its folders,
- * and the Electron-free services it uses. It never imports Electron or the host (src/main/host/):
- * what needs the desktop is a HostServices request.
+ * The core's side of main, which runs wherever it is hosted (main, the core process, plain Node;
+ * src/main/core/host.ts): its folders, and the Electron-free services it uses. It never imports
+ * Electron or the host (src/main/host/): what needs the desktop is a HostServices request.
  */
 const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
 const CORE_SERVICES = 'src/main/{memory,settings,usage,files,git,canvas,project,run-journal}.ts';
@@ -51,7 +52,14 @@ const host = (regex: string) => ({
 });
 
 export default defineConfig(
-  globalIgnores(['.vite/', 'out/', 'coverage/', 'playwright-report/', 'test-results/']),
+  globalIgnores([
+    '.vite/',
+    'dist-cli/',
+    'out/',
+    'coverage/',
+    'playwright-report/',
+    'test-results/',
+  ]),
   {
     name: 'app/typescript',
     files: ['**/*.{ts,tsx,mts,cts}'],
