@@ -12,7 +12,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
-import type { TurnResult } from '../../../shared/session';
+import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
 import type { MessageStore } from './messages';
@@ -229,6 +229,12 @@ export class Delivery {
       this.#withdrawn(message, by);
       this.schedule();
       return;
+    }
+    if (message.kind !== 'text') {
+      throw new DeliveryError(
+        'conflict',
+        'That message is a record; records are never delivered, so there is nothing to take back.',
+      );
     }
     if (!this.#inFlight(message)) {
       throw new DeliveryError('conflict', `That message is ${stateWords(message)} already.`);
@@ -687,7 +693,8 @@ export class Delivery {
 
   /**
    * A message from anyone but you, as its agent is told it: behind a first line saying whom it is
-   * from (and, for a reply, what it replies to), so the agent never takes it for its user's.
+   * from (and, for a reply, what it replies to, and how that turn ended if it didn't complete), so
+   * the agent never takes it for its user's.
    */
   #frame(message: Message): string {
     const { from, id, replyTo, turn, body } = message;
@@ -701,9 +708,23 @@ export class Delivery {
           : ['corrallm', 'corrallm itself'];
     const about =
       turn !== undefined && replyTo !== undefined
-        ? `Reply from ${who} (${what}, not the user; message ${id}, replying to your message ${replyTo})`
+        ? `Reply from ${who} (${what}, not the user; message ${id}, replying to your message ${replyTo}${this.#ending(turn)})`
         : `Message from ${who} (${what}, not the user; message ${id})`;
     return `[corrallm] ${about}:\n${body}`;
+  }
+
+  /**
+   * How a reply's turn ended, as its frame tells it, if it didn't complete: "; its turn failed: a
+   * usage limit, until 18:00".
+   */
+  #ending({ status, reason, message, resetsAt }: TurnResult): string {
+    if (status === 'completed') return '';
+    const until =
+      resetsAt === undefined
+        ? ''
+        : `, until ${resetTime(resetsAt, this.#deps.now(), this.#deps.locale)}`;
+    const why = message === undefined ? '' : ` (${threadTitle(message, REASON)})`;
+    return `; its turn ${status === 'failed' ? 'failed' : 'was cancelled'}: ${REASON_WORDS[reason]}${until}${why}`;
   }
 
   /** Whether a message to an agent is in its hands: being delivered, or its turn going on. */
@@ -753,25 +774,32 @@ export class DeliveryError extends Error {
   }
 }
 
-/** Where a settled message is, in words: "withdrawn", "answered by its turn's end". */
-function stateWords({ state, kind }: Message): string {
-  if (kind !== 'text') return 'a record, which is never delivered';
-  switch (state) {
-    case 'replied':
-      return 'replied to';
-    case 'delivered':
-      return 'delivered';
-    default:
-      return state;
-  }
+/** Where a settled text message is, in words: "withdrawn", "replied to". */
+function stateWords({ state }: Message): string {
+  return state === 'replied' ? 'replied to' : state;
 }
+
+/** Why a turn didn't complete, in words. */
+const REASON_WORDS: Readonly<Record<TurnReason, string>> = {
+  completed: 'it completed',
+  interrupted: 'it was interrupted',
+  'taken-back': 'it was taken back',
+  'usage-limit': 'a usage limit',
+  auth: 'a login problem',
+  api: 'an API error',
+  declined: 'it was declined',
+  'start-failed': 'its session wouldn’t start',
+  'connection-closed': 'its session closed',
+  error: 'an error',
+};
 
 /** A reply cut to the most a message holds, marked where it was cut. */
 function cut(reply: string): string {
   const bytes = new TextEncoder().encode(reply);
   if (bytes.length <= MAX_MESSAGE_BYTES) return reply;
   const room = MAX_MESSAGE_BYTES - new TextEncoder().encode(CUT).length;
-  // Cut on a character's boundary: the decoder drops a partial last one.
+  // Cut on a character's boundary: the decoder ends a character cut in two with U+FFFD, dropped
+  // here.
   const kept = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, room));
   return `${kept.replace(/�$/u, '')}${CUT}`;
 }

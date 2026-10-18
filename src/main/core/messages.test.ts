@@ -189,7 +189,17 @@ async function ok<T = Record<string, unknown>>(
 
 /** What `caller` may read of the canvas's messages, oldest first. */
 async function inbox(caller: Caller = OUTSIDE): Promise<Message[]> {
-  return (await ok<{ items: Message[] }>('messages', {}, caller)).items;
+  const all: Message[] = [];
+  for (let after: string | undefined; ;) {
+    const page: { items: Message[]; next: string } = await ok(
+      'messages',
+      after === undefined ? {} : { after },
+      caller,
+    );
+    if (page.items.length === 0) return all;
+    all.push(...page.items);
+    after = page.next;
+  }
 }
 
 /** A message `caller` sent, as it is now. */
@@ -473,7 +483,20 @@ describe('delivery', () => {
         OUTSIDE,
       ),
     ).toMatchObject({ ok: false, error: { code: 'invalid' } });
-    await send('builder', 'x'.repeat(MAX_MESSAGE_BYTES));
+    // The most a message holds goes; its echoed reply, longer, comes back cut to it, and marked,
+    // never in the middle of a character (each "é" is two bytes, and the cut falls inside one).
+    for (const body of ['x'.repeat(MAX_MESSAGE_BYTES), 'é'.repeat(MAX_MESSAGE_BYTES / 2)]) {
+      const id = await send('builder', body);
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      const reply = (await inbox()).find((message) => message.replyTo === id);
+      expect(new TextEncoder().encode(reply?.body).length).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+      expect(reply?.body).toMatch(
+        /(x|é)\n\n\[corrallm: cut here; the whole reply is in its transcript\]$/u,
+      );
+      expect(reply?.body).not.toContain('\uFFFD');
+    }
   });
 
   it('refuses a party more messages waiting for one agent than it may have, never yours', async () => {
@@ -556,6 +579,94 @@ describe('delivery', () => {
       ],
       ['From you', undefined],
     ]);
+  });
+
+  it('tells an agent how the turn its reply came from ended, when it didn’t complete', async () => {
+    await keepCanvas();
+    const resetsAt = Date.now() + 3_600_000;
+    await start({
+      appServer: {
+        // A turn whose message asks it to fails on a usage limit.
+        start: async (spec, host) => {
+          const session = await appServer.start(spec, host);
+          const send = session.send.bind(session);
+          session.send = (message) => {
+            if (!message.text.endsWith('Fail this')) return send(message);
+            host.emit({ type: 'user', id: message.id, text: message.text });
+            host.emit({
+              type: 'end',
+              messages: [message.id],
+              seconds: 1,
+              interrupted: false,
+              failed: true,
+              result: { status: 'failed', reason: 'usage-limit', resetsAt },
+            });
+            return Promise.resolve();
+          };
+          return session;
+        },
+      },
+    });
+    const id = await send('helper', 'Fail this', BUILDER);
+    await vi.waitFor(async () => {
+      const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
+      expect(reply?.state).toBe('replied');
+    });
+    const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
+    expect(reply).toMatchObject({
+      body: '',
+      turn: { status: 'failed', reason: 'usage-limit', resetsAt },
+    });
+    expect(sent(appServer).at(-1)).toMatch(
+      new RegExp(
+        `^\\[corrallm\\] Reply from agent "Helper" \\(an agent, not the user; message ${String(reply?.id)}, replying to your message ${id}; its turn failed: a usage limit, until [^)]*\\d:\\d\\d\\):\n$`,
+      ),
+    );
+  });
+
+  it('takes back only what its sender may, and says why it can’t', async () => {
+    await keepCanvas();
+    await start({ appServer: new FakeConnector({ adapter: 'codex', pause: 200 }) });
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const waiting = await send('builder', 'Wait for me');
+    // Builder may name a message sent to it, but takes back only what it sent.
+    expect(await core?.call('withdraw', { canvas: CANVAS, id: waiting }, BUILDER)).toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'Only a message you sent can be taken back.' },
+    });
+    expect((await find(waiting))?.state).toBe('pending');
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(waiting))?.state).toBe('delivered');
+    });
+    // Once it is in its turn, even you take back another party's message only by interrupting.
+    expect(await core?.call('withdraw', { canvas: CANVAS, id: waiting }, YOU)).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence:
+          'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
+      },
+    });
+    await vi.waitFor(async () => {
+      expect((await find(waiting))?.state).toBe('replied');
+    });
+    // Replied to, it stays so.
+    expect(await core?.call('withdraw', { canvas: CANVAS, id: waiting }, OUTSIDE)).toEqual({
+      ok: false,
+      error: { code: 'conflict', sentence: 'That message is replied to already.' },
+    });
+    expect((await find(waiting))?.state).toBe('replied');
+    // A record is never delivered: nothing to take back.
+    const [notice] = await notices();
+    expect(await core?.call('withdraw', { canvas: CANVAS, id: notice?.id }, YOU)).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        sentence:
+          'That message is a record; records are never delivered, so there is nothing to take back.',
+      },
+    });
   });
 
   it('delivers an agent its reply as a turn, which makes no reply of its own', async () => {
