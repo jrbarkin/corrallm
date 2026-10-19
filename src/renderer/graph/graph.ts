@@ -6,6 +6,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
 import { CARD_SIZE, EMPTY_FRAME, GROUP_COLORS, HEADER, PADDING } from '../../shared/model/geometry';
 import { areLinked } from '../../shared/model/queries';
+import { clearDeletedReferences } from '../../shared/model/references';
 import { parseRole } from '../../shared/role';
 import type { AgentSettings } from '../../shared/session';
 import { catalog } from '../catalog';
@@ -673,7 +674,8 @@ export function deleteSelection(graph: Graph): Graph {
   );
   if (removed.size === 0 && edges.length === edgesBefore) return graph;
   const byId = indexById(graph.nodes);
-  const nodes = graph.nodes.flatMap((n): GraphNode[] => {
+  const cleared = clearDeletedReferences(graph.nodes, removed);
+  const nodes = cleared.nodes.flatMap((n): GraphNode[] => {
     if (removed.has(n.id)) return [];
     if (n.parentId === undefined || !removed.has(n.parentId)) return [n];
     let ancestor = parentOf(n, byId);

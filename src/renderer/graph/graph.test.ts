@@ -2,6 +2,8 @@ import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
 import type { QueueItem } from '../../shared/model/queue';
+import { fromFile, toFile } from '../../shared/model/file';
+import { TEST_CATALOG } from '../../shared/engine/test-engine';
 
 import {
   absolutePosition,
@@ -809,6 +811,44 @@ describe('deleteEdge', () => {
 });
 
 describe('deleteSelection', () => {
+  it('clears references to deleted agents throughout surviving queues and saves a readable canvas', () => {
+    const g = frozen([
+      selected(agentNode('builder', 0, 0)),
+      agentNode('reviewer', 0, 100, {
+        data: {
+          label: 'Reviewer',
+          queue: [
+            { id: 'wait', waitFor: [{ agent: 'builder' }] },
+            { id: 'send', message: 'Review this', target: 'builder' },
+            {
+              id: 'branch',
+              if: { kind: 'freeText', text: 'Ready?' },
+              then: [{ id: 'read', action: 'Read', target: 'builder' }],
+            },
+            {
+              id: 'loop',
+              repeat: [{ id: 'step', action: 'Read', target: 'builder' }],
+              until: { kind: 'repeatEnds', agent: 'builder', item: 'building' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        },
+      }),
+    ]);
+    const result = deleteSelection(g);
+    expect(get(result, 'reviewer').data.queue).toEqual([
+      {
+        id: 'branch',
+        if: { kind: 'freeText', text: 'Ready?' },
+        then: [{ id: 'read', action: 'Read' }],
+      },
+      { id: 'step', action: 'Read' },
+    ]);
+    const document = documentOf(result, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId);
+    expect(fromFile(toFile(document), TEST_CATALOG, 'claude-code')).toEqual(document);
+  });
+
   it('deletes the selected agents and edges, and the edges of deleted agents', () => {
     const g = frozen(
       [selected(agentNode('a', 0, 0)), agentNode('b', 0, 100), agentNode('c', 0, 200)],
