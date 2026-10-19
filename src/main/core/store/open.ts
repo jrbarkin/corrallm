@@ -36,7 +36,8 @@ import type { StoreDeps } from './store';
  * says it is corrupt or no database, its quick check finds a fault, or it isn't corrallm's) is
  * set aside as core.rejected-<uuid>.db with its log, index and journal, the log first: a log left
  * without its database could otherwise be replayed into the next one. Then the newest snapshot that
- * passes the same checks is restored, else the store starts empty, and it says so. Whatever
+ * passes the same checks is restored, else the store starts empty, and it says so; a restore cut
+ * short (core.db gone, its snapshots there) is finished as the store next opens. Whatever
  * restoring loses, the core treats as a restart does: what was being sent is never sent again.
  */
 
@@ -75,11 +76,17 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
   const said: string[] = [];
   try {
     let connection: Connection;
-    try {
-      connection = openConnection(file);
-    } catch (error) {
-      if (!isDamage(error)) throw error;
-      connection = await recover(profile, file, reason(error), said);
+    if (!existsSync(file) && (await snapshots(profile)).length > 0) {
+      // Set aside without a snapshot in its place yet: a restore cut short, finished now.
+      said.push(`The core’s database (${file}) was missing.`);
+      connection = await restore(profile, file, said);
+    } else {
+      try {
+        connection = openConnection(file);
+      } catch (error) {
+        if (!isDamage(error)) throw error;
+        connection = await recover(profile, file, reason(error), said);
+      }
     }
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
@@ -120,6 +127,17 @@ async function recover(
     await moveIfThere(`${file}${suffix}`, `${rejected}${suffix}`);
   }
   said.push(`The core’s database was damaged (${why}), and was moved to ${rejected}.`);
+  return restore(profile, file, said);
+}
+
+/**
+ * Opens the newest sound snapshot in the place of a database that is gone, or an empty database,
+ * saying which in `said`.
+ */
+async function restore(profile: string, file: string, said: string[]): Promise<Connection> {
+  // A log or journal left without its database belongs to none (SQLite deletes one it finds
+  // beside an empty file): replayed into the snapshot, it would damage it.
+  for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
   for (const snapshot of await snapshots(profile)) {
     if (!sound(snapshot)) continue;
     // Copied beside it, then moved over it: never a database cut short.

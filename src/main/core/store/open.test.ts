@@ -247,6 +247,17 @@ describe('a damaged database', () => {
     }
   }
 
+  /** Leaves at `log` a log another database wrote, and never checkpointed. */
+  async function leaveLog(log: string): Promise<void> {
+    const elsewhere = await mkdtemp(path.join(tmpdir(), 'corrallm-gone-'));
+    const gone = connect(path.join(elsewhere, 'gone.db'));
+    gone.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0');
+    gone.exec("CREATE TABLE gone (note TEXT) STRICT; INSERT INTO gone VALUES ('from the log')");
+    await copyFile(path.join(elsewhere, 'gone.db-wal'), log);
+    gone.close();
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+
   /** What was set aside: the database's file, as moved. */
   async function setAside(): Promise<string> {
     const [name, ...others] = (await readdir(profile)).filter((one) =>
@@ -339,6 +350,33 @@ describe('a damaged database', () => {
     expect(messages(store)).toEqual({ messages: 300 });
   });
 
+  it('finishes a restore cut short the next time it opens, rather than starting empty', async () => {
+    await keepMessages(Date.UTC(2026, 9, 19, 12));
+    await writeFile(file, 'This is not a database. '.repeat(500));
+    // The snapshot's copy fails once the database is set aside (on a full disk, say): here,
+    // something is in its way.
+    await mkdir(`${file}.restoring`);
+    const failed = await openStore(profile);
+    expect(failed.store).toBeUndefined();
+    expect(failed.said).toEqual([
+      `The core’s database was damaged (file is not a database), and was moved to ${await setAside()}.`,
+      expect.stringMatching(/^The core’s database could not be opened \(.+\)\.$/),
+    ]);
+    await rm(`${file}.restoring`, { recursive: true });
+    // A log left without its database belongs to none: never replayed into the snapshot.
+    await leaveLog(`${file}-wal`);
+
+    const { store, said } = await open();
+
+    expect(said).toEqual([
+      `The core’s database (${file}) was missing.`,
+      'It was restored from its snapshot of 2026-10-19T12:00:00.000Z: what changed since then is lost.',
+    ]);
+    expect(canvases(store)).toEqual([{ id: CANVAS }]);
+    expect(messages(store)).toEqual({ messages: 300 });
+    expect(store.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' });
+  });
+
   it('sets aside a database SQLite finds damaged as it opens it', async () => {
     await keepMessages(Date.UTC(2026, 9, 19, 12));
     await rm(path.join(profile, 'backups'), { recursive: true });
@@ -370,15 +408,9 @@ describe('a damaged database', () => {
   });
 
   it('begins a database anew without a log left behind by one that is gone', async () => {
-    // A log another database wrote, and never checkpointed, as one set aside without its log
-    // would leave: SQLite deletes a log it finds beside an empty file, never replaying it.
-    const elsewhere = path.join(profile, 'elsewhere');
-    await mkdir(elsewhere);
-    const gone = connect(path.join(elsewhere, 'gone.db'));
-    gone.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0');
-    gone.exec("CREATE TABLE gone (note TEXT) STRICT; INSERT INTO gone VALUES ('from the log')");
-    await copyFile(path.join(elsewhere, 'gone.db-wal'), `${file}-wal`);
-    gone.close();
+    // As one set aside without its log would leave: SQLite deletes a log it finds beside an
+    // empty file, never replaying it.
+    await leaveLog(`${file}-wal`);
 
     const { store, said } = await open();
 
