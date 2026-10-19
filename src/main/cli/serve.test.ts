@@ -581,7 +581,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     child.stdout.on('data', (chunk: Buffer) => {
       printed += chunk.toString();
     });
-    const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+    // Once its output is all read: a child's last output can come after it exits.
+    const exited = new Promise<number | null>((resolve) => child.once('close', resolve));
     return { child, printed: () => printed.replaceAll('\r\n', '\n'), exited };
   }
 
@@ -594,6 +595,13 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   ): Promise<{ printed: () => string; server: Serve }> {
     const { child, printed, exited } = onTerminal(args);
     const api = await apiFile(exited, printed);
+    // api.json is written as it serves, but the token it printed first comes through the terminal.
+    await vi.waitFor(
+      () => {
+        expect(printed()).toMatch(/^ {2}[A-Za-z0-9_-]{43}$/m);
+      },
+      { timeout: 20_000, interval: 50 },
+    );
     const server: Serve = {
       child,
       url: api.url,
