@@ -51,14 +51,38 @@ vi.mock('./security', () => ({
   isTrustedSender: vi.fn(),
 }));
 vi.mock('./native-selftest', () => ({ runNativeSelfTest: vi.fn() }));
-const { request, createWindow, makeHost } = vi.hoisted(() => ({
-  request: vi.fn<(name: string, ...args: unknown[]) => Promise<{ ok: true; value: unknown }>>(() =>
-    Promise.resolve({ ok: true, value: null }),
-  ),
-  createWindow: vi.fn(() => Promise.resolve()),
-  makeHost: vi.fn<(_shutdown: Pick<RunShutdown, 'ready'>) => unknown>(() => ({})),
+const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoisted(() => {
+  const request = vi.fn<
+    (name: string, ...args: unknown[]) => Promise<{ ok: true; value: unknown }>
+  >(() => Promise.resolve({ ok: true, value: null }));
+  /** Each core process forked: how to end it, as a crash would. */
+  const cores: { exit: (code: number) => void }[] = [];
+  return {
+    request,
+    createWindow: vi.fn(() => Promise.resolve()),
+    makeHost: vi.fn<(_shutdown: Pick<RunShutdown, 'ready'>) => unknown>(() => ({})),
+    cores,
+    forkCore: vi.fn(() => {
+      const exited = Promise.withResolvers<number>();
+      cores.push({ exit: exited.resolve });
+      return {
+        link: { request },
+        exited: exited.promise,
+        connect: vi.fn(),
+        windowGone: vi.fn(),
+        kill: vi.fn(),
+      };
+    }),
+    reconnect: vi.fn(),
+  };
+});
+vi.mock('./host/core-process', () => ({ forkCore }));
+vi.mock('./host/ports', () => ({
+  CorePorts: class {
+    reconnect = reconnect;
+    connect = vi.fn();
+  },
 }));
-vi.mock('./host/core-process', () => ({ forkCore: () => ({ link: { request } }) }));
 vi.mock('./host/services', () => ({ hostServices: makeHost }));
 vi.mock('./window', () => ({ createMainWindow: createWindow }));
 
@@ -66,6 +90,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   getAllWindows.mockReturnValue([]);
+  cores.splice(0);
   request.mockReset();
   request.mockResolvedValue({ ok: true, value: null });
   app.requestSingleInstanceLock.mockReturnValue(true);
@@ -242,4 +267,72 @@ describe('the profile held by corrallm serve', () => {
       expect(createWindow).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('a core that crashes', () => {
+  async function started() {
+    app.whenReady.mockResolvedValueOnce();
+    await import('./index');
+    await vi.waitFor(() => {
+      expect(createWindow).toHaveBeenCalledOnce();
+    });
+  }
+
+  it('is restarted, asked up as the first was, and every window reconnects to it', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await started();
+
+    cores[0]?.exit(9);
+    await vi.waitFor(() => {
+      expect(reconnect).toHaveBeenCalledOnce();
+    });
+    expect(forkCore).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'init']);
+    expect(request.mock.calls[1]).toEqual(request.mock.calls[0]);
+    expect(stderr).toHaveBeenCalledWith(
+      'corrallm: the core process stopped (code 9); starting it again.',
+    );
+    expect(app.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'is given up on once it keeps stopping, saying so, and the app exits (hidden: %s)',
+    async (hidden) => {
+      if (hidden) vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await started();
+
+      for (let nth = 0; nth < 4; nth++) {
+        cores[nth]?.exit(1);
+        await vi.waitFor(() => {
+          expect(nth < 3 ? forkCore.mock.calls.length : app.exit.mock.calls.length).toBe(
+            nth < 3 ? nth + 2 : 1,
+          );
+        });
+      }
+      expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+      const why =
+        'corrallm’s core keeps stopping: it stopped 4 times within a minute. Open corrallm again to go on from what was last saved.';
+      expect(stderr).toHaveBeenCalledWith(`corrallm: ${why}`);
+      if (hidden) expect(showErrorBox).not.toHaveBeenCalled();
+      else
+        expect(showErrorBox).toHaveBeenCalledExactlyOnceWith('corrallm’s core keeps stopping', why);
+    },
+  );
+
+  it('is not restarted once the app quits', async () => {
+    getAllWindows.mockReturnValue([]);
+    await started();
+    const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (
+      event: unknown,
+    ) => void;
+    beforeQuit({ preventDefault: vi.fn() });
+    await vi.waitFor(() => {
+      expect(app.quit).toHaveBeenCalledOnce();
+    });
+
+    cores[0]?.exit(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(forkCore).toHaveBeenCalledOnce();
+  });
 });
