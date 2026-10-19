@@ -580,7 +580,7 @@ describe('delivery', () => {
     });
     expect((await find(first))?.state).toBe('pending');
     const waits =
-      'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.';
+      'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.';
     expect(await notices()).toEqual([expect.objectContaining({ replyTo: first, body: waits })]);
     expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([
       expect.objectContaining({
@@ -825,7 +825,7 @@ describe('delivery', () => {
     expect((await inbox()).find((message) => message.kind === 'notice')).toMatchObject({
       from: 'corrallm',
       replyTo: id,
-      body: 'Checker is waiting for you: Approve Bash: echo hello?',
+      body: 'Checker is waiting for the user: Approve Bash: echo hello?',
     });
     // You see the prompt with its choices; a token sees it, without them.
     const yours = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
@@ -1032,7 +1032,7 @@ describe('a turn waiting for you', () => {
     expect(notice).toMatchObject({
       replyTo: id,
       body: expect.stringMatching(
-        /^Builder is waiting for you: (Approve Bash: echo a+|Which of these (very )*very)…$/,
+        /^Builder is waiting for the user: (Approve Bash: echo a+|Which of these (very )*very)…$/,
       ) as string,
     });
     expect(new TextEncoder().encode(notice?.body).length).toBeLessThan(MAX_MESSAGE_BYTES / 16);
@@ -1047,7 +1047,7 @@ describe('a turn waiting for you', () => {
     expect(await notices()).toEqual([
       expect.objectContaining({
         replyTo: id,
-        body: 'Checker is waiting for you: Approve Bash: echo hello?',
+        body: 'Checker is waiting for the user: Approve Bash: echo hello?',
       }),
     ]);
   });
@@ -1063,7 +1063,7 @@ describe('the shell prefix', () => {
         error: {
           code: 'refused',
           sentence:
-            'It starts with "!", which Codex · Terminal runs as a shell command without asking: only you may send that.',
+            'It starts with "!", which Codex · Terminal runs as a shell command without asking: only the user may send that.',
         },
       });
     }
@@ -1436,7 +1436,7 @@ describe('a restart', () => {
       // Told it waited on a pause, then that it was withdrawn.
       expect((await notices(caller)).filter(({ replyTo }) => replyTo === id)).toEqual([
         expect.objectContaining({
-          body: expect.stringMatching(/^Helper is paused by you/) as string,
+          body: 'Helper is paused by the user, so your message waits until it is released: only the party that set a pause, or the user, can release it.',
         }),
         expect.objectContaining({
           body: 'Your message was withdrawn: the agent it was for, helper, is no longer on the canvas.',
@@ -1515,7 +1515,7 @@ describe('pauses', () => {
       error: {
         code: 'refused',
         sentence:
-          'Builder stays paused by "other" and by you on its group "Team": only the party that set a pause, or you, can release it.',
+          'Builder stays paused by "other" and by the user on its group "Team": only the party that set a pause, or the user, can release it.',
       },
     });
     // You release only Builder's own pauses; its group's still holds it.
@@ -1544,26 +1544,32 @@ describe('pauses', () => {
       error: {
         code: 'refused',
         sentence:
-          'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or you, can release it.',
+          'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or the user, can release it.',
       },
     });
     expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [] });
   });
 
-  it('tells a party once that its message waits on a pause, naming who set it', async () => {
-    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
-    await start();
-    await ok('run.pause', { target: { group: 'team' } }, YOU);
-    const first = await send('builder', 'First');
-    await send('builder', 'Second');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(await notices()).toEqual([
-      expect.objectContaining({
-        replyTo: first,
-        body: 'Builder is paused by you on its group "Team", so your message waits until it is released: only the party that set a pause, or you, can release it.',
-      }),
-    ]);
-  });
+  it.each([
+    ['an outside orchestrator', OUTSIDE],
+    ['an agent', { ...BUILDER, agent: 'helper', session: 'helper-session' }],
+  ] as const)(
+    'tells %s once that its message waits on a pause, naming who set it',
+    async (_, caller) => {
+      await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+      await start();
+      await ok('run.pause', { target: { group: 'team' } }, YOU);
+      const first = await send('builder', 'First', caller);
+      await send('builder', 'Second', caller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await notices(caller)).toEqual([
+        expect.objectContaining({
+          replyTo: first,
+          body: 'Builder is paused by the user on its group "Team", so your message waits until it is released: only the party that set a pause, or the user, can release it.',
+        }),
+      ]);
+    },
+  );
 
   it('tells a party anew when the agent it messages is paused again', async () => {
     await keepCanvas();
@@ -1690,8 +1696,8 @@ describe('a kill', () => {
     const messages = await inbox();
     expect(messages.filter((message) => message.kind === 'notice').map(({ body }) => body)).toEqual(
       [
-        'Your message to Builder was withdrawn by you.',
-        'Your message to Builder was withdrawn by you.',
+        'Your message to Builder was withdrawn by the user.',
+        'Your message to Builder was withdrawn by the user.',
       ],
     );
     expect(

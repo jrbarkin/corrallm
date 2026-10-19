@@ -381,7 +381,7 @@ export class Delivery {
           this.#tell(
             holdKey('unasking', node.id, message.from),
             message,
-            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.`,
+            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.`,
           );
         }
         if (hold.kind === 'usage') {
@@ -744,7 +744,7 @@ export class Delivery {
         this.#tell(
           `waiting:${message.id}`,
           message,
-          `${this.#name(agent)} is waiting for you: ${threadTitle(needsItem(need, input).title, TITLE)}`,
+          `${this.#name(agent)} is waiting for the user: ${threadTitle(needsItem(need, input).title, TITLE)}`,
         );
       }
     }

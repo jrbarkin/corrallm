@@ -412,7 +412,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'ask me' });
     const notice = await waitFor(client, (message) => message.kind === 'notice');
     expect(notice).toMatchObject({ from: 'corrallm', replyTo: id });
-    expect(notice.body).toMatch(/^Builder is waiting for you: \S/);
+    expect(notice.body).toMatch(/^Builder is waiting for the user: \S/);
     const { items } = await call<{ items: { kind: string; agent: string; choices: unknown[] }[] }>(
       client,
       'needs',

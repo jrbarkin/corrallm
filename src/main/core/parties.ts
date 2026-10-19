@@ -8,8 +8,8 @@ import { andList } from '../../shared/model/words';
 
 /*
  * Parties, and the pauses they set, in words, as the core's refusals and notices say them: an
- * agent by its name (on one line, cut short), an outside orchestrator by its name in quotes, you
- * and corrallm as themselves.
+ * agent by its name (on one line, cut short), an outside orchestrator by its name in quotes, the
+ * user and corrallm by those names.
  */
 
 /**
@@ -29,14 +29,15 @@ export function partyName(nodes: readonly NodeLike[], party: PartyId): string {
   return agent === undefined ? (outsideOf(party) ?? party) : nameOf(nodes, agent);
 }
 
-/** A party, as a sentence names it: an outside orchestrator's name in quotes, as a frame has it. */
+/** A party, as a refusal or notice names it: the user, or an outside orchestrator in quotes. */
 export function partyText(nodes: readonly NodeLike[], party: PartyId): string {
+  if (party === 'you') return 'the user';
   return outsideOf(party) === undefined ? partyName(nodes, party) : `"${partyName(nodes, party)}"`;
 }
 
 /**
  * Who set the pauses that hold an agent or a group (`id`), in words: each party, and the group a
- * pause is on when it isn't on `id` itself ('"ops" and by you on its group "Team"').
+ * pause is on when it isn't on `id` itself ('"ops" and by the user on its group "Team"').
  */
 export function pausesText(
   nodes: readonly NodeLike[],
@@ -52,4 +53,4 @@ export function pausesText(
 }
 
 /** What anyone held by a pause is told can release it. */
-export const RELEASES = 'only the party that set a pause, or you, can release it.';
+export const RELEASES = 'only the party that set a pause, or the user, can release it.';

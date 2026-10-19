@@ -21,7 +21,9 @@ describe('NODE_HOST', () => {
         message: string;
       };
       expect(refused.code).toBe('human-only');
-      expect(refused.message).toMatch(/in corrallm’s window/);
+      expect(refused.message).toBe(
+        'Only the user can choose a file or a folder, in corrallm’s window: corrallm serve has no window.',
+      );
     }
   });
 });

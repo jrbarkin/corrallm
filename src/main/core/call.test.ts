@@ -89,7 +89,10 @@ describe('core.call', () => {
     for (const party of ['lead', 'worker', 'outside-read', 'outside-write'] as const) {
       expect(await core.call('test.yours', {}, CALLERS[party])).toEqual({
         ok: false,
-        error: { code: 'human-only', sentence: expect.stringContaining('test.yours') as unknown },
+        error: {
+          code: 'human-only',
+          sentence: 'Only the user can call test.yours, in corrallm’s window.',
+        },
       });
     }
     expect(

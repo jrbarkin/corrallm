@@ -231,7 +231,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       const reach = party === 'you' ? surface.access.you : surface.access[party];
       if (reach === undefined) {
         throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
-          ? new OpFailure('human-only', `Only you can call ${name}, in corrallm’s window.`)
+          ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
           : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
       }
       if (caller.kind !== 'human') {
