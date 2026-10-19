@@ -1,6 +1,7 @@
 import { spawn } from './sessions/process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import { SAFE_GIT_OPTIONS } from './git';
 
@@ -18,6 +19,8 @@ const MAX_FILES = 50_000;
 const MAX_DEPTH = 12;
 /** How long git may take to list them. */
 const GIT_MS = 5000;
+/** Yield between short batches, including when preparing a list or returning many matches. */
+const CHUNK_SIZE = 512;
 /** Folders a walk skips: dependencies, builds, and version control. */
 const SKIPPED = new Set(['node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', '.vite']);
 
@@ -29,7 +32,7 @@ export interface ProjectFilesDeps {
 
 export class ProjectFiles {
   readonly #deps: ProjectFilesDeps;
-  readonly #lists = new Map<string, { at: number; files: Promise<string[]> }>();
+  readonly #lists = new Map<string, { at: number; files: Promise<FileList> }>();
 
   constructor(deps: ProjectFilesDeps) {
     this.#deps = deps;
@@ -37,10 +40,10 @@ export class ProjectFiles {
 
   /** The files and folders of `folder` that match `query` best, at most `limit`, relative to it. */
   async find(folder: string, query: string, limit: number): Promise<string[]> {
-    return rank(await this.#list(folder), query, limit);
+    return (await this.#list(folder)).find(query, limit);
   }
 
-  #list(folder: string): Promise<string[]> {
+  #list(folder: string): Promise<FileList> {
     const now = (this.#deps.now ?? Date.now)();
     const kept = this.#lists.get(folder);
     if (kept && now - kept.at < KEEP_MS) return kept.files;
@@ -48,54 +51,158 @@ export class ProjectFiles {
       .environment()
       .then((env) => gitFiles(folder, env))
       .catch(() => walk(folder))
-      .then(withFolders);
+      .then(withFolders)
+      .then((paths) => FileList.create(paths));
     this.#lists.set(folder, { at: now, files });
     files.catch(() => this.#lists.delete(folder));
     return files;
   }
 }
 
-/** Files and folders that match `query` (its characters in order), best first. */
-export function rank(paths: readonly string[], query: string, limit: number): string[] {
-  const wanted = query.toLowerCase().replace(/\\/g, '/');
-  const scored = paths.flatMap((file) => {
-    const score = matchScore(file.toLowerCase(), wanted);
-    return score === undefined ? [] : [{ file, score }];
-  });
-  scored.sort(
-    (a, b) => a.score - b.score || a.file.length - b.file.length || compare(a.file, b.file),
-  );
-  return scored.slice(0, limit).map(({ file }) => file);
+interface PreparedPath {
+  file: string;
+  lower: string;
+  name: string;
+  depth: number;
+}
+
+interface Match {
+  file: string;
+  score: number;
+}
+
+/** A folder's query-independent path data, kept with its file list. */
+export class FileList {
+  readonly #paths: readonly PreparedPath[];
+
+  private constructor(paths: readonly PreparedPath[]) {
+    this.#paths = paths;
+  }
+
+  static async create(paths: readonly string[]): Promise<FileList> {
+    const prepared: PreparedPath[] = [];
+    for (let i = 0; i < paths.length; i += CHUNK_SIZE) {
+      for (const file of paths.slice(i, i + CHUNK_SIZE)) {
+        const lower = file.toLowerCase();
+        prepared.push({
+          file,
+          lower,
+          name: path.posix.basename(lower.replace(/\/$/, '')),
+          depth: lower.split('/').length,
+        });
+      }
+      if (i + CHUNK_SIZE < paths.length) await setImmediate();
+    }
+    return new FileList(prepared);
+  }
+
+  /**
+   * Files and folders that match `query` (its characters in order), best first, at most `limit`
+   * (a whole number: the composer asks for `MAX_FILE_MATCHES`).
+   */
+  async find(query: string, limit: number): Promise<string[]> {
+    const wanted = query.toLowerCase().replace(/\\/g, '/');
+    const units = wanted.split('');
+    const letters = units.every((char) => char < '\ud800' || char > '\udfff') ? units : undefined;
+    // The worst retained match is at the root: reject the rest without allocating or sorting.
+    const best: Match[] = [];
+    for (let i = 0; i < this.#paths.length; i += CHUNK_SIZE) {
+      for (const file of this.#paths.slice(i, i + CHUNK_SIZE)) {
+        const score = matchScore(file, wanted, letters);
+        if (score === undefined) continue;
+        const worst = best[0];
+        if (best.length < limit) {
+          const match = { file: file.file, score };
+          best.push(match);
+          let at = best.length - 1;
+          while (at > 0) {
+            const parent = Math.floor((at - 1) / 2);
+            const above = best[parent];
+            if (!above || compareMatches(match, above) <= 0) break;
+            best[at] = above;
+            at = parent;
+          }
+          best[at] = match;
+        } else if (worst && (score - worst.score || compareFiles(file.file, worst.file)) < 0) {
+          worst.file = file.file;
+          worst.score = score;
+          siftDown(best);
+        }
+      }
+      if (i + CHUNK_SIZE < this.#paths.length) await setImmediate();
+    }
+    return best.sort(compareMatches).map(({ file }) => file);
+  }
 }
 
 /**
  * How well `file` matches (lower is better), or undefined if it does not: a name starting with
  * the query, then a name containing it, a path containing it, then its characters in order.
  */
-function matchScore(file: string, query: string): number | undefined {
-  if (query === '') return file.split('/').length;
-  const name = path.posix.basename(file.replace(/\/$/, ''));
-  if (name.startsWith(query)) return 0;
-  if (name.includes(query)) return 1;
-  if (file.includes(query)) return 2;
+function matchScore(
+  file: PreparedPath,
+  query: string,
+  letters: readonly string[] | undefined,
+): number | undefined {
+  if (query === '') return file.depth;
+  if (file.name.startsWith(query)) return 0;
+  if (file.name.includes(query)) return 1;
+  if (file.lower.includes(query)) return 2;
+  if (letters) {
+    let from = 0;
+    for (const char of letters) {
+      const at = file.lower.indexOf(char, from);
+      if (at < 0) return undefined;
+      from = at + 1;
+    }
+    return 3;
+  }
+  // The original iteration skips surrogate pairs when matching individual query code units.
   let at = 0;
-  for (const char of file) {
+  for (const char of file.lower) {
     if (char === query[at]) at += 1;
     if (at === query.length) return 3;
   }
   return undefined;
 }
 
-function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+function compareFiles(a: string, b: string): number {
+  return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+function compareMatches(a: Match, b: Match): number {
+  return a.score - b.score || compareFiles(a.file, b.file);
+}
+
+function siftDown(heap: Match[]): void {
+  const match = heap[0];
+  if (!match) return;
+  let at = 0;
+  while (at * 2 + 1 < heap.length) {
+    let child = at * 2 + 1;
+    let below = heap[child];
+    const right = heap[child + 1];
+    if (!below) break;
+    if (right && compareMatches(right, below) > 0) {
+      child += 1;
+      below = right;
+    }
+    if (compareMatches(match, below) >= 0) break;
+    heap[at] = below;
+    at = child;
+  }
+  heap[at] = match;
 }
 
 /** The files, and every folder they are in, ending in "/". */
-function withFolders(files: string[]): string[] {
+async function withFolders(files: string[]): Promise<string[]> {
   const folders = new Set<string>();
-  for (const file of files) {
-    const parts = file.split('/');
-    for (let i = 1; i < parts.length; i += 1) folders.add(`${parts.slice(0, i).join('/')}/`);
+  for (let at = 0; at < files.length; at += CHUNK_SIZE) {
+    for (const file of files.slice(at, at + CHUNK_SIZE)) {
+      const parts = file.split('/');
+      for (let i = 1; i < parts.length; i += 1) folders.add(`${parts.slice(0, i).join('/')}/`);
+    }
+    if (at + CHUNK_SIZE < files.length) await setImmediate();
   }
   return [...folders, ...files];
 }
