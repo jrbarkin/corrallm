@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 
 import { effortChoice as claudeEffort } from './claude-code/efforts';
 import { effortChoice as codexEffort } from './codex/efforts';
-import { claudeOptions } from './claude-settings';
+import { claudeOptions } from './claude-code/claude-settings';
 import { readModels } from './codex/app-server/session';
 import { recordedResult } from './codex/app-server/recorded';
 

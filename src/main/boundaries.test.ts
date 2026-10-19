@@ -93,13 +93,19 @@ function loadedBy(entry: string, seen = new Set<string>()): string[] {
 describe('ESLint’s boundaries in main', () => {
   it('keeps platform files from importing an adapter’s folder', async () => {
     for (const [file, from] of [
-      ['src/main/files.ts', './sessions/sdk/conversations'],
+      ['src/main/files.ts', './sessions/claude-code/sdk/conversations'],
       ['src/main/sessions/environment.ts', './codex/codex'],
-      ['src/main/sessions/terminal/session.ts', '../sdk/tools'],
+      ['src/main/sessions/terminal/session.ts', '../claude-code/sdk/tools'],
       ['src/main/api/mcp.ts', '../sessions/codex/login'],
       ['src/main/settings.ts', './sessions/codex/login'],
       ['src/main/ipc.ts', './sessions/claude-code/adapter'],
       ['src/main/sessions/terminal/session.ts', '../claude-code/adapter'],
+      ['src/main/sessions/manager.ts', './claude-code/sdk/conversations'],
+      ['src/main/core/selftest.ts', '../sessions/claude-code/sdk/inbox'],
+      ['src/main/sessions/connectors.ts', './codex/terminal/connector'],
+      ['src/main/files.ts', './sessions/acp/adapter'],
+      ['src/main/sessions/environment.ts', './muse/adapter'],
+      ['src/main/sessions/environment.ts', './codex'],
     ] as const) {
       expect(await importErrors(file, `import type { A } from '${from}';\n`)).toEqual([
         expect.stringContaining('adapter’s folder'),
@@ -107,16 +113,28 @@ describe('ESLint’s boundaries in main', () => {
     }
   });
 
-  it('lets adapters, Claude’s own files and today’s importers import adapters’ folders', async () => {
+  it('keeps adapters from importing each other, including types', async () => {
     for (const [file, from] of [
-      ['src/main/sessions/sdk/session.ts', '../codex/codex'],
-      ['src/main/sessions/codex/app-server/session.ts', '../../sdk/tools'],
-      ['src/main/sessions/terminal/claude-code.ts', '../sdk/tools'],
-      ['src/main/sessions/claude-settings.ts', './sdk/session'],
-      ['src/main/sessions/connectors.ts', './codex/terminal/connector'],
-      ['src/main/core/selftest.ts', '../sessions/sdk/inbox'],
+      ['src/main/sessions/claude-code/sdk/session.ts', '../../codex/codex'],
+      ['src/main/sessions/codex/app-server/session.ts', '../../claude-code/sdk/tools'],
+      ['src/main/sessions/acp/adapter.ts', '../muse/adapter'],
+      ['src/main/sessions/muse/session.ts', '../acp/adapter'],
+      ['src/main/sessions/claude-code/adapter.ts', '../codex'],
+    ] as const) {
+      expect(await importErrors(file, `import type { A } from '${from}';\n`)).toEqual([
+        expect.stringContaining('adapter’s folder'),
+      ]);
+    }
+  });
+
+  it('lets the registry import adapters, and each adapter import its own files and the toolkit', async () => {
+    for (const [file, from] of [
       ['src/main/sessions/adapters.ts', './claude-code/adapter'],
-      ['src/main/sessions/claude-code/adapter.ts', '../sdk/session'],
+      ['src/main/sessions/adapters.ts', './codex/adapter'],
+      ['src/main/sessions/claude-code/adapter.ts', './sdk/session'],
+      ['src/main/sessions/claude-code/sdk/session.ts', '../../terminal/hooks'],
+      ['src/main/sessions/codex/app-server/session.ts', '../terminal/tui'],
+      ['src/main/sessions/codex/terminal/tui.ts', '../../terminal/screen'],
     ] as const) {
       expect(await importErrors(file, `import { a } from '${from}';\n`)).toEqual([]);
     }

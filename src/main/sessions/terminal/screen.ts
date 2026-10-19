@@ -9,10 +9,9 @@ import type { ProgramStatus } from './status';
 /*
  * Main's copy of what a Terminal session's screen shows: a headless xterm.js fed everything the
  * CLI prints. A view that opens starts from its snapshot, then follows the CLI's output. It also
- * reads what main needs from the screen: Program Status reports (status.ts, as Claude Code makes
- * them), whose probe it answers; the window title (as Codex reports its state there); and the
- * draft in Claude Code's prompt. While no view is open it answers the one query a terminal must
- * (Device Attributes): Windows' ConPTY holds output until it is answered. Otherwise the view's
+ * reads what main needs from the screen: Program Status reports (status.ts), whose probe it
+ * answers; the window title; and the buffer each CLI reads its prompt from. While no view is open
+ * it answers the one query a terminal must (Device Attributes): Windows' ConPTY holds output until it is answered. Otherwise the view's
  * terminal answers queries; this one never does.
  */
 
@@ -33,9 +32,6 @@ const DEVICE_ATTRIBUTES = '\x1b[?1;2c';
  */
 const HIGH_WATER = 1_000_000;
 const LOW_WATER = 100_000;
-/** Claude Code's prompt mark, and the rules above and below its prompt box. */
-const PROMPT = '❯';
-const RULE = '─'.repeat(8);
 
 export interface ScreenOptions {
   cols: number;
@@ -102,7 +98,7 @@ export class Screen {
     return this.#terminal.rows;
   }
 
-  /** Whether the CLI asked for pastes to be bracketed (as Claude Code does, to tell them from typing). */
+  /** Whether the CLI asked for pastes to be bracketed, to tell them from typing. */
   get bracketedPaste(): boolean {
     return this.#terminal.modes.bracketedPasteMode;
   }
@@ -172,36 +168,6 @@ export class Screen {
       bottom: buffer.viewportY + this.#terminal.rows,
       cursorShown: this.#cursorShown,
     };
-  }
-
-  /**
-   * What the user has typed in Claude Code's prompt and not sent: '' when it is empty (or shows
-   * its dim placeholder), undefined when no prompt is on screen (a dialog, or still starting).
-   * The prompt is the line that starts with ❯ right under a rule; the box ends at the next rule.
-   */
-  draft(): string | undefined {
-    const buffer = this.#terminal.buffer.active;
-    const top = buffer.viewportY;
-    const bottom = top + this.#terminal.rows;
-    const lineText = (y: number) => buffer.getLine(y)?.translateToString(true) ?? '';
-    for (let y = bottom - 1; y > top; y -= 1) {
-      if (!lineText(y).startsWith(PROMPT) || !lineText(y - 1).startsWith(RULE)) continue;
-      const typed: string[] = [];
-      const cell = buffer.getNullCell();
-      for (let row = y; row < bottom && (row === y || !lineText(row).startsWith(RULE)); row += 1) {
-        const line = buffer.getLine(row);
-        let text = '';
-        // Past the prompt mark and its space (or the indent of a line after the first).
-        for (let x = 2; line && x < line.length; x += 1) {
-          const at = line.getCell(x, cell);
-          if (!at || at.getWidth() === 0) continue;
-          text += at.isDim() ? ' ' : at.getChars() || ' ';
-        }
-        typed.push(text.trimEnd());
-      }
-      return typed.join('\n').trim();
-    }
-    return undefined;
   }
 
   dispose(): void {

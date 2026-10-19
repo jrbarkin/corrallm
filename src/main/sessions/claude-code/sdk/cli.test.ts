@@ -4,8 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { SessionEvent } from '../../../shared/session';
-import type { LiveSession, SessionHost } from '../connector';
+import type { SessionEvent } from '../../../../shared/session';
+import type { LiveSession, SessionHost } from '../../connector';
 import { SdkConnector } from './connector';
 import { Conversations } from './conversations';
 import { SUBSCRIPTION_LOGIN } from './login';

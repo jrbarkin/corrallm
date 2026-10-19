@@ -1,7 +1,11 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
-import { findCodex } from './codex';
+import { findCodex, requireCodex } from './codex';
+import { AppServerConnector } from './app-server/connector';
+import { CodexTerminalConnector } from './terminal/connector';
+import { codexOptions } from './options';
+import { FakeConnector, FAKE_CODEX_MODELS } from '../fake';
 import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
 
@@ -132,6 +136,22 @@ export const codex: Adapter = {
     ],
     registerMcp: 'codex mcp add {server} --url {url} --bearer-token-env-var {var}',
   },
+  find: findCodex,
+  connectors: ({ clientApp, distribution, consent, usage }) => {
+    const readings = usage === undefined ? {} : { usage };
+    return {
+      [CODEX_TERMINAL]: new CodexTerminalConnector(readings),
+      'codex.app-server': new AppServerConnector({
+        clientApp,
+        distribution,
+        consent: consent('plan'),
+        ...readings,
+      }),
+    };
+  },
+  readOptions: async ({ env, cwd }) => codexOptions({ codex: await requireCodex(env), cwd, env }),
+  fake: (pause) => new FakeConnector({ pause, adapter: 'codex' }),
+  fakeOptions: { models: FAKE_CODEX_MODELS, defaults: { model: null, effort: null, mode: null } },
   usageBackends: [
     {
       id: CODEX_USAGE,

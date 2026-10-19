@@ -15,7 +15,8 @@ import { notice, output, property, text, unifiedDiff } from '../../transcript';
 import type { Places } from '../../transcript';
 import { effortChoice } from '../efforts';
 import { PLAN_DECLINED, planPrompt } from '../login';
-import type { CodexLogin, PlanConsent } from '../login';
+import type { CodexLogin } from '../login';
+import type { Consent } from '../../adapter';
 import type { AppServer } from '../rpc';
 import { RPC_ERRORS, RpcFailure } from '../rpc';
 import { IMPLEMENT_PLAN, INIT_PROMPT, parseMessage, readSkills, slashCommands } from './commands';
@@ -85,7 +86,7 @@ export interface AppServerSessionParts {
    * On a ChatGPT login: the user's say on using their plan, kept for good. The session asks before
    * its first turn uses it, unless they allowed it for good already.
    */
-  consent?: PlanConsent;
+  consent?: Consent;
   /** Runs git, for /diff. */
   git: RunGit;
   /** Starts a new thread, for /new (in the session's mode, with its model). */
@@ -160,7 +161,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #now: () => number;
   readonly #login: CodexLogin;
   /** Whom to ask before using the user's ChatGPT plan: none once it may be used. */
-  #consent: PlanConsent | undefined;
+  #consent: Consent | undefined;
   #thread: ThreadInfo;
   /** The thread whose id was last remembered (a thread is kept once it has a turn). */
   #remembered: string | undefined;

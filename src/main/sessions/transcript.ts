@@ -97,7 +97,7 @@ export function replacement(before: string, after: string): ToolDetail {
 }
 
 /**
- * A unified diff (as `git diff` and Codex write them): its hunks' lines, with "…" between hunks.
+ * A unified diff (as `git diff` writes it): its hunks' lines, with "…" between hunks.
  * File headers (diff --git, index, ---, +++) and "\ No newline at end of file" are left out.
  */
 export function unifiedDiff(patch: string): ToolDetail {

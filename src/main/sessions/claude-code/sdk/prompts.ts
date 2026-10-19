@@ -9,7 +9,12 @@ import type {
   PermissionUpdate,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AskedQuestion, PlanMode, SessionAnswer, SessionEvent } from '../../../shared/session';
+import type {
+  AskedQuestion,
+  PlanMode,
+  SessionAnswer,
+  SessionEvent,
+} from '../../../../shared/session';
 import { formContent, formFields } from './mcp';
 import type { Places } from './tools';
 import { displayPath, property, proposedDetail, text, toolSummary } from './tools';

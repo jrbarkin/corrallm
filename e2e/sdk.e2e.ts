@@ -9,11 +9,11 @@ import { launchApp } from './launch';
 
 /*
  * A Claude agent connected through the Agent SDK, in the built app: the SDK bundled into main
- * runs a fake `claude` (src/main/sessions/sdk/fake-claude.mjs, found through
+ * runs a fake `claude` (src/main/sessions/claude-code/sdk/fake-claude.mjs, found through
  * CORRALLM_CLAUDE_PATH) that speaks the CLI's protocol, never Claude itself.
  */
 
-const FAKE_CLAUDE = path.resolve('src/main/sessions/sdk/fake-claude.mjs');
+const FAKE_CLAUDE = path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs');
 
 let app: ElectronApplication;
 let closeApp: () => Promise<void>;

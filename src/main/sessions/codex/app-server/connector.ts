@@ -11,7 +11,7 @@ import { displayPath, notice, property, text } from '../../transcript';
 import type { Places } from '../../transcript';
 import { checkVersion, requireCodex } from '../codex';
 import { appServerRefusal, ASK_EACH_SESSION, codexLogin } from '../login';
-import type { Distribution, PlanConsent } from '../login';
+import type { Distribution, Consent } from '../../adapter';
 import { startAppServer } from '../rpc';
 import type { SpawnAppServer } from '../rpc';
 import { readSkills, slashCommands } from './commands';
@@ -48,7 +48,7 @@ export interface AppServerConnectorDeps {
   /** How this build is offered: only a local one runs on a ChatGPT login (login.ts). */
   distribution?: Distribution;
   /** The user's say on running on their ChatGPT plan, kept for good (main's settings). */
-  consent?: PlanConsent;
+  consent?: Consent;
   /** Runs git for /diff, in the agents' environment. */
   git?: (env: Readonly<Record<string, string>>) => RunGit;
   home?: string;
@@ -66,7 +66,7 @@ export class AppServerConnector implements Connector<CodexMode> {
   readonly #findCodex: (env: Readonly<Record<string, string>>) => Promise<string>;
   readonly #spawn: SpawnAppServer | undefined;
   readonly #distribution: Distribution;
-  readonly #consent: PlanConsent;
+  readonly #consent: Consent;
   readonly #git: (env: Readonly<Record<string, string>>) => RunGit;
   readonly #home: string;
   readonly #usage: ((backend: UsageBackendId, windows: UsageWindows) => void) | undefined;

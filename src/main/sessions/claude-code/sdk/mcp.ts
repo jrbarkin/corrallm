@@ -1,7 +1,7 @@
 import type { McpServerStatus } from '@anthropic-ai/claude-agent-sdk';
 
-import { MAX_FORM_FIELDS } from '../../../shared/session';
-import type { FormField, FormValue, McpServer } from '../../../shared/session';
+import { MAX_FORM_FIELDS } from '../../../../shared/session';
+import type { FormField, FormValue, McpServer } from '../../../../shared/session';
 import { property, text } from './tools';
 
 /*

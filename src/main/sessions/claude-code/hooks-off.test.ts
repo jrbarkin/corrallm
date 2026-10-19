@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { HOOK_TOKEN } from './hooks';
+import { HOOK_TOKEN } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning } from './hooks-off';
 
 const URL = 'http://127.0.0.1:52817/hook';

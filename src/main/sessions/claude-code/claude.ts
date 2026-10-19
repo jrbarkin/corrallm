@@ -1,8 +1,8 @@
-import { execFile } from './process';
+import { execFile } from '../process';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { canRun, findExecutable } from './executables';
+import { canRun, findExecutable } from '../executables';
 
 /*
  * The `claude` executable both Claude connections run: Terminal runs it in a pty, and the Agent

@@ -1,6 +1,14 @@
-import type { DiffLine, ToolDetail } from '../../../shared/session';
-import { diff, displayPath, firstLine, output, property, replacement, text } from '../transcript';
-import type { Places } from '../transcript';
+import type { DiffLine, ToolDetail } from '../../../../shared/session';
+import {
+  diff,
+  displayPath,
+  firstLine,
+  output,
+  property,
+  replacement,
+  text,
+} from '../../transcript';
+import type { Places } from '../../transcript';
 
 /*
  * How Claude Code's tool calls read in corrallm's transcript: what each acts on (a file, a

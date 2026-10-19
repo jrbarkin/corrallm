@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { HOOK_TOKEN } from './hooks';
+import { HOOK_TOKEN } from '../terminal/hooks';
 
 /*
  * Whether the user's or their organization's Claude Code settings turn off the hooks corrallm

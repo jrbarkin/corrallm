@@ -3,7 +3,7 @@ import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 /*
- * Finding the CLIs agents run (claude.ts, codex/codex.ts): the user's own install, with the
+ * Finding the CLIs agents run: the user's own install, with the
  * version, login and settings they already have; corrallm never ships or updates its own. An app
  * opened from the Finder or the Dock has a bare PATH, so the search goes by the agents'
  * environment (the login shell's: environment.ts), after the places the CLIs' installers use.

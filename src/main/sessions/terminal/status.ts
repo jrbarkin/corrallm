@@ -1,12 +1,12 @@
 /*
- * Program Status reports (OSC 7501): how Claude Code (2.1.295 and later) tells a terminal that
- * asks whether it is working, waiting on the user, done, idle or failed. corrallm's terminal
+ * Program Status reports (OSC 7501): how a CLI tells a terminal that asks whether it is working,
+ * waiting on the user, done, idle or failed. corrallm's terminal
  * answers the CLI's probe for it (screen.ts) and follows the reports to know what the session is
  * doing. The protocol: https://www.superlogical.com/rex/docs/build/program-status
  *
  *   ESC ] 7501 ; ? ST                                   the probe; a terminal that supports it
  *                                                       answers the same (`PROBE_REPLY`)
- *   ESC ] 7501 ; state=working:app=claude-code BEL      a report: key=value pairs, ':' between
+ *   ESC ] 7501 ; state=working:app=agent BEL            a report: key=value pairs, ':' between
  */
 
 /** The OSC number of Program Status reports. */
@@ -27,7 +27,7 @@ export interface ProgramStatus {
   state: (typeof STATES)[number];
   /** What a blocked session waits for: a permission prompt, an answer to a question, a login. */
   kind?: (typeof KINDS)[number];
-  /** How far along it is, 0 to 100 (Claude Code: the share of its to-dos done). */
+  /** How far along it is, 0 to 100. */
   progress?: number;
   /** Which record: a background task's (a/b paths); none for the session's own. */
   id?: string;

@@ -9,9 +9,9 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { CLAUDE_EFFORTS } from '../claude-code/efforts';
+import { CLAUDE_EFFORTS } from '../efforts';
 
-import { isPermissionMode } from '../../../shared/session';
+import { isPermissionMode } from '../../../../shared/session';
 import type {
   FilesRewind,
   McpChange,
@@ -23,8 +23,8 @@ import type {
   SlashCommand,
   UserMessage,
   TurnResult,
-} from '../../../shared/session';
-import type { LiveSession, SessionHost } from '../connector';
+} from '../../../../shared/session';
+import type { LiveSession, SessionHost } from '../../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
 import { displayPath } from './tools';

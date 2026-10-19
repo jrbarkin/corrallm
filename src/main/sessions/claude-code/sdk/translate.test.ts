@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ModelInfo, SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import type { SessionEvent } from '../../../shared/session';
+import type { SessionEvent } from '../../../../shared/session';
 import { RECORDED_PLACES, recorded, recordedMessages } from './recorded';
 import type { Fixture } from './recorded';
 import { Translator } from './translate';

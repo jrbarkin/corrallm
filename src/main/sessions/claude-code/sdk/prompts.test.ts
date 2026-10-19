@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { PlanMode, SessionEvent } from '../../../shared/session';
+import type { PlanMode, SessionEvent } from '../../../../shared/session';
 import { alwaysWording, DENIED, Prompts } from './prompts';
 import { RECORDED_PLACES, recorded } from './recorded';
 import type { Fixture, RecordedRequest } from './recorded';

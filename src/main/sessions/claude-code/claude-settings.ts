@@ -2,9 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { EFFORT_PATTERN, MODEL_PATTERN } from '../../shared/session';
-import type { ModelChoice, SettingsOptions } from '../../shared/session';
-import { CLAUDE_EFFORTS, effortChoice } from './claude-code/efforts';
+import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../shared/session';
+import type { ModelChoice, SettingsOptions } from '../../../shared/session';
+import { CLAUDE_EFFORTS, effortChoice } from './efforts';
 import { corrallmMode } from './sdk/translate';
 
 /*

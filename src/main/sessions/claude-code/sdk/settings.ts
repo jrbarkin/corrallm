@@ -1,7 +1,7 @@
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 
-import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../shared/session';
-import type { PermissionMode } from '../../../shared/session';
+import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../../shared/session';
+import type { PermissionMode } from '../../../../shared/session';
 import { corrallmMode } from './translate';
 
 /** What the CLI's settings say, as far as corrallm reads them. */

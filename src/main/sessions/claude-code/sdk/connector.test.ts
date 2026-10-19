@@ -17,8 +17,8 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionEvent } from '../../../shared/session';
-import type { SessionHost, SessionSpec } from '../connector';
+import type { SessionEvent } from '../../../../shared/session';
+import type { SessionHost, SessionSpec } from '../../connector';
 import { SdkConnector } from './connector';
 import { SUBSCRIPTION_LOGIN } from './login';
 import type { AuthStatus } from './login';

@@ -46,7 +46,7 @@ test.afterEach(async () => {
 });
 
 async function launch(connection: 'claude-code.sdk' | 'claude-code.terminal') {
-  let claude = path.resolve('src/main/sessions/sdk/fake-claude.mjs');
+  let claude = path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs');
   if (connection === 'claude-code.terminal') {
     claude = path.join(dir, 'claude');
     const fake = path.join(import.meta.dirname, 'fake-claude.mjs');

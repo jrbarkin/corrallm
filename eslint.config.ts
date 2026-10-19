@@ -5,6 +5,7 @@ import eslintConfigPrettier from 'eslint-config-prettier/flat';
 import reactHooks from 'eslint-plugin-react-hooks';
 import { reactRefresh } from 'eslint-plugin-react-refresh';
 import { defineConfig, globalIgnores } from 'eslint/config';
+import type { Linter } from 'eslint';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
@@ -12,32 +13,15 @@ const NODE_BUILTINS = builtinModules.flatMap((name) =>
   name.startsWith('node:') ? [name] : [name, `node:${name}`],
 );
 
-/**
- * An import of an adapter's folder: what is particular to one CLI
- * (src/main/sessions/{claude-code,sdk,codex}/).
- */
-const ADAPTER_FOLDERS = {
-  regex: '^(?:\\.{1,2}/)+(?:sessions/)?(?:claude-code|sdk|codex)/',
+/** Adapter folders, including those reserved for future connections. */
+const ADAPTERS = ['claude-code', 'codex', 'acp', 'muse'];
+const adapterFolders = (names: readonly string[]) => ({
+  regex: `(?:^|/)(?:${names.join('|')})(?:/|$)`,
   message:
-    'Platform code must not import an adapter’s folder (src/main/sessions/claude-code/, src/main/sessions/sdk/, src/main/sessions/codex/): reach the CLI through its connector, and what it declares through the catalog (sessions/adapters.ts).',
-};
-/**
- * What may import adapters' folders: the adapters themselves, the registry (sessions/adapters.ts),
- * Claude's own files outside its folder, and the platform files that import them today, each to go
- * as adapters move behind the registry.
- */
-const ADAPTER_IMPORTERS = [
-  'src/main/sessions/claude-code/**',
-  'src/main/sessions/sdk/**',
-  'src/main/sessions/codex/**',
-  'src/main/sessions/adapters.ts',
-  'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
-  'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
-  'src/main/forge-env.d.ts',
-  'src/main/core/{core,selftest}.ts',
-  'src/main/sessions/{manager,installed,connectors}.ts',
-  '**/*.test.ts',
-];
+    'Platform code must not import an adapter’s folder, and adapters never import each other: reach an adapter through sessions/adapters.ts.',
+});
+/** Remaining platform importers outside the registry; each must leave as it uses the seam. */
+const ADAPTER_IMPORTERS: string[] = [];
 
 /**
  * The core's side of main, which runs wherever it is hosted (main, the core process, plain Node;
@@ -164,9 +148,24 @@ export default defineConfig(
   {
     name: 'app/adapters',
     files: ['src/main/**/*.ts'],
-    ignores: ADAPTER_IMPORTERS,
-    rules: { 'no-restricted-imports': ['error', { patterns: [ADAPTER_FOLDERS] }] },
+    ignores: [
+      ...ADAPTERS.map((name) => `src/main/sessions/${name}/**`),
+      'src/main/sessions/adapters.ts',
+      '**/*.test.ts',
+      ...ADAPTER_IMPORTERS,
+    ],
+    rules: { 'no-restricted-imports': ['error', { patterns: [adapterFolders(ADAPTERS)] }] },
   },
+  ...ADAPTERS.map((name): Linter.Config => ({
+    name: `app/adapter-${name}`,
+    files: [`src/main/sessions/${name}/**/*.ts`],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: [adapterFolders(ADAPTERS.filter((other) => other !== name))] },
+      ],
+    },
+  })),
   // typescript-eslint's rule, so that it applies beside app/adapters' (`import type` included).
   {
     name: 'app/boundaries-core',

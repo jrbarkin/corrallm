@@ -40,7 +40,7 @@ test.beforeEach(async () => {
   ({ app, close: closeApp } = await launchApp({
     profile: path.join(dir, 'profile'),
     env: {
-      CORRALLM_CLAUDE_PATH: path.resolve('src/main/sessions/sdk/fake-claude.mjs'),
+      CORRALLM_CLAUDE_PATH: path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs'),
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       FAKE_CLAUDE_PROMPTS: path.join(dir, 'prompts.jsonl'),

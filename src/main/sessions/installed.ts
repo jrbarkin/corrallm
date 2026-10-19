@@ -1,13 +1,14 @@
 import type { InstalledClis } from '../../shared/session';
-import { findClaude } from './claude';
-import { findCodex } from './codex/codex';
+import { ADAPTERS } from './adapters';
 
-/**
- * Which agents the user has, by adapter: whether `claude` and `codex` are found where connected
- * agents would run them from (claude.ts, codex/codex.ts), in the agents' environment (`env`). It
- * runs neither.
- */
+/** Which catalog adapters' executables are found in the agents' environment. Runs none of them. */
 export async function installedClis(env: Readonly<Record<string, string>>): Promise<InstalledClis> {
-  const [claude, codex] = await Promise.all([findClaude(env), findCodex(env)]);
-  return { 'claude-code': claude !== undefined, codex: codex !== undefined };
+  return Object.fromEntries(
+    await Promise.all(
+      ADAPTERS.map(
+        async (adapter) =>
+          [adapter.descriptor.id, (await adapter.find?.(env)) !== undefined] as const,
+      ),
+    ),
+  );
 }

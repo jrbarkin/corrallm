@@ -2,7 +2,7 @@ import { request } from 'node:http';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { HOOK_TOKEN, hookSettings, HookServer } from './hooks';
+import { HookServer } from './hooks';
 import type { HookEvent, HookRegistration } from './hooks';
 
 /** Posts `body` to `url` as a hook would; resolves with the status and what came back. */
@@ -46,39 +46,6 @@ async function register(
   registrations.push(registration);
   return registration;
 }
-
-describe('hookSettings', () => {
-  it('posts the events corrallm follows to its server, with the token from the environment', () => {
-    const settings = hookSettings('http://127.0.0.1:4000/hook');
-    expect(Object.keys(settings.hooks)).toEqual([
-      'UserPromptSubmit',
-      'Stop',
-      'StopFailure',
-      'SessionEnd',
-      'PostModelSwitch',
-      'PermissionRequest',
-      'Notification',
-      'PreToolUse',
-    ]);
-    // Before a tool runs, only the two that ask the user: its questions, and a plan to approve.
-    expect(settings.hooks.PreToolUse).toEqual([
-      { matcher: 'AskUserQuestion|ExitPlanMode', hooks: settings.hooks.Stop?.[0]?.hooks },
-    ]);
-    expect(settings.hooks.Stop).toEqual([
-      {
-        hooks: [
-          {
-            type: 'http',
-            url: 'http://127.0.0.1:4000/hook',
-            headers: { Authorization: `Bearer $${HOOK_TOKEN}` },
-            allowedEnvVars: [HOOK_TOKEN],
-            timeout: 5,
-          },
-        ],
-      },
-    ]);
-  });
-});
 
 describe('HookServer', () => {
   it('routes each event to the session whose token it carries, answering with no decision', async () => {

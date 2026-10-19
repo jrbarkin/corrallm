@@ -8,13 +8,13 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
-import { PERMISSION_MODES } from '../../../shared/session';
-import type { ModelChoice, SessionEvent } from '../../../shared/session';
+import { PERMISSION_MODES } from '../../../../shared/session';
+import type { ModelChoice, SessionEvent } from '../../../../shared/session';
 import { requireClaude } from '../claude';
-import { spawn } from '../process';
-import { CLAUDE_TERMINAL } from '../claude-code/adapter';
-import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
-import { effortChoice } from '../claude-code/efforts';
+import { spawn } from '../../process';
+import { CLAUDE_TERMINAL } from '../adapter';
+import type { Connector, LiveSession, SessionHost, SessionSpec } from '../../connector';
+import { effortChoice } from '../efforts';
 import { historyEvents } from './history';
 import { Inbox } from './inbox';
 import {

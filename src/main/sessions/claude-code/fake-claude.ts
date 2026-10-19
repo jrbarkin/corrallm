@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
-import { HOOK_TOKEN } from './hooks';
-import type { Pty, PtyOptions } from './pty';
+import { HOOK_TOKEN } from '../terminal/hooks';
+import type { Pty, PtyOptions } from '../terminal/pty';
 
 /*
  * For tests: Claude Code's interactive CLI, faked at the pseudo-terminal, printing what the real

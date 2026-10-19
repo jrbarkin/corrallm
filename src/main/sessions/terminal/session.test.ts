@@ -11,10 +11,10 @@ import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../connector';
-import { helpFlags } from '../claude';
-import { TerminalConnector } from './connector';
-import { FakeClaude } from './fake-claude';
-import type { FakeClaudeOptions } from './fake-claude';
+import { helpFlags } from '../claude-code/claude';
+import { TerminalConnector } from '../claude-code/connector';
+import { FakeClaude } from '../claude-code/fake-claude';
+import type { FakeClaudeOptions } from '../claude-code/fake-claude';
 import { HOOK_TOKEN } from './hooks';
 
 /*

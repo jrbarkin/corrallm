@@ -74,7 +74,9 @@ async function launch(cli: 'claude' | 'codex' = 'claude') {
   closeApp = undefined;
   // Startup arguments show which conversation is resumed; the protocol fake separately logs
   // initialization context and user prompts, distinguishing a role from a synthetic turn.
-  const fake = pathToFileURL(path.resolve('src/main/sessions/sdk/fake-claude.mjs')).href;
+  const fake = pathToFileURL(
+    path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs'),
+  ).href;
   const claude = path.join(dir, 'fake-claude-settings.mjs');
   await writeFile(
     claude,

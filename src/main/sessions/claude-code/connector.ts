@@ -3,16 +3,16 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
-import { CLAUDE_USAGE } from '../claude-code/adapter';
-import { claudeFlags, requireClaude } from '../claude';
+import { CLAUDE_USAGE } from './adapter';
+import { claudeFlags, requireClaude } from './claude';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { ClaudeCode } from './claude-code';
 import { FirstRuns } from './first-run';
-import { HOOK_TOKEN, HookServer } from './hooks';
-import { spawnPty } from './pty';
-import type { SpawnPty } from './pty';
-import { TerminalSession, TIMING } from './session';
-import type { TerminalTiming } from './session';
+import { HOOK_TOKEN, HookServer } from '../terminal/hooks';
+import { spawnPty } from '../terminal/pty';
+import type { SpawnPty } from '../terminal/pty';
+import { TerminalSession, TIMING } from '../terminal/session';
+import type { TerminalTiming } from '../terminal/session';
 
 /*
  * The Terminal connection: a Claude agent runs Claude Code's own interactive CLI (the user's
