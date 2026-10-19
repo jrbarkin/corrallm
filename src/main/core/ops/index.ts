@@ -6,6 +6,8 @@ import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
+import type { ProjectFiles } from '../../files';
+import type { ProjectFolders } from '../../project';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
@@ -17,6 +19,7 @@ import { appOps } from './app';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
+import { projectOps } from './project';
 import { runOps } from './run';
 import { sessionOps } from './session';
 import { settingsOps } from './settings';
@@ -52,6 +55,8 @@ export interface OpServices {
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
+  projects: Pick<ProjectFolders, 'of'>;
+  files: Pick<ProjectFiles, 'find'>;
   windows: Pick<Windows, 'canvasOf'>;
   sessions: Pick<
     SessionManager,
@@ -75,6 +80,7 @@ export function implementations(services: OpServices): Implementations {
     ...appOps(services),
     ...catalogOps(services),
     ...templatesOps(services),
+    ...projectOps(services),
     ...conversationOps(services),
     ...sessionOps(services),
     ...settingsOps(services),

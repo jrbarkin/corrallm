@@ -9,7 +9,6 @@ import {
   IMAGE_TYPES,
   imageBytes,
   MAX_ANSWER_LENGTH,
-  MAX_FILE_QUERY_LENGTH,
   MAX_ID_LENGTH,
   MAX_FORM_FIELDS,
   MAX_MCP_NAME_LENGTH,
@@ -95,15 +94,6 @@ export function parseSendArgs(args: unknown[]): IpcArgs<'session:send'> {
     ...(pasted.length === 0 ? {} : { images: pasted }),
   };
   return [parseId(agentId, 'agent'), parsed];
-}
-
-/** project:files: what to search the project folder's files for. */
-export function parseFilesArgs(args: unknown[]): IpcArgs<'project:files'> {
-  const [query] = expect(args, 1, 'what to search for');
-  if (typeof query !== 'string' || query.length > MAX_FILE_QUERY_LENGTH) {
-    throw new TypeError('Expected what to search for');
-  }
-  return [query];
 }
 
 /** The longest base64 an image of the largest size takes. */

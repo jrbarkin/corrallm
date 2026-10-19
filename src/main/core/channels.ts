@@ -6,10 +6,8 @@ import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
-import { MAX_FILE_MATCHES } from '../../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../../shared/usage';
 import type { CanvasFiles } from '../canvas';
-import type { ProjectFiles } from '../files';
 import type { Windows } from './windows';
 import type { HostServices, WindowId } from './host';
 import type { ProjectFolders } from '../project';
@@ -17,7 +15,6 @@ import {
   parseAgentArgs,
   parseAnswerArgs,
   parseEffortArgs,
-  parseFilesArgs,
   parseFreshArgs,
   parseMcpChangeArgs,
   parseModeArgs,
@@ -46,7 +43,7 @@ export type ChannelHandler<C extends CoreChannel> = (
 
 /**
  * What the handlers act on: the catalog, which canvas each window shows, canvas files, runs,
- * project folders, their files, sessions, the agents
+ * project folders, sessions, the agents
  * the user has, and usage. A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
@@ -58,7 +55,6 @@ export interface ChannelServices {
   runs: Pick<RunJournal, 'get' | 'save' | 'opened' | 'saved' | 'draft'>;
   shutdown: { ready: HostServices['runReady'] };
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
-  files: Pick<ProjectFiles, 'find'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -136,7 +132,6 @@ function createHandlers({
   runs,
   shutdown,
   projects,
-  files,
   sessions,
   usage,
 }: ChannelServices): HandlerTable {
@@ -214,13 +209,6 @@ function createHandlers({
         const chosen = await projects.choose(window, canvas);
         if (chosen !== null && chosen.path !== before) await sessions.projectChanged(canvas);
         return chosen;
-      },
-    },
-    'project:files': {
-      parseArgs: parseFilesArgs,
-      handler: async ({ window }, query) => {
-        const folder = projects.of(await of(window));
-        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
       },
     },
     'session:start': {

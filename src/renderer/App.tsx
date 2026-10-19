@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
+import { findProjectFiles } from './agent/completion';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
 import { fromMain } from './ipc-error';
@@ -48,7 +49,7 @@ const sessionBackend: SessionBackend = {
   stopTask: (agentId, taskId) => fromMain(window.api.stopSessionTask(agentId, taskId)),
   close: (agentId) => fromMain(window.api.closeSession(agentId)),
   fresh: (agentId, adapter) => fromMain(window.api.freshSession(agentId, adapter)),
-  files: (query) => fromMain(window.api.findProjectFiles(query)),
+  files: findProjectFiles,
   options: (adapter) => fromMain(window.api.settingsOptions(adapter)),
   sessions: (agentId) => fromMain(window.api.listSessions(agentId)),
   resume: (agentId, sessionId) => fromMain(window.api.resumeSession(agentId, sessionId)),

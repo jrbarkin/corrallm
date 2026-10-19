@@ -3,13 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
-import {
-  MAX_ANSWER_LENGTH,
-  MAX_FILE_MATCHES,
-  MAX_FILE_QUERY_LENGTH,
-  MAX_ID_LENGTH,
-  MAX_MESSAGE_LENGTH,
-} from '../../shared/session';
+import { MAX_ANSWER_LENGTH, MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../shared/session';
 import { mintTrustedPath } from './host';
 import { Channels } from './channels';
 import type { ChannelServices } from './channels';
@@ -48,9 +42,6 @@ function fakeServices() {
       choose: vi.fn<ChannelServices['projects']['choose']>().mockResolvedValue(null),
       restore: vi.fn<ChannelServices['projects']['restore']>().mockResolvedValue(undefined),
       of: vi.fn<ChannelServices['projects']['of']>().mockReturnValue(undefined),
-    },
-    files: {
-      find: vi.fn<ChannelServices['files']['find']>().mockResolvedValue([]),
     },
     sessions: {
       start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
@@ -279,30 +270,6 @@ describe('project:choose handler', () => {
     services.projects.choose.mockResolvedValueOnce(null);
     await expect(invoke('project:choose', [], sender)).resolves.toBeNull();
     expect(services.sessions.projectChanged).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('project:files handler', () => {
-  it('searches the files of the sender’s project folder, and of none without one', async () => {
-    const sender = 7;
-    await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual([]);
-    expect(services.files.find).not.toHaveBeenCalled();
-
-    services.projects.of.mockReturnValue(mintTrustedPath('/work/app'));
-    services.files.find.mockResolvedValueOnce(['src/main/ipc.ts']);
-    await expect(invoke('project:files', ['ipc'], sender)).resolves.toEqual(['src/main/ipc.ts']);
-    expect(services.projects.of).toHaveBeenCalledWith(CANVAS);
-    expect(services.files.find).toHaveBeenCalledWith('/work/app', 'ipc', MAX_FILE_MATCHES);
-  });
-
-  it.each([
-    ['nothing to search for', []],
-    ['a query that is not text', [42]],
-    ['a query too long', ['x'.repeat(MAX_FILE_QUERY_LENGTH + 1)]],
-    ['a folder as well', ['ipc', '/etc']],
-  ])('rejects %s', (_label, args) => {
-    expect(() => invoke('project:files', args)).toThrow(/what to search for/);
-    expect(services.files.find).not.toHaveBeenCalled();
   });
 });
 

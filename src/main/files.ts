@@ -9,7 +9,7 @@ import { SAFE_GIT_OPTIONS } from './git';
  * The files of a project folder, for the composer's @-mentions (as Claude Code completes
  * "@src/ma" to "@src/main/"): the files git knows of (tracked, and untracked but not ignored),
  * or, outside a git repository, the folder's files found by walking it. Folders are offered too,
- * ending in "/". The renderer sends only what it searches for: main knows the folder.
+ * ending in "/". The renderer names its canvas and query: the core knows the folder.
  */
 
 /** How long a folder's file list is kept before it is listed again. */

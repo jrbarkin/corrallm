@@ -6,6 +6,7 @@ import { appOps } from './ops/app';
 import { catalogOps } from './ops/catalog';
 import { conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
+import { projectOps } from './ops/project';
 import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
@@ -27,6 +28,7 @@ export const OPS = {
   ...appOps,
   ...catalogOps,
   ...templatesOps,
+  ...projectOps,
   ...conversationOps,
   ...sessionOps,
   ...settingsOps,

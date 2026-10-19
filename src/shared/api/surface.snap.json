@@ -7,6 +7,7 @@
     "api.catalog.installed",
     "api.templates.list",
     "api.settings.get",
+    "api.project.files",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -28,6 +29,7 @@
       "message",
       "messages",
       "needs",
+      "project_files",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -59,6 +61,7 @@
       "catalog_installed",
       "messages",
       "needs",
+      "project_files",
       "session_get",
       "session_transcript",
       "settings_get",
@@ -75,6 +78,7 @@
       "message",
       "messages",
       "needs",
+      "project_files",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -90,10 +94,10 @@
     ]
   },
   "counts": {
-    "lead": 18,
+    "lead": 19,
     "worker": 10,
-    "outside-read": 13,
-    "outside-write": 19
+    "outside-read": 14,
+    "outside-write": 20
   },
   "unhosted": {
     "agents": "B11",
@@ -148,6 +152,10 @@
     "templates.list": {
       "input": "e5fa5cc18e054cdd",
       "output": "fb72ff50789dfefc"
+    },
+    "project.files": {
+      "input": "c42bffd7c0a78bc0",
+      "output": "48481aeb891f3b2d"
     },
     "agents": {
       "input": "41356bc15da6df1b",

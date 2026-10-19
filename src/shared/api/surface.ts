@@ -112,6 +112,7 @@ export const SURFACE = {
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
+  'project.files': { access: R, kind: 'read', scope: 'none' },
   agents: { access: A, kind: 'read', scope: 'none', varies: ['agents'] },
   status: {
     access: R,

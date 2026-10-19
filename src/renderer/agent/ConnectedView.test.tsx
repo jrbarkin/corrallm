@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../shared/session';
+import { newCanvasId } from '../../shared/canvas';
+import type { AppApi } from '../../shared/ipc';
+import { findProjectFiles } from './completion';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { OpenLinkContext } from '../open-link';
@@ -11,6 +14,10 @@ import { fakeBackend } from '../../shared/engine/test-backend';
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');
   return { createScreen: fakeScreens.create };
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 /** What the run asks at the end of a tool's step: how it went (src/shared/engine/run/turns.ts). */
@@ -1015,13 +1022,23 @@ describe('a connected agent', () => {
   });
 
   it('completes @-mentions with the project folder’s files', async () => {
+    const canvas = newCanvasId();
+    const projectFiles = vi.fn().mockResolvedValue({
+      ok: true,
+      value: { items: ['src/main/', 'src/main/ipc.ts'] },
+    });
+    vi.stubGlobal('api', {
+      windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
+      projectFiles,
+    } satisfies Partial<AppApi>);
     const { backend, composer, view } = await open({ connection: 'claude-code.sdk' });
-    backend.files.mockResolvedValue(['src/main/', 'src/main/ipc.ts']);
+    backend.files.mockImplementation(findProjectFiles);
     fireEvent.change(composer, { target: { value: 'look at @ma', selectionStart: 11 } });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120));
     });
     expect(backend.files).toHaveBeenLastCalledWith('ma');
+    expect(projectFiles).toHaveBeenLastCalledWith({ canvas, query: 'ma' });
     const menu = within(view.getByRole('listbox', { name: 'Files' }));
     fireEvent.click(menu.getByRole('option', { name: 'src/main/ipc.ts' }));
     expect(composer.value).toBe('look at @src/main/ipc.ts ');

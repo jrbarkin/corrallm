@@ -6,6 +6,7 @@ import { MAX_LINK_LENGTH } from '../../shared/ipc';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { OpName, Reach } from '../../shared/api/surface';
 import type { SessionMode } from '../../shared/session';
+import { MAX_FILE_QUERY_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
@@ -214,6 +215,20 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     invalid: [{ canvas: CANVAS }, { extra: true }, 'text', null],
   },
   'settings.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
+  'project.files': {
+    valid: [
+      { canvas: CANVAS, query: 'ipc' },
+      { query: '' },
+      { query: 'x'.repeat(MAX_FILE_QUERY_LENGTH) },
+    ],
+    invalid: [
+      {},
+      { canvas: CANVAS, query: 42 },
+      { canvas: CANVAS, query: 'x'.repeat(MAX_FILE_QUERY_LENGTH + 1) },
+      { canvas: CANVAS, query: 'ipc', folder: '/etc' },
+      { canvas: 'nope', query: '' },
+    ],
+  },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: 1 }],
