@@ -1,5 +1,5 @@
-import { CoreLink } from './link';
-import type { LinkPort } from './link';
+import { CoreLink } from '../../shared/link';
+import type { LinkPort } from '../../shared/link';
 import type { CoreSide, HostSide } from './protocol';
 import { memoryText, runChecks, selfTestChecks } from './selftest';
 

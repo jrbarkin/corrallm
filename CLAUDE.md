@@ -66,9 +66,7 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 HostServices, what it asks of the app that hosts it (the open, save and folder
                 dialogs), and TrustedPath, the only paths a canvas is opened from or saved to and
                 the only project folders; entry.ts, the core process's entry (core.cjs), with only a
-                self-test mode; link.ts, CoreLink: typed requests (answers as values: a result or
-                an error) and events over a port, which checks that only plain data crosses;
-                protocol.ts, what main and the core process ask and tell each other; selftest.ts
+                self-test mode; protocol.ts, what main and the core process ask and tell each other; selftest.ts
                 (and selftest-claude.mjs), the native self-test's checks, run by main, the core
                 process and the CLI; host/node.ts, the core's host under plain Node (`corrallm
                 serve`: no dialogs, so what needs one is human-only; `appProfile`, the app's own
@@ -351,7 +349,10 @@ src/shared/     Types shared by all processes, including the IPC contract (ipc.t
                 JSON Schemas), what a terminal view is shown
                 (terminal.ts), usage readings and rules (usage.ts: their types and checks) and a
                 canvas's id (canvas.ts: CanvasId, and canvasIdOf, the .corral format and version
-                check main and model/file.ts share). No Node, Electron or DOM imports here.
+                check main and model/file.ts share), and CoreLink (link.ts: typed requests, answers
+                as values, a result or an error, and events over a port, which checks that only
+                plain data crosses; main, the core process and the preload speak it). No Node,
+                Electron or DOM imports here.
 src/shared/model/  The canvas as the model keeps it, read wherever the engine runs: canvas.ts (AgentNode,
                 FrameNode, Link, CanvasDocument: by what they mean, with no React Flow, selection
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),

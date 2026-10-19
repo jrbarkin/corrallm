@@ -3,8 +3,8 @@ import { createInterface } from 'node:readline';
 import { utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 
-import { CoreLink } from '../core/link';
-import type { LinkPort } from '../core/link';
+import { CoreLink } from '../../shared/link';
+import type { LinkPort } from '../../shared/link';
 import type { CoreSide, HostSide } from '../core/protocol';
 
 /*
