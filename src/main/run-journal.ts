@@ -47,10 +47,10 @@ const EARLIER = 'This run belongs to an earlier canvas';
  *   read_position  each party's read position in the canvas's messages
  *   open_canvas    the canvas the profile had open last: a window that shows none restores it
  *
- * Its writes go through the database's write lane, in order, each on disk once it resolves (the
- * commit that holds it returned); the core's canvases journal their runs within writes of their
- * own (`keep`, `moveRead`), with what else commits with them (their messages; every position a
- * `wait` moves). A save keeps the read positions as they are: only a `wait` moves one, and only
+ * Its writes go through the database's write lane, in order, each on the drive once it resolves
+ * (the commit that holds it returned and the log was flushed); the core's canvases journal their
+ * runs within writes of their own (`keep`, `moveRead`), with what else commits with them (their
+ * messages; every position a `wait` moves). A save keeps the read positions as they are: only a `wait` moves one, and only
  * forward. A window's renderer saves with the token of the canvas it showed: a save meant for a
  * canvas it has since replaced (or opened again) is refused. A run that can't be restored as one
  * is discarded, saying so. The canvas's file is read back with its run, as canvas memory wrote it,
