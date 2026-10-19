@@ -307,6 +307,30 @@ describe('TokenStore', () => {
     });
   });
 
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    const kept = {
+      id: 'a',
+      name: 'ok',
+      canvases: [M1],
+      access: 'write',
+      expires: now + HOUR,
+      scopes: ['messages'],
+    };
+    await writeFile(
+      file,
+      JSON.stringify({ version: 2, tokens: { [sha256('x')]: kept }, created: { ok: [WORKER] } }),
+    );
+    const tokens = await store();
+    expect(tokens.clientOf('x')?.name).toBe('ok');
+    await tokens.create({ name: 'other', canvases: [M1], access: 'read' });
+    const written = JSON.parse(await readFile(file, 'utf8')) as {
+      tokens: Record<string, unknown>;
+      created: unknown;
+    };
+    expect(written.created).toEqual({ ok: [WORKER] });
+    expect(written.tokens[sha256('x')]).toEqual({ ...kept, lastUsed: now });
+  });
+
   it.skipIf(!CAN_DENY)('never writes over a file it can’t read: it refuses to load', async () => {
     const first = await store();
     const token = await first.create({ name: 'orchestrator', canvases: [M1], access: 'write' });

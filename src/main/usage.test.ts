@@ -259,6 +259,47 @@ describe('UsageReadings', () => {
     });
   });
 
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    const later = {
+      version: 2,
+      readings: [
+        { backend: 'codex', windows: fiveHour(5), at: START, credits: 12 },
+        { backend: 'claude-code', windows: fiveHour(6), at: START, plan: 'max' },
+        { backend: 'gemini', windows: fiveHour(7), at: START },
+      ],
+      rules: {
+        codex: { window: 'weekly', percent: 80, action: 'ask', then: 'gemini' },
+        gemini: { window: 'weekly', percent: 70, action: 'warn' },
+      },
+      exhausted: {
+        codex: { resetsAt: START + HOUR, window: 'fiveHour', source: 'cli' },
+        gemini: { resetsAt: START + HOUR },
+      },
+      fallback: ['codex', 'gemini'],
+    };
+    await writeFile(file, JSON.stringify(later));
+    const again = await open();
+    expect(again.state()).toEqual({
+      readings: [
+        { backend: 'claude-code', windows: fiveHour(6), at: START },
+        { backend: 'codex', windows: fiveHour(5), at: START },
+      ],
+      rules: { codex: { window: 'weekly', percent: 80, action: 'ask' } },
+    });
+    // A new reading is this one's own: what the one it replaces had goes with it.
+    now += MINUTE;
+    again.take('claude-code', fiveHour(8));
+    await again.flush();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      ...later,
+      readings: [
+        { backend: 'claude-code', windows: fiveHour(8), at: now },
+        later.readings[0],
+        later.readings[2],
+      ],
+    });
+  });
+
   it('keeps no reading of a backend the catalog does not list', () => {
     readings.take('gemini', fiveHour(5));
     expect(readings.state()).toEqual({ readings: [], rules: {} });

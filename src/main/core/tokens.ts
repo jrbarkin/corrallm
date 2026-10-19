@@ -4,7 +4,7 @@ import { ID_PATTERN } from '../../shared/adapter';
 import { DEFAULT_TOKEN_HOURS, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import { readWhole, writeWhole } from '../memory';
+import { readWhole, unknownFields, writeWhole } from '../memory';
 import type { OutsideCaller } from './caller';
 
 /*
@@ -23,9 +23,11 @@ import type { OutsideCaller } from './caller';
  * messages, its `wait` read position and the holds it set carry over. Its `id`, a random UUID,
  * names it among the store's tokens without its hash or its value: a caller's limits and repeated
  * requests are kept by it, and a call still going ends on it once its token is replaced or
- * expires. An entry that isn't one it writes reads as no token; a file of another version, or one
- * that isn't JSON, reads as none and is set aside (readWhole). One that can't be read is never read
- * as none, nor written over: the store refuses to load, so the core doesn't start without it.
+ * expires. An entry that isn't one it writes reads as no token, and is dropped as the store is
+ * written again; what it holds that this corrallm doesn't know (a newer one's fields, of the file
+ * and of each token it reads) is written back as it was. A file of another version, or one that
+ * isn't JSON, reads as none and is set aside (readWhole). One that can't be read is never read as
+ * none, nor written over: the store refuses to load, so the core doesn't start without it.
  */
 
 /** What a person makes a token for. */
@@ -55,12 +57,17 @@ const HOUR = 60 * 60 * 1000;
 /** How often, at most, a token's last use is written down as it is used. */
 const LAST_USE_MS = 60 * 1000;
 const HASH = /^[0-9a-f]{64}$/;
+/** The fields of a token, as it keeps them. */
+const FIELDS = ['id', 'name', 'canvases', 'access', 'expires', 'lastUsed'];
 
 export class TokenStore {
   readonly #file: string;
   readonly #now: () => number;
   /** Every token kept, by its hash. */
   #tokens = new Map<string, Kept>();
+  /** What its file holds that this corrallm doesn't know: of the file, and of each token read. */
+  #unknown: Record<string, unknown> = {};
+  readonly #fields = new WeakMap<Kept, Record<string, unknown>>();
   /** When each token's last use was last written down, by id: at most once a LAST_USE_MS. */
   readonly #written = new Map<string, number>();
   /** The tokens it knew that were replaced, or expired and dropped, by id. */
@@ -75,7 +82,9 @@ export class TokenStore {
 
   /** Reads the tokens its file keeps, but those expired. Rejects if it can't be read. */
   async load(): Promise<void> {
-    this.#tokens = parse(await readWhole(this.#file, VERSION));
+    const file = await readWhole(this.#file, VERSION);
+    this.#unknown = unknownFields(file, ['version', 'tokens']);
+    this.#tokens = parse(file, this.#fields);
     this.#prune();
   }
 
@@ -186,13 +195,13 @@ export class TokenStore {
 
   /** Writes the store whole, after every write before it, for the user's eyes only. */
   #write(): Promise<void> {
-    const write = this.#writing.then(() =>
-      writeWhole(
-        this.#file,
-        `${JSON.stringify({ version: VERSION, tokens: Object.fromEntries(this.#tokens) }, null, 2)}\n`,
-        { mode: 0o600 },
-      ),
-    );
+    const write = this.#writing.then(() => {
+      const tokens = [...this.#tokens].map(
+        ([hash, kept]) => [hash, { ...this.#fields.get(kept), ...kept }] as const,
+      );
+      const file = { version: VERSION, ...this.#unknown, tokens: Object.fromEntries(tokens) };
+      return writeWhole(this.#file, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+    });
     this.#writing = write.catch(() => undefined);
     return write;
   }
@@ -202,13 +211,21 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** The tokens a token file holds (none if there is none): those not right are left out. */
-function parse(file: Record<string, unknown> | undefined): Map<string, Kept> {
+/**
+ * The tokens a token file holds (none if there is none): those not right are left out. What each
+ * holds that this corrallm doesn't know goes in `fields`.
+ */
+function parse(
+  file: Record<string, unknown> | undefined,
+  fields: WeakMap<Kept, Record<string, unknown>>,
+): Map<string, Kept> {
   const tokens = new Map<string, Kept>();
   if (!isRecord(file?.tokens)) return tokens;
   for (const [hash, value] of Object.entries(file.tokens)) {
     const kept = readToken(value);
-    if (HASH.test(hash) && kept !== undefined) tokens.set(hash, kept);
+    if (!HASH.test(hash) || kept === undefined) continue;
+    tokens.set(hash, kept);
+    fields.set(kept, unknownFields(value, FIELDS));
   }
   return tokens;
 }

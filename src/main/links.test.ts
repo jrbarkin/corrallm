@@ -151,6 +151,24 @@ describe('LinkOpener', () => {
     said.mockRestore();
   });
 
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        sites: ['https://docs.example.com'],
+        never: ['https://evil.example.com'],
+      }),
+    );
+    const { links } = opener({ open: true, always: true });
+    await links.open(renderer(), 'https://one.example.com/');
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 1,
+      sites: ['https://docs.example.com', 'https://one.example.com'],
+      never: ['https://evil.example.com'],
+    });
+  });
+
   it.skipIf(!CAN_DENY)(
     'never writes over a file it can’t read, and reads it again next time',
     async () => {

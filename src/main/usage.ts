@@ -7,7 +7,7 @@ import type {
   UsageWindow,
   UsageWindows,
 } from '../shared/usage';
-import { readWhole, writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './memory';
 
 /*
  * Every backend's latest usage reading, and its usage rule (src/shared/usage.ts). A reading comes
@@ -21,7 +21,10 @@ import { readWhole, writeWhole } from './memory';
  *     "rules": { "<backend>": { "window", "percent", "action" } },
  *     "exhausted": { "<backend>": { "resetsAt", "window"? } } }
  *
- * A file of another version, or one that isn't JSON, reads as nothing read and no rules, and is set
+ * What it holds that this corrallm doesn't know is written back as it was: a newer one's fields (of
+ * the file, and of each reading, rule and hard limit it rewrites as it read it: a new one is its
+ * own), and the readings, rules and hard limits of backends the catalog doesn't list, unread. A
+ * file of another version, or one that isn't JSON, reads as nothing read and no rules, and is set
  * aside (readWhole). One that can't be read is never read as nothing, nor written over: loading
  * rejects, so the core doesn't start without it.
  */
@@ -54,6 +57,15 @@ export class UsageReadings {
   readonly #readings = new Map<UsageBackendId, UsageReading>();
   readonly #exhausted = new Map<UsageBackendId, Exhausted>();
   #rules: Partial<Record<UsageBackendId, UsageRule>> = {};
+  /** What its file holds that this corrallm doesn't know: its fields, and other backends' entries. */
+  #unknown: {
+    file: Record<string, unknown>;
+    readings: unknown[];
+    rules: Record<string, unknown>;
+    exhausted: Record<string, unknown>;
+  } = { file: {}, readings: [], rules: {}, exhausted: {} };
+  /** What each reading, rule and hard limit read from its file has that this one doesn't know. */
+  readonly #fields = new WeakMap<object, Record<string, unknown>>();
   readonly #listeners = new Set<(state: UsageState, by: 'cli' | 'you') => void>();
   /** When listeners last heard each backend's reading. */
   readonly #told = new Map<UsageBackendId, number>();
@@ -80,27 +92,43 @@ export class UsageReadings {
     const file = await readWhole(this.#file, VERSION);
     if (file === undefined) return;
     const now = this.#now();
-    for (const value of Array.isArray(file.readings) ? (file.readings as unknown[]) : []) {
-      const reading = readingOf(value, this.#backends, now);
-      if (reading) this.#readings.set(reading.backend, reading);
-    }
+    const readings = Array.isArray(file.readings) ? (file.readings as unknown[]) : [];
     const rules = isRecord(file.rules) ? file.rules : {};
+    const exhausted = isRecord(file.exhausted) ? file.exhausted : {};
+    this.#unknown = {
+      file: unknownFields(file, ['version', 'readings', 'rules', 'exhausted']),
+      readings: readings.filter(
+        (value) =>
+          isRecord(value) &&
+          typeof value.backend === 'string' &&
+          !this.#backends.some((backend) => backend === value.backend),
+      ),
+      rules: unknownFields(rules, this.#backends),
+      exhausted: unknownFields(exhausted, this.#backends),
+    };
+    for (const value of readings) {
+      const reading = readingOf(value, this.#backends, now);
+      if (!reading) continue;
+      this.#readings.set(reading.backend, reading);
+      this.#fields.set(reading, unknownFields(value, ['backend', 'windows', 'at', 'simulated']));
+    }
     for (const backend of this.#backends) {
       try {
-        if (rules[backend] !== undefined) this.#rules[backend] = parseRule(rules[backend]);
+        if (rules[backend] === undefined) continue;
+        const rule = parseRule(rules[backend]);
+        this.#rules[backend] = rule;
+        this.#fields.set(rule, unknownFields(rules[backend], ['window', 'percent', 'action']));
       } catch {
         // Left out.
       }
     }
-    const exhausted = isRecord(file.exhausted) ? file.exhausted : {};
     for (const backend of this.#backends) {
       const limit = exhausted[backend];
       if (!isRecord(limit) || !future(limit.resetsAt, now)) continue;
       const window = USAGE_WINDOWS.find((name) => name === limit.window);
-      this.#exhausted.set(backend, {
-        resetsAt: limit.resetsAt,
-        ...(window === undefined ? {} : { window }),
-      });
+      const kept = { resetsAt: limit.resetsAt, ...(window === undefined ? {} : { window }) };
+      this.#exhausted.set(backend, kept);
+      this.#fields.set(kept, unknownFields(limit, ['resetsAt', 'window']));
     }
   }
 
@@ -232,16 +260,39 @@ export class UsageReadings {
     return true;
   }
 
+  /** `entry` with what it had that this corrallm doesn't know, if it is one read from its file. */
+  #withFields<T extends object>(entry: T): T {
+    return { ...this.#fields.get(entry), ...entry };
+  }
+
   /**
    * Writes what it keeps, after every write before it. A failed write is logged, as for readings
    * and rules; a `durable` one (a hold's) rejects instead, for its caller to say.
    */
   #write(durable = false): Promise<void> {
     const { readings, rules } = this.state();
-    const exhausted = Object.fromEntries(
-      [...this.#exhausted].filter(([, limit]) => limit.resetsAt > this.#now()),
-    );
-    const text = `${JSON.stringify({ version: VERSION, readings, rules, exhausted }, null, 2)}\n`;
+    const exhausted = [...this.#exhausted].filter(([, limit]) => limit.resetsAt > this.#now());
+    const unknown = this.#unknown;
+    const file = {
+      version: VERSION,
+      ...unknown.file,
+      readings: [...readings.map((reading) => this.#withFields(reading)), ...unknown.readings],
+      rules: {
+        ...unknown.rules,
+        ...Object.fromEntries(
+          Object.entries(rules).flatMap(([backend, rule]) =>
+            rule === undefined ? [] : [[backend, this.#withFields(rule)]],
+          ),
+        ),
+      },
+      exhausted: {
+        ...unknown.exhausted,
+        ...Object.fromEntries(
+          exhausted.map(([backend, limit]) => [backend, this.#withFields(limit)]),
+        ),
+      },
+    };
+    const text = `${JSON.stringify(file, null, 2)}\n`;
     const write = this.#writing.then(() => writeWhole(this.#file, text, { durable }));
     this.#writing = write.catch((error: unknown) => {
       if (!durable) console.error('Could not remember usage readings:', error);

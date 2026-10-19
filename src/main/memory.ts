@@ -246,6 +246,15 @@ export async function readWhole(
   return undefined;
 }
 
+/**
+ * The fields of an object a store read that this corrallm doesn't know (a newer one's): all but
+ * `known`, to be written back as they were, so that rewriting the store never drops them.
+ */
+export function unknownFields(value: unknown, known: readonly string[]): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !known.includes(key)));
+}
+
 /** Whether a file can't be read because there is none: missing, or a folder on its path a file. */
 function absent(error: unknown): boolean {
   return isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR');

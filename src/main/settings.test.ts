@@ -135,6 +135,31 @@ describe('Settings', () => {
     },
   );
 
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        consents: { codex: { plan: true } },
+        api: { port: 47123, host: '127.0.0.2' },
+        defaultAdapter: 'codex',
+      }),
+    );
+    const settings = new Settings(file);
+    expect(await settings.get()).toEqual({
+      consents: { codex: { plan: true } },
+      api: { port: 47123 },
+    });
+    await settings.consent('claude-code', 'plan').give();
+    await settings.keepApiPort(47124);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { codex: { plan: true }, 'claude-code': { plan: true } },
+      api: { port: 47124, host: '127.0.0.2' },
+      defaultAdapter: 'codex',
+    });
+  });
+
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));

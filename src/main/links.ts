@@ -1,5 +1,5 @@
 import type { LinkAnswer, WindowId } from './core/host';
-import { readWhole, writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './memory';
 import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*
@@ -12,6 +12,7 @@ import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
  *
  *   { "version": 1, "sites": ["https://docs.example.com", …] }
  *
+ * What it holds that this corrallm doesn't know (a newer one's fields) is written back as it was.
  * A file of another version, or one that isn't JSON, reads as no site and is set aside
  * (readWhole); one that can't be read fails the link that needed it, and is read again next time.
  */
@@ -34,6 +35,8 @@ const LIMIT = 500;
 export class LinkOpener {
   readonly #deps: Required<LinkOpenerDeps>;
   #sites: Promise<Set<string>> | undefined;
+  /** What its file holds that this corrallm doesn't know. */
+  #unknown: Record<string, unknown> = {};
   #writing: Promise<void> = Promise.resolve();
   /** Renderers asked something right now: one question at a time each. */
   readonly #asking = new Set<WindowId>();
@@ -72,11 +75,17 @@ export class LinkOpener {
   }
 
   #load(): Promise<Set<string>> {
-    this.#sites ??= readWhole(this.#deps.file, VERSION).then(parse, (error: unknown) => {
-      // Never read as no site, nor written over: read again next time.
-      this.#sites = undefined;
-      throw error;
-    });
+    this.#sites ??= readWhole(this.#deps.file, VERSION).then(
+      (file) => {
+        this.#unknown = unknownFields(file, ['version', 'sites']);
+        return parse(file);
+      },
+      (error: unknown) => {
+        // Never read as no site, nor written over: read again next time.
+        this.#sites = undefined;
+        throw error;
+      },
+    );
     return this.#sites;
   }
 
@@ -88,7 +97,8 @@ export class LinkOpener {
       if (sites.size <= LIMIT) break;
       sites.delete(oldest);
     }
-    const text = `${JSON.stringify({ version: VERSION, sites: [...sites] }, null, 2)}\n`;
+    const file = { version: VERSION, ...this.#unknown, sites: [...sites] };
+    const text = `${JSON.stringify(file, null, 2)}\n`;
     // A failed write is logged: the site is still allowed until the app quits.
     this.#writing = this.#writing
       .then(() => writeWhole(this.#deps.file, text))
