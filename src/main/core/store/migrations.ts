@@ -109,23 +109,41 @@ export const MIGRATIONS: readonly Migration[] = [
 /** The schema this code makes and reads. */
 export const SCHEMA = MIGRATIONS.length;
 
-/** Runs the migrations a database lacks, in order, each with its version in one transaction. */
+/**
+ * Runs the migrations a database lacks, in order, each with its version in one transaction. Each
+ * runs with foreign keys off (sqlite.org/lang_altertable.html §7: set outside its transaction,
+ * since SQLite ignores the pragma within one), so that it may rebuild a table others refer to:
+ * dropping the old table would otherwise delete everything that refers to it. What it leaves is
+ * checked instead, before it commits.
+ */
 export function migrate(
   connection: Connection,
   migrations: readonly Migration[] = MIGRATIONS,
 ): void {
   for (const { version, minReader, sql } of migrations) {
     if (version <= schemaOf(connection)) continue;
-    transaction(connection, () => {
-      connection.exec(sql);
-      connection
-        .prepare(
-          `INSERT INTO meta (id, min_reader) VALUES (1, ?)
-           ON CONFLICT (id) DO UPDATE SET min_reader = excluded.min_reader`,
-        )
-        .run(minReader);
-      connection.exec(`PRAGMA user_version = ${String(version)}`);
-    });
+    const enforced = connection.prepare('PRAGMA foreign_keys').get()?.foreign_keys === 1;
+    connection.exec('PRAGMA foreign_keys = OFF');
+    try {
+      transaction(connection, () => {
+        connection.exec(sql);
+        const dangling = connection.prepare('PRAGMA foreign_key_check').get();
+        if (dangling !== undefined) {
+          throw new Error(
+            `The migration to schema ${String(version)} would leave ${String(dangling.table)} referring to a ${String(dangling.parent)} that isn’t there.`,
+          );
+        }
+        connection
+          .prepare(
+            `INSERT INTO meta (id, min_reader) VALUES (1, ?)
+             ON CONFLICT (id) DO UPDATE SET min_reader = excluded.min_reader`,
+          )
+          .run(minReader);
+        connection.exec(`PRAGMA user_version = ${String(version)}`);
+      });
+    } finally {
+      if (enforced) connection.exec('PRAGMA foreign_keys = ON');
+    }
   }
 }
 

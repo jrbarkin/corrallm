@@ -104,6 +104,61 @@ describe('the schema', () => {
     expect(tables().map(({ name }) => name)).toEqual(['meta']);
   });
 
+  /**
+   * A migration that rebuilds canvas, which every other table refers to, as SQLite's ALTER TABLE
+   * can't change it (sqlite.org/lang_altertable.html §7): here, to give each canvas a project.
+   * `keep` says which canvases it copies.
+   */
+  const rebuildCanvas = (keep: string): Migration => ({
+    version: SCHEMA + 1,
+    minReader: SCHEMA + 1,
+    sql: `
+      CREATE TABLE canvas_new (
+        id TEXT PRIMARY KEY NOT NULL,
+        file TEXT UNIQUE,
+        project TEXT NOT NULL DEFAULT '',
+        used_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO canvas_new SELECT id, file, coalesce(project, ''), used_at FROM canvas
+        WHERE ${keep};
+      DROP TABLE canvas;
+      ALTER TABLE canvas_new RENAME TO canvas;
+      CREATE INDEX canvas_by_use ON canvas (used_at);`,
+  });
+  const rows = (table: string) =>
+    connection.prepare(`SELECT count(*) AS rows FROM ${table}`).get()?.rows;
+
+  it('rebuilds a table others refer to, keeping what refers to it, with foreign keys on', () => {
+    connection.exec('PRAGMA foreign_keys = ON');
+    migrate(connection);
+    addCanvas();
+    addMessage('m');
+
+    migrate(connection, [...MIGRATIONS, rebuildCanvas('1')]);
+
+    expect(schemaOf(connection)).toBe(SCHEMA + 1);
+    expect({ canvas: rows('canvas'), message: rows('message') }).toEqual({ canvas: 1, message: 1 });
+    expect(connection.prepare('SELECT project FROM canvas').get()).toEqual({ project: '' });
+    expect(connection.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+  });
+
+  it('refuses a migration that leaves a reference to nothing, keeping nothing of it', () => {
+    connection.exec('PRAGMA foreign_keys = ON');
+    migrate(connection);
+    addCanvas();
+    addMessage('m');
+
+    expect(() => {
+      migrate(connection, [...MIGRATIONS, rebuildCanvas('0')]);
+    }).toThrow(
+      `The migration to schema ${String(SCHEMA + 1)} would leave message referring to a canvas that isn’t there.`,
+    );
+
+    expect(schemaOf(connection)).toBe(SCHEMA);
+    expect({ canvas: rows('canvas'), message: rows('message') }).toEqual({ canvas: 1, message: 1 });
+    expect(connection.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+  });
+
   it('requires what a message must have, and keeps JSON fields valid', () => {
     migrate(connection);
     addCanvas();
