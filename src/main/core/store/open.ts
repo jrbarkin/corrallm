@@ -26,11 +26,15 @@ import { transaction } from './transaction';
  * database's mode, are the user's alone too. A database that was there is checked first, read
  * only (`vet`): that it is corrallm's, that this code may read it, and SQLite's quick check. Then,
  * in this order: on a new, empty database, incremental vacuuming (which only a database with no
- * tables can take) and corrallm's application id; the write-ahead log; every commit forced to
- * disk (synchronous FULL and, on macOS, F_FULLFSYNC, as Node's own fsync is there: SQLite's plain
+ * tables can take) and corrallm's application id; the write-ahead log; no sync as SQLite commits
+ * (synchronous NORMAL), since the store flushes the log to the drive itself after each commit, off
+ * the loop, before any write resolves (store.ts), and every sync SQLite does make (as it
+ * checkpoints) a full one, on macOS F_FULLFSYNC, as Node's own fsync is there (SQLite's plain
  * fsync leaves it in the drive's cache); foreign keys; no functions from a schema it didn't make
  * (trusted_schema); the log kept within JOURNAL_SIZE_LIMIT and checkpointed by the store when it
- * is idle, never in the middle of a commit; then the migrations it lacks.
+ * is idle, never in the middle of a commit; then the migrations it lacks. What opening wrote is
+ * checkpointed into the database before the store is used, so it is on the drive (a restore's
+ * settling with it).
  *
  * Opening never throws (the host gives up on a core that crashes three times in a minute): it
  * resolves with the store, or none, and what it found to say. A database a newer corrallm made
@@ -91,6 +95,9 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
         connection = await recover(profile, file, reason(error), deps.now(), said);
       }
     }
+    // On the drive before the store is used: SQLite syncs the log before it checkpoints it, and
+    // the database after.
+    connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
     return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };
@@ -302,7 +309,7 @@ function setUp(connection: Connection): void {
   if (mode !== 'wal') {
     throw new Error(`SQLite would not keep a write-ahead log: its journal mode is ${String(mode)}`);
   }
-  connection.exec('PRAGMA synchronous = FULL');
+  connection.exec('PRAGMA synchronous = NORMAL');
   if (process.platform === 'darwin') {
     connection.exec('PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON');
   }

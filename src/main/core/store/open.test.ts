@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MIGRATIONS, SCHEMA } from './migrations';
 import { APPLICATION_ID, JOURNAL_SIZE_LIMIT, openStore } from './open';
 import { connect } from './sqlite';
+import { SYSTEM_DEPS } from './store';
 import type { Store, StoreDeps } from './store';
 
 /*
@@ -88,8 +89,8 @@ describe('openStore', () => {
       // INCREMENTAL
       auto_vacuum: 2,
       journal_mode: 'wal',
-      // FULL
-      synchronous: 2,
+      // NORMAL: the store flushes its log itself, after each commit, off the loop (store.ts)
+      synchronous: 1,
       fullfsync: darwin,
       checkpoint_fullfsync: darwin,
       foreign_keys: 1,
@@ -99,6 +100,18 @@ describe('openStore', () => {
       application_id: APPLICATION_ID,
       user_version: SCHEMA,
     });
+  });
+
+  it('has what opening wrote on the drive before it is used: checkpointed into the database', async () => {
+    const { store } = await open();
+    expect((await stat(`${file}-wal`)).size).toBe(0);
+    const schema = connect(file, { readOnly: true });
+    try {
+      expect(schema.prepare('PRAGMA user_version').get()).toEqual({ user_version: SCHEMA });
+    } finally {
+      schema.close();
+    }
+    expect(pragma(store, 'user_version')).toBe(SCHEMA);
   });
 
   it('vacuums incrementally an empty database SQLite had begun before it', async () => {
@@ -215,7 +228,11 @@ describe('openStore', () => {
 
 describe('a damaged database', () => {
   /** A clock stopped at `at`, and timers that never run. */
-  const stoppedAt = (at: number): StoreDeps => ({ later: () => () => undefined, now: () => at });
+  const stoppedAt = (at: number): StoreDeps => ({
+    ...SYSTEM_DEPS,
+    later: () => () => undefined,
+    now: () => at,
+  });
   const CANVAS = '0a6f6a5e-4bb3-4c3e-8a8c-3f7f2c1e9d10';
 
   /** Keeps a canvas and its messages, then closes: all of it in core.db, and a snapshot of it. */

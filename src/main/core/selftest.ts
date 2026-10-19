@@ -183,7 +183,8 @@ export async function checkAgentSdk(
 
 /**
  * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
- * SQLite: each of its pragmas as set, a write through its lane read back by another connection, a
+ * SQLite: each of its pragmas as set, a write through its lane (its log flushed on Node's thread
+ * pool) read back by another connection, a checkpoint on its checkpointer's worker thread, a
  * snapshot of it (SQLite's backup, Node's one call on its thread pool) read back, and its file,
  * log and index the user's alone (not on Windows, whose files have no such modes).
  */
@@ -211,8 +212,8 @@ export async function checkSqlite(folder = tmpdir()): Promise<string> {
 function storePragmas(): Record<string, unknown> {
   return {
     journal_mode: 'wal',
-    // FULL
-    synchronous: 2,
+    // NORMAL: the store flushes the log itself, after each commit, off the loop
+    synchronous: 1,
     ...(process.platform === 'darwin' ? { fullfsync: 1, checkpoint_fullfsync: 1 } : {}),
     foreign_keys: 1,
     trusted_schema: 0,
@@ -233,7 +234,7 @@ export async function checkStore(store: Store): Promise<string> {
     const read = pragma(name);
     if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
   }
-  const seen = [`SQLite ${version}`, 'WAL', 'synchronous FULL'];
+  const seen = [`SQLite ${version}`, 'WAL', 'synchronous NORMAL'];
   if (process.platform === 'darwin') seen.push('fullfsync');
   seen.push('its other pragmas as set');
   await store.write(() => {
@@ -241,7 +242,9 @@ export async function checkStore(store: Store): Promise<string> {
     store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
   });
   readBack(store.file, 'core.db, read by another connection,');
-  seen.push('a write through the lane read back');
+  seen.push('a write through the lane flushed and read back');
+  await store.checkpoint();
+  seen.push('a checkpoint off the loop');
   readBack(await store.snapshot(), 'its snapshot');
   seen.push('a snapshot read back');
   if (process.platform !== 'win32') {

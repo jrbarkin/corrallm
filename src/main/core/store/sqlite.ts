@@ -34,6 +34,13 @@ export function connect(file: string, options: ConnectOptions = {}): Connection 
 }
 
 /**
+ * How code run on a worker thread (a string, run as CommonJS) opens a connection, as `connect`
+ * does here: an expression of the worker's own `file` and `options`.
+ */
+export const CONNECT_IN_WORKER =
+  "new (process.getBuiltinModule('node:sqlite').DatabaseSync)(file, options)";
+
+/**
  * Copies `source`'s database into `file`, `rate` pages a step (each step on Node's thread pool).
  * Resolves with how many pages it copied.
  */

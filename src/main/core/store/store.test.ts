@@ -1,3 +1,4 @@
+import { fstatSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,14 +8,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import type { Connection } from './sqlite';
+import { SYSTEM_DEPS } from './store';
 import type { Store, StoreDeps } from './store';
 
 /*
  * The core's database, open (Core Database §4): one write lane, whose writes queued within one
  * turn of the loop share one transaction (group commit), each resolving only once the commit that
- * holds it has returned: what "on disk before it is sent" means now. Its log is checkpointed when
- * it is idle, and truncated as it closes; snapshots of it are taken as it closes and every few
- * hours, the newest three kept.
+ * holds it has returned and its log has been flushed to the drive, off the loop: what "on disk
+ * before it is sent" means now. Its log is checkpointed when it is idle, and truncated as it
+ * closes; snapshots of it are taken as it closes and every few hours, the newest three kept.
  */
 
 /** A timer the store set, and whether it ran or was cancelled since. */
@@ -31,6 +33,8 @@ let reader: Connection;
 /** The store's clock, and the timers it set, by the test's hand. */
 let now: number;
 let timers: Timer[];
+/** The flushes of its log the store asked for while the test holds them (else they run at once). */
+let flushes: { fd: number; done: (error?: Error) => void }[] | undefined;
 const deps: StoreDeps = {
   later: (run, ms) => {
     const timer = { run, ms, done: false };
@@ -40,6 +44,19 @@ const deps: StoreDeps = {
     };
   },
   now: () => now,
+  flush: (fd) => {
+    const held = flushes;
+    if (held === undefined) return SYSTEM_DEPS.flush(fd);
+    return new Promise((resolve, reject) => {
+      held.push({
+        fd,
+        done: (error) => {
+          if (error) reject(error);
+          else resolve();
+        },
+      });
+    });
+  },
 };
 /** The timers the store has set that neither ran nor were cancelled. */
 const pending = () => timers.filter(({ done }) => !done);
@@ -55,6 +72,7 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-store-'));
   now = Date.UTC(2026, 9, 19, 12);
   timers = [];
+  flushes = undefined;
   const opened = await openStore(profile, deps);
   if (opened.store === undefined) throw new Error(opened.said.join(' '));
   store = opened.store;
@@ -64,6 +82,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (reader.isOpen) reader.close();
+  for (const { done } of flushes?.splice(0) ?? []) done();
+  flushes = undefined;
   await store.close();
   await rm(profile, { recursive: true, force: true });
 });
@@ -93,6 +113,88 @@ describe('the write lane', () => {
     expect(notes()).toEqual([]);
     await expect(written).resolves.toBe('written');
     expect(seen).toEqual(['one']);
+  });
+
+  it('resolves a write only once its log is flushed to the drive, off the loop, after its commit', async () => {
+    flushes = [];
+    let resolved = false;
+    const written = store
+      .write(() => add('one'))
+      .then(() => {
+        resolved = true;
+      });
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    // Committed (another connection reads it), but not yet on the drive: not yet resolved.
+    expect(notes()).toEqual(['one']);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resolved).toBe(false);
+    // The log's own file.
+    const [flush] = flushes;
+    expect(fstatSync(flush?.fd ?? -1).ino).toBe((await stat(`${store.file}-wal`)).ino);
+    flush?.done();
+    await written;
+    expect(resolved).toBe(true);
+  });
+
+  it('flushes its log one flush at a time, the commits made meanwhile resolving with the next', async () => {
+    flushes = [];
+    const first = store.write(() => add('first'));
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    const settled: string[] = [];
+    const later = ['second', 'third'].map((text) =>
+      new Promise((resolve) => setImmediate(resolve))
+        .then(() => store.write(() => add(text)))
+        .then(() => settled.push(text)),
+    );
+    await vi.waitFor(() => {
+      expect(notes()).toEqual(['first', 'second', 'third']);
+    });
+    // Committed while the first flush went on, they wait for one flush after it.
+    expect(flushes).toHaveLength(1);
+    flushes[0]?.done();
+    await first;
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(2);
+    });
+    expect(settled).toEqual([]);
+    flushes[1]?.done();
+    await Promise.all(later);
+    expect(settled.toSorted()).toEqual(['second', 'third']);
+  });
+
+  it('rejects the writes whose flush failed, with its error, and goes on', async () => {
+    flushes = [];
+    const failed = store.write(() => add('lost'));
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    flushes[0]?.done(new Error('EIO: i/o error, fsync'));
+    await expect(failed).rejects.toThrow('EIO: i/o error, fsync');
+    flushes = undefined;
+    await store.write(() => add('next'));
+    expect(notes()).toEqual(['lost', 'next']);
+  });
+
+  it('closes once the flush going on has ended', async () => {
+    flushes = [];
+    const written = store.write(() => add('one'));
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    let closed = false;
+    const closing = store.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closed).toBe(false);
+    flushes[0]?.done();
+    await written;
+    await closing;
+    expect(closed).toBe(true);
   });
 
   it('commits the writes queued in one turn of the loop together', async () => {
@@ -209,8 +311,10 @@ describe('the write lane', () => {
       queued = store.write(() => add('queued by it'));
     });
     const closed = store.close();
+    // Refused at once, as it closed; the write that queued it, once its log is flushed.
+    const refused = expect(queued).rejects.toThrow('The core’s database is closed.');
     await expect(outer).resolves.toBeUndefined();
-    await expect(queued).rejects.toThrow('The core’s database is closed.');
+    await refused;
     await closed;
     expect(pending()).toEqual([]);
     expect(notes()).toEqual(['outer', 'nested']);
@@ -244,8 +348,23 @@ describe('checkpoints', () => {
 
     fire();
 
-    expect(await size()).toBeGreaterThan(before);
+    await vi.waitFor(async () => {
+      expect(await size()).toBeGreaterThan(before);
+    });
     expect(pending()).toEqual([]);
+  });
+
+  it('checkpoints on a thread of its own, its connection committing meanwhile', async () => {
+    const size = async () => (await stat(store.file)).size;
+    await store.write(() => {
+      for (let i = 0; i < 200; i++) add(`note ${String(i)}`);
+    });
+    const before = await size();
+    const checkpointed = store.checkpoint();
+    store.tx(() => add('meanwhile'));
+    await expect(checkpointed).resolves.toBeUndefined();
+    expect(await size()).toBeGreaterThan(before);
+    expect(notes()).toHaveLength(201);
   });
 
   it('waits for a pause after each commit, but never more than 30 seconds in all', async () => {
