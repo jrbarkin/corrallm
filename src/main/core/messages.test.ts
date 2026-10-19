@@ -1394,8 +1394,15 @@ describe('exhausted usage', () => {
     return result.agents.find(({ id }) => id === agent)?.state;
   }
 
-  /** One failed turn, followed by ordinary turns, with no usage rule set. */
-  async function exhausted({ manual = false, another = false } = {}): Promise<void> {
+  /**
+   * One failed turn, followed by ordinary turns, with no usage rule set; `unwritable`: usage.json
+   * can't be written once the core has started.
+   */
+  async function exhausted({
+    manual = false,
+    another = false,
+    unwritable = false,
+  } = {}): Promise<void> {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
     await keepCanvas();
@@ -1455,6 +1462,11 @@ describe('exhausted usage', () => {
       !manual,
     );
     if (another) await started.engines.open(OTHER_CANVAS);
+    if (unwritable) {
+      // A folder where the file goes: what writes it whole can't move it into place.
+      await rm(path.join(profile, 'usage.json'), { force: true });
+      await mkdir(path.join(profile, 'usage.json'));
+    }
     if (manual) {
       await started.channels.call(7, 'run:get', []);
       await started.channels.call(7, 'session:start', [
@@ -1498,6 +1510,20 @@ describe('exhausted usage', () => {
       expect((await find(other, OTHER))?.state).toBe('replied');
     });
     expect(await notices()).toHaveLength(1);
+  });
+
+  it('holds for this run though it can’t keep the hold, saying so', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // The failed turn's reply reaches its sender all the same.
+    await exhausted({ unwritable: true });
+    expect(said).toHaveBeenCalledWith(
+      'Could not keep Codex’s usage limit: it holds only until corrallm stops.',
+      expect.any(Error),
+    );
+    const id = await send('builder', 'After the reset');
+    expect((await find(id))?.state).toBe('pending');
+    expect((await notices()).map(({ body }) => body)).toEqual([NOTICE]);
+    expect(await state('builder')).toBe('limited');
   });
 
   it('keeps the hold and what it told each sender across a restart', async () => {
