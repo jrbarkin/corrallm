@@ -51,6 +51,8 @@ export type NodeKind = 'agent' | 'frame';
  */
 export type GraphNode = Node<{ [Key in keyof AgentData]: AgentData[Key] }, NodeKind>;
 export interface Graph {
+  /** The canvas's saved automatic layout setting; absent is off. */
+  arrange?: boolean;
   nodes: GraphNode[];
   edges: Edge[];
 }
@@ -77,8 +79,9 @@ export function canvasNodes(nodes: readonly GraphNode[]): CanvasNode[] {
  * A canvas as React Flow draws it (its file's, src/shared/model/file.ts): its nodes, groups sized to
  * fit what they hold, and its links as edges between the dots they were drawn between.
  */
-export function graphOf({ nodes, links }: CanvasDocument): Graph {
+export function graphOf({ arrange, nodes, links }: CanvasDocument): Graph {
   return {
+    ...(arrange ? { arrange: true } : {}),
     nodes: autosize(
       nodes.map(({ id, type, position, parentId, data }): GraphNode => ({
         id,
@@ -101,6 +104,7 @@ export function graphOf({ nodes, links }: CanvasDocument): Graph {
 export function documentOf(graph: Graph, id: CanvasId): CanvasDocument {
   return {
     id,
+    arrange: graph.arrange ?? false,
     nodes: canvasNodes(graph.nodes),
     links: graph.edges.map(({ source, target, sourceHandle, targetHandle }) => ({
       source,
@@ -169,6 +173,7 @@ export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
     container?.id,
   );
   return {
+    ...graph,
     nodes: autosize([...nodes.map((n) => select(n, false)), node]),
     edges: graph.edges.map((e) => select(e, false)),
   };
@@ -674,7 +679,7 @@ export function deleteSelection(graph: Graph): Graph {
       withParent({ ...n, position: { x: abs.x - origin.x, y: abs.y - origin.y } }, ancestor?.id),
     ];
   });
-  return { nodes: autosize(nodes), edges };
+  return { ...graph, nodes: autosize(nodes), edges };
 }
 
 /**
@@ -729,6 +734,7 @@ export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph 
   // Behind its siblings: first among the top-level nodes, or right after its parent.
   const at = parentId === undefined ? 0 : rest.findIndex((n) => n.id === parentId) + 1;
   return {
+    ...graph,
     nodes: autosize([...rest.slice(0, at), container, ...rest.slice(at)]),
     edges: graph.edges.map((e) => select(e, false)),
   };
@@ -752,7 +758,7 @@ export function addParent(graph: Graph, id: string): Graph {
         }
       : select(n, false),
   );
-  return { nodes: autosize(nodes), edges: graph.edges.map((e) => select(e, false)) };
+  return { ...graph, nodes: autosize(nodes), edges: graph.edges.map((e) => select(e, false)) };
 }
 
 /**
@@ -828,6 +834,7 @@ export function ungroupSelection(graph: Graph): Graph {
     }
   }
   return {
+    ...graph,
     nodes: autosize(nodes),
     edges: graph.edges.map((e) => select(e, false)),
   };

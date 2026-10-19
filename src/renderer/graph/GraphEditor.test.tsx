@@ -1836,6 +1836,39 @@ describe('GraphEditor', () => {
       edges: [],
     };
 
+    it('saves arrangement as an edit even on an empty canvas, restores it on open, and omits it when off', async () => {
+      const files = fakeFiles();
+      const { unmount } = render(<GraphEditor files={files} />);
+      expect(document.title).toBe('Untitled — corrallm');
+      fireEvent.click(button('Arrange automatically'));
+      expect(document.title).toBe('Untitled (edited) — corrallm');
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(files.save).toHaveBeenCalledOnce();
+      });
+      const text = files.save.mock.calls[0]?.[0] ?? '';
+      expect(JSON.parse(text)).toHaveProperty('arrange', true);
+      unmount();
+      const reopened = fakeFiles({ id: canvasIdOf(text), name: 'team.corral', text });
+      const { pane, nodes } = setup(undefined, reopened);
+      fireEvent.click(button('Open…'));
+      await waitFor(() => {
+        expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
+      });
+      expect(document.title).toBe('team.corral — corrallm');
+      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      expect(nodes()[0]?.classList.contains('draggable')).toBe(false);
+      expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
+      fireEvent.click(button('Arrange automatically'));
+      expect(document.title).toBe('team.corral (edited) — corrallm');
+      expect(nodes()[0]?.classList.contains('draggable')).toBe(true);
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(reopened.save).toHaveBeenCalledOnce();
+      });
+      expect(JSON.parse(reopened.save.mock.calls[0]?.[0] ?? '')).not.toHaveProperty('arrange');
+    });
+
     it('saves the canvas, and titles the window with its file and whether it is edited', async () => {
       const files = fakeFiles();
       const { pane } = setup(undefined, files);

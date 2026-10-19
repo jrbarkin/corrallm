@@ -31,7 +31,7 @@ import type {
  * refused. The agents' adapters, connections and modes are read against the catalog
  * (src/shared/adapter.ts).
  *
- *   { "format": "corrallm", "version": 2, "id",
+ *   { "format": "corrallm", "version": 2, "id", "arrange"?: true,
  *     "nodes": [{ "id", "kind": "agent" | "group", "label", "position": { "x", "y" },
  *                 "parent"?, "adapter"?, "connection"?, "settings"?, "role"?, "color"?, "queue"? }],
  *     "links": [{ "agents": [id, id], "dots"?: [from, to] }] }
@@ -89,7 +89,7 @@ interface FileLink {
 }
 
 /** A canvas as the text of its `.corral` file. */
-export function toFile({ id, nodes, links }: CanvasDocument): string {
+export function toFile({ id, arrange, nodes, links }: CanvasDocument): string {
   const saved = nodes.map((n): FileNode => {
     const agent = n.type === 'agent' ? n.data : undefined;
     const role = readRole(agent?.role, `${n.id}.role`);
@@ -111,7 +111,7 @@ export function toFile({ id, nodes, links }: CanvasDocument): string {
     agents: [source, target],
     ...(dots ? { dots } : {}),
   }));
-  return `${JSON.stringify({ format: FORMAT, version: CANVAS_VERSION, id, nodes: saved, links: drawn }, null, 2)}\n`;
+  return `${JSON.stringify({ format: FORMAT, version: CANVAS_VERSION, id, ...(arrange ? { arrange: true } : {}), nodes: saved, links: drawn }, null, 2)}\n`;
 }
 
 /**
@@ -132,6 +132,11 @@ export function fromFile(
   }
   if (!isRecord(file)) throw new Error(NOT_A_CANVAS);
   const id = canvasHeader(file);
+  const arrange =
+    optional(file.arrange, 'arrange', (value, where) => {
+      if (typeof value !== 'boolean') throw new Error(`${where} must be a boolean`);
+      return value;
+    }) ?? false;
 
   const nodes = list(file.nodes, 'nodes', (value, where) =>
     readNode(value, where, catalog, defaultAdapter),
@@ -180,7 +185,7 @@ export function fromFile(
     links.push({ source, target, ...(dots ? { dots: [dots[0], dots[1]] } : {}) });
   }
 
-  return { id, nodes: ordered.map(toCanvasNode), links };
+  return { id, arrange, nodes: ordered.map(toCanvasNode), links };
 }
 
 function toCanvasNode({
