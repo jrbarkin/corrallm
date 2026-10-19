@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -48,6 +49,7 @@ export function selfTestChecks({ packaged }: { packaged: boolean }): Check[] {
     { name: 'node-pty', run: checkPty },
     { name: 'terminal screen', run: checkTerminalScreen },
     { name: 'Agent SDK', run: () => checkAgentSdk() },
+    { name: 'node:sqlite', run: () => checkSqlite() },
     { name: 'loopback HTTP', run: checkLoopbackHttp },
     { name: 'spawn', run: checkSpawn },
     ...(packaged ? [{ name: 'child_process.fork', run: () => checkForkRefused() }] : []),
@@ -174,6 +176,48 @@ export async function checkAgentSdk(
     inbox.end();
     run.close();
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** A file-backed WAL transaction through Node's SQLite, reopened read-only after committing. */
+export async function checkSqlite(folder = tmpdir()): Promise<string> {
+  try {
+    const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
+    try {
+      const file = path.join(dir, 'selftest.sqlite');
+      const database = new DatabaseSync(file);
+      let version: string;
+      try {
+        const sqlite = database.prepare('SELECT sqlite_version() AS version').get()?.version;
+        if (typeof sqlite !== 'string') throw new Error('SQLite did not report its version');
+        version = sqlite;
+        const mode = database.prepare('PRAGMA journal_mode=WAL').get()?.journal_mode;
+        if (mode !== 'wal') throw new Error(`journal_mode was ${String(mode)}, not WAL`);
+        database.exec('PRAGMA synchronous=FULL');
+        if (database.prepare('PRAGMA synchronous').get()?.synchronous !== 2) {
+          throw new Error('synchronous was not FULL');
+        }
+        database.exec('CREATE TABLE selftest (value TEXT NOT NULL); BEGIN IMMEDIATE');
+        database.prepare('INSERT INTO selftest (value) VALUES (?)').run('committed');
+        database.exec('COMMIT');
+      } finally {
+        database.close();
+      }
+      const reader = new DatabaseSync(file, { readOnly: true });
+      try {
+        if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'committed') {
+          throw new Error('the reopened database did not read back the committed row');
+        }
+        return `SQLite ${version}, WAL, a transaction read back`;
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(`SQLite transaction check failed: ${why}`, { cause: error });
   }
 }
 

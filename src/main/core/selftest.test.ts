@@ -1,4 +1,7 @@
 import { fork } from 'node:child_process';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -7,6 +10,7 @@ import {
   checkForkRefused,
   checkLoopbackHttp,
   checkSpawn,
+  checkSqlite,
   checkTerminalScreen,
   runChecks,
   selfTestChecks,
@@ -20,6 +24,35 @@ import {
  */
 
 describe('the native self-test', () => {
+  it('checks a file-backed SQLite transaction through the native self-test', async () => {
+    const check = selfTestChecks({ packaged: false }).find(({ name }) => name === 'node:sqlite');
+    expect(check).toBeDefined();
+    await expect(check?.run()).resolves.toMatch(
+      /^SQLite \d+\.\d+\.\d+, WAL, a transaction read back$/,
+    );
+  });
+
+  it('removes the temporary database folder after reading the transaction back', async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
+    try {
+      await expect(checkSqlite(folder)).resolves.toMatch(/WAL, a transaction read back$/);
+      expect(await readdir(folder)).toEqual([]);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('says why SQLite failed when its temporary folder cannot be written', async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
+    const blocked = path.join(folder, 'not-a-folder');
+    await writeFile(blocked, 'a file cannot hold the database folder');
+    try {
+      await expect(checkSqlite(blocked)).rejects.toThrow(/^SQLite transaction check failed: /);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
   it('finds a copy of a terminal screen working', async () => {
     await expect(checkTerminalScreen()).resolves.toBe('@xterm/headless ok (40×5)');
   });
@@ -63,6 +96,7 @@ describe('the native self-test', () => {
       'node-pty',
       'terminal screen',
       'Agent SDK',
+      'node:sqlite',
       'loopback HTTP',
       'spawn',
     ]);
