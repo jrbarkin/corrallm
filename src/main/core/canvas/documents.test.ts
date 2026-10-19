@@ -16,7 +16,8 @@ import type { Connection } from '../store/sqlite';
 import { SYSTEM_DEPS } from '../store/store';
 import type { Store, StoreDeps } from '../store/store';
 import { onDisk, openTestStore, refuseWrites } from '../store/test-store';
-import { Documents } from './documents';
+import { CommitFailed, Documents } from './documents';
+import type { Revision } from './documents';
 
 /*
  * A canvas's document in the core (B9 Design §2, §5): read once from its rows, or from its file
@@ -30,6 +31,7 @@ let documents: Documents;
 /** What is on disk, read through a connection of its own. */
 let disk: Connection;
 
+const REQUEST = '2c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
 /** A canvas: a group of a lead and a worker, linked, the worker with a queue. */
@@ -78,6 +80,24 @@ function renamed(document: CanvasDocument, id: string, label: string): CanvasDoc
       node.id === id ? { ...node, data: { ...node.data, label } } : node,
     ),
   };
+}
+
+/**
+ * Commits `next` as the canvas's document, as an op building it would: its revision, or none if it
+ * changed nothing.
+ */
+async function commit(
+  canvas: CanvasId,
+  next: CanvasDocument,
+  revision: Revision = { op: 'canvas.rename', by: 'you' },
+): Promise<number | undefined> {
+  const { committed } = await documents.change(canvas, {
+    revision,
+    build: () => ({ next, result: undefined }),
+    check: () => undefined,
+    committing: () => undefined,
+  });
+  return committed?.rev;
 }
 
 function documentsOf(database: Store = store): Documents {
@@ -176,7 +196,7 @@ describe('a canvas’s document', () => {
     const next = renamed(before.document, 'worker', 'Builder');
 
     await expect(
-      documents.commit(canvas, next, { op: 'canvas.rename', by: 'outside:orchestrator' }),
+      commit(canvas, next, { op: 'canvas.rename', by: 'outside:orchestrator' }),
     ).resolves.toBe(2);
 
     expect(documents.live(canvas)).toMatchObject({ document: next, rev: 2 });
@@ -205,15 +225,108 @@ describe('a canvas’s document', () => {
     expect(documents.live(canvas).revs.get('node/worker')).toBe(2);
 
     // The same document again changes nothing, and takes no revision.
-    await expect(documents.commit(canvas, next, { op: 'x', by: 'you' })).resolves.toBe(2);
+    await expect(commit(canvas, next)).resolves.toBeUndefined();
     expect(count('revision', canvas)).toBe(2);
+    expect(documents.live(canvas).rev).toBe(2);
+  });
+
+  it('builds an op’s change over the live document, checks it, then commits it past its point of no return', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const live = await documents.load(canvas);
+    const heard: string[] = [];
+    const changed = await documents.change(canvas, {
+      revision: { op: 'canvas.rename', by: 'outside:orchestrator', request: REQUEST },
+      build: (document) => {
+        heard.push('build');
+        return { next: renamed(document, 'worker', 'Builder'), result: 'renamed' };
+      },
+      check: (change, checked) => {
+        heard.push('check');
+        expect(checked).toBe(live);
+        expect([...change.entities.keys()]).toEqual(['node/worker']);
+        expect(change).toMatchObject({ op: 'canvas.rename', by: 'outside:orchestrator' });
+      },
+      committing: () => {
+        heard.push(`committing at ${String(count('revision', canvas))}`);
+      },
+    });
+    expect(heard).toEqual(['build', 'check', 'committing at 1']);
+    expect(changed).toMatchObject({ result: 'renamed', committed: { rev: 2 } });
+    expect(changed.committed?.change.entities.get('node/worker')).toMatchObject({
+      before: { label: 'Worker' },
+      after: { label: 'Builder' },
+      rev: 1,
+    });
+    expect(
+      disk
+        .prepare('SELECT op, by_party, request FROM revision WHERE canvas_id = ? AND rev = 2')
+        .get(canvas),
+    ).toEqual({ op: 'canvas.rename', by_party: 'outside:orchestrator', request: REQUEST });
+  });
+
+  it('writes nothing a check refuses, and never says it is past its point of no return', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const before = await documents.load(canvas);
+    let committing = false;
+    await expect(
+      documents.change(canvas, {
+        revision: { op: 'canvas.rename', by: 'outside:orchestrator' },
+        build: (document) => ({ next: renamed(document, 'worker', 'Builder'), result: undefined }),
+        check: () => {
+          throw new Error('It changed since.');
+        },
+        committing: () => {
+          committing = true;
+        },
+      }),
+    ).rejects.toThrow('It changed since.');
+    expect(committing).toBe(false);
+    expect(documents.live(canvas)).toMatchObject({ document: before.document, rev: 1 });
+    expect(count('revision', canvas)).toBe(1);
+  });
+
+  it('checks and writes nothing for a build that changes nothing', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    await documents.load(canvas);
+    const checked: unknown[] = [];
+    const changed = await documents.change(canvas, {
+      revision: { op: 'canvas.rename', by: 'you' },
+      build: (document) => ({ next: renamed(document, 'worker', 'Worker'), result: 'same' }),
+      check: (change) => checked.push(change),
+      committing: () => checked.push('committing'),
+    });
+    expect(changed).toEqual({ result: 'same' });
+    expect(checked).toEqual([]);
+    expect(count('revision', canvas)).toBe(1);
+  });
+
+  it('refuses a change to a canvas whose document isn’t loaded, building nothing', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    let built = false;
+    await expect(
+      documents.change(canvas, {
+        revision: { op: 'canvas.rename', by: 'you' },
+        build: (document) => {
+          built = true;
+          return { next: document, result: undefined };
+        },
+        check: () => undefined,
+        committing: () => undefined,
+      }),
+    ).rejects.toThrow('That canvas isn’t open in corrallm.');
+    expect(built).toBe(false);
+    expect(documentRow(canvas)).toBeUndefined();
   });
 
   it('restores the edits made since it was saved after a restart, as edited', async () => {
     const canvas = newCanvasId();
     const file = await filed(canvasOf(canvas));
     const next = renamed((await documents.load(canvas)).document, 'lead', 'Head');
-    await documents.commit(canvas, next, { op: 'canvas.rename', by: 'you' });
+    await commit(canvas, next);
     expect(documents.edited(canvas)).toBe(true);
 
     await restart();
@@ -231,14 +344,14 @@ describe('a canvas’s document', () => {
     const next = renamed(before.document, 'worker', 'Builder');
     const allow = refuseWrites(profile, 'node', 'The disk is full');
 
-    await expect(documents.commit(canvas, next, { op: 'x', by: 'you' })).rejects.toThrow(
-      'The disk is full',
-    );
+    const failed = commit(canvas, next);
+    await expect(failed).rejects.toBeInstanceOf(CommitFailed);
+    await expect(failed).rejects.toThrow('The disk is full');
     expect(documents.live(canvas)).toMatchObject({ document: before.document, rev: 1 });
     expect(count('revision', canvas)).toBe(1);
 
     allow();
-    await expect(documents.commit(canvas, next, { op: 'x', by: 'you' })).resolves.toBe(2);
+    await expect(commit(canvas, next)).resolves.toBe(2);
     await restart();
     expect((await documents.load(canvas)).document).toEqual(next);
   });
@@ -252,7 +365,7 @@ describe('a canvas’s document', () => {
       nodes: [{ id: 'lead', type: 'agent', position: { x: 20, y: 52 }, data: { label: 'Lead' } }],
       links: [],
     };
-    await documents.commit(canvas, lone, { op: 'canvas.delete', by: 'you' });
+    await commit(canvas, lone, { op: 'canvas.delete', by: 'you' });
     expect([count('node', canvas), count('link', canvas), count('queue_item', canvas)]).toEqual([
       1, 0, 0,
     ]);
@@ -278,9 +391,9 @@ describe('a canvas’s document', () => {
     });
     expect(documents.edited(canvas)).toBe(false);
     const next = renamed(documents.live(canvas).document, 'lead', 'Head');
-    await documents.commit(canvas, next, { op: 'canvas.rename', by: 'you' });
+    await commit(canvas, next);
     expect(documents.edited(canvas)).toBe(true);
-    await documents.commit(canvas, canvasOf(canvas), { op: 'canvas.rename', by: 'you' });
+    await commit(canvas, canvasOf(canvas));
     expect(documents.edited(canvas)).toBe(false);
   });
 
@@ -288,7 +401,7 @@ describe('a canvas’s document', () => {
     const canvas = newCanvasId();
     const file = await filed(canvasOf(canvas));
     const next = renamed((await documents.load(canvas)).document, 'lead', 'Head');
-    await documents.commit(canvas, next, { op: 'canvas.rename', by: 'you' });
+    await commit(canvas, next);
     const before = documentRow(canvas);
     // As a save leaves it when the core stops after the file was written, before its last commit.
     const saving = async (written: boolean) => {
@@ -320,7 +433,7 @@ describe('a canvas’s document', () => {
     const { document } = await documents.load(canvas);
     // Forgotten as canvas memory forgets the canvases used least recently, with all of it.
     store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
-    await documents.commit(canvas, renamed(document, 'lead', 'Head'), { op: 'x', by: 'you' });
+    await commit(canvas, renamed(document, 'lead', 'Head'));
     await restart();
     expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
 
@@ -366,11 +479,25 @@ describe('a canvas’s document', () => {
     await documents.edit(canvas, toFile(canvasOf(canvas)));
     const first = renamed(canvasOf(canvas), 'lead', 'One');
     const second = renamed(first, 'worker', 'Two');
-    const revs = await Promise.all([
-      documents.commit(canvas, first, { op: 'x', by: 'you' }),
-      documents.commit(canvas, second, { op: 'x', by: 'you' }),
+    // The second is built over what the first left.
+    const built: string[] = [];
+    const rename = (id: string, label: string) =>
+      documents.change(canvas, {
+        revision: { op: 'canvas.rename', by: 'you' },
+        build: (document) => {
+          built.push(document.nodes.map((node) => node.data.label).join(', '));
+          return { next: renamed(document, id, label), result: label };
+        },
+        check: () => undefined,
+        committing: () => undefined,
+      });
+    const changes = await Promise.all([rename('lead', 'One'), rename('worker', 'Two')]);
+    expect(changes.map(({ result, committed }) => [result, committed?.rev])).toEqual([
+      ['One', 2],
+      ['Two', 3],
     ]);
-    expect(revs).toEqual([2, 3]);
+    expect(built).toEqual(['Team, Lead, Worker', 'Team, One, Worker']);
+    expect(documents.live(canvas).document).toEqual(second);
     expect(
       disk
         .prepare('SELECT rev, entity FROM change WHERE canvas_id = ? AND rev > 1 ORDER BY rev')
@@ -385,11 +512,9 @@ describe('a canvas’s document', () => {
     // Its log's flushes skipped: a thousand commits, quickly.
     await restart({ ...SYSTEM_DEPS, flush: () => Promise.resolve() });
     const canvas = newCanvasId();
+    await documents.load(canvas);
     for (let i = 1; i <= 1101; i++) {
-      await documents.commit(canvas, renamed(canvasOf(canvas), 'lead', `Lead ${String(i)}`), {
-        op: 'canvas.rename',
-        by: 'you',
-      });
+      await commit(canvas, renamed(canvasOf(canvas), 'lead', `Lead ${String(i)}`));
     }
     expect(
       disk

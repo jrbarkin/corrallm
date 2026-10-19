@@ -26,11 +26,14 @@ import type {
   NodeRow,
   Row,
   Rows,
+  RowsChange,
 } from '../../../shared/model/rows';
 import type { CanvasMemory } from '../../memory';
 import { writeWhole } from '../../whole-file';
 import type { TrustedPath } from '../host';
 import type { Database } from '../store/store';
+import { changeSetOf } from './change';
+import type { ChangeSet } from './change';
 
 /*
  * Each canvas's document as the core keeps it (B9 Design §2, §5): in its database's rows
@@ -40,13 +43,15 @@ import type { Database } from '../store/store';
  * its edits since it was saved survive a restart, and a file changed on disk is never read over
  * them (B9's file reviews will say so). A draft is kept once it holds something.
  *
- * A change commits write-through: what it changed, entity by entity (diffRows), is written in one
- * write of the database's lane with the revision it takes (the document's next) and what it was,
- * and the live document is the changed one only once that write is on disk, so a commit that fails
- * leaves it as it was. Commits on a canvas go one at a time, each against what the one before
- * left. Each entity changed is stamped with the revision and the party; a row whose place alone
- * was numbered anew keeps its own. Revisions past the last REVISIONS_KEPT are trimmed every
- * TRIM_EVERY commits, with what each changed.
+ * An op changes a loaded document (`change`, B9 Design §3): what it builds from the live document is
+ * diffed by reference against it (diffRows), checked (expect, the change rules) and committed
+ * write-through, past its point of no return once its write is queued: what it changed, entity by
+ * entity, is written in one write of the database's lane with the revision it takes (the
+ * document's next) and what it was, and the live document is the changed one only once that write
+ * is on disk, so a commit that fails (CommitFailed) leaves it as it was. Commits on a canvas go one
+ * at a time, each built against what the one before left. Each entity changed is stamped with the
+ * revision and the party; a row whose place alone was numbered anew keeps its own. Revisions past
+ * the last REVISIONS_KEPT are trimmed every TRIM_EVERY commits, with what each changed.
  *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
  * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
@@ -62,6 +67,7 @@ const REVISIONS_KEPT = 1000;
 const TRIM_EVERY = 100;
 const ANOTHER = 'This canvas’s text is another canvas’s.';
 const NOT_LOADED = 'This canvas’s document isn’t loaded in the core.';
+const NOT_OPEN = 'That canvas isn’t open in corrallm.';
 
 export interface DocumentsDeps {
   /** The profile's database, which keeps the documents. */
@@ -82,6 +88,42 @@ export interface Revision {
   /** The party that proposed it, when you allowed its proposal. */
   proposedBy?: PartyId;
   request?: string;
+}
+
+/** What an op builds from a canvas's live document: the next one, and its result. */
+export interface Built<R> {
+  next: CanvasDocument;
+  result: R;
+  /** The agents it created as exact copies of another (spawnAgent's), new → source. */
+  copies?: ReadonlyMap<string, string>;
+}
+
+/** A change an op makes to a canvas's document. */
+export interface Change<R> {
+  revision: Revision;
+  /** The next document, and the op's result, built purely from the live one. */
+  build(document: CanvasDocument): Built<R>;
+  /** Refuses what it changes by throwing, before anything is written: expect, the change rules. */
+  check(change: ChangeSet, live: LiveDocument): void;
+  /** Said once it is past its point of no return: as its write is queued. */
+  committing(): void;
+}
+
+/** What a change did: the op's result; and, if it changed anything, its revision and what changed. */
+export interface Changed<R> {
+  result: R;
+  committed?: { rev: number; change: ChangeSet };
+}
+
+/** A change's write failed: nothing of it is kept, on disk or in memory. A retry may succeed. */
+export class CommitFailed extends Error {
+  constructor(cause: unknown) {
+    super(
+      `The change couldn’t be written, so nothing changed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = 'CommitFailed';
+  }
 }
 
 /** A canvas's document as the core has it now. */
@@ -170,11 +212,25 @@ export class Documents {
   }
 
   /**
-   * Commits `next` as the canvas's document. Resolves with its revision once it is on disk (the
-   * one it had, if `next` changes nothing); rejects, leaving it as it was, if it couldn't be.
+   * Makes `change` to the canvas's document, which must be loaded: once what the canvas's document
+   * was doing is done, builds it over the live document, and if that changes anything, checks it,
+   * says it is committing and commits it. Resolves once it is on disk, with what it did; rejects,
+   * leaving the document as it was, if it was refused, or couldn't be written (CommitFailed).
    */
-  commit(canvas: CanvasId, next: CanvasDocument, revision: Revision): Promise<number> {
-    return this.#queue(canvas, async () => this.#commit(await this.#load(canvas), next, revision));
+  change<R>(canvas: CanvasId, change: Change<R>): Promise<Changed<R>> {
+    return this.#queue(canvas, async () => {
+      const live = this.#lives.get(canvas);
+      if (live === undefined) throw new Error(NOT_OPEN);
+      const { next, result, copies } = change.build(live.document);
+      if (next.id !== canvas) throw new Error(ANOTHER);
+      const rows = diffRows(live.rows, next, live.document);
+      if (rows.changed.length === 0) return { result };
+      const set = changeSetOf(live, next, rows, change.revision, copies);
+      change.check(set, live);
+      change.committing();
+      const rev = await this.#commit(live, next, rows, change.revision);
+      return { result, committed: { rev, change: set } };
+    });
   }
 
   /**
@@ -188,7 +244,7 @@ export class Documents {
       if (live.kept && this.#text(live.document).text === text) return live.rev;
       const next = this.read(text);
       if (next.id !== canvas) throw new Error(ANOTHER);
-      return this.#commit(live, next, { op: 'canvas.edit', by: 'you' });
+      return this.#commit(live, next, diffRows(live.rows, next), { op: 'canvas.edit', by: 'you' });
     });
   }
 
@@ -283,7 +339,13 @@ export class Documents {
     // Read from its file: kept in rows from now on, under its own id, its hashes with them.
     const read = { ...document, id: canvas };
     const hashes = { saved: this.#text(read).hash, file: sha256(text) };
-    await this.#commit(live, read, { op: 'file.open', by: 'you' }, hashes);
+    await this.#commit(
+      live,
+      read,
+      diffRows(live.rows, read),
+      { op: 'file.open', by: 'you' },
+      hashes,
+    );
     this.#lives.set(canvas, live);
     return live;
   }
@@ -397,28 +459,32 @@ export class Documents {
   }
 
   /**
-   * Commits `next` over `live`: what changed, in one write, at the next revision; `live` is `next`
-   * once it is on disk. With `hashes`, its text's and its file's as read from it.
+   * Commits `next` over `live`, by what it changes of it (`change`): in one write, at the next
+   * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
+   * from it. Throws CommitFailed, leaving `live` as it was, if the write failed.
    */
   async #commit(
     live: Live,
     next: CanvasDocument,
+    { rows, changed, renumbered }: RowsChange,
     revision: Revision,
     hashes?: { saved: string; file: string },
   ): Promise<number> {
-    if (next.id !== live.document.id) throw new Error(ANOTHER);
-    const { rows, changed, renumbered } = diffRows(live.rows, next);
     if (changed.length === 0 && hashes === undefined) return live.rev;
     const rev = live.rev + 1;
     const at = this.#now();
-    await this.#deps.store.write(() => {
-      this.#write(live, { rows, changed, renumbered, rev, at, revision });
-      if (hashes !== undefined) {
-        this.#deps.store
-          .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
-          .run(hashes.saved, hashes.file, next.id);
-      }
-    });
+    try {
+      await this.#deps.store.write(() => {
+        this.#write(live, { rows, changed, renumbered, rev, at, revision });
+        if (hashes !== undefined) {
+          this.#deps.store
+            .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
+            .run(hashes.saved, hashes.file, next.id);
+        }
+      });
+    } catch (error) {
+      throw new CommitFailed(error);
+    }
     live.document = next;
     live.rows = rows;
     for (const key of changed) {

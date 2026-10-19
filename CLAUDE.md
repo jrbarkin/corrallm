@@ -131,11 +131,14 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 each canvas's document (B9 Design §2, §5): read once from its rows (a canvas with
                 none from the file canvas memory keeps for it, `file.open`, then kept in rows, so a
                 file changed on disk is never read over its edits), kept in memory as the live
-                document (`live`), committed write-through by what changed (`commit`: diffRows'
-                entities in one write at the document's next revision, each stamped with it and its
-                party, with `revision` and `change`; the live document changes only once it is on
-                disk; one commit at a time a canvas; revisions past the last 1,000 trimmed every 100
-                commits), the renderer's whole document committed as `canvas.edit` by you until its
+                document (`live`), changed by ops (`change`: built over the live document of a
+                loaded canvas, diffed by reference, its ChangeSet (canvas/change.ts: each entity as
+                it was and is, the agents created and removed, managers changed) checked, then past
+                its point of no return committed write-through: diffRows' entities in one write at
+                the document's next revision, each stamped with it and its party, with `revision`
+                and `change`; the live document changes only once it is on disk, and a failed write
+                is CommitFailed; one commit at a time a canvas; revisions past the last 1,000
+                trimmed every 100 commits), the renderer's whole document committed as `canvas.edit` by you until its
                 gestures are operations (`edit`, for run:save and canvas:save), and saved by the core
                 itself (`save`: writing_hash committed, the file written whole and forced to disk,
                 then file_hash and saved_hash with canvas memory's file; a save cut short is settled
