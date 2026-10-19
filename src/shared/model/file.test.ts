@@ -93,6 +93,60 @@ describe('toFile', () => {
     expect(() => read(JSON.stringify({ ...saved, arrange }))).toThrow('arrange must be a boolean');
   });
 
+  it('writes a canvas the same whatever order its fields were set in, as it reads them', () => {
+    /** `value` with its objects' fields set in the reverse order, at every depth. */
+    const reversed = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reversed)
+        : typeof value === 'object' && value !== null
+          ? Object.fromEntries(
+              Object.entries(value)
+                .reverse()
+                .map(([key, one]) => [key, reversed(one)]),
+            )
+          : value;
+    const settings = {
+      codex: { model: 'gpt-6-luna', effort: 'low', mode: 'read-only' },
+      'claude-code': { model: 'opus', mode: 'plan' },
+    };
+    const everything: QueueItem[] = [
+      ...queue,
+      { id: 's2', action: 'Bash', target: 'b', instruction: 'npm test', expect: 'fails' },
+      { id: 'd', delay: { resets: 'weekly', backend: 'codex' } },
+      { id: 'ok', approve: 'the spec' },
+      {
+        id: 'r',
+        repeat: [{ id: 'w2', waitFor: [{ agent: 'b', item: 'x' }], timeout: { at: '09:00' } }],
+        until: { kind: 'outputContains', text: 'DONE', wholeLine: true },
+        rounds: 2,
+        otherwise: 'goOn',
+      },
+      {
+        id: 'u',
+        if: { kind: 'usageAbove', backend: 'codex', window: 'weekly', percent: 80 },
+        then: [],
+      },
+    ];
+    const set = (items: unknown, all: unknown) =>
+      canvas.nodes.map((n) =>
+        n.id === 'a' && n.type === 'agent'
+          ? { ...n, data: { ...n.data, queue: items, settings: all } }
+          : n,
+      ) as CanvasDocument['nodes'];
+    const text = toFile({ ...canvas, nodes: set(everything, settings) });
+
+    expect(toFile({ ...canvas, nodes: set(reversed(everything), reversed(settings)) })).toBe(text);
+    expect(toFile(read(text))).toBe(text);
+  });
+
+  it('writes an empty queue as none, and reads one so', () => {
+    const empty = withQueue([]);
+    expect((JSON.parse(toFile(empty)) as typeof saved).nodes[1]).not.toHaveProperty('queue');
+    const file = structuredClone(saved);
+    Object.assign(file.nodes[2] ?? {}, { queue: [] });
+    expect(agentData(read(JSON.stringify(file)), 'b')).toEqual({ label: 'Reviewer' });
+  });
+
   it('writes the canvas as readable JSON', () => {
     const text = toFile(canvas);
     expect(JSON.parse(text)).toEqual(saved);

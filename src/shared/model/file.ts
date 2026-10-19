@@ -89,7 +89,62 @@ interface FileLink {
   dots?: [string, string];
 }
 
-/** A canvas as the text of its `.corral` file. */
+/**
+ * The fields a file's objects hold (an item, a condition, a time, a wait's target, an agent's
+ * settings), in the order the file writes them, which is the order they are read in: so a canvas's
+ * text depends only on what it means, never on the order its fields were set in.
+ */
+const FIELD_ORDER = [
+  'id',
+  'kind',
+  'action',
+  'message',
+  'if',
+  'waitFor',
+  'delay',
+  'approve',
+  'repeat',
+  'target',
+  'instruction',
+  'expect',
+  'then',
+  'until',
+  'rounds',
+  'otherwise',
+  'timeout',
+  'agent',
+  'item',
+  'text',
+  'wholeLine',
+  'resets',
+  'backend',
+  'window',
+  'percent',
+  'seconds',
+  'at',
+  'model',
+  'effort',
+  'mode',
+];
+const FIELD_RANK = new Map(FIELD_ORDER.map((field, i) => [field, i]));
+
+/**
+ * `value` with every object's fields in the order a file writes them (FIELD_ORDER, then any other,
+ * as an adapter's id, by name), at every depth: what queue items and settings are written and kept
+ * as.
+ */
+export function inFileOrder<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(inFileOrder) as T;
+  if (!isRecord(value)) return value;
+  const rank = (field: string) => FIELD_RANK.get(field) ?? FIELD_ORDER.length;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))
+      .map(([field, one]) => [field, inFileOrder(one)]),
+  ) as T;
+}
+
+/** A canvas as the text of its `.corral` file. An agent's empty queue is written as none. */
 export function toFile({ id, arrange, nodes, links }: CanvasDocument): string {
   const saved = nodes.map((n): FileNode => {
     const agent = n.type === 'agent' ? n.data : undefined;
@@ -102,10 +157,12 @@ export function toFile({ id, arrange, nodes, links }: CanvasDocument): string {
       ...(n.parentId === undefined ? {} : { parent: n.parentId }),
       ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
       ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
-      ...(agent?.settings === undefined ? {} : { settings: agent.settings }),
+      ...(agent?.settings === undefined ? {} : { settings: inFileOrder(agent.settings) }),
       ...(role === undefined ? {} : { role }),
       ...(n.data.color === undefined ? {} : { color: n.data.color }),
-      ...(agent?.queue === undefined ? {} : { queue: agent.queue }),
+      ...(agent?.queue === undefined || agent.queue.length === 0
+        ? {}
+        : { queue: inFileOrder(agent.queue) }),
     };
   });
   const drawn = links.map(({ source, target, dots }): FileLink => ({
@@ -265,10 +322,12 @@ function readNode(
     }
     return v;
   });
-  const queue = optional(node.queue, `${where}.queue`, (v, at) => {
+  const read = optional(node.queue, `${where}.queue`, (v, at) => {
     if (kind === 'group') throw new Error(`${at}: a group has no queue`);
     return readQueue(v, at);
   });
+  // An empty queue is none, as it is written.
+  const queue = read?.length === 0 ? undefined : read;
   return {
     id,
     kind,
