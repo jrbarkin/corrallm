@@ -53,8 +53,7 @@ describe('authored session roles', () => {
       type: 'end',
       messages: [sent()],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     await store.restart('a');
     await vi.waitFor(() => {

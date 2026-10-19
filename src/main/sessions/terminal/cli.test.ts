@@ -347,7 +347,7 @@ const seen = () =>
     event.type === 'status'
       ? `status:${event.status}`
       : event.type === 'end'
-        ? `end:${event.interrupted ? 'interrupted' : event.failed ? 'failed' : 'done'}`
+        ? `end:${event.result.status === 'cancelled' ? 'interrupted' : event.result.status === 'failed' ? 'failed' : 'done'}`
         : event.type === 'text' || event.type === 'user'
           ? `${event.type}:${event.text}`
           : event.type === 'notice'
@@ -411,7 +411,7 @@ describe('a Terminal session of another CLI', () => {
     });
     session.terminal.input('y');
     await until(() => {
-      expect(last('end')).toMatchObject({ interrupted: false, failed: false });
+      expect(last('end')).toMatchObject({ result: { status: 'completed', reason: 'completed' } });
     });
   });
 
@@ -422,7 +422,7 @@ describe('a Terminal session of another CLI', () => {
       expect(last('end')).toBeDefined();
     });
     expect(seen()).toContain('notice:It stopped without finishing.');
-    expect(last('end')).toMatchObject({ failed: true });
+    expect(last('end')).toMatchObject({ result: { status: 'failed', reason: 'error' } });
   });
 
   it('waits for a message it holds while it starts, however long that takes', async () => {
@@ -447,7 +447,7 @@ describe('a Terminal session of another CLI', () => {
     // Once the picker closes, the message goes in.
     run.closePicker();
     await until(() => {
-      expect(last('end')).toMatchObject({ interrupted: false, failed: false });
+      expect(last('end')).toMatchObject({ result: { status: 'completed', reason: 'completed' } });
     });
     expect(run.written).toContain(`${PASTE_START}Hello${PASTE_END}`);
   });

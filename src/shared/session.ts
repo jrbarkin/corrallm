@@ -33,22 +33,6 @@ export interface TurnResult {
   resetsAt?: number;
 }
 
-/** Preserves typed results while accepting events from connections that still use the flags. */
-export function turnResult(end: {
-  interrupted: boolean;
-  failed?: boolean;
-  result?: TurnResult;
-}): TurnResult {
-  return (
-    end.result ??
-    (end.interrupted
-      ? { status: 'cancelled', reason: 'interrupted' }
-      : end.failed
-        ? { status: 'failed', reason: 'error' }
-        : { status: 'completed', reason: 'completed' })
-  );
-}
-
 /** Which agents the user has, by adapter: whether corrallm finds each, as its connections would run it. */
 export type InstalledClis = Readonly<Record<AdapterId, boolean>>;
 
@@ -575,14 +559,12 @@ export type SessionEvent =
   | { type: 'model'; model: string }
   /** The reasoning effort it runs at now (null: its model's default). */
   | { type: 'effort'; effort: string | null }
-  /** The turn ended: interrupted by the user, or failed (an API error, a usage limit). */
+  /** The turn ended, with its native completion, cancellation or failure reason. */
   | {
       type: 'end';
       messages: string[];
       seconds: number;
-      interrupted: boolean;
-      failed: boolean;
-      result?: TurnResult;
+      result: TurnResult;
     }
   /**
    * The session stopped: its process exited, or main closed it (for another canvas or project).

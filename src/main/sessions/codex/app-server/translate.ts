@@ -764,13 +764,14 @@ export function historyEvents(turns: readonly unknown[], places: Places): Sessio
     const user = events.find((event) => event.type === 'user');
     const status = property(turn, 'status');
     const ms = property(turn, 'durationMs');
-    events.push(...translator.endTurn(turn), {
-      type: 'end',
-      messages: user === undefined ? [] : [user.id],
-      seconds: Math.max(1, Math.round((typeof ms === 'number' ? ms : 0) / 1000)),
-      interrupted: status === 'interrupted',
-      failed: status === 'failed',
-    });
+    events.push(...translator.endTurn(turn));
+    if (status === 'completed' || status === 'interrupted' || status === 'failed')
+      events.push({
+        type: 'end',
+        messages: user === undefined ? [] : [user.id],
+        seconds: Math.max(1, Math.round((typeof ms === 'number' ? ms : 0) / 1000)),
+        result: translator.takeResult(turn),
+      });
     return events;
   });
 }

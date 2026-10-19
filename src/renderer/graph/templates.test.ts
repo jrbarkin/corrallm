@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { catalog } from '../catalog';
 import { defaultConnection, equivalentAction } from './agents';
 import type { Graph } from './graph';
-import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
+import { fillTemplate, placeholdersOf } from '../../shared/templates';
+import { withAgents, withConnections } from './templates';
 const template: Graph = {
   nodes: [
     {

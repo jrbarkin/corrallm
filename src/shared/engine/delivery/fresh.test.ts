@@ -37,8 +37,7 @@ describe('starting a fresh native conversation', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
       const submissions = store.of('a').submissions;
       const cli = TEST_ENGINE.adapterOf(connection);

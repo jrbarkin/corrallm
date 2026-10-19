@@ -30,16 +30,17 @@
   cursor: default;
 }
 
-/* An item is a card that looks like React Flow's default node. Keep in sync with CARD_SIZE. */
+/* An item is a card that looks like React Flow's default node. */
 .react-flow__node-agent {
-  width: 150px;
   font-size: 12px;
 }
 
 .graph-card {
   position: relative;
   box-sizing: border-box;
-  min-height: 34px;
+  /* card.test.ts keeps these fixed dimensions equal to the model's CARD_SIZE. */
+  width: 150px;
+  height: 34px;
   border: var(--xy-node-border-default);
   border-radius: 4px;
   background: var(--xy-node-background-color-default);
@@ -124,20 +125,22 @@ input.graph-label {
   position: absolute;
   top: 0;
   left: 50%;
-  width: 150px;
-  height: 34px;
   transform: translateX(-50%);
   font-weight: 600;
   pointer-events: all;
   cursor: grab;
 }
 
-.react-flow__node-agent.parent > .graph-card > .graph-label,
+.graph-card > .graph-label,
 .graph-frame-title > .graph-label {
-  height: 32px;
+  min-height: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.graph-card > .graph-label {
+  height: 100%;
 }
 
 .graph-frame-title {
@@ -146,6 +149,7 @@ input.graph-label {
 }
 
 .graph-frame-title > .graph-label {
+  height: 32px;
   text-align: left;
 }
 
@@ -779,6 +783,7 @@ input.graph-label {
   left: 8px;
   box-sizing: border-box;
   height: 16px;
+  max-width: calc(100% - 24px);
   padding: 0 6px;
   border-radius: 8px;
   background: var(--agent-color);
@@ -787,6 +792,9 @@ input.graph-label {
   font-weight: 600;
   line-height: 16px;
   pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .graph-agent::after {
@@ -802,11 +810,14 @@ input.graph-label {
 }
 
 .graph-agent-chip > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 4px 12px;
   border: 0;
   border-radius: 999px;
-  background: var(--agent-color);
-  color: white;
+  background: color-mix(in srgb, CanvasText 7%, Canvas);
+  color: CanvasText;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -1497,13 +1508,6 @@ input.graph-label {
   padding-top: 4px;
 }
 
-.graph-example-agent {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--agent-color);
-}
-
 /* A template's blanks: what each asks for, over a box to fill it in, then Back or Create. */
 .graph-template-form {
   display: grid;
@@ -1558,8 +1562,8 @@ input.graph-label {
 }
 
 /*
- * A template's agents: each with its type, or the default (a hollow dot where it is left open),
- * and how it runs. Their rows share the fieldset's columns, so their pickers line up.
+ * A template's agents: each with its selected or default adapter's logo, and how it runs.
+ * Their rows share the fieldset's columns, so their pickers line up.
  */
 .graph-template-agents {
   display: grid;
@@ -1590,12 +1594,6 @@ input.graph-label {
   background: Canvas;
   color: inherit;
   font: inherit;
-}
-
-.graph-example-agent:not([data-agent]) {
-  box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, CanvasText 45%, transparent);
-  background: transparent;
 }
 
 /*

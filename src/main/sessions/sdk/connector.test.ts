@@ -440,10 +440,33 @@ describe('SdkConnector', () => {
       type: 'end',
       messages: [id],
       seconds: 5,
-      interrupted: false,
-      failed: false,
       result: { status: 'completed', reason: 'completed' },
     });
+  });
+
+  it('ends a native error result as failed, with its API error', async () => {
+    const { sdk, host, query, events } = connector();
+    const session = await sdk.start(SPEC, host);
+    const id = '00000000-0000-4000-8000-000000000001';
+    await session.send({ id, text: 'Hello' });
+    await settle();
+    const result = turn('tools-and-compact', 0).find((message) => message.type === 'result');
+    if (!result) throw new Error('no recorded result');
+    query().say({
+      ...result,
+      subtype: 'error_during_execution' as const,
+      is_error: true,
+      errors: ['The upstream API failed.'],
+      user_message_uuids: [id],
+    });
+    await settle();
+    expect(events.at(-1)).toMatchObject({
+      type: 'end',
+      messages: [id],
+      result: { status: 'failed', reason: 'api', message: 'The upstream API failed.' },
+    });
+    expect(events.at(-1)).not.toHaveProperty('interrupted');
+    expect(events.at(-1)).not.toHaveProperty('failed');
   });
 
   it('remembers its session only once a turn has made it one to resume', async () => {
@@ -562,8 +585,7 @@ describe('SdkConnector', () => {
     expect(events.at(-1)).toMatchObject({
       type: 'end',
       messages: [id],
-      interrupted: true,
-      failed: false,
+      result: { status: 'cancelled' },
     });
   });
 
@@ -574,7 +596,11 @@ describe('SdkConnector', () => {
     await session.send({ id, text: 'Later' });
     query().interrupt.mockResolvedValueOnce({ still_queued: [], cancelled: [id] });
     await session.interrupt();
-    expect(events.at(-1)).toMatchObject({ type: 'end', messages: [id], interrupted: true });
+    expect(events.at(-1)).toMatchObject({
+      type: 'end',
+      messages: [id],
+      result: { status: 'cancelled' },
+    });
   });
 
   it('does not end a message on another turn’s result (a background task’s follow-up)', async () => {

@@ -654,9 +654,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       type: 'end',
       messages: turn.messages,
       seconds: Math.max(1, Math.round((Date.now() - turn.started) / 1000)),
-      interrupted,
-      failed,
-      ...(failed && turn.result !== undefined ? { result: turn.result } : {}),
+      result: interrupted
+        ? { status: 'cancelled', reason: 'interrupted' }
+        : failed
+          ? (turn.result ?? { status: 'failed', reason: 'error' })
+          : { status: 'completed', reason: 'completed' },
     });
     this.#readUsage();
   }

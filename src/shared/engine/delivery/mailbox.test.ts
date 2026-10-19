@@ -30,8 +30,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [id],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     expect(store.of('a').submissions).toMatchObject([
       { text: 'Use tabs, please', status: 'completed' },
@@ -55,8 +54,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [id],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     expect(done).toHaveBeenCalledWith(false, '', { status: 'completed', reason: 'completed' });
     store.reset();
@@ -131,8 +129,7 @@ describe('SessionStore', () => {
           type: 'end',
           messages: [id],
           seconds: 1,
-          interrupted: false,
-          failed: false,
+          result: { status: 'completed', reason: 'completed' },
         });
       };
       end(first);
@@ -211,8 +208,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: ['native'],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
       expect(store.of('a').submissions?.[0]?.status).toBe('completed');
       expect(store.of('a').queued).toHaveLength(1);
@@ -253,8 +249,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
       expect(store.of('a').submissions).toMatchObject([
         { text: 'Not yet dispatched', status: 'cancelled' },
@@ -284,8 +279,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [active],
         seconds: 1,
-        interrupted: true,
-        failed: false,
+        result: { status: 'cancelled', reason: 'interrupted' },
       });
       expect(store.of('a').queued).toMatchObject([{ text: 'Waiting' }]);
       expect(backend.send).toHaveBeenCalledTimes(1);
@@ -387,8 +381,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [previous],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -417,14 +410,7 @@ describe('SessionStore', () => {
       'a',
       'claude-code.sdk',
       { type: 'text', id: 'reply', text: 'Try after the reset.' },
-      {
-        type: 'end',
-        messages: [id],
-        seconds: 1,
-        interrupted: false,
-        failed: true,
-        result,
-      },
+      { type: 'end', messages: [id], seconds: 1, result },
     );
     expect(done).toHaveBeenCalledWith(true, 'Try after the reset.', result);
     expect(store.of('a').submissions?.[0]).toMatchObject({ result, reply: 'Try after the reset.' });
@@ -460,8 +446,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [automated],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -479,14 +464,7 @@ describe('SessionStore', () => {
       'a',
       'claude-code.terminal',
       { type: 'text', id: 'reply', text: 'Updated.' },
-      {
-        type: 'end',
-        messages: [queued.id, 'native-one'],
-        seconds: 1,
-        interrupted: false,
-        failed: false,
-        result,
-      },
+      { type: 'end', messages: [queued.id, 'native-one'], seconds: 1, result },
     );
     expect(ended.mock.calls).toEqual([
       ['a', queued.id, 'Updated.', result],
@@ -501,8 +479,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: ['native-two'],
       seconds: 1,
-      interrupted: true,
-      failed: false,
+      result: { status: 'cancelled', reason: 'interrupted' },
     });
     expect(ended).toHaveBeenLastCalledWith('a', 'native-two', 'Updated.', {
       status: 'cancelled',
@@ -528,8 +505,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [id],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       },
     );
     store.send('a', 'claude-code', 'Unresolved');
@@ -755,8 +731,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [id],
       seconds: 1,
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed', reason: 'completed' },
     });
     expect(store.of('a').submissions).toMatchObject([{ id, status: 'completed' }]);
     expect(backend.send).toHaveBeenCalledTimes(1);
@@ -782,8 +757,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
     }
     expect(store.of('a').submissions?.map(({ status }) => status)).toEqual([
@@ -800,8 +774,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [sent()],
       seconds: 1,
-      interrupted: true,
-      failed: false,
+      result: { status: 'cancelled', reason: 'interrupted' },
     });
     expect(store.of('a').submissions?.at(-1)?.status).toBe('cancelled');
     store.reset();
@@ -829,8 +802,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [automated],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
       store.send('a', 'claude-code', 'Manual');
       await Promise.resolve();
@@ -854,8 +826,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [manual, 'native-1', 'native-2'],
         seconds: 1,
-        interrupted: false,
-        failed: true,
+        result: { status: 'failed', reason: 'error' },
       });
       expect(store.of('a').submissions?.map(({ status }) => status)).toEqual([
         'failed',
@@ -893,8 +864,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
     }
     expect(heard).toEqual(['Third (interrupted)', 'First', 'Second']);
@@ -906,8 +876,7 @@ describe('SessionStore', () => {
       type: 'end',
       messages: [sent()],
       seconds: 1,
-      interrupted: true,
-      failed: false,
+      result: { status: 'cancelled', reason: 'interrupted' },
     });
     expect(heard.at(-1)).toBe('Fourth (interrupted)');
     store.reset();
@@ -941,8 +910,7 @@ describe('SessionStore', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
     }
     expect(backend.send.mock.calls.map(([, message]) => message.text)).toEqual([
@@ -1003,7 +971,12 @@ describe('submission retention', () => {
         'a',
         'claude-code.terminal',
         { type: 'user', id, text: `Prompt ${String(index)}` },
-        { type: 'end', messages: [id], seconds: 1, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [id],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
     }
     emit('a', 'claude-code.terminal', { type: 'user', id: 'latest', text: 'Still running' });

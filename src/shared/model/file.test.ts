@@ -30,6 +30,7 @@ const queue: QueueItem[] = [
 /** A group holding an agent, another agent outside it, and a link between the two. */
 const canvas: CanvasDocument = {
   id: ID,
+  arrange: false,
   nodes: [
     { id: 'G', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Team', color: 2 } },
     {
@@ -74,6 +75,24 @@ const saved = {
 };
 
 describe('toFile', () => {
+  it('round-trips arrangement and writes it only when on', () => {
+    const on = { ...canvas, arrange: true };
+    expect(JSON.parse(toFile(on))).toHaveProperty('arrange', true);
+    expect(read(toFile(on))).toEqual(on);
+    expect(JSON.parse(toFile({ ...canvas, arrange: false }))).not.toHaveProperty('arrange');
+  });
+
+  it('reads an old file without arrangement as off and writes it back unchanged', () => {
+    const text = `${JSON.stringify(saved, null, 2)}\n`;
+    const loaded = read(text);
+    expect(loaded).toHaveProperty('arrange', false);
+    expect(toFile(loaded)).toBe(text);
+  });
+
+  it.each([null, 'true', 1, {}])('refuses a non-boolean arrange: %j', (arrange) => {
+    expect(() => read(JSON.stringify({ ...saved, arrange }))).toThrow('arrange must be a boolean');
+  });
+
   it('writes the canvas as readable JSON', () => {
     const text = toFile(canvas);
     expect(JSON.parse(text)).toEqual(saved);
@@ -248,6 +267,7 @@ describe('fromFile', () => {
     });
     const connected: CanvasDocument = {
       id: ID,
+      arrange: false,
       nodes: [
         agent('t', 0, { label: 'T', connection: 'claude-code.terminal' }),
         agent('s', 200, { label: 'S', adapter: 'claude-code', connection: 'claude-code.sdk' }),
@@ -272,6 +292,7 @@ describe('fromFile', () => {
     } as const;
     const set: CanvasDocument = {
       id: ID,
+      arrange: false,
       nodes: [
         {
           id: 't',

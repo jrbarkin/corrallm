@@ -85,7 +85,7 @@ export class Engine {
           agent.data.adapter ?? io.catalog.defaultAdapter,
           text,
           (failed, reply, result) => {
-            done({ failed, reply, ...(result ? { result } : {}) });
+            done({ failed, reply, result });
           },
           images && [...images],
           refused,

@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
+import { flushDrafts } from '../useDraft';
 
 import type { AdapterId } from '../../shared/adapter';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
@@ -209,6 +210,7 @@ export function Composer({
 
   const submit = (text = draft.trim()) => {
     if (text === '' && images.length === 0) return;
+    flushDrafts();
     controls.send(
       text,
       images.map(({ mediaType, data }) => ({ mediaType, data })),

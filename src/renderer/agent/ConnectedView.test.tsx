@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEvent } from '../../shared/session';
+import { newCanvasId } from '../../shared/canvas';
+import type { AppApi } from '../../shared/ipc';
+import { findProjectFiles } from './completion';
 import { GraphEditor } from '../graph/GraphEditor';
 import type { Graph, GraphNode } from '../graph/graph';
 import { OpenLinkContext } from '../open-link';
@@ -11,6 +14,10 @@ import { fakeBackend } from '../../shared/engine/test-backend';
 vi.mock('../terminal/screen', async () => {
   const { fakeScreens } = await import('../terminal/test-screen');
   return { createScreen: fakeScreens.create };
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 /** What the run asks at the end of a tool's step: how it went (src/shared/engine/run/turns.ts). */
@@ -347,8 +354,7 @@ describe('a connected agent', () => {
         type: 'end',
         messages: [sent()],
         seconds: 1,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       });
     };
     await send('Sketch the plan');
@@ -357,7 +363,12 @@ describe('a connected agent', () => {
     expect(first).toBeDefined();
     expect(side.queryByRole('group', { name: /^Current chat/ })).toBeNull();
 
-    emit({ type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false });
+    emit({
+      type: 'end',
+      messages: [sent()],
+      seconds: 1,
+      result: { status: 'completed', reason: 'completed' },
+    });
     // The native conversation continues with every submission represented once.
     expect(messages()).toEqual(['Sketch the plan']);
     await turn('Fix the tests');
@@ -378,7 +389,12 @@ describe('a connected agent', () => {
         type: 'history',
         events: [
           { type: 'user', id: 'x1', text: 'Review the pull request' },
-          { type: 'end', messages: ['x1'], seconds: 3, interrupted: false, failed: false },
+          {
+            type: 'end',
+            messages: ['x1'],
+            seconds: 3,
+            result: { status: 'completed', reason: 'completed' },
+          },
         ],
       });
     });
@@ -401,7 +417,12 @@ describe('a connected agent', () => {
       type: 'history',
       events: [
         { type: 'user', id: 'restored', text: 'Review the pull request' },
-        { type: 'end', messages: ['restored'], seconds: 3, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: ['restored'],
+          seconds: 3,
+          result: { status: 'completed', reason: 'completed' },
+        },
       ],
     });
     const sidebar = view.getByRole('complementary', { name: 'Questions and queue' });
@@ -606,7 +627,7 @@ describe('a connected agent', () => {
         text: 'You’ve hit your session limit · resets 3pm',
       },
       { type: 'usage', usage: { costUsd: 0.0234, contextTokens: 6000, contextWindow: 200_000 } },
-      { type: 'end', messages: [id], seconds: 4, interrupted: false, failed: true },
+      { type: 'end', messages: [id], seconds: 4, result: { status: 'failed', reason: 'error' } },
     );
     expect(transcript.getByRole('alert').textContent).toBe(
       'You’ve hit your session limit · resets 3pm',
@@ -623,7 +644,12 @@ describe('a connected agent', () => {
     fireEvent.keyDown(composer, { key: 'Escape' });
     await settle();
     expect(backend.interrupt).toHaveBeenCalledWith('a');
-    emit({ type: 'end', messages: [sent()], seconds: 2, interrupted: true, failed: false });
+    emit({
+      type: 'end',
+      messages: [sent()],
+      seconds: 2,
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
     expect(transcript.getByText('Interrupted · 2s')).toBeTruthy();
   });
 
@@ -798,7 +824,12 @@ describe('a connected agent', () => {
     emit(
       { type: 'user', id: sent(), text: 'Cover the empty state too' },
       { type: 'status', status: 'working' },
-      { type: 'end', messages: [sent()], seconds: 4, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 4,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     expect(row()?.dataset.run).toBe('asking');
     fireEvent.click(within(bar() ?? document.body).getByRole('button', { name: 'Approve' }));
@@ -842,7 +873,12 @@ describe('a connected agent', () => {
       text: '/compact keep the layout notes',
     });
     expect(row()?.dataset.run).toBe('asking');
-    emit({ type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false });
+    emit({
+      type: 'end',
+      messages: [sent()],
+      seconds: 2,
+      result: { status: 'completed', reason: 'completed' },
+    });
 
     // What is sent otherwise is the changes, with the images pasted into them.
     const png = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
@@ -878,7 +914,12 @@ describe('a connected agent', () => {
     emit(
       { type: 'user', id: sent(), text: question },
       { type: 'text', id: 'm:0', text: 'Hard to say: one test timed out once.' },
-      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 3,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     const needs = within(
       within(view.getByRole('region', { name: 'Session' })).getByRole('group', {
@@ -938,7 +979,12 @@ describe('a connected agent', () => {
     });
 
     // The turn ends: the run reaches the OK, which the sidebar asks, answered there.
-    emit({ type: 'end', messages: [turn], seconds: 6, interrupted: false, failed: false });
+    emit({
+      type: 'end',
+      messages: [turn],
+      seconds: 6,
+      result: { status: 'completed', reason: 'completed' },
+    });
     expect(sidebar().getByText('Your OK on the branch?')).toBeTruthy();
     expect(sidebar().getByText('1', { selector: '.graph-questions-count' })).toBeTruthy();
     fireEvent.change(sidebar().getByRole('textbox', { name: 'What should change?' }), {
@@ -1015,13 +1061,23 @@ describe('a connected agent', () => {
   });
 
   it('completes @-mentions with the project folder’s files', async () => {
+    const canvas = newCanvasId();
+    const projectFiles = vi.fn().mockResolvedValue({
+      ok: true,
+      value: { items: ['src/main/', 'src/main/ipc.ts'] },
+    });
+    vi.stubGlobal('api', {
+      windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
+      projectFiles,
+    } satisfies Partial<AppApi>);
     const { backend, composer, view } = await open({ connection: 'claude-code.sdk' });
-    backend.files.mockResolvedValue(['src/main/', 'src/main/ipc.ts']);
+    backend.files.mockImplementation(findProjectFiles);
     fireEvent.change(composer, { target: { value: 'look at @ma', selectionStart: 11 } });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 120));
     });
     expect(backend.files).toHaveBeenLastCalledWith('ma');
+    expect(projectFiles).toHaveBeenLastCalledWith({ canvas, query: 'ma' });
     const menu = within(view.getByRole('listbox', { name: 'Files' }));
     fireEvent.click(menu.getByRole('option', { name: 'src/main/ipc.ts' }));
     expect(composer.value).toBe('look at @src/main/ipc.ts ');
@@ -1085,7 +1141,12 @@ describe('a connected agent', () => {
       events: [
         { type: 'user', id: 'u1', text: 'Earlier question' },
         { type: 'text', id: 'm1:0', text: 'Earlier answer' },
-        { type: 'end', messages: ['u1'], seconds: 3, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: ['u1'],
+          seconds: 3,
+          result: { status: 'completed', reason: 'completed' },
+        },
       ],
     });
     expect(transcript.getByText('Earlier question')).toBeTruthy();
@@ -1100,7 +1161,12 @@ describe('a connected agent', () => {
     emit(
       { type: 'user', id: one, text: 'One' },
       { type: 'text', id: 'm1:0', text: 'First answer' },
-      { type: 'end', messages: [one], seconds: 2, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [one],
+        seconds: 2,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     // Resumed after the agent ran elsewhere (a Terminal): a turn it did there is not shown yet.
     emit({
@@ -1108,11 +1174,21 @@ describe('a connected agent', () => {
       events: [
         { type: 'user', id: one, text: 'One' },
         { type: 'text', id: 'm1:0', text: 'First answer' },
-        { type: 'end', messages: [one], seconds: 2, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [one],
+          seconds: 2,
+          result: { status: 'completed', reason: 'completed' },
+        },
         { type: 'user', id: 'u2', text: 'Two' },
         { type: 'tool', id: 't2', tool: 'Read', summary: 'README.md', status: 'done' },
         { type: 'text', id: 'm2:0', text: 'Second answer' },
-        { type: 'end', messages: ['u2'], seconds: 5, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: ['u2'],
+          seconds: 5,
+          result: { status: 'completed', reason: 'completed' },
+        },
       ],
     });
     expect(transcript.getAllByText('First answer')).toHaveLength(1);
@@ -1127,13 +1203,23 @@ describe('a connected agent', () => {
     emit(
       { type: 'user', id: sent(), text: 'Hello' },
       { type: 'text', id: 'm1:0', text: 'Hi there' },
-      { type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 2,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     await send('/clear');
     emit(
       { type: 'user', id: sent(), text: '/clear' },
       { type: 'cleared', id: 'reset-1' },
-      { type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     expect(transcript.getByRole('separator', { name: 'Conversation cleared' })).toBeTruthy();
     expect(transcript.getByText('Hi there')).toBeTruthy();
@@ -1293,7 +1379,12 @@ describe('a connected agent', () => {
           { id: 'a1', description: 'Survey the code', kind: 'agent' },
         ],
       },
-      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 3,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     const strip = within(view.getByRole('group', { name: 'Background tasks' }));
     expect(strip.getByText('npm run dev')).toBeTruthy();
@@ -1317,7 +1408,12 @@ describe('a connected agent', () => {
     const { composer, send, sent, emit } = await open({ connection: 'claude-code.sdk' });
     await send('Fix the bug');
     emit(
-      { type: 'end', messages: [sent()], seconds: 3, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 3,
+        result: { status: 'completed', reason: 'completed' },
+      },
       { type: 'suggestion', text: 'Run the tests' },
     );
     expect(composer.placeholder).toBe('Run the tests');
@@ -1331,7 +1427,12 @@ describe('a connected agent', () => {
     const { composer, send, sent, emit } = await open({ connection: 'claude-code.sdk' });
     for (const text of ['First', 'Second']) {
       await send(text);
-      emit({ type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false });
+      emit({
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        result: { status: 'completed', reason: 'completed' },
+      });
     }
     fireEvent.change(composer, { target: { value: 'Draft' } });
     fireEvent.keyDown(composer, { key: 'ArrowUp' });
@@ -1755,7 +1856,12 @@ describe('an Agent SDK agent rewound', () => {
       emit(
         { type: 'user', id, text },
         { type: 'text', id: `${id}:0`, text: `Done: ${text}` },
-        { type: 'end', messages: [id], seconds: 2, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [id],
+          seconds: 2,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
     }
     return { ...opened, ids };
@@ -1887,7 +1993,12 @@ describe('an Agent SDK agent rewound', () => {
     emit(
       { type: 'user', id: sent(), text: '/clear' },
       { type: 'cleared', id: 'reset-1' },
-      { type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 1,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     // What came before stays in view, but is another conversation: nothing to rewind to yet.
     expect(transcript.getByText('Fix the login bug')).toBeTruthy();
@@ -1896,7 +2007,12 @@ describe('an Agent SDK agent rewound', () => {
     await send('Start on the search');
     emit(
       { type: 'user', id: sent(), text: 'Start on the search' },
-      { type: 'end', messages: [sent()], seconds: 2, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent()],
+        seconds: 2,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     const box = view.getByRole('textbox', { name: 'Message a' });
     expect(transcript.getAllByRole('button', { name: 'Rewind to here' })).toHaveLength(1);

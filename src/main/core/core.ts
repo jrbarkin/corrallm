@@ -243,7 +243,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     runs: journal,
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
     projects,
-    files,
     sessions,
     usage,
   });
@@ -280,6 +279,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         app: config.app,
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
+        projects,
+        files,
         settings,
         links,
         reveal,

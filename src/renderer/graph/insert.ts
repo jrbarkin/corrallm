@@ -77,6 +77,7 @@ export function insertGraph(
     };
   });
   return {
+    ...graph,
     nodes: autosize([
       ...graph.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)),
       frame,

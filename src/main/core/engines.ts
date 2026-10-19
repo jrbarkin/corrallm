@@ -13,7 +13,6 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import { turnResult } from '../../shared/session';
 import type { SessionEvent, UserMessage } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
@@ -198,7 +197,7 @@ export class Engines {
     event: SessionEvent,
   ): Promise<void> {
     if (event.type === 'end') {
-      const result = turnResult(event);
+      const result = event.result;
       const catalog = this.#deps.engineCatalog;
       const backend = catalog.usageBackendOf({
         adapter: catalog.adapterOf(connection),

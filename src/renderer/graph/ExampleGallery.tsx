@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { InstalledClis } from '../../shared/session';
-import { catalog } from '../catalog';
+import { api } from '../api/client';
+import { AdapterLogo } from '../AdapterLogo';
+import { ipcErrorMessage } from '../ipc-error';
+import type { TemplateInfo } from '../../shared/templates';
 import {
   adapterName,
   CONNECTED_AGENTS,
@@ -12,9 +15,6 @@ import {
   defaultConnection,
 } from './agents';
 import type { AgentConnection } from './agents';
-import type { Example } from './examples';
-import { fromFile } from '../../shared/model/file';
-import { graphOf } from './graph';
 
 /** How a template is used: as a new canvas, or inserted into this one as a group. */
 export type TemplateUse = 'new' | 'insert';
@@ -45,22 +45,20 @@ type Chosen = Omit<TemplateChoices, 'connections'> & {
  * closes the gallery, as do the close button and a click outside.
  */
 export function ExampleGallery({
-  examples,
   canInsert,
   installed,
   onPick,
   onClose,
 }: {
-  examples: readonly Example[];
   canInsert: boolean;
   /** Which CLIs the user has; undefined while main has not said. */
   installed?: InstalledClis | undefined;
-  onPick: (example: Example, choices: TemplateChoices, use: TemplateUse) => void;
+  onPick: (example: TemplateInfo, choices: TemplateChoices, use: TemplateUse) => void;
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   /** The template picked, and what it is to be used with so far. */
-  const [chosen, setChosen] = useState<{ example: Example } & Chosen>();
+  const [chosen, setChosen] = useState<{ example: TemplateInfo } & Chosen>();
   /** How an agent of the template picked runs: as chosen, or its type's default. */
   const connectionOf = (id: string): AgentConnection =>
     chosen?.connections[id] ?? defaultConnection(chosen?.agents[id] ?? DEFAULT_AGENT);
@@ -76,32 +74,35 @@ export function ExampleGallery({
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [onClose, chosen]);
-  /** Each template's agents: id, name, and type (undefined where the template leaves it open). */
-  const agentsOf = useMemo(
-    () =>
-      new Map(
-        examples.map((example) => [
-          example,
-          graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT))
-            .nodes.filter((n) => n.type === 'agent')
-            .map((n) => ({ id: n.id, label: n.data.label, agent: n.data.adapter })),
-        ]),
-      ),
-    [examples],
-  );
+  const [examples, setExamples] = useState<TemplateInfo[]>();
+  const [problem, setProblem] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    void api.templatesList().then(
+      ({ items }) => {
+        if (current) setExamples(items);
+      },
+      (error: unknown) => {
+        if (current) setProblem(ipcErrorMessage(error));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, []);
   const use = (how: TemplateUse) => {
     if (!chosen) return;
     const { example, values, agents } = chosen;
     const connections = Object.fromEntries(
-      (agentsOf.get(example) ?? []).map((role) => [role.id, connectionOf(role.id)]),
+      example.agents.map((role) => [role.id, connectionOf(role.id)]),
     );
     onPick(example, { values, agents, connections }, how);
   };
-  const pick = (example: Example) => {
+  const pick = (example: TemplateInfo) => {
     setChosen({
       example,
-      values: Object.fromEntries((example.fields ?? []).map((f) => [f.key, f.example])),
-      agents: Object.fromEntries((agentsOf.get(example) ?? []).map((a) => [a.id, a.agent])),
+      values: Object.fromEntries(example.fields.map((f) => [f.key, f.example])),
+      agents: Object.fromEntries(example.agents.map((a) => [a.id, a.adapter])),
       connections: {},
     });
   };
@@ -130,6 +131,8 @@ export function ExampleGallery({
             onClick={onClose}
           />
         </header>
+        {problem && <p role="alert">Could not load templates: {problem}</p>}
+        {examples === undefined && problem === undefined && <p role="status">Loading templates…</p>}
         {chosen ? (
           <form
             className="graph-template-form"
@@ -139,7 +142,7 @@ export function ExampleGallery({
             }}
           >
             <p className="graph-example-description">{chosen.example.description}</p>
-            {(chosen.example.fields ?? []).map((field, i) => (
+            {chosen.example.fields.map((field, i) => (
               <label key={field.key} className="graph-template-field">
                 <span>{field.label}</span>
                 <textarea
@@ -158,17 +161,13 @@ export function ExampleGallery({
             ))}
             <fieldset className="graph-template-agents">
               <legend>Agents</legend>
-              {(agentsOf.get(chosen.example) ?? []).map((role) => (
+              {chosen.example.agents.map((role) => (
                 <label key={role.id} className="graph-template-agent">
-                  <span
-                    className="graph-example-agent"
-                    data-agent={chosen.agents[role.id]}
-                    aria-hidden="true"
-                  />
-                  <span>{role.label}</span>
+                  <AdapterLogo adapter={chosen.agents[role.id] ?? DEFAULT_AGENT} size={18} />
+                  <span>{role.name}</span>
                   <select
                     id={`template-agent-${role.id}`}
-                    aria-label={`${role.label}'s agent`}
+                    aria-label={`${role.name}'s agent`}
                     value={chosen.agents[role.id] ?? ''}
                     onChange={(event) => {
                       const type = CONNECTED_AGENTS.find((t) => t === event.target.value);
@@ -188,7 +187,7 @@ export function ExampleGallery({
                     ))}
                   </select>
                   <ConnectionSelect
-                    role={role.label}
+                    role={role.name}
                     agent={chosen.agents[role.id] ?? DEFAULT_AGENT}
                     value={connectionOf(role.id)}
                     installed={installed}
@@ -229,8 +228,8 @@ export function ExampleGallery({
           </form>
         ) : (
           <ul>
-            {examples.map((example) => (
-              <li key={example.name}>
+            {(examples ?? []).map((example) => (
+              <li key={example.id}>
                 <button
                   type="button"
                   className="graph-example"
@@ -241,12 +240,11 @@ export function ExampleGallery({
                   <span className="graph-example-name">{example.name}</span>
                   <span className="graph-example-description">{example.description}</span>
                   <span className="graph-example-agents" aria-hidden="true">
-                    {agentsOf.get(example)?.map((role) => (
-                      <span
+                    {example.agents.map((role) => (
+                      <AdapterLogo
                         key={role.id}
-                        className="graph-example-agent"
-                        data-agent={role.agent}
-                        title={role.agent ?? 'Any agent'}
+                        adapter={role.adapter ?? DEFAULT_AGENT}
+                        size={18}
                       />
                     ))}
                   </span>

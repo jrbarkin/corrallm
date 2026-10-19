@@ -24,7 +24,9 @@ import { mergeHistory } from './history';
 
 export type SessionAction =
   /** A turn starts with the user's message. */
-  | { type: 'start'; entry: Extract<Entry, { kind: 'user' }> }
+  | { type: 'start'; entry: Extract<Entry, { kind: 'user' }>; before?: string }
+  /** The CLI's receipt, including its final text and place after any earlier native messages. */
+  | { type: 'received'; id: string; text: string }
   | { type: 'add'; entry: Entry }
   /** Replaces the entry `id` with what `update` makes of it. */
   | { type: 'update'; id: string; update: (entry: Entry) => Entry }
@@ -46,10 +48,8 @@ export type SessionAction =
       type: 'end';
       id: string;
       seconds: number;
-      interrupted: boolean;
-      failed?: boolean;
       messages?: readonly string[];
-      result?: TurnResult;
+      result: TurnResult;
     }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
@@ -104,16 +104,34 @@ export function reduce(session: Session, action: SessionAction): Session {
   switch (action.type) {
     case 'start': {
       // What was predicted for it is no longer.
+      const before =
+        action.before === undefined
+          ? -1
+          : session.entries.findIndex((entry) => entry.id === action.before);
       const started: Session = {
         ...session,
         status: 'working',
-        entries: [...session.entries, action.entry],
+        entries:
+          before === -1
+            ? [...session.entries, action.entry]
+            : [...session.entries.slice(0, before), action.entry, ...session.entries.slice(before)],
       };
       delete started.suggestion;
       return started;
     }
     case 'add':
       return { ...session, entries: [...session.entries, action.entry] };
+    case 'received': {
+      const sent = session.entries.find((entry) => entry.id === action.id);
+      if (sent?.kind !== 'user') return session;
+      const received: Entry = { ...sent, text: action.text, reached: true };
+      return {
+        ...session,
+        entries: sent.reached
+          ? update(action.id, () => received)
+          : [...session.entries.filter((entry) => entry.id !== action.id), received],
+      };
+    }
     case 'update':
       return { ...session, entries: update(action.id, action.update) };
     case 'stream':
@@ -174,7 +192,9 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'status':
       return { ...session, status: action.status };
     case 'end': {
-      const { id, seconds, interrupted, failed, result } = action;
+      const { id, seconds, result } = action;
+      const interrupted = result.status === 'cancelled';
+      const failed = result.status === 'failed';
       const entries = session.entries.map((entry): Entry => {
         if (isOpen(entry)) return { ...entry, withdrawn: true };
         return interrupted && entry.kind === 'tool' && entry.status === 'running'
@@ -192,7 +212,7 @@ export function reduce(session: Session, action: SessionAction): Session {
             seconds,
             interrupted,
             ...(failed ? { failed: true } : {}),
-            ...(result === undefined ? {} : { result }),
+            result,
           },
         ],
       };

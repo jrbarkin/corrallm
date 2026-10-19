@@ -184,22 +184,19 @@ describe('the App Server translator, on what Codex did', () => {
         type: 'end',
         messages: ['01a1344c-73e4-7b23-b95b-33e074ac24e2'],
         seconds: 11,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       },
       {
         type: 'end',
         messages: ['01a1344c-985c-7e92-b648-b6b52e979f74'],
         seconds: 8,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       },
       {
         type: 'end',
         messages: ['01a1344c-b7fa-74f2-a6c5-43a43837428c'],
         seconds: 3,
-        interrupted: false,
-        failed: false,
+        result: { status: 'completed', reason: 'completed' },
       },
     ]);
     const live = play(recordedNotifications('turns')).events;

@@ -109,7 +109,10 @@ describe('SdkConnector through the Agent SDK', () => {
     await session.answer(asked.id, { kind: 'permission', answer: 'once' });
 
     const ended = await waitFor(events, (e) => e.type === 'end');
-    expect(ended).toMatchObject({ messages: [id], interrupted: false, failed: false });
+    expect(ended).toMatchObject({
+      messages: [id],
+      result: { status: 'completed', reason: 'completed' },
+    });
     expect(events).toContainEqual(
       expect.objectContaining({
         type: 'tool',
@@ -135,7 +138,10 @@ describe('SdkConnector through the Agent SDK', () => {
     await waitFor(events, (e) => e.type === 'text');
     await session.interrupt();
     const ended = await waitFor(events, (e) => e.type === 'end');
-    expect(ended).toMatchObject({ messages: [id], interrupted: true, failed: false });
+    expect(ended).toMatchObject({
+      messages: [id],
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
   });
 
   it('starts in the user’s own default mode when none was chosen, as the CLI then says', async () => {

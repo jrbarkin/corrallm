@@ -324,8 +324,7 @@ describe('the App Server connection', () => {
     expect(events.at(-1)).toMatchObject({
       type: 'end',
       messages: [id],
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed' },
     });
     expect(remembered).toHaveLength(1);
     // The turn was sent in the session's mode: Default's preset, not plan mode.
@@ -392,7 +391,7 @@ describe('the App Server connection', () => {
     const prompt = await heard('permission');
     await session.answer(prompt.id, { kind: 'permission', answer: 'deny' });
     await ended('m1');
-    expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true, failed: false });
+    expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
     expect(events.filter((e) => e.type === 'tool').at(-1)).toMatchObject({ status: 'failed' });
   });
 
@@ -475,7 +474,7 @@ describe('the App Server connection', () => {
     await heard('tool', { detail: { kind: 'output' } });
     await session.interrupt();
     await ended('m1');
-    expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true });
+    expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
   it('interrupts a turn Codex has not started yet as soon as it starts', async () => {
@@ -484,7 +483,7 @@ describe('the App Server connection', () => {
     await session.interrupt();
     await sent;
     await ended('m1');
-    expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true });
+    expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
   it('says why a turn failed, and when the usage limit resets', async () => {
@@ -496,7 +495,7 @@ describe('the App Server connection', () => {
         text: expect.stringMatching(/^You’ve hit your usage limit\. · resets /) as string,
       },
     ]);
-    expect(events.at(-1)).toMatchObject({ type: 'end', failed: true });
+    expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'failed' } });
   });
 
   it('sends pasted images, and the skills a message invokes', async () => {
@@ -557,7 +556,11 @@ describe('the App Server connection', () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: 'notice', text: 'Context compacted' }),
     );
-    expect(events.at(-1)).toMatchObject({ type: 'end', messages: ['c'], failed: false });
+    expect(events.at(-1)).toMatchObject({
+      type: 'end',
+      messages: ['c'],
+      result: { status: 'completed' },
+    });
 
     await turn('/init', 'i');
     expect((await requests('turn/start')).at(-1)?.input).toEqual([
@@ -744,8 +747,6 @@ describe('the App Server connection', () => {
       });
       expect(events.at(-1)).toMatchObject({
         type: 'end',
-        interrupted: true,
-        failed: false,
         result: { status: 'cancelled', reason: 'interrupted' },
       });
       expect(await requests('turn/start')).toEqual([]);
@@ -758,7 +759,7 @@ describe('the App Server connection', () => {
       await session.interrupt();
       await ended('m1');
       expect(events).toContainEqual({ type: 'withdrawn', id: prompt.id });
-      expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true, failed: false });
+      expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
       expect(await requests('turn/start')).toEqual([]);
     });
 
@@ -866,7 +867,7 @@ describe('the App Server connection, replaying the real Codex', () => {
     await heard('tool', { tool: 'exec_command', summary: 'sleep 30', status: 'running' });
     await session.interrupt();
     await ended('m1');
-    expect(events.at(-1)).toMatchObject({ type: 'end', interrupted: true, failed: false });
+    expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
     expect(problems).toEqual([]);
   });
 
@@ -912,8 +913,7 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(events.at(-1)).toMatchObject({
       type: 'end',
       messages: ['c'],
-      interrupted: false,
-      failed: false,
+      result: { status: 'completed' },
     });
     expect(problems).toEqual([]);
   });

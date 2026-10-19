@@ -9,7 +9,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { isPermissionMode, turnResult } from '../../../shared/session';
+import { isPermissionMode } from '../../../shared/session';
 import type {
   FilesRewind,
   McpChange,
@@ -218,8 +218,6 @@ export class SdkSession implements LiveSession {
     if (cancelled.length > 0)
       this.#end(cancelled, {
         seconds: 1,
-        interrupted: true,
-        failed: false,
         result: { status: 'cancelled', reason: 'taken-back' },
       });
   }
@@ -408,18 +406,12 @@ export class SdkSession implements LiveSession {
       this.#interrupting || result.terminal_reason?.startsWith('aborted') === true;
     this.#end(ours, {
       seconds: result.duration_ms / 1000,
-      interrupted,
-      failed: !interrupted && (result.is_error || result.subtype !== 'success'),
       result: this.#translator.takeResult(result, interrupted),
     });
   }
 
-  #end(
-    uuids: readonly string[],
-    ending: { seconds: number; interrupted: boolean; failed: boolean; result?: TurnResult },
-  ): void {
-    const { seconds } = ending;
-    const result = turnResult(ending);
+  #end(uuids: readonly string[], ending: { seconds: number; result: TurnResult }): void {
+    const { seconds, result } = ending;
     const messages = uuids.flatMap((uuid) => {
       const id = this.#pending.get(uuid);
       this.#pending.delete(uuid);
@@ -430,8 +422,6 @@ export class SdkSession implements LiveSession {
       type: 'end',
       messages,
       seconds: Math.max(1, Math.round(seconds)),
-      interrupted: result.status === 'cancelled',
-      failed: result.status === 'failed',
       result,
     };
     this.#host.emit(event);

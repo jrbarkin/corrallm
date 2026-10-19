@@ -69,7 +69,6 @@ export interface IpcContract {
    * The files and folders of the canvas's project folder (relative to it; folders end in "/")
    * that best match `query`, for an @-mention in the composer. None without a project folder.
    */
-  'project:files': { args: [query: string]; result: string[] };
   /**
    * Starts an agent's connected session (or resumes it, if the canvas's file remembers one), in
    * the canvas's project folder. Resolves once it runs; rejects without a project folder, or if
@@ -209,7 +208,6 @@ export interface InvokeApi {
   saveCanvas(...args: IpcArgs<'canvas:save'>): Promise<IpcResult<'canvas:save'>>;
   forgetCanvas(): Promise<IpcResult<'canvas:forget'>>;
   chooseProject(): Promise<IpcResult<'project:choose'>>;
-  findProjectFiles(...args: IpcArgs<'project:files'>): Promise<IpcResult<'project:files'>>;
   startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
@@ -255,7 +253,6 @@ export const API_CHANNELS = {
   saveCanvas: 'canvas:save',
   forgetCanvas: 'canvas:forget',
   chooseProject: 'project:choose',
-  findProjectFiles: 'project:files',
   startSession: 'session:start',
   sendToSession: 'session:send',
   answerSession: 'session:answer',
