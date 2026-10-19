@@ -1,9 +1,10 @@
 import { Graph as Layered, layout } from '@dagrejs/dagre';
 import type { EdgeLabel, GraphLabel, NodeLabel } from '@dagrejs/dagre';
-import { autosize, NODE_GAP, RANK_GAP, size, topInset } from './graph';
-import { PADDING } from '../../shared/model/geometry';
+import { NODE_GAP, RANK_GAP } from './graph';
+import { autosize, size } from './geometry';
+import { PADDING, topInset } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
-import { workEdges } from './work';
+import { workEdges } from '../../shared/model/work';
 
 /** What the layout follows: an edge, or the work one agent's queue gives another. */
 interface Flow {
@@ -13,7 +14,7 @@ interface Flow {
 
 /**
  * Lays the graph out top to bottom along its edges and the work its queues give (dagre's layered
- * layout, see work.ts): each group's nodes
+ * layout, see src/shared/model/work.ts): each group's nodes
  * inside it, innermost groups first, then every group among its siblings. An edge into or out of a
  * group counts, at each level, as an edge of whatever there holds its end. The graph stays where it
  * was, and an arranged graph is returned as it is.

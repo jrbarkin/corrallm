@@ -1,27 +1,25 @@
 import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
+import { absolutePosition } from '../../shared/model/geometry';
+import { autosize, size } from './geometry';
 import type { QueueItem } from '../../shared/model/queue';
 import { fromFile, toFile } from '../../shared/model/file';
 import { TEST_CATALOG } from '../../shared/engine/test-engine';
 
 import {
-  absolutePosition,
   addAgent,
   documentOf,
   graphOf,
   addParent,
   addToQueue,
-  autosize,
   canConnect,
   canUngroup,
   canvasNodes,
   connect,
-  containerAt,
   deleteEdge,
   deleteSelection,
   editMessage,
-  groupColors,
   groupMembers,
   groupSelection,
   moveInQueue,
@@ -40,7 +38,6 @@ import {
   setRepeat,
   setTime,
   setWaitFor,
-  size,
   spawnAgent,
   ungroupSelection,
 } from './graph';
@@ -1191,17 +1188,6 @@ describe('group colours', () => {
     expect(get(g, `G${String(GROUP_COLORS)}`).data.color).toBe(0);
   });
 
-  it("colours a group's nodes with its colour, and nested groups with their own", () => {
-    const nodes = [
-      { ...frame('F', 0, 0, 400, 400), data: { label: 'F', color: 2 } },
-      inside('F', agentNode('a', 20, 52)),
-      inside('F', { ...frame('G', 20, 120, 200, 200), data: { label: 'G', color: 5 } }),
-      inside('G', agentNode('b', 20, 52)),
-      agentNode('c', 600, 0),
-    ];
-    expect(Object.fromEntries(groupColors(nodes))).toEqual({ F: 2, a: 2, G: 5, b: 5 });
-  });
-
   it('keeps the colour when a group gets a parent node', () => {
     const g = group(frozen(pair(0, ['a', 'b'])), 'F');
     expect(get(addParent(g, 'F'), 'F').data.color).toBe(get(g, 'F').data.color);
@@ -1290,51 +1276,7 @@ describe('ungroupSelection', () => {
   });
 });
 
-describe('autosize', () => {
-  it('grows every container around a child dragged past their right and bottom', () => {
-    const before = nested();
-    expect(before.map((n) => [n.id, n.width, n.height])).toEqual([
-      ['H', 220, 316],
-      ['G', 180, 244],
-      ['F', 140, 172],
-      ['c', undefined, undefined],
-      ['d', undefined, undefined],
-    ]);
-    const dragged = moved(before, 'd', { x: 300, y: 200 });
-    const result = autosize(dragged);
-    expect(result.map((n) => [n.id, n.position, n.width, n.height])).toEqual([
-      ['H', { x: 0, y: 0 }, 500, 404],
-      ['G', { x: 20, y: 52 }, 460, 332],
-      ['F', { x: 20, y: 52 }, 420, 260],
-      ['c', { x: 20, y: 52 }, undefined, undefined],
-      ['d', { x: 300, y: 200 }, undefined, undefined],
-    ]);
-    expect(result[3]).toBe(dragged[3]);
-    expectValid(frozen(result));
-  });
-
-  it('grows containers left and up for a child dragged past their top-left, moving nothing on screen', () => {
-    const before = frozen(nested());
-    const dragged = frozen(moved(before.nodes, 'c', { x: -60, y: -90 }));
-    const result = frozen(autosize(dragged.nodes));
-    expect(absAll(result, ['c', 'd'])).toEqual(absAll(dragged, ['c', 'd']));
-    expect(get(result, 'c').position).toEqual({ x: 20, y: 52 });
-    // Each container grew only left and up: its right and bottom edges stay where they were.
-    for (const id of ['H', 'G', 'F']) {
-      const was = get(before, id);
-      const now = get(result, id);
-      expect(abs(result, id).x + (now.width ?? 0), id).toBe(abs(before, id).x + (was.width ?? 0));
-      expect(abs(result, id).y + (now.height ?? 0), id).toBe(abs(before, id).y + (was.height ?? 0));
-    }
-    expectValid(result);
-  });
-
-  it('shrinks every container around a child dragged back inward', () => {
-    const grown = autosize(moved(nested(), 'd', { x: 300, y: 200 }));
-    const result = autosize(moved(grown, 'd', { x: 20, y: 112 }));
-    expect(result).toEqual(nested());
-  });
-
+describe('autosize during a drag', () => {
   it('keeps the top-left corner of containers around a dragged node until the drag ends', () => {
     // React Flow only reports a drag move when the node's position in its container changes, so a
     // container that moved along with the node would swallow moves.
@@ -1350,44 +1292,6 @@ describe('autosize', () => {
     const dropped = frozen(autosize(dragging(out, false)));
     expect(absAll(dropped, ['c', 'd'])).toEqual(absAll(frozen(out), ['c', 'd']));
     expectValid(dropped);
-  });
-
-  it('shrinks a childless frame to EMPTY_FRAME and turns a childless parent node into its card', () => {
-    const result = autosize([
-      frame('F', 100, 100, 400, 300),
-      { ...agentNode('p', 0, 0), width: 300, height: 200 },
-    ]);
-    expect(result[0]).toMatchObject({ position: { x: 100, y: 100 }, ...EMPTY_FRAME });
-    expect(result[1]).toEqual(agentNode('p', 75, 0));
-  });
-
-  it('returns the same array when every container fits', () => {
-    const nodes = frozen([...nested(), agentNode('z', -500, -500)]).nodes;
-    expect(autosize(nodes)).toBe(nodes);
-    expect(autosize([])).toEqual([]);
-  });
-});
-
-describe('containerAt', () => {
-  const nodes = [
-    frame('F', 0, 0, 500, 400),
-    inside('F', frame('G', 20, 52, 200, 200)),
-    frame('H', 400, 300, 300, 300),
-    agentNode('p', 1000, 0, { width: 200, height: 200, measured: { width: 200, height: 200 } }),
-    inside('p', agentNode('c', 20, 52)),
-    agentNode('leaf', 1000, 500),
-  ];
-
-  it('finds the innermost container under the point', () => {
-    expect(containerAt(nodes, { x: 50, y: 100 })?.id).toBe('G');
-    expect(containerAt(nodes, { x: 300, y: 100 })?.id).toBe('F');
-    expect(containerAt(nodes, { x: 450, y: 350 })?.id).toBe('H');
-    expect(containerAt(nodes, { x: 1100, y: 150 })?.id).toBe('p');
-  });
-
-  it('ignores items without children and empty canvas', () => {
-    expect(containerAt(nodes, { x: 1050, y: 510 })).toBeUndefined();
-    expect(containerAt(nodes, { x: 900, y: 900 })).toBeUndefined();
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { absolutePosition, edgeId } from './graph';
+import { absolutePosition } from '../../shared/model/geometry';
+import { edgeId } from './graph';
 import { CARD_SIZE } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './graph';
 import { insertGraph } from './insert';

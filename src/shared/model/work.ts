@@ -1,6 +1,6 @@
-import type { GraphNode } from './graph';
-import { isApproval, isDelay, isIf, isRepeat, isWait } from '../../shared/model/queue';
-import type { QueueItem } from '../../shared/model/queue';
+import type { NodeLike } from './canvas';
+import { isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
+import type { QueueItem } from './queue';
 
 /**
  * Work between two agents, as their queues make it: an edge from `from` to `to`, drawn (with an
@@ -35,7 +35,7 @@ export function isWorkBetween(item: QueueItem, owner: string, from: string, to: 
  * in the order the queues first mention them. Steps aimed at the queue's own agent, or at an agent
  * that no longer exists, make none.
  */
-export function workEdges(nodes: readonly GraphNode[]): WorkEdge[] {
+export function workEdges(nodes: readonly NodeLike[]): WorkEdge[] {
   const agents = new Set(nodes.filter((n) => n.type === 'agent').map((n) => n.id));
   const edges = new Map<string, WorkEdge>();
   const add = (from: string, to: string, conditional: boolean) => {

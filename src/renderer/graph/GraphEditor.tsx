@@ -18,6 +18,8 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
+import { absolutePosition, groupColors } from '../../shared/model/geometry';
+import { autosize } from './geometry';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
@@ -57,11 +59,9 @@ import { GraphActionsContext } from './actions';
 import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
 import type { GraphActions } from './actions';
 import {
-  absolutePosition,
   addAgent,
   addParent,
   addToQueue,
-  autosize,
   canConnect,
   canvasNodes,
   connect,
@@ -71,7 +71,6 @@ import {
   editMessage,
   EMPTY_GRAPH,
   graphOf,
-  groupColors,
   groupMembers,
   groupSelection,
   moveInQueue,
@@ -113,7 +112,7 @@ import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
 import { QuestionsSidebar } from './Questions';
-import { workEdges } from './work';
+import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
 import type { QueueEdits } from './edits';
 import './GraphEditor.css';

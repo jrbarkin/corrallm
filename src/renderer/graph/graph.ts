@@ -4,7 +4,14 @@ import { isStartMode } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
-import { CARD_SIZE, EMPTY_FRAME, GROUP_COLORS, HEADER, PADDING } from '../../shared/model/geometry';
+import {
+  absolutePosition,
+  CARD_SIZE,
+  nextGroupColor,
+  PADDING,
+  topInset,
+} from '../../shared/model/geometry';
+import { autosize, bounds, containerAt, size } from './geometry';
 import { areLinked } from '../../shared/model/queries';
 import { clearDeletedReferences } from '../../shared/model/references';
 import { parseRole } from '../../shared/role';
@@ -120,11 +127,6 @@ export const NODE_GAP = 40;
 export const RANK_GAP = 60;
 /** How far "Add node" moves a new node that would land on another node's top-left corner. */
 const NUDGE = 24;
-
-interface Size {
-  width: number;
-  height: number;
-}
 
 export function edgeId(source: string, target: string): string {
   return `${source}->${target}`;
@@ -761,40 +763,6 @@ export function addParent(graph: Graph, id: string): Graph {
   return { ...graph, nodes: autosize(nodes), edges: graph.edges.map((e) => select(e, false)) };
 }
 
-/**
- * The colour each node shows: a group its own, any other node that of the innermost group it is in.
- * Nodes outside any group have none.
- */
-export function groupColors(nodes: readonly GraphNode[]): Map<string, number> {
-  const byId = indexById(nodes);
-  const parentIds = new Set(nodes.map((n) => n.parentId));
-  const colors = new Map<string, number>();
-  for (const node of nodes) {
-    for (let n: GraphNode | undefined = node; n; n = parentOf(n, byId)) {
-      const isGroup = n.type === 'frame' || parentIds.has(n.id);
-      if (isGroup && n.data.color !== undefined) {
-        colors.set(node.id, n.data.color);
-        break;
-      }
-    }
-  }
-  return colors;
-}
-
-/** The colour for a new group: the one fewest groups have, the first of those on a tie. */
-export function nextGroupColor(nodes: readonly GraphNode[]): number {
-  const parentIds = new Set(nodes.map((n) => n.parentId));
-  const uses = new Array<number>(GROUP_COLORS).fill(0);
-  for (const n of nodes) {
-    const isGroup = n.type === 'frame' || parentIds.has(n.id);
-    if (isGroup && n.data.color !== undefined) {
-      const i = n.data.color % GROUP_COLORS;
-      uses[i] = (uses[i] ?? 0) + 1;
-    }
-  }
-  return uses.indexOf(Math.min(...uses));
-}
-
 /** Whether `ungroupSelection` would change anything. */
 export function canUngroup(nodes: readonly GraphNode[]): boolean {
   const parentIds = new Set(nodes.map((n) => n.parentId));
@@ -850,163 +818,6 @@ export function selectionRoots(nodes: readonly GraphNode[]): GraphNode[] {
     }
     return true;
   });
-}
-
-/** Position in flow coordinates: the sum of the positions up the parent chain. */
-export function absolutePosition(
-  node: GraphNode,
-  byId: ReadonlyMap<string, GraphNode>,
-): XYPosition {
-  let { x, y } = node.position;
-  for (let p = parentOf(node, byId); p; p = parentOf(p, byId)) {
-    x += p.position.x;
-    y += p.position.y;
-  }
-  return { x, y };
-}
-
-/**
- * The innermost container (frame, or item with children) whose box contains `point` (flow
- * coordinates). Among overlapping containers at the same depth the later one, drawn on top, wins.
- */
-export function containerAt(nodes: readonly GraphNode[], point: XYPosition): GraphNode | undefined {
-  const byId = indexById(nodes);
-  const parentIds = new Set(nodes.map((n) => n.parentId));
-  let best: { node: GraphNode; depth: number } | undefined;
-  for (const node of nodes) {
-    if (node.type !== 'frame' && !parentIds.has(node.id)) continue;
-    const { x, y } = absolutePosition(node, byId);
-    const { width, height } = size(node);
-    if (point.x < x || point.x > x + width || point.y < y || point.y > y + height) continue;
-    let depth = 0;
-    for (let p = parentOf(node, byId); p; p = parentOf(p, byId)) depth++;
-    if (!best || depth >= best.depth) best = { node, depth };
-  }
-  return best?.node;
-}
-
-/**
- * Sizes every container to fit its children: PADDING inside its left, right and bottom edges and
- * `topInset` below its top. Containers grow and shrink; a container moves when its children's
- * top-left corner does, and its children move back, so nothing moves on screen. Innermost
- * containers go first, so an outer one fits its inner ones' new boxes. A frame without children
- * becomes EMPTY_FRAME at the same top-left corner; an item without children goes back to its
- * card, centred where the card was. Returns `nodes` itself when nothing changes, and unchanged
- * nodes keep their identity: this runs on every React Flow change, including every drag frame.
- *
- * While a node is being dragged, the containers around it keep their top-left corner and only
- * their right and bottom edges follow; the rest fits when the drag ends. React Flow reports a drag
- * move only when the node's position inside its container changes, so a container that moved
- * along with the node would swallow moves.
- */
-export function autosize(nodes: GraphNode[]): GraphNode[] {
-  const childIndices = new Map<string, number[]>();
-  for (const [i, node] of nodes.entries()) {
-    if (node.parentId === undefined) continue;
-    const indices = childIndices.get(node.parentId);
-    if (indices) indices.push(i);
-    else childIndices.set(node.parentId, [i]);
-  }
-  const byId = indexById(nodes);
-  const pinned = new Set<string>();
-  for (const node of nodes) {
-    if (!node.dragging) continue;
-    for (let p = parentOf(node, byId); p; p = parentOf(p, byId)) pinned.add(p.id);
-  }
-  let result = nodes;
-  const set = (i: number, node: GraphNode) => {
-    if (result === nodes) result = [...nodes];
-    result[i] = node;
-  };
-  // Children come after their parents, so going backwards reaches each container after everything
-  // inside it has its final size.
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    const node = result[i];
-    if (!node) continue;
-    const indices = childIndices.get(node.id);
-    if (!indices) {
-      const fitted = childless(node);
-      if (fitted !== node) set(i, fitted);
-      continue;
-    }
-    const children = indices.map((j) => result[j]).filter((n) => n !== undefined);
-    const { x1, y1, x2, y2 } = bounds(children);
-    const top = topInset(node.type);
-    const dx = pinned.has(node.id) ? 0 : x1 - PADDING;
-    const dy = pinned.has(node.id) ? 0 : y1 - top;
-    const fit = { width: x2 - dx + PADDING, height: y2 - dy + PADDING };
-    if (dx === 0 && dy === 0 && hasSize(node, fit)) continue;
-    const position = { x: node.position.x + dx, y: node.position.y + dy };
-    set(i, resized({ ...node, position }, fit));
-    if (dx === 0 && dy === 0) continue;
-    for (const j of indices) {
-      const child = result[j];
-      if (child)
-        set(j, { ...child, position: { x: child.position.x - dx, y: child.position.y - dy } });
-    }
-  }
-  return result;
-}
-
-/** Width and height as React Flow sees them: measured, else explicit, else an item's default. */
-export function size(node: GraphNode): Size {
-  return {
-    width: node.measured?.width ?? node.width ?? CARD_SIZE.width,
-    height: node.measured?.height ?? node.height ?? CARD_SIZE.height,
-  };
-}
-
-/**
- * How far below a container's top its children start: past the header zone at the top of its box
- * (a frame's label bar), plus PADDING. A parent node's box starts half a card lower, because its
- * card straddles the box's top border; so a frame that gets a parent keeps its border in place.
- */
-export function topInset(kind: NodeKind): number {
-  return (kind === 'frame' ? 0 : CARD_SIZE.height / 2) + HEADER + PADDING;
-}
-
-/** A node without children: frames shrink to EMPTY_FRAME, items lose their container size. */
-function childless(node: GraphNode): GraphNode {
-  if (node.type === 'frame') return hasSize(node, EMPTY_FRAME) ? node : resized(node, EMPTY_FRAME);
-  if (node.width === undefined) return node;
-  // The card was centred on the box's top border; leave the plain node where the card was.
-  const shrunk = {
-    ...node,
-    position: { x: node.position.x + (node.width - CARD_SIZE.width) / 2, y: node.position.y },
-  };
-  delete shrunk.width;
-  delete shrunk.height;
-  return shrunk;
-}
-
-function hasSize(node: GraphNode, { width, height }: Size): boolean {
-  const current = size(node);
-  return (
-    node.width === width &&
-    node.height === height &&
-    current.width === width &&
-    current.height === height
-  );
-}
-
-/** Sets an explicit size, and `measured` to match so the node is not hidden until measured. */
-function resized<T extends GraphNode>(node: T, { width, height }: Size): T {
-  return { ...node, width, height, measured: { width, height } };
-}
-
-/** The box around `nodes` (non-empty), in their parent's coordinates. */
-export function bounds(nodes: readonly GraphNode[]): {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-} {
-  return {
-    x1: Math.min(...nodes.map((n) => n.position.x)),
-    y1: Math.min(...nodes.map((n) => n.position.y)),
-    x2: Math.max(...nodes.map((n) => n.position.x + size(n).width)),
-    y2: Math.max(...nodes.map((n) => n.position.y + size(n).height)),
-  };
 }
 
 /** Moves `node` out of `parent` into the parent's own parent, keeping it in place on screen. */

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from './graph';
-import type { QueueItem } from '../../shared/model/queue';
+import type { AgentNode } from './canvas';
+import type { QueueItem } from './queue';
 import { isWorkBetween, workEdges } from './work';
 
-const agent = (id: string, queue: QueueItem[] = []): GraphNode => ({
+const agent = (id: string, queue: QueueItem[] = []): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },

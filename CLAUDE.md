@@ -264,9 +264,11 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      RepeatEnds, going round with another agent's repeat) is one item holding
                      others: findItem (model/queue.ts) finds an item at any depth, and graph.ts's
                      operations reach inside through mapItems;
-                     automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
+                     automatic layout (dagre) in layout.ts. Geometry comes from src/shared/model/geometry.ts;
+                     graph/geometry.ts adapts its sizes and pinned corners to React Flow measurements
+                     and drag state, preserving node identity when nothing changes. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
-                     the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
+                     the queues (src/shared/model/work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
                      (ConnectMenu.tsx). Canvases save as .corral files (versioned JSON, version 2,
                      holding the canvas's id: see Canvas identity; format and validation in
                      src/shared/model/file.ts, which reads a CanvasDocument against the catalog, open/save bar in FileBar.tsx; an agent's
@@ -396,7 +398,9 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 changed in words; used by the renderer's deleteSelection),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
                 members, links, an agent's name, its manager, its team and what it is nested
-                in), geometry.ts (the boxes' sizes, the group colours), file.ts (the .corral
+                in), geometry.ts (fixed CARD_SIZE, group colours, autosize, bounds, hit testing and
+                absolute positions over model nodes, with no DOM sizes; a view may provide its box
+                reader and writer), work.ts (the work arrows derived from agents' queues), file.ts (the .corral
                 format: a CanvasDocument read against the catalog, an agent naming no adapter
                 running the default it is given, and written back), words.ts (how the queue's
                 items, times and usage holds read, in what the run says and wherever they are

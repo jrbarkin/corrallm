@@ -6,7 +6,7 @@ import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
 import { QueueEditor } from './QueueEditor';
 import type { RowMarks } from './QueueEditor';
-import { isWorkBetween } from './work';
+import { isWorkBetween } from '../../shared/model/work';
 
 /**
  * The work from one agent for another (an edge from `from` to `to`, see work.ts): the steps and

@@ -1,7 +1,8 @@
 import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
-import { absolutePosition, autosize, size } from './graph';
+import { absolutePosition } from '../../shared/model/geometry';
+import { autosize, size } from './geometry';
 import type { Graph, GraphNode } from './graph';
 import { arrange } from './layout';
 
