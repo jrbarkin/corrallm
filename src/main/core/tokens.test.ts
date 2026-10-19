@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import type * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,9 +15,34 @@ import { TokenStore } from './tokens';
  * hash, and replaced by a new token of the same name, whose party carries over.
  */
 
+/** What the file system was asked to force to disk, and to move, in order (by base name). */
+const disk = vi.hoisted(() => [] as string[]);
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        await sync();
+        disk.push(`fsync ${path.basename(String(args[0]))}`);
+      };
+      return handle;
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      await actual.rename(...args);
+      disk.push(`rename to ${path.basename(String(args[1]))}`);
+    },
+  };
+});
+
 const M1 = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01' as CanvasId;
 const WORKER = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a02' as CanvasId;
 const HOUR = 60 * 60 * 1000;
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 let dir: string;
 let file: string;
@@ -143,6 +169,21 @@ describe('TokenStore', () => {
     expect(Object.keys(kept.tokens)).toHaveLength(2);
   });
 
+  it('forces a token’s replacement to disk before it returns the new one', async () => {
+    const tokens = await store();
+    await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    disk.length = 0;
+    await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    disk.push('returned');
+    // A power loss can't bring the token it replaced back.
+    expect(disk).toEqual([
+      expect.stringMatching(/^fsync tokens\.json\..+\.partial$/) as string,
+      'rename to tokens.json',
+      ...(process.platform === 'win32' ? [] : [`fsync ${path.basename(dir)}`]),
+      'returned',
+    ]);
+  });
+
   it('says a token it knew is revoked once it expires, and never one it never made', async () => {
     const tokens = await store();
     const token = await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
@@ -210,9 +251,22 @@ describe('TokenStore', () => {
     const kept = JSON.parse(await readFile(file, 'utf8')) as { tokens: Record<string, unknown> };
     expect(Object.keys(kept.tokens)).toEqual([expect.not.stringMatching(sha256(token))]);
 
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // A file it can't read as its own is set aside, as it was, and said.
+    for (const text of ['not json', JSON.stringify({ version: 1, tokens: kept.tokens })]) {
+      await writeFile(file, text);
+      expect((await store()).clientOf('x')).toBeUndefined();
+      const rejected = (await readdir(dir)).filter((name) => name.startsWith('tokens.rejected-'));
+      expect(rejected).toHaveLength(1);
+      expect(await readFile(path.join(dir, String(rejected[0])), 'utf8')).toBe(text);
+      expect(said).toHaveBeenLastCalledWith(
+        expect.stringContaining(path.join(dir, String(rejected[0]))),
+      );
+      await rm(path.join(dir, String(rejected[0])));
+    }
+    said.mockRestore();
+    // One of its version whose tokens aren't right is its own: none of them is read.
     for (const text of [
-      'not json',
-      JSON.stringify({ version: 1, tokens: kept.tokens }),
       JSON.stringify({ version: 2, tokens: [] }),
       JSON.stringify({
         version: 2,
@@ -265,6 +319,7 @@ describe('TokenStore', () => {
     ]) {
       await writeFile(file, text);
       expect((await store()).clientOf('x')).toBeUndefined();
+      expect(await readdir(dir)).toEqual(['tokens.json']);
     }
     // A token written as it writes them is read.
     await writeFile(
@@ -289,5 +344,40 @@ describe('TokenStore', () => {
       access: 'write',
       canvases: [M1],
     });
+  });
+
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    const kept = {
+      id: 'a',
+      name: 'ok',
+      canvases: [M1],
+      access: 'write',
+      expires: now + HOUR,
+      scopes: ['messages'],
+    };
+    await writeFile(
+      file,
+      JSON.stringify({ version: 2, tokens: { [sha256('x')]: kept }, created: { ok: [WORKER] } }),
+    );
+    const tokens = await store();
+    expect(tokens.clientOf('x')?.name).toBe('ok');
+    await tokens.create({ name: 'other', canvases: [M1], access: 'read' });
+    const written = JSON.parse(await readFile(file, 'utf8')) as {
+      tokens: Record<string, unknown>;
+      created: unknown;
+    };
+    expect(written.created).toEqual({ ok: [WORKER] });
+    expect(written.tokens[sha256('x')]).toEqual({ ...kept, lastUsed: now });
+  });
+
+  it.skipIf(!CAN_DENY)('never writes over a file it can’t read: it refuses to load', async () => {
+    const first = await store();
+    const token = await first.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    const kept = await readFile(file, 'utf8');
+    await chmod(file, 0);
+    await expect(new TokenStore(file, clock).load()).rejects.toThrow(/EACCES/);
+    await chmod(file, 0o600);
+    expect(await readFile(file, 'utf8')).toBe(kept);
+    expect((await store()).clientOf(token)?.name).toBe('orchestrator');
   });
 });

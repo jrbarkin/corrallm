@@ -1,10 +1,13 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Settings } from './settings';
+
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 let dir: string;
 let file: string;
@@ -50,16 +53,34 @@ describe('Settings', () => {
     expect(await new Settings(file).get()).toEqual({ consents: {} });
   });
 
-  it('starts from nothing when its file is missing, unreadable, of version 1, or not what it wrote', async () => {
-    for (const text of [
-      'not json',
-      '{"version": 1, "settings": {"chatgptPlan": true}}',
-      '[]',
-      '{"version": 2, "consents": []}',
-    ]) {
+  it('starts from nothing when its file is missing, broken, of version 1, or not what it wrote', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // A file it can't read as its own is set aside, as it was, and said; one of its version with
+    // nothing right in it is its own, read as nothing chosen.
+    for (const [text, setAside] of [
+      ['not json', true],
+      ['{"version": 1, "settings": {"chatgptPlan": true}}', true],
+      ['[]', true],
+      ['{"version": 2, "consents": []}', false],
+    ] as const) {
+      await rm(dir, { recursive: true });
+      await mkdir(dir);
       await writeFile(file, text);
-      expect(await new Settings(file).get()).toEqual({ consents: {} });
+      const settings = new Settings(file);
+      expect(await settings.get()).toEqual({ consents: {} });
+      await settings.keepApiPort(47123);
+      const rejected = (await readdir(dir)).filter((name) => name !== 'settings.json');
+      expect(rejected).toEqual(
+        setAside ? [expect.stringMatching(/^settings\.rejected-.+\.json$/)] : [],
+      );
+      if (setAside) {
+        expect(await readFile(path.join(dir, String(rejected[0])), 'utf8')).toBe(text);
+        expect(said).toHaveBeenLastCalledWith(
+          expect.stringContaining(path.join(dir, String(rejected[0]))),
+        );
+      }
     }
+    said.mockRestore();
     // A consent of the wrong kind, or for no adapter, is left out.
     await writeFile(
       file,
@@ -86,6 +107,57 @@ describe('Settings', () => {
       await writeFile(file, JSON.stringify({ version: 2, consents: {}, api: { port } }));
       expect(await new Settings(file).apiPort()).toBeUndefined();
     }
+  });
+
+  it.skipIf(!CAN_DENY)(
+    'never writes over a file it can’t read, and reads it again next time',
+    async () => {
+      const kept = `${JSON.stringify({ version: 2, consents: { codex: { plan: true } } })}\n`;
+      await writeFile(file, kept);
+      await chmod(file, 0);
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const settings = new Settings(file);
+      await expect(settings.consent('codex', 'plan').given()).rejects.toThrow(/EACCES/);
+      await settings.keepApiPort(47123);
+      expect(errors).toHaveBeenCalledOnce();
+      errors.mockRestore();
+      await chmod(file, 0o600);
+      expect(await readFile(file, 'utf8')).toBe(kept);
+
+      // Read once it can be: what it kept, and what is changed after.
+      expect(await settings.consent('codex', 'plan').given()).toBe(true);
+      await settings.keepApiPort(47123);
+      expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+        version: 2,
+        consents: { codex: { plan: true } },
+        api: { port: 47123 },
+      });
+    },
+  );
+
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        consents: { codex: { plan: true } },
+        api: { port: 47123, host: '127.0.0.2' },
+        defaultAdapter: 'codex',
+      }),
+    );
+    const settings = new Settings(file);
+    expect(await settings.get()).toEqual({
+      consents: { codex: { plan: true } },
+      api: { port: 47123 },
+    });
+    await settings.consent('claude-code', 'plan').give();
+    await settings.keepApiPort(47124);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      consents: { codex: { plan: true }, 'claude-code': { plan: true } },
+      api: { port: 47124, host: '127.0.0.2' },
+      defaultAdapter: 'codex',
+    });
   });
 
   it('applies updates in order, and a failed write fails no one', async () => {

@@ -3,7 +3,7 @@ import { builtinModules } from 'node:module';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 
-import { mainDefine, NATIVE_EXTERNALS, PREFIX_ONLY_BUILTINS } from './vite.main.config.mts';
+import { mainDefine, NATIVE_EXTERNALS } from './vite.main.config.mts';
 
 /**
  * The `corrallm` CLI (src/main/cli/index.ts), the core's code for plain Node: `pnpm build:cli`
@@ -31,11 +31,10 @@ export default defineConfig({
       fileName: () => 'corrallm.cjs',
     },
     rollupOptions: {
-      external: [
-        ...builtinModules.flatMap((name) => [name, `node:${name}`]),
-        ...NATIVE_EXTERNALS,
-        ...PREFIX_ONLY_BUILTINS,
-      ],
+      // One file, the CLI (main.ts) inlined to run only once its entry has checked the Node it
+      // runs on (index.ts): split into a file of its own, it would be required, and run, first.
+      output: { codeSplitting: false },
+      external: [...builtinModules.flatMap((name) => [name, `node:${name}`]), ...NATIVE_EXTERNALS],
     },
   },
 });

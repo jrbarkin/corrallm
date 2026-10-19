@@ -1,7 +1,5 @@
-import { readFile } from 'node:fs/promises';
-
 import type { LinkAnswer, WindowId } from './core/host';
-import { writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './memory';
 import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*
@@ -13,6 +11,10 @@ import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
  * always open is remembered, by origin, in the app's user data:
  *
  *   { "version": 1, "sites": ["https://docs.example.com", …] }
+ *
+ * What it holds that this corrallm doesn't know (a newer one's fields) is written back as it was.
+ * A file of another version, or one that isn't JSON, reads as no site and is set aside
+ * (readWhole); one that can't be read fails the link that needed it, and is read again next time.
  */
 
 export type { LinkAnswer } from './core/host';
@@ -33,6 +35,8 @@ const LIMIT = 500;
 export class LinkOpener {
   readonly #deps: Required<LinkOpenerDeps>;
   #sites: Promise<Set<string>> | undefined;
+  /** What its file holds that this corrallm doesn't know. */
+  #unknown: Record<string, unknown> = {};
   #writing: Promise<void> = Promise.resolve();
   /** Renderers asked something right now: one question at a time each. */
   readonly #asking = new Set<WindowId>();
@@ -71,7 +75,17 @@ export class LinkOpener {
   }
 
   #load(): Promise<Set<string>> {
-    this.#sites ??= readFile(this.#deps.file, 'utf8').then(parse, () => new Set<string>());
+    this.#sites ??= readWhole(this.#deps.file, VERSION).then(
+      (file) => {
+        this.#unknown = unknownFields(file, ['version', 'sites']);
+        return parse(file);
+      },
+      (error: unknown) => {
+        // Never read as no site, nor written over: read again next time.
+        this.#sites = undefined;
+        throw error;
+      },
+    );
     return this.#sites;
   }
 
@@ -83,7 +97,8 @@ export class LinkOpener {
       if (sites.size <= LIMIT) break;
       sites.delete(oldest);
     }
-    const text = `${JSON.stringify({ version: VERSION, sites: [...sites] }, null, 2)}\n`;
+    const file = { version: VERSION, ...this.#unknown, sites: [...sites] };
+    const text = `${JSON.stringify(file, null, 2)}\n`;
     // A failed write is logged: the site is still allowed until the app quits.
     this.#writing = this.#writing
       .then(() => writeWhole(this.#deps.file, text))
@@ -95,18 +110,9 @@ export class LinkOpener {
 }
 
 /** The sites a file remembers: those that are a site a link may open, each its own origin. */
-function parse(text: string): Set<string> {
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return new Set();
-  }
-  if (typeof file !== 'object' || file === null || !('sites' in file) || !('version' in file)) {
-    return new Set();
-  }
-  const { version, sites } = file;
-  if (version !== VERSION || !Array.isArray(sites)) return new Set();
+function parse(file: Record<string, unknown> | undefined): Set<string> {
+  const sites = file?.sites;
+  if (!Array.isArray(sites)) return new Set();
   return new Set(
     sites.filter(
       (site): site is string => typeof site === 'string' && linkTarget(site)?.origin === site,

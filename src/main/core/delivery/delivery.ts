@@ -283,16 +283,19 @@ export class Delivery {
 
   /**
    * An agent was killed (by `by`): every message to or from it still waiting is withdrawn, and
-   * every one being delivered is taken back, its turn interrupted.
+   * every one being delivered is taken back, its turn interrupted. Resolves once each is withdrawn
+   * (one being delivered, once its turn has ended).
    */
-  kill(agent: string, by: PartyId): void {
+  async kill(agent: string, by: PartyId): Promise<void> {
     const party = agentParty(agent);
+    const withdrawing: Promise<Withdrawal>[] = [];
     for (const message of this.#deps.store.all()) {
       if (message.kind !== 'text' || (message.to !== party && message.from !== party)) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) void this.#takeBack(message, by, false);
+      else if (this.#inFlight(message)) withdrawing.push(this.#takeBack(message, by, false));
     }
     this.schedule();
+    await Promise.all(withdrawing);
   }
 
   /**

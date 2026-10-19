@@ -22,7 +22,7 @@ import type { Store } from './store/store';
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
  * the core needs loads and runs as bundled (CommonJS; packaged, fused), wherever it runs: the app's
  * main process (native-selftest.ts), its core process (entry.ts) and the CLI bundle under plain
- * Node (cli/index.ts). No real `claude`, no login. Electron-free: what differs between those hosts
+ * Node (cli/main.ts). No real `claude`, no login. Electron-free: what differs between those hosts
  * (whether the app is packaged) is passed in. Each check resolves with what it saw, or rejects
  * saying what failed.
  */

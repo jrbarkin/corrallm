@@ -1,7 +1,5 @@
-import { readFile } from 'node:fs/promises';
-
 import { ID_PATTERN } from '../shared/adapter';
-import { writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './memory';
 
 /** What the user chose for corrallm as a whole, rather than for one canvas (memory.ts). */
 export interface AppSettings {
@@ -30,12 +28,16 @@ const VERSION = 2;
  *
  *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" } }
  *
- * Updates are applied one at a time, in order, and written whole. A file of another version reads
- * as nothing chosen.
+ * Updates are applied one at a time, in order, and written whole, with what it holds that this
+ * corrallm doesn't know (a newer one's fields, of the file and of `api`) written back as it was. A
+ * file of another version, or one that isn't JSON, reads as nothing chosen and is set aside
+ * (readWhole); one that can't be read fails what needed it, and is read again next time.
  */
 export class Settings {
   readonly #file: string;
   #settings: Promise<AppSettings> | undefined;
+  /** What its file holds that this corrallm doesn't know: of the file, and of `api`. */
+  #unknown: { file: Record<string, unknown>; api: Record<string, unknown> } = { file: {}, api: {} };
   #writing: Promise<void> = Promise.resolve();
   readonly #listeners = new Set<() => void>();
 
@@ -90,7 +92,18 @@ export class Settings {
     const run = async () => {
       const next = change(await this.#load());
       this.#settings = Promise.resolve(next);
-      await writeWhole(this.#file, `${JSON.stringify({ version: VERSION, ...next }, null, 2)}\n`);
+      const { file, api } = this.#unknown;
+      const text = JSON.stringify(
+        {
+          version: VERSION,
+          ...file,
+          ...next,
+          ...(next.api === undefined ? {} : { api: { ...api, ...next.api } }),
+        },
+        null,
+        2,
+      );
+      await writeWhole(this.#file, `${text}\n`);
     };
     // A failed write is logged: the setting holds for this run.
     this.#writing = this.#writing
@@ -105,22 +118,28 @@ export class Settings {
   }
 
   #load(): Promise<AppSettings> {
-    this.#settings ??= readFile(this.#file, 'utf8').then(parse, () => ({ consents: {} }));
+    this.#settings ??= readWhole(this.#file, VERSION).then(
+      (file) => {
+        this.#unknown = {
+          file: unknownFields(file, ['version', 'consents', 'api']),
+          api: unknownFields(file?.api, ['port']),
+        };
+        return parse(file);
+      },
+      (error: unknown) => {
+        // Never read as nothing chosen, nor written over: read again next time.
+        this.#settings = undefined;
+        throw error;
+      },
+    );
     return this.#settings;
   }
 }
 
-/** The settings a settings file holds; those that are not right are left out. */
-function parse(text: string): AppSettings {
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return { consents: {} };
-  }
-  if (!isRecord(file) || file.version !== VERSION) return { consents: {} };
-  const consents = isRecord(file.consents) ? file.consents : {};
-  const port = isRecord(file.api) ? file.api.port : undefined;
+/** The settings a settings file holds (none if there is none); those not right are left out. */
+function parse(file: Record<string, unknown> | undefined): AppSettings {
+  const consents = isRecord(file?.consents) ? file.consents : {};
+  const port = isRecord(file?.api) ? file.api.port : undefined;
   return {
     ...(isPort(port) ? { api: { port } } : {}),
     consents: Object.fromEntries(
