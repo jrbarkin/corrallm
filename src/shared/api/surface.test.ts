@@ -553,6 +553,16 @@ describe('T1: the surface’s rules', () => {
   });
 });
 
+describe('MCP descriptions', () => {
+  it('explains that a wait with `for` leaves messages for a later wait without `after`', () => {
+    const { description } = toolOf('wait', OPS.wait, SURFACE.wait);
+    expect(description).toContain('A wait with `for` never moves the read position');
+    expect(description).toContain(
+      'a later wait without `after` may return messages a `for` wait already returned.',
+    );
+  });
+});
+
 describe('the envelope', () => {
   const surface = (more: Partial<Surface> = {}): Surface => ({
     access: { you: 'all' },

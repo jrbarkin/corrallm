@@ -171,8 +171,9 @@ export const conversationOps = {
       'Returns the messages addressed to you on your canvases (replies, corrallm’s notices) after ' +
       '`after`, oldest first, or waits up to timeoutSeconds for the next. Without `after`, it ' +
       'starts where your last wait without `for` ended; `for` keeps those about one message. ' +
-      '`next` is where to read on. Keep waits under 2 minutes here; for longer, run `corrallm ' +
-      'wait` in a background command.',
+      'A wait with `for` never moves the read position, so a later wait without `after` may ' +
+      'return messages a `for` wait already returned. `next` is where to read on. Keep waits ' +
+      'under 2 minutes here; for longer, run `corrallm wait` in a background command.',
     input: z.strictObject({
       after: Cursor.optional(),
       for: MessageId.optional(),
