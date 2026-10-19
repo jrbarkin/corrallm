@@ -60,6 +60,8 @@ export class TokenStore {
   readonly #now: () => number;
   /** Every token kept, by its hash. */
   #tokens = new Map<string, Kept>();
+  /** When each token's last use was last written down, by id: at most once a LAST_USE_MS. */
+  readonly #written = new Map<string, number>();
   /** The tokens it knew that were replaced, or expired and dropped, by id. */
   readonly #revoked = new Set<string>();
   readonly #listeners = new Set<(id: string) => void>();
@@ -123,13 +125,13 @@ export class TokenStore {
     const kept = this.#tokens.get(sha256(token));
     const now = this.#now();
     if (!kept || now >= kept.expires) return undefined;
-    if (kept.lastUsed === undefined || now - kept.lastUsed >= LAST_USE_MS) {
-      kept.lastUsed = now;
+    kept.lastUsed = now;
+    const written = this.#written.get(kept.id);
+    if (written === undefined || now - written >= LAST_USE_MS) {
+      this.#written.set(kept.id, now);
       this.#write().catch((error: unknown) => {
         console.error('Could not keep when a token was last used:', error);
       });
-    } else {
-      kept.lastUsed = now;
     }
     return {
       kind: 'outside',

@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import { TokenStore } from './tokens';
@@ -176,6 +176,30 @@ describe('TokenStore', () => {
       tokens: Record<string, { lastUsed?: number }>;
     };
     expect(kept.tokens[sha256(token)]?.lastUsed).toBe(now);
+  });
+
+  it('writes a token’s last use down once a minute while it is used, however often', async () => {
+    const tokens = await store();
+    const token = await tokens.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    const lastUsed = async () =>
+      (
+        JSON.parse(await readFile(file, 'utf8')) as {
+          tokens: Record<string, { lastUsed?: number }>;
+        }
+      ).tokens[sha256(token)]?.lastUsed;
+    const first = now;
+    tokens.clientOf(token);
+    await vi.waitFor(async () => {
+      expect(await lastUsed()).toBe(first);
+    });
+    // Used every 30 seconds: written down again a minute after it last was.
+    now += 30 * 1000;
+    tokens.clientOf(token);
+    now += 30 * 1000;
+    tokens.clientOf(token);
+    await vi.waitFor(async () => {
+      expect(await lastUsed()).toBe(first + 60 * 1000);
+    });
   });
 
   it('forgets expired tokens, and reads a file of another version, or not its own, as none', async () => {
