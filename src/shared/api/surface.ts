@@ -110,6 +110,7 @@ export const SURFACE = {
   'app.info': { access: A, kind: 'read', scope: 'none' },
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
+  'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
   agents: { access: A, kind: 'read', scope: 'none', varies: ['agents'] },
   status: {

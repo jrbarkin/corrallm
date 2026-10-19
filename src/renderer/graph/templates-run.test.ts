@@ -5,9 +5,9 @@ import { expectRestorable } from '../../shared/engine/run/test-restore';
 import { manual, setup } from '../../shared/engine/run/test-run';
 import { catalog } from '../catalog';
 import { connectionsOf, DEFAULT_AGENT } from './agents';
-import { EXAMPLES } from './examples';
+import { EXAMPLES } from '../../shared/examples';
 import { canvasNodes, graphOf } from './graph';
-import { fillTemplate } from './templates';
+import { fillTemplate } from '../../shared/templates';
 
 /*
  * The built-in templates, run: each runs as its author meant, with what its blanks are filled

@@ -5,6 +5,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PARTIES } from '../../shared/api/surface';
+import { EXAMPLES } from '../../shared/examples';
+import { isIf, isRepeat } from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
+import type { Job } from '../../shared/adapter';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
@@ -49,6 +53,55 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
 }
 
 describe('createCore', () => {
+  it('lists each shipped template’s fields and agent roles with the jobs of all their steps', async () => {
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    const jobs = (queue: QueueItem[]): Job[] => [
+      ...new Set(
+        queue.flatMap((item): Job[] => {
+          if (isIf(item)) return jobs(item.then);
+          if (isRepeat(item)) return jobs(item.repeat);
+          if (!('action' in item)) return [];
+          const job = CATALOG.adapters
+            .flatMap((adapter) => adapter.actions)
+            .find((action) => action.name === item.action)?.job;
+          return job === undefined ? [] : [job];
+        }),
+      ),
+    ];
+    const expected = EXAMPLES.map((example) => {
+      const blanks = [
+        ...new Set([...example.text.matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1])),
+      ].sort();
+      expect((example.fields ?? []).map((field) => field.key).sort()).toEqual(blanks);
+      const file = JSON.parse(example.text) as {
+        id: string;
+        nodes: { id: string; kind: string; label: string; adapter?: string; queue?: QueueItem[] }[];
+      };
+      return {
+        id: file.id,
+        name: example.name,
+        description: example.description,
+        fields: example.fields ?? [],
+        agents: file.nodes
+          .filter((node) => node.kind === 'agent')
+          .map((node) => ({
+            id: node.id,
+            name: node.label,
+            ...(node.adapter === undefined ? {} : { adapter: node.adapter }),
+            jobs: jobs(node.queue ?? []),
+          })),
+      };
+    });
+    expect(await started.call('templates.list', {}, CALLERS['outside-read'])).toEqual({
+      ok: true,
+      value: { items: expected },
+    });
+    expect(expected.flatMap((item) => item.agents).some((agent) => !('adapter' in agent))).toBe(
+      true,
+    );
+    expect(expected.flatMap((item) => item.fields).length).toBeGreaterThan(0);
+  });
+
   it('serves both catalog operations on a window’s port', async () => {
     vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
     vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));

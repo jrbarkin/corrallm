@@ -5,6 +5,7 @@
     "api.app.info",
     "api.catalog.get",
     "api.catalog.installed",
+    "api.templates.list",
     "api.settings.get",
     "api.usage.get",
     "api.usage.setRule",
@@ -35,6 +36,7 @@
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "withdraw"
     ],
@@ -61,6 +63,7 @@
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "wait"
     ],
@@ -80,16 +83,17 @@
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "wait",
       "withdraw"
     ]
   },
   "counts": {
-    "lead": 17,
+    "lead": 18,
     "worker": 10,
-    "outside-read": 12,
-    "outside-write": 18
+    "outside-read": 13,
+    "outside-write": 19
   },
   "unhosted": {
     "agents": "B11",
@@ -140,6 +144,10 @@
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
       "output": "de9aacd07a220d13"
+    },
+    "templates.list": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "fb72ff50789dfefc"
     },
     "agents": {
       "input": "41356bc15da6df1b",

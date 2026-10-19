@@ -21,6 +21,7 @@ import { runOps } from './run';
 import { sessionOps } from './session';
 import { settingsOps } from './settings';
 import { terminalOps } from './terminal';
+import { templatesOps } from './templates';
 import { topicsOps } from './topics';
 import { usageOps } from './usage';
 import { waitOps } from './wait';
@@ -73,6 +74,7 @@ export function implementations(services: OpServices): Implementations {
     ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
+    ...templatesOps(services),
     ...conversationOps(services),
     ...sessionOps(services),
     ...settingsOps(services),

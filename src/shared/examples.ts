@@ -8,20 +8,15 @@ import reviewPanel from './examples/review-panel.corral?raw';
 import specFirst from './examples/spec-first.corral?raw';
 import tddRelay from './examples/tdd-relay.corral?raw';
 import teamLead from './examples/team-lead.corral?raw';
-import type { TemplateField } from './templates';
+import type { Example } from './templates';
+import { canvasIdOf } from './canvas';
+export type { Example } from './templates';
 
 /**
  * A canvas to start from, in the Templates gallery: a `.corral` file's text. Its `fields` are the
  * blanks (`{{key}}`) in its agents' names, messages and conditions, filled in before it opens
  * (templates.ts); without any, it opens as it is.
  */
-export interface Example {
-  name: string;
-  description: string;
-  text: string;
-  fields?: readonly TemplateField[];
-}
-
 export const EXAMPLES: readonly Example[] = [
   {
     name: 'TDD relay',
@@ -114,3 +109,8 @@ export const EXAMPLES: readonly Example[] = [
     text: releaseChecks,
   },
 ];
+
+/** The shipped file to open or insert after the gallery chose its metadata by id. */
+export function exampleOf(id: string): Example | undefined {
+  return EXAMPLES.find((example) => canvasIdOf(example.text) === id);
+}

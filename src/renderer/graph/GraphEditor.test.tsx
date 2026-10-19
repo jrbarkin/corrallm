@@ -1,12 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
+import { api } from '../api/client';
+import { EXAMPLES } from '../../shared/examples';
+import { templateInfo } from '../../shared/templates';
 import { readRun } from '../../shared/engine/run/checkpoint';
 import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
@@ -79,8 +82,15 @@ const actions = (id: string) => {
   return within(toolbar);
 };
 
+beforeEach(() => {
+  vi.spyOn(api, 'templatesList').mockResolvedValue({
+    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('GraphEditor', () => {
@@ -1927,7 +1937,7 @@ describe('GraphEditor', () => {
       const { nodes } = setup(undefined, files);
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^Team lead/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^Team lead/ }));
       fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       // A new canvas, with main's new draft's id.
@@ -1981,7 +1991,7 @@ describe('GraphEditor', () => {
       const { nodes, node } = setup(undefined, fakeFiles());
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each blank starts from the template's own example; Back returns to the templates.
       const framework = gallery.getByRole('textbox', { name: 'Which test framework?' });
       expect((framework as HTMLTextAreaElement).value).toBe('pytest');
@@ -2004,11 +2014,11 @@ describe('GraphEditor', () => {
       );
     });
 
-    it('inserts a template into the canvas as a group, each agent of the type chosen', () => {
+    it('inserts a template into the canvas as a group, each agent of the type chosen', async () => {
       const { nodes, container } = setup(coder, fakeFiles());
       fireEvent.click(button('Templates…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each agent starts as the template names it; the Tester is left to the default agent.
       const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
       expect((tester as HTMLSelectElement).value).toBe('codex');
@@ -2042,7 +2052,7 @@ describe('GraphEditor', () => {
       );
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       const how = (role: string) =>
         gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);

@@ -10,6 +10,7 @@ import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
 import { terminalOps } from './ops/terminal';
+import { templatesOps } from './ops/templates';
 import { topicsOps } from './ops/topics';
 import { usageOps } from './ops/usage';
 import { windowOps } from './ops/window';
@@ -25,6 +26,7 @@ export const OPS = {
   ...topicsOps,
   ...appOps,
   ...catalogOps,
+  ...templatesOps,
   ...conversationOps,
   ...sessionOps,
   ...settingsOps,

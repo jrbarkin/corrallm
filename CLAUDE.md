@@ -272,11 +272,12 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      holding the canvas's id: see Canvas identity; format and validation in
                      src/shared/model/file.ts, which reads a CanvasDocument against the catalog, open/save bar in FileBar.tsx; an agent's
                      adapter, connection and settings, by adapter, among what it saves: see Agent
-                     settings). examples/ holds .corral
-                     templates, listed in examples.ts and shown by ExampleGallery.tsx; a test keeps
+                     settings). src/shared/examples/ holds .corral
+                     templates, listed in src/shared/examples.ts. ExampleGallery.tsx reads their
+                     fields and agent roles through templates.list; a test keeps
                      each one valid and written exactly as toFile writes it. A template may leave
-                     blanks ({{key}}, filled from its `fields`; templates.ts) and leave agents' types
-                     open (no `agent`: the default, or chosen when it is used; withAgents translates
+                     blanks ({{key}}, filled from its `fields`; src/shared/templates.ts) and leave agents' types
+                     open (no `adapter`: the default, or chosen when it is used; withAgents translates
                      steps between types via EQUIVALENT_ACTIONS in agents.ts). The gallery's form
                      also chooses how each agent runs (withConnections): by default in a Terminal
                      by native default (`defaultConnection`); missing installed CLIs are labelled

@@ -97,11 +97,12 @@ import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/
 import type { Graph } from './graph';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
-import { EXAMPLES } from './examples';
-import type { Example } from './examples';
+import { exampleOf } from '../../shared/examples';
+import type { Example } from '../../shared/examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate, withAgents, withConnections } from './templates';
+import { fillTemplate } from '../../shared/templates';
+import { withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
@@ -1471,10 +1472,14 @@ function Editor({
         )}
         {gallery && (
           <ExampleGallery
-            examples={EXAMPLES}
             canInsert={graph.nodes.length > 0}
             installed={installed}
-            onPick={(example, choices, use) => {
+            onPick={(template, choices, use) => {
+              const example = exampleOf(template.id);
+              if (!example) {
+                setProblem('That template is no longer available in this build.');
+                return;
+              }
               setGallery(false);
               if (use === 'new') {
                 commands?.example(example, choices, edited);
