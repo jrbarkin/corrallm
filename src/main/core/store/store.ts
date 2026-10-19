@@ -91,6 +91,11 @@ export class Store {
   #snapshotAt: number | undefined;
   /** The snapshot being taken, if one is. */
   #snapshotting: Promise<string> | undefined;
+  /**
+   * Whether the store is closing: set before it commits what was queued, so that a write those
+   * queue is refused rather than committed once it has closed.
+   */
+  #shut = false;
   #closing: Promise<void> | undefined;
 
   constructor(connection: Connection, { profile, file, deps, snapshotAt }: Opening) {
@@ -122,11 +127,11 @@ export class Store {
   /**
    * Runs `run` in a transaction, committed once it returns, and returns what it returned; within
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns.
-   * Refused once the store is closing.
+   * Refused once the store is closing, but within a write it commits.
    */
   tx<T>(run: () => T): T {
-    if (this.#closing !== undefined) throw closed();
     const outermost = !this.#connection.isTransaction;
+    if (outermost && this.#shut) throw closed();
     const value = transaction(this.#connection, run);
     if (outermost) this.#committed();
     return value;
@@ -139,7 +144,7 @@ export class Store {
    * store is closing.
    */
   write<T>(run: () => T): Promise<T> {
-    if (this.#closing !== undefined) return Promise.reject(closed());
+    if (this.#shut) return Promise.reject(closed());
     return new Promise<T>((resolve, reject) => {
       this.#queue.push({ run, resolve: resolve as (value: unknown) => void, reject });
       if (this.#scheduled) return;
@@ -172,7 +177,10 @@ export class Store {
    * nothing more.
    */
   close(): Promise<void> {
-    this.#closing ??= this.#close();
+    if (this.#closing === undefined) {
+      this.#shut = true;
+      this.#closing = this.#close();
+    }
     return this.#closing;
   }
 

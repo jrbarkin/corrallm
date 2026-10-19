@@ -198,6 +198,24 @@ describe('the write lane', () => {
     await closed;
     expect(notes()).toEqual(['queued']);
   });
+
+  it('refuses a write that a write queues as it closes, and leaves nothing to run after', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let queued: Promise<unknown> | undefined;
+    const outer = store.write(() => {
+      add('outer');
+      // A transaction within the lane's goes on as a savepoint of it.
+      store.tx(() => add('nested'));
+      queued = store.write(() => add('queued by it'));
+    });
+    const closed = store.close();
+    await expect(outer).resolves.toBeUndefined();
+    await expect(queued).rejects.toThrow('The core’s database is closed.');
+    await closed;
+    expect(pending()).toEqual([]);
+    expect(notes()).toEqual(['outer', 'nested']);
+    expect(errors).not.toHaveBeenCalled();
+  });
 });
 
 describe('tx', () => {
