@@ -1,8 +1,8 @@
 import type { AdapterId, ConnectionId, ModeId } from './adapter';
 
 /*
- * Connected sessions: an agent's session run by the main process (Claude Code or Codex, in a
- * terminal or through a structured interface), what the engine asks of it, and what main tells it
+ * Connected sessions: an agent's session run by the core, in a terminal or through a structured
+ * interface, what the engine asks of it, and what main tells it
  * back. Main's connectors (src/main/sessions/) turn their CLI's own output into these events; the
  * engine's connected driver (src/shared/engine/transcript/receive.ts) plays them onto the session
  * its views show (src/shared/model/session.ts).
@@ -37,8 +37,7 @@ export interface TurnResult {
 export type InstalledClis = Readonly<Record<AdapterId, boolean>>;
 
 /**
- * Claude Code's permission modes, by its settings' names, in the order Shift+Tab cycles them.
- * 'manual' is what the CLI also calls 'default'.
+ * Permission modes by their native settings names, until all modes come from descriptors.
  */
 export const PERMISSION_MODES = [
   'manual',
@@ -50,12 +49,7 @@ export const PERMISSION_MODES = [
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 /**
- * Codex's modes: its permission presets (what its /permissions offers, by their ids in its source,
- * codex-rs/utils/approval-presets), then plan mode. 'read-only': a read-only sandbox, asking before
- * anything more; 'auto' (Codex's Default): edits and commands in a sandbox of the project folder,
- * asking before leaving it; 'full-access': no sandbox and never asking; 'plan': Codex's plan
- * collaboration mode, which explores and proposes a plan before changing anything (with Default's
- * permissions).
+ * Additional connection modes by their native ids, until all modes come from descriptors.
  */
 export const CODEX_MODES = ['read-only', 'auto', 'full-access', 'plan'] as const;
 export type CodexMode = (typeof CODEX_MODES)[number];
@@ -63,14 +57,7 @@ export type CodexMode = (typeof CODEX_MODES)[number];
 /** A session's mode: one of its CLI's. */
 export type SessionMode = PermissionMode | CodexMode;
 
-/** The mode each adapter's agents start in unless told otherwise: Claude Code's Manual, Codex's Default. */
-export const DEFAULT_MODES: { readonly 'claude-code': PermissionMode; readonly codex: CodexMode } =
-  {
-    'claude-code': 'manual',
-    codex: 'auto',
-  };
-
-/** Whether `mode` is one of Claude Code's permission modes. */
+/** Whether `mode` is one of the permission modes. */
 export function isPermissionMode(mode: SessionMode): mode is PermissionMode {
   return (PERMISSION_MODES as readonly SessionMode[]).includes(mode);
 }
@@ -98,7 +85,7 @@ export type ToolDetail =
  */
 export interface ToolProgress {
   seconds?: number;
-  /** What a subagent is doing now, as the CLI words it ("Reading README.md"). */
+  /** What a subagent is doing now, in the CLI’s words. */
   doing?: string;
   toolUses?: number;
   tokens?: number;
@@ -120,10 +107,8 @@ export interface Todo {
 }
 
 /**
- * A model a session offers: what the CLI calls it, and how the model picker shows it; and how hard
- * it can reason, where the CLI lets the user choose (Claude Code's /effort levels, Codex's reasoning
- * efforts, as their pickers offer them), with the effort it reasons at unless one is chosen, where
- * the CLI says (Codex does; Claude Code's is "the model's default").
+ * A model a session offers: its native value, its label, and the reasoning efforts it offers,
+ * each labelled by the adapter. `defaultEffort` is the native default when the CLI reports one.
  */
 export interface ModelChoice {
   value: string;
@@ -133,7 +118,7 @@ export interface ModelChoice {
   defaultEffort?: string;
 }
 
-/** A reasoning effort a model offers: what the CLI calls it ('high'), and how the picker shows it. */
+/** A reasoning effort a model offers: its native value and the adapter's label for the picker. */
 export interface EffortChoice {
   value: string;
   label: string;
@@ -152,8 +137,7 @@ export interface SessionOptions {
   /** The model the agent is set to run, or null: the user's own default (their CLI's settings). */
   model: string | null;
   /**
-   * The mode it starts in (one of its connection's CLI's), or null: the user's own default (their
-   * Claude Code settings; Codex's Default, which leaves their own sandbox settings).
+   * The mode it starts in, or null to leave the user's own native settings in effect.
    */
   mode: SessionMode | null;
   /** The reasoning effort it is set to; null or absent: the user's own default, else the model's. */
@@ -220,7 +204,7 @@ export interface SettingsOptions {
  */
 export const UNASKING_MODES: readonly SessionMode[] = ['bypassPermissions', 'full-access'];
 
-/** The kinds of image the user can paste into a message (those Claude reads). */
+/** The kinds of image the user can paste into a message, subject to the connection's limits. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];
 
@@ -249,7 +233,7 @@ export interface MessageSender {
  * A message the user sends: its id (the turn it starts ends naming it), its text, and the images
  * pasted into it, if any (only connected sessions see them). `from`: who sent it, when another
  * party did (an agent, an outside orchestrator, corrallm): its text is framed so, and a connection
- * whose CLI takes who sent a message (the Agent SDK) tells it too, so that it never takes it for
+ * whose CLI takes who sent a message tells it too, so that it never takes it for
  * its user's.
  */
 export interface UserMessage {
@@ -260,8 +244,7 @@ export interface UserMessage {
 }
 
 /**
- * A slash command a session offers (Claude Code's own, the user's and the project's commands and
- * skills, MCP prompts), as the composer completes it: typed as `/name`, then what it takes.
+ * A slash command a session offers, as the composer completes it: typed as `/name`, then its args.
  */
 export interface SlashCommand {
   /** Its name, without the slash. */
@@ -272,8 +255,7 @@ export interface SlashCommand {
 }
 
 /**
- * A conversation Claude Code kept for the project folder (its transcript), as /resume lists it.
- * Both connections keep theirs there: an agent can open any of them.
+ * A native conversation the adapter kept for the project folder, which its agent can resume.
  */
 export interface PastSession {
   /** Its session id: main opens it only if main listed it for this folder. */
@@ -291,8 +273,7 @@ export interface PastSession {
 }
 
 /**
- * What restoring the files to how they were before a message would change (a preview), or
- * changed: Claude Code's file checkpoints.
+ * What restoring files to before a message would change (a preview), or changed.
  */
 export interface FilesRewind {
   /** Whether they can be restored to that point; `error` says why not. */
@@ -305,7 +286,7 @@ export interface FilesRewind {
   removed: number;
 }
 
-/** What rewinding to before a message restores, as Claude Code offers it. */
+/** What rewinding to before a message restores. */
 export const REWIND_RESTORES = ['both', 'conversation', 'code'] as const;
 export type RewindRestore = (typeof REWIND_RESTORES)[number];
 
@@ -315,7 +296,7 @@ export interface RewindResult {
   conversation: boolean;
 }
 
-/** How an MCP server is, as Claude Code reports it. */
+/** How an MCP server is, as the connection reports it. */
 export const MCP_STATUSES = ['connected', 'failed', 'needs-auth', 'pending', 'disabled'] as const;
 export type McpStatus = (typeof MCP_STATUSES)[number];
 
@@ -323,7 +304,7 @@ export type McpStatus = (typeof MCP_STATUSES)[number];
 export interface McpServer {
   name: string;
   status: McpStatus;
-  /** Where it is configured: user, project, local, a plugin, claude.ai… */
+  /** Where the server is configured, in the connection's words. */
   scope?: string;
   /** What it says it is, once connected ("github 1.2.0"). */
   server?: string;
@@ -365,7 +346,7 @@ export interface FormField {
 export const ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
 export type ElicitationAction = (typeof ELICITATION_ACTIONS)[number];
 
-/** A question the agent asks the user (Claude Code's AskUserQuestion), with answers to pick from. */
+/** A question the agent asks the user, with answers to pick from. */
 export interface AskedQuestion {
   /** A short name for it, as a chip shows it. */
   header: string;
@@ -392,8 +373,7 @@ export type TerminalAsk =
   | { kind: 'other'; id: string; text: string };
 
 /**
- * The modes a plan can be carried out in once approved, as Claude Code offers them. Codex carries
- * out a plan in its Default mode ('auto').
+ * The modes a plan may be carried out in once approved, where the connection lets the user pick.
  */
 export const PLAN_MODES = ['auto', 'acceptEdits', 'manual'] as const;
 export type PlanMode = (typeof PLAN_MODES)[number];
@@ -402,8 +382,7 @@ export type PlanMode = (typeof PLAN_MODES)[number];
 export type PlanAnswer = { approve: true; mode: PlanMode } | { approve: false; feedback: string };
 
 /**
- * The user's answer to a prompt a session showed. A permission denied with `feedback` (what to do
- * instead) lets Claude go on with it; denied without, the turn stops, as in Claude Code.
+ * The user's answer to a prompt a session showed; `feedback` tells it what to do instead.
  */
 export type SessionAnswer =
   | { kind: 'permission'; answer: 'once' | 'always' | 'deny'; feedback?: string }
@@ -421,8 +400,7 @@ export interface SessionUsage {
   contextTokens: number | null;
   contextWindow: number | null;
   /**
-   * How much of each of the user's plan's usage limits is used (Codex's rate-limit windows: the
-   * 5-hour one, the weekly one), where the CLI says.
+   * How much of each of the user's plan's usage limits is used, where the CLI reports them.
    */
   limits?: UsageLimit[];
 }
@@ -459,7 +437,8 @@ export type SessionEvent =
   | {
       type: 'started';
       model: string | null;
-      mode: SessionMode;
+      /** Null until its native mode is known; the user’s own settings apply meanwhile. */
+      mode: SessionMode | null;
       models: ModelChoice[];
       effort?: string | null;
       modes?: SessionMode[];
@@ -508,8 +487,7 @@ export type SessionEvent =
   | { type: 'unheard'; text: string }
   /**
    * It asks before running a tool. `always`: what answering "always" allows, as the CLI words it,
-   * or null where it offers no "always". `title`: what it asks, as the CLI words it ("Claude wants
-   * to fetch example.com"), when it says.
+   * or null where it offers no "always". `title`: what it asks, in the CLI's words, when reported.
    */
   | {
       type: 'permission';
@@ -539,8 +517,7 @@ export type SessionEvent =
   | { type: 'withdrawn'; id: string }
   /**
    * Something to tell the user: compaction, a retry, a usage limit and when it resets, a login
-   * problem. `switchTo`: the connection the agent can switch to, to get past it (Terminal, for an
-   * Agent SDK session on a Claude subscription login).
+   * problem. `switchTo`: another connection the agent can switch to, to get past it.
    */
   | {
       type: 'notice';
@@ -550,12 +527,12 @@ export type SessionEvent =
       switchTo?: ConnectionId;
     }
   /**
-   * The conversation was cleared (/clear): Claude starts afresh, under a new session id. The
+   * The conversation was cleared: the agent starts afresh, under a new native session id. The
    * transcript keeps what came before, marked off.
    */
   | { type: 'cleared'; id: string }
   | { type: 'usage'; usage: SessionUsage }
-  | { type: 'mode'; mode: SessionMode }
+  | { type: 'mode'; mode: SessionMode | null }
   | { type: 'model'; model: string }
   /** The reasoning effort it runs at now (null: its model's default). */
   | { type: 'effort'; effort: string | null }
@@ -582,7 +559,7 @@ export const MAX_ANSWER_LENGTH = 20_000;
 export const MAX_FILE_QUERY_LENGTH = 500;
 /** At most this many files are offered for a file mention. */
 export const MAX_FILE_MATCHES = 50;
-/** At most this many questions in one prompt (Claude Code asks 1 to 4). */
+/** At most this many questions in one prompt. */
 export const MAX_QUESTIONS = 4;
 /** At most this many fields in an MCP server's form, and choices in one of them. */
 export const MAX_FORM_FIELDS = 50;

@@ -1,4 +1,4 @@
-import type { TurnReason } from '../../shared/session';
+import type { TurnReason } from '../../../shared/session';
 
 /*
  * The errors Claude Code ends a turn with, as both connections hear them: an assistant message's

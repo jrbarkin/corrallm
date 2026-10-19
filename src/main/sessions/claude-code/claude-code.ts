@@ -8,20 +8,20 @@ import {
   MODEL_PATTERN,
   PERMISSION_MODES,
 } from '../../../shared/session';
-import { CLAUDE_EFFORTS } from '../sdk/session';
+import { CLAUDE_EFFORTS } from './efforts';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
-import { claudeFailure } from '../claude-errors';
+import { claudeFailure } from './claude-errors';
 import { isSessionId } from '../id';
-import { askedQuestions } from '../sdk/prompts';
-import { proposedDetail, property, text as textOf, toolSummary } from '../sdk/tools';
-import type { Places } from '../sdk/tools';
+import { askedQuestions } from './sdk/prompts';
+import { proposedDetail, property, text as textOf, toolSummary } from './sdk/tools';
+import type { Places } from './sdk/tools';
 import { preview } from '../transcript';
-import type { Launch, TerminalCli, TerminalSignal } from './cli';
+import type { Launch, TerminalCli, TerminalSignal } from '../terminal/cli';
 import { hookSettings } from './hooks';
-import type { HookEvent, HookRegistration } from './hooks';
+import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
-import type { Screen } from './screen';
+import type { Screen } from '../terminal/screen';
 import { statusLineSettings, statusLineUsage } from './statusline';
 import { keystrokes, typeable } from './typing';
 
@@ -33,7 +33,7 @@ import { keystrokes, typeable } from './typing';
  * levels, where its claude takes the flag: connector.ts) and --permission-mode only when the agent
  * was set to them (otherwise the user's own default model, effort and mode apply). Its screen
  * reports its state (Program Status, OSC 7501: read by the session's screen) and shows its prompt
- * box (whose draft screen.ts reads); its hooks tell its session id, the prompts it took, its last
+ * box (whose draft it reads); its hooks tell its session id, the prompts it took, its last
  * reply, why a turn failed, its mode and its model, and what it is about to ask the user in its
  * terminal (a permission prompt and what it is for, its questions, a plan to approve, what its
  * notifications say it needs). A message is typed in as a person would (typing.ts).
@@ -53,6 +53,9 @@ const MAX_ASK_TEXT = 2000;
 /** At most this many lines of what a permission is for (a diff, a file, a command) are listed. */
 const PREVIEW_LINES = 12;
 const LOGIN = 'Claude Code needs you to log in: run /login in its terminal.';
+/** Its prompt mark, and the rules above and below its prompt box. */
+const PROMPT = '❯';
+const RULE = '─'.repeat(8);
 /** Its folder trust dialog's choice to go on. */
 const TRUST_DIALOG = 'Yes, I trust this folder';
 
@@ -87,8 +90,6 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       none: 'Claude Code is waiting for you.',
     },
   };
-  /** Manual, as Claude Code calls its default mode. */
-  readonly defaultMode = 'manual';
   /**
    * Enter once its prompt shows what was typed: keys that pile up while it is busy (just after
    * its folder trust dialog, or as a turn ends) are read in one go, as a paste, and 2.1.296 keeps
@@ -262,8 +263,32 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     };
   }
 
+  /**
+   * What the user has typed in Claude Code's prompt and not sent: '' when it is empty (or shows
+   * its dim placeholder), undefined when no prompt is on screen (a dialog, or still starting).
+   * The prompt is the line that starts with ❯ right under a rule; the box ends at the next rule.
+   */
   draft(screen: Screen): string | undefined {
-    return screen.draft();
+    const { buffer, top, bottom } = screen.view();
+    const lineText = (y: number) => buffer.getLine(y)?.translateToString(true) ?? '';
+    for (let y = bottom - 1; y > top; y -= 1) {
+      if (!lineText(y).startsWith(PROMPT) || !lineText(y - 1).startsWith(RULE)) continue;
+      const typed: string[] = [];
+      const cell = buffer.getNullCell();
+      for (let row = y; row < bottom && (row === y || !lineText(row).startsWith(RULE)); row += 1) {
+        const line = buffer.getLine(row);
+        let text = '';
+        // Past the prompt mark and its space (or the indent of a line after the first).
+        for (let x = 2; line && x < line.length; x += 1) {
+          const at = line.getCell(x, cell);
+          if (!at || at.getWidth() === 0) continue;
+          text += at.isDim() ? ' ' : at.getChars() || ' ';
+        }
+        typed.push(text.trimEnd());
+      }
+      return typed.join('\n').trim();
+    }
+    return undefined;
   }
 
   /**

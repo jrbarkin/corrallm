@@ -18,17 +18,6 @@ const PROMPT_BOX =
   '\x1b[3G\x1b[38;2;150;108;30m⏵⏵\x1b[6Gauto\x1b[11Gmode\x1b[16Gon\x1b[39m\r\r\n\x1b[2C\x1b[3A';
 /** The prompt line redrawn with a draft (the cursor sits after the prompt mark). */
 const DRAFT = '\r\x1b[2C\x1b[KFix the flaky test';
-/** A prompt box holding a draft of two lines. */
-const TWO_LINES =
-  '\x1b[H\x1b[2J' +
-  `${GREY}${'─'.repeat(80)}\x1b[39m\r\r\n` +
-  '❯ Fix the flaky test\r\r\n  and its fixture\r\r\n' +
-  `${GREY}${'─'.repeat(80)}\x1b[39m\r\r\n`;
-const TRUST_DIALOG =
-  '\r\r\n\x1b[38;2;150;108;30m──────────────────────────────────────────\x1b[39m\r\r\n' +
-  '\x1b[2G\x1b[1mAccessing\x1b[12Gworkspace:\x1b[22m\r\r\n\r\r\n' +
-  '\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck:\x1b[22GIs\x1b[25Gthis\x1b[30Ga\x1b[32Gproject\x1b[40Gyou\x1b[44Gtrust?\r\r\n\r\r\n' +
-  '\x1b[2G\x1b[38;2;87;105;247m❯\x1b[4GNo,\x1b[8Gexit\x1b[39m\r\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder\r\r\n';
 /** Its terminal probes at startup: the background colour, DA1, XTVERSION, kitty keys, Program Status, DA1. */
 const PROBES = '\x1b]11;?\x07\x1b[c\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c';
 
@@ -71,27 +60,6 @@ describe('Screen', () => {
       { state: 'blocked', kind: 'permission', msg: 'approve Bash: git init -q' },
       { state: 'clear' },
     ]);
-  });
-
-  it('reads Claude Code’s prompt: empty under its dim placeholder, or the user’s draft', async () => {
-    const { screen: made } = screen();
-    made.write(PROMPT_BOX);
-    await made.settled();
-    expect(made.draft()).toBe('');
-    made.write(DRAFT);
-    await made.settled();
-    expect(made.draft()).toBe('Fix the flaky test');
-    made.write(TWO_LINES);
-    await made.settled();
-    expect(made.draft()).toBe('Fix the flaky test\nand its fixture');
-  });
-
-  it('finds no prompt while a dialog shows', async () => {
-    const { screen: made } = screen();
-    made.write(TRUST_DIALOG);
-    await made.settled();
-    expect(made.draft()).toBeUndefined();
-    expect(made.text()).toContain('Quick safety check');
   });
 
   it('snapshots the screen as written so far, which shows the same in another terminal', async () => {

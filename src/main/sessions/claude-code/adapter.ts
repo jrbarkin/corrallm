@@ -1,6 +1,13 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
+import { FakeConnector, FAKE_MODELS } from '../fake';
+import { findClaude } from './claude';
+import { claudeOptions } from './claude-settings';
+import { TerminalConnector } from './connector';
+import { SdkConnector } from './sdk/connector';
+import { Conversations } from './sdk/conversations';
+import { checkAgentSdk } from './selftest';
 import logo from './logo.svg?raw';
 
 const HOUR = 60 * 60 * 1000;
@@ -38,7 +45,7 @@ const START_MODES = ['manual', 'acceptEdits', 'plan', 'auto'];
 
 /**
  * Claude Code: its own interactive CLI in a terminal (sessions/terminal/), or a Claude Code session
- * through the Agent SDK (sessions/sdk/), in corrallm's transcript. Terminal comes first: it works
+ * through the Agent SDK (sdk/), in corrallm's transcript. Terminal comes first: it works
  * with any Claude login, the Agent SDK only with an API key or a cloud provider (Oct 12, 2026).
  */
 export const claudeCode: Adapter = {
@@ -161,6 +168,31 @@ export const claudeCode: Adapter = {
     registerMcp:
       "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'",
   },
+  inheritedEnv: [
+    'CLAUDECODE',
+    'CLAUDE_PID',
+    'CLAUDE_EFFORT',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_CHILD_SESSION',
+    'CLAUDE_CODE_BRIDGE_SESSION_ID',
+    'CLAUDE_CODE_MESSAGING_SOCKET',
+    'CLAUDE_CODE_MESSAGING_TOKEN',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_EXECPATH',
+    'CLAUDE_CODE_SESSION_ATTENDED',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_AGENT_SDK_VERSION',
+  ],
+  find: findClaude,
+  connectors: ({ clientApp, usage }) => ({
+    [CLAUDE_TERMINAL]: new TerminalConnector(usage === undefined ? {} : { usage }),
+    'claude-code.sdk': new SdkConnector({ clientApp }),
+  }),
+  readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
+  fake: (pause) => new FakeConnector({ pause }),
+  fakeOptions: { models: FAKE_MODELS, defaults: { model: null, effort: null, mode: null } },
+  conversations: new Conversations(),
+  selfTests: [{ name: 'Agent SDK', run: () => checkAgentSdk() }],
   usageBackends: [
     {
       id: CLAUDE_USAGE,

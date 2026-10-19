@@ -196,7 +196,7 @@ export const sessionOps = {
       commands: z.array(
         z.strictObject({ name: z.string(), description: z.string(), argumentHint: z.string() }),
       ),
-      mode: z.string(),
+      mode: z.string().nullable(),
       model: z.string().nullable(),
       effort: z.string().nullable(),
       models: z.array(

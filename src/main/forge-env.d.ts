@@ -3,13 +3,13 @@
 // because that file types the dev server URL as `string`, but it is `undefined` outside
 // `electron-forge start` (production and packaged builds). And corrallm's own, from
 // vite.main.config.mts's `define`.
-import type { Distribution } from './sessions/codex/login';
+import type { Distribution } from './sessions/adapter';
 
 declare global {
   const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
   const MAIN_WINDOW_VITE_NAME: string;
   /**
-   * How this build is offered (sessions/codex/login.ts): 'local' unless built with
+   * How this build is offered (sessions/adapter.ts): 'local' unless built with
    * CORRALLM_DISTRIBUTION=commercial or hosted. Defined by vite.main.config.mts.
    */
   const CORRALLM_DISTRIBUTION: Distribution;

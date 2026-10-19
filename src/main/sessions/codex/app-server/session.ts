@@ -11,10 +11,12 @@ import type {
   TurnResult,
 } from '../../../../shared/session';
 import type { LiveSession, SessionHost } from '../../connector';
-import { effortChoice, notice, output, property, text, unifiedDiff } from '../../transcript';
+import { notice, output, property, text, unifiedDiff } from '../../transcript';
 import type { Places } from '../../transcript';
+import { effortChoice } from '../efforts';
 import { PLAN_DECLINED, planPrompt } from '../login';
-import type { CodexLogin, PlanConsent } from '../login';
+import type { CodexLogin } from '../login';
+import type { Consent } from '../../adapter';
 import type { AppServer } from '../rpc';
 import { RPC_ERRORS, RpcFailure } from '../rpc';
 import { IMPLEMENT_PLAN, INIT_PROMPT, parseMessage, readSkills, slashCommands } from './commands';
@@ -22,7 +24,14 @@ import type { CommandName, Skill } from './commands';
 import { gitDiff } from './diff';
 import type { RunGit } from './diff';
 import type { Prompts } from './prompts';
-import { imageInput, modeSettings, readSandboxPolicy, sandboxPolicy, textInput } from './protocol';
+import {
+  imageInput,
+  modeSettings,
+  presetOf,
+  readSandboxPolicy,
+  sandboxPolicy,
+  textInput,
+} from './protocol';
 import type { SandboxPolicy, UserInput } from './protocol';
 import type { Translator } from './translate';
 import { historyEvents, OUTPUT_EVERY_MS } from './translate';
@@ -57,6 +66,7 @@ export interface ThreadInfo {
   effort: string | null;
   /** The sandbox Codex reports for it (with the user's own settings in it). */
   sandbox: unknown;
+  approval: unknown;
   /** The AGENTS.md files it read, and where it works. */
   instructions: string[];
 }
@@ -68,7 +78,7 @@ export interface AppServerSessionParts {
   prompts: Prompts;
   places: Places;
   thread: ThreadInfo;
-  mode: CodexMode;
+  mode: CodexMode | null;
   models: CodexModel[];
   skills: Skill[];
   login: CodexLogin;
@@ -76,11 +86,11 @@ export interface AppServerSessionParts {
    * On a ChatGPT login: the user's say on using their plan, kept for good. The session asks before
    * its first turn uses it, unless they allowed it for good already.
    */
-  consent?: PlanConsent;
+  consent?: Consent;
   /** Runs git, for /diff. */
   git: RunGit;
   /** Starts a new thread, for /new (in the session's mode, with its model). */
-  newThread: (mode: CodexMode, model: string) => Promise<ThreadInfo>;
+  newThread: (mode: CodexMode | null, model: string) => Promise<ThreadInfo>;
   /** The time, in milliseconds. */
   now?: () => number;
 }
@@ -151,11 +161,11 @@ export class AppServerSession implements LiveSession<CodexMode> {
   readonly #now: () => number;
   readonly #login: CodexLogin;
   /** Whom to ask before using the user's ChatGPT plan: none once it may be used. */
-  #consent: PlanConsent | undefined;
+  #consent: Consent | undefined;
   #thread: ThreadInfo;
   /** The thread whose id was last remembered (a thread is kept once it has a turn). */
   #remembered: string | undefined;
-  #mode: CodexMode;
+  #mode: CodexMode | null;
   #model: string;
   #effort: string | null;
   readonly #models: CodexModel[];
@@ -206,6 +216,14 @@ export class AppServerSession implements LiveSession<CodexMode> {
   /** The reasoning effort it runs at (null: its model's default), for 'started'. */
   get effort(): string | null {
     return this.#effort;
+  }
+
+  /** The mode it chose, or the preset Codex reports for the user's own policies. */
+  get mode(): CodexMode | null {
+    if (this.#mode !== null) return this.#mode;
+    return this.#thread.sandbox === undefined || this.#thread.approval === undefined
+      ? null
+      : presetOf(this.#thread.sandbox, this.#thread.approval);
   }
 
   send(message: UserMessage): Promise<void> {
@@ -374,26 +392,30 @@ export class AppServerSession implements LiveSession<CodexMode> {
   /** Asks Codex for a turn of the thread, with the session's settings. */
   async #start(turn: Turn, input: UserInput[], clientId?: string): Promise<void> {
     if (!(await this.#mayUsePlan(turn))) return;
-    const settings = modeSettings(this.#mode);
+    const settings = this.#mode === null ? undefined : modeSettings(this.#mode);
     const result = await this.#server.request('turn/start', {
       threadId: this.#thread.id,
       input,
       ...(clientId === undefined ? {} : { clientUserMessageId: clientId }),
       model: this.#model,
       ...(this.#effort === null ? {} : { effort: this.#effort }),
-      approvalPolicy: settings.approvalPolicy,
-      sandboxPolicy: sandboxPolicy(
-        settings.sandbox,
-        this.#policies.get(policyKind(settings.sandbox)),
-      ),
-      collaborationMode: {
-        mode: settings.plan ? 'plan' : 'default',
-        settings: {
-          model: this.#model,
-          reasoning_effort: this.#effort,
-          developer_instructions: null,
-        },
-      },
+      ...(settings === undefined
+        ? {}
+        : {
+            approvalPolicy: settings.approvalPolicy,
+            sandboxPolicy: sandboxPolicy(
+              settings.sandbox,
+              this.#policies.get(policyKind(settings.sandbox)),
+            ),
+            collaborationMode: {
+              mode: settings.plan ? 'plan' : 'default',
+              settings: {
+                model: this.#model,
+                reasoning_effort: this.#effort,
+                developer_instructions: null,
+              },
+            },
+          }),
     });
     this.#bind(turn, text(property(property(result, 'turn'), 'id')));
   }
@@ -712,7 +734,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   #status(): string {
     const model = this.#models.find((m) => m.value === this.#model);
     const effort = this.#effort ?? model?.defaultEffort;
-    const settings = modeSettings(this.#mode);
+    const settings = this.#mode === null ? undefined : modeSettings(this.#mode);
     const login =
       this.#login.kind === 'apiKey'
         ? 'an API key'
@@ -725,7 +747,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       '**Codex status**',
       '',
       `- Model: ${model?.label ?? this.#model}${effort === undefined ? '' : ` (${effortChoice(effort).label.toLowerCase()} effort)`}`,
-      `- Approvals: ${settings.approvalPolicy} · Sandbox: ${settings.sandbox}${settings.plan ? ' · Plan mode' : ''}`,
+      `- Approvals: ${settings?.approvalPolicy ?? text(this.#thread.approval) ?? 'Your default'} · Sandbox: ${settings?.sandbox ?? text(property(this.#thread.sandbox, 'type')) ?? 'Your default'}${settings?.plan === true ? ' · Plan mode' : ''}`,
       `- Folder: ${this.#places.cwd}`,
       `- AGENTS.md: ${this.#thread.instructions.length === 0 ? 'none' : this.#thread.instructions.join(', ')}`,
       `- Thread: ${this.#thread.id}`,

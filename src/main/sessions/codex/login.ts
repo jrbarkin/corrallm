@@ -1,3 +1,4 @@
+import type { Consent, Distribution } from '../adapter';
 import type { SessionEvent } from '../../../shared/session';
 import { output } from '../transcript';
 
@@ -25,14 +26,6 @@ export type CodexLogin =
   /** Another provider's (Amazon Bedrock, or one that needs no OpenAI login at all). */
   | { kind: 'other'; type: string }
   | { kind: 'none' };
-
-/**
- * How a build of corrallm is offered: an app the user runs locally ('local': the app as it is
- * built by default, for personal or open-source use), or a commercial or hosted product, which
- * OpenAI does not allow to run Codex on a ChatGPT login. Set when building, with
- * CORRALLM_DISTRIBUTION (vite.main.config.mts).
- */
-export type Distribution = 'local' | 'commercial' | 'hosted';
 
 /** The login an account/read result says Codex has (`{ account, requiresOpenaiAuth }`). */
 export function codexLogin(result: unknown): CodexLogin {
@@ -80,19 +73,8 @@ export function appServerRefusal(
   }
 }
 
-/**
- * The user's say on running the App Server connection on their ChatGPT plan, kept for good (main's
- * settings): asked when a session first needs it, unless they allowed it already.
- */
-export interface PlanConsent {
-  /** Whether they allowed it for good. */
-  given(): Promise<boolean>;
-  /** They allowed it for good ("don't ask again"). */
-  give(): Promise<void>;
-}
-
 /** Nothing kept: every session asks. */
-export const ASK_EACH_SESSION: PlanConsent = {
+export const ASK_EACH_SESSION: Consent = {
   given: () => Promise.resolve(false),
   give: () => Promise.resolve(),
 };

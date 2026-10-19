@@ -59,7 +59,7 @@ export type SessionAction =
    */
   | { type: 'refuse'; id: string }
   /** The mode, model or effort: chosen by the user, or as the session says. */
-  | { type: 'mode'; mode: Mode }
+  | { type: 'mode'; mode: Mode | null }
   | { type: 'model'; model: string }
   | { type: 'effort'; effort: string | null }
   /** A connected session runs, started with the agent's settings `settings`; or none (undefined). */
@@ -72,7 +72,7 @@ export type SessionAction =
       type: 'connected';
       models: readonly ModelChoice[];
       model: string | null;
-      mode: Mode;
+      mode: Mode | null;
       modes?: readonly Mode[];
       effort?: string | null;
     }

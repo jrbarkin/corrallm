@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FirstRuns } from './first-run';
-import type { FirstRunTurn } from './first-run';
+import type { FirstRunTurn } from '../terminal/first-run';
 
 /** Whether a turn may start: now, or once its wait has resolved (by the time this settles). */
 async function started(turn: FirstRunTurn): Promise<boolean> {

@@ -22,27 +22,26 @@ import type { ProgramStatus } from './status';
 import { ENTER } from './typing';
 
 /*
- * A Terminal session: a CLI's own interactive terminal (Claude Code's, Codex's) in a
+ * A Terminal session: a CLI's own interactive terminal in a
  * pseudo-terminal, which the agent's view shows as it is (every feature of the CLI works there, as
  * the user knows it), while corrallm follows it to orchestrate it: it knows when the session
- * works, waits on the user, or is done, from what the CLI reports on its screen (Claude Code's
- * Program Status reports: status.ts; or its window title) and what its hooks tell (hooks.ts); it
+ * works, waits on the user, or is done, from what the CLI reports on its screen (Program Status
+ * reports: status.ts; or its window title) and what its hooks tell (hooks.ts); it
  * types the queue's messages into the prompt, and hears each turn end. What differs between CLIs
  * (their command line, how they report, their prompt, their hooks) is their TerminalCli's
- * (cli.ts: Claude Code's is claude-code.ts).
+ * (cli.ts).
  *
  * A turn, as corrallm sees it, starts with a message corrallm sends, or with the CLI starting to
  * work on its own (a prompt the user typed in the terminal, a background task reporting back), and
  * lasts until the CLI has taken every message corrallm sent in it and stopped working. corrallm
  * types a message only once the prompt is ready: the CLI idle (or done), and nothing the user
- * typed in the prompt; meanwhile, a session kept from it by a dialog (as Claude Code's folder
- * trust prompt) or by the user's draft is waiting on the user.
+ * typed in the prompt; meanwhile, a session kept from it by a dialog or by the user's draft is waiting on the user.
  *
  * What the CLI asks the user in its terminal is listed outside it ('asking'), never answered: its
- * hooks may tell what it is about to ask (Claude Code's: what a permission prompt is for, its
- * questions and a plan to approve, just before it shows them); its reports say when it waits on
+ * hooks may tell what it is about to ask (what a permission prompt is for, its questions and a
+ * plan to approve, just before it shows them); its reports say when it waits on
  * the user (and, in a word, for what), and when it goes on (the user answered, in the terminal).
- * Its folder trust dialog (Claude Code's, the first time it runs in a folder) is read from its
+ * Its folder trust dialog, before it runs in a new folder, is read from its
  * screen, turn or not: nothing else tells it.
  *
  * A CLI that may ask whether to trust the folder starts in its turn (first-run.ts): while another
@@ -140,7 +139,7 @@ interface Link {
 }
 
 export interface TerminalSessionDeps<M extends SessionMode = PermissionMode> {
-  /** The CLI's executable (the user's `claude`, `codex`). */
+  /** The CLI's executable, installed by the user. */
   executable: string;
   /** What is particular to the CLI (cli.ts). */
   cli: TerminalCli<M>;
@@ -175,7 +174,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #id: string | null;
   /** Whether its CLI resumes a session it may not find (then it starts afresh). */
   #resuming: boolean;
-  #mode: M;
+  #mode: M | null;
   #registration: HookRegistration | undefined;
   #settingsDir: string | undefined;
   #pty: Pty | undefined;
@@ -254,8 +253,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       throw new TypeError('Expected a UUID session id');
     }
     this.#resuming = spec.resume !== null;
-    // Until its hooks say otherwise: the CLI's own default, if the user's applies.
-    this.#mode = spec.mode ?? deps.cli.defaultMode;
+    this.#mode = spec.mode;
     this.#screen = this.#newScreen();
   }
 
@@ -492,8 +490,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       !this.#reporting &&
       this.#cli.resumeFailed(this.#screen.text())
     ) {
-      // Its transcript is gone (or it never had one: no message was sent): it starts afresh (Claude
-      // Code under the same id).
+      // Its transcript is gone (or it never had one: no message was sent): it starts afresh.
       this.#resuming = false;
       this.#screen.dispose();
       this.#screen = this.#newScreen();
@@ -667,8 +664,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #ready(): boolean {
     const draft = this.#cli.draft(this.#screen);
     if (draft !== undefined && draft !== '') return false;
-    // Without reports (an older Claude Code), its prompt on screen says it is ready; a CLI whose
-    // reports leave out some dialogs (Codex's) needs its prompt on screen as well.
+    // Without reports, its prompt on screen says it is ready; a CLI whose reports leave out
+    // some dialogs needs its prompt on screen as well.
     if (!this.#reporting) return draft === '';
     return !busy(this.#state) && (draft === '' || !this.#cli.waitsForPrompt);
   }
@@ -717,7 +714,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * Waits until the CLI's prompt shows the end of the message (`text`), at most `timing.echo`: it
    * has read those keys. A CLI that reads keys late (TerminalCli.waitsForEcho) takes an Enter read
    * in one go with keys before it for part of a paste, not a submit: keys pile up so while it is
-   * busy (Claude Code just after its folder trust dialog, or as a turn ends), and the message would
+   * busy (just after a folder trust dialog, or as a turn ends), and the message would
    * stay in the prompt.
    */
   async #shown(text: string, typing: { stopped: boolean }): Promise<void> {
@@ -966,8 +963,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /**
    * What the CLI asks the user now. While it waits on them: what its hooks told just before (or,
    * if they told nothing, what it waits for in its report's words, or its notification's, or its
-   * CLI's). It may tell without waiting: what a notification says it needs. Without reports (an
-   * older Claude Code), what its hooks told, until the turn ends.
+   * CLI's). It may tell without waiting: what a notification says it needs. Without reports,
+   * what its hooks told, until the turn ends.
    */
   #asking(): TerminalAsk[] {
     if (this.#exited) return [];
@@ -1000,7 +997,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   // ---- Usage.
 
-  /** What its CLI gave its status line (Claude Code's): its usage limits go to main's readings. */
+  /** What its CLI gave its status line: its usage limits go to main's readings. */
   #statusLine(input: HookEvent): void {
     if (this.#exited || this.#closing) return;
     const windows = this.#cli.statusLine?.(input);
@@ -1008,8 +1005,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   }
 
   /**
-   * Reads its account's usage, where its CLI reads it apart from its terminal (Codex's: a private
-   * app server), as it starts and after each turn: what it says goes to main's readings.
+   * Reads its account's usage, where its CLI reads it apart from its terminal, as it starts and after each turn: what it says goes to main's readings.
    */
   #readUsage(): void {
     const usage = this.#deps.usage;

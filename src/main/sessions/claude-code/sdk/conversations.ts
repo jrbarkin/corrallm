@@ -6,7 +6,7 @@ import {
   listSessions as listKept,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import type { PastSession } from '../../../shared/session';
+import type { KeptConversation } from '../../adapter';
 
 /*
  * The conversations Claude Code keeps for a folder: the transcripts its CLI writes, whichever
@@ -19,9 +19,6 @@ import type { PastSession } from '../../../shared/session';
 const LIMIT = 50;
 /** The longest title shown, in characters. */
 const TITLE_LENGTH = 120;
-
-/** A conversation kept for a folder, as /resume lists it (which is an agent's own is not its to say). */
-export type KeptConversation = Omit<PastSession, 'current'>;
 
 export interface ConversationsDeps {
   /** The Agent SDK's session functions; fakes in tests. */

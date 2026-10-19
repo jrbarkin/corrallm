@@ -19,9 +19,9 @@ import type {
   ToolProgress,
   ToolStatus,
   TurnResult,
-} from '../../../shared/session';
+} from '../../../../shared/session';
 import { claudeFailure, isLoginError } from '../claude-errors';
-import { notice, resetTime } from '../transcript';
+import { notice, resetTime } from '../../transcript';
 import type { Places } from './tools';
 import { output, property, resultDetail, resultText, text, toolSummary } from './tools';
 
@@ -188,8 +188,8 @@ export class Translator {
     this.#model = model;
   }
 
-  setMode(mode: PermissionMode): void {
-    this.#mode = mode;
+  setMode(mode: PermissionMode | null): void {
+    this.#mode = mode ?? undefined;
   }
 
   /**

@@ -1,7 +1,8 @@
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../shared/session';
-import type { CodexMode, ModelChoice, SettingsOptions } from '../../../shared/session';
+import type { ModelChoice, SettingsOptions } from '../../../shared/session';
 import { property, text } from '../transcript';
 import { readModels } from './app-server/session';
+import { presetOf } from './app-server/protocol';
 import { askAppServer, startAppServer } from './rpc';
 import type { AppServer, AppServerOptions } from './rpc';
 import { folderTrust } from './terminal/hooks';
@@ -74,19 +75,10 @@ export async function codexOptions(
     defaults: {
       model: model !== undefined && MODEL_PATTERN.test(model) ? model : null,
       effort: effort !== undefined && EFFORT_PATTERN.test(effort) ? effort : null,
-      mode: presetOf(property(config, 'sandbox_mode'), property(config, 'approval_policy')),
+      mode:
+        config === undefined
+          ? null
+          : presetOf(property(config, 'sandbox_mode'), property(config, 'approval_policy')),
     },
   };
-}
-
-/**
- * Which of Codex's /permissions presets a config's sandbox and approvals are, or null for none of
- * them. Neither set is Codex's Default.
- */
-function presetOf(sandbox: unknown, approvals: unknown): CodexMode | null {
-  if (sandbox === 'read-only') return 'read-only';
-  if (sandbox === 'danger-full-access') return approvals === 'never' ? 'full-access' : null;
-  return approvals === null || approvals === undefined || approvals === 'on-request'
-    ? 'auto'
-    : null;
 }

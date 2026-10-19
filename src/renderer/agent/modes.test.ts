@@ -32,10 +32,10 @@ describe('modes', () => {
     }
   });
 
-  it('shows a mode its agent has, or else the one it starts in', () => {
+  it('shows a known mode by its label, and never substitutes an adapter’s default', () => {
     expect(modeOf('codex', 'full-access').label).toBe('Full access');
-    expect(modeOf('codex', 'acceptEdits').label).toBe('Default');
-    expect(modeOf('claude-code', 'read-only').label).toBe('Manual');
+    expect(modeOf('codex', 'acceptEdits').label).toBe('acceptEdits');
+    expect(modeOf('claude-code', 'read-only').label).toBe('read-only');
     expect(modeOf('claude-code', 'plan').label).toBe('Plan');
   });
 });

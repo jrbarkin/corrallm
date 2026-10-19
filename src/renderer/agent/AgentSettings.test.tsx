@@ -113,6 +113,29 @@ const open = () => {
 };
 
 describe('shared agent settings', () => {
+  it('shows the adapter’s own effort labels in the settings sheet', async () => {
+    const supplied = (): Promise<SettingsOptions> =>
+      Promise.resolve({
+        models: [
+          { value: 'test', label: 'Test', efforts: [{ value: 'high', label: 'Careful work' }] },
+        ],
+        defaults: { model: 'test', effort: 'high', mode: null },
+      });
+    render(
+      <SettingsMenu
+        inline
+        adapter="claude-code"
+        connection="claude-code.sdk"
+        settings={{}}
+        options={supplied}
+        running={undefined}
+        working={false}
+      />,
+    );
+    const effort = await screen.findByRole('button', { name: 'Effort: Default (Careful work)' });
+    fireEvent.click(effort);
+    expect(screen.getByRole('menuitemradio', { name: 'Careful work' })).toBeTruthy();
+  });
   it('shows the selected adapter’s logo in the CLI choice', () => {
     render(<Editor />);
     const { panel } = open();

@@ -9,7 +9,9 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { isPermissionMode } from '../../../shared/session';
+import { CLAUDE_EFFORTS } from '../efforts';
+
+import { isPermissionMode } from '../../../../shared/session';
 import type {
   FilesRewind,
   McpChange,
@@ -21,8 +23,8 @@ import type {
   SlashCommand,
   UserMessage,
   TurnResult,
-} from '../../../shared/session';
-import type { LiveSession, SessionHost } from '../connector';
+} from '../../../../shared/session';
+import type { LiveSession, SessionHost } from '../../connector';
 import type { Inbox } from './inbox';
 import { mcpServer } from './mcp';
 import { displayPath } from './tools';
@@ -39,17 +41,6 @@ import type { Translator } from './translate';
  * ends with the CLI's result for the message that started it.
  */
 
-/**
- * Claude Code's /effort levels, least to most, with what its effort menu says of each (as the
- * picker offers them, where a model takes one).
- */
-export const CLAUDE_EFFORTS: Readonly<Record<EffortLevel, string>> = {
-  low: 'Quick, straightforward implementation',
-  medium: 'Balanced approach with standard testing',
-  high: 'Comprehensive implementation with extensive testing',
-  xhigh: 'Extended reasoning with thorough analysis',
-  max: 'Maximum capability with deepest reasoning (this session only)',
-};
 const CLAUDE_EFFORT_LEVELS = Object.keys(CLAUDE_EFFORTS) as EffortLevel[];
 
 /** How long after a plan is approved the CLI may take to leave plan mode, before the mode is set. */
@@ -73,7 +64,7 @@ export interface SdkSessionParts {
   /** What the CLI has written to stderr lately. */
   stderr: Stderr;
   /** The mode it starts in. */
-  mode: PermissionMode;
+  mode: PermissionMode | null;
   /** Where it works, to name the files a rewind restores. */
   places: Places;
   /** What the CLI's settings say it does with a message from another session, if they say. */
@@ -116,7 +107,7 @@ export class SdkSession implements LiveSession {
   readonly #peers: PeerMessages | undefined;
   /** Messages sent whose turn has not ended: the CLI's uuid for each, and the renderer's id. */
   readonly #pending = new Map<string, string>();
-  #mode: PermissionMode;
+  #mode: PermissionMode | null;
   #interrupting = false;
   #closing = false;
   #sessionId: string | undefined;
@@ -356,7 +347,8 @@ export class SdkSession implements LiveSession {
       this.#host.emit({ type: 'commands', commands: SdkSession.commands(message.commands) });
     }
     for (const event of this.#translator.translate(message)) {
-      if (event.type === 'mode' && isPermissionMode(event.mode)) this.#mode = event.mode;
+      if (event.type === 'mode' && event.mode !== null && isPermissionMode(event.mode))
+        this.#mode = event.mode;
       this.#host.emit(event);
     }
     if (

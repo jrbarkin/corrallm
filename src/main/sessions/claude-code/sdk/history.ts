@@ -1,6 +1,6 @@
 import type { SDKMessage, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 
-import type { SessionEvent, TurnResult } from '../../../shared/session';
+import type { SessionEvent, TurnResult } from '../../../../shared/session';
 import type { Places } from './tools';
 import { property, text } from './tools';
 import { Translator } from './translate';

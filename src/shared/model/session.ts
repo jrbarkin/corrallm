@@ -47,8 +47,7 @@ export type {
  */
 
 /**
- * When the agent asks before acting: its CLI's modes (Claude Code's permission modes, by its
- * settings' names; Codex's permission presets and plan mode).
+ * A native mode in which the agent asks before acting.
  */
 export type Mode = SessionMode;
 
@@ -177,7 +176,8 @@ export interface Session {
   status: 'idle' | 'working' | 'waiting';
   /** Messages sent while it works, sent in order once it is idle. */
   queued: { id: string; text: string; images?: MessageImage[] }[];
-  mode: Mode;
+  /** Its reported mode, or null until the native session says. */
+  mode: Mode | null;
   /** The model picked for it; null for its agent's default. */
   model: string | null;
   /**
@@ -267,7 +267,7 @@ export const NEW_SESSION: Session = {
   entries: [],
   status: 'idle',
   queued: [],
-  mode: 'manual',
+  mode: null,
   model: null,
 };
 

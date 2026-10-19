@@ -1,7 +1,7 @@
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 
-import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../shared/session';
-import type { PermissionMode } from '../../../shared/session';
+import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../../shared/session';
+import type { PermissionMode } from '../../../../shared/session';
 import { corrallmMode } from './translate';
 
 /** What the CLI's settings say, as far as corrallm reads them. */
@@ -39,7 +39,7 @@ interface WithSettings {
  * local and managed settings, merged, as `effective`, and what it will use, as `applied`), for the
  * user's own default mode, whether bypassing permissions is turned off, the model and effort it
  * starts with, and what it does with a message from another session. A CLI or SDK that can't say,
- * or an answer of another shape, says nothing: Manual, bypassing offered, the account's default
+ * or an answer of another shape, leaves the mode unknown, bypassing offered, the account's default
  * model, and messages from other sessions taken as the CLI takes them by default.
  */
 export async function modeSettings(query: Query): Promise<ModeSettings> {
@@ -53,7 +53,10 @@ export async function modeSettings(query: Query): Promise<ModeSettings> {
   const effective = field(answer, 'effective');
   const applied = field(answer, 'applied');
   const permissions = field(effective, 'permissions');
-  const defaultMode = corrallmMode(field(permissions, 'defaultMode'));
+  const nativeMode = field(permissions, 'defaultMode');
+  const defaultMode =
+    corrallmMode(nativeMode) ??
+    (effective !== undefined && nativeMode === undefined ? 'manual' : undefined);
   const model = matching(field(effective, 'model'), MODEL_PATTERN);
   const appliedModel = matching(field(applied, 'model'), MODEL_PATTERN);
   const effort =

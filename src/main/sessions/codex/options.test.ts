@@ -68,6 +68,11 @@ describe('codexOptions', () => {
       'gpt-5.6-luna',
     ]);
     expect(models[0]).toMatchObject({ label: 'GPT-6.1-Sol', defaultEffort: 'low' });
+    for (const model of models)
+      for (const effort of model.efforts ?? []) {
+        expect(typeof effort.label).toBe('string');
+        expect(effort.label.trim()).not.toBe('');
+      }
     expect(models[3]?.efforts?.map((e) => e.value)).toEqual([
       'low',
       'medium',
