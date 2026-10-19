@@ -14,7 +14,10 @@ import type { WindowId } from './host';
 
 declare const human: unique symbol;
 
-/** You, at a window (or main's own native UI: 'host'). Made only by `asHuman`. */
+/**
+ * You, at a window (or main's own native UI: 'host'). Made only by core/gui.ts, for a window's port
+ * main made after its sender check.
+ */
 export interface HumanCaller {
   readonly kind: 'human';
   readonly window: WindowId | 'host';
@@ -49,14 +52,6 @@ export type TokenCaller = AgentCaller | OutsideCaller;
 /** Whether `caller` is one a token or a session's pipe identifies, as any but you is. */
 export function isTokenCaller(caller: Caller): caller is TokenCaller {
   return caller.kind !== 'human';
-}
-
-/**
- * You, at `window`. Only the core's side of a window's port calls this (core/gui.ts, B8), for a
- * port main made after its sender check: never for anything a token, a page or an agent sends.
- */
-export function asHuman(window: WindowId | 'host'): HumanCaller {
-  return { kind: 'human', window } as HumanCaller;
 }
 
 /** The caller's party now: an agent is a lead only while `isLead` says so (none is by default). */

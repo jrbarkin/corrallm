@@ -10,7 +10,9 @@ import { Closing } from './closing';
 import { lockProfile, ProfileLocked } from './core/lock';
 import { PROD_CSP } from './csp';
 import { ProjectFiles } from './files';
+import { forkCore } from './host/core-process';
 import { LinkOpener } from './host/links';
+import { CorePorts } from './host/ports';
 import { FileRevealer } from './host/reveal';
 import { hostServices } from './host/services';
 import { Windows } from './host/windows';
@@ -123,6 +125,27 @@ function main(): void {
       };
       app.once('will-quit', release);
       process.once('exit', release);
+
+      // The core process (core/entry.ts), forked before the first window: each window's preload
+      // asks main for its port to it (core:connect, host/ports.ts). Until main's services move into
+      // it, main keeps the profile's stores, and the core serves only what reads none (app.info).
+      const core = forkCore({
+        entry: path.join(__dirname, 'core.cjs'),
+        output: (line, stream) => {
+          if (stream === 'stdout') console.log(`[core] ${line}`);
+          else console.error(`[core] ${line}`);
+        },
+        check: devServerUrl !== undefined,
+        host: hostServices,
+      });
+      core.link.request('init', { app: { name: app.getName(), version: app.getVersion() } }).then(
+        (answer) => {
+          if (!answer.ok) console.error('corrallm’s core could not start:', answer.error.message);
+        },
+        (error: unknown) => {
+          console.error('corrallm’s core could not start:', error);
+        },
+      );
 
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {
@@ -243,6 +266,7 @@ function main(): void {
         sessions,
         clis,
         usage,
+        core: new CorePorts(core),
       });
 
       // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.

@@ -5,6 +5,7 @@ import { app } from 'electron';
 import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from './core/selftest';
 import type { CheckResult } from './core/selftest';
 import { forkCore } from './host/core-process';
+import { hostServices } from './host/services';
 
 /**
  * Diagnostic only, not feature code: proves, in the app as built (including a packaged, fused
@@ -60,6 +61,7 @@ async function checkCoreProcess(packaged: boolean): Promise<boolean> {
       else console.error(`[native-selftest] core printed: ${line}`);
     },
     check: MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined,
+    host: hostServices,
   });
   try {
     const memory = await new Promise<string>((resolve, reject) => {

@@ -30,25 +30,27 @@ describe('App', () => {
     Reflect.deleteProperty(window, 'api');
   });
 
-  it('shows the version returned by window.api.ping()', async () => {
-    const ping = vi.fn<AppApi['ping']>().mockResolvedValue('corrallm 0.1.0');
-    stubApi({ ping });
+  it('shows which corrallm this is, as the core says (app.info)', async () => {
+    const appInfo = vi
+      .fn<AppApi['appInfo']>()
+      .mockResolvedValue({ name: 'corrallm', version: '0.1.0' });
+    stubApi({ appInfo });
 
     render(<App />);
 
-    const result = screen.getByTestId('ping-result');
+    const result = screen.getByTestId('app-info');
     await waitFor(() => {
       expect(result.dataset.status).toBe('ok');
     });
     expect(result.textContent).toBe('corrallm 0.1.0');
-    expect(ping).toHaveBeenCalled();
+    expect(appInfo).toHaveBeenCalled();
   });
 
   it('reads the usage readings and rules main keeps, and hears their changes', async () => {
     const getUsage = vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} });
     const onUsageChanged = vi.fn<AppApi['onUsageChanged']>(() => () => undefined);
     stubApi({
-      ping: vi.fn<AppApi['ping']>().mockResolvedValue('corrallm 0.1.0'),
+      appInfo: vi.fn<AppApi['appInfo']>().mockResolvedValue({ name: 'corrallm', version: '0.1.0' }),
       getUsage,
       onUsageChanged,
     });
@@ -61,15 +63,15 @@ describe('App', () => {
     expect(onUsageChanged).toHaveBeenCalled();
   });
 
-  it('shows an error when the ping fails', async () => {
-    stubApi({ ping: vi.fn<AppApi['ping']>().mockRejectedValue(new Error('boom')) });
+  it('says so when the core can’t say', async () => {
+    stubApi({ appInfo: vi.fn<AppApi['appInfo']>().mockRejectedValue(new Error('boom')) });
 
     render(<App />);
 
-    const result = screen.getByTestId('ping-result');
+    const result = screen.getByTestId('app-info');
     await waitFor(() => {
       expect(result.dataset.status).toBe('error');
     });
-    expect(result.textContent).toBe('Ping failed: boom');
+    expect(result.textContent).toBe('corrallm’s core didn’t answer: boom');
   });
 });

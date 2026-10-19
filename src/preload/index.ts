@@ -1,9 +1,14 @@
 // Runs sandboxed: only 'electron' may be imported, and Vite bundles this into one CJS file.
-// Never expose ipcRenderer itself; expose one typed function per contract channel, and one per
-// event that listens for it (never passing Electron's event object on).
+// Never expose ipcRenderer itself, the core's port or a function that takes a channel or an
+// operation; expose one typed function per contract channel, one per event that listens for it
+// (never passing Electron's event object on), and one per GUI operation, generated from the
+// registry's fixed list (GUI_OPS), each calling its own operation over the window's port.
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 
+import { GUI_OPS } from '../shared/api/surface';
+import { guiFunction } from '../shared/gui-link';
+import type { GuiApi } from '../shared/gui-link';
 import {
   API_CHANNELS,
   API_EVENTS,
@@ -14,6 +19,7 @@ import {
   type IpcEventArgs,
   type IpcResult,
 } from '../shared/ipc';
+import { connectCore } from './core';
 
 function invoke<C extends IpcChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
   return ipcRenderer.invoke(channel, ...args) as Promise<IpcResult<C>>;
@@ -33,8 +39,15 @@ function listen<E extends IpcEvent>(
   };
 }
 
+const core = connectCore();
+
+/** A function per GUI operation, by its camel-cased name (app.info → appInfo). */
+const ops = Object.fromEntries(
+  GUI_OPS.map((op) => [guiFunction(op), (args?: unknown) => core.call(op, args)]),
+) as GuiApi;
+
 const api: AppApi = {
-  ping: () => invoke(API_CHANNELS.ping),
+  ...ops,
   catalog: () => invoke(API_CHANNELS.catalog),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),

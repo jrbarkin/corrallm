@@ -5,10 +5,7 @@ const { handle } = vi.hoisted(() => ({
   handle:
     vi.fn<(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void>(),
 }));
-vi.mock('electron', () => ({
-  app: { getName: () => 'corrallm', getVersion: () => '0.1.0' },
-  ipcMain: { handle },
-}));
+vi.mock('electron', () => ({ ipcMain: { handle } }));
 
 import { newCanvasId } from '../shared/canvas';
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
@@ -119,6 +116,7 @@ function fakeServices() {
       setRule: vi.fn<IpcServices['usage']['setRule']>(),
       simulate: vi.fn<IpcServices['usage']['simulate']>(),
     },
+    core: { connect: vi.fn<IpcServices['core']['connect']>() },
   };
 }
 
@@ -136,11 +134,33 @@ function invoke(name: string, args: unknown[], sender: unknown = { id: 7 }) {
   return listenerFor(name)({ senderFrame: frame(TRUSTED_ORIGIN), sender }, ...args);
 }
 
-const pingListener = () => listenerFor('app:ping');
-
 beforeEach(() => {
   handle.mockReset();
   services = fakeServices();
+});
+
+describe('core:connect handler', () => {
+  it('hands the trusted window that asks a port to the core', () => {
+    const sender = { id: 7 };
+    expect(invoke('core:connect', [], sender)).toBeNull();
+    expect(services.core.connect).toHaveBeenCalledExactlyOnceWith(sender);
+  });
+
+  it.each([
+    ['a null sender frame', null],
+    ['another origin', frame('https://evil.example')],
+    ['a subframe', frame(TRUSTED_ORIGIN, { parent: {} })],
+    ['a detached frame', frame(TRUSTED_ORIGIN, { detached: true })],
+  ])('refuses %s, handing it no port', (_label, senderFrame) => {
+    const listener = listenerFor('core:connect');
+    expect(() => listener({ senderFrame, sender: { id: 7 } })).toThrow(/untrusted sender/);
+    expect(services.core.connect).not.toHaveBeenCalled();
+  });
+
+  it('takes no arguments', () => {
+    expect(() => invoke('core:connect', ['window 1'])).toThrow(/Expected no arguments/);
+    expect(services.core.connect).not.toHaveBeenCalled();
+  });
 });
 
 describe('catalog:get handler', () => {
@@ -150,41 +170,20 @@ describe('catalog:get handler', () => {
   });
 });
 
-describe('app:ping handler', () => {
-  it('returns the version string to the trusted renderer', () => {
-    const listener = pingListener();
-    const result = listener({ senderFrame: frame(TRUSTED_ORIGIN) });
-    expect(result).toMatch(/^corrallm 0\.1\.0 \(Electron .*, Chromium .*, Node .*\)$/);
-  });
-
-  it.each([
-    ['a null sender frame', null],
-    ['another origin', frame('https://evil.example')],
-    ['a subframe', frame(TRUSTED_ORIGIN, { parent: {} })],
-    ['a detached frame', frame(TRUSTED_ORIGIN, { detached: true })],
-  ])('rejects %s', (_label, senderFrame) => {
-    const listener = pingListener();
-    expect(() => listener({ senderFrame })).toThrow(/untrusted sender/);
-  });
-
-  it('rejects unexpected arguments', () => {
-    const listener = pingListener();
-    expect(() => listener({ senderFrame: frame(TRUSTED_ORIGIN) }, 'extra')).toThrow(
-      /Expected no arguments/,
-    );
-  });
-});
-
 describe('every channel', () => {
-  it.each(Object.values(API_CHANNELS))('%s rejects an untrusted sender', (channel) => {
-    const listener = listenerFor(channel);
-    expect(() => listener({ senderFrame: frame('https://evil.example') })).toThrow(
-      /untrusted sender/,
-    );
-    expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.links.open).not.toHaveBeenCalled();
-    expect(services.reveal.reveal).not.toHaveBeenCalled();
-  });
+  it.each([...Object.values(API_CHANNELS), 'core:connect'])(
+    '%s rejects an untrusted sender',
+    (channel) => {
+      const listener = listenerFor(channel);
+      expect(() => listener({ senderFrame: frame('https://evil.example') })).toThrow(
+        /untrusted sender/,
+      );
+      expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+      expect(services.links.open).not.toHaveBeenCalled();
+      expect(services.reveal.reveal).not.toHaveBeenCalled();
+      expect(services.core.connect).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('link:open handler', () => {

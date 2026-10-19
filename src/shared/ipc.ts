@@ -1,5 +1,6 @@
 import type { AdapterId, Catalog, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
+import type { GuiApi } from './gui-link';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
   FilesRewind,
@@ -24,8 +25,8 @@ import type { UsageRule, UsageState, UsageWindows } from './usage';
  *
  * Every channel is declared here once, mapping its name to the argument tuple the renderer
  * sends and the value main resolves with. Main registers a handler for every channel
- * (src/main/ipc.ts), the preload exposes each one on `window.api` (src/preload/index.ts), and
- * the renderer calls `window.api`. The compiler checks both that the three agree on types and
+ * (src/main/ipc.ts), the preload exposes each one on `window.api` (src/preload/index.ts; but
+ * core:connect, which it invokes itself), and the renderer calls `window.api`. The compiler checks both that the three agree on types and
  * that no channel is missing a handler or an `AppApi` method.
  *
  * Main also sends events to the renderer (`IpcEvents`): the preload exposes a function per event
@@ -34,8 +35,11 @@ import type { UsageRule, UsageState, UsageWindows } from './usage';
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 export interface IpcContract {
-  /** Round-trip check. Resolves with a human-readable version string. */
-  'app:ping': { args: []; result: string };
+  /**
+   * The preload's own, which it invokes as it loads and never exposes to the page: asks for the
+   * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
+   */
+  'core:connect': { args: []; result: null };
   /** What every adapter declares (src/shared/adapter.ts): the renderer loads it before it mounts. */
   'catalog:get': { args: []; result: Catalog };
   /** Restore the current named canvas or durable draft, without starting an agent. */
@@ -243,7 +247,6 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  * dropOnTerminal, which takes the dropped files).
  */
 export interface InvokeApi {
-  ping(): Promise<IpcResult<'app:ping'>>;
   catalog(): Promise<IpcResult<'catalog:get'>>;
   getRun(): Promise<IpcResult<'run:get'>>;
   saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
@@ -294,12 +297,14 @@ export interface EventApi {
   onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
 }
 
-/** The API the preload script exposes to the renderer as `window.api`. */
-export interface AppApi extends InvokeApi, EventApi {}
+/**
+ * The API the preload script exposes to the renderer as `window.api`: a function per channel and
+ * per event, and one per GUI operation, over the window's port to the core.
+ */
+export interface AppApi extends InvokeApi, EventApi, GuiApi {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
-  ping: 'app:ping',
   catalog: 'catalog:get',
   getRun: 'run:get',
   saveRun: 'run:save',
@@ -348,9 +353,12 @@ export const API_EVENTS = {
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;
-/** Fails to compile, naming the channel, if a contract channel has no `AppApi` method. */
+/**
+ * Fails to compile, naming the channel, if a contract channel has no `AppApi` method (but the
+ * preload's own, core:connect).
+ */
 export type UnexposedChannels = AssertNever<
-  Exclude<IpcChannel, (typeof API_CHANNELS)[keyof typeof API_CHANNELS]>
+  Exclude<IpcChannel, (typeof API_CHANNELS)[keyof typeof API_CHANNELS] | 'core:connect'>
 >;
 /** Fails to compile, naming the event, if an event has no `AppApi` function to listen for it. */
 export type UnexposedEvents = AssertNever<
