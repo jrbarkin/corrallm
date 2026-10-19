@@ -51,7 +51,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/agent/tools.ts': 1,
   'src/renderer/graph/GraphEditor.css': 4,
   'src/renderer/graph/Questions.tsx': 3,
-  'src/renderer/graph/agents.ts': 57,
+  'src/renderer/graph/agents.ts': 39,
   'src/shared/examples.ts': 7,
   'src/shared/examples/cross-check.corral': 2,
   'src/shared/examples/fan-out.corral': 4,

@@ -312,16 +312,20 @@ src/preload/    Preload script (sandboxed; may import only 'electron' and src/sh
                 camel-cased: app.info → appInfo), each a call over the window's port to the core,
                 which core.ts asks main for as it loads (core:connect) and keeps in a CoreLink.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts
-                api/client.ts unwraps GUI results in the renderer, preserving errors' code and
-                sentence across contextBridge; api/topics.ts mirrors topic state for
-                useSyncExternalStore, re-subscribing on a new core epoch. open-link.ts
+                api/bridge.ts unwraps GUI results, preserving errors' code and sentence across
+                contextBridge; api/client.ts awaits drafts before every GUI op and its returned
+                topic revisions before resolving a write. api/topics.ts mirrors immutable topic
+                state for useSyncExternalStore, re-subscribing on a new core epoch or a revision
+                gap; test-api.ts supplies a fake core and expectOneOp for gesture tests. open-link.ts
                 is where clicked links go (the core’s link.open, or link.reveal for a file:// link;
                 provided by App.tsx). catalog.ts holds the catalog the core gives (catalog.get), which
                 boot.ts loads before the app mounts (main.tsx), so the renderer's views read it at
                 once (catalog(), and its lookups: an adapter's connection, its view, what it
                 continues in; never the engine, which is given its own: src/shared/engine/catalog.ts).
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
-                     groups are type 'frame'. Pure graph operations in graph.ts, whose GraphNode
+                     groups are type 'frame'. Structure operations live in src/shared/model/structure.ts;
+                     graph.ts projects its GraphNode into model nodes and carries the results and selection
+                     hints back, preserving React Flow's measurements and view state. Its GraphNode
                      wraps the model's agent data (src/shared/model/canvas.ts): canvasNodes gives
                      the engine the model's nodes, graphOf draws a model canvas (what a file holds,
                      its groups sized to fit) and documentOf keeps a graph's (what a file saves);
@@ -340,11 +344,13 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      (QueueRepeat: steps, messages, waits and delays run in rounds until a
                      condition holds, at most `rounds`, then ask or go on; or, `until` a
                      RepeatEnds, going round with another agent's repeat) is one item holding
-                     others: findItem (model/queue.ts) finds an item at any depth, and graph.ts's
-                     operations reach inside through mapItems;
-                     automatic layout (dagre) in layout.ts. Stored edges are links (agents that can
+                     others: findItem (model/queue.ts) finds an item at any depth, and queue-ops.ts's
+                     edits reach its list by id; graph.ts calls those shared edits;
+                     automatic layout (dagre) in src/shared/model/layout.ts, through graph/layout.ts. Geometry comes from src/shared/model/geometry.ts;
+                     graph/geometry.ts adapts its sizes and pinned corners to React Flow measurements
+                     and drag state, preserving node identity when nothing changes. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
-                     the queues (work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
+                     the queues (src/shared/model/work.ts, opened in WorkDetail.tsx). Drawing an edge asks which
                      (ConnectMenu.tsx). Canvases save as .corral files (versioned JSON, version 2,
                      holding the canvas's id: see Canvas identity; format and validation in
                      src/shared/model/file.ts, which reads a CanvasDocument against the catalog, open/save bar in FileBar.tsx; an agent's
@@ -353,15 +359,15 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      templates, listed in src/shared/examples.ts. ExampleGallery.tsx reads their
                      fields and agent roles through templates.list; a test keeps
                      each one valid and written exactly as toFile writes it. A template may leave
-                     blanks ({{key}}, filled from its `fields`; src/shared/templates.ts) and leave agents' types
+                     blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts) and leave agents' types
                      open (no `adapter`: the default, or chosen when it is used; withAgents translates
-                     steps between types via EQUIVALENT_ACTIONS in agents.ts). The gallery's form
+                     steps between types by their catalog jobs through model/agent-ops.ts). The gallery's form
                      also chooses how each agent runs (withConnections): by default in a Terminal
                      by native default (`defaultConnection`); missing installed CLIs are labelled
                      without falling back to fake work. A template's tool steps say what
                      they are to do (`instruction`, which may hold blanks too), as does Codex's
                      /review: a test keeps it so. It opens as a new canvas or is inserted into this
-                     one as a group (insert.ts).
+                     one as a group (model/insert.ts through graph/insert.ts).
 src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
                      the agent's native questions and queue,
                      showing live manual submissions as read-only Message rows (model/queue.ts'
@@ -471,10 +477,21 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
                 references.ts (clears surviving queues when agents are deleted, returning what
-                changed in words; used by the renderer's deleteSelection),
+                changed in words; used by structure.ts's remove),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
                 members, links, an agent's name, its manager, its team and what it is nested
-                in), geometry.ts (the boxes' sizes, the group colours), file.ts (the .corral
+                in), geometry.ts (fixed CARD_SIZE, group colours, autosize, bounds, hit testing and
+                absolute positions over model nodes, with no DOM sizes; a view may provide its box
+                reader and writer), structure.ts (pure structure edits over CanvasDocument, with
+                explicit ids, caller-supplied new ids and default adapter, selection hints and
+                unchanged objects kept by reference), queue-ops.ts (add, remove, move by neighbour,
+                and a field change union, preserving text authorship), agent-ops.ts (adapter,
+                connection, settings and role edits, translating steps by catalog jobs), layout.ts
+                (dagre over model nodes, fitting groups from CARD_SIZE), insert.ts (inserts a
+                template as a group, optionally inside a parent, remapping node references),
+                templates.ts (fills blanks and chooses adapters and native connections from the
+                supplied catalog, preserving untouched nodes and queue items), work.ts
+                (the work arrows derived from agents' queues), file.ts (the .corral
                 format: a CanvasDocument read against the catalog, an agent naming no adapter
                 running the default it is given, and written back), words.ts (how the queue's
                 items, times and usage holds read, in what the run says and wherever they are
@@ -578,7 +595,7 @@ scripts/        corrallm.mjs (`pnpm corrallm`); check-linux.sh, the packaged Lin
 
 Queues: there is one queue component, QueueEditor.tsx. Every queue the app shows (an agent's own, the one shown beside it to pick from, the work panel between two agents, the lanes of All queues) is built from its rows (`QueueRow`), its end (`QueueEnd`) and its picking (`PickTask`), styled once in GraphEditor.css (cards at rest; what edits a task shows on the one pointed at; the drag handle always shows). Bind edits to an agent with `editsOf` (graph/edits.ts), word tasks with src/shared/model/words.ts, and mark them with `queueMarks` (queues/marks.ts) rather than adding another copy.
 
-Canvas text uses `src/renderer/useDraft.ts`: labels and group titles, agent names and roles, queue messages and instructions stay local while edited, committing on blur, single-line Enter or 600 ms idle. Escape cancels pending text; an unchanged field makes no graph change. Incoming changes leave a focused pending draft alone. Its window-wide `flushDrafts` commits pending fields and flushes React updates before another gesture reads the graph or starts work: pointer actions (drags and drops included), shortcuts, Run, the composer's Send, and shutdown's freeze/save. Text selection, clipboard shortcuts and multiline Enter stay with the field.
+Canvas text uses `src/renderer/useDraft.ts`: labels and group titles, agent names and roles, queue messages and instructions stay local while edited, committing on blur, single-line Enter or 600 ms idle. Escape cancels pending text; an unchanged field makes no graph change. Incoming changes leave a focused pending draft alone. Its window-wide `flushDrafts` commits pending fields and flushes React updates before another gesture reads the graph or starts work: pointer actions (drags and drops included), shortcuts, Run, the composer's Send, and shutdown's freeze/save. It also awaits commits still in flight (including those started on blur or idle); the GUI client awaits it before sending every operation and registers a draft's calls even if its UI callback returns void. A commit can send its own operation without awaiting itself. Text selection, clipboard shortcuts and multiline Enter stay with the field.
 
 The canvas's `arrange` setting is saved: absent in a `.corral` file means off, and only on is written. The renderer keeps it with the graph, applies automatic layout after its edits while on, and restores it when opening a canvas or its run. Agent cards have fixed dimensions equal to the model's `CARD_SIZE`, checked against the stylesheet by `graph/card.test.tsx`; long labels use an ellipsis, while badges and handles remain outside the card.
 
@@ -635,6 +652,8 @@ Every operation of corrallm's one API is defined once (`src/shared/api/`, Core S
 
 - By default an op is on both surfaces. One on a surface alone needs a `DEVIATIONS` row (`deviations.ts`) of one of the closed `REASONS`, or, until B11, an op the app doesn't host yet a line in `UNHOSTED` (`unhosted.ts`) naming the phase that will. A rule an op carries needs its row in `RULES` (`rules.ts`) and its check in the core.
 - The GUI’s global topics (`core/topics.ts`, `shared/api/topics.ts`) are `usage` and `settings` from B8: `topics.subscribe` returns `{ epoch, rev, state }`, then the port’s `topic(changes)` carries replacements in 16 ms batches, with topic revisions, a shared sequence, actor and time. `topics.unsubscribe` stops them; a port going forgets its subscriptions. Each read is dispatched through the op whose surface declares `reads` for that topic, so its audience and reach remain the one authorization path. Tokens get neither subscription op (D5, `transport`). The core announces its own UUID `epoch` on each port; `renderer/api/topics.ts` mirrors the latest immutable state for `useSyncExternalStore`, shares one subscription per observed topic, re-subscribes on a new epoch or a revision gap, and keeps changes that arrive ahead of a snapshot’s reply. T3c (`core/topics.test.ts`) checks the two topics against their reads, subscribed windows, unsubscribe and token refusal.
+- The renderer's B9 mirror also accepts `canvases`, `canvas:<id>` and `needs:<id>` (subscribed as `{ topic: 'canvas' | 'needs', canvas }`). Keyed `set`/`remove` changes preserve unchanged entities' objects; `replace` takes a whole topic's state. `whenAt(topic, rev)` holds a subscription until that revision arrives, even without a view listening. A GUI write resolves only after all its returned `revs` reach the mirror. Waiting writes fail on a core restart, rather than mistaking a new epoch's revisions for the old one's. The mirror's transport bypasses the client’s draft and revision barriers so subscriptions cannot deadlock a commit waiting for its change.
+- T6 (`main/gestures.test.ts`) scans production renderer calls: every GUI op without `reads` needs a call site or a reason in `renderer/api/gestures.ts`'s `NO_GESTURE`. `renderer/test-api.ts` records operations separately from transport subscriptions, feeds snapshots and changes, and supplies `expectOneOp` for each gesture's intent.
 - The tests that make 1:1 the default (Core Server §3.7): T1 and T2 (`shared/api/surface.test.ts`: the surface's rules, each also shown to catch a registry made wrong; `surface.snap.json` up to date), T3a (`core/transport.test.ts`: every op's fixtures through MCP's dispatch half and over HTTP answer byte for byte as `core.call` does, for the same caller, and every GUI op's through a window's port, for you), T3b (`core/callers.test.ts`: audience and tool lists agree, results alike but for `varies`, rules per party, and reach generated per op and party: each id in an op's valid arguments swapped for each one its `OutOfReach` world says a token party doesn't reach, which must be not-found; it fails an op taking a kind of id no valid argument names, or that the world says nothing of for a party in its audience), T7 and T8 (`boundaries.test.ts`, ESLint). Each runs on the registry and on the core's test registry.
 
 To add an operation:
@@ -682,7 +701,7 @@ What every adapter declares about the agent it runs is plain data, the catalog (
 
 - The ids: adapters `claude-code` and `codex`; connections `<adapter>.<name>`, in their adapter's order, the first its default (`claude-code.terminal`, `claude-code.sdk`; `codex.terminal`, `codex.app-server`); usage backends `claude-code` (Claude Code's Terminal spends it) and `codex` (both of Codex's), each with the windows `fiveHour` and `weekly`. They name everything stored (`.corral` files, the database's conversations, `settings.json`'s consents, `usage.json`, run checkpoints) and every IPC argument.
 - Each adapter's contract test (`<its folder>/adapter.test.ts`) pins its descriptor: its ids and connection order, each mode's `asks` and `rank`, each connection's `startModes`, `shellPrefix` and `usage`, its `logo` and `registerMcp`, and that each connection's `live` and `panels` match the methods of the LiveSession its connector starts. `adapters.test.ts` checks what holds for every adapter (unique ids of the right shape, start modes that ask, declared backends, a connector and an options reader for each) and keeps the renderer tests' copy (see Testing).
-- The core reads it in args.ts (a connection, an adapter, a mode a connection starts in, a usage backend), the manager (a connection's adapter and its modes) and usage.ts (the backends it keeps, in the app and in `createCore`; `usage.get`'s schema takes a backend by `ID_PATTERN`'s shape, since the registry names no adapter). The renderer gets it through `api.catalogGet()` (`catalog.get`) before it mounts (boot.ts) and reads it in usage.ts and catalog.ts's lookups, and reads files against it (`src/shared/model/file.ts`, as the core does); the engine (the run and the sessions) reads it through the `EngineCatalog` it is given (`src/shared/engine/catalog.ts`: an agent's adapter and connection, the adapter an agent naming none runs, its actions, the usage backend it spends, whether a connection starts in a mode, whether a mode never asks, a connection's label and a usage backend's name; `runCatalog` in agents.ts makes the renderer's, which its views also pass to the words they share with the run; the core makes its own, its default adapter the registry's `DEFAULT_ADAPTER`), never a table of its own nor the loaded catalog. The renderer's own tables (agents.ts: connections' words, actions, equivalent actions; agent/modes.ts: modes) remain until the UI reads the catalog throughout, kept equal to it by agents.test.ts (connections' words, actions), templates.test.ts (equivalent actions, by the actions' `job`s) and agent/modes.test.ts (modes, and the modes Shift+Tab cycles: those that ask); agents.ts' names (an agent's, its CLI's) are the UI's own words, not the catalog's `name`.
+- The core reads it in args.ts (a connection, an adapter, a mode a connection starts in, a usage backend), the manager (a connection's adapter and its modes) and usage.ts (the backends it keeps, in the app and in `createCore`; `usage.get`'s schema takes a backend by `ID_PATTERN`'s shape, since the registry names no adapter). The renderer gets it through `api.catalogGet()` (`catalog.get`) before it mounts (boot.ts) and reads it in usage.ts and catalog.ts's lookups, and reads files against it (`src/shared/model/file.ts`, as the core does); the engine (the run and the sessions) reads it through the `EngineCatalog` it is given (`src/shared/engine/catalog.ts`: an agent's adapter and connection, the adapter an agent naming none runs, its actions, the usage backend it spends, whether a connection starts in a mode, whether a mode never asks, a connection's label and a usage backend's name; `runCatalog` in agents.ts makes the renderer's, which its views also pass to the words they share with the run; the core makes its own, its default adapter the registry's `DEFAULT_ADAPTER`), never a table of its own nor the loaded catalog. The renderer's own tables (agents.ts: connections' words and actions; agent/modes.ts: modes) remain until the UI reads the catalog throughout, kept equal to it by agents.test.ts (connections' words, actions), model/agent-ops.test.ts (translation by the actions' `job`s) and agent/modes.test.ts (modes, and the modes Shift+Tab cycles: those that ask); agents.ts' names (an agent's, its CLI's) are the UI's own words, not the catalog's `name`.
 - Declared for what comes next: `logo` (an SVG document of the adapter's, drawn only as an `<img>` from a `data:` URL; today the UI guide's stand-in marks), `accent`, `words`, `registerMcp`, `continueIn`, `keys`, `images`, `panels`, `role`, `resume`, `list`, and actions' `job`s.
 
 ## Connected sessions

@@ -5,7 +5,7 @@ import { catalog } from '../catalog';
 import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
-import { placeholdersOf } from '../../shared/templates';
+import { placeholdersOf } from '../../shared/model/templates';
 import {
   findItem,
   isApproval,
@@ -16,7 +16,7 @@ import {
   isWait,
 } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
-import { workEdges } from './work';
+import { workEdges } from '../../shared/model/work';
 import { documentOf, graphOf } from './graph';
 
 describe.each(EXAMPLES)('the $name example', (example) => {

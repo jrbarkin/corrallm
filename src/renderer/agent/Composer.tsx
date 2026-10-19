@@ -210,7 +210,7 @@ export function Composer({
 
   const submit = (text = draft.trim()) => {
     if (text === '' && images.length === 0) return;
-    flushDrafts();
+    void flushDrafts();
     controls.send(
       text,
       images.map(({ mediaType, data }) => ({ mediaType, data })),
