@@ -257,6 +257,9 @@ function problems(registry: Registry): string[] {
     } else if (worst > MAX_REQUEST_BYTES) {
       found.push(`${name}: its input may take ${String(worst)} bytes, over MAX_REQUEST_BYTES`);
     }
+    if (surface.drains !== undefined && surface.scope !== 'canvas') {
+      found.push(`${name}: drains, but doesn’t run in a canvas’s scope`);
+    }
     if (surface.waits && (surface.kind !== 'read' || deviation !== 'transport')) {
       found.push(`${name}: waits, but isn't a read on MCP alone (the transport deviation)`);
     }
@@ -536,6 +539,13 @@ describe('T1: the surface’s rules', () => {
       'a long poll on both surfaces',
       registry({ 'test.poll': op({ access: both, kind: 'read', scope: 'none', waits: true }) }),
       "test.poll: waits, but isn't a read on MCP alone (the transport deviation)",
+    ],
+    [
+      'an op that drains, outside a canvas’s scope',
+      registry({
+        'test.close': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
+      }),
+      'test.close: drains, but doesn’t run in a canvas’s scope',
     ],
     [
       'a varies field not in the result',

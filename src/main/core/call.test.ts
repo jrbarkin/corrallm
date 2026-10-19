@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
-import { createDispatcher, OpFailure, scopeOf } from './call';
+import { withEnvelope } from '../../shared/api/define';
+import { createDispatcher, drainsOf, OpFailure, scopeOf } from './call';
 import type { DispatchOptions } from './call';
 import { partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
@@ -71,7 +72,60 @@ describe('scopeOf', () => {
   });
 });
 
+describe('drainsOf', () => {
+  it('drains every scope beneath a canvas’s, or those of the agents an op removes or switches', () => {
+    expect(drainsOf({ drains: 'canvas' }, { canvas: CANVAS, discard: true })).toEqual([
+      ['app', CANVAS],
+    ]);
+    expect(drainsOf({ drains: 'agents' }, { canvas: CANVAS, agent: 'helper' })).toEqual([
+      ['app', CANVAS, 'helper'],
+    ]);
+    expect(
+      drainsOf({ drains: 'agents' }, { canvas: CANVAS, nodes: ['helper', 'team'], links: [] }),
+    ).toEqual([
+      ['app', CANVAS, 'helper'],
+      ['app', CANVAS, 'team'],
+    ]);
+    expect(drainsOf({}, { canvas: CANVAS, agent: 'helper' })).toEqual([]);
+  });
+});
+
 describe('core.call', () => {
+  it('lets a draining op stop what holds an agent’s scope on its canvas, then run', async () => {
+    const registry = testRegistry();
+    const surface = {
+      access: { you: 'all' },
+      kind: 'command',
+      scope: 'canvas',
+      drains: 'canvas',
+    } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.close': surface },
+        ops: {
+          ...registry.ops,
+          'test.close': withEnvelope(surface, {
+            summary: 'Closes a canvas.',
+            input: z.strictObject({ canvas: z.uuid() }),
+            output: z.strictObject({ closed: z.boolean() }),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.close': () => ({ closed: true }) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const holding = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    expect(await core.call('test.close', { canvas: CANVAS }, CALLERS.you)).toEqual({
+      ok: true,
+      value: { closed: true },
+    });
+    expect(await holding).toEqual({ ok: true, value: { stopped: true } });
+  });
+
   it('answers with the op’s result, as a value', async () => {
     const { core } = setup();
     expect(await core.call('test.read', {}, CALLERS.you)).toEqual({

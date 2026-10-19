@@ -72,6 +72,12 @@ export interface Surface {
   /** It runs ahead of its scope's queue, aborting what it supersedes (an interrupt, a stop). */
   readonly preempt?: true;
   /**
+   * It removes or replaces what owns scopes beneath its canvas's (B9 Design §3): as it comes, it
+   * aborts and waits for what runs on the whole canvas ('canvas': closing or replacing it), or on
+   * the agents its arguments remove or switch ('agents'), then takes its turn as usual.
+   */
+  readonly drains?: 'canvas' | 'agents';
+  /**
    * It waits for what comes (a long poll): a token's limit on calls in flight leaves it out, and
    * its limit on waits in flight counts it instead. Only a read on MCP alone (the transport
    * deviation).

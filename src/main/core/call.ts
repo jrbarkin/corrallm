@@ -192,7 +192,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     try {
       const value = await scopes.run(
         scopeOf(surface, args),
-        surface.preempt === true,
+        { preempt: surface.preempt === true, drains: drainsOf(surface, args) },
         signal,
         async (opSignal) => {
           ran = opSignal;
@@ -303,6 +303,29 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
         ? ['app', String(canvas)]
         : ['app', String(canvas), String(agent ?? to ?? target?.agent)];
   }
+}
+
+/**
+ * The scopes an op drains as it comes, from its arguments: every scope beneath its canvas's, or
+ * those of the agents it removes or switches (`agent`, `nodes`).
+ */
+export function drainsOf(surface: Pick<Surface, 'drains'>, args: unknown): string[][] {
+  const {
+    canvas,
+    agent,
+    nodes = [],
+  } = args as {
+    canvas?: unknown;
+    agent?: string;
+    nodes?: readonly string[];
+  };
+  if (surface.drains === 'canvas') return [['app', String(canvas)]];
+  if (surface.drains === undefined) return [];
+  return [...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
+    'app',
+    String(canvas),
+    one,
+  ]);
 }
 
 /**

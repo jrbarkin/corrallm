@@ -88,12 +88,15 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 (see The registry): call.ts is core.call, the one dispatcher every transport calls
                 (audience, limits per token, the canvas, filled in for a caller with one, or the
                 one holding a message it names (`withdraw` takes none), and asked of one with
-                several otherwise, schema, reach, self, rules, repeated requests, scopes; failures
-                as values); caller.ts its callers (you, an agent's session, an outside token) and
-                their parties (no token is ever you; only gui.ts makes you); scopes.ts the order
-                ops run in (one at a time per scope; a preempting op aborts what runs beneath it
-                first, never another preempting op, and those that overlap run in turn, ahead of
-                the queue);
+                several otherwise, schema, reach, self, repeated requests, scopes, rules in the
+                scope; failures as values); caller.ts its callers (you, an agent's session, an
+                outside token) and their parties (no token is ever you; only gui.ts makes you);
+                scopes.ts the order ops run in (one at a time per scope; a preempting op aborts
+                what runs beneath it first, never another preempting op, and those that overlap
+                run in turn, ahead of the queue; a draining op, `drains`, aborts what runs on its
+                canvas or on the agents it removes or switches as it comes, then takes its turn
+                as usual; nothing aborts an op past its point of no return, a commit queued, and
+                what would have waits for it);
                 throttle.ts the limits per token (calls in flight and writes a second; a long
                 poll, `waits`, counts against the waits in flight instead of the calls);
                 requests.ts the repeated requests (each caller's own; a result kept only when its
@@ -672,7 +675,7 @@ Every operation of corrallm's one API is defined once (`src/shared/api/`, Core S
 
 To add an operation:
 
-1. Add its surface to `SURFACE` in `src/shared/api/surface.ts`: its audience (who may call it, and how far each reaches), kind, scope, and any rules, `self` (required when a token may call it naming an agent), `destructive`, `preempt` (it aborts what runs beneath it in its scope first), `waits` (a long poll: only a read on MCP alone, the transport deviation, which T1 checks; it counts against a token's `TOKEN_WAITS` waits in flight, not its calls), `varies` and `reads`.
+1. Add its surface to `SURFACE` in `src/shared/api/surface.ts`: its audience (who may call it, and how far each reaches), kind, scope, and any rules, `self` (required when a token may call it naming an agent), `destructive`, `preempt` (it aborts what runs beneath it in its scope first), `drains` (`'canvas'` or `'agents'`: it removes or replaces what owns scopes beneath its canvas's, so it aborts what runs there as it comes, then queues as usual; only in a canvas's scope, which T1 checks), `waits` (a long poll: only a read on MCP alone, the transport deviation, which T1 checks; it counts against a token's `TOKEN_WAITS` waits in flight, not its calls), `varies` and `reads`.
 2. Define it in `src/shared/api/ops/<area>.ts` with `define(name, { summary, input, output })`: the summary is its MCP description; the input a `z.strictObject`, every string and list bounded, every id a branded one (`ids.ts`), never put through a pipe (a transform after it, a preprocess before it) nor in a union with a transform, which T1 refuses: core.call reads the id the op gets for reach, and finds nothing in reach where it can't; the output an object. Add a new area's ops to `OPS` in `registry.ts`.
 3. Implement it in `src/main/core/ops/<area>.ts` (the `Implementations` type refuses a missing one), over the services `createCore` composes.
 4. List it in `UNHOSTED` until the app serves it, or give it a deviation; give it fixtures in `REAL_FIXTURES` (`core/test-world.ts`): valid arguments (naming between them every kind of id it takes; `by`, those only some parties may pass, as a message they sent; `fresh`, the result's fields each call mints anew), invalid ones and arguments meeting each of its rules; for a kind of id no op took before, say in `REAL_OUT_OF_REACH` which ids of it each token party doesn't reach, as far as each reach goes. A write's fixtures carry a `request` id, so a call repeated through another transport dedupes.

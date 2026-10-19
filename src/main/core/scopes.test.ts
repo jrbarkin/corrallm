@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { Scopes, Superseded } from './scopes';
 
-/** An op that runs until released (or aborted), recording when it started and how it ended. */
-function controlled(log: string[], name: string) {
+/**
+ * An op that runs until released (or aborted), recording when it started and how it ended; `past`,
+ * one that is past its point of no return once it starts.
+ */
+function controlled(log: string[], name: string, { past = false } = {}) {
   const release = Promise.withResolvers<undefined>();
   const started = Promise.withResolvers<AbortSignal>();
-  const op = async (signal: AbortSignal) => {
+  const op = async (signal: AbortSignal, noReturn: () => void) => {
     log.push(`${name} started`);
+    if (past) noReturn();
     started.resolve(signal);
     await Promise.race([
       release.promise,
@@ -37,8 +41,8 @@ describe('Scopes', () => {
     const log: string[] = [];
     const first = controlled(log, 'first');
     const second = controlled(log, 'second');
-    const one = scopes.run(['app', 'c', 'a'], false, undefined, first.op);
-    const two = scopes.run(['app', 'c', 'a'], false, undefined, second.op);
+    const one = scopes.run(['app', 'c', 'a'], {}, undefined, first.op);
+    const two = scopes.run(['app', 'c', 'a'], {}, undefined, second.op);
     await first.started;
     await tick();
     expect(log).toEqual(['first started']);
@@ -55,11 +59,11 @@ describe('Scopes', () => {
     const first = controlled(log, 'first');
     const second = controlled(log, 'second');
     const third = controlled(log, 'third');
-    const one = scopes.run(['app', 'c'], false, undefined, first.op);
-    const two = scopes.run(['app', 'c'], false, undefined, second.op);
+    const one = scopes.run(['app', 'c'], {}, undefined, first.op);
+    const two = scopes.run(['app', 'c'], {}, undefined, second.op);
     first.release();
     await second.started;
-    const three = scopes.run(['app', 'c'], false, undefined, third.op);
+    const three = scopes.run(['app', 'c'], {}, undefined, third.op);
     await tick();
     expect(log).toEqual(['first started', 'first done', 'second started']);
     second.release();
@@ -76,10 +80,10 @@ describe('Scopes', () => {
     const canvas = controlled(log, 'canvas');
     const free = controlled(log, 'free');
     const running = [
-      scopes.run(['app', 'c', 'a'], false, undefined, a.op),
-      scopes.run(['app', 'c', 'b'], false, undefined, b.op),
-      scopes.run(['app', 'c'], false, undefined, canvas.op),
-      scopes.run(null, false, undefined, free.op),
+      scopes.run(['app', 'c', 'a'], {}, undefined, a.op),
+      scopes.run(['app', 'c', 'b'], {}, undefined, b.op),
+      scopes.run(['app', 'c'], {}, undefined, canvas.op),
+      scopes.run(null, {}, undefined, free.op),
     ];
     await Promise.all([a.started, b.started, canvas.started, free.started]);
     for (const op of [a, b, canvas, free]) op.release();
@@ -92,10 +96,10 @@ describe('Scopes', () => {
     const slow = controlled(log, 'slow');
     const queued = controlled(log, 'queued');
     const stop = controlled(log, 'stop');
-    const running = scopes.run(['app', 'c', 'a'], false, undefined, slow.op);
-    const next = scopes.run(['app', 'c', 'a'], false, undefined, queued.op);
+    const running = scopes.run(['app', 'c', 'a'], {}, undefined, slow.op);
+    const next = scopes.run(['app', 'c', 'a'], {}, undefined, queued.op);
     const slowSignal = await slow.started;
-    const stopping = scopes.run(['app', 'c', 'a'], true, undefined, stop.op);
+    const stopping = scopes.run(['app', 'c', 'a'], { preempt: true }, undefined, stop.op);
     await stop.started;
     expect(slowSignal.reason).toBeInstanceOf(Superseded);
     expect(log).toEqual(['slow started', 'slow aborted', 'stop started']);
@@ -119,11 +123,11 @@ describe('Scopes', () => {
     let running = 0;
     let most = 0;
     const counted =
-      <T>(op: (signal: AbortSignal) => Promise<T>) =>
-      async (signal: AbortSignal) => {
+      <T>(op: (signal: AbortSignal, noReturn: () => void) => Promise<T>) =>
+      async (signal: AbortSignal, noReturn: () => void) => {
         most = Math.max(most, ++running);
         try {
-          return await op(signal);
+          return await op(signal, noReturn);
         } finally {
           running--;
         }
@@ -133,12 +137,12 @@ describe('Scopes', () => {
     const stop = controlled(log, 'stop');
     const kill = controlled(log, 'kill');
     const queued = controlled(log, 'queued');
-    const results = [scopes.run(path, false, undefined, counted(slow.op))];
+    const results = [scopes.run(path, {}, undefined, counted(slow.op))];
     await slow.started;
     // Both come while the slow op unwinds.
-    results.push(scopes.run(path, true, undefined, counted(stop.op)));
-    results.push(scopes.run(path, true, undefined, counted(kill.op)));
-    results.push(scopes.run(path, false, undefined, counted(queued.op)));
+    results.push(scopes.run(path, { preempt: true }, undefined, counted(stop.op)));
+    results.push(scopes.run(path, { preempt: true }, undefined, counted(kill.op)));
+    results.push(scopes.run(path, {}, undefined, counted(queued.op)));
     await stop.started;
     await tick();
     expect(log).toEqual(['slow started', 'slow aborted', 'stop started']);
@@ -170,15 +174,15 @@ describe('Scopes', () => {
     const queued = controlled(log, 'queued');
     // An op that takes a while to unwind once aborted.
     const unwound = Promise.withResolvers<undefined>();
-    const running = scopes.run(path, false, undefined, async (signal) => {
-      const result = await slow.op(signal);
+    const running = scopes.run(path, {}, undefined, async (signal, noReturn) => {
+      const result = await slow.op(signal, noReturn);
       await unwound.promise;
       return result;
     });
     await slow.started;
     const caller = new AbortController();
-    const stopping = scopes.run(path, true, caller.signal, stop.op);
-    const next = scopes.run(path, false, undefined, queued.op);
+    const stopping = scopes.run(path, { preempt: true }, caller.signal, stop.op);
+    const next = scopes.run(path, {}, undefined, queued.op);
     caller.abort(new Error('gone'));
     unwound.resolve(undefined);
     await expect(stopping).rejects.toThrow('gone');
@@ -194,10 +198,10 @@ describe('Scopes', () => {
     const agent = controlled(log, 'agent');
     const elsewhere = controlled(log, 'elsewhere');
     const stop = controlled(log, 'stop');
-    const running = scopes.run(['app', 'c', 'a'], false, undefined, agent.op);
-    const other = scopes.run(['app', 'd', 'a'], false, undefined, elsewhere.op);
+    const running = scopes.run(['app', 'c', 'a'], {}, undefined, agent.op);
+    const other = scopes.run(['app', 'd', 'a'], {}, undefined, elsewhere.op);
     await Promise.all([agent.started, elsewhere.started]);
-    const stopping = scopes.run(['app', 'c'], true, undefined, stop.op);
+    const stopping = scopes.run(['app', 'c'], { preempt: true }, undefined, stop.op);
     await stop.started;
     stop.release();
     elsewhere.release();
@@ -206,15 +210,142 @@ describe('Scopes', () => {
     expect(log).toContain('elsewhere done');
   });
 
+  it('lets a draining op abort what runs in the scopes it drains, then take its turn in its own as usual', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const agent = controlled(log, 'agent');
+    const other = controlled(log, 'other');
+    const canvas = controlled(log, 'canvas');
+    const drain = controlled(log, 'drain');
+    const running = [
+      scopes.run(['app', 'c', 'a'], {}, undefined, agent.op),
+      scopes.run(['app', 'c', 'b'], {}, undefined, other.op),
+      scopes.run(['app', 'c'], {}, undefined, canvas.op),
+    ];
+    await Promise.all([agent.started, other.started, canvas.started]);
+    const draining = scopes.run(['app', 'c'], { drains: [['app', 'c', 'a']] }, undefined, drain.op);
+    await tick();
+    // The agent it drains is stopped at once; the one it doesn't drain, and what holds its own
+    // scope (whose turn came first), go on.
+    expect(log).toEqual(['agent started', 'other started', 'canvas started', 'agent aborted']);
+    canvas.release();
+    await drain.started;
+    other.release();
+    drain.release();
+    expect(await Promise.all([...running, draining])).toEqual([
+      'agent',
+      'other',
+      'canvas',
+      'drain',
+    ]);
+    expect(log).toEqual([
+      'agent started',
+      'other started',
+      'canvas started',
+      'agent aborted',
+      'canvas done',
+      'drain started',
+      'other done',
+      'drain done',
+    ]);
+  });
+
+  it('drains every scope beneath a canvas’s when it drains the canvas, and none of another', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const a = controlled(log, 'a');
+    const b = controlled(log, 'b');
+    const elsewhere = controlled(log, 'elsewhere');
+    const close = controlled(log, 'close');
+    const running = [
+      scopes.run(['app', 'c', 'a'], {}, undefined, a.op),
+      scopes.run(['app', 'c', 'b'], {}, undefined, b.op),
+      scopes.run(['app', 'd', 'a'], {}, undefined, elsewhere.op),
+    ];
+    await Promise.all([a.started, b.started, elsewhere.started]);
+    const closing = scopes.run(['app', 'c'], { drains: [['app', 'c']] }, undefined, close.op);
+    await close.started;
+    close.release();
+    elsewhere.release();
+    await Promise.all([...running, closing]);
+    expect(log.indexOf('a aborted')).toBeLessThan(log.indexOf('close started'));
+    expect(log.indexOf('b aborted')).toBeLessThan(log.indexOf('close started'));
+    expect(log).toContain('elsewhere done');
+  });
+
+  it('never runs a draining op superseded while it waited for what it drains', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const agent = controlled(log, 'agent');
+    const close = controlled(log, 'close');
+    const stop = controlled(log, 'stop');
+    // An agent op slow to unwind once aborted.
+    const unwound = Promise.withResolvers<undefined>();
+    const working = scopes.run(['app', 'c', 'a'], {}, undefined, async (signal, noReturn) => {
+      const result = await agent.op(signal, noReturn);
+      await unwound.promise;
+      return result;
+    });
+    await agent.started;
+    const closing = scopes.run(['app', 'c'], { drains: [['app', 'c']] }, undefined, close.op);
+    const stopping = scopes.run(['app', 'c'], { preempt: true }, undefined, stop.op);
+    await tick();
+    unwound.resolve(undefined);
+    await stop.started;
+    stop.release();
+    await expect(closing).rejects.toBeInstanceOf(Superseded);
+    expect(await Promise.all([working, stopping])).toEqual(['agent', 'stop']);
+    expect(log).not.toContain('close started');
+  });
+
+  it('never aborts an op past its point of no return, but lets what would have wait for it', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const commit = controlled(log, 'commit', { past: true });
+    const agent = controlled(log, 'agent', { past: true });
+    const stop = controlled(log, 'stop');
+    const close = controlled(log, 'close');
+    const committing = scopes.run(['app', 'c'], {}, undefined, commit.op);
+    const working = scopes.run(['app', 'c', 'a'], {}, undefined, agent.op);
+    const signals = await Promise.all([commit.started, agent.started]);
+    const stopping = scopes.run(['app', 'c'], { preempt: true }, undefined, stop.op);
+    const closing = scopes.run(['app', 'c'], { drains: [['app', 'c']] }, undefined, close.op);
+    await tick();
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+    expect(log).toEqual(['commit started', 'agent started']);
+    commit.release();
+    agent.release();
+    await stop.started;
+    stop.release();
+    await close.started;
+    close.release();
+    expect(await Promise.all([committing, working, stopping, closing])).toEqual([
+      'commit',
+      'agent',
+      'stop',
+      'close',
+    ]);
+    expect(log).toEqual([
+      'commit started',
+      'agent started',
+      'commit done',
+      'agent done',
+      'stop started',
+      'stop done',
+      'close started',
+      'close done',
+    ]);
+  });
+
   it('passes the caller’s signal to the op, and drops a queued op whose caller gave up', async () => {
     const scopes = new Scopes();
     const log: string[] = [];
     const first = controlled(log, 'first');
     const second = controlled(log, 'second');
     const caller = new AbortController();
-    const running = scopes.run(['app'], false, caller.signal, first.op);
+    const running = scopes.run(['app'], {}, caller.signal, first.op);
     const waiting = new AbortController();
-    const queued = scopes.run(['app'], false, waiting.signal, second.op);
+    const queued = scopes.run(['app'], {}, waiting.signal, second.op);
     await first.started;
     waiting.abort(new Error('gone'));
     await expect(queued).rejects.toThrow('gone');
@@ -223,7 +354,7 @@ describe('Scopes', () => {
     expect(log).toEqual(['first started', 'first aborted']);
     // The scope is free again.
     const third = controlled(log, 'third');
-    const after = scopes.run(['app'], false, undefined, third.op);
+    const after = scopes.run(['app'], {}, undefined, third.op);
     await third.started;
     third.release();
     expect(await after).toBe('third');
@@ -232,9 +363,9 @@ describe('Scopes', () => {
   it('frees its scope when an op fails', async () => {
     const scopes = new Scopes();
     await expect(
-      scopes.run(['app', 'c'], false, undefined, () => Promise.reject(new Error('broken'))),
+      scopes.run(['app', 'c'], {}, undefined, () => Promise.reject(new Error('broken'))),
     ).rejects.toThrow('broken');
-    expect(await scopes.run(['app', 'c'], false, undefined, () => Promise.resolve('next'))).toBe(
+    expect(await scopes.run(['app', 'c'], {}, undefined, () => Promise.resolve('next'))).toBe(
       'next',
     );
   });
