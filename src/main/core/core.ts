@@ -91,15 +91,18 @@ export interface Core extends Dispatcher {
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
-   * Opens the canvas kept in `file`, as `corrallm serve --canvas` names it, held: nothing is
-   * delivered on it until `deliver()`. Only if canvases.json names that file for the canvas it
-   * holds, and keeps a project folder for it that is still there, both picked in the app. Rejects,
-   * naming the file and saying what to do in the app, for any other: one corrallm doesn't keep, a
-   * copy of one it does, one with no project folder, or one that can't open. Its id, and what
-   * opening it found to say (its run record set aside).
+   * The canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvases.json names
+   * that file for the canvas it holds, and keeps a project folder for it that is still there, both
+   * picked in the app. Rejects, naming the file and saying what to do in the app, for any other:
+   * one corrallm doesn't keep, a copy of one it does, or one with no project folder.
    */
-  openFile(file: string): Promise<{ canvas: CanvasId; warnings: readonly string[] }>;
-  /** Starts delivering on every canvas `openFile` opened: what waits on each goes once it can. */
+  keptCanvas(file: string): Promise<CanvasId>;
+  /**
+   * Opens a canvas held: nothing is delivered on it until `deliver()`. Rejects, saying why, if it
+   * can't open. What opening it found to say (its run record set aside).
+   */
+  openHeld(canvas: CanvasId): Promise<readonly string[]>;
+  /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
   deliver(): Promise<void>;
   /** Hears every canvas it runs: each message, and what newly waits for an answer. */
   watch(watcher: Watcher): () => void;
@@ -198,16 +201,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     engines,
     tokens,
     settings,
-    openFile: async (file) => {
-      const canvas = await keptCanvas(file, memory);
-      try {
-        await engines.open(canvas, { held: true });
-      } catch (error) {
-        throw new Error(`${path.basename(file)} can’t be served: ${reasonOf(error)}`, {
-          cause: error,
-        });
-      }
-      return { canvas, warnings: engines.canvas(canvas)?.warnings ?? [] };
+    keptCanvas: (file) => keptCanvas(file, memory),
+    openHeld: async (canvas) => {
+      await engines.open(canvas, { held: true });
+      return engines.canvas(canvas)?.warnings ?? [];
     },
     deliver: () => engines.deliver(),
     watch: (watcher) => engines.watch(watcher),

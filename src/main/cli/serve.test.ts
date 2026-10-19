@@ -794,6 +794,22 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     });
   });
 
+  it('names its canvas by its file in what it says of a need there as it opens', async () => {
+    await withGhost();
+    const first = await serve();
+    const client = await connect(first.url);
+    const { id } = await call<{ id: string }>(client, 'message', { to: 'ghost', body: 'Hello' });
+    expect(await first.stop()).toBe(0);
+
+    // Started again, the message still waits for Ghost: said as the canvas opens, by its file.
+    const server = await serve();
+    expect(server.stderr()).toMatch(/\[m1\.corral\] need on Ghost: \S/);
+    expect(server.stderr()).not.toContain(`[${CANVAS}]`);
+    const again = await connect(server.url);
+    const { items } = await call<{ items: Message[] }>(again, 'messages');
+    expect(items.find((message) => message.id === id)?.state).toBe('pending');
+  });
+
   /** Runs `corrallm wait`: its exit code, and the one line it printed. */
   async function cliWait(
     args: string[],

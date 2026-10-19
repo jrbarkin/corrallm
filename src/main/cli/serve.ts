@@ -101,8 +101,8 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     );
     core = opened;
     const names = new Map<CanvasId, string>();
-    // Heard from the first, so that what delivery starts with (a message cut off when corrallm
-    // last stopped) is said too.
+    // Heard from the first, so that what each canvas has waiting for an answer as it opens, and
+    // what delivery starts with (a message cut off when corrallm last stopped), are said too.
     opened.watch({
       message: (message) => {
         say(messageLine(opened, names, message));
@@ -114,18 +114,27 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     const files = new Map<CanvasId, string>();
     const basenames = command.canvases.map((file) => path.basename(file));
     for (const file of command.canvases) {
+      const name = path.basename(file);
+      let canvas: CanvasId;
       try {
-        const { canvas, warnings } = await opened.openFile(file);
-        const name = path.basename(file);
-        files.set(canvas, name);
-        // In the log, two files of one name are told apart by their canvases' ids.
-        names.set(
-          canvas,
-          basenames.filter((one) => one === name).length > 1 ? `${name} ${canvas}` : name,
-        );
-        for (const warning of warnings) say(`${where(names, canvas)} ${warning}`);
+        canvas = await opened.keptCanvas(file);
       } catch (error) {
         say(`corrallm serve: ${reasonOf(error)}`);
+        return 1;
+      }
+      files.set(canvas, name);
+      // Named before it opens, as what opening it says is said by its name; in the log, two files
+      // of one name are told apart by their canvases' ids.
+      names.set(
+        canvas,
+        basenames.filter((one) => one === name).length > 1 ? `${name} ${canvas}` : name,
+      );
+      try {
+        for (const warning of await opened.openHeld(canvas)) {
+          say(`${where(names, canvas)} ${warning}`);
+        }
+      } catch (error) {
+        say(`corrallm serve: ${name} can’t be served: ${reasonOf(error)}`);
         return 1;
       }
     }
