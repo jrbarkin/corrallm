@@ -9,7 +9,8 @@ import { backup, connect } from './sqlite';
  * copies SQLite's backup API takes of the open database as it goes on being written (never a copy
  * of its files, which would miss its log or tear), each a file of its own (no log beside it),
  * named for when it was taken. The profile keeps the newest SNAPSHOTS_KEPT. A snapshot is taken
- * beside its name and moved there once whole, so one cut short never passes for the latest.
+ * beside its name and moved there once whole, so one cut short never passes for the latest; what
+ * it left is removed as the next is taken.
  *
  * The backup reads through a connection of its own, in one step: SQLite refuses a step while its
  * source connection is writing (SQLITE_LOCKED, which node:sqlite reports as "not an error"), and
@@ -64,9 +65,12 @@ export async function snapshots(profile: string): Promise<string[]> {
 export async function takeSnapshot(source: string, profile: string, at: number): Promise<string> {
   const folder = path.join(profile, SNAPSHOT_FOLDER);
   await mkdir(folder, { recursive: true, mode: 0o700 });
+  // What a snapshot cut short left behind (one is taken at a time, so none is being taken now).
+  for (const name of await readdir(folder)) {
+    if (isPartial(name)) await rm(path.join(folder, name), { force: true });
+  }
   const file = path.join(folder, snapshotName(at));
   const partial = `${file}.partial`;
-  await remove(partial);
   try {
     // Made the user's alone before SQLite writes it, as core.db is.
     closeSync(openSync(partial, 'wx', 0o600));
@@ -90,6 +94,12 @@ export async function takeSnapshot(source: string, profile: string, at: number):
   }
   for (const old of (await snapshots(profile)).slice(SNAPSHOTS_KEPT)) await remove(old);
   return file;
+}
+
+/** Whether `name` is a snapshot being taken, or a file SQLite keeps beside one. */
+function isPartial(name: string): boolean {
+  const snapshot = /^(.*)\.partial(?:-journal|-wal|-shm)?$/.exec(name)?.[1];
+  return snapshot !== undefined && snapshotTime(snapshot) !== undefined;
 }
 
 /** Removes a database's file and those SQLite kept beside it. */

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -354,6 +354,15 @@ describe('snapshots', () => {
       'core-2026-10-19T03-00-00-000Z.db',
       'core-2026-10-19T04-00-00-000Z.db',
     ]);
+  });
+
+  it('removes what a snapshot cut short left behind', async () => {
+    // What a core killed while taking a snapshot leaves: the partial copy, and its journal.
+    await mkdir(backups(), { recursive: true });
+    await writeFile(path.join(backups(), 'core-2026-10-18T09-00-00-000Z.db.partial'), 'cut short');
+    await writeFile(path.join(backups(), 'core-2026-10-18T09-00-00-000Z.db.partial-journal'), '');
+    await store.snapshot();
+    expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
   });
 
   it('takes a sound one while it goes on being written', async () => {
