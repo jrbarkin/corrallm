@@ -528,9 +528,8 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    const kept = this.#deps.journal.keep(running.document.id, running.token, checkpoint);
+    this.#deps.journal.keep(running.document.id, running.token, checkpoint);
     return () => {
-      kept();
       running.saved = Math.max(running.saved, covered);
     };
   }

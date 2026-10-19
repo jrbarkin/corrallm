@@ -59,12 +59,19 @@ export const MIGRATIONS: readonly Migration[] = [
         PRIMARY KEY (canvas_id, adapter, agent_id)
       ) STRICT, WITHOUT ROWID;
 
-      -- A canvas's run: its state, and the workflow it runs (written only when it changes).
+      -- A canvas's run: its state.
       CREATE TABLE run (
         canvas_id TEXT PRIMARY KEY NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
         state TEXT NOT NULL CHECK (json_valid(state)),
-        workflow TEXT NOT NULL,
         updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      -- The workflow a canvas's run runs, and its SHA-256: a row of its own, written only when the
+      -- hash changes, since SQLite writes a row whole, and a run's state changes far more often.
+      CREATE TABLE run_workflow (
+        canvas_id TEXT PRIMARY KEY NOT NULL REFERENCES run (canvas_id) ON DELETE CASCADE,
+        workflow TEXT NOT NULL,
+        hash TEXT NOT NULL
       ) STRICT;
 
       -- A canvas's messages, in the order they came: seq is never given again, even once the

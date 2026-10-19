@@ -150,7 +150,7 @@ export function journaledRun(profile: string, canvas: string): RunCheckpoint | u
       .prepare(
         `SELECT json_extract(state, '$.version') AS version, json_extract(state, '$.state') AS state,
            json_extract(state, '$.messages') AS messages, workflow, updated_at AS updatedAt
-         FROM run WHERE canvas_id = ?`,
+         FROM run JOIN run_workflow USING (canvas_id) WHERE canvas_id = ?`,
       )
       .get(canvas),
   );

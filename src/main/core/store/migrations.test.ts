@@ -65,6 +65,7 @@ describe('the schema', () => {
       { name: 'open_canvas', strict: 1, wr: 0 },
       { name: 'read_position', strict: 1, wr: 1 },
       { name: 'run', strict: 1, wr: 0 },
+      { name: 'run_workflow', strict: 1, wr: 0 },
     ]);
   });
 
@@ -228,14 +229,18 @@ describe('the schema', () => {
       )
       .run(CANVAS);
     connection
-      .prepare("INSERT INTO run (canvas_id, state, workflow, updated_at) VALUES (?, '{}', '', 1)")
+      .prepare("INSERT INTO run (canvas_id, state, updated_at) VALUES (?, '{}', 1)")
+      .run(CANVAS);
+    connection
+      .prepare("INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, '{}', 'h')")
       .run(CANVAS);
     connection
       .prepare("INSERT INTO read_position (canvas_id, party, seq) VALUES (?, 'you', 1)")
       .run(CANVAS);
     connection.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(CANVAS);
     connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
-    for (const table of ['conversation', 'run', 'message', 'read_position', 'open_canvas']) {
+    const kept = ['conversation', 'run', 'run_workflow', 'message', 'read_position', 'open_canvas'];
+    for (const table of kept) {
       expect(connection.prepare(`SELECT count(*) AS rows FROM ${table}`).get(), table).toEqual({
         rows: 0,
       });

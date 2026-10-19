@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -9,8 +9,8 @@ import type { CanvasId } from '../shared/canvas';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
 import type { Connection } from './core/store/sqlite';
-import { unopened } from './core/store/store';
-import type { Database, Store } from './core/store/store';
+import { SYSTEM_DEPS, unopened } from './core/store/store';
+import type { Database, Store, StoreDeps } from './core/store/store';
 import { onDisk, openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
@@ -54,16 +54,21 @@ async function named(name: string, text = '{"saved":true}'): Promise<[CanvasId, 
 }
 /** The canvas's run, as on disk. */
 const ran = (canvas: CanvasId) =>
-  reader.prepare('SELECT state, workflow, updated_at FROM run WHERE canvas_id = ?').get(canvas);
+  reader
+    .prepare(
+      `SELECT state, workflow, updated_at FROM run LEFT JOIN run_workflow USING (canvas_id)
+       WHERE canvas_id = ?`,
+    )
+    .get(canvas);
 /** Where each party has read to in the canvas's messages, as on disk. */
 const readTo = (canvas: CanvasId) =>
   reader
     .prepare('SELECT party, seq FROM read_position WHERE canvas_id = ? ORDER BY party')
     .all(canvas);
 /** Closes the store and opens it again, as the core does when it starts again. */
-async function reopen(): Promise<void> {
+async function reopen(deps?: StoreDeps): Promise<void> {
   await store.close();
-  store = await openTestStore(profile);
+  store = await openTestStore(profile, deps);
   memory = new CanvasMemory(store);
 }
 
@@ -147,9 +152,9 @@ describe('RunJournal', () => {
   it('writes the workflow only when it changed, and the run’s state every time', async () => {
     const [canvas] = await named('team.corral');
     store.exec(`CREATE TABLE written (workflow TEXT NOT NULL) STRICT;
-      CREATE TRIGGER workflow_made AFTER INSERT ON run
+      CREATE TRIGGER workflow_made AFTER INSERT ON run_workflow
         BEGIN INSERT INTO written VALUES (NEW.workflow); END;
-      CREATE TRIGGER workflow_written AFTER UPDATE OF workflow ON run
+      CREATE TRIGGER workflow_written AFTER UPDATE ON run_workflow
         BEGIN INSERT INTO written VALUES (NEW.workflow); END;`);
     const written = () => reader.prepare('SELECT workflow FROM written').all();
     const runs = journal();
@@ -173,6 +178,60 @@ describe('RunJournal', () => {
     expect(await again.get(canvas)).toMatchObject({
       checkpoint: { workflow: edited, updatedAt: 800 },
     });
+  });
+
+  it('writes a workflow once, not again with each save that changes only the run’s state', async () => {
+    // Never checkpointed meanwhile: what the log grows by is what the saves wrote.
+    await reopen({ ...SYSTEM_DEPS, later: () => () => undefined });
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const workflow = JSON.stringify({ nodes: [{ text: 'x'.repeat(2 * 2 ** 20) }] });
+    await runs.save(canvas, token, { ...checkpoint, workflow });
+    const log = async () => (await stat(`${store.file}-wal`)).size;
+    const before = await log();
+    for (let round = 1; round <= 5; round++) {
+      const state = JSON.stringify({ round: 'r'.repeat(round * 100) });
+      await runs.save(canvas, token, { ...checkpoint, workflow, state, updatedAt: 123 + round });
+    }
+    // Five saves of a 2 MiB workflow, its state's size changing each time, and the log holds less
+    // than a tenth of one copy of it.
+    expect((await log()) - before).toBeLessThan(2 ** 20 / 5);
+    expect((await runs.get(canvas)).checkpoint).toMatchObject({ workflow, updatedAt: 128 });
+  });
+
+  it('writes the workflow a save has, whatever an earlier save’s flush did', async () => {
+    let failing = false;
+    await reopen({
+      ...SYSTEM_DEPS,
+      flush: (fd) => (failing ? Promise.reject(new Error('EIO')) : SYSTEM_DEPS.flush(fd)),
+    });
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const edited = { ...checkpoint, workflow: '{"edit":"two"}', updatedAt: 456 };
+    await runs.save(canvas, token, checkpoint);
+    // Committed, though its log couldn't be flushed: the row holds it.
+    failing = true;
+    await expect(runs.save(canvas, token, edited)).rejects.toThrow('EIO');
+    failing = false;
+    // The edit undone.
+    await runs.save(canvas, token, { ...checkpoint, updatedAt: 789 });
+    expect(ran(canvas)).toMatchObject({ workflow: checkpoint.workflow, updated_at: 789 });
+    await reopen();
+    expect((await journal().get(canvas)).checkpoint).toEqual({ ...checkpoint, updatedAt: 789 });
+  });
+
+  it('writes the workflow the last of saves made together has', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    await runs.save(canvas, token, checkpoint);
+    await Promise.all([
+      runs.save(canvas, token, { ...checkpoint, workflow: '{"edit":"two"}', updatedAt: 456 }),
+      runs.save(canvas, token, { ...checkpoint, updatedAt: 789 }),
+    ]);
+    expect(ran(canvas)).toMatchObject({ workflow: checkpoint.workflow, updated_at: 789 });
   });
 
   it('writes the workflow again after a save of it failed, or its run was forgotten', async () => {
@@ -269,12 +328,10 @@ describe('RunJournal', () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
-    let kept: () => void = () => undefined;
     await store.write(() => {
-      kept = runs.keep(canvas, token, checkpoint);
+      runs.keep(canvas, token, checkpoint);
       runs.moveRead(canvas, 'outside:orchestrator', 3);
     });
-    kept();
     expect(ran(canvas)).toMatchObject({ updated_at: 123 });
     expect(readTo(canvas)).toEqual([{ party: 'outside:orchestrator', seq: 3 }]);
 
@@ -381,9 +438,10 @@ describe('RunJournal', () => {
       const runs = journal();
       await runs.opened(canvas);
       await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
+      store.prepare('UPDATE run SET state = coalesce(?, state)').run(state ?? null);
       store
-        .prepare('UPDATE run SET state = coalesce(?, state), workflow = coalesce(?, workflow)')
-        .run(state ?? null, workflow ?? null);
+        .prepare('UPDATE run_workflow SET workflow = coalesce(?, workflow)')
+        .run(workflow ?? null);
       const next = journal();
       const context = await next.get(canvas);
       expect(context).toMatchObject({
