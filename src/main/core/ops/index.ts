@@ -1,7 +1,8 @@
-import type { Catalog } from '../../../shared/adapter';
+import type { AdapterId, Catalog } from '../../../shared/adapter';
 import type { ArgsOf, ResultOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
+import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
 import type { OpContext } from '../call';
 import type { Engines } from '../engines';
@@ -12,6 +13,7 @@ import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
 import { runOps } from './run';
 import { sessionOps } from './session';
+import { settingsOps } from './settings';
 import { usageOps } from './usage';
 import { waitOps } from './wait';
 
@@ -31,6 +33,9 @@ export interface OpServices {
   app: { name: string; version: string };
   /** What every adapter declares. */
   catalog: Catalog;
+  /** The adapter agents run when none is chosen. */
+  defaultAdapter: AdapterId;
+  settings: Pick<Settings, 'get'>;
   /** The agents’ environment, read from the login shell when first needed. */
   environment: () => Promise<Readonly<Record<string, string>>>;
   usage: Pick<UsageReadings, 'state'>;
@@ -52,6 +57,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...conversationOps(services),
     ...sessionOps(services),
+    ...settingsOps(services),
     ...runOps(services),
     ...usageOps(services),
     ...waitOps(services),

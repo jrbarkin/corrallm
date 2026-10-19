@@ -15,6 +15,7 @@
       "session_get",
       "session_interrupt",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "withdraw"
@@ -40,6 +41,7 @@
       "needs",
       "session_get",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "wait"
@@ -58,6 +60,7 @@
       "session_get",
       "session_interrupt",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "wait",
@@ -65,15 +68,16 @@
     ]
   },
   "counts": {
-    "lead": 16,
+    "lead": 17,
     "worker": 10,
-    "outside-read": 11,
-    "outside-write": 17
+    "outside-read": 12,
+    "outside-write": 18
   },
   "unhosted": {
     "app.info": "B8",
     "catalog.get": "B8",
     "catalog.installed": "B8",
+    "settings.get": "B8",
     "agents": "B11",
     "status": "B11",
     "needs": "B11",
@@ -143,6 +147,10 @@
     "session.interrupt": {
       "input": "dafe7f6753754290",
       "output": "e5fa5cc18e054cdd"
+    },
+    "settings.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "ca640021dc5b5fbe"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",

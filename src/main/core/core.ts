@@ -174,6 +174,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       implementations: implementations({
         app: config.app,
         catalog: CATALOG,
+        defaultAdapter: DEFAULT_ADAPTER,
+        settings,
         environment,
         usage,
         engines,

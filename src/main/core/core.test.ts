@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PARTIES } from '../../shared/api/surface';
-import { CATALOG } from '../sessions/adapters';
+import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -72,6 +72,27 @@ describe('createCore', () => {
     expect(Object.keys(result.value).sort()).toEqual(
       CATALOG.adapters.map((adapter) => adapter.id).sort(),
     );
+  });
+
+  it('reads the default adapter and the app consents the profile remembers', async () => {
+    const consents = { codex: { plan: true }, 'old-adapter': { allowed: true } };
+    await writeFile(
+      path.join(profile, 'settings.json'),
+      JSON.stringify({ version: 2, consents, api: { port: 12345 } }),
+    );
+    const started = await start();
+    expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({
+      ok: true,
+      value: { defaultAdapter: DEFAULT_ADAPTER, consents },
+    });
+  });
+
+  it('starts with no app consents in a new profile', async () => {
+    const started = await start();
+    expect(await started.call('settings.get', undefined, CALLERS.you)).toEqual({
+      ok: true,
+      value: { defaultAdapter: DEFAULT_ADAPTER, consents: {} },
+    });
   });
 
   it('reads the usage readings and rules the profile remembers', async () => {

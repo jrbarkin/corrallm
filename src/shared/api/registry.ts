@@ -7,6 +7,7 @@ import { catalogOps } from './ops/catalog';
 import { conversationOps } from './ops/conversation';
 import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
+import { settingsOps } from './ops/settings';
 import { usageOps } from './ops/usage';
 import type { OpName, Party, Surface } from './surface';
 
@@ -21,6 +22,7 @@ export const OPS = {
   ...catalogOps,
   ...conversationOps,
   ...sessionOps,
+  ...settingsOps,
   ...runOps,
   ...usageOps,
 } satisfies Record<OpName, OpDef>;
