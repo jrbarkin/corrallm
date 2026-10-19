@@ -97,7 +97,7 @@ afterEach(async () => {
 });
 
 const start = () => core.channels.call(7, 'session:start', ['a', OPTIONS]);
-const ok = { ok: true, value: {} };
+const ok = { ok: true, value: { revs: {} } };
 
 describe('terminal operations', () => {
   it('passes keystrokes, including control characters, and sizes to the calling window’s terminal', async () => {

@@ -459,14 +459,14 @@ describe('preload', () => {
 
   it('reads paths with webUtils for terminal.drop, while the page supplies only files', async () => {
     const api = await exposed();
-    const heard = postPort(() => ({ ok: true, value: {} }));
+    const heard = postPort(() => ({ ok: true, value: { revs: {} } }));
     const request = '2c3d4e5f-6071-4829-9bac-1d2e3f4a5b99';
     const shot = new File(['png'], 'Screen Shot.png');
     const made = new File(['made by the page'], 'made.txt');
     getPathForFile.mockImplementation((file) => (file === shot ? '/Users/me/Screen Shot.png' : ''));
     await expect(api.terminalDrop({ agent: 'a', files: [shot, made], request })).resolves.toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(heard).toEqual([
       ['terminal.drop', { agent: 'a', paths: ['/Users/me/Screen Shot.png'], request }],
@@ -474,7 +474,7 @@ describe('preload', () => {
     heard.length = 0;
     await expect(api.terminalDrop({ agent: 'a', files: [made] })).resolves.toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(heard).toEqual([]);
     expect(channel).not.toHaveBeenCalled();

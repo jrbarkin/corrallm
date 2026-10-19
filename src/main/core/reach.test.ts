@@ -73,8 +73,11 @@ const engines = {
 const core = resolvers(engines, (canvas, agent) => canvas === CANVAS && agent === 'lead');
 
 /** Whether the lead reaches `id` of the kind `brand`, for a write on its team. */
-const leadReaches = (brand: 'NodeId' | 'GroupId' | 'ItemId', id: string, agent?: string) =>
-  core[brand]?.(id, LEAD, 'team', { canvas: CANVAS, ...(agent === undefined ? {} : { agent }) });
+const leadReaches = (
+  brand: 'NodeId' | 'GroupId' | 'ItemId' | 'EntityKey',
+  id: string,
+  agent?: string,
+) => core[brand]?.(id, LEAD, 'team', { canvas: CANVAS, ...(agent === undefined ? {} : { agent }) });
 
 describe('outOfReach', () => {
   it('resolves a queue item with the agent named beside it', () => {
@@ -142,5 +145,29 @@ describe('the core’s resolvers', () => {
     expect(
       core.ItemId?.('build', ORCHESTRATOR, 'canvas', { canvas: CANVAS, agent: 'worker' }),
     ).toBe(true);
+  });
+
+  it('resolve an entity’s key as what it names: its node, both ends of its link, its item’s agent', () => {
+    for (const key of ['node/helper', 'node/crew', 'item/helper/plan', 'item/helper/fix']) {
+      expect(leadReaches('EntityKey', key), key).toBe(true);
+    }
+    for (const key of [
+      'node/worker',
+      'item/worker/build',
+      'link/helper/worker',
+      'node/ghost',
+      'item/ghost/plan',
+      'node/he%2',
+      'node/%68elper',
+      'meta',
+    ]) {
+      expect(leadReaches('EntityKey', key), key).toBe(false);
+    }
+    expect(leadReaches('EntityKey', 'link/apprentice/helper')).toBe(true);
+    // An outside token reaches its whole canvas: whatever a key there names, there or not.
+    for (const key of ['node/worker', 'item/worker/gone', 'link/ghost/worker']) {
+      expect(core.EntityKey?.(key, ORCHESTRATOR, 'canvas', { canvas: CANVAS }), key).toBe(true);
+    }
+    expect(core.EntityKey?.('node/he%2', ORCHESTRATOR, 'canvas', { canvas: CANVAS })).toBe(false);
   });
 });

@@ -57,7 +57,7 @@ describe('link.open', () => {
   it('opens a normalized allowlisted URL through the host', async () => {
     expect(await core.call('link.open', { url: 'HTTPS://GITHUB.COM/openai' }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: true },
+      value: { opened: true, revs: {} },
     });
     expect(host.openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/openai');
     expect(host.askOpenLink).not.toHaveBeenCalled();
@@ -67,14 +67,14 @@ describe('link.open', () => {
     const url = 'https://docs.example.com/a';
     expect(await core.call('link.open', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: false },
+      value: { opened: false, revs: {} },
     });
     expect(host.askOpenLink).toHaveBeenCalledExactlyOnceWith(7, 'docs.example.com', url);
     expect(host.openExternal).not.toHaveBeenCalled();
     host.askOpenLink.mockResolvedValue({ open: true, always: false });
     expect(await core.call('link.open', { url }, EIGHT)).toEqual({
       ok: true,
-      value: { opened: true },
+      value: { opened: true, revs: {} },
     });
     expect(host.askOpenLink).toHaveBeenLastCalledWith(8, 'docs.example.com', url);
     expect(host.openExternal).toHaveBeenCalledExactlyOnceWith(url);
@@ -89,7 +89,7 @@ describe('link.open', () => {
   ])('leaves %s inert', async (url) => {
     expect(await core.call('link.open', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { opened: false },
+      value: { opened: false, revs: {} },
     });
     expect(host.askOpenLink).not.toHaveBeenCalled();
     expect(host.openExternal).not.toHaveBeenCalled();
@@ -104,7 +104,7 @@ describe('link.reveal', () => {
     await writeFile(file, 'Notes');
     expect(await core.call('link.reveal', { url: pathToFileURL(file).href }, SEVEN)).toEqual({
       ok: true,
-      value: { revealed: true },
+      value: { revealed: true, revs: {} },
     });
     expect(host.showFile).toHaveBeenCalledExactlyOnceWith(await realpath(file));
     const outside = path.join(profile, 'outside.txt');
@@ -120,7 +120,7 @@ describe('link.reveal', () => {
     ]) {
       expect(await core.call('link.reveal', { url }, SEVEN)).toEqual({
         ok: true,
-        value: { revealed: false },
+        value: { revealed: false, revs: {} },
       });
     }
     expect(host.showFile).toHaveBeenCalledOnce();
@@ -136,12 +136,12 @@ describe('link.reveal', () => {
     const url = pathToFileURL(file).href;
     expect(await core.call('link.reveal', { url }, EIGHT)).toEqual({
       ok: true,
-      value: { revealed: false },
+      value: { revealed: false, revs: {} },
     });
     expect(host.showFile).not.toHaveBeenCalled();
     expect(await core.call('link.reveal', { url }, SEVEN)).toEqual({
       ok: true,
-      value: { revealed: true },
+      value: { revealed: true, revs: {} },
     });
   });
 });

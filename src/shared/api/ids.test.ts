@@ -33,6 +33,14 @@ describe('idsIn', () => {
     ]);
   });
 
+  it('finds the ids a map is keyed by, said to be keys', () => {
+    const Key = brandedId('EntityKey', z.string().max(64));
+    const input = z.strictObject({ expect: z.record(Key, z.number()).optional() });
+    expect(idsOf(input, { expect: { 'node/lead': 2 } })).toEqual([
+      { brand: 'EntityKey', id: 'node/lead', path: '.expect.node/lead', key: true },
+    ]);
+  });
+
   it('reads a pipe on its out side, which the parsed value matches', () => {
     const input = z.strictObject({ to: z.preprocess(trim, Agent), from: z.string().pipe(Agent) });
     expect(idsOf(input, { to: ' peer ', from: 'lead' })).toEqual([

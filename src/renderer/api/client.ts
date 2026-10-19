@@ -1,4 +1,4 @@
-import type { OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
+import type { Current, OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
 import { GUI_OPS } from '../../shared/api/surface';
 import { guiFunction } from '../../shared/gui-link';
 import type { GuiApi } from '../../shared/gui-link';
@@ -7,12 +7,14 @@ import type { GuiApi } from '../../shared/gui-link';
 export class ApiError extends Error implements OpError {
   readonly code: OpErrorCode;
   readonly sentence: string;
+  readonly current?: Readonly<Record<string, Current>>;
 
-  constructor({ code, sentence }: OpError) {
+  constructor({ code, sentence, current }: OpError) {
     super(sentence);
     this.name = 'ApiError';
     this.code = code;
     this.sentence = sentence;
+    if (current !== undefined) this.current = current;
   }
 }
 

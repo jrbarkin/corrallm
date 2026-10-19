@@ -106,7 +106,7 @@ describe('the app’s core and window channels', () => {
       seven.request('call', 'usage.setRule', { backend: 'codex', rule }),
     ).resolves.toEqual({
       ok: true,
-      value: { ok: true, value: {} },
+      value: { ok: true, value: { revs: {} } },
     });
     const state = { readings: [], rules: { codex: rule } };
     expect(await channel(eight, 'usage:get')).toEqual(state);
@@ -180,7 +180,7 @@ describe('the app’s core and window channels', () => {
     const b = events(eight);
     await expect(seven.request('call', 'terminal.attach', { agent: 'a' })).resolves.toEqual({
       ok: true,
-      value: { ok: true, value: {} },
+      value: { ok: true, value: { revs: {} } },
     });
     await vi.waitFor(() => {
       expect(a).toEqual([

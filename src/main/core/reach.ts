@@ -5,6 +5,7 @@ import type { CanvasNode, Link } from '../../shared/model/canvas';
 import type { Message } from '../../shared/model/messages';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
 import { findItem } from '../../shared/model/queue';
+import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import { canvasesOf, partyIdOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
 import type { Engines } from './engines';
@@ -38,6 +39,7 @@ const WORDS: Readonly<Record<Brand, string>> = {
   NodeId: 'node',
   GroupId: 'group',
   ItemId: 'queue item',
+  EntityKey: 'entity',
   NeedId: 'Needs item',
   MessageId: 'message',
   ConversationId: 'conversation',
@@ -144,6 +146,56 @@ export function reachesItem(
   );
 }
 
+/**
+ * Whether `caller` reaches the entity a document's key names (src/shared/model/rows.ts) as far as
+ * `reach`: its node, both ends of its link, its item's agent. One reaching its whole canvas reaches
+ * whatever a key names there, there or not; any other, only what is there. A key that isn't one as
+ * rows.ts writes it names nothing.
+ */
+export function reachesEntity(
+  world: World,
+  caller: TokenCaller,
+  reach: Reach,
+  key: string,
+  lead: boolean,
+): boolean {
+  const named = namedBy(key);
+  if (named === undefined) return false;
+  if (caller.kind === 'outside') return reach === 'canvas';
+  switch (named.entity) {
+    case 'node':
+      return reachesNode(world, caller, reach, named.id, lead);
+    case 'link':
+      return named.ends.every((end) => reachesAgent(world, caller, reach, end, lead));
+    case 'item':
+      return reachesAgent(world, caller, reach, named.agent, lead);
+  }
+}
+
+/** What a document's key names, if it is a key as rows.ts writes one. */
+function namedBy(
+  key: string,
+):
+  | { entity: 'node'; id: string }
+  | { entity: 'link'; ends: [string, string] }
+  | { entity: 'item'; agent: string; id: string }
+  | undefined {
+  const [entity, ...parts] = key.split('/');
+  let ids: string[];
+  try {
+    ids = parts.map(decodeURIComponent);
+  } catch {
+    return undefined;
+  }
+  const [one, other] = ids;
+  if (one === undefined) return undefined;
+  if (entity === 'node' && ids.length === 1 && nodeKey(one) === key) return { entity, id: one };
+  if (other === undefined || ids.length !== 2) return undefined;
+  if (entity === 'link' && linkKey(one, other) === key) return { entity, ends: [one, other] };
+  if (entity === 'item' && itemKey(one, other) === key) return { entity, agent: one, id: other };
+  return undefined;
+}
+
 /** Whether `caller` reaches the group `id` as far as `reach`: every agent of it. */
 export function reachesGroup(
   world: World,
@@ -215,6 +267,9 @@ export function resolvers(
     ItemId: over(
       (world, id, caller, reach, isALead, agent) =>
         agent !== undefined && reachesItem(world, caller, reach, agent, id, isALead),
+    ),
+    EntityKey: over((world, key, caller, reach, isALead) =>
+      reachesEntity(world, caller, reach, key, isALead),
     ),
     MessageId: (id, caller, _reach, { canvas }) => {
       // An op that takes no canvas (`wait`) names a message on any of the caller's open ones.

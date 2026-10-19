@@ -196,7 +196,7 @@ describe('createCore', () => {
       await started.call('usage.setRule', { backend: 'codex', rule: RULE }, CALLERS.you),
     ).toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
       ok: true,
@@ -206,7 +206,7 @@ describe('createCore', () => {
       await started.call('usage.setRule', { backend: 'codex', rule: null }, CALLERS.you),
     ).toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
       ok: true,
@@ -226,7 +226,7 @@ describe('createCore', () => {
       await started.call('usage.simulate', { backend: 'codex', windows }, CALLERS.you),
     ).toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
       ok: true,
@@ -236,7 +236,7 @@ describe('createCore', () => {
       await started.call('usage.simulate', { backend: 'codex', windows: null }, CALLERS.you),
     ).toEqual({
       ok: true,
-      value: {},
+      value: { revs: {} },
     });
     expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
       ok: true,

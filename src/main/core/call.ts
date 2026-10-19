@@ -2,7 +2,7 @@ import type { z } from 'zod';
 
 import type { OpDef } from '../../shared/api/define';
 import { TOO_MANY_WAITS } from '../../shared/api/errors';
-import type { OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
+import type { Current, OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
 import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
@@ -31,14 +31,19 @@ import { Throttle } from './throttle';
  * value, whose code survives any transport.
  */
 
-/** An operation's failure, thrown by core.call's checks and by ops; it answers as a value. */
+/**
+ * An operation's failure, thrown by core.call's checks and by ops; it answers as a value, with what
+ * the entities a conflict is over are now (`current`).
+ */
 export class OpFailure extends Error {
   readonly code: OpErrorCode;
+  readonly current: Readonly<Record<string, Current>> | undefined;
 
-  constructor(code: OpErrorCode, sentence: string) {
+  constructor(code: OpErrorCode, sentence: string, current?: Readonly<Record<string, Current>>) {
     super(sentence);
     this.name = 'OpFailure';
     this.code = code;
+    this.current = current;
   }
 }
 
@@ -210,7 +215,15 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
               if (outcome) return { proposed: outcome.propose };
             }
           }
-          return implementation(args as never, { caller, party, signal: opSignal });
+          const result = await implementation(args as never, {
+            caller,
+            party,
+            signal: opSignal,
+          });
+          // A write says what it reached: the revisions of the topics it changed.
+          return surface.kind === 'read' || isProposal(result)
+            ? result
+            : { ...(result as object), revs: {} };
         },
       );
       if (check) checkResult(def, value);
@@ -378,6 +391,11 @@ function withCanvas(
   return only === undefined ? raw : { ...given, canvas: only };
 }
 
+/** Whether an op's result is a proposal for you, which applied nothing. */
+function isProposal(result: unknown): boolean {
+  return typeof result === 'object' && result !== null && 'proposed' in result;
+}
+
 /** Whether an agent's call names the agent itself. */
 function aimsAtItself(ids: readonly IdRef[], caller: TokenCaller): boolean {
   return (
@@ -396,7 +414,13 @@ function issueOf(error: z.ZodError): string {
 
 /** What a failure answers as. */
 function errorOf(error: unknown, signal: AbortSignal | undefined): OpError {
-  if (error instanceof OpFailure) return { code: error.code, sentence: error.message };
+  if (error instanceof OpFailure) {
+    return {
+      code: error.code,
+      sentence: error.message,
+      ...(error.current === undefined ? {} : { current: error.current }),
+    };
+  }
   if (error instanceof UnreadableIds) return { code: 'not-found', sentence: error.message };
   if (error instanceof Superseded) return { code: 'refused', sentence: error.message };
   if (signal?.aborted) return { code: 'refused', sentence: 'The call was cancelled.' };

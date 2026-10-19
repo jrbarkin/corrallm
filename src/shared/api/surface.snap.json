@@ -131,11 +131,11 @@
   "schemas": {
     "topics.subscribe": {
       "input": "eb59d888d198bdf1",
-      "output": "ba803cbcde9ca0e3"
+      "output": "8d9fcdb5b045d77e"
     },
     "topics.unsubscribe": {
       "input": "eb59d888d198bdf1",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "app.info": {
       "input": "e5fa5cc18e054cdd",
@@ -175,7 +175,7 @@
     },
     "message": {
       "input": "2fcad0392e13265b",
-      "output": "cd9ed4fd3afce36e"
+      "output": "49e43c944945473f"
     },
     "wait": {
       "input": "d429567b08fb223f",
@@ -183,7 +183,7 @@
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
-      "output": "3d1b490b47599ef4"
+      "output": "85372e4cca6901df"
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
@@ -195,7 +195,7 @@
     },
     "session.interrupt": {
       "input": "dafe7f6753754290",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
@@ -203,15 +203,15 @@
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "run.kill": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "run.unpause": {
       "input": "a85fe9cb1eb6d55a",
-      "output": "b2777e9d642af147"
+      "output": "c8f56788bf9f4dd8"
     },
     "usage.get": {
       "input": "e5fa5cc18e054cdd",
@@ -219,19 +219,19 @@
     },
     "usage.setRule": {
       "input": "9019a4803080df29",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "usage.simulate": {
       "input": "8cbbd0959972a51d",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "link.open": {
       "input": "c15bb3817c6ef6b3",
-      "output": "e66a3e83d3926508"
+      "output": "3862d4a18485e975"
     },
     "link.reveal": {
       "input": "c15bb3817c6ef6b3",
-      "output": "b40c0d650f7a979a"
+      "output": "c6b8a38dadae7227"
     },
     "window.get": {
       "input": "e5fa5cc18e054cdd",
@@ -239,23 +239,23 @@
     },
     "terminal.attach": {
       "input": "a80925bfbd4d86d2",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.detach": {
       "input": "a80925bfbd4d86d2",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.input": {
       "input": "e2ae5af40f432ab7",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.resize": {
       "input": "6f7b91a783617018",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.drop": {
       "input": "2007c6b60eae3b5c",
-      "output": "e5fa5cc18e054cdd"
+      "output": "647bbd6cc7b4f077"
     }
   }
 }

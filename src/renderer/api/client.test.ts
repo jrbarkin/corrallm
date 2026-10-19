@@ -24,23 +24,27 @@ describe('the GUI client', () => {
   it('unwraps a value and passes each operation’s arguments to its bridge function', async () => {
     const info = { name: 'corrallm', version: '1.2.3' };
     const appInfo = vi.fn<AppApi['appInfo']>().mockResolvedValue({ ok: true, value: info });
-    const usageSetRule = vi.fn<AppApi['usageSetRule']>().mockResolvedValue({ ok: true, value: {} });
+    const usageSetRule = vi
+      .fn<AppApi['usageSetRule']>()
+      .mockResolvedValue({ ok: true, value: { revs: {} } });
     stubApi({ appInfo, usageSetRule });
 
     await expect(api.appInfo()).resolves.toEqual(info);
     expect(appInfo).toHaveBeenCalledExactlyOnceWith(undefined);
     const args = { backend: 'codex', rule: null };
-    await expect(api.usageSetRule(args)).resolves.toEqual({});
+    await expect(api.usageSetRule(args)).resolves.toEqual({ revs: {} });
     expect(usageSetRule).toHaveBeenCalledExactlyOnceWith(args);
   });
 
   it('passes File objects to the drop bridge, and subscribes to terminal events without unwrapping them as results', async () => {
-    const terminalDrop = vi.fn<AppApi['terminalDrop']>().mockResolvedValue({ ok: true, value: {} });
+    const terminalDrop = vi
+      .fn<AppApi['terminalDrop']>()
+      .mockResolvedValue({ ok: true, value: { revs: {} } });
     const stop = vi.fn();
     const terminalOnEvent = vi.fn<AppApi['terminalOnEvent']>().mockReturnValue(stop);
     stubApi({ terminalDrop, terminalOnEvent });
     const files = [new File(['png'], 'shot.png')];
-    await expect(api.terminalDrop({ agent: 'a', files })).resolves.toEqual({});
+    await expect(api.terminalDrop({ agent: 'a', files })).resolves.toEqual({ revs: {} });
     expect(terminalDrop).toHaveBeenCalledExactlyOnceWith({ agent: 'a', files });
     const listener = vi.fn();
     expect(api.terminalOnEvent(listener)).toBe(stop);
@@ -57,5 +61,15 @@ describe('the GUI client', () => {
     const called = api.appInfo();
     await expect(called).rejects.toBeInstanceOf(ApiError);
     await expect(called).rejects.toMatchObject({ ...error, message: error.sentence });
+  });
+
+  it('keeps what a conflict says the entities it is over are now', async () => {
+    const error = {
+      code: 'conflict',
+      sentence: 'node/lead is at revision 3, not 2.',
+      current: { 'node/lead': { rev: 3, value: null } },
+    } as const;
+    stubApi({ appInfo: vi.fn<AppApi['appInfo']>().mockResolvedValue({ ok: false, error }) });
+    await expect(api.appInfo()).rejects.toMatchObject(error);
   });
 });

@@ -289,8 +289,8 @@ describe('the MCP server’s tools', () => {
     await client.listTools();
     const args = { canvas: CANVAS, to: 'peer', body: 'Make the tests pass' };
     expect(await client.callTool({ name: 'test_message', arguments: args })).toEqual({
-      content: [{ type: 'text', text: JSON.stringify({ sent: 'peer' }) }],
-      structuredContent: { sent: 'peer' },
+      content: [{ type: 'text', text: JSON.stringify({ sent: 'peer', revs: {} }) }],
+      structuredContent: { sent: 'peer', revs: {} },
     });
     expect(registry.calls['test.message']).toEqual([args]);
   });

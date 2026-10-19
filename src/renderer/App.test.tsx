@@ -23,11 +23,11 @@ function stubApi(api: Partial<AppApi>) {
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
-      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} }, revs: {} },
     }),
     topicsUnsubscribe: vi
       .fn<AppApi['topicsUnsubscribe']>()
-      .mockResolvedValue({ ok: true, value: {} }),
+      .mockResolvedValue({ ok: true, value: { revs: {} } }),
     topicsOnChange: vi.fn<AppApi['topicsOnChange']>(() => () => undefined),
     topicsOnEpoch: vi.fn<AppApi['topicsOnEpoch']>((listener) => {
       listener('one');
@@ -61,7 +61,7 @@ describe('App', () => {
   it('subscribes to the core’s usage topic and its changes', async () => {
     const topicsSubscribe = vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
       ok: true,
-      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} }, revs: {} },
     });
     const topicsOnChange = vi.fn<AppApi['topicsOnChange']>(() => () => undefined);
     stubApi({

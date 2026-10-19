@@ -1,5 +1,5 @@
 import type { AdapterId, Catalog } from '../../../shared/adapter';
-import type { ArgsOf, ResultOf } from '../../../shared/api/registry';
+import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { Settings } from '../../settings';
@@ -37,7 +37,7 @@ import { windowOps } from './window';
  */
 
 export type Implementations = {
-  [N in OpName]: (args: ArgsOf<N>, ctx: OpContext) => ResultOf<N> | Promise<ResultOf<N>>;
+  [N in OpName]: (args: ArgsOf<N>, ctx: OpContext) => ProducedOf<N> | Promise<ProducedOf<N>>;
 };
 
 /** What the operations act on: the services the core composes (createCore). */

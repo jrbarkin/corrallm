@@ -121,9 +121,40 @@ describe('core.call', () => {
     });
     expect(await core.call('test.close', { canvas: CANVAS }, CALLERS.you)).toEqual({
       ok: true,
-      value: { closed: true },
+      value: { closed: true, revs: {} },
     });
     expect(await holding).toEqual({ ok: true, value: { stopped: true } });
+  });
+
+  it('gives every write’s result the revisions it reached, and a read’s none', async () => {
+    const { core } = setup();
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).toEqual(
+      { ok: true, value: { agent: 'helper', revs: {} } },
+    );
+    expect(await core.call('test.read', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { caller: 'you', same: 1 },
+    });
+  });
+
+  it('answers a conflict with what the entities it names are now', async () => {
+    const registry = testRegistry();
+    const current = { 'node/helper': { rev: 3, value: null } };
+    const core = createDispatcher(
+      {
+        ...registry,
+        implementations: {
+          ...registry.implementations,
+          'test.agent': () => {
+            throw new OpFailure('conflict', 'It changed.', current);
+          },
+        },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).toEqual(
+      { ok: false, error: { code: 'conflict', sentence: 'It changed.', current } },
+    );
   });
 
   it('answers with the op’s result, as a value', async () => {
@@ -264,7 +295,7 @@ describe('core.call', () => {
     // With one, it is filled in.
     expect(await core.call('test.agent', { agent: 'helper' }, CALLERS['outside-write'])).toEqual({
       ok: true,
-      value: { agent: 'helper' },
+      value: { agent: 'helper', revs: {} },
     });
     expect(
       (
@@ -293,7 +324,7 @@ describe('core.call', () => {
     });
     expect(await core.call('test.piped', piped(' peer '), CALLERS.worker)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -312,7 +343,7 @@ describe('core.call', () => {
     // You reach everything.
     expect(await core.call('test.piped', { canvas: CANVAS, to: 'PEER' }, CALLERS.you)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -342,7 +373,7 @@ describe('core.call', () => {
     expect(calls['test.message']).toEqual([]);
     expect(await core.call('test.message', message({ body: '!ls' }), CALLERS.you)).toEqual({
       ok: true,
-      value: { sent: 'peer' },
+      value: { sent: 'peer', revs: {} },
     });
   });
 
@@ -356,7 +387,7 @@ describe('core.call', () => {
     expect(calls['test.delete']).toEqual([]);
     expect(await core.call('test.delete', args, CALLERS.you)).toEqual({
       ok: true,
-      value: { deleted: 'stranger' },
+      value: { deleted: 'stranger', revs: {} },
     });
   });
 
@@ -387,7 +418,7 @@ describe('core.call', () => {
     expect(checked).toEqual([]);
     await core.call('test.stop', peer, CALLERS.you);
     await holding;
-    expect(await sending).toEqual({ ok: true, value: { sent: 'peer' } });
+    expect(await sending).toEqual({ ok: true, value: { sent: 'peer', revs: {} } });
     expect(checked).toEqual(['hello']);
   });
 
@@ -416,7 +447,7 @@ describe('core.call', () => {
         { canvas: CANVAS, agent: 'stranger' },
         CALLERS['outside-write'],
       ),
-    ).toEqual({ ok: true, value: { deleted: 'stranger' } });
+    ).toEqual({ ok: true, value: { deleted: 'stranger', revs: {} } });
   });
 
   it('returns a repeated request’s first result, once per caller', async () => {
@@ -467,12 +498,12 @@ describe('core.call', () => {
       ok: false,
       error: { code: 'refused', sentence: 'The call was cancelled.' },
     });
-    expect(await retry).toEqual({ ok: true, value: { agent: 'helper' } });
+    expect(await retry).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
     expect(runs).toBe(2);
     // The retry's result is the one kept.
     expect(await core.call('test.agent', args, CALLERS['outside-write'])).toEqual({
       ok: true,
-      value: { agent: 'helper' },
+      value: { agent: 'helper', revs: {} },
     });
     expect(runs).toBe(2);
   });
@@ -508,7 +539,7 @@ describe('core.call', () => {
       throw new Error('The disk is full.');
     });
     expect(broken.first).toMatchObject({ ok: false, error: { code: 'unavailable' } });
-    expect(broken.again).toEqual({ ok: true, value: { agent: 'again' } });
+    expect(broken.again).toEqual({ ok: true, value: { agent: 'again', revs: {} } });
     // So is one a preempting op stopped, whatever it threw as it unwound.
     const stopped = crypto.randomUUID();
     const holding = call(stopped);
@@ -522,7 +553,7 @@ describe('core.call', () => {
       });
     });
     outcomes.push(() => ({ agent: 'again' }));
-    expect(await call(stopped)).toEqual({ ok: true, value: { agent: 'again' } });
+    expect(await call(stopped)).toEqual({ ok: true, value: { agent: 'again', revs: {} } });
   });
 
   it('keeps each caller’s recent requests apart, so none pushes out another’s', async () => {
@@ -612,7 +643,7 @@ describe('core.call', () => {
     await vi.waitFor(async () => {
       expect(await core.call('test.stop', args, CALLERS.you)).toEqual({
         ok: true,
-        value: { stopped: true },
+        value: { stopped: true, revs: {} },
       });
     });
     expect(await holding).toEqual({ ok: true, value: { stopped: true } });

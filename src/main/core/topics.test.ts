@@ -68,6 +68,7 @@ describe('T3c: usage and settings topics', () => {
             rev: 0,
             epoch: expect.any(String) as string,
             state: state.ok ? state.value : undefined,
+            revs: {},
           },
         },
       });

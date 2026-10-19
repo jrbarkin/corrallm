@@ -400,7 +400,11 @@ it('delivers the next message once one taken back while it was journaled is with
     await vi.waitFor(() => {
       expect(messages?.get(first.id)?.state).toBe('delivering');
     });
-    expect(await ok('withdraw', { id: first.id })).toEqual({ reached: false, interrupted: false });
+    expect(await ok('withdraw', { id: first.id })).toEqual({
+      reached: false,
+      interrupted: false,
+      revs: {},
+    });
   } finally {
     release();
   }

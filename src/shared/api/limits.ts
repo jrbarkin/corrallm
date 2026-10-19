@@ -54,6 +54,18 @@ export const MAX_PAGE_BYTES = 60 * 1024;
  */
 export const MAX_NEED_ID = 4096;
 
+/** The longest name of an agent or a group an op gives it, in characters. */
+export const MAX_LABEL = 200;
+
+/** The most nodes one op names, or moves, on a canvas. */
+export const MAX_OP_NODES = 500;
+
+/** The most ops one canvas.batch holds. */
+export const MAX_BATCH_OPS = 100;
+
+/** The most entities a doc op may say it expects the revisions of (Core Server §5.4). */
+export const MAX_EXPECT = 100;
+
 /** How many lines of a prompt's detail are shown, then how many more there are. */
 export const MAX_DETAIL_LINES = 12;
 

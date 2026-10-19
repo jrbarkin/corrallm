@@ -18,6 +18,7 @@ export type Brand =
   | 'NodeId'
   | 'GroupId'
   | 'ItemId'
+  | 'EntityKey'
   | 'NeedId'
   | 'MessageId'
   | 'ConversationId'
@@ -83,11 +84,26 @@ export type ItemId = z.infer<typeof ItemId>;
 export const MessageId = brandedId('MessageId', z.uuid());
 export type MessageId = z.infer<typeof MessageId>;
 
-/** A branded id found in an op's arguments: its brand, its value, and where it was. */
+/**
+ * An entity of a canvas's document, by its key (src/shared/model/rows.ts): `node/<id>`,
+ * `link/<a>/<b>` or `item/<agent>/<id>`, each id escaped (up to 9 characters for each of its own).
+ */
+export const EntityKey = brandedId(
+  'EntityKey',
+  z
+    .string()
+    .max('item/'.length + 2 * 9 * MAX_NODE_ID + 1)
+    .regex(/^(?:node|link|item)\//),
+);
+export type EntityKey = z.infer<typeof EntityKey>;
+
+/** A branded id found in an op's arguments: its brand, its value, where it was, and if a key. */
 export interface IdRef {
   brand: Brand;
   id: string;
   path: string;
+  /** Whether it keys a map, rather than being a value. */
+  key?: true;
 }
 
 /** The parts of a zod schema's definition that can hold an id. */
@@ -213,7 +229,7 @@ export function idsIn(schema: z.ZodType, value: unknown, path = ''): IdRef[] {
       const { keyType, valueType } = def;
       return isRecord(value) && keyType && valueType
         ? Object.entries(value).flatMap(([key, item]) => [
-            ...idsIn(keyType, key, `${path}.${key}`),
+            ...idsIn(keyType, key, `${path}.${key}`).map((ref) => ({ ...ref, key: true as const })),
             ...idsIn(valueType, item, `${path}.${key}`),
           ])
         : [];

@@ -44,6 +44,10 @@ export type ArgsOf<N extends OpName> = z.output<(typeof OPS)[N]['input']>;
 /** What op `N` returns. */
 export type ResultOf<N extends OpName> = z.output<(typeof OPS)[N]['output']>;
 
+/** What op `N`'s implementation returns: its result but the revisions core.call adds to a write's. */
+export type ProducedOf<N extends OpName> = WithoutRevs<ResultOf<N>>;
+type WithoutRevs<T> = T extends { revs: unknown } ? Omit<T, 'revs'> : T;
+
 /** The operations `party` may call, by name, sorted: the tools MCP lists to it. */
 export function opsFor(surface: Readonly<Record<string, Surface>>, party: Party): string[] {
   return Object.keys(surface)

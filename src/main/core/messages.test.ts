@@ -784,7 +784,7 @@ describe('delivery', () => {
         },
         YOU,
       ),
-    ).toEqual({ ok: true, value: {} });
+    ).toEqual({ ok: true, value: { revs: {} } });
     await vi.waitFor(async () => {
       const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
       expect(reply?.state).toBe('replied');
@@ -1120,7 +1120,11 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
         .entries.some((entry) => entry.kind === 'user' && entry.reached),
     ).toBe(true);
   });
-  expect(await ok('withdraw', { id }, caller)).toEqual({ reached: true, interrupted: true });
+  expect(await ok('withdraw', { id }, caller)).toEqual({
+    reached: true,
+    interrupted: true,
+    revs: {},
+  });
   expect((await find(id, caller))?.state).toBe('withdrawn');
   return id;
 }
@@ -1239,7 +1243,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await start();
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
     const id = await send('builder', 'Never sent');
-    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false });
+    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false, revs: {} });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     const next = await send('builder', 'New work', OTHER);
     await vi.waitFor(async () => {
@@ -1263,6 +1267,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     expect(await ok('withdraw', { id: queued }, YOU)).toEqual({
       reached: false,
       interrupted: false,
+      revs: {},
     });
     await ok('session.interrupt', { agent: 'builder' }, YOU);
     await vi.waitFor(async () => {
@@ -1371,7 +1376,7 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('delivering');
     });
-    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true });
+    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true, revs: {} });
     await vi.waitFor(async () => {
       expect((await find(next, YOU))?.state).toBe('replied');
     });
@@ -2192,12 +2197,16 @@ describe('pauses', () => {
     await ok('run.pause', { target: { agent: 'builder' } });
     expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
       held: [{ by: 'you', on: 'builder' }],
+      revs: {},
     });
     const id = await send('builder', 'Still paused?');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect((await find(id))?.state).toBe('pending');
     // Yours released too, it runs again.
-    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
+      held: [],
+      revs: {},
+    });
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
     });
@@ -2221,6 +2230,7 @@ describe('pauses', () => {
     // You release only Builder's own pauses; its group's still holds it.
     expect(await ok('run.unpause', { target: { agent: 'builder' } }, YOU)).toEqual({
       held: [{ by: 'you', on: 'team' }],
+      revs: {},
     });
   });
 
@@ -2247,7 +2257,7 @@ describe('pauses', () => {
           'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or the user, can release it.',
       },
     });
-    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [], revs: {} });
   });
 
   it.each([
@@ -2313,14 +2323,20 @@ describe('pauses', () => {
     expect(
       await core?.call('run.unpause', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE),
     ).toMatchObject({ ok: false, error: { code: 'refused' } });
-    expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } }, OTHER)).toEqual({
+      held: [],
+      revs: {},
+    });
   });
 
   it('lets a token release a kill it made', async () => {
     await keepCanvas();
     await start();
     await ok('run.kill', { target: { agent: 'builder' } });
-    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({ held: [] });
+    expect(await ok('run.unpause', { target: { agent: 'builder' } })).toEqual({
+      held: [],
+      revs: {},
+    });
     const id = await send('builder', 'Back again');
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
@@ -2760,11 +2776,11 @@ describe('reads', () => {
     });
     expect(await started.call('withdraw', { id }, both)).toEqual({
       ok: true,
-      value: { reached: false, interrupted: false },
+      value: { reached: false, interrupted: false, revs: {} },
     });
     const next = await send('builder', 'Say hello over MCP', both);
     expect(await callTool(started, both, 'withdraw', { id: next })).toMatchObject({
-      structuredContent: { reached: false, interrupted: false },
+      structuredContent: { reached: false, interrupted: false, revs: {} },
     });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
     expect(await find(next)).toMatchObject({ state: 'withdrawn' });

@@ -88,7 +88,7 @@ const api: AppApi = {
       (file) => file !== '',
     );
     return paths.length === 0
-      ? Promise.resolve({ ok: true, value: {} } as const)
+      ? Promise.resolve({ ok: true, value: { revs: {} } } as const)
       : (core.call('terminal.drop', {
           agent,
           paths,

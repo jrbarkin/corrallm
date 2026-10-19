@@ -21,10 +21,20 @@ export const ERROR_CODES = [
 ] as const;
 export type OpErrorCode = (typeof ERROR_CODES)[number];
 
-/** An operation's failure: its code, and one sentence saying why. */
+/** What an entity of a canvas's document is now: its revision (0: there is none) and its row. */
+export interface Current {
+  rev: number;
+  value: unknown;
+}
+
+/**
+ * An operation's failure: its code, and one sentence saying why; for a conflict over entities a
+ * doc op expected at other revisions, what each of those is now, by its key.
+ */
 export interface OpError {
   code: OpErrorCode;
   sentence: string;
+  current?: Readonly<Record<string, Current>>;
 }
 
 /** What an operation answers: its result, or why it failed. */

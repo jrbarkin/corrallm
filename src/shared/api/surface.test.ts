@@ -7,7 +7,7 @@ import type { OpDef } from './define';
 import { DEVIATIONS, REASONS } from './deviations';
 import { brandedId, brandsIn, children, defOf, ID_BRANDS, NeedId } from './ids';
 import type { Brand } from './ids';
-import { MAX_REQUEST_BYTES } from './limits';
+import { MAX_EXPECT, MAX_REQUEST_BYTES } from './limits';
 import { inputSchemaOf, OPS, opsFor, outputSchemaOf, toolName, toolOf } from './registry';
 import { RULES } from './rules';
 import type { RuleRow } from './rules';
@@ -581,8 +581,13 @@ describe('T1: the surface’s rules', () => {
                 words: z.array(z.string().max(5)).max(3),
               }),
             ),
+            // A doc op's envelope, the entities it expects, is bounded.
+            'test.doc': op(
+              { access: both, kind: 'doc', scope: 'canvas', self: 'allowed' },
+              z.strictObject({ agent: Agent }),
+            ),
           },
-          { unhosted: { 'test.agent': 'B11' } },
+          { unhosted: { 'test.agent': 'B11', 'test.doc': 'B11' } },
         ),
       ),
     ).toEqual([]);
@@ -624,11 +629,44 @@ describe('the envelope', () => {
     ).toBe(false);
   });
 
+  it('gives a doc op the revisions it expects of entities, by their keys, at most MAX_EXPECT', () => {
+    const doc = withEnvelope(surface({ kind: 'doc', scope: 'canvas' }), def);
+    const expected = { 'node/lead': 3, 'link/lead/worker': 1, 'item/lead/plan': 0 };
+    expect(doc.input.parse({ n: 1, expect: expected })).toEqual({ n: 1, expect: expected });
+    for (const expect_ of [
+      { meta: 1 },
+      { 'canvas/lead': 1 },
+      { 'node/lead': -1 },
+      { 'node/lead': 1.5 },
+      Object.fromEntries(
+        Array.from({ length: MAX_EXPECT + 1 }, (_, i) => [`node/agent-${String(i)}`, 1]),
+      ),
+    ]) {
+      expect(doc.input.safeParse({ n: 1, expect: expect_ }).success, JSON.stringify(expect_)).toBe(
+        false,
+      );
+    }
+    // Only doc ops change entities.
+    expect(withEnvelope(surface(), def).input.safeParse({ n: 1, expect: {} }).success).toBe(false);
+  });
+
+  it('gives every write’s result the revisions it reached, and a read’s none', () => {
+    const revs = { 'canvas:0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b': 4 };
+    for (const kind of ['command', 'doc'] as const) {
+      const write = withEnvelope(surface({ kind, scope: 'canvas' }), def);
+      expect(write.output.parse({ n: 1, revs })).toEqual({ n: 1, revs });
+      expect(write.output.safeParse({ n: 1 }).success).toBe(false);
+    }
+    expect(
+      withEnvelope(surface({ kind: 'read' }), def).output.safeParse({ n: 1, revs }).success,
+    ).toBe(false);
+  });
+
   it('lets an op that may become a proposal return { proposed }, and its outputSchema say so', () => {
     const proposing = withEnvelope(surface({ rules: ['discard'], destructive: true }), def);
     const proposed = { proposed: NeedId.parse('proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b') };
     expect(proposing.output.parse(proposed)).toEqual(proposed);
-    expect(proposing.output.parse({ n: 2 })).toEqual({ n: 2 });
+    expect(proposing.output.parse({ n: 2, revs: {} })).toEqual({ n: 2, revs: {} });
     expect(outputSchemaOf(proposing)).toMatchObject({
       type: 'object',
       anyOf: [{ type: 'object' }, { type: 'object' }],

@@ -13,8 +13,13 @@ function source(connected = true) {
   const api: TopicSource = {
     topicsSubscribe: vi.fn<TopicSource['topicsSubscribe']>(
       ({ topic }) =>
-        new Promise<TopicSnapshot>((resolve) => {
-          pending.push({ topic, resolve });
+        new Promise((resolve) => {
+          pending.push({
+            topic,
+            resolve: (snapshot) => {
+              resolve({ ...snapshot, revs: {} });
+            },
+          });
         }),
     ),
     topicsUnsubscribe: vi.fn().mockResolvedValue({}),
