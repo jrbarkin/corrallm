@@ -5,7 +5,6 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -20,7 +19,7 @@ import fakeClaude from './selftest-claude.mjs?raw';
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
  * the core needs loads and runs as bundled (CommonJS; packaged, fused), wherever it runs: the app's
  * main process (native-selftest.ts), its core process (entry.ts) and the CLI bundle under plain
- * Node (cli/index.ts). No real `claude`, no login. Electron-free: what differs between those hosts
+ * Node (cli/main.ts). No real `claude`, no login. Electron-free: what differs between those hosts
  * (whether the app is packaged) is passed in. Each check resolves with what it saw, or rejects
  * saying what failed.
  */
@@ -182,6 +181,9 @@ export async function checkAgentSdk(
 /** A file-backed WAL transaction through Node's SQLite, reopened read-only after committing. */
 export async function checkSqlite(folder = tmpdir()): Promise<string> {
   try {
+    // Imported here only: the CLI's bundle requires what is imported at the top as it loads, before
+    // it checks the Node it runs on (cli/index.ts), and an older Node lacks this one.
+    const { DatabaseSync } = await import('node:sqlite');
     const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
     try {
       const file = path.join(dir, 'selftest.sqlite');
