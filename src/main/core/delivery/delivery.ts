@@ -507,11 +507,13 @@ export class Delivery {
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     if (this.#unasking(node)) return { kind: 'unasking' };
+    // The run's own message on its way to it goes first, as one in its session's queue would.
     const session = engine.sessions.of(node.id);
     if (
       session.status !== 'idle' ||
       session.queued.length > 0 ||
-      (session.asking?.length ?? 0) > 0
+      (session.asking?.length ?? 0) > 0 ||
+      engine.run.sending(node.id)
     ) {
       return { kind: 'busy' };
     }
