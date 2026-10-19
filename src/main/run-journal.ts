@@ -61,11 +61,13 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
  * canvas memory lost it, and where each party's `wait` has read to in its messages: every save
- * keeps them as they were (the app's never moves one), but the save that moves one forward, which
- * is forced to disk. A window's renderer saves with the token of the canvas it showed: a save meant
- * for a canvas it has since replaced (or opened again) is refused. A record that can't be read as
- * one is set aside, saying where; a last canvas of another version reads as none. The folders it
- * makes are the user's alone.
+ * keeps them as they were (the app's never moves one), but the save that moves one forward; and
+ * once a record holds any, every write of it is forced to disk, so that no crash, during that write
+ * or any after it, loses a position a `wait` returned past (a record with none, which no party has
+ * waited on, is written as quickly as ever). A window's renderer saves with the token of the
+ * canvas it showed: a save meant for a canvas it has since replaced (or opened again) is refused.
+ * A record that can't be read as one is set aside, saying where; a last canvas of another version
+ * reads as none. The folders it makes are the user's alone.
  */
 export class RunJournal {
   readonly #directory: string;
@@ -143,7 +145,7 @@ export class RunJournal {
   /**
    * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, with where
    * each party's `wait` has read to as the record kept them; with `moved`, that party's moved
-   * forward (never back), and the record forced to disk before it resolves.
+   * forward (never back). A record holding any is forced to disk before it resolves.
    */
   async save(
     canvas: CanvasId,
@@ -303,8 +305,9 @@ export class RunJournal {
   }
 
   /**
-   * Writes a canvas's record, with the read positions it had: `moved` moved forward, and then
-   * forced to disk.
+   * Writes a canvas's record, with the read positions it had, `moved` moved forward: forced to disk
+   * once it holds any, since each write replaces the record whole, and one torn by a crash would
+   * lose them all.
    */
   async #write(canvas: CanvasId, checkpoint: RunCheckpoint, moved?: MovedRead): Promise<void> {
     const { file, ...remembered } = await this.#deps.memory.get(canvas);
@@ -313,6 +316,7 @@ export class RunJournal {
       moved === undefined || moved.seq <= (kept[moved.party] ?? 0)
         ? kept
         : { ...kept, [moved.party]: moved.seq };
+    const holdsReads = Object.keys(reads).length > 0;
     await mkdir(path.dirname(this.#recordFile(canvas)), PRIVATE);
     await writeWhole(
       this.#recordFile(canvas),
@@ -322,9 +326,9 @@ export class RunJournal {
         ...(file === undefined ? {} : { file }),
         checkpoint,
         remembered,
-        ...(Object.keys(reads).length === 0 ? {} : { reads }),
+        ...(holdsReads ? { reads } : {}),
       }),
-      { durable: moved !== undefined },
+      { durable: holdsReads },
     );
     this.#reads.set(canvas, reads);
   }

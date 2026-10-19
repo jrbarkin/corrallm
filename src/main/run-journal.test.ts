@@ -235,11 +235,36 @@ describe('RunJournal', () => {
       runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 5 }),
     ]);
     const records = writes.mock.calls.filter(([file]) => file === record(canvas));
-    expect(records.map(([, , options]) => options?.durable === true)).toEqual([true, false, true]);
+    expect(records.map(([, , options]) => options?.durable === true)).toEqual([true, true, true]);
     expect(await journal().reads(canvas)).toEqual({
       'outside:orchestrator': 3,
       'outside:other': 5,
     });
+  });
+
+  it('forces every write of a record holding a read position to disk, so none that follows can lose it', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    const forced = () =>
+      writes.mock.calls
+        .filter(([file]) => file === record(canvas))
+        .map(([, , options]) => options?.durable === true);
+    // No party has waited on it: its saves are as quick as ever.
+    await runs.save(canvas, token, checkpoint);
+    expect(forced()).toEqual([false]);
+
+    // Once a record holds one, a save that moves none (the engine's every 250 ms, a canvas saved,
+    // the app's) still replaces it whole: each is forced too, so a crash leaves either record.
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 });
+    await runs.save(canvas, token, { ...checkpoint, updatedAt: 456 });
+    await runs.saved(canvas);
+    const app = journal();
+    const context = await app.get(canvas);
+    await app.save(canvas, context.token, { ...checkpoint, updatedAt: 789 });
+    expect(forced()).toEqual([false, true, true, true, true]);
+    expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 3 });
   });
 
   it('reads no read position that isn’t a party’s place in the store', async () => {
