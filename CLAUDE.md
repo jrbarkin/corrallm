@@ -391,6 +391,8 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 FrameNode, Link, CanvasDocument: by what they mean, with no React Flow, selection
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
+                references.ts (clears surviving queues when agents are deleted, returning what
+                changed in words; used by the renderer's deleteSelection),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
                 members, links, an agent's name, its manager, its team and what it is nested
                 in), geometry.ts (the boxes' sizes, the group colours), file.ts (the .corral

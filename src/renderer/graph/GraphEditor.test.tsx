@@ -84,6 +84,69 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it.each([
+    ['Model: Opus', 'Default (Opus)', { effort: 'low', mode: 'plan' }],
+    ['Effort: Low', 'Default (Low)', { model: 'opus', mode: 'plan' }],
+    ['Mode: Plan', 'Default (Manual)', { model: 'opus', effort: 'low' }],
+  ] as const)(
+    'saves exactly the settings the sheet shows after clearing %s',
+    async (field, choice, expected) => {
+      const other = { model: 'gpt-6-luna', mode: 'auto' };
+      const files = {
+        open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+        save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+        forget: vi
+          .fn<CanvasFiles['forget']>()
+          .mockImplementation(() => Promise.resolve(newCanvasId())),
+      };
+      const { node, fake } = setup(
+        {
+          nodes: [
+            agentNode('a', 0, 0, {
+              data: {
+                label: 'Reviewer',
+                connection: 'claude-code.sdk',
+                settings: {
+                  'claude-code': { model: 'opus', effort: 'low', mode: 'plan' },
+                  codex: other,
+                },
+              },
+            }),
+          ],
+          edges: [],
+        },
+        files,
+      );
+      fake.backend.options.mockResolvedValue({
+        models: [{ value: 'opus', label: 'Opus', efforts: [{ value: 'low', label: 'Low' }] }],
+        defaults: { model: 'opus', effort: 'low', mode: 'manual' },
+      });
+      fireEvent.contextMenu(node('a'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Settings…' }));
+      const sheet = within(screen.getByRole('dialog', { name: 'Agent settings: Reviewer' }));
+      await waitFor(() => {
+        expect(sheet.getByRole('button', { name: 'Model: Opus' })).toBeTruthy();
+      });
+      fireEvent.click(sheet.getByRole('button', { name: field }));
+      fireEvent.click(
+        sheet.getByRole('menuitemradio', { name: (name) => name.startsWith(choice) }),
+      );
+      expect(
+        sheet.getByRole('button', { name: `${field.split(':')[0] ?? ''}: ${choice}` }),
+      ).toBeTruthy();
+      fireEvent.click(sheet.getByRole('button', { name: 'Close agent settings' }));
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(files.save).toHaveBeenCalledOnce();
+      });
+      const loaded = fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT);
+      expect(loaded.nodes[0]?.data).toHaveProperty('settings', {
+        'claude-code': expected,
+        codex: other,
+      });
+    },
+  );
+
   it('restores, saves and sends under StrictMode, and answers shutdown from the shown canvas once', async () => {
     const saved: Graph = {
       nodes: [

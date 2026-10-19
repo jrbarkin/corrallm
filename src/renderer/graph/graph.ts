@@ -6,8 +6,10 @@ import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
 import { CARD_SIZE, EMPTY_FRAME, GROUP_COLORS, HEADER, PADDING } from '../../shared/model/geometry';
 import { areLinked } from '../../shared/model/queries';
+import { clearDeletedReferences } from '../../shared/model/references';
 import { parseRole } from '../../shared/role';
-import type { AgentSettings } from '../../shared/session';
+import { mergeAgentSettings } from '../../shared/session';
+import type { AgentSettingsChange } from '../../shared/session';
 import { catalog } from '../catalog';
 import { connectionsOf, DEFAULT_AGENT, defaultConnection, translateActions } from './agents';
 import type { AgentConnection } from './agents';
@@ -302,21 +304,8 @@ function fitted(
   const mode = settings[adapter]?.mode;
   if (mode === undefined || runs === 'unavailable') return { settings };
   if (isStartMode(catalog(), adapter, runs, mode)) return { settings };
-  const rest = { ...settings[adapter] };
-  delete rest.mode;
-  const kept = withSettings({ ...settings, [adapter]: rest });
+  const kept = mergeAgentSettings(settings, adapter, { mode: null });
   return kept === undefined ? {} : { settings: kept };
-}
-
-/** Each adapter's settings that set anything; undefined if none does. */
-function withSettings(
-  all: NonNullable<GraphNode['data']['settings']>,
-): GraphNode['data']['settings'] {
-  const kept = Object.entries(all).filter(
-    (entry): entry is [string, AgentSettings] =>
-      entry[1] !== undefined && Object.keys(entry[1]).length > 0,
-  );
-  return kept.length === 0 ? undefined : Object.fromEntries(kept);
 }
 
 /** `graph` with `node`'s data replaced by `data`. */
@@ -325,19 +314,19 @@ function replace(graph: Graph, node: GraphNode, data: GraphNode['data']): Graph 
 }
 
 /**
- * Sets what an agent is set to run with by `adapter` (what is not in `settings` is the user's own
- * default); nothing set by any adapter leaves it no settings at all.
+ * Merges what an agent is set to run with by `adapter`: omitted fields stay, null unsets them.
+ * Nothing set by any adapter leaves it no settings at all.
  */
 export function setSettings(
   graph: Graph,
   id: string,
   adapter: AdapterId,
-  settings: AgentSettings,
+  change: AgentSettingsChange,
 ): Graph {
   const node = graph.nodes.find((n) => n.id === id);
   if (node?.type !== 'agent') return graph;
-  const { settings: before = {}, ...data } = node.data;
-  const kept = withSettings({ ...before, [adapter]: settings });
+  const { settings: before, ...data } = node.data;
+  const kept = mergeAgentSettings(before, adapter, change);
   return replace(graph, node, kept === undefined ? data : { ...data, settings: kept });
 }
 
@@ -673,7 +662,8 @@ export function deleteSelection(graph: Graph): Graph {
   );
   if (removed.size === 0 && edges.length === edgesBefore) return graph;
   const byId = indexById(graph.nodes);
-  const nodes = graph.nodes.flatMap((n): GraphNode[] => {
+  const cleared = clearDeletedReferences(graph.nodes, removed);
+  const nodes = cleared.nodes.flatMap((n): GraphNode[] => {
     if (removed.has(n.id)) return [];
     if (n.parentId === undefined || !removed.has(n.parentId)) return [n];
     let ancestor = parentOf(n, byId);

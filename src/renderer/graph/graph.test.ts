@@ -2,6 +2,8 @@ import type { Edge, XYPosition } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
 import type { QueueItem } from '../../shared/model/queue';
+import { fromFile, toFile } from '../../shared/model/file';
+import { TEST_CATALOG } from '../../shared/engine/test-engine';
 
 import {
   absolutePosition,
@@ -685,6 +687,36 @@ describe('setConnection', () => {
 });
 
 describe('setSettings', () => {
+  it('merges a model-only change, keeping saved mode, effort and other adapters', () => {
+    const other = { model: 'gpt-6-luna', mode: 'auto' };
+    const g = frozen([
+      agentNode('a', 0, 0, {
+        data: {
+          label: 'a',
+          settings: {
+            'claude-code': { model: 'opus', effort: 'high', mode: 'plan' },
+            codex: other,
+          },
+        },
+      }),
+    ]);
+    const result = setSettings(g, 'a', 'claude-code', { model: 'haiku' });
+    expect(get(result, 'a').data.settings).toEqual({
+      'claude-code': { model: 'haiku', effort: 'high', mode: 'plan' },
+      codex: other,
+    });
+    expect(get(result, 'a').data.settings?.codex).toBe(other);
+    expect(
+      get(setSettings(result, 'a', 'claude-code', { effort: null }), 'a').data.settings,
+    ).toEqual({
+      'claude-code': { model: 'haiku', mode: 'plan' },
+      codex: other,
+    });
+    expect(get(setSettings(result, 'a', 'claude-code', {}), 'a').data.settings).toEqual(
+      get(result, 'a').data.settings,
+    );
+  });
+
   it('sets what an agent runs with by one adapter, keeping the other’s; nothing set leaves nothing', () => {
     const g = frozen([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
     const claude = setSettings(g, 'a', 'claude-code', { model: 'haiku', mode: 'plan' });
@@ -693,10 +725,12 @@ describe('setSettings', () => {
       'claude-code': { model: 'haiku', mode: 'plan' },
       codex: { effort: 'low' },
     });
-    expect(get(setSettings(both, 'a', 'codex', {}), 'a').data.settings).toEqual({
+    expect(get(setSettings(both, 'a', 'codex', { effort: null }), 'a').data.settings).toEqual({
       'claude-code': { model: 'haiku', mode: 'plan' },
     });
-    expect(get(setSettings(claude, 'a', 'claude-code', {}), 'a').data).toEqual({ label: 'a' });
+    expect(
+      get(setSettings(claude, 'a', 'claude-code', { model: null, mode: null }), 'a').data,
+    ).toEqual({ label: 'a' });
     expect(setSettings(g, 'F', 'claude-code', { model: 'haiku' })).toBe(g);
   });
 
@@ -712,7 +746,10 @@ describe('setSettings', () => {
       codex: { model: 'gpt-6-luna' },
     });
     // A mode it starts in stays, and so does what other adapters are set to.
-    const reading = { codex: { mode: 'read-only' }, 'claude-code': { mode: 'plan' } };
+    const reading = {
+      codex: { model: 'gpt-6-luna', mode: 'read-only' },
+      'claude-code': { mode: 'plan' },
+    };
     const read = setSettings(g, 'a', 'codex', reading.codex);
     const both = setSettings(read, 'a', 'claude-code', reading['claude-code']);
     expect(get(setConnection(both, 'a', 'codex.terminal'), 'a').data.settings).toEqual(reading);
@@ -809,6 +846,44 @@ describe('deleteEdge', () => {
 });
 
 describe('deleteSelection', () => {
+  it('clears references to deleted agents throughout surviving queues and saves a readable canvas', () => {
+    const g = frozen([
+      selected(agentNode('builder', 0, 0)),
+      agentNode('reviewer', 0, 100, {
+        data: {
+          label: 'Reviewer',
+          queue: [
+            { id: 'wait', waitFor: [{ agent: 'builder' }] },
+            { id: 'send', message: 'Review this', target: 'builder' },
+            {
+              id: 'branch',
+              if: { kind: 'freeText', text: 'Ready?' },
+              then: [{ id: 'read', action: 'Read', target: 'builder' }],
+            },
+            {
+              id: 'loop',
+              repeat: [{ id: 'step', action: 'Read', target: 'builder' }],
+              until: { kind: 'repeatEnds', agent: 'builder', item: 'building' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        },
+      }),
+    ]);
+    const result = deleteSelection(g);
+    expect(get(result, 'reviewer').data.queue).toEqual([
+      {
+        id: 'branch',
+        if: { kind: 'freeText', text: 'Ready?' },
+        then: [{ id: 'read', action: 'Read' }],
+      },
+      { id: 'step', action: 'Read' },
+    ]);
+    const document = documentOf(result, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId);
+    expect(fromFile(toFile(document), TEST_CATALOG, 'claude-code')).toEqual(document);
+  });
+
   it('deletes the selected agents and edges, and the edges of deleted agents', () => {
     const g = frozen(
       [selected(agentNode('a', 0, 0)), agentNode('b', 0, 100), agentNode('c', 0, 200)],
