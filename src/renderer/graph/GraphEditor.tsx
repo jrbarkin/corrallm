@@ -22,7 +22,7 @@ import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { UNASKING_MODES } from '../../shared/session';
-import type { AgentSettings, InstalledClis } from '../../shared/session';
+import type { AgentSettingsChange, InstalledClis } from '../../shared/session';
 import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
@@ -560,18 +560,15 @@ function Editor({
    * Changes what a connected agent is set to run with by the adapter it runs now (its settings,
    * saved with it). What it runs with changes nothing laid out; an unavailable connector has none to change.
    */
-  const updateSettings = useCallback(
-    (id: string, change: (settings: AgentSettings) => AgentSettings) => {
-      setRawGraph((g) => {
-        const node = g.nodes.find((n) => n.id === id);
-        const connection = node ? connectionOf(node.data) : 'unavailable';
-        if (!node || connection === 'unavailable') return g;
-        const adapter = adapterOf(connection);
-        return setSettings(g, id, adapter, change(node.data.settings?.[adapter] ?? {}));
-      });
-    },
-    [],
-  );
+  const updateSettings = useCallback((id: string, change: AgentSettingsChange) => {
+    setRawGraph((g) => {
+      const node = g.nodes.find((n) => n.id === id);
+      const connection = node ? connectionOf(node.data) : 'unavailable';
+      if (!node || connection === 'unavailable') return g;
+      const adapter = adapterOf(connection);
+      return setSettings(g, id, adapter, change);
+    });
+  }, []);
 
   // Also dismisses React Flow's selection rectangle, which would keep covering the old selection.
   const apply = useCallback(
@@ -1406,23 +1403,17 @@ function Editor({
               // never asks only for the session, never saved.
               setMode: (mode) => {
                 sessionStore.setMode(openedNode.id, mode);
-                updateSettings(openedNode.id, (settings) => {
-                  const next = { ...settings };
-                  delete next.mode;
-                  return UNASKING_MODES.includes(mode) ? next : { ...next, mode };
+                updateSettings(openedNode.id, {
+                  mode: UNASKING_MODES.includes(mode) ? null : mode,
                 });
               },
               setModel: (model) => {
                 sessionStore.setModel(openedNode.id, model);
-                updateSettings(openedNode.id, (settings) => ({ ...settings, model }));
+                updateSettings(openedNode.id, { model });
               },
               setEffort: (effort) => {
                 sessionStore.setEffort(openedNode.id, effort);
-                updateSettings(openedNode.id, (settings) => {
-                  const next = { ...settings };
-                  delete next.effort;
-                  return effort === null ? next : { ...next, effort };
-                });
+                updateSettings(openedNode.id, { effort });
               },
               settingsOptions: (adapter) => sessionStore.settingsOptions(adapter),
               restart: () => {
@@ -1536,7 +1527,13 @@ function Editor({
               );
             }}
             onSettings={(adapter, settings) => {
-              setRawGraph((g) => setSettings(g, settingsNode.id, adapter, settings));
+              setRawGraph((g) =>
+                setSettings(g, settingsNode.id, adapter, {
+                  model: settings.model ?? null,
+                  effort: settings.effort ?? null,
+                  mode: settings.mode ?? null,
+                }),
+              );
             }}
             onRestart={() => {
               void sessionStore.restart(settingsNode.id);

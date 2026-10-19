@@ -190,6 +190,29 @@ export interface AgentSettings {
   mode?: ModeId;
 }
 
+/** A saved-settings change: omitted fields stay as they are; null restores the user's default. */
+export type AgentSettingsChange = {
+  [Key in keyof AgentSettings]?: Required<AgentSettings>[Key] | null;
+};
+
+/** Merges one adapter's settings, dropping its entry, and then the map, when nothing is set. */
+export function mergeAgentSettings(
+  saved: Partial<Record<AdapterId, AgentSettings>> | undefined,
+  adapter: AdapterId,
+  change: AgentSettingsChange,
+): Partial<Record<AdapterId, AgentSettings>> | undefined {
+  const before = saved && Object.hasOwn(saved, adapter) ? saved[adapter] : undefined;
+  const entry = { ...before };
+  for (const key of ['model', 'effort', 'mode'] as const) {
+    const value = change[key];
+    if (value === null) Reflect.deleteProperty(entry, key);
+    else if (value !== undefined) entry[key] = value;
+  }
+  const next = { ...saved, [adapter]: entry };
+  if (Object.keys(entry).length === 0) Reflect.deleteProperty(next, adapter);
+  return Object.keys(next).length ? next : undefined;
+}
+
 /** What a session starts with; the authored role is shared by every CLI the agent runs. */
 export interface AgentStartSettings extends AgentSettings {
   role?: string;

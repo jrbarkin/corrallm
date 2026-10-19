@@ -687,6 +687,36 @@ describe('setConnection', () => {
 });
 
 describe('setSettings', () => {
+  it('merges a model-only change, keeping saved mode, effort and other adapters', () => {
+    const other = { model: 'gpt-6-luna', mode: 'auto' };
+    const g = frozen([
+      agentNode('a', 0, 0, {
+        data: {
+          label: 'a',
+          settings: {
+            'claude-code': { model: 'opus', effort: 'high', mode: 'plan' },
+            codex: other,
+          },
+        },
+      }),
+    ]);
+    const result = setSettings(g, 'a', 'claude-code', { model: 'haiku' });
+    expect(get(result, 'a').data.settings).toEqual({
+      'claude-code': { model: 'haiku', effort: 'high', mode: 'plan' },
+      codex: other,
+    });
+    expect(get(result, 'a').data.settings?.codex).toBe(other);
+    expect(
+      get(setSettings(result, 'a', 'claude-code', { effort: null }), 'a').data.settings,
+    ).toEqual({
+      'claude-code': { model: 'haiku', mode: 'plan' },
+      codex: other,
+    });
+    expect(get(setSettings(result, 'a', 'claude-code', {}), 'a').data.settings).toEqual(
+      get(result, 'a').data.settings,
+    );
+  });
+
   it('sets what an agent runs with by one adapter, keeping the other’s; nothing set leaves nothing', () => {
     const g = frozen([agentNode('a', 0, 0), frame('F', 0, 200, 200, 200)]);
     const claude = setSettings(g, 'a', 'claude-code', { model: 'haiku', mode: 'plan' });
@@ -695,10 +725,12 @@ describe('setSettings', () => {
       'claude-code': { model: 'haiku', mode: 'plan' },
       codex: { effort: 'low' },
     });
-    expect(get(setSettings(both, 'a', 'codex', {}), 'a').data.settings).toEqual({
+    expect(get(setSettings(both, 'a', 'codex', { effort: null }), 'a').data.settings).toEqual({
       'claude-code': { model: 'haiku', mode: 'plan' },
     });
-    expect(get(setSettings(claude, 'a', 'claude-code', {}), 'a').data).toEqual({ label: 'a' });
+    expect(
+      get(setSettings(claude, 'a', 'claude-code', { model: null, mode: null }), 'a').data,
+    ).toEqual({ label: 'a' });
     expect(setSettings(g, 'F', 'claude-code', { model: 'haiku' })).toBe(g);
   });
 
@@ -714,7 +746,10 @@ describe('setSettings', () => {
       codex: { model: 'gpt-6-luna' },
     });
     // A mode it starts in stays, and so does what other adapters are set to.
-    const reading = { codex: { mode: 'read-only' }, 'claude-code': { mode: 'plan' } };
+    const reading = {
+      codex: { model: 'gpt-6-luna', mode: 'read-only' },
+      'claude-code': { mode: 'plan' },
+    };
     const read = setSettings(g, 'a', 'codex', reading.codex);
     const both = setSettings(read, 'a', 'claude-code', reading['claude-code']);
     expect(get(setConnection(both, 'a', 'codex.terminal'), 'a').data.settings).toEqual(reading);
