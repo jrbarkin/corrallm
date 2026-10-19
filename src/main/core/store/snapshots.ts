@@ -1,5 +1,5 @@
 import { closeSync, openSync } from 'node:fs';
-import { mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { copyFile, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { faults } from './faults';
@@ -10,9 +10,10 @@ import { backup, connect } from './sqlite';
  * copies SQLite's backup API takes of the open database as it goes on being written (never a copy
  * of its files, which would miss its log or tear), each a file of its own (no log beside it),
  * named for when it was taken. The profile keeps the newest SNAPSHOTS_KEPT. A snapshot is taken
- * beside its name and moved there once whole, so one cut short never passes for the latest; what
- * it left is removed as the next is taken. One that SQLite's quick check finds a fault in is never
- * kept: the database it copied looks damaged, and the older snapshots stay to restore.
+ * beside its name, forced to disk, and moved there once whole, so one cut short never passes for
+ * the latest (nor, once the machine stops, an empty file of its name); what it left is removed as
+ * the next is taken. One that SQLite's quick check finds a fault in is never kept: the database it
+ * copied looks damaged, and the older snapshots stay to restore.
  *
  * The backup reads through a connection of its own, in one step: SQLite refuses a step while its
  * source connection is writing (SQLITE_LOCKED, which node:sqlite reports as "not an error"), and
@@ -95,13 +96,50 @@ export async function takeSnapshot(source: string, profile: string, at: number):
     } finally {
       copy.close();
     }
-    await rename(partial, file);
+    await place(partial, file);
   } catch (error) {
     await remove(partial);
     throw error;
   }
   for (const old of (await snapshots(profile)).slice(SNAPSHOTS_KEPT)) await remove(old);
   return file;
+}
+
+/**
+ * Copies `snapshot` into the database's place, `file`, which isn't there: beside it, forced to
+ * disk, then moved there, so the database restored is never one cut short.
+ */
+export async function restoreSnapshot(snapshot: string, file: string): Promise<void> {
+  const restoring = `${file}.restoring`;
+  try {
+    await copyFile(snapshot, restoring);
+    await place(restoring, file);
+  } catch (error) {
+    await rm(restoring, { force: true });
+    throw error;
+  }
+}
+
+/**
+ * Moves a file written beside `file` there, once forced to disk, then forces its folder's entries
+ * to disk too: not even the machine stopping leaves `file` naming what never reached the disk.
+ */
+async function place(partial: string, file: string): Promise<void> {
+  const handle = await open(partial, 'r+');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(partial, file);
+  // Windows opens no folder to.
+  if (process.platform === 'win32') return;
+  const folder = await open(path.dirname(file), 'r');
+  try {
+    await folder.sync();
+  } finally {
+    await folder.close();
+  }
 }
 
 /** Whether `name` is a snapshot being taken, or a file SQLite keeps beside one. */

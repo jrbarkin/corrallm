@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, openSync, rmSync } from 'node:fs';
-import { copyFile, rename, rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
-import { snapshots, snapshotTime } from './snapshots';
+import { restoreSnapshot, snapshots, snapshotTime } from './snapshots';
 import {
   connect,
   extendedCode,
@@ -140,15 +140,7 @@ async function restore(profile: string, file: string, said: string[]): Promise<C
   for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
   for (const snapshot of await snapshots(profile)) {
     if (!sound(snapshot)) continue;
-    // Copied beside it, then moved over it: never a database cut short.
-    const restoring = `${file}.restoring`;
-    try {
-      await copyFile(snapshot, restoring);
-      await rename(restoring, file);
-    } catch (error) {
-      await rm(restoring, { force: true });
-      throw error;
-    }
+    await restoreSnapshot(snapshot, file);
     const at = new Date(snapshotTime(path.basename(snapshot)) ?? 0).toISOString();
     said.push(`It was restored from its snapshot of ${at}: what changed since then is lost.`);
     return openConnection(file);
