@@ -202,7 +202,9 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     if (stopping) return stop();
     await opened.deliver();
     say(`corrallm serve: serving ${served} at ${url}, on the profile ${profile}. Ctrl-C stops it.`);
-    for (const line of findIt) say(`corrallm serve: ${line}`);
+    if (!command.newToken) {
+      for (const line of findIt) say(`corrallm serve: ${line}`);
+    }
     await writeApiFile(profile, {
       url,
       port: server.port,
