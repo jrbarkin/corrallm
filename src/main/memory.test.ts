@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,10 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath as at } from './core/host';
-import { CanvasMemory, writeWhole } from './memory';
+import { CanvasMemory } from './memory';
 
-/** What the file system was asked to force to disk, and to move, in order (by base name). */
-const disk = vi.hoisted(() => [] as string[]);
 /** While set, reading a file fails with this code, as a disk or permissions would. */
 const reads = vi.hoisted(() => ({ failing: undefined as string | undefined }));
 
@@ -25,19 +23,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         });
       }
       return actual.readFile(...args);
-    },
-    open: async (...args: Parameters<typeof actual.open>) => {
-      const handle = await actual.open(...args);
-      const sync = handle.sync.bind(handle);
-      handle.sync = async () => {
-        await sync();
-        disk.push(`fsync ${path.basename(String(args[0]))}`);
-      };
-      return handle;
-    },
-    rename: async (...args: Parameters<typeof actual.rename>) => {
-      await actual.rename(...args);
-      disk.push(`rename to ${path.basename(String(args[1]))}`);
     },
   };
 });
@@ -289,31 +274,5 @@ describe('CanvasMemory', () => {
     expect(
       Object.keys((JSON.parse(await readFile(file, 'utf8')) as { canvases: object }).canvases),
     ).toEqual([TEAM]);
-  });
-});
-
-describe('writeWhole', () => {
-  it('writes a file whole while other writes of it are under way, each beside it on its own', async () => {
-    const texts = ['one', 'two', 'three', 'four', 'five'].map((word) => `${word}\n`);
-    await Promise.all(texts.map((text) => writeWhole(file, text)));
-    expect(texts).toContain(await readFile(file, 'utf8'));
-    // Nothing is left beside it.
-    expect(await readdir(dir)).toEqual(['canvases.json']);
-  });
-
-  it('forces a durable write to disk: the file before it is moved into place, its folder after', async () => {
-    disk.length = 0;
-    await writeWhole(file, 'kept\n', { durable: true, mode: 0o600 });
-    expect(await readFile(file, 'utf8')).toBe('kept\n');
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
-    expect(disk).toEqual([
-      expect.stringMatching(/^fsync canvases\.json\..+\.partial$/) as string,
-      'rename to canvases.json',
-      ...(process.platform === 'win32' ? [] : [`fsync ${path.basename(dir)}`]),
-    ]);
-    // Any other write is moved into place only.
-    disk.length = 0;
-    await writeWhole(file, 'again\n');
-    expect(disk).toEqual(['rename to canvases.json']);
   });
 });

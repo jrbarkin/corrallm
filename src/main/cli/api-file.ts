@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { stillRuns } from '../core/lock';
-import { writeWhole } from '../memory';
+import { writeWhole } from '../whole-file';
 
 /*
  * <profile>/api.json (API Spec §8.1): where the server that holds a profile listens, written by

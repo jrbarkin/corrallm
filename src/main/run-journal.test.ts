@@ -9,9 +9,9 @@ import type { CanvasId } from '../shared/canvas';
 import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
-import * as canvasMemory from './memory';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
+import * as wholeFile from './whole-file';
 
 const checkpoint: RunCheckpoint = {
   version: 2,
@@ -227,7 +227,7 @@ describe('RunJournal', () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
-    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    const writes = vi.spyOn(wholeFile, 'writeWhole');
     // Two parties' positions moved at once, and a save of the run between them.
     await Promise.all([
       runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 }),
@@ -246,7 +246,7 @@ describe('RunJournal', () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
-    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    const writes = vi.spyOn(wholeFile, 'writeWhole');
     const forced = () =>
       writes.mock.calls
         .filter(([file]) => file === record(canvas))
@@ -342,7 +342,7 @@ describe('RunJournal', () => {
     await runs.save(canvas, token, checkpoint);
     const writing = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
-    vi.spyOn(canvasMemory, 'writeWhole').mockImplementationOnce(async () => {
+    vi.spyOn(wholeFile, 'writeWhole').mockImplementationOnce(async () => {
       writing.resolve(undefined);
       await release.promise;
       throw new Error('Disk full');

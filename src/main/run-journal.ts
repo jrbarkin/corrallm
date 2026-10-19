@@ -11,8 +11,9 @@ import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
-import { readRemembered, writeWhole } from './memory';
+import { readRemembered } from './memory';
 import type { CanvasMemory, Remembered } from './memory';
+import { writeWhole } from './whole-file';
 
 /** What the journal keeps of a canvas a window shows: its generation's token, and what to say. */
 interface Entry {
