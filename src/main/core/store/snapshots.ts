@@ -22,23 +22,22 @@ export const SNAPSHOT_FOLDER = 'backups';
 /** How many snapshots the profile keeps: the newest. */
 export const SNAPSHOTS_KEPT = 3;
 
-/** A snapshot's name: when it was taken (core-2026-10-19T12-00-00-000Z.db, in UTC). */
-const NAME = /^core-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.db$/;
 /** The files SQLite keeps beside a database while it is open. */
 const SIDECARS = ['', '-journal', '-wal', '-shm'];
 /** Every page in one step: the most node:sqlite takes. */
 const ONE_STEP = 2 ** 31 - 1;
 
+/** A snapshot's name: when it was taken, in UTC (core-2026-10-19T12-00-00-000Z.db). */
 export function snapshotName(at: number): string {
   return `core-${new Date(at).toISOString().replace(/[:.]/g, '-')}.db`;
 }
 
 /** When the snapshot `name` was taken, or undefined if `name` is no snapshot's. */
 export function snapshotTime(name: string): number | undefined {
-  const match = NAME.exec(name);
-  if (match === null) return undefined;
-  const [, day, hours, minutes, seconds, ms] = match;
-  return Date.parse(`${day ?? ''}T${hours ?? ''}:${minutes ?? ''}:${seconds ?? ''}.${ms ?? ''}Z`);
+  const iso = name.replace(/^core-(.{13})-(\d\d)-(\d\d)-(.*)\.db$/, '$1:$2:$3.$4');
+  const at = Date.parse(iso);
+  // Only a name snapshotName gives: no other file, and no time it couldn't have given.
+  return Number.isNaN(at) || snapshotName(at) !== name ? undefined : at;
 }
 
 /** The profile's snapshots' files, the newest first. */
