@@ -86,7 +86,7 @@ export function addAgent(
     },
     container?.id,
   );
-  return finish(doc, [...nodes, node], doc.links, { id, select: [id] }, context);
+  return fitDocument(doc, [...nodes, node], doc.links, { id, select: [id] }, context);
 }
 
 /** Spawns a fresh queue beside or below an agent, keeping its startup choices and role. */
@@ -148,7 +148,7 @@ export function spawnAgent(
     relation === 'linked'
       ? [...doc.links, { source: from, target: id, dots: ['bottom', 'top'] as [string, string] }]
       : doc.links;
-  return finish(doc, [...nodes, node], links, { id, select: [id] }, context);
+  return fitDocument(doc, [...nodes, node], links, { id, select: [id] }, context);
 }
 
 /** Renames a node without touching its other data or any other entity. */
@@ -225,7 +225,7 @@ export function remove(
       ),
     ];
   });
-  return finish(doc, nodes, links, { cleared: cleared.cleared }, geometry);
+  return fitDocument(doc, nodes, links, { cleared: cleared.cleared }, geometry);
 }
 
 /** The named nodes without a named ancestor, in document order. */
@@ -298,7 +298,7 @@ export function group(
       : node,
   );
   const at = parentId === undefined ? 0 : rest.findIndex((node) => node.id === parentId) + 1;
-  return finish(
+  return fitDocument(
     doc,
     [...rest.slice(0, at), container, ...rest.slice(at)],
     doc.links,
@@ -329,7 +329,7 @@ export function addParent(
         }
       : node,
   );
-  return finish(doc, nodes, doc.links, { id, select: [id] }, context);
+  return fitDocument(doc, nodes, doc.links, { id, select: [id] }, context);
 }
 
 export function canUngroup(nodes: readonly CanvasNode[], ids: readonly string[]): boolean {
@@ -373,7 +373,7 @@ export function ungroup(
       }
     }
   }
-  return finish(doc, nodes, doc.links, { select }, geometry);
+  return fitDocument(doc, nodes, doc.links, { select }, geometry);
 }
 
 /** Moves named nodes in their parent's coordinates, fitting their groups once after all moves. */
@@ -389,7 +389,7 @@ export function move(
   });
   return nodes.every((node, i) => node === doc.nodes[i])
     ? { next: doc, result: {} }
-    : finish(doc, nodes, doc.links, {}, geometry);
+    : fitDocument(doc, nodes, doc.links, {}, geometry);
 }
 
 function newAgent(adapter: AdapterId, newId: () => string): Pick<AgentData, 'adapter' | 'queue'> {
@@ -402,7 +402,7 @@ function boxes(nodes: CanvasNode[], geometry: Geometry): CanvasNode[] {
 }
 
 /** Discards computed box fields and preserves every unchanged model object and array. */
-function finish<R>(
+export function fitDocument<R>(
   doc: CanvasDocument,
   nodes: CanvasNode[],
   links: Link[],

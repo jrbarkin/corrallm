@@ -1,9 +1,9 @@
 import type { AdapterId, Catalog, Job } from './adapter';
-import type { AgentData } from './model/canvas';
 import { fromFile } from './model/file';
-import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './model/queue';
-import type { Condition, QueueItem, RepeatedItem, Until } from './model/queue';
-import { parseRole } from './role';
+import { isIf, isRepeat } from './model/queue';
+import type { QueueItem } from './model/queue';
+
+export { fillTemplate, placeholdersOf } from './model/templates';
 
 /** A template blank and the words and starting text its form shows. */
 export interface TemplateField {
@@ -35,87 +35,6 @@ export interface TemplateInfo {
   description: string;
   fields: TemplateField[];
   agents: TemplateAgent[];
-}
-
-/** The text a model or a view's nodes keep, without depending on how either draws them. */
-interface TemplateCanvas {
-  nodes: readonly { type?: 'agent' | 'frame'; data: AgentData }[];
-}
-
-const PLACEHOLDER = /\{\{(\w+)\}\}/g;
-
-/** Every piece of text in a canvas that a placeholder may be in. */
-function textsOf(canvas: TemplateCanvas): string[] {
-  const ofCondition = (condition: Condition | Until) =>
-    'text' in condition ? [condition.text] : [];
-  const ofItem = (item: QueueItem): string[] =>
-    isWait(item) || isDelay(item)
-      ? []
-      : isApproval(item)
-        ? [item.approve]
-        : isIf(item)
-          ? [...ofCondition(item.if), ...item.then.flatMap(ofItem)]
-          : isRepeat(item)
-            ? [...item.repeat.flatMap(ofItem), ...ofCondition(item.until)]
-            : isMessage(item)
-              ? [item.message]
-              : [item.instruction ?? ''];
-  return canvas.nodes.flatMap((node) => [
-    node.data.label,
-    ...(node.type === 'agent' && node.data.role !== undefined ? [node.data.role] : []),
-    ...(node.data.queue ?? []).flatMap(ofItem),
-  ]);
-}
-
-/** The blanks a canvas uses, by key, in the order they first appear. */
-export function placeholdersOf(canvas: TemplateCanvas): string[] {
-  const keys = textsOf(canvas).flatMap((text) =>
-    [...text.matchAll(PLACEHOLDER)].map((match) => match[1]),
-  );
-  return [...new Set(keys.filter((key) => key !== undefined))];
-}
-
-/** A canvas with its blanks filled; those without a value stay as they are. */
-export function fillTemplate<C extends TemplateCanvas>(
-  canvas: C,
-  values: Readonly<Record<string, string>>,
-): C {
-  const fill = (text: string) =>
-    text.replace(PLACEHOLDER, (whole, key: string) => values[key] ?? whole);
-  const condition = <T extends Condition | Until>(value: T): T =>
-    'text' in value ? { ...value, text: fill(value.text) } : value;
-  const step = <T extends RepeatedItem>(item: T): T =>
-    isMessage(item)
-      ? { ...item, message: fill(item.message) }
-      : 'action' in item && item.instruction !== undefined
-        ? { ...item, instruction: fill(item.instruction) }
-        : item;
-  const item = (value: QueueItem): QueueItem =>
-    isWait(value) || isDelay(value)
-      ? value
-      : isApproval(value)
-        ? { ...value, approve: fill(value.approve) }
-        : isIf(value)
-          ? { ...value, if: condition(value.if), then: value.then.map(step) }
-          : isRepeat(value)
-            ? { ...value, repeat: value.repeat.map(step), until: condition(value.until) }
-            : step(value);
-  return {
-    ...canvas,
-    nodes: canvas.nodes.map((node) => {
-      const data = {
-        ...node.data,
-        label: fill(node.data.label),
-        ...(node.data.queue ? { queue: node.data.queue.map(item) } : {}),
-      };
-      if (node.type === 'agent' && node.data.role !== undefined) {
-        const role = parseRole(fill(node.data.role));
-        if (role === undefined) delete data.role;
-        else data.role = role;
-      }
-      return { ...node, data };
-    }),
-  };
 }
 
 /** A shipped template's blanks and roles, including the jobs needed inside Ifs and repeats. */

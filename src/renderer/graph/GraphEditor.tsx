@@ -100,7 +100,7 @@ import { exampleOf } from '../../shared/examples';
 import type { Example } from '../../shared/examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate } from '../../shared/templates';
+import { fillTemplate } from '../../shared/model/templates';
 import { withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';

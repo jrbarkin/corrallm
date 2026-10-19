@@ -115,7 +115,7 @@ export function nextLabel(nodes: readonly GraphNode[], prefix: 'Agent' | 'Group'
 }
 
 export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc, context) => Structure.addAgent(doc, { at: center, adapter: DEFAULT_AGENT }, context),
     { newId: nodeIds(id) },
@@ -128,7 +128,7 @@ export function spawnAgent(
   id: string,
   relation: 'peer' | 'linked',
 ): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc, context) => Structure.spawnAgent(doc, { from, relation }, context),
     { newId: nodeIds(id) },
@@ -136,11 +136,11 @@ export function spawnAgent(
 }
 
 export function renameNode(graph: Graph, id: string, label: string): Graph {
-  return structureEdit(graph, (doc) => Structure.rename(doc, { id, label }), { fit: false });
+  return editGraph(graph, (doc) => Structure.rename(doc, { id, label }), { fit: false });
 }
 
 export function setAgent(graph: Graph, agent: string, adapter: AdapterId): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc) =>
       AgentOps.setType(
@@ -152,7 +152,7 @@ export function setAgent(graph: Graph, agent: string, adapter: AdapterId): Graph
   );
 }
 export function setConnection(graph: Graph, agent: string, connection: AgentConnection): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc) =>
       AgentOps.setConnection(
@@ -169,12 +169,12 @@ export function setSettings(
   adapter: AdapterId,
   change: AgentSettingsChange,
 ): Graph {
-  return structureEdit(graph, (doc) => AgentOps.setSettings(doc, { agent, adapter, change }), {
+  return editGraph(graph, (doc) => AgentOps.setSettings(doc, { agent, adapter, change }), {
     fit: false,
   });
 }
 export function setRole(graph: Graph, agent: string, role: string | undefined): Graph {
-  return structureEdit(graph, (doc) => AgentOps.setRole(doc, { agent, role }), { fit: false });
+  return editGraph(graph, (doc) => AgentOps.setRole(doc, { agent, role }), { fit: false });
 }
 
 export function addToQueue(
@@ -184,7 +184,7 @@ export function addToQueue(
   newId: () => string,
   into?: string,
 ): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc) =>
       QueueOps.add(doc, { agent, entry, ...(into === undefined ? {} : { into }) }, 'you', newId),
@@ -192,7 +192,7 @@ export function addToQueue(
   );
 }
 export function removeFromQueue(graph: Graph, agent: string, item: string): Graph {
-  return structureEdit(graph, (doc) => QueueOps.remove(doc, { agent, item }), { fit: false });
+  return editGraph(graph, (doc) => QueueOps.remove(doc, { agent, item }), { fit: false });
 }
 
 /** The view still supplies a drop index; the model moves by a sibling's id. */
@@ -212,10 +212,10 @@ export function moveInQueue(graph: Graph, agent: string, item: string, index: nu
         : [];
   const rest = siblings.filter((one) => one.id !== item);
   const before = rest[Math.max(0, index)]?.id ?? null;
-  return structureEdit(graph, (doc) => QueueOps.move(doc, { agent, item, before }), { fit: false });
+  return editGraph(graph, (doc) => QueueOps.move(doc, { agent, item, before }), { fit: false });
 }
 function queueChange(graph: Graph, agent: string, item: string, change: QueueChange): Graph {
-  return structureEdit(graph, (doc) => QueueOps.update(doc, { agent, item, change }, 'you'), {
+  return editGraph(graph, (doc) => QueueOps.update(doc, { agent, item, change }, 'you'), {
     fit: false,
   });
 }
@@ -303,7 +303,7 @@ export function connect(
   },
 ): Graph {
   const { source, target, sourceHandle, targetHandle } = connection;
-  const next = structureEdit(
+  const next = editGraph(
     graph,
     (doc) =>
       Structure.link(doc, {
@@ -330,11 +330,11 @@ export function connect(
 
 export function deleteEdge(graph: Graph, id: string): Graph {
   const edge = graph.edges.find((edge) => edge.id === id);
-  return edge ? structureEdit(graph, (doc) => Structure.unlink(doc, edge), { fit: false }) : graph;
+  return edge ? editGraph(graph, (doc) => Structure.unlink(doc, edge), { fit: false }) : graph;
 }
 
 export function deleteSelection(graph: Graph): Graph {
-  return structureEdit(graph, (doc, context) =>
+  return editGraph(graph, (doc, context) =>
     Structure.remove(
       doc,
       {
@@ -356,7 +356,7 @@ export function groupMembers(nodes: readonly GraphNode[]): GraphNode[] {
 }
 
 export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph {
-  return structureEdit(
+  return editGraph(
     graph,
     (doc, context) => Structure.group(doc, { nodes: selectedNodeIds(graph.nodes), kind }, context),
     { newId: nodeIds(id) },
@@ -364,7 +364,7 @@ export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph 
 }
 
 export function addParent(graph: Graph, id: string): Graph {
-  return structureEdit(graph, (doc, context) => Structure.addParent(doc, { id }, context), {
+  return editGraph(graph, (doc, context) => Structure.addParent(doc, { id }, context), {
     newId: () => `${id}/message`,
   });
 }
@@ -374,7 +374,7 @@ export function canUngroup(nodes: readonly GraphNode[]): boolean {
 }
 
 export function ungroupSelection(graph: Graph): Graph {
-  return structureEdit(graph, (doc, context) =>
+  return editGraph(graph, (doc, context) =>
     Structure.ungroup(doc, { nodes: selectedNodeIds(graph.nodes) }, context),
   );
 }
@@ -395,7 +395,7 @@ function select<T extends { selected?: boolean }>(element: T, selected: boolean)
 }
 
 /** Runs a model edit while preserving React Flow's view state and existing box measurements. */
-function structureEdit<R>(
+export function editGraph<R>(
   graph: Graph,
   build: (doc: CanvasDocument, context: Structure.StructureContext) => Structure.Built<R>,
   options: { newId?: () => string; fit?: boolean } = {},

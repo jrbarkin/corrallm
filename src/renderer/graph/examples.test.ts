@@ -5,7 +5,7 @@ import { catalog } from '../catalog';
 import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
-import { placeholdersOf } from '../../shared/templates';
+import { placeholdersOf } from '../../shared/model/templates';
 import {
   findItem,
   isApproval,

@@ -266,7 +266,7 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      RepeatEnds, going round with another agent's repeat) is one item holding
                      others: findItem (model/queue.ts) finds an item at any depth, and queue-ops.ts's
                      edits reach its list by id; graph.ts calls those shared edits;
-                     automatic layout (dagre) in layout.ts. Geometry comes from src/shared/model/geometry.ts;
+                     automatic layout (dagre) in src/shared/model/layout.ts, through graph/layout.ts. Geometry comes from src/shared/model/geometry.ts;
                      graph/geometry.ts adapts its sizes and pinned corners to React Flow measurements
                      and drag state, preserving node identity when nothing changes. Stored edges are links (agents that can
                      talk); arrows for the work one agent's queue gives another are derived from
@@ -279,7 +279,7 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      templates, listed in src/shared/examples.ts. ExampleGallery.tsx reads their
                      fields and agent roles through templates.list; a test keeps
                      each one valid and written exactly as toFile writes it. A template may leave
-                     blanks ({{key}}, filled from its `fields`; src/shared/templates.ts) and leave agents' types
+                     blanks ({{key}}, filled from its `fields`; src/shared/model/templates.ts) and leave agents' types
                      open (no `adapter`: the default, or chosen when it is used; withAgents translates
                      steps between types by their catalog jobs through model/agent-ops.ts). The gallery's form
                      also chooses how each agent runs (withConnections): by default in a Terminal
@@ -287,7 +287,7 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      without falling back to fake work. A template's tool steps say what
                      they are to do (`instruction`, which may hold blanks too), as does Codex's
                      /review: a test keeps it so. It opens as a new canvas or is inserted into this
-                     one as a group (insert.ts).
+                     one as a group (model/insert.ts through graph/insert.ts).
 src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
                      the agent's native questions and queue,
                      showing live manual submissions as read-only Message rows (model/queue.ts'
@@ -406,7 +406,11 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 explicit ids, caller-supplied new ids and default adapter, selection hints and
                 unchanged objects kept by reference), queue-ops.ts (add, remove, move by neighbour,
                 and a field change union, preserving text authorship), agent-ops.ts (adapter,
-                connection, settings and role edits, translating steps by catalog jobs), work.ts
+                connection, settings and role edits, translating steps by catalog jobs), layout.ts
+                (dagre over model nodes, fitting groups from CARD_SIZE), insert.ts (inserts a
+                template as a group, optionally inside a parent, remapping node references),
+                templates.ts (fills blanks and chooses adapters and native connections from the
+                supplied catalog, preserving untouched nodes and queue items), work.ts
                 (the work arrows derived from agents' queues), file.ts (the .corral
                 format: a CanvasDocument read against the catalog, an agent naming no adapter
                 running the default it is given, and written back), words.ts (how the queue's
