@@ -5,7 +5,6 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -15,6 +14,7 @@ import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
 import fakeClaude from './selftest-claude.mjs?raw';
+import { connect } from './store/sqlite';
 
 /*
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
@@ -185,7 +185,7 @@ export async function checkSqlite(folder = tmpdir()): Promise<string> {
     const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
     try {
       const file = path.join(dir, 'selftest.sqlite');
-      const database = new DatabaseSync(file);
+      const database = connect(file);
       let version: string;
       try {
         const sqlite = database.prepare('SELECT sqlite_version() AS version').get()?.version;
@@ -203,7 +203,7 @@ export async function checkSqlite(folder = tmpdir()): Promise<string> {
       } finally {
         database.close();
       }
-      const reader = new DatabaseSync(file, { readOnly: true });
+      const reader = connect(file, { readOnly: true });
       try {
         if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'committed') {
           throw new Error('the reopened database did not read back the committed row');
