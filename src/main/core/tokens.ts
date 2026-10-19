@@ -90,8 +90,9 @@ export class TokenStore {
 
   /**
    * Makes a token for `grant`: its value, returned once, never kept. It replaces any token of the
-   * same name at once, and is written down before it is returned. Rejects a name that isn't an id,
-   * no canvases, or hours that aren't 1 to MAX_TOKEN_HOURS.
+   * same name at once, and is written down, forced to disk, before it is returned: no power loss
+   * brings the token it replaced back. Rejects a name that isn't an id, no canvases, or hours that
+   * aren't 1 to MAX_TOKEN_HOURS.
    */
   async create({
     name,
@@ -120,7 +121,7 @@ export class TokenStore {
       access,
       expires: this.#now() + hours * HOUR,
     });
-    await this.#write();
+    await this.#write(true);
     return token;
   }
 
@@ -193,14 +194,18 @@ export class TokenStore {
     }
   }
 
-  /** Writes the store whole, after every write before it, for the user's eyes only. */
-  #write(): Promise<void> {
+  /**
+   * Writes the store whole, after every write before it, for the user's eyes only; `durable`,
+   * forced to disk, as a write that replaces a token is: no power loss brings that one back.
+   */
+  #write(durable = false): Promise<void> {
     const write = this.#writing.then(() => {
       const tokens = [...this.#tokens].map(
         ([hash, kept]) => [hash, { ...this.#fields.get(kept), ...kept }] as const,
       );
       const file = { version: VERSION, ...this.#unknown, tokens: Object.fromEntries(tokens) };
-      return writeWhole(this.#file, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+      const text = `${JSON.stringify(file, null, 2)}\n`;
+      return writeWhole(this.#file, text, { mode: 0o600, durable });
     });
     this.#writing = write.catch(() => undefined);
     return write;
