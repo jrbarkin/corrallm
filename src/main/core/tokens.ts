@@ -1,11 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
 import { ID_PATTERN } from '../../shared/adapter';
 import { DEFAULT_TOKEN_HOURS, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import { writeWhole } from '../memory';
+import { readWhole, writeWhole } from '../memory';
 import type { OutsideCaller } from './caller';
 
 /*
@@ -24,7 +23,9 @@ import type { OutsideCaller } from './caller';
  * messages, its `wait` read position and the holds it set carry over. Its `id`, a random UUID,
  * names it among the store's tokens without its hash or its value: a caller's limits and repeated
  * requests are kept by it, and a call still going ends on it once its token is replaced or
- * expires. A file of another version, or an entry that isn't one it writes, reads as no token.
+ * expires. An entry that isn't one it writes reads as no token; a file of another version, or one
+ * that isn't JSON, reads as none and is set aside (readWhole). One that can't be read is never read
+ * as none, nor written over: the store refuses to load, so the core doesn't start without it.
  */
 
 /** What a person makes a token for. */
@@ -72,15 +73,9 @@ export class TokenStore {
     this.#now = now;
   }
 
-  /** Reads the tokens its file keeps, but those expired. */
+  /** Reads the tokens its file keeps, but those expired. Rejects if it can't be read. */
   async load(): Promise<void> {
-    let text: string;
-    try {
-      text = await readFile(this.#file, 'utf8');
-    } catch {
-      return;
-    }
-    this.#tokens = parse(text);
+    this.#tokens = parse(await readWhole(this.#file, VERSION));
     this.#prune();
   }
 
@@ -207,16 +202,10 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** The tokens a token file holds: those that are not right are left out. */
-function parse(text: string): Map<string, Kept> {
+/** The tokens a token file holds (none if there is none): those not right are left out. */
+function parse(file: Record<string, unknown> | undefined): Map<string, Kept> {
   const tokens = new Map<string, Kept>();
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return tokens;
-  }
-  if (!isRecord(file) || file.version !== VERSION || !isRecord(file.tokens)) return tokens;
+  if (!isRecord(file?.tokens)) return tokens;
   for (const [hash, value] of Object.entries(file.tokens)) {
     const kept = readToken(value);
     if (HASH.test(hash) && kept !== undefined) tokens.set(hash, kept);

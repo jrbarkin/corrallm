@@ -51,7 +51,8 @@ const VERSION = 2;
  *
  * A file belongs to one canvas at most. Updates are applied one at a time, in order, and written
  * whole (beside it, then moved over it). The paths it reads back are trusted: it wrote them, from
- * the app's dialogs. A file of another version reads as empty.
+ * the app's dialogs. A file of another version, or one that isn't JSON, reads as empty and is set
+ * aside (readWhole); one that can't be read fails what needed it, and is read again next time.
  */
 export class CanvasMemory {
   readonly #file: string;
@@ -138,7 +139,11 @@ export class CanvasMemory {
   }
 
   #load(): Promise<Map<CanvasId, Remembered>> {
-    this.#canvases ??= readFile(this.#file, 'utf8').then(parse, () => new Map());
+    this.#canvases ??= readWhole(this.#file, VERSION).then(parse, (error: unknown) => {
+      // Never read as empty, nor written over: read again next time.
+      this.#canvases = undefined;
+      throw error;
+    });
     return this.#canvases;
   }
 
@@ -199,6 +204,53 @@ export async function writeWhole(
   if (durable) await syncFolder(path.dirname(file));
 }
 
+/**
+ * Reads a store's file, written whole: its JSON object, if it is one of `version`; undefined if
+ * there is no file. A file that isn't one (not JSON, not an object, another version: an older
+ * corrallm's included) is set aside beside it, as `<name>.rejected-<uuid>.json`, saying where, and
+ * reads as none, so that what it held is never written over. Rejects, leaving the file as it is,
+ * if it is there but can't be read (its permissions, the disk, too many files open): it may hold
+ * what is still good, so it is never read as none, and the store reads it again when next asked.
+ */
+export async function readWhole(
+  file: string,
+  version: number,
+): Promise<Record<string, unknown> | undefined> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (absent(error)) return undefined;
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    // Set aside below.
+  }
+  if (isRecord(value) && value.version === version) return value;
+  let why = 'it isn’t a JSON object';
+  if (isRecord(value)) {
+    why =
+      value.version === undefined
+        ? 'it has no version'
+        : `it is of version ${JSON.stringify(value.version)}, not ${String(version)}`;
+  }
+  const rejected = path.join(
+    path.dirname(file),
+    `${path.basename(file, '.json')}.rejected-${randomUUID()}.json`,
+  );
+  await rename(file, rejected);
+  console.error(`Could not read ${file} (${why}), so it was moved to ${rejected}.`);
+  return undefined;
+}
+
+/** Whether a file can't be read because there is none: missing, or a folder on its path a file. */
+function absent(error: unknown): boolean {
+  return isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+}
+
 /** Forces a folder's entries to disk: a file just moved into it. Windows opens no folder to. */
 async function syncFolder(folder: string): Promise<void> {
   if (process.platform === 'win32') return;
@@ -210,16 +262,10 @@ async function syncFolder(folder: string): Promise<void> {
   }
 }
 
-/** The canvases a memory file holds; entries that are not right are left out. */
-function parse(text: string): Map<CanvasId, Remembered> {
+/** The canvases a memory file holds (none if there is none); entries not right are left out. */
+function parse(file: Record<string, unknown> | undefined): Map<CanvasId, Remembered> {
   const canvases = new Map<CanvasId, Remembered>();
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return canvases;
-  }
-  if (!isRecord(file) || file.version !== VERSION || !isRecord(file.canvases)) return canvases;
+  if (!isRecord(file?.canvases)) return canvases;
   for (const [canvas, value] of Object.entries(file.canvases)) {
     const remembered = readRemembered(value);
     if (isCanvasId(canvas) && remembered !== undefined) canvases.set(canvas, remembered);

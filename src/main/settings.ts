@@ -1,7 +1,5 @@
-import { readFile } from 'node:fs/promises';
-
 import { ID_PATTERN } from '../shared/adapter';
-import { writeWhole } from './memory';
+import { readWhole, writeWhole } from './memory';
 
 /** What the user chose for corrallm as a whole, rather than for one canvas (memory.ts). */
 export interface AppSettings {
@@ -30,8 +28,9 @@ const VERSION = 2;
  *
  *   { "version": 2, "consents": { "<adapter>": { "<key>": true } }, "api"?: { "port" } }
  *
- * Updates are applied one at a time, in order, and written whole. A file of another version reads
- * as nothing chosen.
+ * Updates are applied one at a time, in order, and written whole. A file of another version, or
+ * one that isn't JSON, reads as nothing chosen and is set aside (readWhole); one that can't be read
+ * fails what needed it, and is read again next time.
  */
 export class Settings {
   readonly #file: string;
@@ -105,22 +104,19 @@ export class Settings {
   }
 
   #load(): Promise<AppSettings> {
-    this.#settings ??= readFile(this.#file, 'utf8').then(parse, () => ({ consents: {} }));
+    this.#settings ??= readWhole(this.#file, VERSION).then(parse, (error: unknown) => {
+      // Never read as nothing chosen, nor written over: read again next time.
+      this.#settings = undefined;
+      throw error;
+    });
     return this.#settings;
   }
 }
 
-/** The settings a settings file holds; those that are not right are left out. */
-function parse(text: string): AppSettings {
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return { consents: {} };
-  }
-  if (!isRecord(file) || file.version !== VERSION) return { consents: {} };
-  const consents = isRecord(file.consents) ? file.consents : {};
-  const port = isRecord(file.api) ? file.api.port : undefined;
+/** The settings a settings file holds (none if there is none); those not right are left out. */
+function parse(file: Record<string, unknown> | undefined): AppSettings {
+  const consents = isRecord(file?.consents) ? file.consents : {};
+  const port = isRecord(file?.api) ? file.api.port : undefined;
   return {
     ...(isPort(port) ? { api: { port } } : {}),
     consents: Object.fromEntries(

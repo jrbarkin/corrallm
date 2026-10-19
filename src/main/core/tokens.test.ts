@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +17,8 @@ import { TokenStore } from './tokens';
 const M1 = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01' as CanvasId;
 const WORKER = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a02' as CanvasId;
 const HOUR = 60 * 60 * 1000;
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 let dir: string;
 let file: string;
@@ -210,9 +212,22 @@ describe('TokenStore', () => {
     const kept = JSON.parse(await readFile(file, 'utf8')) as { tokens: Record<string, unknown> };
     expect(Object.keys(kept.tokens)).toEqual([expect.not.stringMatching(sha256(token))]);
 
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // A file it can't read as its own is set aside, as it was, and said.
+    for (const text of ['not json', JSON.stringify({ version: 1, tokens: kept.tokens })]) {
+      await writeFile(file, text);
+      expect((await store()).clientOf('x')).toBeUndefined();
+      const rejected = (await readdir(dir)).filter((name) => name.startsWith('tokens.rejected-'));
+      expect(rejected).toHaveLength(1);
+      expect(await readFile(path.join(dir, String(rejected[0])), 'utf8')).toBe(text);
+      expect(said).toHaveBeenLastCalledWith(
+        expect.stringContaining(path.join(dir, String(rejected[0]))),
+      );
+      await rm(path.join(dir, String(rejected[0])));
+    }
+    said.mockRestore();
+    // One of its version whose tokens aren't right is its own: none of them is read.
     for (const text of [
-      'not json',
-      JSON.stringify({ version: 1, tokens: kept.tokens }),
       JSON.stringify({ version: 2, tokens: [] }),
       JSON.stringify({
         version: 2,
@@ -265,6 +280,7 @@ describe('TokenStore', () => {
     ]) {
       await writeFile(file, text);
       expect((await store()).clientOf('x')).toBeUndefined();
+      expect(await readdir(dir)).toEqual(['tokens.json']);
     }
     // A token written as it writes them is read.
     await writeFile(
@@ -289,5 +305,16 @@ describe('TokenStore', () => {
       access: 'write',
       canvases: [M1],
     });
+  });
+
+  it.skipIf(!CAN_DENY)('never writes over a file it can’t read: it refuses to load', async () => {
+    const first = await store();
+    const token = await first.create({ name: 'orchestrator', canvases: [M1], access: 'write' });
+    const kept = await readFile(file, 'utf8');
+    await chmod(file, 0);
+    await expect(new TokenStore(file, clock).load()).rejects.toThrow(/EACCES/);
+    await chmod(file, 0o600);
+    expect(await readFile(file, 'utf8')).toBe(kept);
+    expect((await store()).clientOf(token)?.name).toBe('orchestrator');
   });
 });

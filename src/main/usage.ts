@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-
 import type { UsageBackendId } from '../shared/adapter';
 import { parseBackend, parseRule, parseWindows, USAGE_WINDOWS } from '../shared/usage';
 import type {
@@ -9,7 +7,7 @@ import type {
   UsageWindow,
   UsageWindows,
 } from '../shared/usage';
-import { writeWhole } from './memory';
+import { readWhole, writeWhole } from './memory';
 
 /*
  * Every backend's latest usage reading, and its usage rule (src/shared/usage.ts). A reading comes
@@ -23,7 +21,9 @@ import { writeWhole } from './memory';
  *     "rules": { "<backend>": { "window", "percent", "action" } },
  *     "exhausted": { "<backend>": { "resetsAt", "window"? } } }
  *
- * A file of another version reads as nothing read and no rules.
+ * A file of another version, or one that isn't JSON, reads as nothing read and no rules, and is set
+ * aside (readWhole). One that can't be read is never read as nothing, nor written over: loading
+ * rejects, so the core doesn't start without it.
  */
 
 const VERSION = 2;
@@ -72,15 +72,13 @@ export class UsageReadings {
     this.#writeDelay = writeDelay;
   }
 
-  /** Reads what was remembered (once, at start); entries that are not right are left out. */
+  /**
+   * Reads what was remembered (once, at start); entries that are not right are left out. Rejects if
+   * its file can't be read.
+   */
   async load(): Promise<void> {
-    let file: unknown;
-    try {
-      file = JSON.parse(await readFile(this.#file, 'utf8'));
-    } catch {
-      return;
-    }
-    if (!isRecord(file) || file.version !== VERSION) return;
+    const file = await readWhole(this.#file, VERSION);
+    if (file === undefined) return;
     const now = this.#now();
     for (const value of Array.isArray(file.readings) ? (file.readings as unknown[]) : []) {
       const reading = readingOf(value, this.#backends, now);

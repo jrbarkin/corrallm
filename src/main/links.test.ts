@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LinkOpener } from './links';
 import type { LinkAnswer, LinkOpenerDeps } from './links';
+
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 /** The window the dialog belongs to, by its id. */
 let nextWindow = 0;
@@ -129,9 +132,42 @@ describe('LinkOpener', () => {
     await links.open(renderer(), 'http://evil.example/');
     expect(ask).not.toHaveBeenCalled();
 
-    await writeFile(file, 'not json');
-    const fresh = opener();
-    await fresh.links.open(renderer(), 'https://docs.example.com/');
-    expect(fresh.ask).toHaveBeenCalledTimes(1);
+    // One it can't read as its own is set aside, as it was, and said.
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const text of ['not json', JSON.stringify({ version: 2, sites: [] })]) {
+      await rm(dir, { recursive: true });
+      await mkdir(dir);
+      await writeFile(file, text);
+      const fresh = opener({ open: true, always: true });
+      await fresh.links.open(renderer(), 'https://docs.example.com/');
+      expect(fresh.ask).toHaveBeenCalledTimes(1);
+      const rejected = (await readdir(dir)).filter((name) => name !== 'links.json');
+      expect(rejected).toEqual([expect.stringMatching(/^links\.rejected-.+\.json$/)]);
+      expect(await readFile(path.join(dir, String(rejected[0])), 'utf8')).toBe(text);
+      expect(said).toHaveBeenLastCalledWith(
+        expect.stringContaining(path.join(dir, String(rejected[0]))),
+      );
+    }
+    said.mockRestore();
   });
+
+  it.skipIf(!CAN_DENY)(
+    'never writes over a file it can’t read, and reads it again next time',
+    async () => {
+      const kept = `${JSON.stringify({ version: 1, sites: ['https://docs.example.com'] })}\n`;
+      await writeFile(file, kept);
+      await chmod(file, 0);
+      const { links, ask, openExternal } = opener({ open: true, always: true });
+      await expect(links.open(renderer(), 'https://one.example.com/')).rejects.toThrow(/EACCES/);
+      expect(ask).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+      await chmod(file, 0o600);
+      expect(await readFile(file, 'utf8')).toBe(kept);
+
+      // Read once it can be.
+      await links.open(renderer(), 'https://docs.example.com/');
+      expect(ask).not.toHaveBeenCalled();
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://docs.example.com/');
+    },
+  );
 });
