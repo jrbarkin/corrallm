@@ -1,7 +1,8 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
-import type { ConnectionId } from '../../shared/adapter';
+import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
@@ -20,7 +21,7 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createOptions } from '../sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
@@ -40,6 +41,8 @@ import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
+import { UsageProbe } from './usage-probe';
+import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import type { ChildSystem } from './children';
 
@@ -82,11 +85,13 @@ export interface CoreConfig {
   fakeSessions?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
-   * (sessions/fake.ts), and the environment they run in instead of the login shell's.
+   * (sessions/fake.ts), the environment they run in instead of the login shell's, and what reads a
+   * held usage backend instead of its adapter's reader (none, for a backend left out).
    */
   sessions?: {
     connectors: Readonly<Partial<Record<ConnectionId, Connector<SessionMode>>>>;
     environment: () => Promise<Readonly<Record<string, string>>>;
+    readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
   };
 }
 
@@ -159,6 +164,22 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       (shell ??= fake
         ? Promise.resolve(agentEnvironment(process.env))
         : loginShellEnvironment().then(agentEnvironment)));
+  // A held backend's usage, read by its adapter (as a CLI the core owns, in the home folder: the
+  // limits are the account's, not a folder's); none for fake sessions.
+  const readerOf = (backend: UsageBackendId): UsageRead | undefined => {
+    if (config.sessions !== undefined) return config.sessions.readUsage?.[backend];
+    const read = ADAPTERS.find((adapter) =>
+      adapter.usageBackends.some(({ id }) => id === backend),
+    )?.readUsage;
+    if (fake || read === undefined) return undefined;
+    return () =>
+      children.run(async () => read(backend, { env: await environment(), cwd: homedir() }));
+  };
+  const probe = new UsageProbe({
+    usage,
+    backends: CATALOG.usageBackends.map((backend) => backend.id),
+    readerOf,
+  });
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -283,6 +304,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),
     },
   );
+  // Held backends are read from now on, so a limit that ended while the core was down is noticed.
+  probe.start();
   return {
     surface: dispatcher.surface,
     ops: dispatcher.ops,
@@ -310,6 +333,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     deliver: () => engines.deliver(),
     watch: (watcher) => engines.watch(watcher),
     close: async () => {
+      probe.stop();
       topics.close();
       try {
         await engines.close();

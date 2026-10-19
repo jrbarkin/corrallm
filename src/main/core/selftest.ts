@@ -19,7 +19,7 @@ import fakeClaude from './selftest-claude.mjs?raw';
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
  * the core needs loads and runs as bundled (CommonJS; packaged, fused), wherever it runs: the app's
  * main process (native-selftest.ts), its core process (entry.ts) and the CLI bundle under plain
- * Node (cli/index.ts). No real `claude`, no login. Electron-free: what differs between those hosts
+ * Node (cli/main.ts). No real `claude`, no login. Electron-free: what differs between those hosts
  * (whether the app is packaged) is passed in. Each check resolves with what it saw, or rejects
  * saying what failed.
  */
@@ -48,6 +48,7 @@ export function selfTestChecks({ packaged }: { packaged: boolean }): Check[] {
     { name: 'node-pty', run: checkPty },
     { name: 'terminal screen', run: checkTerminalScreen },
     { name: 'Agent SDK', run: () => checkAgentSdk() },
+    { name: 'node:sqlite', run: () => checkSqlite() },
     { name: 'loopback HTTP', run: checkLoopbackHttp },
     { name: 'spawn', run: checkSpawn },
     ...(packaged ? [{ name: 'child_process.fork', run: () => checkForkRefused() }] : []),
@@ -174,6 +175,51 @@ export async function checkAgentSdk(
     inbox.end();
     run.close();
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** A file-backed WAL transaction through Node's SQLite, reopened read-only after committing. */
+export async function checkSqlite(folder = tmpdir()): Promise<string> {
+  try {
+    // Imported here only: the CLI's bundle requires what is imported at the top as it loads, before
+    // it checks the Node it runs on (cli/index.ts), and an older Node lacks this one.
+    const { DatabaseSync } = await import('node:sqlite');
+    const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
+    try {
+      const file = path.join(dir, 'selftest.sqlite');
+      const database = new DatabaseSync(file);
+      let version: string;
+      try {
+        const sqlite = database.prepare('SELECT sqlite_version() AS version').get()?.version;
+        if (typeof sqlite !== 'string') throw new Error('SQLite did not report its version');
+        version = sqlite;
+        const mode = database.prepare('PRAGMA journal_mode=WAL').get()?.journal_mode;
+        if (mode !== 'wal') throw new Error(`journal_mode was ${String(mode)}, not WAL`);
+        database.exec('PRAGMA synchronous=FULL');
+        if (database.prepare('PRAGMA synchronous').get()?.synchronous !== 2) {
+          throw new Error('synchronous was not FULL');
+        }
+        database.exec('CREATE TABLE selftest (value TEXT NOT NULL); BEGIN IMMEDIATE');
+        database.prepare('INSERT INTO selftest (value) VALUES (?)').run('committed');
+        database.exec('COMMIT');
+      } finally {
+        database.close();
+      }
+      const reader = new DatabaseSync(file, { readOnly: true });
+      try {
+        if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'committed') {
+          throw new Error('the reopened database did not read back the committed row');
+        }
+        return `SQLite ${version}, WAL, a transaction read back`;
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(`SQLite transaction check failed: ${why}`, { cause: error });
   }
 }
 

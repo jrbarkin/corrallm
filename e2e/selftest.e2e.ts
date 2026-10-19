@@ -23,6 +23,7 @@ const PASSED = [
   /node-pty ok \(pid \d+, exit 0\)/,
   /@xterm\/headless ok \(40×5\)/,
   /Agent SDK ok \(the fake claude said “ok”\)/,
+  /SQLite \d+\.\d+\.\d+, WAL, a transaction read back/,
   /loopback HTTP ok \(127\.0\.0\.1:\d+\)/,
   /spawn ok \(pid \d+, exit 0\)/,
 ];

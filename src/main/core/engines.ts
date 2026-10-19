@@ -76,6 +76,8 @@ export interface OpenCanvas {
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
+  /** Forces the run as it is now to disk, replacing its coalesced write. */
+  journal(): Promise<void>;
   /** What opening it found to say: its run record, or its message log, set aside. */
   warnings: readonly string[];
 }
@@ -208,7 +210,13 @@ export class Engines {
         result.reason === 'usage-limit' &&
         result.resetsAt !== undefined
       ) {
-        await this.#deps.usage.exhaust(backend, result.resetsAt);
+        // A hold it can't keep holds all the same, until the core stops: the turn's end goes on.
+        await this.#deps.usage.exhaust(backend, result.resetsAt).catch((error: unknown) => {
+          console.error(
+            `Could not keep ${catalog.backendName(backend)}’s usage limit: it holds only until corrallm stops.`,
+            error,
+          );
+        });
       }
     }
     const mail = await this.#mail.get(canvas);
@@ -308,6 +316,7 @@ export class Engines {
     running.reads = new ReadPositions(await journal.reads(canvas), (moved) =>
       this.#write(running, moved),
     );
+    running.journal = () => this.#write(running);
     const engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),

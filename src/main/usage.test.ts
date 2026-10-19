@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UsageState } from '../shared/usage';
 import { UsageReadings } from './usage';
 
+/** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
+const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 const START = Date.UTC(2026, 9, 12, 12, 0);
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -40,6 +42,13 @@ async function open(): Promise<UsageReadings> {
   await store.load();
   store.subscribe((state) => heard.push(state));
   return store;
+}
+
+/** What the one file set aside beside usage.json holds. */
+async function setAside(): Promise<string> {
+  const rejected = (await readdir(dir)).filter((name) => name !== 'usage.json');
+  expect(rejected).toEqual([expect.stringMatching(/^usage\.rejected-.+\.json$/)]);
+  return readFile(path.join(dir, String(rejected[0])), 'utf8');
 }
 
 const fiveHour = (usedPercent: number, resetsAt: number | null = START + 2 * HOUR) => ({
@@ -197,8 +206,13 @@ describe('UsageReadings', () => {
   });
 
   it('starts empty from a missing or broken file, and skips what is not right in it', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await writeFile(file, 'not json');
     expect((await open()).state()).toEqual({ readings: [], rules: {} });
+    // Set aside, as it was, and said: never written over.
+    expect(await setAside()).toBe('not json');
+    expect(said).toHaveBeenCalledOnce();
+    said.mockRestore();
     await writeFile(
       file,
       JSON.stringify({
@@ -218,16 +232,72 @@ describe('UsageReadings', () => {
     });
   });
 
-  it('reads a file of another version as nothing read and no rules', async () => {
-    await writeFile(
-      file,
-      JSON.stringify({
-        version: 1,
-        readings: [{ backend: 'Claude', windows: fiveHour(5), at: START }],
-        rules: { Claude: { window: 'weekly', percent: 80, action: 'ask' } },
-      }),
-    );
+  it('reads a file of another version as nothing read and no rules, setting it aside', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const old = JSON.stringify({
+      version: 1,
+      readings: [{ backend: 'Claude', windows: fiveHour(5), at: START }],
+      rules: { Claude: { window: 'weekly', percent: 80, action: 'ask' } },
+    });
+    await writeFile(file, old);
     expect((await open()).state()).toEqual({ readings: [], rules: {} });
+    expect(await setAside()).toBe(old);
+    expect(said).toHaveBeenCalledOnce();
+    said.mockRestore();
+  });
+
+  it.skipIf(!CAN_DENY)('never writes over a file it can’t read: it refuses to load', async () => {
+    readings.setRule('codex', { window: 'weekly', percent: 90, action: 'ask' });
+    await readings.flush();
+    const kept = await readFile(file, 'utf8');
+    await chmod(file, 0);
+    await expect(open()).rejects.toThrow(/EACCES/);
+    await chmod(file, 0o600);
+    expect(await readFile(file, 'utf8')).toBe(kept);
+    expect((await open()).state().rules).toEqual({
+      codex: { window: 'weekly', percent: 90, action: 'ask' },
+    });
+  });
+
+  it('writes back what a newer corrallm keeps in it that it doesn’t know, as it was', async () => {
+    const later = {
+      version: 2,
+      readings: [
+        { backend: 'codex', windows: fiveHour(5), at: START, credits: 12 },
+        { backend: 'claude-code', windows: fiveHour(6), at: START, plan: 'max' },
+        { backend: 'gemini', windows: fiveHour(7), at: START },
+      ],
+      rules: {
+        codex: { window: 'weekly', percent: 80, action: 'ask', then: 'gemini' },
+        gemini: { window: 'weekly', percent: 70, action: 'warn' },
+      },
+      exhausted: {
+        codex: { resetsAt: START + HOUR, window: 'fiveHour', source: 'cli' },
+        gemini: { resetsAt: START + HOUR },
+      },
+      fallback: ['codex', 'gemini'],
+    };
+    await writeFile(file, JSON.stringify(later));
+    const again = await open();
+    expect(again.state()).toEqual({
+      readings: [
+        { backend: 'claude-code', windows: fiveHour(6), at: START },
+        { backend: 'codex', windows: fiveHour(5), at: START },
+      ],
+      rules: { codex: { window: 'weekly', percent: 80, action: 'ask' } },
+    });
+    // A new reading is this one's own: what the one it replaces had goes with it.
+    now += MINUTE;
+    again.take('claude-code', fiveHour(8));
+    await again.flush();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      ...later,
+      readings: [
+        { backend: 'claude-code', windows: fiveHour(8), at: now },
+        later.readings[0],
+        later.readings[2],
+      ],
+    });
   });
 
   it('keeps no reading of a backend the catalog does not list', () => {

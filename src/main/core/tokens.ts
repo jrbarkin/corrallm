@@ -1,11 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
 import { ID_PATTERN } from '../../shared/adapter';
 import { DEFAULT_TOKEN_HOURS, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import { writeWhole } from '../memory';
+import { readWhole, unknownFields, writeWhole } from '../memory';
 import type { OutsideCaller } from './caller';
 
 /*
@@ -24,7 +23,11 @@ import type { OutsideCaller } from './caller';
  * messages, its `wait` read position and the holds it set carry over. Its `id`, a random UUID,
  * names it among the store's tokens without its hash or its value: a caller's limits and repeated
  * requests are kept by it, and a call still going ends on it once its token is replaced or
- * expires. A file of another version, or an entry that isn't one it writes, reads as no token.
+ * expires. An entry that isn't one it writes reads as no token, and is dropped as the store is
+ * written again; what it holds that this corrallm doesn't know (a newer one's fields, of the file
+ * and of each token it reads) is written back as it was. A file of another version, or one that
+ * isn't JSON, reads as none and is set aside (readWhole). One that can't be read is never read as
+ * none, nor written over: the store refuses to load, so the core doesn't start without it.
  */
 
 /** What a person makes a token for. */
@@ -54,12 +57,17 @@ const HOUR = 60 * 60 * 1000;
 /** How often, at most, a token's last use is written down as it is used. */
 const LAST_USE_MS = 60 * 1000;
 const HASH = /^[0-9a-f]{64}$/;
+/** The fields of a token, as it keeps them. */
+const FIELDS = ['id', 'name', 'canvases', 'access', 'expires', 'lastUsed'];
 
 export class TokenStore {
   readonly #file: string;
   readonly #now: () => number;
   /** Every token kept, by its hash. */
   #tokens = new Map<string, Kept>();
+  /** What its file holds that this corrallm doesn't know: of the file, and of each token read. */
+  #unknown: Record<string, unknown> = {};
+  readonly #fields = new WeakMap<Kept, Record<string, unknown>>();
   /** When each token's last use was last written down, by id: at most once a LAST_USE_MS. */
   readonly #written = new Map<string, number>();
   /** The tokens it knew that were replaced, or expired and dropped, by id. */
@@ -72,22 +80,19 @@ export class TokenStore {
     this.#now = now;
   }
 
-  /** Reads the tokens its file keeps, but those expired. */
+  /** Reads the tokens its file keeps, but those expired. Rejects if it can't be read. */
   async load(): Promise<void> {
-    let text: string;
-    try {
-      text = await readFile(this.#file, 'utf8');
-    } catch {
-      return;
-    }
-    this.#tokens = parse(text);
+    const file = await readWhole(this.#file, VERSION);
+    this.#unknown = unknownFields(file, ['version', 'tokens']);
+    this.#tokens = parse(file, this.#fields);
     this.#prune();
   }
 
   /**
    * Makes a token for `grant`: its value, returned once, never kept. It replaces any token of the
-   * same name at once, and is written down before it is returned. Rejects a name that isn't an id,
-   * no canvases, or hours that aren't 1 to MAX_TOKEN_HOURS.
+   * same name at once, and is written down, forced to disk, before it is returned: no power loss
+   * brings the token it replaced back. Rejects a name that isn't an id, no canvases, or hours that
+   * aren't 1 to MAX_TOKEN_HOURS.
    */
   async create({
     name,
@@ -116,7 +121,7 @@ export class TokenStore {
       access,
       expires: this.#now() + hours * HOUR,
     });
-    await this.#write();
+    await this.#write(true);
     return token;
   }
 
@@ -189,15 +194,19 @@ export class TokenStore {
     }
   }
 
-  /** Writes the store whole, after every write before it, for the user's eyes only. */
-  #write(): Promise<void> {
-    const write = this.#writing.then(() =>
-      writeWhole(
-        this.#file,
-        `${JSON.stringify({ version: VERSION, tokens: Object.fromEntries(this.#tokens) }, null, 2)}\n`,
-        { mode: 0o600 },
-      ),
-    );
+  /**
+   * Writes the store whole, after every write before it, for the user's eyes only; `durable`,
+   * forced to disk, as a write that replaces a token is: no power loss brings that one back.
+   */
+  #write(durable = false): Promise<void> {
+    const write = this.#writing.then(() => {
+      const tokens = [...this.#tokens].map(
+        ([hash, kept]) => [hash, { ...this.#fields.get(kept), ...kept }] as const,
+      );
+      const file = { version: VERSION, ...this.#unknown, tokens: Object.fromEntries(tokens) };
+      const text = `${JSON.stringify(file, null, 2)}\n`;
+      return writeWhole(this.#file, text, { mode: 0o600, durable });
+    });
     this.#writing = write.catch(() => undefined);
     return write;
   }
@@ -207,19 +216,21 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** The tokens a token file holds: those that are not right are left out. */
-function parse(text: string): Map<string, Kept> {
+/**
+ * The tokens a token file holds (none if there is none): those not right are left out. What each
+ * holds that this corrallm doesn't know goes in `fields`.
+ */
+function parse(
+  file: Record<string, unknown> | undefined,
+  fields: WeakMap<Kept, Record<string, unknown>>,
+): Map<string, Kept> {
   const tokens = new Map<string, Kept>();
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return tokens;
-  }
-  if (!isRecord(file) || file.version !== VERSION || !isRecord(file.tokens)) return tokens;
+  if (!isRecord(file?.tokens)) return tokens;
   for (const [hash, value] of Object.entries(file.tokens)) {
     const kept = readToken(value);
-    if (HASH.test(hash) && kept !== undefined) tokens.set(hash, kept);
+    if (!HASH.test(hash) || kept === undefined) continue;
+    tokens.set(hash, kept);
+    fields.set(kept, unknownFields(value, FIELDS));
   }
   return tokens;
 }

@@ -207,6 +207,46 @@ describe('run persistence coordinator', () => {
     expect(source.save).toHaveBeenCalledWith('new', expect.any(Object));
   });
 
+  it('saves a flush asked for while it rebinds once the rebind is done, under the new token', async () => {
+    const { persistence, source } = setup();
+    await persistence.initialize();
+    const rebound = Promise.withResolvers<RunContext>();
+    vi.mocked(source.get).mockReturnValueOnce(rebound.promise);
+    const rebinding = persistence.rebind(false);
+    await vi.waitFor(() => {
+      expect(source.get).toHaveBeenCalledTimes(2);
+    });
+    // As main asks the renderer to save while it quits.
+    let flushed = false;
+    const flush = persistence.flush().then(() => {
+      flushed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(flushed).toBe(false);
+    expect(source.save).not.toHaveBeenCalled();
+    rebound.resolve({ id: newCanvasId(), token: 'rebound', checkpoint: null, name: null });
+    await rebinding;
+    await flush;
+    expect(source.save).toHaveBeenCalledExactlyOnceWith('rebound', expect.any(Object));
+  });
+
+  it('still refuses a flush asked for while it rebinds once it is disposed', async () => {
+    const { persistence, source } = setup();
+    await persistence.initialize();
+    const rebound = Promise.withResolvers<RunContext>();
+    vi.mocked(source.get).mockReturnValueOnce(rebound.promise);
+    const rebinding = persistence.rebind(false);
+    await vi.waitFor(() => {
+      expect(source.get).toHaveBeenCalledTimes(2);
+    });
+    const flush = persistence.flush();
+    persistence.dispose();
+    rebound.resolve({ id: newCanvasId(), token: 'rebound', checkpoint: null, name: null });
+    await rebinding;
+    await expect(flush).rejects.toThrow('The run storage is not available.');
+    expect(source.save).not.toHaveBeenCalled();
+  });
+
   it('waits for a pending identical checkpoint and still saves an edit reverted during the write', async () => {
     const { persistence, source, change } = setup();
     let release: (() => void) | undefined;

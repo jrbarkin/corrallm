@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +15,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
-import { cursorOf } from './delivery/messages';
+import { cursorOf, readCursor } from './delivery/messages';
 import { NO_DESKTOP } from './test-registry';
 
 /*
@@ -155,11 +156,12 @@ async function failure(
   return result.error;
 }
 
-/** Where the canvas's record says each party's `wait` has read to. */
+/** Where the canvas's record says each party's `wait` has read to: none if it has no record. */
 async function keptReads(canvas: CanvasId = M1): Promise<Record<string, number> | undefined> {
-  const record = JSON.parse(
-    await readFile(path.join(profile, 'runs', canvas, 'record.json'), 'utf8'),
-  ) as { reads?: Record<string, number> };
+  const file = path.join(profile, 'runs', canvas, 'record.json');
+  // A canvas whose record was never written keeps none.
+  if (!existsSync(file)) return undefined;
+  const record = JSON.parse(await readFile(file, 'utf8')) as { reads?: Record<string, number> };
   return record.reads;
 }
 
@@ -434,6 +436,40 @@ describe('wait', () => {
         await chmod(runs, 0o700);
       }
       expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([false, true])(
+    'returns only the canvases whose read positions landed, losing none (with cursor: %s)',
+    async (withCursor) => {
+      await keep(true);
+      await start([M1, WORKER]);
+      const { caller } = await token('orchestrator', [M1, WORKER]);
+      const first = await exchange(caller, 'One', M1);
+      const second = await exchange(caller, 'Two', WORKER);
+      const before = cursorOf('wait', { [M1]: 0, [WORKER]: 0 });
+      const runs = path.join(profile, 'runs', WORKER);
+      await chmod(runs, 0o500);
+      let waited: Waited;
+      try {
+        waited = await wait(caller, withCursor ? { after: before } : {});
+        expect(waited.messages.map(({ replyTo }) => replyTo)).toEqual([first]);
+        const next = readCursor(waited.next, ['wait']);
+        expect(next).toEqual({
+          [M1]: current()
+            .engines.canvas(M1)
+            ?.messages.seqOf(waited.messages[0]?.id ?? ''),
+          [WORKER]: 0,
+        });
+        expect(await keptReads(M1)).toEqual({ 'outside:orchestrator': next?.[M1] });
+        expect((await keptReads(WORKER))?.['outside:orchestrator'] ?? 0).toBe(0);
+        expect(current().engines.canvas(WORKER)?.reads.of('outside:orchestrator')).toBe(0);
+      } finally {
+        await chmod(runs, 0o700);
+      }
+      const following = await wait(caller, withCursor ? { after: waited.next } : {});
+      expect(following.messages.map(({ replyTo }) => replyTo)).toEqual([second]);
+      expect((await wait(caller)).messages).toEqual([]);
     },
   );
 

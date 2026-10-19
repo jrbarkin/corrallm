@@ -11,11 +11,21 @@ import { CanvasMemory, writeWhole } from './memory';
 
 /** What the file system was asked to force to disk, and to move, in order (by base name). */
 const disk = vi.hoisted(() => [] as string[]);
+/** While set, reading a file fails with this code, as a disk or permissions would. */
+const reads = vi.hoisted(() => ({ failing: undefined as string | undefined }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
   return {
     ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (reads.failing !== undefined) {
+        throw Object.assign(new Error(`${reads.failing}: could not read`), {
+          code: reads.failing,
+        });
+      }
+      return actual.readFile(...args);
+    },
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
       const sync = handle.sync.bind(handle);
@@ -45,6 +55,8 @@ beforeEach(async () => {
   file = path.join(dir, 'canvases.json');
 });
 afterEach(async () => {
+  reads.failing = undefined;
+  vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -202,25 +214,56 @@ describe('CanvasMemory', () => {
     expect(await memory.get(OTHER)).toEqual({ file: '/o.corral', conversations: {} });
   });
 
-  it('reads a version 1 file as empty, and starts afresh from one it cannot read', async () => {
-    await writeFile(
-      file,
-      JSON.stringify({
-        version: 1,
-        canvases: { '/team.corral': { project: '/p', sessions: { a: SESSION } } },
-      }),
-    );
-    const memory = new CanvasMemory(file);
-    expect(await memory.canvasWithFile('/team.corral')).toBeUndefined();
-    await memory.update(TEAM, (m) => m);
-    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
-      version: 2,
-      canvases: { [TEAM]: { conversations: {} } },
+  it('reads a version 1 file, or one it cannot parse, as empty, setting it aside rather than writing over it', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const old = JSON.stringify({
+      version: 1,
+      canvases: { '/team.corral': { project: '/p', sessions: { a: SESSION } } },
     });
-
-    await writeFile(file, 'not json');
-    expect(await new CanvasMemory(file).get(TEAM)).toEqual({ conversations: {} });
+    for (const text of [old, 'not json']) {
+      await rm(dir, { recursive: true });
+      await mkdir(dir);
+      await writeFile(file, text);
+      const memory = new CanvasMemory(file);
+      expect(await memory.canvasWithFile('/team.corral')).toBeUndefined();
+      await memory.update(TEAM, (m) => m);
+      expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+        version: 2,
+        canvases: { [TEAM]: { conversations: {} } },
+      });
+      // What it held is beside it, as it was, and where is said.
+      const [rejected] = (await readdir(dir)).filter((name) => name !== 'canvases.json');
+      expect(rejected).toMatch(/^canvases\.rejected-[0-9a-f-]{36}\.json$/);
+      expect(await readFile(path.join(dir, String(rejected)), 'utf8')).toBe(text);
+      expect(said).toHaveBeenLastCalledWith(
+        expect.stringContaining(path.join(dir, String(rejected))),
+      );
+    }
   });
+
+  it.each(['EACCES', 'EIO', 'EMFILE'])(
+    'never writes over a file it could not read (%s), and reads it again next time',
+    async (code) => {
+      await saved({ [OTHER]: { file: '/o.corral', project: '/p', conversations: {} } });
+      const kept = await readFile(file, 'utf8');
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const memory = new CanvasMemory(file);
+      reads.failing = code;
+      await expect(memory.get(TEAM)).rejects.toThrow(code);
+      await memory.update(TEAM, () => ({ project: at('/team'), conversations: {} }));
+      expect(logged).toHaveBeenCalledOnce();
+      await expect(memory.flush()).rejects.toThrow(code);
+      reads.failing = undefined;
+      expect(await readFile(file, 'utf8')).toBe(kept);
+      expect(await readdir(dir)).toEqual(['canvases.json']);
+
+      // Read once it can be: what it kept, and what is changed after.
+      await memory.update(TEAM, (m) => ({ ...m, project: at('/team') }));
+      await expect(memory.flush()).resolves.toBeUndefined();
+      expect((await new CanvasMemory(file).get(OTHER)).project).toBe('/p');
+      expect((await new CanvasMemory(file).get(TEAM)).project).toBe('/team');
+    },
+  );
 
   it('ignores entries that are not right', async () => {
     await saved({
