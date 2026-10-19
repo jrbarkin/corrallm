@@ -133,27 +133,36 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 never a static import, which the bundler would hoist above the CLI's check of
                 Node's version; a test keeps it so). open.ts is openStore, which never rejects:
                 core.db made 0600 before SQLite opens it (so its -wal and -shm are too); one that
-                was there checked read-only first (corrallm's application id, meta.min_reader,
-                quick_check); then incremental vacuuming on a new one, WAL, synchronous FULL and
-                F_FULLFSYNC on macOS, foreign keys, an untrusted schema, a 4 MiB journal size
-                limit, no automatic checkpoints, no busy timeout (the core is the only writer),
-                and migrations.ts' forward-only migrations (each with its user_version and
-                meta.min_reader in one transaction; schema 1: canvas, conversation, run, message,
-                read_position, open_canvas, meta, STRICT). One a newer corrallm made that this one
-                can't read is refused, left untouched; a damaged one is set aside
-                (core.rejected-<uuid>.db, its -wal first) and the newest sound snapshot restored,
-                else it starts empty, saying so. store.ts is the open Store: `prepare` (cached),
-                `tx` (transaction.ts: BEGIN IMMEDIATE, a synchronous function, COMMIT, a savepoint
-                within one, rolled back only if SQLite hasn't, as on a full disk), `write` (the
-                lane: writes queued in one turn of the loop share one commit, each in a savepoint,
-                each resolving only once that commit returned: "on disk before it is sent"), a
-                PASSIVE checkpoint once idle a second (at most 30 s after the first unchecked
-                commit), `snapshot` (snapshots.ts: SQLite's backup into backups/core-<time>.db,
-                read through a connection of its own in one step, the newest three kept; taken
-                as it closes and every four hours) and `close` (the lane drained, a TRUNCATE
-                checkpoint, a snapshot; once). Today's stores (memory.ts, run-journal.ts,
-                delivery/messages.ts, delivery/reads.ts) keep their files until B9.0's second
-                part puts them behind it.
+                was there checked read-only first (a transaction a crash left in its rollback
+                journal, as while it is set up, rolled back first; corrallm's application id,
+                meta.min_reader, quick_check: faults.ts); then incremental vacuuming on a new one,
+                WAL, synchronous FULL and F_FULLFSYNC on macOS, foreign keys, an untrusted schema,
+                a 4 MiB journal size limit, no automatic checkpoints, no busy timeout (the core is
+                the only writer), and migrations.ts' forward-only migrations (each with its
+                user_version and meta.min_reader in one transaction, run with foreign keys off,
+                so one may rebuild a table others refer to, and refused if it leaves a reference
+                to nothing; schema 1: canvas, conversation, run, message, read_position,
+                open_canvas, meta, STRICT). One a newer corrallm made that this one can't read is
+                refused, left untouched; a damaged one is set aside (core.rejected-<uuid>.db, its
+                -wal first, then -shm and -journal) and the newest snapshot passing the same
+                checks restored, else it starts empty, saying so; a profile with snapshots but no
+                core.db (a restore cut short) is restored the same way, saying so. A restore, or
+                an empty start in place of a database, numbers each never-reused sequence
+                (migrations.ts' SEQUENCES: message's seq) on from the clock in ms, past every
+                place given before, so a cursor from before reads what comes next. store.ts is the
+                open Store: `prepare` (cached), `tx` (transaction.ts: BEGIN IMMEDIATE, a
+                synchronous function, COMMIT, a savepoint within one, rolled back only if SQLite
+                hasn't, as on a full disk), `write` (the lane: writes queued in one turn of the
+                loop share one commit, each in a savepoint, each resolving only once that commit
+                returned: "on disk before it is sent"), a PASSIVE checkpoint once idle a second
+                (at most 30 s after the first unchecked commit), `snapshot` (snapshots.ts:
+                SQLite's backup into backups/core-<time>.db, read through a connection of its own
+                in one step, quick-checked and forced to disk before it is named, never kept with
+                a fault, the newest three kept, what one cut short left removed by the next; taken
+                as it closes and every four hours) and `close` (writes, and transactions outside
+                one, refused from its start; the lane drained, a TRUNCATE checkpoint, a snapshot;
+                once). Today's stores (memory.ts, run-journal.ts, delivery/messages.ts,
+                delivery/reads.ts) keep their files until B9.0's second part puts them behind it.
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside
