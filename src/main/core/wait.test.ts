@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TOKEN_REPLACED } from '../../shared/api/errors';
+import { TOKEN_REPLACED, TOO_MANY_WAITS } from '../../shared/api/errors';
 import { MAX_MESSAGE_BYTES, TOKEN_WAITS } from '../../shared/api/limits';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
@@ -489,9 +489,10 @@ describe('wait', () => {
     try {
       // Every wait holds its place, and the token's other calls are answered meanwhile.
       await vi.waitFor(async () => {
+        // In the words `corrallm wait` exits 3 on, to try again later.
         expect(await failure('wait', { timeoutSeconds: 30 }, caller)).toEqual({
           code: 'refused',
-          sentence: 'Too many waits at once; let one end first.',
+          sentence: TOO_MANY_WAITS,
         });
       });
       expect((await current().call('agents', { canvas: M1 }, caller)).ok).toBe(true);

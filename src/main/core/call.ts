@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 
 import type { OpDef } from '../../shared/api/define';
+import { TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
 import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
@@ -239,9 +240,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           waits: surface.waits === true,
         });
         if (admitted === 'calls') throw new OpFailure('refused', 'Too many calls; slow down.');
-        if (admitted === 'waits') {
-          throw new OpFailure('refused', 'Too many waits at once; let one end first.');
-        }
+        if (admitted === 'waits') throw new OpFailure('refused', TOO_MANY_WAITS);
         release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));

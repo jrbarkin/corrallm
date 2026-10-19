@@ -37,3 +37,9 @@ export type OpResult<T> = { ok: true; value: T } | { ok: false; error: OpError }
  */
 export const TOKEN_REPLACED =
   'This token was replaced or expired: call with the token its maker has now (corrallm serve --new-token).';
+
+/**
+ * What a token's `wait` is refused with (`refused`) while it has as many going as it may
+ * (TOKEN_WAITS): a refusal that passes, which `corrallm wait` tells apart by these words.
+ */
+export const TOO_MANY_WAITS = 'Too many waits at once; let one end first.';

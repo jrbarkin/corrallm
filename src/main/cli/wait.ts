@@ -1,7 +1,7 @@
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 
-import { TOKEN_REPLACED } from '../../shared/api/errors';
+import { TOKEN_REPLACED, TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError } from '../../shared/api/errors';
 import { appProfile } from '../core/host/node';
 import { loopbackUrl } from '../url-policy';
@@ -27,9 +27,10 @@ export const URL_VARIABLE = 'CORRALLM_URL';
 /**
  * How it exits: 0 when something came; 1 when the time limit passed; 2 when its token was refused
  * (none, a wrong one, one expired or replaced); 3 when no server answered (none found, a URL that
- * isn't corrallm's on this machine, or a server that can't wait now); 5 when the server refused
- * the wait for what it asked (a cursor or message id it doesn't know: the line says why). A
- * command line that can never work exits 64 (index.ts).
+ * isn't corrallm's on this machine), or none that can take the wait now (a server that can't wait
+ * now, or the token's waits at their limit, TOKEN_WAITS: try again later); 5 when the server
+ * refused the wait for what it asked (a cursor or message id it doesn't know: the line says why).
+ * A command line that can never work exits 64 (index.ts).
  */
 const EXIT = { came: 0, timedOut: 1, refused: 2, noServer: 3, failed: 5 } as const;
 
@@ -130,10 +131,12 @@ export async function waitCommand(
 
 /**
  * How a wait the core refused exits: 2 only for its token, replaced or expired while it waited; 3
- * for a server that can't wait now; 5 for anything it asked.
+ * for a server that can't take it now (or not from this token, whose waits are at their limit); 5
+ * for anything it asked.
  */
 function exitFor({ code, sentence }: OpError): number {
   if (code === 'refused' && sentence === TOKEN_REPLACED) return EXIT.refused;
+  if (code === 'refused' && sentence === TOO_MANY_WAITS) return EXIT.noServer;
   return code === 'unavailable' ? EXIT.noServer : EXIT.failed;
 }
 

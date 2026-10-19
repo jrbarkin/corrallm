@@ -3,15 +3,16 @@ import type { Server } from 'node:http';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { TOKEN_REPLACED } from '../../shared/api/errors';
+import { TOKEN_REPLACED, TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError } from '../../shared/api/errors';
 import { waitCommand } from './wait';
 
 /*
  * How `corrallm wait` exits on each refusal the server gives (API Spec §8.6): 2 only for its token,
  * so an orchestrator that asks the person for a new token on 2 never does for anything else; 3 for
- * a server that can't wait now; 5 for what the wait asked. serve.test.ts runs it against the real
- * server; here a stand-in answers each refusal as the MCP server words one.
+ * a server that can't take the wait now, so it tries again later; 5 for what the wait asked, so it
+ * gives up that cursor or id. serve.test.ts runs it against the real server; here a stand-in
+ * answers each refusal as the MCP server words one.
  */
 
 let server: Server | undefined;
@@ -52,7 +53,9 @@ async function refusing(error: OpError): Promise<string> {
 describe('corrallm wait', () => {
   it.each<[string, OpError, number]>([
     ['its token replaced while it waited', { code: 'refused', sentence: TOKEN_REPLACED }, 2],
-    ['too many waits', { code: 'refused', sentence: 'Too many waits at once.' }, 5],
+    // A passing refusal: it waits again later, keeping its place.
+    ['its token’s waits at their limit', { code: 'refused', sentence: TOO_MANY_WAITS }, 3],
+    ['another refusal', { code: 'refused', sentence: 'Not that.' }, 5],
     ['a cursor it didn’t give', { code: 'invalid', sentence: 'That cursor isn’t one.' }, 5],
     ['a message it doesn’t know', { code: 'not-found', sentence: 'No such message.' }, 5],
     ['a server that can’t wait now', { code: 'unavailable', sentence: 'Not now.' }, 3],
