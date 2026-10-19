@@ -205,6 +205,14 @@ describe('tx', () => {
     expect(store.tx(() => add('now').changes)).toBe(1);
     expect(notes()).toEqual(['now']);
   });
+
+  it('refuses once the store is closing, keeping nothing', async () => {
+    const closed = store.close();
+    expect(() => store.tx(() => add('too late'))).toThrow('The core’s database is closed.');
+    await closed;
+    expect(notes()).toEqual([]);
+    expect(pending()).toEqual([]);
+  });
 });
 
 describe('checkpoints', () => {

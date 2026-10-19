@@ -122,8 +122,10 @@ export class Store {
   /**
    * Runs `run` in a transaction, committed once it returns, and returns what it returned; within
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns.
+   * Refused once the store is closing.
    */
   tx<T>(run: () => T): T {
+    if (this.#closing !== undefined) throw closed();
     const outermost = !this.#connection.isTransaction;
     const value = transaction(this.#connection, run);
     if (outermost) this.#committed();
@@ -133,12 +135,11 @@ export class Store {
   /**
    * Queues `run` (synchronous, with no await inside) for the lane's next commit, with the other
    * writes queued in this turn of the loop. Resolves with what it returned once that commit has
-   * returned; rejects, keeping nothing of it, if it threw or the commit failed.
+   * returned; rejects, keeping nothing of it, if it threw or the commit failed. Refused once the
+   * store is closing.
    */
   write<T>(run: () => T): Promise<T> {
-    if (this.#closing !== undefined) {
-      return Promise.reject(new Error('The core’s database is closed.'));
-    }
+    if (this.#closing !== undefined) return Promise.reject(closed());
     return new Promise<T>((resolve, reject) => {
       this.#queue.push({ run, resolve: resolve as (value: unknown) => void, reject });
       if (this.#scheduled) return;
@@ -265,4 +266,8 @@ export class Store {
       });
     }
   }
+}
+
+function closed(): Error {
+  return new Error('The core’s database is closed.');
 }
