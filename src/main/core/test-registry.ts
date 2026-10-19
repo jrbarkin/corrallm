@@ -23,7 +23,7 @@ import type { Resolver } from './reach';
 
 export const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b' as CanvasId;
 export const OTHER_CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c' as CanvasId;
-export const PROPOSAL = NeedId.parse('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d');
+export const PROPOSAL = NeedId.parse('proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d');
 
 /**
  * The canvas's agents: `lead` (a lead, whose team is `helper`, nested inside it), `worker` (with
@@ -69,7 +69,7 @@ function reachesAgent(id: string, caller: TokenCaller, reach: Reach): boolean {
 export const RESOLVERS: Readonly<Record<string, Resolver>> = {
   CanvasId: (id, caller) =>
     caller.kind === 'outside' ? caller.canvases.includes(id as CanvasId) : caller.canvas === id,
-  AgentId: (id, caller, reach, canvas) =>
+  AgentId: (id, caller, reach, { canvas }) =>
     (canvas === undefined || canvas === CANVAS) && reachesAgent(id, caller, reach),
 };
 

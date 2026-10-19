@@ -48,6 +48,12 @@ export const DEFAULT_PAGE = 50;
  */
 export const MAX_PAGE_BYTES = 60 * 1024;
 
+/**
+ * The longest id of a Needs item: what it is, its agent's id escaped (encodeURIComponent: up to 9
+ * characters for each of its own) and what of the agent's it is.
+ */
+export const MAX_NEED_ID = 4096;
+
 /** How many lines of a prompt's detail are shown, then how many more there are. */
 export const MAX_DETAIL_LINES = 12;
 

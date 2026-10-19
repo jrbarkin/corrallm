@@ -4,6 +4,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { CanvasNode, Link } from '../../shared/model/canvas';
 import type { Message } from '../../shared/model/messages';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
+import { findItem } from '../../shared/model/queue';
 import { canvasesOf, partyIdOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
 import type { Engines } from './engines';
@@ -18,14 +19,16 @@ import type { Engines } from './engines';
  */
 
 /**
- * Whether `caller` reaches the id `id` of one kind, as far as `reach`, on `canvas` (the canvas the
- * call names, if it names one: ids other than a canvas's are unique within their canvas only).
+ * Whether `caller` reaches the id `id` of one kind, as far as `reach`, where the call names it:
+ * on `at.canvas`, the canvas the call names, if it names one (ids other than a canvas's are unique
+ * within their canvas only), and beside `at.agent`, the agent named in the same object as it, if
+ * one is (a queue item's id is unique within its agent's queue only).
  */
 export type Resolver = (
   id: string,
   caller: TokenCaller,
   reach: Reach,
-  canvas: string | undefined,
+  at: { canvas?: string; agent?: string },
 ) => boolean;
 
 /** What each kind of id names, as a sentence says it. */
@@ -33,7 +36,7 @@ const WORDS: Readonly<Record<Brand, string>> = {
   CanvasId: 'canvas',
   AgentId: 'agent',
   NodeId: 'node',
-  LinkId: 'link',
+  GroupId: 'group',
   ItemId: 'queue item',
   NeedId: 'Needs item',
   MessageId: 'message',
@@ -53,10 +56,23 @@ export function outOfReach(
   resolvers: Readonly<Partial<Record<Brand, Resolver>>>,
 ): string | undefined {
   const canvas = ids.find((ref) => ref.brand === 'CanvasId')?.id;
-  const missing = ids.find((ref) => resolvers[ref.brand]?.(ref.id, caller, reach, canvas) !== true);
+  const missing = ids.find((ref) => {
+    const agent = besideOf(ids, ref);
+    const at = {
+      ...(canvas === undefined ? {} : { canvas }),
+      ...(agent === undefined ? {} : { agent }),
+    };
+    return resolvers[ref.brand]?.(ref.id, caller, reach, at) !== true;
+  });
   return (
     missing && `There is no ${WORDS[missing.brand]} ${missing.id} (at ${missing.path.slice(1)}).`
   );
+}
+
+/** The agent named beside `ref`, in the same object as it (`.agent` there), if one is. */
+function besideOf(ids: readonly IdRef[], ref: IdRef): string | undefined {
+  const parent = ref.path.replace(/(?:\.[^.[]+|\[\d+\])$/, '');
+  return ids.find((one) => one.brand === 'AgentId' && one.path === `${parent}.agent`)?.id;
 }
 
 /** What reach is read over: a canvas's nodes and links. */
@@ -95,6 +111,39 @@ export function reachesAgent(
   }
 }
 
+/** Whether `caller` reaches node `id` as far as `reach`: an agent as itself, a frame as its agents. */
+export function reachesNode(
+  world: World,
+  caller: TokenCaller,
+  reach: Reach,
+  id: string,
+  lead: boolean,
+): boolean {
+  const node = world.nodes.find((one) => one.id === id);
+  if (node?.type === 'agent') return reachesAgent(world, caller, reach, id, lead);
+  return node !== undefined && reachesGroup(world, caller, reach, id, lead);
+}
+
+/**
+ * Whether `caller` reaches item `id` of agent `agent`'s queue, at any depth, as far as `reach`:
+ * only if it reaches the agent.
+ */
+export function reachesItem(
+  world: World,
+  caller: TokenCaller,
+  reach: Reach,
+  agent: string,
+  id: string,
+  lead: boolean,
+): boolean {
+  const node = world.nodes.find((one) => one.id === agent);
+  return (
+    node?.type === 'agent' &&
+    findItem(node.data.queue ?? [], id) !== undefined &&
+    reachesAgent(world, caller, reach, agent, lead)
+  );
+}
+
 /** Whether `caller` reaches the group `id` as far as `reach`: every agent of it. */
 export function reachesGroup(
   world: World,
@@ -123,7 +172,8 @@ export function agentsReached(
 
 /**
  * How the core resolves each kind of id a token names, over the canvases it runs (`engines`): a
- * canvas it has; an agent or a group it reaches there; a message it sent or received there. On a
+ * canvas it has; a node, a group, an agent or an item of its queue it reaches there; a message it
+ * sent or received there. On a
  * canvas of its own that isn't open, nothing can be told, so the op answers that it isn't open.
  */
 export function resolvers(
@@ -141,12 +191,15 @@ export function resolvers(
         caller: TokenCaller,
         reach: Reach,
         lead: boolean,
+        agent: string | undefined,
       ) => boolean,
     ): Resolver =>
-    (id, caller, reach, canvas) => {
+    (id, caller, reach, { canvas, agent }) => {
       if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;
       const open = engines.canvas(canvas as CanvasId);
-      return !open || reaches(open.document, id, caller, reach, lead(caller, canvas as CanvasId));
+      return (
+        !open || reaches(open.document, id, caller, reach, lead(caller, canvas as CanvasId), agent)
+      );
     };
   return {
     CanvasId: (id, caller) => canvasesOf(caller).includes(id as CanvasId),
@@ -154,9 +207,16 @@ export function resolvers(
       reachesAgent(world, caller, reach, id, isALead),
     ),
     NodeId: over((world, id, caller, reach, isALead) =>
+      reachesNode(world, caller, reach, id, isALead),
+    ),
+    GroupId: over((world, id, caller, reach, isALead) =>
       reachesGroup(world, caller, reach, id, isALead),
     ),
-    MessageId: (id, caller, _reach, canvas) => {
+    ItemId: over(
+      (world, id, caller, reach, isALead, agent) =>
+        agent !== undefined && reachesItem(world, caller, reach, agent, id, isALead),
+    ),
+    MessageId: (id, caller, _reach, { canvas }) => {
       // An op that takes no canvas (`wait`) names a message on any of the caller's open ones.
       if (canvas === undefined) {
         return canvasesOf(caller).some((one) =>

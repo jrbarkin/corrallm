@@ -71,9 +71,10 @@ const ID_KEYS = new Set([
   'frame',
   'group',
   'parent',
+  'target',
 ]);
 /** The brands that name an agent, which an op open to a token must say whether it may aim at itself. */
-const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId'];
+const AGENT_BRANDS: readonly Brand[] = ['AgentId', 'NodeId', 'GroupId'];
 
 /** Whether `schema` takes strings that aren't a branded id (a literal or an enum is a fixed word). */
 function takesUnbrandedText(schema: z.ZodType): boolean {
@@ -414,6 +415,26 @@ describe('T1: the surface’s rules', () => {
       'test.id: .to is an id, not branded',
     ],
     [
+      'an agent a step is aimed at that isn’t branded',
+      registry({
+        'test.id': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ target: z.string().max(9) }),
+        ),
+      }),
+      'test.id: .target is an id, not branded',
+    ],
+    [
+      'an op naming a group, open to a token, without self',
+      registry({
+        'test.group': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ group: brandedId('GroupId', z.string().max(9)) }),
+        ),
+      }),
+      'test.group: names an agent, open to a token, and declares no self',
+    ],
+    [
       'an id behind a preprocess that isn’t branded',
       registry({
         'test.id': op(
@@ -595,7 +616,7 @@ describe('the envelope', () => {
 
   it('lets an op that may become a proposal return { proposed }, and its outputSchema say so', () => {
     const proposing = withEnvelope(surface({ rules: ['discard'], destructive: true }), def);
-    const proposed = { proposed: NeedId.parse('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b') };
+    const proposed = { proposed: NeedId.parse('proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b') };
     expect(proposing.output.parse(proposed)).toEqual(proposed);
     expect(proposing.output.parse({ n: 2 })).toEqual({ n: 2 });
     expect(outputSchemaOf(proposing)).toMatchObject({

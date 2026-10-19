@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { brandedId, brandsIn, idsIn, UnreadableIds } from './ids';
+import { brandedId, brandsIn, idsIn, NeedId, UnreadableIds } from './ids';
+import { MAX_NEED_ID } from './limits';
 
 /*
  * The ids core.call resolves against a token's reach (core/reach.ts): each branded id an op's
@@ -63,5 +64,27 @@ describe('brandsIn', () => {
     expect(brandsIn(z.preprocess(trim, Agent))).toEqual(['AgentId']);
     expect(brandsIn(Agent.transform((id) => id.length))).toEqual(['AgentId']);
     expect(brandsIn(z.strictObject({ n: z.number().transform(String) }))).toEqual([]);
+  });
+});
+
+describe('NeedId', () => {
+  it('names a Needs item by what it is, then whose and which: never a bare UUID', () => {
+    for (const id of [
+      'hold/lead/check',
+      'start/a%2Fb',
+      'prompt/worker/toolu_01',
+      'proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+      'file/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+    ]) {
+      expect(NeedId.safeParse(id).success, id).toBe(true);
+    }
+    for (const id of [
+      '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+      'hold/',
+      'later/lead',
+      `hold/${'x'.repeat(MAX_NEED_ID)}`,
+    ]) {
+      expect(NeedId.safeParse(id).success, id).toBe(false);
+    }
   });
 });

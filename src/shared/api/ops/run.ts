@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { PARTY_PATTERN } from '../../model/messages';
-import { AgentId, NodeId, OpCanvas } from '../ids';
+import { AgentId, GroupId, OpCanvas } from '../ids';
 import type { OpName } from '../surface';
 
 /** The run (Core Server §4 F): holding and releasing an agent's queue, or a group's. */
@@ -14,7 +14,7 @@ const canvas = OpCanvas;
 const Party = z.string().regex(PARTY_PATTERN);
 
 /** One agent, or every agent of a group (a group of nodes, or an agent with agents inside it). */
-const Target = z.union([z.strictObject({ agent: AgentId }), z.strictObject({ group: NodeId })]);
+const Target = z.union([z.strictObject({ agent: AgentId }), z.strictObject({ group: GroupId })]);
 
 export const runOps = {
   'run.pause': define('run.pause', {

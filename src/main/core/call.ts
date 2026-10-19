@@ -109,7 +109,7 @@ export interface Dispatcher {
 }
 
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
-const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId']);
+const AGENT_BRANDS: ReadonlySet<Brand> = new Set(['AgentId', 'NodeId', 'GroupId']);
 /** The kinds of id unique across canvases (UUIDs a canvas mints), which say whose canvas a call is on. */
 const UNIQUE_BRANDS: ReadonlySet<Brand> = new Set(['MessageId']);
 /** How a refusal names a party that isn't in an op's audience. */

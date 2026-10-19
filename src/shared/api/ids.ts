@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAX_NODE_ID } from '../model/canvas';
+import { MAX_NEED_ID } from './limits';
 
 /*
  * The ids operations name, as zod brands (Core Server §3.1). core.call resolves every branded id in
@@ -15,7 +16,7 @@ export type Brand =
   | 'CanvasId'
   | 'AgentId'
   | 'NodeId'
-  | 'LinkId'
+  | 'GroupId'
   | 'ItemId'
   | 'NeedId'
   | 'MessageId'
@@ -34,8 +35,18 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
   return schema.brand<B>().register(ID_BRANDS, { brand }) as z.core.$ZodBranded<S, B>;
 }
 
-/** A Needs item (API Spec §5.9), by the id the core minted: what a proposal returns. */
-export const NeedId = brandedId('NeedId', z.uuid());
+/**
+ * A Needs item (API Spec §5.9), by its id on its canvas: what it is, then its agent's id (escaped)
+ * and what of the agent's it is (src/shared/engine/needs.ts), or a proposal's or a file review's
+ * own id. A proposal returns one.
+ */
+export const NeedId = brandedId(
+  'NeedId',
+  z
+    .string()
+    .max(MAX_NEED_ID)
+    .regex(/^(?:hold|start|unasking|limited|prompt|proposal|file)\/[\s\S]+$/),
+);
 export type NeedId = z.infer<typeof NeedId>;
 
 /** A canvas, by its stable id (src/shared/canvas.ts). */
@@ -53,9 +64,20 @@ export const OpCanvas = CanvasId.optional();
 export const AgentId = brandedId('AgentId', z.string().min(1).max(MAX_NODE_ID));
 export type AgentId = z.infer<typeof AgentId>;
 
-/** A node of a canvas (an agent or a group), by its id. */
+/** A node of a canvas, by its id: an agent, as itself, or a frame, as every agent inside it. */
 export const NodeId = brandedId('NodeId', z.string().min(1).max(MAX_NODE_ID));
 export type NodeId = z.infer<typeof NodeId>;
+
+/** A group of a canvas, by its node's id: a frame, or an agent with agents inside it, and all of them. */
+export const GroupId = brandedId('GroupId', z.string().min(1).max(MAX_NODE_ID));
+export type GroupId = z.infer<typeof GroupId>;
+
+/**
+ * An item of an agent's queue, at any depth (inside an if-then or a repeat), by its id: named
+ * beside the agent whose queue holds it (`agent`, an AgentId in the same object).
+ */
+export const ItemId = brandedId('ItemId', z.string().min(1).max(MAX_NODE_ID));
+export type ItemId = z.infer<typeof ItemId>;
 
 /** A message (API Spec §5.2), by the id the core minted. */
 export const MessageId = brandedId('MessageId', z.uuid());

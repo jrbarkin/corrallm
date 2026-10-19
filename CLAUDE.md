@@ -98,9 +98,10 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 poll, `waits`, counts against the waits in flight instead of the calls);
                 requests.ts the repeated requests (each caller's own; a result kept only when its
                 op came to it by itself, so a cancelled call's retry runs again); reach.ts
-                resolves the ids a token names against its reach (`resolvers`: a canvas it has, an
-                agent or a group it reaches there, a message it sent or received there; a caller
-                with one canvas may leave it out; `holder`, which of a caller's canvases holds a
+                resolves the ids a token names against its reach (`resolvers`: a canvas it has; an
+                agent, a node (an agent as itself, a frame as its agents), a group (every agent of
+                it) it reaches there, or an item of the queue of the agent named beside it; a
+                message it sent or received there; a caller with one canvas may leave it out; `holder`, which of a caller's canvases holds a
                 message it sent or got); rules.ts checks each rule an op carries on a token's
                 arguments (shell-text, sticky); parties.ts words parties and the pauses they set,
                 for refusals and notices; ops/ is each op's implementation, by area (open.ts: the

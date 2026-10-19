@@ -464,7 +464,7 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   AgentId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
   // A lead's team holds its own group, not the worker's.
-  NodeId: (caller, reach) =>
+  GroupId: (caller, reach) =>
     caller.kind === 'outside'
       ? []
       : caller.agent === 'lead' && reach === 'team'
