@@ -468,3 +468,213 @@ describe('diffRows', () => {
     );
   });
 });
+
+describe('diffRows by reference', () => {
+  /** `document` with node `id` as `change` makes it, every other node the same object. */
+  const withNode = (
+    document: CanvasDocument,
+    id: string,
+    change: (node: CanvasNode) => CanvasNode | undefined,
+  ): CanvasDocument => ({
+    ...document,
+    nodes: document.nodes.flatMap((node) => {
+      if (node.id !== id) return [node];
+      const changed = change(node);
+      return changed === undefined ? [] : [changed];
+    }),
+  });
+  /** `document` with agent `id`'s queue as `change` makes it. */
+  const withQueue = (
+    document: CanvasDocument,
+    id: string,
+    change: (queue: readonly QueueItem[]) => QueueItem[] | undefined,
+  ): CanvasDocument =>
+    withNode(document, id, (node) => {
+      if (node.type !== 'agent') return node;
+      const { queue, ...data } = node.data;
+      const next = change(queue ?? []);
+      return { ...node, data: next === undefined ? data : { ...data, queue: next } };
+    });
+
+  /** Edits of `everything`, each keeping what it doesn't change the same object. */
+  const EDITS: [string, (document: CanvasDocument) => CanvasDocument][] = [
+    ['nothing', (document) => document],
+    ['nothing, in new lists', (document) => ({ ...document, nodes: [...document.nodes] })],
+    [
+      'a node renamed',
+      (document) =>
+        withNode(document, 'lead', (node) => ({ ...node, data: { ...node.data, label: 'Head' } })),
+    ],
+    [
+      'a node replaced by one equal to it',
+      (document) => withNode(document, 'team', (node) => structuredClone(node)),
+    ],
+    [
+      'a node moved on the canvas',
+      (document) =>
+        withNode(document, 'Ünïcode 𝔸', (node) => ({ ...node, position: { x: 1, y: 2 } })),
+    ],
+    [
+      'a node moved into another',
+      (document) => withNode(document, 'worker/1', (node) => ({ ...node, parentId: 'team' })),
+    ],
+    ['its arrangement', (document) => ({ ...document, arrange: !document.arrange })],
+    [
+      'an agent deleted, with its link',
+      (document) => ({
+        ...withNode(document, '�', () => undefined),
+        links: document.links.filter((link) => link.target !== '�'),
+      }),
+    ],
+    [
+      'a link added',
+      (document) => ({ ...document, links: [...document.links, { source: '�', target: 'lead' }] }),
+    ],
+    ['its links reordered', (document) => ({ ...document, links: [...document.links].reverse() })],
+    [
+      'an agent’s settings',
+      (document) =>
+        withNode(document, 'lead', (node) =>
+          node.type === 'agent'
+            ? { ...node, data: { ...node.data, settings: { codex: { model: 'gpt-7' } } } }
+            : node,
+        ),
+    ],
+    [
+      'an item deep in a repeat changed',
+      (document) =>
+        withQueue(document, 'lead', (queue) =>
+          queue.map((item) =>
+            item.id === 'loop' && 'repeat' in item
+              ? {
+                  ...item,
+                  repeat: item.repeat.map((inner) =>
+                    inner.id === 'waited' ? { ...inner, timeout: { seconds: 90 } } : inner,
+                  ),
+                }
+              : item,
+          ),
+        ),
+    ],
+    [
+      'an item moved to the top',
+      (document) =>
+        withQueue(document, 'lead', (queue) => [
+          ...queue.filter((item) => item.id === 'later'),
+          ...queue.filter((item) => item.id !== 'later'),
+        ]),
+    ],
+    [
+      'an item moved out of an if-then',
+      (document) =>
+        withQueue(document, 'lead', (queue) => {
+          const red = queue.find((item) => item.id === 'if-red');
+          const fix = red && 'then' in red ? red.then.find((item) => item.id === 'fix') : undefined;
+          return [
+            ...(fix ? [fix] : []),
+            ...queue.map((item) =>
+              item === red && 'then' in item
+                ? { ...item, then: item.then.filter((inner) => inner !== fix) }
+                : item,
+            ),
+          ];
+        }),
+    ],
+    [
+      'an item added between two',
+      (document) =>
+        withQueue(document, 'lead', (queue) => [
+          ...queue.slice(0, 1),
+          message('new'),
+          ...queue.slice(1),
+        ]),
+    ],
+    [
+      'an item removed',
+      (document) =>
+        withQueue(document, 'lead', (queue) => queue.filter((item) => item.id !== 'ok')),
+    ],
+    [
+      'an item moved to another agent',
+      (document) =>
+        withQueue(
+          withQueue(document, 'worker/1', () => undefined),
+          'lead',
+          (queue) => [...queue, { id: 'x', action: 'Read' }],
+        ),
+    ],
+    ['a queue emptied', (document) => withQueue(document, 'lead', () => undefined)],
+  ];
+
+  it.each(EDITS)('diffs %s as it would by value', (_edit, edit) => {
+    const before = toRows(everything);
+    const next = edit(everything);
+    const byValue = diffRows(before, next);
+    const byReference = diffRows(before, next, everything);
+    expect(byReference).toEqual(byValue);
+    // Rows are written in their order: a node after what holds it, an item after its holder.
+    expect(Object.keys(byReference.rows)).toEqual(Object.keys(byValue.rows));
+    expect(fromRows(ID, byReference.rows)).toEqual(next);
+  });
+
+  it('diffs every shipped template’s edits as it would by value', () => {
+    for (const example of EXAMPLES) {
+      const document = fromFile(example.text, TEST_CATALOG, 'claude-code');
+      const before = toRows(document);
+      const [first] = document.nodes;
+      const agent = document.nodes.find((node) =>
+        node.type === 'agent' ? node.data.queue : false,
+      );
+      const edits = [
+        first && withNode(document, first.id, (node) => ({ ...node, position: { x: 7, y: 7 } })),
+        agent &&
+          withQueue(document, agent.id, (queue) => [...queue.slice(1), ...queue.slice(0, 1)]),
+        { ...document, nodes: document.nodes.slice(0, -1), links: [] },
+      ];
+      for (const next of edits) {
+        if (next === undefined) continue;
+        const byReference = diffRows(before, next, document);
+        expect(byReference, example.name).toEqual(diffRows(before, next));
+        expect(Object.keys(byReference.rows)).toEqual(Object.keys(diffRows(before, next).rows));
+      }
+    }
+  });
+
+  it('renumbers a list whose places ran out as it would by value', () => {
+    let document = queued([message('zero'), message('first'), message('last')]);
+    let rows = toRows(document);
+    let renumbered = 0;
+    for (let i = 0; i < 80 && renumbered === 0; i++) {
+      const next = withQueue(document, 'a', (queue) => [
+        ...queue.slice(0, 2),
+        message(`n${String(i)}`),
+        ...queue.slice(2),
+      ]);
+      const diff = diffRows(rows, next, document);
+      expect(diff).toEqual(diffRows(rows, next));
+      ({ rows } = diff);
+      renumbered = diff.renumbered.length;
+      document = next;
+    }
+    expect(renumbered).toBeGreaterThan(0);
+  });
+
+  it('reads no more of what is unchanged than its keys', () => {
+    const before = toRows(everything);
+    // The worker's node is shared: reading its settings or its queue's items' bodies would throw.
+    const worker = everything.nodes.find((node) => node.id === 'worker/1') as AgentNode;
+    const guarded: AgentNode = {
+      ...worker,
+      data: {
+        ...worker.data,
+        get settings(): never {
+          throw new Error('Read a shared node’s settings.');
+        },
+      },
+    };
+    const was = withNode(everything, 'worker/1', () => guarded);
+    const wasRows = { ...before };
+    const next = withNode(was, 'lead', (node) => ({ ...node, position: { x: 0, y: 0 } }));
+    expect(diffRows(wasRows, next, was).changed).toEqual([nodeKey('lead')]);
+  });
+});

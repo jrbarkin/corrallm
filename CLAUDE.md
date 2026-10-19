@@ -512,7 +512,9 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 `fromRows`, one row an entity under node/<id>, link/<a>/<b> with a before b by code
                 point, item/<agent>/<id> and meta, ids escaped as Needs ids are; places that keep
                 while their order holds, so a move rewrites one row; `diffRows`, what a next
-                document changes, entity by entity), words.ts (how the queue's
+                document changes, entity by entity, and given the document the rows keep, by
+                reference: what the next shares with it is never read again), words.ts (how the
+                queue's
                 items, times and usage holds read, in what the run says and wherever they are
                 shown: words that may name a usage backend take the catalog that names it, and
                 words that tell a time of day the locale), session.ts (an

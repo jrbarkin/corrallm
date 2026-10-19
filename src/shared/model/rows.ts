@@ -83,6 +83,9 @@ export interface MetaRow {
 
 export type Row = NodeRow | LinkRow | ItemRow | MetaRow;
 
+/** A placed row, before it is placed. */
+type Unplaced = Omit<NodeRow, 'place'> | Omit<LinkRow, 'place'> | Omit<ItemRow, 'place'>;
+
 /** A document's rows, by key. */
 export type Rows = Readonly<Record<EntityKey, Row>>;
 
@@ -132,18 +135,23 @@ export function toRows(document: CanvasDocument, before: Rows = {}): Record<Enti
   return placed(document, before).rows;
 }
 
-/** What `next` changes of a document kept in `before`. */
-export function diffRows(before: Rows, next: CanvasDocument): RowsChange {
-  const { rows, moved } = placed(next, before);
+/**
+ * What `next` changes of a document kept in `before`. With `was`, the document `before` keeps, what
+ * `next` shares with it (the same list, node, link or item) is taken as it was, its row not made
+ * nor compared again: an op that changes one entity, keeping the objects it doesn't change, makes
+ * one row anew. The change is the same either way.
+ */
+export function diffRows(before: Rows, next: CanvasDocument, was?: CanvasDocument): RowsChange {
+  const { rows, moved, shared } = placed(next, before, was);
   const changed: EntityKey[] = [];
   const renumbered: EntityKey[] = [];
   for (const [key, row] of Object.entries(rows)) {
-    const was = before[key];
-    if (was === undefined || moved.has(key) || !same(unplaced(was), unplaced(row))) {
-      changed.push(key);
-    } else if (!same(was, row)) {
-      renumbered.push(key);
-    }
+    const prior = before[key];
+    if (prior === undefined || moved.has(key)) changed.push(key);
+    else if (shared.has(key)) {
+      if (row !== prior) renumbered.push(key);
+    } else if (!same(unplaced(prior), unplaced(row))) changed.push(key);
+    else if (!same(prior, row)) renumbered.push(key);
   }
   for (const key of Object.keys(before)) if (!Object.hasOwn(rows, key)) changed.push(key);
   return { rows, changed, renumbered };
@@ -238,63 +246,127 @@ const HOLDERS: Record<Exclude<ItemKind, 'if' | 'repeat'>, string> = {
   approval: 'an OK',
 };
 
-/** The document's rows, each placed after its row in `before`, and the entities that moved. */
+/**
+ * The document's rows, each placed after its row in `before`; the entities that moved; and those
+ * whose rows are `before`'s but for their place (`shared`): with `was`, the document `before`
+ * keeps, those of the nodes, links and items `document` shares with it, which it doesn't read.
+ */
 function placed(
   document: CanvasDocument,
   before: Rows,
-): { rows: Record<EntityKey, Row>; moved: Set<EntityKey> } {
+  was?: CanvasDocument,
+): { rows: Record<EntityKey, Row>; moved: Set<EntityKey>; shared: Set<EntityKey> } {
   const rows: Record<EntityKey, Row> = { [META]: { arrange: document.arrange } };
   const moved = new Set<EntityKey>();
+  const shared = new Set<EntityKey>();
   /**
    * The places of a list's entities, by key: each its place in `before`, while its order among
-   * them holds (`prior`: its place there, if it was in this list).
+   * them holds (`prior`: its place there, if it was in this list). A list `was` shares (`same`)
+   * keeps every place it had.
    */
-  const placesOf = (keys: EntityKey[], prior: (row: Row) => number | undefined) => {
-    const was = keys.map((key) => {
+  const placesOf = (
+    keys: EntityKey[],
+    prior: (row: Row) => number | undefined,
+    same = false,
+  ): Map<EntityKey, number> => {
+    const had = keys.map((key) => {
       const row = before[key];
       return row === undefined ? undefined : prior(row);
     });
-    const { at, kept } = places(was);
+    if (same && had.every((place) => place !== undefined)) {
+      return new Map(keys.map((key, i) => [key, had[i] ?? i]));
+    }
+    const { at, kept } = places(had);
     keys.forEach((key, i) => {
-      if (was[i] !== undefined && !kept.has(i)) moved.add(key);
+      if (had[i] !== undefined && !kept.has(i)) moved.add(key);
     });
     return new Map(keys.map((key, i) => [key, at[i] ?? i]));
   };
+  /**
+   * Keeps an entity's row: `before`'s, at `place`, if `reused` (an object `was` shares) and it has
+   * one; else made anew.
+   */
+  const keep = (key: EntityKey, place: number, reused: boolean, make: () => Unplaced) => {
+    const prior = reused ? before[key] : undefined;
+    if (prior === undefined) {
+      rows[key] = { ...make(), place };
+      return;
+    }
+    rows[key] = (prior as NodeRow).place === place ? prior : { ...prior, place };
+    shared.add(key);
+  };
   const own = (row: Row) => (row as NodeRow | LinkRow).place;
 
+  const wasNodes = new Map(was?.nodes.map((node) => [node.id, node]));
   const nodeKeys = document.nodes.map((node) => nodeKey(node.id));
-  const nodePlaces = placesOf(nodeKeys, own);
+  const nodePlaces = placesOf(nodeKeys, own, document.nodes === was?.nodes);
   document.nodes.forEach((node, i) => {
     const key = nodeKeys[i] ?? nodeKey(node.id);
-    rows[key] = { ...nodeRow(node), place: nodePlaces.get(key) ?? i };
+    keep(key, nodePlaces.get(key) ?? i, wasNodes.get(node.id) === node, () => nodeRow(node));
   });
 
   const linkKeys = document.links.map(({ source, target }) => linkKey(source, target));
-  const linkPlaces = placesOf(linkKeys, own);
+  const wasLinks = new Map(was?.links.map((link) => [linkKey(link.source, link.target), link]));
+  const linkPlaces = placesOf(linkKeys, own, document.links === was?.links);
   document.links.forEach((link, i) => {
     const key = linkKeys[i] ?? linkKey(link.source, link.target);
-    rows[key] = { ...linkRow(link), place: linkPlaces.get(key) ?? i };
+    keep(key, linkPlaces.get(key) ?? i, wasLinks.get(key) === link, () => linkRow(link));
   });
 
   for (const node of document.nodes) {
     if (node.type !== 'agent') continue;
     const agent = node.id;
-    /** Places a list of items held by `container` (none: the queue), and what each holds. */
-    const list = (items: readonly QueueItem[], container: string | undefined) => {
+    const wasNode = wasNodes.get(agent);
+    const wasQueue = wasNode?.type === 'agent' ? wasNode.data.queue : undefined;
+    /** The items `was` holds in this agent's queue, at any depth, by id: read once needed. */
+    let wasItems: Map<string, QueueItem> | undefined;
+    const wasItem = (id: string) => {
+      wasItems ??= new Map(everyItemOf(wasQueue ?? []).map((item) => [item.id, item]));
+      return wasItems.get(id);
+    };
+    /**
+     * Places a list of items held by `container` (none: the queue), and what each holds, `wasList`
+     * the list `was` holds there.
+     */
+    const list = (
+      items: readonly QueueItem[],
+      container: string | undefined,
+      wasList: readonly QueueItem[] | undefined,
+    ) => {
       const keys = items.map((item) => itemKey(agent, item.id));
-      const at = placesOf(keys, (row) =>
-        (row as ItemRow).container === container ? (row as ItemRow).place : undefined,
+      const at = placesOf(
+        keys,
+        (row) => ((row as ItemRow).container === container ? (row as ItemRow).place : undefined),
+        items === wasList,
       );
       items.forEach((item, i) => {
         const key = keys[i] ?? itemKey(agent, item.id);
-        rows[key] = { ...itemRow(agent, item, container), place: at.get(key) ?? i };
-        if (isIf(item)) list(item.then, item.id);
-        else if (isRepeat(item)) list(item.repeat, item.id);
+        const prior = items === wasList ? item : was && wasItem(item.id);
+        const reused =
+          prior === item && (before[key] as ItemRow | undefined)?.container === container;
+        keep(key, at.get(key) ?? i, reused, () => itemRow(agent, item, container));
+        const inner = (one: QueueItem | undefined) =>
+          one === undefined
+            ? undefined
+            : isIf(one)
+              ? one.then
+              : isRepeat(one)
+                ? one.repeat
+                : undefined;
+        if (isIf(item)) list(item.then, item.id, inner(prior));
+        else if (isRepeat(item)) list(item.repeat, item.id, inner(prior));
       });
     };
-    list(node.data.queue ?? [], undefined);
+    list(node.data.queue ?? [], undefined, wasQueue);
   }
-  return { rows, moved };
+  return { rows, moved, shared };
+}
+
+/** A queue's items, at any depth: each if-then's and repeat's after it. */
+function everyItemOf(queue: readonly QueueItem[]): QueueItem[] {
+  return queue.flatMap((item): QueueItem[] =>
+    isIf(item) ? [item, ...item.then] : isRepeat(item) ? [item, ...item.repeat] : [item],
+  );
 }
 
 /**
