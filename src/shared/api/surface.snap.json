@@ -39,7 +39,8 @@
       "session_get",
       "session_transcript",
       "status",
-      "usage_get"
+      "usage_get",
+      "wait"
     ],
     "outside-write": [
       "agents",
@@ -56,14 +57,15 @@
       "session_transcript",
       "status",
       "usage_get",
+      "wait",
       "withdraw"
     ]
   },
   "counts": {
     "lead": 15,
     "worker": 10,
-    "outside-read": 9,
-    "outside-write": 15
+    "outside-read": 10,
+    "outside-write": 16
   },
   "unhosted": {
     "app.info": "B8",
@@ -82,7 +84,9 @@
     "run.unpause": "B11",
     "usage.get": "B8"
   },
-  "deviations": {},
+  "deviations": {
+    "wait": "transport"
+  },
   "schemas": {
     "app.info": {
       "input": "e5fa5cc18e054cdd",
@@ -111,6 +115,10 @@
     "message": {
       "input": "2fcad0392e13265b",
       "output": "cd9ed4fd3afce36e"
+    },
+    "wait": {
+      "input": "d429567b08fb223f",
+      "output": "ab20146cfb571ed1"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",

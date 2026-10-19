@@ -120,6 +120,8 @@ export class Delivery {
    */
   #unrecordable: (() => void) | undefined;
   #scheduled = false;
+  /** Whether it delivers yet: not until it starts, though messages may be sent before. */
+  #started = false;
   #closed = false;
   readonly #stop: (() => void)[];
 
@@ -132,12 +134,16 @@ export class Delivery {
   }
 
   /**
-   * Starts delivering, as the canvas opens: a message that was being delivered, or delivered with
+   * Starts delivering, as the canvas opens (or once its host says, Engines.deliver): a message
+   * that was being delivered, or delivered with
    * no turn end, when the core last stopped is unresolved (its sender told so), and never sent
    * again, and so is one that waited in a log the store set aside as broken with no record read
-   * after the broken line (it may have gone); what was waiting goes once it can.
+   * after the broken line (it may have gone); what was waiting, or was sent before it started,
+   * goes once it can. Once only.
    */
   async start(): Promise<void> {
+    if (this.#started) return;
+    this.#started = true;
     const { store } = this.#deps;
     // What its senders were told before, they were told once.
     for (const key of store.told()) this.#told.add(key);
@@ -168,7 +174,7 @@ export class Delivery {
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
   schedule(): void {
-    if (this.#scheduled || this.#closed) return;
+    if (this.#scheduled || !this.#started || this.#closed) return;
     this.#scheduled = true;
     queueMicrotask(() => {
       this.#scheduled = false;
@@ -311,7 +317,7 @@ export class Delivery {
    * withdrawn first.
    */
   #pump(): void {
-    if (this.#closed) return;
+    if (!this.#started || this.#closed) return;
     const { engine, store } = this.#deps;
     this.#withdrawGone();
     const messages = store.all();

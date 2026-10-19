@@ -196,6 +196,94 @@ describe('RunJournal', () => {
     expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({ file: target });
   });
 
+  it('keeps each party’s wait read position in the record, whoever journals the run next', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    expect(await runs.reads(canvas)).toEqual({});
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 7 });
+    expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({
+      reads: { 'outside:orchestrator': 7 },
+    });
+
+    // The app journals the run with no read positions of its own: they are kept as they were.
+    const app = journal();
+    const context = await app.get(canvas);
+    await app.save(canvas, context.token, { ...checkpoint, updatedAt: 456 });
+    await app.saved(canvas);
+    expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 7 });
+
+    // Moved on by the next save that moves one, and never back.
+    await runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 2 });
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 9 });
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 8 });
+    expect(await journal().reads(canvas)).toEqual({
+      'outside:orchestrator': 9,
+      'outside:other': 2,
+    });
+  });
+
+  it('forces a save that moves a read position to disk, and keeps what saves at once moved', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    // Two parties' positions moved at once, and a save of the run between them.
+    await Promise.all([
+      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 }),
+      runs.save(canvas, token, checkpoint),
+      runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 5 }),
+    ]);
+    const records = writes.mock.calls.filter(([file]) => file === record(canvas));
+    expect(records.map(([, , options]) => options?.durable === true)).toEqual([true, true, true]);
+    expect(await journal().reads(canvas)).toEqual({
+      'outside:orchestrator': 3,
+      'outside:other': 5,
+    });
+  });
+
+  it('forces every write of a record to disk, so a crash loses neither a send’s record nor a read position', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    const forced = () =>
+      writes.mock.calls
+        .filter(([file]) => file === record(canvas))
+        .map(([, , options]) => options?.durable === true);
+    // No party has waited on it: the save before a send is forced all the same (Core Server §7.7).
+    await runs.save(canvas, token, checkpoint);
+    expect(forced()).toEqual([true]);
+
+    // A save that moves a read position, and those that move none (the engine's every 250 ms, a
+    // canvas saved, the app's), each replace the record whole: each is forced, so a crash leaves
+    // either record.
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 });
+    await runs.save(canvas, token, { ...checkpoint, updatedAt: 456 });
+    await runs.saved(canvas);
+    const app = journal();
+    const context = await app.get(canvas);
+    await app.save(canvas, context.token, { ...checkpoint, updatedAt: 789 });
+    expect(forced()).toEqual([true, true, true, true, true]);
+    expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 3 });
+  });
+
+  it('reads no read position that isn’t a party’s place in the store', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    await runs.save(canvas, token, checkpoint);
+    const kept = JSON.parse(await readFile(record(canvas), 'utf8')) as Record<string, unknown>;
+    await writeFile(
+      record(canvas),
+      JSON.stringify({
+        ...kept,
+        reads: { 'outside:ok': 3, nobody: 4, 'outside:neg': -1, 'outside:half': 1.5 },
+      }),
+    );
+    expect(await journal().reads(canvas)).toEqual({ 'outside:ok': 3 });
+  });
+
   it('refuses a save of the canvas a window showed before it opened or began another', async () => {
     const runs = journal();
     const first = await runs.last();

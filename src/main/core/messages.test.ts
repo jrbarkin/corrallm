@@ -1994,7 +1994,8 @@ describe('reads', () => {
     await keepCanvas();
     const started = await start();
     const both: OutsideCaller = { ...OUTSIDE, canvases: [CANVAS, crypto.randomUUID() as CanvasId] };
-    const sentence = 'Name the canvas: there is more than one to choose from.';
+    // Naming the canvases it may choose from, all within its reach.
+    const sentence = `Name the canvas: there is more than one to choose from (${both.canvases.join(', ')}).`;
     for (const [name, args] of [
       ['message', { to: 'builder', body: 'Say hello' }],
       ['agents', {}],

@@ -13,4 +13,6 @@ declare global {
    * CORRALLM_DISTRIBUTION=commercial or hosted. Defined by vite.main.config.mts.
    */
   const CORRALLM_DISTRIBUTION: Distribution;
+  /** corrallm's version, from package.json: what the CLI's core says it is. */
+  const CORRALLM_VERSION: string;
 }

@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 
 import type { OpDef } from '../../shared/api/define';
+import { TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
 import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
@@ -234,8 +235,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
       }
       if (caller.kind !== 'human') {
-        release = throttle.admit(callerKey(caller), surface.kind !== 'read');
-        if (!release) throw new OpFailure('refused', 'Too many calls; slow down.');
+        const admitted = throttle.admit(callerKey(caller), {
+          write: surface.kind !== 'read',
+          waits: surface.waits === true,
+        });
+        if (admitted === 'calls') throw new OpFailure('refused', 'Too many calls; slow down.');
+        if (admitted === 'waits') throw new OpFailure('refused', TOO_MANY_WAITS);
+        release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
       if (caller.kind !== 'human') {
@@ -328,7 +334,10 @@ function withCanvas(
       return unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller));
     });
     if (holding.length === 1) return { ...given, canvas: holding[0] };
-    throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
+    throw new OpFailure(
+      'invalid',
+      `Name the canvas: there is more than one to choose from (${canvases.join(', ')}).`,
+    );
   }
   const [only] = canvases;
   return only === undefined ? raw : { ...given, canvas: only };

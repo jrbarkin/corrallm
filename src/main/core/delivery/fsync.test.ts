@@ -79,8 +79,11 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-/** Starts the core over a profile keeping a canvas of Builder, on Codex's App Server: `connector`. */
-async function start(connector: Connector<SessionMode>): Promise<Core> {
+/**
+ * Starts the core over a profile keeping a canvas of Builder, on Codex's App Server: `connector`;
+ * with `queue`, what Builder's queue holds.
+ */
+async function start(connector: Connector<SessionMode>, queue?: unknown[]): Promise<Core> {
   const project = path.join(profile, 'project');
   await mkdir(project);
   const file = path.join(profile, 'canvas.corral');
@@ -98,6 +101,7 @@ async function start(connector: Connector<SessionMode>): Promise<Core> {
           position: { x: 0, y: 0 },
           adapter: 'codex',
           connection: 'codex.app-server',
+          ...(queue === undefined ? {} : { queue }),
         },
       ],
       links: [],
@@ -158,6 +162,38 @@ it('sends a message only once its delivering record is on disk', async () => {
   const appendedAt = events.indexOf(`append ${id} delivering ${String(as)}`);
   expect(appendedAt).toBeGreaterThan(-1);
   expect(events.slice(0, sendAt).lastIndexOf('fsync messages.jsonl')).toBeGreaterThan(appendedAt);
+});
+
+it('sends the run’s own message only once the run’s record is on disk (Core Server §7.7)', async () => {
+  const codex = new FakeConnector({ adapter: 'codex' });
+  const engine = await (
+    await start(
+      {
+        start: async (spec, host) => {
+          const session = await codex.start(spec, host);
+          const send = session.send.bind(session);
+          session.send = (message) => {
+            events.push(`send ${message.id}`);
+            return send(message);
+          };
+          return session;
+        },
+      },
+      [{ id: 'hello', message: 'Say hello' }],
+    )
+  ).engines.open(CANVAS);
+  engine.run.start();
+  await vi.waitFor(() => {
+    expect(events.some((event) => event.startsWith('send '))).toBe(true);
+  });
+  const before = events.slice(
+    0,
+    events.findIndex((event) => event.startsWith('send ')),
+  );
+  // The record written whole for the send was forced to disk, and then the folder it was moved into.
+  const recordAt = before.findLastIndex((event) => /^fsync record\.json\..+\.partial$/.test(event));
+  expect(recordAt).toBeGreaterThan(-1);
+  expect(before.slice(recordAt)).toContain(`fsync ${CANVAS}`);
 });
 
 it('forces a delivering record written with the log anew to disk before it sends', async () => {

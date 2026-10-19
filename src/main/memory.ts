@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { ID_PATTERN } from '../shared/adapter';
@@ -158,18 +158,55 @@ function withFile(remembered: Remembered, file: TrustedPath | undefined): Rememb
   return next;
 }
 
+/** How writeWhole writes a file. */
+export interface WriteOptions {
+  /** The file's permissions (0o600: only the user may read it), else the process's default. */
+  mode?: number;
+  /**
+   * Forced to disk: the file beside it before it is moved over it, and its folder after, so not
+   * even the machine stopping loses it once it is written.
+   */
+  durable?: boolean;
+}
+
 /**
  * Writes a file whole: beside it, then moved over it, so it is never left half written. Each write
  * has its own file beside it, so writes of the same file at once never move each other's.
  */
-export async function writeWhole(file: string, text: string): Promise<void> {
+export async function writeWhole(
+  file: string,
+  text: string,
+  { mode, durable = false }: WriteOptions = {},
+): Promise<void> {
   const partial = `${file}.${randomUUID()}.partial`;
   try {
-    await writeFile(partial, text, 'utf8');
+    if (durable) {
+      const handle = await open(partial, 'w', mode);
+      try {
+        await handle.writeFile(text, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } else {
+      await writeFile(partial, text, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
+    }
     await rename(partial, file);
   } catch (error) {
     await rm(partial, { force: true });
     throw error;
+  }
+  if (durable) await syncFolder(path.dirname(file));
+}
+
+/** Forces a folder's entries to disk: a file just moved into it. Windows opens no folder to. */
+async function syncFolder(folder: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await open(folder, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 

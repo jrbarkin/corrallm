@@ -68,6 +68,12 @@ export interface Surface {
   readonly scope: Scope;
   /** It runs ahead of its scope's queue, aborting what it supersedes (an interrupt, a stop). */
   readonly preempt?: true;
+  /**
+   * It waits for what comes (a long poll): a token's limit on calls in flight leaves it out, and
+   * its limit on waits in flight counts it instead. Only a read on MCP alone (the transport
+   * deviation).
+   */
+  readonly waits?: true;
   /** It removes, discards or interrupts: MCP's destructiveHint. */
   readonly destructive?: true;
   /** The rules checked on its arguments in core.call, and on its change at commit. */
@@ -90,6 +96,8 @@ const A = { ...R, worker: 'linked' } as const;
 const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
 /** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
 const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
+/** Outside tokens alone, read-only or read-write, on their canvases. */
+const T = { 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 
 export const SURFACE = {
   'app.info': { access: A, kind: 'read', scope: 'none' },
@@ -158,6 +166,7 @@ export const SURFACE = {
     self: 'allowed',
   },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
+  wait: { access: T, kind: 'read', scope: 'none', waits: true, varies: ['messages', 'next'] },
 } as const satisfies Record<string, Surface>;
 
 export type OpName = keyof typeof SURFACE;

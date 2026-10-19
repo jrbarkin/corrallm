@@ -5,7 +5,8 @@
 // requests without params, as the real one does.
 //
 // A turn reasons (a summary, streamed), then replies "You said: <text>" (streamed), and reports
-// its token usage and the account's limits. What the message starts with makes it do more:
+// its token usage and the account's limits. What the message starts with (after the first line
+// corrallm frames a message from anyone but you with) makes it do more:
 // - "run": runs `npm test`, asking first in a read-only sandbox (its default), as Codex does
 //   (item/commandExecution/requestApproval, Yes, a rule for `npm test`, or No: cancel);
 // - "edit": patches hello.txt (a fileChange), asking first in a read-only sandbox;
@@ -23,7 +24,8 @@
 // default), FAKE_CODEX_FAIL (it prints that on stderr and exits 1 at once), FAKE_CODEX_STATE (a
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
 // it appends each request it gets to, one JSON line each), FAKE_CODEX_CONFIG_FAIL (config/read
-// fails with that message).
+// fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
+// as one finishing what it runs: none by default).
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -233,7 +235,9 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     turn: { id: turnId, items: [], status: 'inProgress', error: null },
   });
   const text = input.map((part) => (part.type === 'text' ? part.text : '')).join('');
-  if (text.startsWith('crash')) {
+  // What it is asked to do: the message, after the first line corrallm frames a party's with.
+  const wanted = text.replace(/^\[corrallm\] [^\n]*\n/, '');
+  if (wanted.startsWith('crash')) {
     process.stderr.write('Error: it crashed\n');
     process.exit(3);
   }
@@ -280,7 +284,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     );
     return finish('completed');
   }
-  if (text.startsWith('fail')) {
+  if (wanted.startsWith('fail')) {
     const error = {
       message: 'You’ve hit your usage limit.',
       codexErrorInfo: 'usageLimitExceeded',
@@ -289,7 +293,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     notify('error', { error, willRetry: false, threadId, turnId });
     return finish('failed', error);
   }
-  if (text.startsWith('todo')) {
+  if (wanted.startsWith('todo')) {
     notify('turn/plan/updated', {
       ...where,
       explanation: null,
@@ -299,7 +303,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
       ],
     });
   }
-  if (text.startsWith('run')) {
+  if (wanted.startsWith('run')) {
     const command = {
       type: 'commandExecution',
       id: `exec-${randomUUID()}`,
@@ -363,7 +367,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     items.push(done);
     if (decision === 'cancel') return finish('interrupted');
   }
-  if (text.startsWith('edit')) {
+  if (wanted.startsWith('edit')) {
     const change = {
       type: 'fileChange',
       id: `call_${randomUUID()}`,
@@ -396,7 +400,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     if (!accepted) return finish('interrupted');
   }
   let said = `You said: ${text}`;
-  if (text.startsWith('ask')) {
+  if (wanted.startsWith('ask')) {
     const { id, answer } = await ask('item/tool/requestUserInput', {
       ...where,
       itemId: `call_${randomUUID()}`,
@@ -420,7 +424,7 @@ async function turn(thread, turnId, input, { review, compact } = {}) {
     if (state.interrupted) return finish('interrupted');
     said = `You picked ${answer?.result?.answers?.color?.answers?.[0] ?? 'nothing'}.`;
   }
-  if (text.startsWith('slow')) {
+  if (wanted.startsWith('slow')) {
     const command = {
       type: 'commandExecution',
       id: `exec-${randomUUID()}`,
@@ -630,5 +634,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.id !== undefined) handle(message);
 });
-// Its input ends: it exits, as the real one does.
-process.stdin.on('end', () => process.exit(0));
+// Its input ends: it exits, as the real one does (FAKE_CODEX_LINGER ms later, if set).
+const linger = Number(process.env.FAKE_CODEX_LINGER ?? 0);
+process.stdin.on('end', () => {
+  if (linger > 0) setTimeout(() => process.exit(0), linger);
+  else process.exit(0);
+});

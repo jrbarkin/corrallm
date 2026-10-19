@@ -157,7 +157,13 @@ export function resolvers(
       reachesGroup(world, caller, reach, id, isALead),
     ),
     MessageId: (id, caller, _reach, canvas) => {
-      if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;
+      // An op that takes no canvas (`wait`) names a message on any of the caller's open ones.
+      if (canvas === undefined) {
+        return canvasesOf(caller).some((one) =>
+          isTheirs(engines.canvas(one)?.messages.get(id), caller),
+        );
+      }
+      if (!canvasesOf(caller).includes(canvas as CanvasId)) return false;
       const open = engines.canvas(canvas as CanvasId);
       if (!open) return true;
       return isTheirs(open.messages.get(id), caller);

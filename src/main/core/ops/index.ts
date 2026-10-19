@@ -6,12 +6,14 @@ import type { UsageReadings } from '../../usage';
 import type { OpContext } from '../call';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
+import type { TokenStore } from '../tokens';
 import { appOps } from './app';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
 import { runOps } from './run';
 import { sessionOps } from './session';
 import { usageOps } from './usage';
+import { waitOps } from './wait';
 
 /*
  * What each operation does, by area (Core Server §8.2): one implementation per op in the registry,
@@ -38,6 +40,8 @@ export interface OpServices {
   locale?: string;
   /** Whatever needs the desktop. */
   host: HostServices;
+  /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
+  tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
 }
 
 export function implementations(services: OpServices): Implementations {
@@ -48,5 +52,6 @@ export function implementations(services: OpServices): Implementations {
     ...sessionOps(services),
     ...runOps(services),
     ...usageOps(services),
+    ...waitOps(services),
   };
 }

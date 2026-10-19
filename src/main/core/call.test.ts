@@ -197,7 +197,7 @@ describe('core.call', () => {
           ok: false,
           error: {
             code: 'invalid',
-            sentence: 'Name the canvas: there is more than one to choose from.',
+            sentence: `Name the canvas: there is more than one to choose from (${both.join(', ')}).`,
           },
         });
       }
