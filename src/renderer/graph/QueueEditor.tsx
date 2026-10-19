@@ -11,6 +11,7 @@ import type { Answers } from '../../shared/engine/run/asks';
 import type { EngineCatalog } from '../../shared/engine/catalog';
 import type { Answer, TaskAttempt, TaskProblem } from '../../shared/engine/run/runner';
 import { SearchPicker } from '../search/SearchPicker';
+import { useDraft } from '../useDraft';
 import { backendOfType } from '../usage/usage';
 import {
   andList,
@@ -872,6 +873,13 @@ function StepRow({
   context: Context;
 }) {
   const [expecting, setExpecting] = useState(false);
+  const instruction = useDraft(
+    item.instruction ?? '',
+    (text) => {
+      context.onInstruction(item.id, text);
+    },
+    { multiline: true },
+  );
   const known = context.actions.some((a) => a.name === item.action);
   const command = item.action.startsWith('/');
   const fails = item.expect === 'fails';
@@ -911,10 +919,7 @@ function StepRow({
         rows={1}
         aria-label={command ? `Arguments for ${item.action}` : `What ${item.action} is to do`}
         placeholder={command ? 'Arguments' : 'What to do'}
-        value={item.instruction ?? ''}
-        onChange={(event) => {
-          context.onInstruction(item.id, event.target.value);
-        }}
+        {...instruction}
       />
       <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
       <RowCountdown id={item.id} context={context} />
@@ -1066,6 +1071,13 @@ function MessageRow({
   handle: HandleProps;
   context: Context;
 }) {
+  const message = useDraft(
+    item.message,
+    (text) => {
+      context.onEditMessage(item.id, text);
+    },
+    { multiline: true },
+  );
   if (item.submission) {
     const { status, images, unresolved } = item.submission;
     return (
@@ -1106,10 +1118,7 @@ function MessageRow({
       <textarea
         aria-label="Message to the agent"
         placeholder="Tell the agent what to do"
-        value={item.message}
-        onChange={(event) => {
-          context.onEditMessage(item.id, event.target.value);
-        }}
+        {...message}
       />
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />

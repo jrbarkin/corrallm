@@ -84,6 +84,73 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  it('commits the agent name before the composer sends without blur', async () => {
+    const { fake, node } = setup({
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    const name = view.getByRole('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Drafted name' } });
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+    fake.backend.send.mockImplementationOnce(() => {
+      expect(screen.getByRole('dialog', { name: 'Drafted name' })).toBeTruthy();
+      return Promise.resolve(null);
+    });
+    const composer = view.getByRole('textbox', { name: 'Message a' });
+    fireEvent.change(composer, { target: { value: 'Hello' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await waitFor(() => {
+      expect(fake.backend.send).toHaveBeenCalledOnce();
+    });
+    expect(node('a').textContent).toContain('Drafted name');
+  });
+
+  it('saves the drafted label from the file shortcut before blur', async () => {
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
+    };
+    setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] }, files);
+    fireEvent.keyDown(document.body, { key: 'F2' });
+    fireEvent.change(labelInput(), { target: { value: 'Drafted label' } });
+    fireEvent.keyDown(labelInput(), { key: 's', ctrlKey: true });
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledOnce();
+    });
+    expect(
+      fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
+    ).toBe('Drafted label');
+  });
+
+  it('runs a pending message draft before the idle commit or blur', async () => {
+    const { fake } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'a',
+            connection: 'claude-code.sdk',
+            queue: [{ id: 'work', message: 'Original' }],
+          },
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    const input = queues.getByRole('textbox', { name: 'Message to the agent' });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Run this draft' } });
+    // A synthetic click deliberately skips blur: Run itself must flush the draft.
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await waitFor(() => {
+      expect(fake.backend.send).toHaveBeenCalledOnce();
+    });
+    expect(fake.backend.send.mock.calls[0]?.[1].text).toBe('Run this draft');
+  });
+
   it.each([
     ['Model: Opus', 'Default (Opus)', { effort: 'low', mode: 'plan' }],
     ['Effort: Low', 'Default (Low)', { model: 'opus', mode: 'plan' }],
@@ -614,6 +681,8 @@ describe('GraphEditor', () => {
     });
     expect(message.value).toBe('');
     fireEvent.change(message, { target: { value: 'Fix the flaky test' } });
+    expect(count()).toBeUndefined();
+    fireEvent.blur(message);
     expect(count()).toBe('1');
   });
 
@@ -1747,6 +1816,8 @@ describe('GraphEditor', () => {
     // Renamed in the panel a double-click opens.
     fireEvent.doubleClick(node('a'));
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Gamma' } });
+    expect(edge()?.getAttribute('aria-label')).toBe('Alpha and Beta can talk');
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Name' }), { key: 'Enter' });
     expect(screen.getByRole('dialog', { name: 'Gamma' })).toBeTruthy();
     expect(edge()?.getAttribute('aria-label')).toBe('Gamma and Beta can talk');
   });

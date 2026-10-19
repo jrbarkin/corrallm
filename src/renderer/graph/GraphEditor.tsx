@@ -30,6 +30,7 @@ import { NO_BACKEND } from '../../shared/engine/transcript/receive';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import { adapterOf, catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
+import { flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
@@ -298,6 +299,7 @@ function Editor({
           updatedAt: Date.now(),
         }),
         freeze: () => {
+          flushDrafts();
           runStore.pause();
         },
         error: (error) => {
@@ -862,6 +864,7 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
+        flushDrafts();
         if (file === 'save' || file === 'saveAs') {
           commands.save(latest.current.text, file === 'saveAs');
         } else if (!latest.current.modal) {
@@ -873,6 +876,7 @@ function Editor({
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
+      flushDrafts();
       event.preventDefault();
       if (action !== 'rename') {
         apply(operation(action));
@@ -1445,6 +1449,7 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
+              flushDrafts();
               runStore.start();
             }}
             onStop={() => {

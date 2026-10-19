@@ -53,6 +53,35 @@ const submitted = (status: SubmittedMessage['status'] = 'running'): QueueMessage
   },
 });
 
+it.each([
+  { item: { id: 'text', message: 'Original' }, label: 'Message to the agent', edit: 'editMessage' },
+  {
+    item: { id: 'text', action: 'Bash', instruction: 'Original' },
+    label: 'What Bash is to do',
+    edit: 'setInstruction',
+  },
+] as const)('drafts $label until the field is left', ({ item, label, edit }) => {
+  const node = agent('a', [item]);
+  const changes = edits();
+  render(
+    <QueueEditor
+      node={node}
+      nodes={[node]}
+      agent="Claude"
+      actions={actionsOf('claude-code')}
+      {...editsOf(changes, 'a')}
+    />,
+  );
+  const input = screen.getByRole('textbox', { name: label });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'Draft' } });
+  expect(changes[edit]).not.toHaveBeenCalled();
+  expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(true);
+  expect(changes[edit]).not.toHaveBeenCalled();
+  fireEvent.blur(input);
+  expect(changes[edit]).toHaveBeenCalledExactlyOnceWith('a', 'text', 'Draft');
+});
+
 describe('task recovery in the shared queue row', () => {
   const node = agent('a', [{ id: 'work', action: 'Bash', instruction: 'npm test' }]);
   const problem = {
