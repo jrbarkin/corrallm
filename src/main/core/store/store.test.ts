@@ -240,8 +240,8 @@ describe('checkpoints', () => {
 
   it('truncates its log as it closes, keeping everything in the database', async () => {
     await store.write(() => add('kept'));
+    expect((await stat(`${store.file}-wal`)).size).toBeGreaterThan(0);
     reader.close();
-    await store.close();
     await store.close();
     await expect(stat(`${store.file}-wal`)).rejects.toThrow(/ENOENT/);
     expect(pending()).toEqual([]);
@@ -251,6 +251,14 @@ describe('checkpoints', () => {
     } finally {
       reopened.close();
     }
+  });
+
+  it('closes once, however often it is asked to', async () => {
+    const closing = [store.close(), store.close()];
+    expect(closing[0]).toBe(closing[1]);
+    await Promise.all(closing);
+    await expect(store.close()).resolves.toBeUndefined();
+    expect(await readdir(path.join(profile, 'backups'))).toHaveLength(1);
   });
 });
 
