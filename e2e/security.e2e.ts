@@ -42,6 +42,8 @@ test('blocks renderer navigation, new windows and media permissions', async () =
         BrowserWindow.getAllWindows()[0]?.webContents.getURL(),
       ),
     ).toBe(rendererUrl);
+    // Blocking navigation must keep the page's port alive, including its save acknowledgement.
+    expect(await page.evaluate(() => window.api.appInfo())).toMatchObject({ ok: true });
 
     expect(await page.evaluate(() => window.open('https://attacker.invalid/popup'))).toBeNull();
     expect(await externalLinks.evaluate((links) => links)).toEqual([]);

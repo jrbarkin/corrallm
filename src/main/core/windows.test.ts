@@ -1,27 +1,16 @@
-import { EventEmitter } from 'node:events';
-
-import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import { Windows } from './windows';
 
-const ORIGIN = 'app://main_window';
-
-/** A window's web contents, faked: it emits what Electron's would. */
-const window = () => new EventEmitter() as unknown as WebContents & EventEmitter;
-const navigation = (url: string, fields: Record<string, unknown> = {}) => ({
-  url,
-  isMainFrame: true,
-  isSameDocument: false,
-  ...fields,
-});
+let nextWindow = 0;
+const window = () => ++nextWindow;
 
 function windows(restore: () => Promise<CanvasId> = () => Promise.resolve(newCanvasId())) {
   const left = vi.fn<(canvas: CanvasId) => Promise<void>>().mockResolvedValue(undefined);
   const restoring = vi.fn(restore);
-  return { windows: new Windows(ORIGIN, { restore: restoring, left }), left, restoring };
+  return { windows: new Windows({ restore: restoring, left }), left, restoring };
 }
 
 describe('the windows and their canvases', () => {
@@ -65,42 +54,46 @@ describe('the windows and their canvases', () => {
     expect(left).toHaveBeenCalledOnce();
   });
 
-  it('ends a reloading window’s canvas’s sessions, and gives its page the canvas once they have', async () => {
+  it('ends a gone window’s sessions, keeping its canvas for the page that reconnects', async () => {
     const { windows: shown, left } = windows();
     const contents = window();
-    shown.watch(contents);
     const canvas = await shown.canvasOf(contents);
     const closed = Promise.withResolvers<undefined>();
     left.mockReturnValueOnce(closed.promise);
-    contents.emit('did-start-navigation', navigation(`${ORIGIN}/index.html`));
-    expect(left).toHaveBeenCalledWith(canvas);
+    const leaving = shown.gone(contents);
+    expect(left).toHaveBeenCalledExactlyOnceWith(canvas);
     let restored = false;
     const asked = shown.canvasOf(contents).then((id) => {
       restored = true;
       return id;
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setImmediate(resolve));
     expect(restored).toBe(false);
     closed.resolve(undefined);
+    await leaving;
     expect(await asked).toBe(canvas);
-
-    // Navigations that are no reload leave it alone.
-    contents.emit('did-start-navigation', navigation('https://example.com/'));
-    contents.emit('did-start-navigation', navigation(`${ORIGIN}/`, { isMainFrame: false }));
-    contents.emit('did-start-navigation', navigation(`${ORIGIN}/#x`, { isSameDocument: true }));
-    expect(left).toHaveBeenCalledOnce();
   });
 
-  it('ends a crashed window’s canvas’s sessions, keeping its canvas; a closed one forgets it', async () => {
+  it('forgets a destroyed window, including a restore still in progress', async () => {
+    const last = newCanvasId();
+    const restore = Promise.withResolvers<typeof last>();
+    const { windows: shown, left } = windows(() => restore.promise);
+    const contents = window();
+    const restoring = shown.canvasOf(contents);
+    await shown.gone(contents, true);
+    restore.resolve(last);
+    await restoring;
+    expect(shown.has(contents)).toBe(false);
+    expect(shown.showing(last)).toEqual([]);
+    expect(left).not.toHaveBeenCalled();
+  });
+
+  it('forgets a closed window’s canvas and ends its sessions', async () => {
     const { windows: shown, left } = windows();
     const contents = window();
-    shown.watch(contents);
     const canvas = await shown.canvasOf(contents);
-    contents.emit('render-process-gone');
-    expect(left).toHaveBeenLastCalledWith(canvas);
-    expect(shown.has(contents)).toBe(true);
-    contents.emit('destroyed');
-    expect(left).toHaveBeenCalledTimes(2);
+    await shown.gone(contents, true);
+    expect(left).toHaveBeenCalledExactlyOnceWith(canvas);
     expect(shown.has(contents)).toBe(false);
     expect(shown.showing(canvas)).toEqual([]);
   });

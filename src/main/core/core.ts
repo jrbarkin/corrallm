@@ -12,6 +12,11 @@ import type { OpName } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
+import { CanvasFiles } from '../canvas';
+import { LinkOpener } from '../links';
+import { FileRevealer } from '../reveal';
+import { installedClis } from '../sessions/installed';
+import { Conversations } from '../sessions/sdk/conversations';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
@@ -23,12 +28,14 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
+import { Channels } from './channels';
+import { Windows } from './windows';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { Caller } from './caller';
 import { Engines } from './engines';
 import type { Watcher } from './engines';
-import type { HostServices } from './host';
+import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
 import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
@@ -39,8 +46,8 @@ import { TokenStore } from './tokens';
  * on, kept in a profile folder (the app's user data, or `corrallm serve --profile`), and asking
  * whatever needs the desktop of its host. It runs each canvas it opens with an engine of its own
  * (engines.ts), whose agents' sessions its SessionManager runs in this process, and keeps the
- * outside tokens orchestrators call it with (tokens.ts). In milestone 1 it is composed only in
- * tests and under `corrallm serve` (B7); B8 composes it in the app's core process.
+ * outside tokens orchestrators call it with (tokens.ts). It is composed in the app's core process,
+ * under `corrallm serve`, and in tests.
  */
 
 export interface CoreConfig {
@@ -67,6 +74,8 @@ export interface CoreConfig {
    * many calls as one token at once.
    */
   limitsClock?: () => number;
+  /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
+  fakeSessions?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
    * (sessions/fake.ts), and the environment they run in instead of the login shell's.
@@ -86,6 +95,11 @@ export interface Core extends Dispatcher {
   ): Promise<OpResult<ResultOf<N>>>;
   /** The canvases it runs, each with its engine. */
   engines: Engines;
+  /** The app's hand-written channels, over these same services. */
+  channels: Channels;
+  shown(windows: WindowId[]): WindowId[];
+  /** Ends the sessions and finishes writes after the renderer froze and saved. */
+  flush(): Promise<void>;
   /** The outside tokens, kept in the profile's tokens.json. */
   tokens: TokenStore;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
@@ -129,17 +143,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     memory,
     projectOf: (canvas) => projects.of(canvas),
   });
+  const fake = config.fakeSessions ?? false;
   let shell: Promise<Record<string, string>> | undefined;
   // Read once, when first needed.
   const environment =
     config.sessions?.environment ??
-    (() => (shell ??= loginShellEnvironment().then(agentEnvironment)));
+    (() =>
+      (shell ??= fake
+        ? Promise.resolve(agentEnvironment(process.env))
+        : loginShellEnvironment().then(agentEnvironment)));
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
       config.sessions?.connectors ??
       createConnectors({
-        fake: false,
+        fake,
         clientApp: `${config.app.name}/${config.app.version}`,
         distribution: config.distribution,
         consent: (adapter, key) => settings.consent(adapter, key),
@@ -148,13 +166,58 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         },
       }),
     environment,
-    options: createOptions({ fake: false }),
+    options: createOptions({ fake }),
+    conversations: new Conversations(),
     projectOf: (canvas) => projects.of(canvas),
     memory,
     emit: (canvas, agentId, connection, event) => {
       engines.emit(canvas, agentId, connection, event);
+      channels.emit(canvas, 'session:event', agentId, connection, event);
+    },
+    terminal: (canvas, agentId, event) => {
+      channels.emit(canvas, 'terminal:event', agentId, event);
     },
   });
+  const windows = new Windows({
+    restore: async () => {
+      const canvas = await journal.last();
+      await projects.restore(canvas);
+      return canvas;
+    },
+    left: (canvas) => sessions.closeCanvas(canvas),
+  });
+  const files = new ProjectFiles({ environment });
+  const links = new LinkOpener({
+    file: path.join(profile, 'links.json'),
+    ask: (window, site, url) => host.askOpenLink(window, site, url),
+    openExternal: async (url) => {
+      await host.openExternal(url);
+    },
+  });
+  const channels = new Channels({
+    catalog: CATALOG,
+    windows,
+    canvases: new CanvasFiles({ host, memory }),
+    runs: journal,
+    shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
+    projects,
+    files,
+    links,
+    reveal: new FileRevealer({
+      folderOf: (canvas) => projects.of(canvas),
+      show: async (file) => {
+        await host.showFile(file);
+      },
+    }),
+    sessions,
+    clis: { installed: async () => installedClis(await environment()) },
+    usage,
+  });
+  usage.subscribe((state) => {
+    channels.emit(null, 'usage:changed', state);
+  });
+  const stores = () =>
+    Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush(), links.flush()]);
   const engines: Engines = new Engines({
     catalog: CATALOG,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
@@ -162,7 +225,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     projects,
     journal,
     usage,
-    files: new ProjectFiles({ environment }),
+    files,
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
   });
@@ -202,6 +265,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
       dispatcher.call(name, raw, caller, signal) as Promise<OpResult<ResultOf<N>>>,
     engines,
+    channels,
+    shown: (asked) => asked.filter((window) => windows.has(window)),
+    flush: async () => {
+      await journal.flush();
+      await sessions.closeEverything();
+      await stores();
+    },
     tokens,
     settings,
     keptCanvas: (file) => keptCanvas(file, memory),
@@ -216,7 +286,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         await engines.close();
       } finally {
         // What the core keeps is written out even if a canvas's run couldn't be.
-        await Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush()]);
+        await stores();
       }
     },
   };

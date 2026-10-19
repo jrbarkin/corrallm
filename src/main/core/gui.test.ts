@@ -90,13 +90,21 @@ describe('a window’s port', () => {
     expect(core.call).not.toHaveBeenCalled();
   });
 
-  it('refuses a hand-written channel, which still goes to main', async () => {
-    const window = connect(new WindowPorts(fakeCore()), 1);
+  it('serves a hand-written channel for the window its port belongs to', async () => {
+    const channels = {
+      call: vi.fn(() => 'team.corral'),
+      listen: vi.fn(() => () => undefined),
+      gone: vi.fn(),
+    };
+    const core = { ...fakeCore(), channels };
+    const window = connect(new WindowPorts(core), 7);
 
-    await expect(window.request('channel', 'canvas:open', [])).resolves.toEqual({
-      ok: false,
-      error: { message: 'corrallm’s core doesn’t serve canvas:open yet: it goes to main.' },
+    await expect(window.request('channel', 'canvas:save', ['{}', false])).resolves.toEqual({
+      ok: true,
+      value: 'team.corral',
     });
+    expect(channels.call).toHaveBeenCalledWith(7, 'canvas:save', ['{}', false]);
+    expect(core.call).not.toHaveBeenCalled();
   });
 
   it('closes a window’s port when it goes, cancelling its calls still going', async () => {

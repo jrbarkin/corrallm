@@ -34,6 +34,12 @@ beforeEach(() => {
 });
 
 const ports: MessagePort[] = [];
+const channel = vi.fn<(name: string, ...args: unknown[]) => Promise<unknown>>();
+let remote: CoreLink<CoreGuiSide, GuiSide>;
+beforeEach(() => {
+  channel.mockReset();
+  channel.mockResolvedValue(null);
+});
 afterEach(() => {
   for (const port of ports.splice(0)) port.close();
   vi.useRealTimers();
@@ -56,7 +62,7 @@ function postPort(
   const { port1, port2 } = new MessageChannel();
   ports.push(port1, port2);
   const heard: [op: string, args: unknown][] = [];
-  new CoreLink<CoreGuiSide, GuiSide>(
+  remote = new CoreLink<CoreGuiSide, GuiSide>(
     {
       post: (message) => {
         port2.postMessage(message);
@@ -70,7 +76,7 @@ function postPort(
         heard.push([op, args]);
         return answer(op, args);
       },
-      channel: () => null,
+      channel: (name, args) => channel(name, ...args),
     },
   );
   listenerOn('core:port')({ ports: [port1], sender: 'the ipcRenderer' }, { epoch: 1 });
@@ -258,76 +264,82 @@ describe('the window’s port to the core', () => {
 });
 
 describe('preload', () => {
-  it('invokes the catalog and canvas channels with their arguments', async () => {
+  afterEach(() => {
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(['core:connect']);
+  });
+
+  it('calls the catalog and canvas channels with their arguments', async () => {
     const api = await exposed();
+    postPort(answerInfo);
 
     // The catalog, which the renderer loads before it mounts.
     const catalog = { adapters: [], usageBackends: [] };
-    invoke.mockResolvedValue(catalog);
-    await expect(api.catalog()).resolves.toBe(catalog);
-    expect(invoke).toHaveBeenLastCalledWith('catalog:get');
+    channel.mockResolvedValue(catalog);
+    await expect(api.catalog()).resolves.toEqual(catalog);
+    expect(channel).toHaveBeenLastCalledWith('catalog:get');
 
-    // The canvas file functions invoke their channels with their arguments.
+    // The canvas file functions channel their channels with their arguments.
     await api.openCanvas();
-    expect(invoke).toHaveBeenLastCalledWith('canvas:open');
+    expect(channel).toHaveBeenLastCalledWith('canvas:open');
     await api.saveCanvas('{}', true);
-    expect(invoke).toHaveBeenLastCalledWith('canvas:save', '{}', true);
+    expect(channel).toHaveBeenLastCalledWith('canvas:save', '{}', true);
     await api.forgetCanvas();
-    expect(invoke).toHaveBeenLastCalledWith('canvas:forget');
+    expect(channel).toHaveBeenLastCalledWith('canvas:forget');
     await api.chooseProject();
-    expect(invoke).toHaveBeenLastCalledWith('project:choose');
+    expect(channel).toHaveBeenLastCalledWith('project:choose');
     await api.findProjectFiles('src/ma');
-    expect(invoke).toHaveBeenLastCalledWith('project:files', 'src/ma');
+    expect(channel).toHaveBeenLastCalledWith('project:files', 'src/ma');
   });
 
-  it('invokes the session channels with their arguments', async () => {
+  it('calls the session channels with their arguments', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue(null);
+    postPort(answerInfo);
+    channel.mockResolvedValue(null);
     const options = { connection: 'claude-code.sdk', model: null, mode: 'manual' } as const;
     await api.startSession('a', options);
-    expect(invoke).toHaveBeenLastCalledWith('session:start', 'a', options);
+    expect(channel).toHaveBeenLastCalledWith('session:start', 'a', options);
     await api.sendToSession('a', { id: 'm', text: 'Hi' });
-    expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
+    expect(channel).toHaveBeenLastCalledWith('session:send', 'a', { id: 'm', text: 'Hi' });
     const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' } as const;
     await api.sendToSession('a', { id: 'm2', text: '', images: [image] });
-    expect(invoke).toHaveBeenLastCalledWith('session:send', 'a', {
+    expect(channel).toHaveBeenLastCalledWith('session:send', 'a', {
       id: 'm2',
       text: '',
       images: [image],
     });
     await api.answerSession('a', 'p', { kind: 'permission', answer: 'deny' });
-    expect(invoke).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
+    expect(channel).toHaveBeenLastCalledWith('session:answer', 'a', 'p', {
       kind: 'permission',
       answer: 'deny',
     });
     await api.interruptSession('a');
-    expect(invoke).toHaveBeenLastCalledWith('session:interrupt', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:interrupt', 'a');
     await api.setSessionMode('a', 'plan');
-    expect(invoke).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
+    expect(channel).toHaveBeenLastCalledWith('session:mode', 'a', 'plan');
     await api.setSessionModel('a', 'opus');
-    expect(invoke).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
+    expect(channel).toHaveBeenLastCalledWith('session:model', 'a', 'opus');
     await api.setSessionEffort('a', 'high');
-    expect(invoke).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
+    expect(channel).toHaveBeenLastCalledWith('session:effort', 'a', 'high');
     await api.stopSessionTask('a', 'b1');
-    expect(invoke).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
+    expect(channel).toHaveBeenLastCalledWith('session:stopTask', 'a', 'b1');
     await api.closeSession('a');
-    expect(invoke).toHaveBeenLastCalledWith('session:close', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:close', 'a');
     await api.freshSession('a', 'codex');
-    expect(invoke).toHaveBeenLastCalledWith('session:fresh', 'a', 'codex');
+    expect(channel).toHaveBeenLastCalledWith('session:fresh', 'a', 'codex');
     await api.listSessions('a');
-    expect(invoke).toHaveBeenLastCalledWith('session:list', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:list', 'a');
     await api.previewRewind('a', 'm');
-    expect(invoke).toHaveBeenLastCalledWith('session:rewind-preview', 'a', 'm');
+    expect(channel).toHaveBeenLastCalledWith('session:rewind-preview', 'a', 'm');
     await api.rewindSession('a', 'm', 'both');
-    expect(invoke).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
+    expect(channel).toHaveBeenLastCalledWith('session:rewind', 'a', 'm', 'both');
     await api.mcpServers('a');
-    expect(invoke).toHaveBeenLastCalledWith('session:mcp', 'a');
+    expect(channel).toHaveBeenLastCalledWith('session:mcp', 'a');
     await api.settingsOptions('claude-code');
-    expect(invoke).toHaveBeenLastCalledWith('session:options', 'claude-code');
+    expect(channel).toHaveBeenLastCalledWith('session:options', 'claude-code');
     await api.changeMcpServer('a', 'github', 'disable');
-    expect(invoke).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
+    expect(channel).toHaveBeenLastCalledWith('session:mcp-change', 'a', 'github', 'disable');
     await api.resumeSession('a', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
-    expect(invoke).toHaveBeenLastCalledWith(
+    expect(channel).toHaveBeenLastCalledWith(
       'session:resume',
       'a',
       '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11',
@@ -336,110 +348,132 @@ describe('preload', () => {
 
   it('passes session events on without Electron’s event object, until told to stop', async () => {
     const api = await exposed();
+    postPort(answerInfo);
     const heard = vi.fn<Parameters<AppApi['onSessionEvent']>[0]>();
     const stop = api.onSessionEvent(heard);
-    const receive = listenerOn('session:event');
 
     const event: SessionEvent = { type: 'status', status: 'working' };
-    receive({ sender: 'the ipcRenderer event' }, 'a', 'claude-code.sdk', event);
+    remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledOnce();
+    });
     expect(heard).toHaveBeenCalledWith('a', 'claude-code.sdk', event);
 
     stop();
-    expect(removeListener).toHaveBeenCalledWith('session:event', receive);
+    remote.emit('event', 'session:event', ['a', 'claude-code.sdk', event]);
+    await api.getUsage();
+    expect(heard).toHaveBeenCalledOnce();
   });
 
-  it('invokes the terminal channels with their arguments', async () => {
+  it('calls the terminal channels with their arguments', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue(null);
+    postPort(answerInfo);
+    channel.mockResolvedValue(null);
     await api.attachTerminal('a');
-    expect(invoke).toHaveBeenLastCalledWith('terminal:attach', 'a');
+    expect(channel).toHaveBeenLastCalledWith('terminal:attach', 'a');
     await api.writeTerminal('a', 'ls\r');
-    expect(invoke).toHaveBeenLastCalledWith('terminal:input', 'a', 'ls\r');
+    expect(channel).toHaveBeenLastCalledWith('terminal:input', 'a', 'ls\r');
     await api.resizeTerminal('a', 120, 40);
-    expect(invoke).toHaveBeenLastCalledWith('terminal:resize', 'a', 120, 40);
+    expect(channel).toHaveBeenLastCalledWith('terminal:resize', 'a', 120, 40);
     await api.detachTerminal('a');
-    expect(invoke).toHaveBeenLastCalledWith('terminal:detach', 'a');
+    expect(channel).toHaveBeenLastCalledWith('terminal:detach', 'a');
   });
 
   it('asks main to open a link, with only its URL', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue(true);
+    postPort(answerInfo);
+    channel.mockResolvedValue(true);
     await expect(api.openLink('https://docs.example.com/a')).resolves.toBe(true);
-    expect(invoke).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
+    expect(channel).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
   });
 
   it('asks main to show a file:// link’s file in the file manager, with only the link', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue(true);
+    postPort(answerInfo);
+    channel.mockResolvedValue(true);
     await expect(api.revealFile('file:///work/app/notes.txt')).resolves.toBe(true);
-    expect(invoke).toHaveBeenLastCalledWith('link:reveal', 'file:///work/app/notes.txt');
+    expect(channel).toHaveBeenLastCalledWith('link:reveal', 'file:///work/app/notes.txt');
   });
 
   it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue(null);
+    postPort(answerInfo);
+    channel.mockResolvedValue(null);
     const shot = new File(['png'], 'Screen Shot.png');
     const made = new File(['made by the page'], 'made.txt');
     getPathForFile.mockImplementation((file) => (file === shot ? '/Users/me/Screen Shot.png' : ''));
     await api.dropOnTerminal('a', [shot, made]);
-    expect(invoke).toHaveBeenLastCalledWith('terminal:drop', 'a', ['/Users/me/Screen Shot.png']);
+    expect(channel).toHaveBeenLastCalledWith('terminal:drop', 'a', ['/Users/me/Screen Shot.png']);
     // Files that are not on disk (made by the page) name no path: nothing is sent.
-    invoke.mockClear();
+    channel.mockClear();
     await expect(api.dropOnTerminal('a', [made])).resolves.toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
+    expect(channel).not.toHaveBeenCalled();
   });
 
   it('passes terminal events on without Electron’s event object, until told to stop', async () => {
     const api = await exposed();
+    postPort(answerInfo);
     const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();
     const stop = api.onTerminalEvent(heard);
-    const receive = listenerOn('terminal:event');
 
-    receive({ sender: 'the ipcRenderer event' }, 'a', { type: 'output', data: 'hi' });
+    remote.emit('event', 'terminal:event', ['a', { type: 'output', data: 'hi' }]);
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledOnce();
+    });
     expect(heard).toHaveBeenCalledWith('a', { type: 'output', data: 'hi' });
 
     stop();
-    expect(removeListener).toHaveBeenCalledWith('terminal:event', receive);
+    remote.emit('event', 'terminal:event', ['a', { type: 'output', data: 'hi' }]);
+    await api.getUsage();
+    expect(heard).toHaveBeenCalledOnce();
   });
 
   it('asks main which agents the user has', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue({ 'claude-code': true, codex: true });
+    postPort(answerInfo);
+    channel.mockResolvedValue({ 'claude-code': true, codex: true });
     await expect(api.installedClis()).resolves.toEqual({ 'claude-code': true, codex: true });
-    expect(invoke).toHaveBeenLastCalledWith('session:clis');
+    expect(channel).toHaveBeenLastCalledWith('session:clis');
   });
 
-  it('invokes the usage channels with their arguments', async () => {
+  it('calls the usage channels with their arguments', async () => {
     const api = await exposed();
-    invoke.mockResolvedValue({ readings: [], rules: {} });
+    postPort(answerInfo);
+    channel.mockResolvedValue({ readings: [], rules: {} });
     await expect(api.getUsage()).resolves.toEqual({ readings: [], rules: {} });
-    expect(invoke).toHaveBeenLastCalledWith('usage:get');
+    expect(channel).toHaveBeenLastCalledWith('usage:get');
     const rule = { window: 'weekly', percent: 90, action: 'warn' } as const;
     await api.setUsageRule('claude-code', rule);
-    expect(invoke).toHaveBeenLastCalledWith('usage:rule', 'claude-code', rule);
+    expect(channel).toHaveBeenLastCalledWith('usage:rule', 'claude-code', rule);
     const windows = { fiveHour: { usedPercent: 85, resetsAt: null } };
     await api.simulateUsage('claude-code', windows);
-    expect(invoke).toHaveBeenLastCalledWith('usage:simulate', 'claude-code', windows);
+    expect(channel).toHaveBeenLastCalledWith('usage:simulate', 'claude-code', windows);
   });
 
   it('passes usage changes on without Electron’s event object, until told to stop', async () => {
     const api = await exposed();
+    postPort(answerInfo);
     const heard = vi.fn<Parameters<AppApi['onUsageChanged']>[0]>();
     const stop = api.onUsageChanged(heard);
-    const receive = listenerOn('usage:changed');
 
     const state = { readings: [], rules: {} };
-    receive({ sender: 'the ipcRenderer event' }, state);
+    remote.emit('event', 'usage:changed', [state]);
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledOnce();
+    });
     expect(heard).toHaveBeenCalledWith(state);
 
     stop();
-    expect(removeListener).toHaveBeenCalledWith('usage:changed', receive);
+    remote.emit('event', 'usage:changed', [state]);
+    await api.getUsage();
+    expect(heard).toHaveBeenCalledOnce();
   });
 });
 
 describe('run persistence preload', () => {
   it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
     const api = await exposed();
+    postPort(answerInfo);
     const checkpoint = {
       version: 2,
       workflow: '{}',
@@ -448,11 +482,11 @@ describe('run persistence preload', () => {
       updatedAt: 1,
     } as const;
     await api.getRun();
-    expect(invoke).toHaveBeenLastCalledWith('run:get');
+    expect(channel).toHaveBeenLastCalledWith('run:get');
     await api.saveRun('token', checkpoint);
-    expect(invoke).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
+    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
     await api.runReady('request', null);
-    expect(invoke).toHaveBeenLastCalledWith('run:ready', 'request', null);
+    expect(channel).toHaveBeenLastCalledWith('run:ready', 'request', null);
     const listener = vi.fn();
     const stop = api.onRunStopping(listener);
     const call = on.mock.calls.find(([channel]) => channel === 'run:stopping');
@@ -460,5 +494,48 @@ describe('run persistence preload', () => {
     expect(listener).toHaveBeenCalledWith('request');
     stop();
     expect(removeListener).toHaveBeenCalledWith('run:stopping', call?.[1]);
+  });
+});
+
+describe('channels waiting for the core', () => {
+  it('queues a channel until the port comes, and preserves a handler’s error message', async () => {
+    const api = await exposed();
+    const pending = api.openCanvas();
+    channel.mockRejectedValue(new Error('The file could not open.'));
+    postPort(answerInfo);
+    await expect(pending).rejects.toThrow('The file could not open.');
+    expect(channel).toHaveBeenCalledExactlyOnceWith('canvas:open');
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
+  });
+
+  it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
+    const api = await exposed();
+    vi.useFakeTimers();
+    const failed = expect(api.forgetCanvas()).rejects.toThrow(
+      'corrallm’s core isn’t answering yet.',
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await failed;
+    postPort(answerInfo);
+    await api.appInfo();
+    expect(channel).not.toHaveBeenCalled();
+  });
+
+  it('keeps event subscriptions across replacement ports', async () => {
+    const api = await exposed();
+    const heard = vi.fn();
+    const stop = api.onUsageChanged(heard);
+    postPort(answerInfo);
+    remote.emit('event', 'usage:changed', [{ readings: [], rules: {} }]);
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledOnce();
+    });
+    await closePort();
+    postPort(answerInfo);
+    remote.emit('event', 'usage:changed', [{ readings: [], rules: {} }]);
+    await vi.waitFor(() => {
+      expect(heard).toHaveBeenCalledTimes(2);
+    });
+    stop();
   });
 });

@@ -58,8 +58,12 @@ export async function launchApp({
   return {
     app,
     close: async () => {
+      // Its process, read while the app is open: Playwright forgets it once the app closes.
+      const child = app.process();
       try {
         await app.close();
+        const code = child.exitCode;
+        if (code !== 0) throw new Error(`corrallm exited with code ${String(code)} while closing.`);
       } finally {
         remove();
       }

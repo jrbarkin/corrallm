@@ -4,6 +4,7 @@ import type { WebContents } from 'electron';
 import { CORE_PORT } from '../../shared/gui-link';
 import type { CorePort } from '../../shared/gui-link';
 import type { CoreProcess } from './core-process';
+import { originKey } from '../url-policy';
 
 /*
  * Windows' ports to the core (B8 Design §3), main's half of the handshake. A window's preload asks
@@ -16,6 +17,7 @@ import type { CoreProcess } from './core-process';
 
 export class CorePorts {
   readonly #core: Pick<CoreProcess, 'connect' | 'windowGone'>;
+  readonly #origin: string;
   /**
    * Which core a port reaches. There is one until supervision restarts a core that stops, each
    * restart a new epoch (B8 Design §6).
@@ -24,8 +26,9 @@ export class CorePorts {
   /** The windows followed, whose going the core hears. */
   readonly #followed = new WeakSet<WebContents>();
 
-  constructor(core: Pick<CoreProcess, 'connect' | 'windowGone'>) {
+  constructor(core: Pick<CoreProcess, 'connect' | 'windowGone'>, origin: string) {
     this.#core = core;
+    this.#origin = origin;
   }
 
   /** Gives the window a port to the core: a new one each time it asks, as after a reload. */
@@ -41,13 +44,20 @@ export class CorePorts {
     this.#followed.add(contents);
     // Read now: a destroyed window's contents has no id to read.
     const window = contents.id;
-    const gone = () => {
-      this.#core.windowGone(window);
+    const gone = (closed = false) => {
+      this.#core.windowGone(window, closed);
     };
     contents.on('did-start-navigation', (event) => {
-      if (event.isMainFrame && !event.isSameDocument) gone();
+      // This precedes will-navigate: a foreign navigation will be blocked, keeping this page
+      // and its port alive. Only a reload of our own renderer leaves its sessions.
+      if (event.isMainFrame && !event.isSameDocument && originKey(event.url) === this.#origin)
+        gone();
     });
-    contents.on('render-process-gone', gone);
-    contents.once('destroyed', gone);
+    contents.on('render-process-gone', () => {
+      gone();
+    });
+    contents.once('destroyed', () => {
+      gone(true);
+    });
   }
 }

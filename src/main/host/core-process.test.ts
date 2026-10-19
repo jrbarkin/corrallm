@@ -43,6 +43,10 @@ beforeEach(() => {
 
 /** What main answers the core of the desktop: the dialogs' picks, faked. */
 const host = {
+  askOpenLink: () => Promise.resolve({ open: false, always: false }),
+  openExternal: () => Promise.resolve(null),
+  showFile: () => Promise.resolve(null),
+  runReady: () => Promise.resolve(null),
   pickCanvasToOpen: vi.fn(() => Promise.resolve(null)),
   pickCanvasToSave: vi.fn(() => Promise.resolve(null)),
   pickFolder: vi.fn((_window: number, current?: string) =>

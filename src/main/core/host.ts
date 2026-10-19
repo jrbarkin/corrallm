@@ -6,13 +6,13 @@
 
 declare const trusted: unique symbol;
 /**
- * A path the user picked in one of the app's dialogs, or one main wrote itself and read back: the
+ * A path the user picked in one of the app's dialogs, or one the core wrote itself and read back: the
  * only paths a canvas is opened from or saved to, and the only project folders agents work in.
  */
 export type TrustedPath = string & { readonly [trusted]: true };
 
 /**
- * Brands a path as trusted. Only its mint sites call it: the dialogs (src/main/host/dialogs.ts),
+ * Brands a path as trusted. Only its mint sites call it: the host’s dialog answers (core/host/app.ts),
  * and the stores reading back paths they wrote (memory.ts, run-journal.ts). Never a command line.
  */
 export function mintTrustedPath(path: string): TrustedPath {
@@ -21,6 +21,12 @@ export function mintTrustedPath(path: string): TrustedPath {
 
 /** A window, by its web contents' id: the window a dialog belongs to. */
 export type WindowId = number;
+
+/** Whether to open a link, and to open its site's links from now on. */
+export interface LinkAnswer {
+  open: boolean;
+  always: boolean;
+}
 
 export interface HostServices {
   /** The Open dialog for a canvas file: the file picked, or null if cancelled. */
@@ -35,4 +41,12 @@ export interface HostServices {
    * given: the folder picked, or null if cancelled.
    */
   pickFolder(window: WindowId, current?: string): Promise<TrustedPath | null>;
+  /** Asks before opening a site the user has not allowed, parented to its window. */
+  askOpenLink(window: WindowId, host: string, url: string): Promise<LinkAnswer>;
+  /** Opens a URL the core checked in the user's browser. */
+  openExternal(url: string): Promise<null>;
+  /** Shows a project file the core checked in the file manager, never opening it. */
+  showFile(file: string): Promise<null>;
+  /** The renderer finished the freeze/save main requested before closing its window. */
+  runReady(window: WindowId, request: string, error: string | null): Promise<null>;
 }

@@ -176,10 +176,7 @@ describe('ESLint’s boundaries in main', () => {
       ),
     ).toEqual([]);
     expect(
-      await importErrors(
-        'src/main/host/dialogs.ts',
-        "import { dialog } from 'electron';\nimport { mintTrustedPath } from '../core/host';\n",
-      ),
+      await importErrors('src/main/host/dialogs.ts', "import { dialog } from 'electron';\n"),
     ).toEqual([]);
   });
 });
@@ -277,33 +274,26 @@ describe('main’s files', () => {
     expect(loaders).toEqual(['src/main/core/entry.ts']);
   });
 
-  it('compose no store in the core process while main keeps the profile’s', () => {
-    // Until main's services move into the core process, main journals and keeps the profile's
-    // stores, and runs the sessions that write them: the core process must not open them too.
-    const loaded = loadedBy('src/main/core/entry.ts');
-    expect(loaded).toContain('src/main/core/gui.ts');
-    expect(
-      loaded.filter((file) =>
-        [
-          'src/main/memory.ts',
-          'src/main/settings.ts',
-          'src/main/usage.ts',
-          'src/main/run-journal.ts',
-          'src/main/core/tokens.ts',
-          'src/main/core/core.ts',
-          'src/main/core/engines.ts',
-          'src/main/sessions/manager.ts',
-        ].includes(file),
-      ),
-    ).toEqual([]);
+  it('compose the profile’s stores only in the core process', () => {
+    const stores = [
+      'src/main/memory.ts',
+      'src/main/settings.ts',
+      'src/main/usage.ts',
+      'src/main/run-journal.ts',
+      'src/main/core/tokens.ts',
+      'src/main/core/core.ts',
+      'src/main/core/engines.ts',
+      'src/main/sessions/manager.ts',
+    ];
+    expect(loadedBy('src/main/core/entry.ts')).toEqual(expect.arrayContaining(stores));
+    expect(loadedBy('src/main/index.ts').filter((file) => stores.includes(file))).toEqual([]);
   });
 
-  it('mint trusted paths only from the dialogs (main’s, or their answers in the core) and the stores reading back what they wrote', () => {
+  it('mint trusted paths only from the host’s dialog answers in the core and the stores reading back what they wrote', () => {
     const minting = mainFiles().filter((file) => read(file).includes('mintTrustedPath('));
     expect(minting.sort()).toEqual([
       'src/main/core/host.ts',
       'src/main/core/host/app.ts',
-      'src/main/host/dialogs.ts',
       'src/main/memory.ts',
       'src/main/run-journal.ts',
     ]);

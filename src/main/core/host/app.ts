@@ -21,12 +21,22 @@ export function appHost(link: Pick<CoreLink<CoreSide, HostSide>, 'request'>): Ho
           ? link.request('pickFolder', window)
           : link.request('pickFolder', window, current),
       ),
+    askOpenLink: (window, host, url) => answered(link.request('askOpenLink', window, host, url)),
+    openExternal: (url) => answered(link.request('openExternal', url)),
+    showFile: (file) => answered(link.request('showFile', file)),
+    runReady: (window, request, error) =>
+      answered(link.request('runReady', window, request, error)),
   };
 }
 
 /** What the user picked in main's dialog, or null if they cancelled; rejects if it failed. */
 async function picked(asked: Promise<Answer<string | null>>): Promise<TrustedPath | null> {
+  const value = await answered(asked);
+  return value === null ? null : mintTrustedPath(value);
+}
+
+async function answered<T>(asked: Promise<Answer<T>>): Promise<T> {
   const answer = await asked;
   if (!answer.ok) throw new Error(answer.error.message);
-  return answer.value === null ? null : mintTrustedPath(answer.value);
+  return answer.value;
 }

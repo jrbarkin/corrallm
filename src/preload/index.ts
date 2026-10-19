@@ -14,24 +14,23 @@ import {
   API_EVENTS,
   type AppApi,
   type IpcArgs,
-  type IpcChannel,
-  type IpcEvent,
+  type CoreChannel,
   type IpcEventArgs,
   type IpcResult,
 } from '../shared/ipc';
 import { connectCore } from './core';
 
-function invoke<C extends IpcChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
-  return ipcRenderer.invoke(channel, ...args) as Promise<IpcResult<C>>;
+function invoke<C extends CoreChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
+  return core.channel(channel, args);
 }
 
 /** Calls `listener` with each `event` main sends; returns a function that stops it. */
-function listen<E extends IpcEvent>(
-  event: E,
-  listener: (...args: IpcEventArgs<E>) => void,
+function listen(
+  event: 'run:stopping',
+  listener: (...args: IpcEventArgs<'run:stopping'>) => void,
 ): () => void {
   const receive = (_event: IpcRendererEvent, ...args: unknown[]) => {
-    listener(...(args as IpcEventArgs<E>));
+    listener(...(args as IpcEventArgs<'run:stopping'>));
   };
   ipcRenderer.on(event, receive);
   return () => {
@@ -86,7 +85,7 @@ const api: AppApi = {
   openLink: (url) => invoke(API_CHANNELS.openLink, url),
   revealFile: (url) => invoke(API_CHANNELS.revealFile, url),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
-  // never names a path, and main checks these again.
+  // never names a path, and the core checks these again.
   dropOnTerminal: (agentId, files) => {
     const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter(
       (file) => file !== '',
@@ -98,9 +97,9 @@ const api: AppApi = {
   getUsage: () => invoke(API_CHANNELS.getUsage),
   setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
   simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
-  onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
-  onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
-  onUsageChanged: (listener) => listen(API_EVENTS.onUsageChanged, listener),
+  onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
+  onTerminalEvent: (listener) => core.listen(API_EVENTS.onTerminalEvent, listener),
+  onUsageChanged: (listener) => core.listen(API_EVENTS.onUsageChanged, listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import type { OpResult } from './api/errors';
 import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
+import type { CoreEvent, IpcEventArgs } from './ipc';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -29,11 +30,14 @@ export interface CoreGuiSide {
     call: { args: [op: string, args: unknown]; result: OpResult<unknown> };
     /**
      * A hand-written channel (src/shared/ipc.ts) the registry doesn't replace yet, by its name and
-     * arguments. Not served yet: those channels still go to main.
+     * arguments, parsed and handled by the core for this window’s canvas.
      */
     channel: { args: [name: string, args: unknown[]]; result: unknown };
   };
-  events: Record<string, never>;
+  events: {
+    /** Hand-written session, terminal and usage events, until their topics replace them. */
+    event: [name: CoreEvent, args: IpcEventArgs<CoreEvent>];
+  };
 }
 
 /** What a window answers and tells the core: nothing yet. */

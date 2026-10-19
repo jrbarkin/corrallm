@@ -44,6 +44,10 @@ function linked(main: Handlers<HostSide>) {
 function dialogs(picked: string | null) {
   const pick = () => Promise.resolve(picked);
   return {
+    askOpenLink: () => Promise.resolve({ open: false, always: false }),
+    openExternal: () => Promise.resolve(null),
+    showFile: () => Promise.resolve(null),
+    runReady: () => Promise.resolve(null),
     pickCanvasToOpen: vi.fn<(window: number) => Promise<string | null>>(pick),
     pickCanvasToSave: vi.fn<(window: number, defaultPath: string) => Promise<string | null>>(pick),
     pickFolder: vi.fn<(window: number, current?: string) => Promise<string | null>>(pick),

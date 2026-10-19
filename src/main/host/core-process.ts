@@ -35,7 +35,7 @@ export interface CoreProcess {
   /** Hands the core its end of `window`'s port (the window has the other end). */
   connect(window: WindowId, port: MessagePortMain): void;
   /** Tells the core that `window` closed, crashed or reloaded: its port is done. */
-  windowGone(window: WindowId): void;
+  windowGone(window: WindowId, closed?: boolean): void;
   kill(): void;
 }
 
@@ -60,8 +60,9 @@ export function forkCore({ entry, output, check, host }: CoreProcessOptions): Co
     connect: (window, port) => {
       child.postMessage({ kind: 'window', window } satisfies WindowMessage, [port]);
     },
-    windowGone: (window) => {
-      link.emit('windowGone', window);
+    windowGone: (window, closed) => {
+      if (closed === undefined) link.emit('windowGone', window);
+      else link.emit('windowGone', window, closed);
     },
     kill: () => {
       child.kill();

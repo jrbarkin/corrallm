@@ -422,4 +422,8 @@ export const NO_DESKTOP: HostServices = {
   pickCanvasToOpen: () => Promise.resolve(null),
   pickCanvasToSave: () => Promise.resolve(null),
   pickFolder: () => Promise.resolve(null),
+  askOpenLink: () => Promise.resolve({ open: false, always: false }),
+  openExternal: () => Promise.resolve(null),
+  showFile: () => Promise.resolve(null),
+  runReady: () => Promise.resolve(null),
 };

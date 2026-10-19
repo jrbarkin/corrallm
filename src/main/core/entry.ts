@@ -1,12 +1,11 @@
-import { OPS } from '../../shared/api/registry';
-import { SURFACE } from '../../shared/api/surface';
 import { CoreLink } from '../../shared/link';
 import type { LinkPort } from '../../shared/link';
-import { createDispatcher } from './call';
+import { createCore } from './core';
+import type { Core } from './core';
+import { appHost } from './host/app';
 import { WindowPorts } from './gui';
 import type { WindowPort } from './gui';
 import type { WindowId } from './host';
-import { appOps } from './ops/app';
 import { isWindowMessage } from './protocol';
 import type { CoreSide, HostSide } from './protocol';
 import { memoryText, runChecks, selfTestChecks } from './selftest';
@@ -17,11 +16,6 @@ import { memoryText, runChecks, selfTestChecks } from './selftest';
  * `init`, then hands it each trusted window's port beside the link (B8 Design §3), which it serves
  * once composed (core/gui.ts). In the native self-test (CORRALLM_NATIVE_SELFTEST=1,
  * native-selftest.ts) main only asks it to run the checks, and it is never composed.
- *
- * Until main's services move into this process, main keeps the profile's stores (the journal,
- * memory, settings, usage, tokens) and runs the agents' sessions, so the core composes none of
- * them: only the operations that read no store, app.info. Any other a window may call answers that
- * there is no such operation until then.
  */
 
 // Checking that only plain data crosses costs a walk of every value: only under `pnpm dev`.
@@ -83,6 +77,7 @@ if (!parent) {
 /** The windows' ports, served once the core is composed: a window's that comes before waits. */
 const windows = Promise.withResolvers<WindowPorts>();
 let composed = false;
+const ready = Promise.withResolvers<Core>();
 
 const link = new CoreLink<CoreSide, HostSide>(
   parentPortOf(parent, (window, port) => {
@@ -91,14 +86,21 @@ const link = new CoreLink<CoreSide, HostSide>(
     });
   }),
   {
-    init: ({ app }) => {
+    init: async (config) => {
       if (composed) throw new Error('corrallm’s core is up already.');
       composed = true;
-      const core = createDispatcher(
-        { surface: SURFACE, ops: OPS, implementations: appOps({ app }), rules: {} },
-        { check },
-      );
+      const core = await createCore({ ...config, check }, appHost(link));
+      ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
+      return null;
+    },
+    shown: async (asked) => (await ready.promise).shown(asked),
+    flush: async () => {
+      await (await ready.promise).flush();
+      return null;
+    },
+    close: async () => {
+      await (await ready.promise).close();
       return null;
     },
     selftest: async ({ packaged }) => ({
@@ -108,9 +110,9 @@ const link = new CoreLink<CoreSide, HostSide>(
   },
   { check },
 );
-link.on('windowGone', (window) => {
+link.on('windowGone', (window, closed) => {
   void windows.promise.then((served) => {
-    served.gone(window);
+    served.gone(window, closed);
   });
 });
 link.emit('ready', memoryText());

@@ -22,6 +22,10 @@ export const NODE_HOST: HostServices = {
   pickCanvasToOpen: refuse,
   pickCanvasToSave: refuse,
   pickFolder: refuse,
+  askOpenLink: refuse,
+  openExternal: refuse,
+  showFile: refuse,
+  runReady: refuse,
 };
 
 /**

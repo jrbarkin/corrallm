@@ -21,16 +21,14 @@ import type { TerminalEvent } from './terminal';
 import type { UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
- * The IPC contract between the main process and the renderer.
+ * The hand-written channels between the renderer and the core. Each one's name, argument tuple
+ * and result are declared here once: core/channels.ts parses and handles it, and the preload
+ * exposes its fixed function on window.api over the window's port. The checked handshake,
+ * core:connect, stays in main and is never exposed to the page.
  *
- * Every channel is declared here once, mapping its name to the argument tuple the renderer
- * sends and the value main resolves with. Main registers a handler for every channel
- * (src/main/ipc.ts), the preload exposes each one on `window.api` (src/preload/index.ts; but
- * core:connect, which it invokes itself), and the renderer calls `window.api`. The compiler checks both that the three agree on types and
- * that no channel is missing a handler or an `AppApi` method.
- *
- * Main also sends events to the renderer (`IpcEvents`): the preload exposes a function per event
- * that listens for it and returns a function that stops listening.
+ * The core sends session, terminal and usage events over the port. Main still asks the renderer
+ * to freeze/save with run:stopping. The preload strips transport details from each event and
+ * returns a function that stops listening.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
@@ -44,7 +42,7 @@ export interface IpcContract {
   'catalog:get': { args: []; result: Catalog };
   /** Restore the current named canvas or durable draft, without starting an agent. */
   'run:get': { args: []; result: RunContext };
-  /** Main selects storage; the token rejects writes from an earlier canvas generation. */
+  /** The core selects storage; the token rejects writes from an earlier canvas generation. */
   'run:save': { args: [token: string, checkpoint: RunCheckpoint | null]; result: null };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
@@ -121,7 +119,7 @@ export interface IpcContract {
    */
   'session:list': { args: [agentId: string]; result: PastSession[] };
   /**
-   * Makes a conversation main listed (session:list) for the canvas's project folder the agent's
+   * Makes a conversation the core listed (session:list) for the canvas's project folder the agent's
    * own: its session ends, and resumes that one when it starts again. Rejects any other id.
    */
   'session:resume': { args: [agentId: string, sessionId: string]; result: null };
@@ -152,7 +150,7 @@ export interface IpcContract {
     result: McpServer[];
   };
   /**
-   * Shows an agent's terminal (a Terminal session's) in the renderer's view: main sends
+   * Shows an agent's terminal (a Terminal session's) in the renderer's view: the core sends
    * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
    * again for each session after, until the view detaches.
    */
@@ -172,12 +170,12 @@ export interface IpcContract {
   /**
    * Shows the file or folder a file:// link the user Cmd-clicked in a terminal names in the OS file
    * manager (Finder), selected, never opened: only if it is in the canvas's project folder, links
-   * resolved (src/main/host/reveal.ts). Resolves with whether it was shown.
+   * resolved (src/main/reveal.ts). Resolves with whether it was shown.
    */
   'link:reveal': { args: [url: string]; result: boolean };
   /**
    * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
-   * dropped files: window.api takes the files, never paths): main pastes those that exist into its
+   * dropped files: window.api takes the files, never paths): the core pastes those that exist into its
    * terminal, quoted, as a terminal does.
    */
   'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
@@ -195,7 +193,7 @@ export interface IpcContract {
   };
 }
 
-/** Events main sends the renderer: each one's name, and what it carries. */
+/** Events the core and main send the renderer: each one's name, and what it carries. */
 export interface IpcEvents {
   /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
   'run:stopping': [requestId: string];
@@ -237,6 +235,10 @@ export const CANVAS_EXTENSION = 'corral';
 export const MAX_CANVAS_BYTES = 10 * 1024 * 1024;
 
 export type IpcChannel = keyof IpcContract;
+/** Hand-written channels served on a window’s port, after the checked handshake. */
+export type CoreChannel = Exclude<IpcChannel, 'core:connect'>;
+/** Events from the core; main still asks the renderer to freeze/save. */
+export type CoreEvent = Exclude<IpcEvent, 'run:stopping'>;
 export type IpcArgs<C extends IpcChannel> = IpcContract[C]['args'];
 export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 export type IpcEvent = keyof IpcEvents;

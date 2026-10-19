@@ -3,7 +3,14 @@ import { ipcRenderer } from 'electron';
 import type { OpResult } from '../shared/api/errors';
 import { CORE_PORT } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
-import type { IpcChannel } from '../shared/ipc';
+import type {
+  CoreChannel,
+  CoreEvent,
+  IpcArgs,
+  IpcEventArgs,
+  IpcResult,
+  IpcChannel,
+} from '../shared/ipc';
 import { CoreLink } from '../shared/link';
 
 /*
@@ -21,6 +28,8 @@ const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
 export interface CoreConnection {
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
+  channel<C extends CoreChannel>(name: C, args: IpcArgs<C>): Promise<IpcResult<C>>;
+  listen<E extends CoreEvent>(name: E, listener: (...args: IpcEventArgs<E>) => void): () => void;
 }
 
 interface Linked {
@@ -30,7 +39,11 @@ interface Linked {
 }
 
 /** A link over the port main posted. */
-function linkOver(port: MessagePort, closed: () => void): Linked {
+function linkOver(
+  port: MessagePort,
+  closed: () => void,
+  receive: (name: CoreEvent, args: IpcEventArgs<CoreEvent>) => void,
+): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
     {
@@ -51,6 +64,7 @@ function linkOver(port: MessagePort, closed: () => void): Linked {
     },
     {},
   );
+  link.on('event', receive);
   return {
     link,
     close: (why) => {
@@ -64,15 +78,23 @@ export function connectCore(): CoreConnection {
   let linked: Linked | undefined;
   /** Why main gave no port, if it refused. */
   let refused: Error | undefined;
+  const listeners = new Map<CoreEvent, Set<(...args: unknown[]) => void>>();
+  const receive = (name: CoreEvent, args: IpcEventArgs<CoreEvent>) => {
+    for (const listener of listeners.get(name) ?? []) listener(...args);
+  };
   const waiting = new Set<{ resolve: (linked: Linked) => void; reject: (error: Error) => void }>();
 
   ipcRenderer.on(CORE_PORT, (event) => {
     const [port] = event.ports;
     if (port === undefined) return;
     linked?.close('corrallm’s core restarted.');
-    const next: Linked = linkOver(port, () => {
-      if (linked === next) linked = undefined;
-    });
+    const next: Linked = linkOver(
+      port,
+      () => {
+        if (linked === next) linked = undefined;
+      },
+      receive,
+    );
     linked = next;
     refused = undefined;
     for (const pending of waiting) pending.resolve(next);
@@ -106,6 +128,20 @@ export function connectCore(): CoreConnection {
   };
 
   return {
+    channel: async (name, args) => {
+      const answer = await (await ready()).link.request('channel', name, args);
+      if (!answer.ok) throw new Error(answer.error.message);
+      return answer.value as IpcResult<typeof name>;
+    },
+    listen: (name, listener) => {
+      let listening = listeners.get(name);
+      if (!listening) listeners.set(name, (listening = new Set()));
+      const receive = listener as (...args: unknown[]) => void;
+      listening.add(receive);
+      return () => {
+        listening.delete(receive);
+      };
+    },
     call: async (op, args) => {
       try {
         const answer = await (await ready()).link.request('call', op, args);

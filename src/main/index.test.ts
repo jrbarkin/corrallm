@@ -1,26 +1,43 @@
+import { EventEmitter } from 'node:events';
+
+import type { WebContents } from 'electron';
+import type { RunShutdown } from './run-shutdown';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { app, registerPrivileges, installGuards } = vi.hoisted(() => ({
-  app: {
-    isPackaged: false,
-    requestSingleInstanceLock: vi.fn(() => true),
-    quit: vi.fn(),
-    whenReady: vi.fn(() => new Promise<void>(() => undefined)),
-    enableSandbox: vi.fn(),
-    on: vi.fn(),
-  },
-  registerPrivileges: vi.fn(),
-  installGuards: vi.fn(),
-}));
+const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox } = vi.hoisted(
+  () => ({
+    app: {
+      isPackaged: false,
+      requestSingleInstanceLock: vi.fn(() => true),
+      quit: vi.fn(),
+      exit: vi.fn(),
+      setActivationPolicy: vi.fn(),
+      whenReady: vi.fn(() => new Promise<void>(() => undefined)),
+      enableSandbox: vi.fn(),
+      on: vi.fn(),
+      once: vi.fn(),
+      getPath: vi.fn(() => '/app/profile'),
+      getName: vi.fn(() => 'corrallm'),
+      getVersion: vi.fn(() => '1.2.3'),
+      getLocale: vi.fn(() => 'en-US'),
+      commandLine: { hasSwitch: vi.fn(() => false) },
+    },
+    getAllWindows: vi.fn<() => unknown[]>(() => []),
+    showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
+    registerPrivileges: vi.fn(),
+    installGuards: vi.fn(),
+  }),
+);
 
-// Bootstrap is tested before readiness, so it cannot start sessions or write user data.
+// The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
-  BrowserWindow: {},
-  dialog: {},
-  session: {},
+  BrowserWindow: { getAllWindows },
+  dialog: { showMessageBox },
+  session: { defaultSession: {} },
   shell: {},
-  ipcMain: {},
+  ipcMain: { handle: vi.fn() },
 }));
 vi.mock('electron-squirrel-startup', () => ({ default: false }));
 vi.mock('./app-protocol', () => ({
@@ -34,19 +51,37 @@ vi.mock('./security', () => ({
   isTrustedSender: vi.fn(),
 }));
 vi.mock('./native-selftest', () => ({ runNativeSelfTest: vi.fn() }));
-vi.mock('./sessions/connectors', () => ({ createConnectors: vi.fn(), createOptions: vi.fn() }));
+const { request, createWindow, makeHost } = vi.hoisted(() => ({
+  request: vi.fn<(name: string, ...args: unknown[]) => Promise<{ ok: true; value: unknown }>>(() =>
+    Promise.resolve({ ok: true, value: null }),
+  ),
+  createWindow: vi.fn(() => Promise.resolve()),
+  makeHost: vi.fn<(_shutdown: Pick<RunShutdown, 'ready'>) => unknown>(() => ({})),
+}));
+vi.mock('./host/core-process', () => ({ forkCore: () => ({ link: { request } }) }));
+vi.mock('./host/services', () => ({ hostServices: makeHost }));
+vi.mock('./core/lock', () => ({ lockProfile: () => Promise.resolve({ release: vi.fn() }) }));
+vi.mock('./window', () => ({ createMainWindow: createWindow }));
 
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  getAllWindows.mockReturnValue([]);
+  request.mockReset();
+  request.mockResolvedValue({ ok: true, value: null });
   app.requestSingleInstanceLock.mockReturnValue(true);
+  app.isPackaged = false;
+  app.whenReady.mockImplementation(() => new Promise<void>(() => undefined));
   vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
   vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
+  vi.stubGlobal('CORRALLM_DISTRIBUTION', 'local');
   vi.stubEnv('CORRALLM_NATIVE_SELFTEST', undefined);
   vi.stubEnv('CORRALLM_HIDE_WINDOW', undefined);
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -70,4 +105,109 @@ describe('single-instance startup', () => {
     expect(app.whenReady).toHaveBeenCalledOnce();
     expect(installGuards).toHaveBeenCalledWith('app://main_window');
   });
+});
+
+describe('starting the app’s core', () => {
+  it.each([false, true])(
+    'passes the profile, app, distribution and locale, admitting fake sessions only unpackaged (packaged: %s)',
+    async (packaged) => {
+      app.isPackaged = packaged;
+      app.whenReady.mockResolvedValueOnce();
+      vi.stubEnv('CORRALLM_FAKE_SESSIONS', '1');
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(createWindow).toHaveBeenCalledOnce();
+      });
+      expect(request).toHaveBeenCalledExactlyOnceWith('init', {
+        app: { name: 'corrallm', version: '1.2.3' },
+        profile: '/app/profile',
+        distribution: 'local',
+        locale: 'en-US',
+        fakeSessions: !packaged,
+      });
+    },
+  );
+});
+
+describe('a hidden app that cannot save before closing', () => {
+  it.each(['Quit', 'Close'])(
+    '%s reports the failure and exits nonzero without a native dialog',
+    async (verb) => {
+      vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+      app.whenReady.mockResolvedValueOnce();
+      const contents = {
+        id: 7,
+        isDestroyed: () => false,
+        isCrashed: () => false,
+        send: vi.fn(),
+      };
+      const window = Object.assign(new EventEmitter(), { webContents: contents, close: vi.fn() });
+      getAllWindows.mockReturnValue([window]);
+      request.mockImplementation((name) =>
+        Promise.resolve({ ok: true, value: name === 'shown' ? [7] : null }),
+      );
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(createWindow).toHaveBeenCalledOnce();
+      });
+      vi.useFakeTimers();
+      const preventDefault = vi.fn();
+      if (verb === 'Quit') {
+        const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (
+          event: unknown,
+        ) => void;
+        beforeQuit({ preventDefault });
+      } else {
+        const created = app.on.mock.calls.find(
+          ([name]) => name === 'browser-window-created',
+        )?.[1] as (event: unknown, window: unknown) => void;
+        created({}, window);
+        window.emit('close', { preventDefault });
+      }
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(contents.send).toHaveBeenCalledWith('run:stopping', expect.any(String));
+      expect(showMessageBox).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledWith(
+        'Could not save before closing:',
+        'The window did not finish saving its run before closing',
+      );
+      expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(preventDefault).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+it('keeps the core up until the window has finished saving and main receives run:ready', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  const contents = { id: 7, isDestroyed: () => false, isCrashed: () => false, send: vi.fn() };
+  getAllWindows.mockReturnValue([{ webContents: contents }]);
+  request.mockImplementation((name) =>
+    Promise.resolve({ ok: true, value: name === 'shown' ? [7] : null }),
+  );
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(createWindow).toHaveBeenCalledOnce();
+  });
+  const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (
+    event: unknown,
+  ) => void;
+  beforeQuit({ preventDefault: vi.fn() });
+  await vi.waitFor(() => {
+    expect(contents.send).toHaveBeenCalledOnce();
+  });
+  expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'shown']);
+  expect(app.quit).not.toHaveBeenCalled();
+  const shutdown = makeHost.mock.calls[0]?.[0];
+  if (!shutdown) throw new Error('no shutdown service');
+  shutdown.ready(
+    contents as unknown as WebContents,
+    contents.send.mock.calls[0]?.[1] as string,
+    null,
+  );
+  await vi.waitFor(() => {
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+  expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'shown', 'flush', 'close']);
 });

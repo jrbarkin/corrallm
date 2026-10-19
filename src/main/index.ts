@@ -1,37 +1,22 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, dialog, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, session } from 'electron';
 import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
+import type { Answer } from '../shared/link';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
-import { CanvasFiles } from './canvas';
 import { Closing } from './closing';
 import { lockProfile, ProfileLocked } from './core/lock';
 import { PROD_CSP } from './csp';
-import { ProjectFiles } from './files';
 import { forkCore } from './host/core-process';
-import { LinkOpener } from './host/links';
 import { CorePorts } from './host/ports';
-import { FileRevealer } from './host/reveal';
 import { hostServices } from './host/services';
-import { Windows } from './host/windows';
 import { registerIpcHandlers, sendEvent } from './ipc';
-import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
-import { ProjectFolders } from './project';
-import { RunJournal } from './run-journal';
 import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
-import { Settings } from './settings';
-import { CATALOG } from './sessions/adapters';
-import { createConnectors, createOptions } from './sessions/connectors';
-import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
-import { installedClis } from './sessions/installed';
-import { SessionManager } from './sessions/manager';
-import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
-import { UsageReadings } from './usage';
 import { createMainWindow } from './window';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
@@ -78,7 +63,7 @@ function main(): void {
   }
 
   // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden, and connected
-  // sessions with a fake connector instead of Claude Code. Never in packaged builds.
+  // sessions with fake connectors. Never in packaged builds.
   const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';
   const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
   // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
@@ -126,9 +111,10 @@ function main(): void {
       app.once('will-quit', release);
       process.once('exit', release);
 
-      // The core process (core/entry.ts), forked before the first window: each window's preload
-      // asks main for its port to it (core:connect, host/ports.ts). Until main's services move into
-      // it, main keeps the profile's stores, and the core serves only what reads none (app.info).
+      const shutdown = new RunShutdown((contents, requestId) => {
+        sendEvent(contents, 'run:stopping', requestId);
+      });
+      // The core owns the profile and its sessions; main answers only what needs the desktop.
       const core = forkCore({
         entry: path.join(__dirname, 'core.cjs'),
         output: (line, stream) => {
@@ -136,15 +122,16 @@ function main(): void {
           else console.error(`[core] ${line}`);
         },
         check: devServerUrl !== undefined,
-        host: hostServices,
+        host: hostServices(shutdown),
       });
-      core.link.request('init', { app: { name: app.getName(), version: app.getVersion() } }).then(
-        (answer) => {
-          if (!answer.ok) console.error('corrallm’s core could not start:', answer.error.message);
-        },
-        (error: unknown) => {
-          console.error('corrallm’s core could not start:', error);
-        },
+      await answered(
+        core.link.request('init', {
+          app: { name: app.getName(), version: app.getVersion() },
+          profile: app.getPath('userData'),
+          distribution: CORRALLM_DISTRIBUTION,
+          locale: app.getLocale(),
+          fakeSessions,
+        }),
       );
 
       hardenSession(session.defaultSession, trustedOrigin);
@@ -155,138 +142,27 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      // What main remembers of each canvas: its file, its project folder, its agents' conversations.
-      const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
-      // What the user chose for the app as a whole.
-      const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
-      const canvases = new CanvasFiles({ host: hostServices, memory });
-      const projects = new ProjectFolders({ host: hostServices, memory });
-      const runs = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
-        memory,
-        projectOf: (canvas) => projects.of(canvas),
-      });
-      // Which canvas each window shows: a new window shows the one the profile had open last.
-      const windows: Windows = new Windows(trustedOrigin, {
-        restore: async () => {
-          const canvas = await runs.last();
-          await projects.restore(canvas);
-          return canvas;
-        },
-        left: (canvas) => sessions.closeCanvas(canvas),
-      });
-      const shutdown = new RunShutdown((contents, requestId) => {
-        sendEvent(contents, 'run:stopping', requestId);
-      });
-      // Every backend's usage, read from its agents' CLIs: every window hears each change.
-      const usage = new UsageReadings({
-        file: path.join(app.getPath('userData'), 'usage.json'),
-        backends: CATALOG.usageBackends.map((backend) => backend.id),
-      });
-      await usage.load();
-      usage.subscribe((state) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          sendEvent(window.webContents, 'usage:changed', state);
-        }
-      });
-      let environment: Promise<Record<string, string>> | undefined;
-      // Resolved once, when the first session starts.
-      const agentsEnvironment = () =>
-        (environment ??= fakeSessions
-          ? Promise.resolve(agentEnvironment(process.env))
-          : loginShellEnvironment().then(agentEnvironment));
-      const sessions = new SessionManager({
-        catalog: CATALOG,
-        connectors: createConnectors({
-          fake: fakeSessions,
-          clientApp: `${app.getName()}/${app.getVersion()}`,
-          distribution: CORRALLM_DISTRIBUTION,
-          consent: (adapter, key) => settings.consent(adapter, key),
-          usage: (backend, windows) => {
-            usage.take(backend, windows);
-          },
-        }),
-        environment: agentsEnvironment,
-        options: createOptions({ fake: fakeSessions }),
-        // The conversations Claude Code kept, whichever connection ran them.
-        conversations: new Conversations(),
-        projectOf: (canvas) => projects.of(canvas),
-        memory,
-        emit: (canvas, agentId, connection, event) => {
-          for (const contents of windows.showing(canvas)) {
-            sendEvent(contents, 'session:event', agentId, connection, event);
-          }
-        },
-        terminal: (canvas, agentId, event) => {
-          for (const contents of windows.showing(canvas)) {
-            sendEvent(contents, 'terminal:event', agentId, event);
-          }
-        },
-      });
-      const files = new ProjectFiles({ environment: agentsEnvironment });
-      const links = new LinkOpener({
-        file: path.join(app.getPath('userData'), 'links.json'),
-        ask: async (contents, host, url) => {
-          const options: MessageBoxOptions = {
-            type: 'question',
-            message: `Open ${host} in your browser?`,
-            detail: url.length > 300 ? `${url.slice(0, 300)}…` : url,
-            buttons: ['Open', 'Cancel'],
-            defaultId: 0,
-            cancelId: 1,
-            checkboxLabel: 'Always for this site',
-            noLink: true,
-          };
-          const window = BrowserWindow.fromWebContents(contents);
-          const { response, checkboxChecked } = await (window
-            ? dialog.showMessageBox(window, options)
-            : dialog.showMessageBox(options));
-          return { open: response === 0, always: response === 0 && checkboxChecked };
-        },
-        openExternal: (url) => shell.openExternal(url),
-      });
-      // Which agents the user has, for the templates' agents.
-      const clis = { installed: async () => installedClis(await agentsEnvironment()) };
-      // file:// links in a terminal: shown in the file manager, if in the project folder.
-      const reveal = new FileRevealer({
-        folderOf: (canvas) => projects.of(canvas),
-        show: (file) => {
-          shell.showItemInFolder(file);
-        },
-      });
-      registerIpcHandlers(trustedOrigin, {
-        catalog: CATALOG,
-        windows,
-        canvases,
-        runs,
-        shutdown,
-        projects,
-        files,
-        links,
-        reveal,
-        sessions,
-        clis,
-        usage,
-        core: new CorePorts(core),
-      });
+      registerIpcHandlers(trustedOrigin, new CorePorts(core, trustedOrigin));
 
-      // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.
+      // Renderer acknowledgement precedes closing CLIs or flushing the profile's stores.
       const persistWindows = async (closing: BrowserWindow[]) => {
-        await Promise.all(
-          closing.map((window) =>
-            windows.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
+        const shown = await answered(
+          core.link.request(
+            'shown',
+            closing.map((window) => window.webContents.id),
           ),
         );
-        await runs.flush();
-        await sessions.closeEverything();
-        await Promise.all([memory.flush(), settings.flush(), links.flush(), usage.flush()]);
+        await Promise.all(
+          closing.flatMap((window) =>
+            shown.includes(window.webContents.id) ? [shutdown.stop(window.webContents)] : [],
+          ),
+        );
+        await answered(core.link.request('flush'));
       };
-      // Closing without saving (the user said to, after it failed): what can be closed, within a
-      // few seconds.
+      // Closing without saving, after the user said to: give the core a few seconds to finish.
       const abandon = async () => {
         await Promise.race([
-          Promise.allSettled([sessions.closeEverything()]).then(() =>
-            Promise.allSettled([memory.flush(), settings.flush(), links.flush(), usage.flush()]),
-          ),
+          core.link.request('close').catch(() => undefined),
           new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
         ]);
       };
@@ -294,6 +170,11 @@ function main(): void {
         (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
         async (why: string): Promise<boolean> => {
           console.error('Could not save before closing:', why);
+          if (hidden) {
+            await abandon();
+            app.exit(1);
+            return false;
+          }
           const options: MessageBoxOptions = {
             type: 'warning',
             message: 'The run could not be saved',
@@ -308,7 +189,10 @@ function main(): void {
           return response === 1;
         };
       const quit = new Closing({
-        save: () => persistWindows(BrowserWindow.getAllWindows()),
+        save: async () => {
+          await persistWindows(BrowserWindow.getAllWindows());
+          await answered(core.link.request('close'));
+        },
         abandon,
         ask: askAnyway('Quit'),
         done: () => {
@@ -319,9 +203,6 @@ function main(): void {
         if (!quit.request()) event.preventDefault();
       });
       app.on('browser-window-created', (_event, window) => {
-        // A reload keeps the window's canvas but ends its sessions (run:get waits for them to
-        // close before restoring); a crash or close ends them too.
-        windows.watch(window.webContents);
         // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({
           save: () => persistWindows([window]),
@@ -353,6 +234,13 @@ function main(): void {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
+}
+
+/** A failed core request must stop a save/close, with its sentence intact. */
+async function answered<T>(asked: Promise<Answer<T>>): Promise<T> {
+  const answer = await asked;
+  if (!answer.ok) throw new Error(answer.error.message);
+  return answer.value;
 }
 
 main();

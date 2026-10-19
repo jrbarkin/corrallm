@@ -4,6 +4,7 @@ import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
 import type { LinkOptions, LinkPort } from '../../shared/link';
 import type { Dispatcher } from './call';
+import type { Channels } from './channels';
 import type { HumanCaller } from './caller';
 import type { WindowId } from './host';
 
@@ -33,15 +34,19 @@ interface Served {
   readonly calls: AbortController;
   /** Ends the window's link, once it has started: what it still answers goes nowhere. */
   end?: (why: string) => void;
+  stop?: (() => void) | undefined;
 }
+
+/** A dispatcher, and the app’s hand-written channels when it hosts windows. */
+type GuiCore = Pick<Dispatcher, 'call'> & { channels?: Pick<Channels, 'call' | 'listen' | 'gone'> };
 
 /** Every window's port the core serves, by window. */
 export class WindowPorts {
-  readonly #core: Pick<Dispatcher, 'call'>;
+  readonly #core: GuiCore;
   readonly #options: LinkOptions;
   readonly #windows = new Map<WindowId, Served>();
 
-  constructor(core: Pick<Dispatcher, 'call'>, options: LinkOptions = {}) {
+  constructor(core: GuiCore, options: LinkOptions = {}) {
     this.#core = core;
     this.#options = options;
   }
@@ -52,7 +57,7 @@ export class WindowPorts {
     const caller = asHuman(window);
     const served: Served = { port, calls: new AbortController() };
     this.#windows.set(window, served);
-    new CoreLink<CoreGuiSide, GuiSide>(
+    const link = new CoreLink<CoreGuiSide, GuiSide>(
       {
         post: (message) => {
           port.post(message);
@@ -76,26 +81,37 @@ export class WindowPorts {
                   sentence: `corrallm’s window has no operation named ${op}.`,
                 },
               },
-        channel: (name) => {
-          throw new Error(`corrallm’s core doesn’t serve ${name} yet: it goes to main.`);
+        channel: (name, args) => {
+          if (!this.#core.channels)
+            throw new Error(`corrallm’s window has no channel named ${name}.`);
+          return this.#core.channels.call(window, name, args);
         },
       },
       this.#options,
     );
+    served.stop = this.#core.channels?.listen(window, (name, args) => {
+      link.emit('event', name, args);
+    });
   }
 
   /** The window closed, crashed or reloaded: its port closes, and its calls going are cancelled. */
-  gone(window: WindowId): void {
+  gone(window: WindowId, closed = false): void {
     const served = this.#windows.get(window);
-    if (!served) return;
-    this.#forget(window, served);
+    if (!served) {
+      if (closed) this.#core.channels?.gone(window, true);
+      return;
+    }
+    this.#forget(window, served, closed);
     served.port.close();
     served.end?.('the window went');
   }
 
-  #forget(window: WindowId, served: Served): void {
-    if (this.#windows.get(window) === served) this.#windows.delete(window);
+  #forget(window: WindowId, served: Served, closed = false): void {
+    if (this.#windows.get(window) !== served) return;
+    this.#windows.delete(window);
     served.calls.abort();
+    served.stop?.();
+    this.#core.channels?.gone(window, closed);
   }
 }
 
