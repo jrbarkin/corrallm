@@ -224,12 +224,12 @@ describe('wait', () => {
     await keep();
     await start();
     const { caller } = await token();
-    const status = await call<{ next: string }>('status', { canvas: M1 }, caller);
 
     const before = Date.now();
     const empty = await wait(caller, { timeoutSeconds: 1 });
     expect(Date.now() - before).toBeGreaterThanOrEqual(900);
-    expect(empty).toEqual({ messages: [], next: status.next });
+    // Where it started: where the party had read to, nowhere yet.
+    expect(empty).toEqual({ messages: [], next: cursorOf('wait', { [M1]: 0 }) });
 
     const waiting = wait(caller, { timeoutSeconds: 30 });
     const { id } = await call<{ id: string }>(
@@ -486,7 +486,7 @@ describe('wait', () => {
       code: 'invalid',
     });
     // A place past m1's last message is no place corrallm gave: it moves nothing.
-    const past = cursorOf('wait', { [M1]: 1_000_000, [WORKER]: 0 });
+    const past = cursorOf('wait', { [M1]: Number.MAX_SAFE_INTEGER, [WORKER]: 0 });
     expect(await failure('wait', { timeoutSeconds: 0, after: past }, caller)).toMatchObject({
       code: 'invalid',
     });

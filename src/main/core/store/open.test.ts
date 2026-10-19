@@ -397,7 +397,9 @@ describe('a damaged database', () => {
 
   for (const snapshot of [true, false]) {
     it(`gives no message a place given before, restored ${snapshot ? 'from a snapshot' : 'empty'}`, async () => {
-      await keepMessages(Date.UTC(2026, 9, 19, 12));
+      const noon = Date.UTC(2026, 9, 19, 12);
+      // Numbered on from the clock as it opened: noon's 300 messages.
+      await keepMessages(noon);
       if (!snapshot) await rm(path.join(profile, 'backups'), { recursive: true });
       // Places given after the snapshot, which a cursor may hold, lost with the database.
       const lost = connect(file);
@@ -411,7 +413,7 @@ describe('a damaged database', () => {
             .get(`lost ${String(seq)}`, CANVAS)?.seq,
       );
       lost.close();
-      expect(given).toEqual([301, 302, 303]);
+      expect(given).toEqual([noon + 301, noon + 302, noon + 303]);
       await writeFile(file, 'This is not a database. '.repeat(500));
 
       const { store } = await open(stoppedAt(Date.UTC(2026, 9, 19, 18)));
@@ -423,7 +425,7 @@ describe('a damaged database', () => {
            VALUES ('after', ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
         )
         .get(CANVAS)?.seq;
-      expect(next).toBeGreaterThan(303);
+      expect(next).toBeGreaterThan(noon + 303);
       expect(Number.isSafeInteger(next)).toBe(true);
       expect(store.prepare('SELECT typeof(seq) AS type FROM sqlite_sequence').all()).toEqual([
         { type: 'integer' },
@@ -432,7 +434,8 @@ describe('a damaged database', () => {
   }
 
   it('never sends what waited in the snapshot it restores: unresolved, each sender told after every place given', async () => {
-    const { store: before } = await open(stoppedAt(Date.UTC(2026, 9, 19, 12)));
+    const noon = Date.UTC(2026, 9, 19, 12);
+    const { store: before } = await open(stoppedAt(noon));
     const row = (id: string, from: string, state: string, kind = 'text') =>
       before
         .prepare(
@@ -462,11 +465,11 @@ describe('a damaged database', () => {
         .prepare('SELECT seq, id, state, turn FROM message WHERE kind <> ? ORDER BY seq')
         .all('notice'),
     ).toEqual([
-      { seq: 1, id: 'waited', state: 'unresolved', turn: turn('waited') },
-      { seq: 2, id: 'yours', state: 'unresolved', turn: turn('yours') },
+      { seq: noon + 1, id: 'waited', state: 'unresolved', turn: turn('waited') },
+      { seq: noon + 2, id: 'yours', state: 'unresolved', turn: turn('yours') },
       // Being delivered, it is cut off as its canvas opens, as after any restart.
-      { seq: 3, id: 'out', state: 'delivering', turn: null },
-      { seq: 4, id: 'done', state: 'replied', turn: null },
+      { seq: noon + 3, id: 'out', state: 'delivering', turn: null },
+      { seq: noon + 4, id: 'done', state: 'replied', turn: null },
     ]);
     const notices = store
       .prepare(

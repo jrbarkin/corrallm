@@ -51,9 +51,9 @@ interface Kept {
 /**
  * The profile's messages, every canvas's, in the database's `message` table: a row each, in the
  * order every canvas's messages share. The core is the table's only writer, so it gives each place
- * in that order itself, past the last the table's sequence gave (AUTOINCREMENT, which a restore
- * raises past every place given before it: store/open.ts), and SQLite raises that sequence with
- * each row written.
+ * in that order itself, past the last the table's sequence gave (AUTOINCREMENT, which every open
+ * raises past every place given before, those whose rows a crash cut off included: store/open.ts),
+ * and SQLite raises that sequence with each row written.
  */
 export class MessageTable {
   readonly #store: Database;

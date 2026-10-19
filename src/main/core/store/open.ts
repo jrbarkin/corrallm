@@ -45,7 +45,8 @@ import { transaction } from './transaction';
  * passes the same checks is restored, else the store starts empty, and it says so; a restore cut
  * short (core.db gone, its snapshots there) is finished as the store next opens. Whatever
  * restoring loses, the core treats as a restart does: what was being sent is never sent again, nor
- * is what waited to be sent (restored.ts).
+ * is what waited to be sent (restored.ts). Every open numbers rows on past every place given
+ * before (`numberOn`), those a crash cut off included.
  */
 
 export const STORE_FILE = 'core.db';
@@ -89,7 +90,7 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
       connection = await restore(profile, file, deps.now(), said);
     } else {
       try {
-        connection = openConnection(file);
+        connection = numberOn(openConnection(file), deps.now(), false);
       } catch (error) {
         if (!isDamage(error)) throw error;
         connection = await recover(profile, file, reason(error), deps.now(), said);
@@ -159,21 +160,22 @@ async function restore(
     await restoreSnapshot(snapshot, file);
     const at = new Date(snapshotTime(path.basename(snapshot)) ?? 0).toISOString();
     said.push(`It was restored from its snapshot of ${at}: what changed since then is lost.`);
-    return numberOn(openConnection(file), now);
+    return numberOn(openConnection(file), now, true);
   }
   said.push('It starts empty.');
-  return numberOn(openConnection(file), now);
+  return numberOn(openConnection(file), now, true);
 }
 
 /**
  * Numbers rows on, in each table whose places are never given again (SEQUENCES), from past every
- * place the database a restore replaced may have given, which a cursor may hold: from the clock,
- * in milliseconds, unless the snapshot's places are past it already. A profile gives far fewer
- * than one place a millisecond, even since a restore last did this: only a clock set back since
- * then could give a place again. Then, in the same transaction, it settles what waited in the
- * snapshot (restored.ts).
+ * place given before, which a cursor may hold: those the database has, and those it lost, which
+ * the core gave as it stopped without writing their rows (a crash cut them off), or which a
+ * database a restore replaced gave. From the clock, in milliseconds, unless the database's places
+ * are past it already; as every open does this, a profile gives far fewer than one place a
+ * millisecond since the last did: only a clock set back since then could give a place again.
+ * Then, in the same transaction, a restore settles what waited in the snapshot (restored.ts).
  */
-function numberOn(connection: Connection, now: number): Connection {
+function numberOn(connection: Connection, now: number, restored: boolean): Connection {
   try {
     transaction(connection, () => {
       for (const table of SEQUENCES) {
@@ -185,7 +187,7 @@ function numberOn(connection: Connection, now: number): Connection {
           .prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, CAST(? AS INTEGER))')
           .run(table, now);
       }
-      settleRestored(connection, now);
+      if (restored) settleRestored(connection, now);
     });
     return connection;
   } catch (error) {

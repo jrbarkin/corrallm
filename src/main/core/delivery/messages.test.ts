@@ -8,8 +8,8 @@ import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits
 import type { CanvasId } from '../../../shared/canvas';
 import type { Message } from '../../../shared/model/messages';
 import { CanvasMemory } from '../../memory';
-import { unopened } from '../store/store';
-import type { Store } from '../store/store';
+import { SYSTEM_DEPS, unopened } from '../store/store';
+import type { Store, StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites } from '../store/test-store';
 import { MessageStore, MessageTable } from './messages';
 
@@ -37,9 +37,9 @@ afterEach(async () => {
 });
 
 /** Closes the database and opens it again, as the core does when it starts again. */
-async function restart(): Promise<void> {
+async function restart(deps?: StoreDeps): Promise<void> {
   await database.close();
-  database = await openTestStore(profile);
+  database = await openTestStore(profile, deps);
   table = new MessageTable(database, new CanvasMemory(database));
 }
 
@@ -148,19 +148,33 @@ describe('the message store', () => {
     const first = one.add(draft('outside:orchestrator', 'agent:builder'));
     const second = other.add(draft('outside:orchestrator', 'agent:builder'));
     const third = one.add(draft('outside:orchestrator', 'agent:builder'));
+    const place = one.seqOf(first.id) ?? 0;
     const places = [one.seqOf(first.id), other.seqOf(second.id), one.seqOf(third.id)];
-    expect(places).toEqual([1, 2, 3]);
-    expect(one.end()).toBe(3);
-    expect(other.end()).toBe(3);
+    expect(places).toEqual([place, place + 1, place + 2]);
+    expect(one.end()).toBe(place + 2);
+    expect(other.end()).toBe(place + 2);
     await Promise.all([one.durable(), other.durable()]);
     // The newest deleted, as a canvas forgotten deletes them.
     database.tx(() => database.prepare('DELETE FROM message WHERE id = ?').run(third.id));
     await restart();
 
     const again = await store(CANVAS);
-    expect(again.end()).toBe(3);
+    expect(again.end()).toBeGreaterThanOrEqual(place + 2);
     const next = again.add(draft('outside:orchestrator', 'agent:builder'));
-    expect(again.seqOf(next.id)).toBe(4);
+    expect(again.seqOf(next.id)).toBeGreaterThan(place + 2);
+  });
+
+  it('never gives a place again, though a crash cut off the rows it was given to', async () => {
+    // Ahead of the clock the store opened with: each open numbers places on from its clock.
+    let clock = Date.now() + 3_600_000;
+    const deps = { ...SYSTEM_DEPS, now: () => clock };
+    await restart(deps);
+    // Given, and named by a cursor at once (`status` gives the last place given), but no row was
+    // written with them before the core stopped.
+    const given = [table.place(), table.place(), table.place()];
+    clock += 60_000;
+    await restart(deps);
+    expect(table.place()).toBeGreaterThan(Math.max(...given));
   });
 
   it('keeps the newest settled messages per party, and every pending and unresolved one, deleting the rest', async () => {
