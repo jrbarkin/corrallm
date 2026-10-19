@@ -97,6 +97,12 @@ describe('the agent view', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('shows the adapter’s logo in its agent chip', () => {
+    const { view } = open();
+    const chip = view.getByRole('button', { name: /^Agent:/ });
+    expect(within(chip).getByRole('img', { name: 'Claude Code' }).tagName).toBe('IMG');
+  });
+
   it('adds to the queue from its sidebar, or from right above the message box', () => {
     const { view } = open();
     const session = within(view.getByRole('region', { name: 'Session' }));

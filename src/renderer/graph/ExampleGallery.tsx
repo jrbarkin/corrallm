@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AdapterId } from '../../shared/adapter';
 import type { InstalledClis } from '../../shared/session';
 import { api } from '../api/client';
+import { AdapterLogo } from '../AdapterLogo';
 import { ipcErrorMessage } from '../ipc-error';
 import type { TemplateInfo } from '../../shared/templates';
 import {
@@ -162,11 +163,7 @@ export function ExampleGallery({
               <legend>Agents</legend>
               {chosen.example.agents.map((role) => (
                 <label key={role.id} className="graph-template-agent">
-                  <span
-                    className="graph-example-agent"
-                    data-agent={chosen.agents[role.id]}
-                    aria-hidden="true"
-                  />
+                  <AdapterLogo adapter={chosen.agents[role.id] ?? DEFAULT_AGENT} size={18} />
                   <span>{role.name}</span>
                   <select
                     id={`template-agent-${role.id}`}
@@ -244,11 +241,10 @@ export function ExampleGallery({
                   <span className="graph-example-description">{example.description}</span>
                   <span className="graph-example-agents" aria-hidden="true">
                     {example.agents.map((role) => (
-                      <span
+                      <AdapterLogo
                         key={role.id}
-                        className="graph-example-agent"
-                        data-agent={role.adapter}
-                        title={role.adapter ?? 'Any agent'}
+                        adapter={role.adapter ?? DEFAULT_AGENT}
+                        size={18}
                       />
                     ))}
                   </span>

@@ -703,6 +703,29 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
   await expect(panel).toHaveCount(0);
 });
 
+test('loads catalog logos as images under the production CSP', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await a.dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  const loaded = async (name: string) => {
+    const image = view.getByRole('button', { name: /^Agent:/ }).getByRole('img', { name });
+    await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+    await expect
+      .poll(() =>
+        image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
+      )
+      .toBe(true);
+    expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
+  };
+  await loaded('Claude Code');
+  await view.getByRole('button', { name: /^Agent:/ }).click();
+  await page.keyboard.type('codex app server');
+  await page.keyboard.press('Enter');
+  await loaded('Codex');
+  // The shared afterEach also rejects console warnings/errors, including CSP violations.
+  expect(problems).toEqual([]);
+});
+
 test('opens an agent as a full Claude Code-style session, and goes back to the canvas', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await a.dblclick();

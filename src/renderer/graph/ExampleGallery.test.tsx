@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type { AppApi } from '../../shared/ipc';
@@ -34,6 +34,12 @@ it('lists and fills the fields and open agents returned by templates.list', asyn
     screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'What should it investigate?' }).value,
   ).toBe('A core-supplied example.');
   expect(screen.getByRole('combobox', { name: "Researcher's agent" })).toBeTruthy();
+  const role = screen.getByRole('combobox', { name: "Researcher's agent" }).closest('label');
+  expect(role?.querySelector('img')?.getAttribute('alt')).toBe('Claude Code');
+  fireEvent.change(screen.getByRole('combobox', { name: "Researcher's agent" }), {
+    target: { value: 'codex' },
+  });
+  expect(role && within(role).getByRole('img', { name: 'Codex' }).tagName).toBe('IMG');
   fireEvent.click(screen.getByRole('button', { name: 'Create canvas' }));
   await waitFor(() => {
     expect(onPick).toHaveBeenCalledOnce();

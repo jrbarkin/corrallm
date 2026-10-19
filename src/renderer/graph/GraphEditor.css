@@ -810,11 +810,14 @@ input.graph-label {
 }
 
 .graph-agent-chip > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 4px 12px;
   border: 0;
   border-radius: 999px;
-  background: var(--agent-color);
-  color: white;
+  background: color-mix(in srgb, CanvasText 7%, Canvas);
+  color: CanvasText;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -1505,13 +1508,6 @@ input.graph-label {
   padding-top: 4px;
 }
 
-.graph-example-agent {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--agent-color);
-}
-
 /* A template's blanks: what each asks for, over a box to fill it in, then Back or Create. */
 .graph-template-form {
   display: grid;
@@ -1566,8 +1562,8 @@ input.graph-label {
 }
 
 /*
- * A template's agents: each with its type, or the default (a hollow dot where it is left open),
- * and how it runs. Their rows share the fieldset's columns, so their pickers line up.
+ * A template's agents: each with its selected or default adapter's logo, and how it runs.
+ * Their rows share the fieldset's columns, so their pickers line up.
  */
 .graph-template-agents {
   display: grid;
@@ -1598,12 +1594,6 @@ input.graph-label {
   background: Canvas;
   color: inherit;
   font: inherit;
-}
-
-.graph-example-agent:not([data-agent]) {
-  box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, CanvasText 45%, transparent);
-  background: transparent;
 }
 
 /*

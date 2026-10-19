@@ -29,8 +29,8 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['src/renderer/**/*.test.{ts,tsx}'],
           setupFiles: ['./src/renderer/test-setup.ts'],
-          // Contract tests read the card's CSS as text; other styles stay disabled in jsdom.
-          css: { include: [/GraphEditor\.css\?raw$/] },
+          // Contract tests read CSS as text; other styles stay disabled in jsdom.
+          css: { include: [/(?:GraphEditor|AdapterLogo)\.css\?raw$/] },
         },
       },
     ],

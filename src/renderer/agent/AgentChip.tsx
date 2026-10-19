@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { connectionIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
 import { catalog } from '../catalog';
+import { AdapterLogo } from '../AdapterLogo';
 import { agentLabel, CONNECTED_AGENTS, connectionInfo, connectionsOf } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { SearchPicker } from '../search/SearchPicker';
@@ -20,7 +21,7 @@ const CHOICES: readonly Choice[] = CONNECTED_AGENTS.flatMap((adapter) =>
 );
 
 /**
- * The agent's adapter and how it runs: a colour-coded chip ("Claude · Terminal") that opens a
+ * The agent's adapter and how it runs: its logo and label ("Claude · Terminal") that open a
  * dropdown of the adapters, each with the ways it can run; for a connection that continues its
  * conversation in another (an Agent SDK agent's, in Terminal), first, continuing it there.
  */
@@ -62,6 +63,7 @@ export function AgentChip({
           setOpen(!open);
         }}
       >
+        <AdapterLogo adapter={adapter} size={16} />
         {label}
       </button>
       {open && (

@@ -113,6 +113,13 @@ const open = () => {
 };
 
 describe('shared agent settings', () => {
+  it('shows the selected adapter’s logo in the CLI choice', () => {
+    render(<Editor />);
+    const { panel } = open();
+    const choice = panel.getByRole('button', { name: /^Agent:/ });
+    expect(within(choice).getByRole('img', { name: 'Claude Code' }).tagName).toBe('IMG');
+  });
+
   it('drafts the name until Enter and cancels a role draft with Escape without closing the sheet', () => {
     const onRole = vi.fn();
     const onClose = vi.fn();
