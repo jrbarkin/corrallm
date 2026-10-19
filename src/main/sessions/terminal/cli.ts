@@ -80,8 +80,6 @@ export interface TerminalCli<M extends SessionMode> {
   /** The CLI, as messages name it ("Claude Code"). */
   readonly name: string;
   readonly words: TerminalWords;
-  /** The mode it runs in when the user's own default applies, until it says otherwise. */
-  readonly defaultMode: M;
   /** Native interrupt/exit keys, each sent separately before bounded process termination. */
   readonly shutdownKeys?: readonly string[];
   /** The id a new session starts under, or null where the CLI picks its own (and its hooks tell it). */

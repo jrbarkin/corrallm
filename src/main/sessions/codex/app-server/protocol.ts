@@ -83,6 +83,17 @@ export function modeSettings(mode: CodexMode): ModeSettings {
   }
 }
 
+/** Which preset the user's config or a thread's reported policy describes; null for a custom one. */
+export function presetOf(sandbox: unknown, approvals: unknown): CodexMode | null {
+  const kind =
+    typeof sandbox === 'object' && sandbox !== null && 'type' in sandbox ? sandbox.type : sandbox;
+  if (kind === 'danger-full-access' || kind === 'dangerFullAccess')
+    return approvals === 'never' ? 'full-access' : null;
+  if (approvals != null && approvals !== 'on-request') return null;
+  if (kind === 'read-only' || kind === 'readOnly') return 'read-only';
+  return kind == null || kind === 'workspace-write' || kind === 'workspaceWrite' ? 'auto' : null;
+}
+
 /**
  * The sandbox policy of a sandbox mode, for turn/start. `known` is the policy Codex reported for
  * the thread, which carries the user's own settings (config.toml's writable roots, network

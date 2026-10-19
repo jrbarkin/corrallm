@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
+import { OPS } from '../../shared/api/registry';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
 import { withoutChoices } from '../../shared/engine/needs';
@@ -2813,6 +2814,14 @@ describe('reads', () => {
     const since = await ok<{ items: Message[] }>('messages', { after: before.next });
     expect(since.items.map((message) => message.id)).toContain(id);
     expect((await ok<{ items: Message[] }>('messages', { after: now.next })).items).toEqual([]);
+  });
+
+  it('leaves the mode unknown until a native session reports it, on the session.get surface too', async () => {
+    await keepCanvas();
+    await start();
+    const result = await ok('session.get', { agent: 'builder' });
+    expect(result.mode).toBeNull();
+    expect(() => OPS['session.get'].output.parse(result)).not.toThrow();
   });
 
   it('says whether an agent is paused, and what it replied last', async () => {

@@ -14,7 +14,7 @@ import { requireClaude } from '../claude';
 import { spawn } from '../process';
 import { CLAUDE_TERMINAL } from '../claude-code/adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
-import { effortChoice } from '../transcript';
+import { effortChoice } from '../claude-code/efforts';
 import { historyEvents } from './history';
 import { Inbox } from './inbox';
 import {
@@ -24,7 +24,7 @@ import {
   uncheckedLogin,
 } from './login';
 import { Prompts } from './prompts';
-import { CLAUDE_EFFORTS, SdkSession, Stderr, stopped } from './session';
+import { SdkSession, Stderr, stopped } from './session';
 import { modeSettings } from './settings';
 import type { Places } from './tools';
 import { sdkMode, Translator } from './translate';
@@ -243,9 +243,7 @@ export class SdkConnector implements Connector {
         value: m.value,
         label: m.displayName,
         description: m.description,
-        ...(levels.length === 0
-          ? {}
-          : { efforts: levels.map((level) => effortChoice(level, CLAUDE_EFFORTS[level])) }),
+        ...(levels.length === 0 ? {} : { efforts: levels.map(effortChoice) }),
         // What it reasons at unless one is chosen: the user's own effort, where it takes it.
         ...(settings.effort !== undefined && levels.some((level) => level === settings.effort)
           ? { defaultEffort: settings.effort }
@@ -255,8 +253,8 @@ export class SdkConnector implements Connector {
     const current = model ?? startingModel(init.models, settings);
     translator.setModels(init.models, current);
     // The mode chosen, or the user's own default (the CLI says so again at its first turn).
-    const mode = spec.mode ?? settings.defaultMode ?? 'manual';
-    translator.setMode(mode);
+    const mode = spec.mode ?? settings.defaultMode ?? null;
+    if (mode !== null) translator.setMode(mode);
     const session = new SdkSession({
       query,
       inbox,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_MODES } from '../../shared/session';
+import type { AdapterId } from '../../shared/adapter';
 import type { ModelChoice, SessionAnswer, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 
@@ -26,8 +26,8 @@ export const FAKE_CODEX_MODELS: ModelChoice[] = [
 ];
 
 /**
- * A connector that runs no CLI, for tests, standing in for any connection of its adapter (Claude
- * Code's, or Codex's: `adapter`). Each turn echoes the message, thinks, and runs a command, asking first in the modes
+ * A connector that runs no CLI, for tests, standing in for any connection of `adapter`. Each turn
+ * echoes the message, thinks, and runs a command, asking first in the modes
  * that ask (Manual and Plan; Codex's Read only); a message starting "/question" asks the user a
  * question instead, and one starting "/plan" asks to approve a plan. It honours interrupts, modes,
  * models and (for Codex, whose models offer them) reasoning efforts, and remembers a made-up
@@ -43,15 +43,18 @@ export class FakeConnector implements Connector<SessionMode> {
   /** Every session it started, each with the messages it was sent. */
   readonly sessions: FakeSession[] = [];
   readonly #pause: number;
-  readonly #adapter: keyof typeof DEFAULT_MODES;
+  readonly #mode: SessionMode;
+  readonly #adapter: AdapterId;
 
   /** `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for. */
   constructor({
     pause = 0,
     adapter = 'claude-code',
-  }: { pause?: number; adapter?: keyof typeof DEFAULT_MODES } = {}) {
+    mode,
+  }: { pause?: number; adapter?: AdapterId; mode?: SessionMode } = {}) {
     this.#pause = pause;
     this.#adapter = adapter;
+    this.#mode = mode ?? (adapter === 'codex' ? 'auto' : 'manual');
   }
 
   start(spec: SessionSpec<SessionMode>, host: SessionHost): Promise<LiveSession<SessionMode>> {
@@ -62,8 +65,8 @@ export class FakeConnector implements Connector<SessionMode> {
     if (spec.resume !== null) {
       host.emit({ type: 'notice', id: randomUUID(), level: 'info', text: `Resumed ${id}` });
     }
-    // Its user's own default mode is its adapter's.
-    const mode = spec.mode ?? DEFAULT_MODES[this.#adapter];
+    // The fake's native setting applies when no mode was chosen.
+    const mode = spec.mode ?? this.#mode;
     const codex = this.#adapter === 'codex';
     host.emit({
       type: 'started',

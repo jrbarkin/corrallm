@@ -120,7 +120,7 @@ export function Composer({
   const working = session.status !== 'idle';
   const models = session.models ?? DEFAULT_MODEL;
   const model = models.find((m) => m.value === session.model) ?? models[0];
-  const mode = modeOf(agent, session.mode);
+  const mode = session.mode === null ? undefined : modeOf(agent, session.mode);
   /** The modes it can switch to: its CLI's, unless the session said otherwise. */
   const modes = modesOf(agent).filter((m) => session.modes?.includes(m.mode) ?? true);
   /** Switches to a mode picked from the menu: one that never asks only once confirmed. */
@@ -496,7 +496,8 @@ export function Composer({
               const cycle = cycledModes(agent).filter((m) =>
                 modes.some((offered) => offered.mode === m),
               );
-              const next = cycle[(cycle.indexOf(mode.mode) + 1) % cycle.length];
+              const index = session.mode === null ? -1 : cycle.indexOf(session.mode);
+              const next = cycle[(index + 1) % cycle.length];
               if (next !== undefined) controls.setMode(next);
             } else if (event.key === 'Escape' && (working || draft !== '' || images.length > 0)) {
               // Otherwise Esc goes on to close the view.
@@ -512,10 +513,10 @@ export function Composer({
         <div className="agent-input-bar">
           <ChoiceMenu
             label="Mode"
-            value={mode.label}
-            title={`${mode.description} (Shift+Tab to switch)`}
+            value={mode?.label ?? 'Your default'}
+            title={`${mode?.description ?? 'Uses your own settings'} (Shift+Tab to switch)`}
             choices={modes.map((m) => ({ key: m.mode, label: m.label, detail: m.description }))}
-            chosen={mode.mode}
+            chosen={mode?.mode ?? ''}
             onChoose={(key) => {
               const picked = modes.find((m) => m.mode === key);
               if (picked) pickMode(picked.mode);

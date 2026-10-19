@@ -188,8 +188,8 @@ export class Translator {
     this.#model = model;
   }
 
-  setMode(mode: PermissionMode): void {
-    this.#mode = mode;
+  setMode(mode: PermissionMode | null): void {
+    this.#mode = mode ?? undefined;
   }
 
   /**

@@ -129,6 +129,17 @@ function texts(events: SessionEvent[]): string[] {
 }
 
 describe('the App Server connection', () => {
+  it('leaves an omitted mode to Codex, reports it, and preserves it on the next turn', async () => {
+    const { events, turn } = await start({ mode: null });
+    const [began] = await requests('thread/start');
+    expect(began).not.toHaveProperty('approvalPolicy');
+    expect(began).not.toHaveProperty('sandbox');
+    expect(events[0]).toMatchObject({ type: 'started', mode: 'read-only' });
+    await turn('Hello');
+    const [sent] = await requests('turn/start');
+    expect(sent).not.toHaveProperty('approvalPolicy');
+    expect(sent).not.toHaveProperty('sandboxPolicy');
+  });
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const env = {
       FAKE_CODEX_STATE: path.join(dir, 'threads.json'),

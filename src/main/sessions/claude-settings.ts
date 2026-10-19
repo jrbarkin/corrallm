@@ -4,9 +4,8 @@ import path from 'node:path';
 
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../../shared/session';
 import type { ModelChoice, SettingsOptions } from '../../shared/session';
-import { CLAUDE_EFFORTS } from './sdk/session';
+import { CLAUDE_EFFORTS, effortChoice } from './claude-code/efforts';
 import { corrallmMode } from './sdk/translate';
-import { effortChoice } from './transcript';
 
 /*
  * What a Claude agent can be set to run with, as far as corrallm can tell without a prompt or a
@@ -16,7 +15,7 @@ import { effortChoice } from './transcript';
  * So the models are the aliases `claude --model` takes for the latest of each family (as its
  * --help says; described in Claude Code's own words, from 2.1.296's model list), restricted to the
  * user's `availableModels` where their settings set one, with the user's own model if it is none
- * of them; each with Claude Code's effort levels (`--effort`). The user's own defaults are read from
+ * of them; each with its native effort levels (`--effort`). The user's own defaults are read from
  * their settings as Claude Code reads them (the project's local settings, then its shared ones,
  * then the user's, in CLAUDE_CONFIG_DIR or ~/.claude: `model`, `effortLevel`,
  * `permissions.defaultMode`), with ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL (the agents'
@@ -33,9 +32,7 @@ const ALIASES: readonly { value: string; label: string; description: string }[] 
 ];
 
 /** Claude Code's effort levels, as its pickers offer them. */
-const EFFORTS = Object.entries(CLAUDE_EFFORTS).map(([level, description]) =>
-  effortChoice(level, description),
-);
+const EFFORTS = Object.keys(CLAUDE_EFFORTS).map(effortChoice);
 
 type Settings = Record<string, unknown>;
 

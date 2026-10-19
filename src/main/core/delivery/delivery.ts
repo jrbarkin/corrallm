@@ -525,14 +525,15 @@ export class Delivery {
 
   /**
    * Whether agent `node`'s session runs, now, in a mode its adapter says never asks: it acts on
-   * whatever it is sent, so a party's text would act unchecked. One that doesn't run starts in its
-   * own mode, which always asks.
+   * whatever it is sent, so a party's text would act unchecked. Only its reported native mode
+   * can say so; an unstarted session has no mode yet.
    */
   #unasking(node: AgentNode): boolean {
     const { catalog, sessions } = this.#deps.engine;
     const session = sessions.of(node.id);
     return (
       session.running !== undefined &&
+      session.mode !== null &&
       catalog.neverAsks(catalog.connectionOf(node.data), session.mode)
     );
   }

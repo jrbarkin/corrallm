@@ -8,7 +8,7 @@ import {
   MODEL_PATTERN,
   PERMISSION_MODES,
 } from '../../../shared/session';
-import { CLAUDE_EFFORTS } from '../sdk/session';
+import { CLAUDE_EFFORTS } from '../claude-code/efforts';
 import type { PermissionMode, TerminalAsk } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import { claudeFailure } from '../claude-errors';
@@ -87,8 +87,6 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       none: 'Claude Code is waiting for you.',
     },
   };
-  /** Manual, as Claude Code calls its default mode. */
-  readonly defaultMode = 'manual';
   /**
    * Enter once its prompt shows what was typed: keys that pile up while it is busy (just after
    * its folder trust dialog, or as a turn ends) are read in one go, as a paste, and 2.1.296 keeps

@@ -175,7 +175,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #id: string | null;
   /** Whether its CLI resumes a session it may not find (then it starts afresh). */
   #resuming: boolean;
-  #mode: M;
+  #mode: M | null;
   #registration: HookRegistration | undefined;
   #settingsDir: string | undefined;
   #pty: Pty | undefined;
@@ -254,8 +254,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       throw new TypeError('Expected a UUID session id');
     }
     this.#resuming = spec.resume !== null;
-    // Until its hooks say otherwise: the CLI's own default, if the user's applies.
-    this.#mode = spec.mode ?? deps.cli.defaultMode;
+    this.#mode = spec.mode;
     this.#screen = this.#newScreen();
   }
 

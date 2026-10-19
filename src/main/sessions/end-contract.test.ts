@@ -86,6 +86,14 @@ const fixtures: Record<string, () => Connector<SessionMode>> = {
 };
 
 function check(events: readonly SessionEvent[], expected: string[]) {
+  for (const event of events)
+    if (event.type === 'started') {
+      for (const model of event.models)
+        for (const effort of model.efforts ?? []) {
+          expect(typeof effort.label).toBe('string');
+          expect(effort.label.trim()).not.toBe('');
+        }
+    }
   const ends = events.filter((event) => event.type === 'end');
   expect(ends.map((event) => event.result.status)).toEqual(expected);
   for (const end of ends) {

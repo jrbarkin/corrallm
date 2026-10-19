@@ -348,14 +348,14 @@ describe('SdkConnector', () => {
     expect(events[0]).toMatchObject({ type: 'started', mode: 'acceptEdits' });
   });
 
-  it('says Manual when the CLI says nothing of its default mode, and a chosen mode wins', async () => {
+  it('keeps an unknown native mode unset, and a chosen mode wins', async () => {
     const quiet = connector({
       prepare: (q) => {
         q.getSettings.mockRejectedValue(new Error('Unknown request: get_settings'));
       },
     });
     await quiet.sdk.start({ ...SPEC, mode: null }, quiet.host);
-    expect(quiet.events[0]).toMatchObject({ type: 'started', mode: 'manual' });
+    expect(quiet.events[0]).toMatchObject({ type: 'started', mode: null });
 
     const chosen = connector({
       prepare: (q) => {

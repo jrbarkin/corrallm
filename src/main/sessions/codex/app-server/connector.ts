@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { DEFAULT_MODES } from '../../../../shared/session';
 import type { CodexMode, ModelChoice, SessionEvent } from '../../../../shared/session';
 import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
@@ -169,26 +168,25 @@ export class AppServerConnector implements Connector<CodexMode> {
         spec.role !== undefined || (spec.resume !== null && spec.roleChanged === true)
           ? appendRole(await readDeveloperInstructions(server, spec.cwd), spec.role)
           : undefined;
-      const begin = (mode: CodexMode, model: string | null) => {
-        const settings = modeSettings(mode);
+      const begin = (mode: CodexMode | null, model: string | null) => {
+        const settings = mode === null ? undefined : modeSettings(mode);
         return {
           cwd: spec.cwd,
-          approvalPolicy: settings.approvalPolicy,
-          sandbox: settings.sandbox,
+          ...(settings === undefined
+            ? {}
+            : { approvalPolicy: settings.approvalPolicy, sandbox: settings.sandbox }),
           ...(model === null ? {} : { model }),
           ...(developerInstructions === undefined ? {} : { developerInstructions }),
         };
       };
-      const newThread = async (mode: CodexMode, model: string | null) =>
+      const newThread = async (mode: CodexMode | null, model: string | null) =>
         threadInfo(
           await server.request('thread/start', { ...begin(mode, model), serviceName: 'corrallm' }),
           places,
         );
       const model =
         spec.model !== null && models.some((m) => m.value === spec.model) ? spec.model : null;
-      // Unless one was given, Codex's Default: the user's own sandbox settings, asking before
-      // leaving it.
-      const mode = spec.mode ?? DEFAULT_MODES.codex;
+      const mode = spec.mode;
       let thread: ThreadInfo;
       let history: SessionEvent[] = [];
       const told: SessionEvent[] = [];
@@ -243,7 +241,7 @@ export class AppServerConnector implements Connector<CodexMode> {
       host.emit({
         type: 'started',
         model: thread.model,
-        mode,
+        mode: session.mode,
         models: choices(models, thread.model),
         effort: session.effort,
       });
@@ -272,6 +270,7 @@ function threadInfo(result: unknown, places: Places): ThreadInfo {
     model: text(property(result, 'model')) ?? text(property(thread, 'model')) ?? '',
     effort: text(property(result, 'reasoningEffort')) ?? null,
     sandbox: property(result, 'sandbox'),
+    approval: property(result, 'approvalPolicy'),
     instructions: Array.isArray(sources)
       ? sources.flatMap((file) => (typeof file === 'string' ? [displayPath(file, places)] : []))
       : [],
