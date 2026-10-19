@@ -11,9 +11,9 @@ import type { Implementations, OpServices } from '.';
  * run is going. Each pause and kill is stamped with the party that set it: a token releases only
  * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
  * target still (another party's pause, or one on a group it is in). Each takes effect at once, and
- * returns once it is on disk: the canvas's run record forced there, and for a kill, after it, what
- * it took back in the message log. One that can't be fails, saying it is in place all the same but
- * may not survive a restart.
+ * returns once it is on disk: the canvas's run committed to the database, and for a kill, what it
+ * took back with it, in the same commit (one being delivered, once its interrupted turn ends). One
+ * that can't be fails, saying it is in place all the same but may not survive a restart.
  */
 export function runOps({
   engines,
@@ -38,17 +38,15 @@ export function runOps({
       // Held first, so that nothing taken back lets another member's work start.
       if ('agent' in target) engine.run.killAgent(target.agent, by);
       else engine.run.killGroup(target.group, by);
-      // Its record is queued before anything it takes back is appended to the same journal, so no
-      // withdrawal reaches the disk without the hold. One being delivered is withdrawn once its
-      // interrupted turn ends.
-      const record = open.journal();
+      // What waits is withdrawn at once, committed with the hold: neither reaches the disk without
+      // the other. One being delivered is withdrawn once its interrupted turn ends.
       const withdrawing = members.map((agent) => {
         const withdrawn = delivery.kill(agent, by);
         engine.sessions.stop(agent);
         return withdrawn;
       });
       await saved(
-        record.then(async () => {
+        open.journal().then(async () => {
           await Promise.all(withdrawing);
           await open.messages.durable();
         }),

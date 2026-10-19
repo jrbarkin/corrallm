@@ -262,6 +262,8 @@ const IDLE: Run = { running: false, agents: {} };
 interface PendingSend {
   owner: string;
   destination: string;
+  /** Whether its record is on its way to disk (RunIO.beforeSend): it goes once it is there. */
+  journaling: boolean;
   dispatch: () => void;
   withdraw: () => void;
 }
@@ -546,6 +548,17 @@ export class RunStore {
     const [id, held] =
       'agent' in target ? [target.agent, causes.individual] : [target.group, causes.groups];
     return held.flatMap((cause) => (cause.id === id ? [cause.by] : []));
+  }
+
+  /**
+   * Whether the run has a message on its way to `agent`'s session: its record still on its way to
+   * disk (RunIO.beforeSend), after which it goes at once unless the run holds it. Its subscribers
+   * hear when it no longer is, though nothing else changed.
+   */
+  sending(agent: string): boolean {
+    return [...this.#sent.values()].some(
+      ({ destination, journaling }) => journaling && destination === agent,
+    );
   }
 
   /**
@@ -1930,6 +1943,7 @@ export class RunStore {
     const pending: PendingSend = {
       owner: holder?.agent ?? to.id,
       destination: to.id,
+      journaling: !ready,
       dispatch,
       withdraw: () => {
         sent.over = true;
@@ -1942,9 +1956,13 @@ export class RunStore {
         .then(
           () => {
             ready = true;
+            pending.journaling = false;
             dispatch();
+            // Held, it is no longer on its way: what waited behind it may go.
+            if (!started) this.#heard();
           },
           (error: unknown) => {
+            pending.journaling = false;
             if (sent.over) return;
             sent.over = true;
             this.#sent.delete(sent);
@@ -2164,6 +2182,11 @@ export class RunStore {
 
   #set(run: Run): void {
     this.#run = run;
+    this.#heard();
+  }
+
+  /** Tells its subscribers to look again: at the run, or at what it says beside it (`sending`). */
+  #heard(): void {
     for (const listener of this.#listeners) listener();
   }
 }

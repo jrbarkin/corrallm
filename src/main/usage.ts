@@ -7,7 +7,7 @@ import type {
   UsageWindow,
   UsageWindows,
 } from '../shared/usage';
-import { readWhole, unknownFields, writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './whole-file';
 
 /*
  * Every backend's latest usage reading, and its usage rule (src/shared/usage.ts). A reading comes

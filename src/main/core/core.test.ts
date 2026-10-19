@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -5,13 +6,20 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PARTIES } from '../../shared/api/surface';
+import { newCanvasId } from '../../shared/canvas';
+import type { RunContext } from '../../shared/run';
 import { EXAMPLES } from '../../shared/examples';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
+import { STORE_FILE } from './store/open';
+import { snapshots } from './store/snapshots';
+import { connect } from './store/sqlite';
+import { journaledRun, openTestStore, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { WindowPorts } from './gui';
 import { openWindow } from './test-window';
@@ -286,5 +294,60 @@ describe('createCore', () => {
     await started.close();
     core = undefined;
     await expect(readFile(path.join(profile, 'usage.json'), 'utf8')).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe('the core’s database', () => {
+  const CHECKPOINT = {
+    version: 2,
+    workflow: '{}',
+    state: '{"paused":true}',
+    messages: '[]',
+    updatedAt: 1,
+  } as const;
+
+  it('opens the profile’s database, and closes it last, after all it journaled', async () => {
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    // A window's canvas, a draft, its run journaled.
+    const run = (await started.channels.call(7, 'run:get', [])) as RunContext;
+    await started.channels.call(7, 'run:save', [run.token, CHECKPOINT]);
+    expect(journaledRun(profile, run.id)).toEqual(CHECKPOINT);
+    await started.close();
+    core = undefined;
+    // Closed: its log checkpointed into it and gone, and a snapshot taken of what it kept.
+    expect(existsSync(path.join(profile, `${STORE_FILE}-wal`))).toBe(false);
+    const [snapshot] = await snapshots(profile);
+    if (snapshot === undefined) throw new Error('No snapshot was taken as it closed.');
+    const copy = connect(snapshot, { readOnly: true });
+    try {
+      expect(copy.prepare('SELECT canvas_id FROM run').all()).toEqual([{ canvas_id: run.id }]);
+    } finally {
+      copy.close();
+    }
+  });
+
+  it('runs on a database it can’t open, journaling nothing and starting nothing, saying why', async () => {
+    // A database a newer corrallm made, which this one can't read.
+    await (await openTestStore(profile)).close();
+    writeOnDisk(profile, 'UPDATE meta SET min_reader = 999');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const started = await start({
+      connectors: { 'codex.app-server': codex },
+      environment: () => Promise.resolve({}),
+    });
+    const why = /made by a newer corrallm, which this one can’t read/;
+    expect(logged).toHaveBeenCalledWith(expect.stringMatching(why));
+    expect(await started.call('app.info', {}, CALLERS.you)).toMatchObject({ ok: true });
+    await expect(started.channels.call(7, 'run:get', [])).rejects.toThrow(why);
+    await expect(started.channels.call(7, 'canvas:forget', [])).rejects.toThrow(why);
+    await expect(started.engines.open(newCanvasId())).rejects.toThrow(why);
+    expect(codex.started).toEqual([]);
+    await started.close();
+    core = undefined;
+    // Left as it was.
+    expect(
+      readOnDisk(profile, (disk) => disk.prepare('SELECT min_reader FROM meta').get()),
+    ).toEqual({ min_reader: 999 });
   });
 });

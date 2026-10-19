@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,8 @@ import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
+import type { Store } from '../core/store/store';
+import { openTestStore, readOnDisk } from '../core/store/test-store';
 import { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
@@ -21,8 +23,15 @@ import type { SessionManagerDeps } from './manager';
 import { quotePath } from './terminal/drop';
 
 const OPTIONS: SessionOptions = { connection: 'claude-code.sdk', model: null, mode: null };
+/** Conversations Claude Code kept, and one a rewind forked: session ids, as the CLI's are. */
+const KEPT_ONE = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e31';
+const KEPT_TWO = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e32';
+const FORKED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e33';
+/** The conversation a rewinding agent's session remembers. */
+const REMEMBERED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e34';
 
 let dir: string;
+let store: Store;
 let memory: CanvasMemory;
 let fake: FakeConnector;
 let terminal: FakeConnector;
@@ -76,7 +85,8 @@ const conversations = async (canvas: CanvasId) => (await memory.get(canvas)).con
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
-  memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+  store = await openTestStore(dir);
+  memory = new CanvasMemory(store);
   fake = new FakeConnector();
   terminal = new FakeConnector();
   projects = new Map();
@@ -84,16 +94,17 @@ beforeEach(async () => {
   shown = new Map();
   environment = () => Promise.resolve({ PATH: '/usr/bin' });
   before = vi.fn<Kept['before']>().mockResolvedValue('reply-1');
-  fork = vi.fn<Kept['fork']>().mockResolvedValue('forked');
+  fork = vi.fn<Kept['fork']>().mockResolvedValue(FORKED);
   listKept = vi.fn(() =>
     Promise.resolve([
-      { id: 'kept-2', title: 'Add a cart', modified: 2000 },
-      { id: 'kept-1', title: 'Fix the login bug', modified: 1000 },
+      { id: KEPT_TWO, title: 'Add a cart', modified: 2000 },
+      { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000 },
     ]),
   );
 });
 afterEach(async () => {
   await memory.flush();
+  await store.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -114,7 +125,10 @@ describe('SessionManager', () => {
       expect(connector.started.at(-1)).not.toHaveProperty('roleChanged');
       await memory.flush();
       expect((await conversations(canvas))[cli]?.a?.role).toBe(fingerprint);
-      expect(await readFile(path.join(dir, 'canvases.json'), 'utf8')).not.toContain(role);
+      // Its fingerprint, never its text.
+      const kept = readOnDisk(dir, (disk) => disk.prepare('SELECT * FROM conversation').all());
+      expect(JSON.stringify(kept)).toContain(fingerprint);
+      expect(JSON.stringify(kept)).not.toContain(role);
 
       await sessions.start(canvas, 'a', { ...OPTIONS, connection: other, role });
       const next = connection === 'claude-code.sdk' ? terminal : codex;
@@ -122,7 +136,9 @@ describe('SessionManager', () => {
       await sessions.closeEverything();
 
       // Load the fingerprint from disk, as after an app restart.
-      memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+      await store.close();
+      store = await openTestStore(dir);
+      memory = new CanvasMemory(store);
       const after = manager({ 'codex.app-server': codex });
       for (const [currentRole, changed] of [
         [role, false],
@@ -216,7 +232,7 @@ describe('SessionManager', () => {
     await expect(sessions.send(canvas, 'a', { id: 'm', text: 'Hello' })).rejects.toThrow(
       /not running/,
     );
-    const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
+    const disk = new CanvasMemory(store);
     expect((await disk.get(canvas)).conversations).toEqual({
       'claude-code': { a: { id: claudeId, role: 'none' } },
       codex: { b: { id: otherCodexId, role: 'none' } },
@@ -261,10 +277,8 @@ describe('SessionManager', () => {
     release?.();
     await Promise.all([closing, fresh]);
     expect(
-      (await new CanvasMemory(path.join(dir, 'canvases.json')).get(canvas)).conversations[
-        'claude-code'
-      ],
-    ).toEqual({});
+      (await new CanvasMemory(store).get(canvas)).conversations['claude-code']?.a,
+    ).toBeUndefined();
   });
 
   it('clears only its own canvas’s conversation, whatever another canvas does meanwhile', async () => {
@@ -299,8 +313,8 @@ describe('SessionManager', () => {
     await sessions.start(other, 'b', OPTIONS);
     release?.();
     await Promise.all([fresh, closing]);
-    const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
-    expect((await disk.get(canvas)).conversations['claude-code']).toEqual({});
+    const disk = new CanvasMemory(store);
+    expect((await disk.get(canvas)).conversations['claude-code']?.a).toBeUndefined();
     expect((await disk.get(other)).conversations['claude-code']?.a?.id).toBe(otherId);
     await sessions.start(other, 'a', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBe(otherId);
@@ -938,11 +952,11 @@ describe('SessionManager and kept conversations', () => {
     const own = fake.ids[0] ?? '';
     listKept.mockResolvedValue([
       { id: own, title: 'This one', modified: 3000 },
-      { id: 'kept-1', title: 'Fix the login bug', modified: 1000 },
+      { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000 },
     ]);
     await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
       { id: own, title: 'This one', modified: 3000, current: true },
-      { id: 'kept-1', title: 'Fix the login bug', modified: 1000, current: false },
+      { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000, current: false },
     ]);
     expect(listKept).toHaveBeenCalledWith('/work/app');
     // Without a project folder there is nothing to list.
@@ -956,18 +970,18 @@ describe('SessionManager and kept conversations', () => {
     const canvas = shownCanvas();
     await sessions.start(canvas, 'a', OPTIONS);
     await sessions.listSessions(canvas, 'a');
-    await sessions.resumeSession(canvas, 'a', 'kept-1');
+    await sessions.resumeSession(canvas, 'a', KEPT_ONE);
     await memory.flush();
-    expect((await conversations(canvas))['claude-code']?.a).toEqual({ id: 'kept-1' });
+    expect((await conversations(canvas))['claude-code']?.a).toEqual({ id: KEPT_ONE });
     await expect(sessions.send(canvas, 'a', { id: 'm', text: 'Hi' })).rejects.toThrow(
       /not running/,
     );
     await sessions.start(canvas, 'a', OPTIONS);
-    expect(fake.started.at(-1)).toMatchObject({ resume: 'kept-1', roleChanged: true });
+    expect(fake.started.at(-1)).toMatchObject({ resume: KEPT_ONE, roleChanged: true });
     // And after a restart.
     await memory.flush();
     expect((await conversations(canvas))['claude-code']).toEqual({
-      a: { id: 'kept-1', role: 'none' },
+      a: { id: KEPT_ONE, role: 'none' },
     });
   });
 
@@ -975,7 +989,7 @@ describe('SessionManager and kept conversations', () => {
     const sessions = manager();
     const canvas = shownCanvas();
     // Never listed.
-    await expect(sessions.resumeSession(canvas, 'a', 'kept-1')).rejects.toThrow(
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
     await sessions.listSessions(canvas, 'a');
@@ -984,7 +998,7 @@ describe('SessionManager and kept conversations', () => {
     );
     // Listed for another folder.
     projects.set(canvas, '/work/other');
-    await expect(sessions.resumeSession(canvas, 'a', 'kept-1')).rejects.toThrow(
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
     await sessions.start(canvas, 'a', OPTIONS);
@@ -1001,7 +1015,7 @@ describe('SessionManager rewinding a session', () => {
     const close = vi.fn<LiveSession['close']>().mockResolvedValue(undefined);
     const connector: Connector = {
       start: (spec, host) => {
-        host.remember(spec.resume ?? 'conversation');
+        host.remember(spec.resume ?? REMEMBERED);
         return Promise.resolve({
           send: () => Promise.resolve(),
           answer: () => Promise.resolve(),
@@ -1050,17 +1064,17 @@ describe('SessionManager rewinding a session', () => {
       conversation: true,
       files: { files: ['notes.txt'] },
     });
-    expect(before).toHaveBeenCalledWith('/work/app', 'conversation', 'u2');
-    expect(fork).toHaveBeenCalledWith('/work/app', 'conversation', 'reply-1');
+    expect(before).toHaveBeenCalledWith('/work/app', REMEMBERED, 'u2');
+    expect(fork).toHaveBeenCalledWith('/work/app', REMEMBERED, 'reply-1');
     expect(close).toHaveBeenCalled();
     await memory.flush();
-    expect((await conversations(canvas))['claude-code']?.a).toEqual({ id: 'forked' });
+    expect((await conversations(canvas))['claude-code']?.a).toEqual({ id: FORKED });
     await sessions.start(canvas, 'a', OPTIONS);
-    expect(started).toEqual([null, 'forked']);
+    expect(started).toEqual([null, FORKED]);
     expect(specs.at(-1)).toHaveProperty('roleChanged', true);
     await memory.flush();
     expect((await conversations(canvas))['claude-code']).toEqual({
-      a: { id: 'forked', role: 'none' },
+      a: { id: FORKED, role: 'none' },
     });
   });
 
@@ -1072,7 +1086,7 @@ describe('SessionManager rewinding a session', () => {
     await sessions.rewind(canvas, 'a', 'u1', 'conversation');
     expect(fork).not.toHaveBeenCalled();
     await memory.flush();
-    expect((await conversations(canvas))['claude-code']).toEqual({});
+    expect((await conversations(canvas))['claude-code']?.a).toBeUndefined();
     await sessions.start(canvas, 'a', OPTIONS);
     expect(started).toEqual([null, null]);
   });
