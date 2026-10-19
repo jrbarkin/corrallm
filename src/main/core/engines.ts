@@ -12,7 +12,7 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { SessionEvent } from '../../shared/session';
+import type { SessionEvent, UserMessage } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
 import type { MovedRead, RunJournal } from '../run-journal';
@@ -113,6 +113,7 @@ export class Engines {
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #watchers = new Set<Watcher>();
+  #closed = false;
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
@@ -135,6 +136,7 @@ export class Engines {
    * canvas now.
    */
   open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+    if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
     let running = this.#running.get(canvas);
     if (!running) {
       running = this.#open(canvas, held);
@@ -166,11 +168,35 @@ export class Engines {
   /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
   emit(canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent): void {
     void this.#running.get(canvas)?.then(
-      ({ listeners }) => {
+      ({ listeners, delivery }) => {
+        delivery.receive(agentId, event);
         for (const listener of listeners) listener(agentId, connection, event);
       },
       () => undefined,
     );
+  }
+
+  /**
+   * Every session send, including the app's channels: carry any untold withdrawals. A canvas
+   * with a message log opens first, so its notes survive a restart before any API call opens it.
+   * A draft with no messages needs no engine merely for its user's session to send.
+   */
+  async sending(
+    canvas: CanvasId,
+    agentId: string,
+    message: UserMessage,
+    send: (message: UserMessage) => Promise<void>,
+  ): Promise<void> {
+    if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
+    if (
+      !this.#running.has(canvas) &&
+      (await this.#deps.journal.readMessages(canvas)) !== undefined
+    ) {
+      await this.open(canvas);
+    }
+    const running = await this.#running.get(canvas);
+    if (running) await running.delivery.withWithdrawals(agentId, message, send);
+    else await send(message);
   }
 
   /**
@@ -179,6 +205,7 @@ export class Engines {
    * run can't be journaled; then it rejects, with why each couldn't.
    */
   async close(): Promise<void> {
+    this.#closed = true;
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
     this.#canvases.clear();

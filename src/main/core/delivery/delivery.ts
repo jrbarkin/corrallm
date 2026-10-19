@@ -12,7 +12,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
-import type { TurnReason, TurnResult } from '../../../shared/session';
+import type { SessionEvent, TurnReason, TurnResult, UserMessage } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
 import type { MessageStore } from './messages';
@@ -70,6 +70,20 @@ interface Stuck {
   retrying: boolean;
 }
 
+/** What taking a message back did, rather than what its recorded delivery state implied. */
+interface Withdrawal {
+  reached: boolean;
+  interrupted: boolean;
+}
+
+interface TakingBack {
+  by: PartyId;
+  tell: boolean;
+  reached: boolean;
+  ended: Promise<Withdrawal>;
+  finish: (result: Withdrawal) => void;
+}
+
 /** What an agent with no connection this build runs is told. */
 const NO_CONNECTION = 'it has no connection corrallm can run.';
 /** What lets such an agent start. */
@@ -107,7 +121,9 @@ export class Delivery {
   /** The messages sent whose records are on their way to disk: none goes before it is there. */
   readonly #recording = new Set<string>();
   /** Who asked for each message whose turn is going to be taken back, by its id. */
-  readonly #withdrawing = new Map<string, PartyId>();
+  readonly #withdrawing = new Map<string, TakingBack>();
+  /** The session messages carrying notes, until the CLI echoes them (or their send fails). */
+  readonly #carrying = new Map<string, { agent: string; ids: string[]; ended?: () => void }>();
   /** What each party was told, so that it is told once (kept with each notice, by its key). */
   readonly #told = new Set<string>();
   /** The agents whose sessions would not start, by id. */
@@ -161,13 +177,18 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    for (const carrying of this.#carrying.values()) carrying.ended?.();
+    this.#carrying.clear();
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
     this.#unrecordable?.();
     this.#unrecordable = undefined;
     for (const message of this.#deps.store.all()) {
-      if (this.#inFlight(message)) this.#cutOff(message);
+      if (!this.#inFlight(message)) continue;
+      const taking = this.#withdrawing.get(message.id);
+      if (taking) this.#takenBack(message, taking, false);
+      else this.#cutOff(message);
     }
     await this.#deps.store.durable();
   }
@@ -228,7 +249,7 @@ export class Delivery {
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
    * Throws, saying why, a message that can't be.
    */
-  withdraw(id: string, by: PartyId): void {
+  async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
     if (!message) throw new DeliveryError('not-found', 'There is no such message.');
     if (by !== 'you' && message.from !== by) {
@@ -237,7 +258,7 @@ export class Delivery {
     if (message.state === 'pending') {
       this.#withdrawn(message, by);
       this.schedule();
-      return;
+      return { reached: false, interrupted: false };
     }
     if (message.kind !== 'text') {
       throw new DeliveryError(
@@ -254,7 +275,89 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    this.#takeBack(message, by);
+    const result = await this.#takeBack(message, by, true);
+    if (result.reached) await this.#deps.store.durable();
+    return result;
+  }
+
+  /**
+   * Sends the next CLI message with any withdrawals still untold. Done at the backend, after
+   * the session's queue, so manual and run messages, and messages already queued, carry them too.
+   */
+  async withWithdrawals(
+    agent: string,
+    message: UserMessage,
+    send: (message: UserMessage) => Promise<void>,
+  ): Promise<void> {
+    const sendOpen = (next: UserMessage) => {
+      if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
+      return send(next);
+    };
+    const claimed = new Set([...this.#carrying.values()].flatMap(({ ids }) => ids));
+    const notes = this.#deps.store
+      .withdrawals(agentParty(agent))
+      .filter(({ id }) => !claimed.has(id));
+    if (notes.length === 0) return sendOpen(message);
+    const text = notes.map(({ text }) => text).join('\n');
+    const shell =
+      message.from === undefined &&
+      this.#deps.engine.catalog.shellPrefixes.some((prefix) =>
+        message.text.trimStart().startsWith(prefix),
+      );
+    const id = shell ? randomUUID() : message.id;
+    let ended: (() => void) | undefined;
+    const finished = shell
+      ? new Promise<void>((resolve) => {
+          ended = resolve;
+        })
+      : undefined;
+    this.#carrying.set(id, { agent, ids: notes.map(({ id }) => id), ...(ended ? { ended } : {}) });
+    try {
+      await this.#deps.store.durable();
+      if (shell) {
+        await sendOpen({
+          id,
+          text: `[corrallm] ${text}`,
+          from: { party: 'corrallm', name: 'corrallm' },
+        });
+        await finished;
+        await sendOpen(message);
+      } else {
+        // Keep a party's header and its note in the same frame; the original body stays last.
+        const split =
+          message.from !== undefined && message.text.startsWith('[corrallm]')
+            ? message.text.indexOf('\n')
+            : -1;
+        await sendOpen({
+          ...message,
+          text:
+            split < 0
+              ? `[corrallm] ${text}\n\n${message.text}`
+              : `${message.text.slice(0, split)}\n${text}\n\n${message.text.slice(split + 1)}`,
+        });
+      }
+    } catch (error) {
+      this.#carrying.delete(id);
+      throw error;
+    }
+  }
+
+  /** A session echoed a note's carrier, or ended before it could: only an echo tells the note. */
+  receive(agent: string, event: SessionEvent): void {
+    if (event.type === 'user') {
+      const carrying = this.#carrying.get(event.id);
+      if (carrying?.agent !== agent) return;
+      this.#deps.store.toldWithdrawals(carrying.ids);
+      if (!carrying.ended) this.#carrying.delete(event.id);
+    } else if (event.type === 'end' || event.type === 'closed') {
+      const ids = event.type === 'end' ? event.messages : [...this.#carrying.keys()];
+      for (const id of ids) {
+        const carrying = this.#carrying.get(id);
+        if (carrying?.agent !== agent) continue;
+        this.#carrying.delete(id);
+        carrying.ended?.();
+      }
+    }
   }
 
   /**
@@ -266,7 +369,7 @@ export class Delivery {
     for (const message of this.#deps.store.all()) {
       if (message.kind !== 'text' || (message.to !== party && message.from !== party)) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) this.#takeBack(message, by);
+      else if (this.#inFlight(message)) void this.#takeBack(message, by, false);
     }
     this.schedule();
   }
@@ -618,10 +721,13 @@ export class Delivery {
     const message = store.get(id);
     // Cut off as the canvas closed, or back to waiting: its session would not start.
     if (this.#closed || !message || !this.#inFlight(message)) return;
-    const by = this.#withdrawing.get(id);
-    this.#withdrawing.delete(id);
-    if (by !== undefined) {
-      this.#withdrawn(message, by);
+    const taking = this.#withdrawing.get(id);
+    if (taking !== undefined) {
+      this.#takenBack(
+        message,
+        taking,
+        (result ?? turnResult({ interrupted })).status === 'cancelled',
+      );
       this.schedule();
       return;
     }
@@ -663,20 +769,57 @@ export class Delivery {
   }
 
   /** Takes back a message being delivered for `by`: withdrawn once its turn has ended. */
-  #takeBack(message: Message, by: PartyId): void {
+  #takeBack(message: Message, by: PartyId, tell: boolean): Promise<Withdrawal> {
+    const existing = this.#withdrawing.get(message.id);
+    if (existing) return existing.ended;
     const takeBack = this.#sent.get(message.id);
     if (!takeBack) {
       // Still being journaled: it is never sent.
       this.#withdrawn(message, by);
-      return;
+      return Promise.resolve({ reached: false, interrupted: false });
     }
-    this.#withdrawing.set(message.id, by);
+    let finish!: TakingBack['finish'];
+    const ended = new Promise<Withdrawal>((resolve) => {
+      finish = resolve;
+    });
+    this.#withdrawing.set(message.id, { by, tell, reached: this.#reached(message), ended, finish });
     takeBack();
+    return ended;
+  }
+
+  /** Whether the CLI has the message: delivering also covers journaling and the session queue. */
+  #reached(message: Message): boolean {
+    const agent = agentOf(message.to);
+    return (
+      message.state === 'delivered' ||
+      (agent !== undefined &&
+        this.#deps.engine.sessions
+          .of(agent)
+          .entries.some(
+            (entry) =>
+              entry.id === message.delivery?.as && entry.kind === 'user' && entry.reached === true,
+          ))
+    );
+  }
+
+  /** The take-back ended: keep its note in the same record as the withdrawal, before the next send. */
+  #takenBack(message: Message, taking: TakingBack, interrupted: boolean): void {
+    this.#withdrawing.delete(message.id);
+    const reached = taking.reached || this.#reached(message);
+    const result = { reached, interrupted: reached && interrupted };
+    const sender =
+      message.from === 'you' ? 'the user' : partyName(this.#deps.nodes(), message.from);
+    const note =
+      taking.tell && reached
+        ? `Message ${message.id} from "${sender}" was withdrawn by its sender after it reached you${result.interrupted ? ', and its turn was interrupted' : ''}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`
+        : undefined;
+    this.#withdrawn(message, taking.by, note);
+    taking.finish(result);
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
-  #withdrawn(message: Message, by: PartyId): void {
-    this.#deps.store.update(message.id, { state: 'withdrawn', by });
+  #withdrawn(message: Message, by: PartyId, note?: string): void {
+    this.#deps.store.update(message.id, { state: 'withdrawn', by }, note);
     if (by !== message.from) {
       this.#notice(
         message,

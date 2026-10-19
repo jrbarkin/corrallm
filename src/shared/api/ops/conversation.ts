@@ -184,9 +184,11 @@ export const conversationOps = {
   withdraw: define('withdraw', {
     summary:
       'Takes back a message you sent: off its agent’s queue if it is still waiting, or ' +
-      'interrupting its turn if that is going on. The message says which canvas it is on, so ' +
-      '`canvas` may be left out.',
+      'interrupting its turn if that is going on. Returns whether it reached the agent and ' +
+      'whether its turn was interrupted. Work already done stays, and the agent’s history ' +
+      'keeps the message; the agent is told of the withdrawal with its next message. The ' +
+      'message says which canvas it is on, so `canvas` may be left out.',
     input: z.strictObject({ canvas, id: MessageId }),
-    output: z.strictObject({}),
+    output: z.strictObject({ reached: z.boolean(), interrupted: z.boolean() }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;

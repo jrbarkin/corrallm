@@ -26,6 +26,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await journal.flush();
   await rm(profile, { recursive: true, force: true });
 });
 
@@ -165,6 +166,30 @@ describe('the message store', () => {
     expect(ids.filter((id) => settled.some((one) => one.id === id))).toHaveLength(
       STORE_SETTLED_PER_PARTY,
     );
+  });
+
+  it('keeps an untold withdrawal through pruning and rewrites, until its note reaches the agent', async () => {
+    const messages = await store();
+    const withdrawn = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    messages.update(withdrawn.id, { state: 'withdrawn' }, 'The instruction was withdrawn.');
+    const waiting = messages.add(draft('you', 'agent:builder'));
+    for (let i = 0; i < STORE_SETTLED_PER_PARTY + 5; i++) {
+      messages.add(draft('outside:orchestrator', 'agent:builder', 'withdrawn'));
+    }
+    // Outgrow the log's byte budget too: its next write replaces it with only what is kept.
+    for (let i = 0; i < 400; i++) messages.update(waiting.id, { body: 'x'.repeat(16 * 1024) });
+    await messages.durable();
+    const again = await store();
+    expect(again.withdrawals('agent:checker')).toEqual([]);
+    expect(again.withdrawals('agent:builder')).toEqual([
+      { id: withdrawn.id, text: 'The instruction was withdrawn.' },
+    ]);
+    expect(again.get(withdrawn.id)?.state).toBe('withdrawn');
+    again.toldWithdrawals([withdrawn.id]);
+    await again.durable();
+    const told = await store();
+    expect(told.withdrawals('agent:builder')).toEqual([]);
+    expect(told.get(withdrawn.id)).toBeUndefined();
   });
 
   it('keeps within its byte budget, dropping the oldest settled first, and never throws', async () => {

@@ -256,7 +256,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   withdraw: {
     valid: [],
     by: {
-      you: [{ canvas: CANVAS, id: SEEDED.you, request: request(20) }],
+      you: [
+        { canvas: CANVAS, id: SEEDED.you, request: request(20) },
+        { id: SEEDED.you, request: request(20) },
+      ],
       lead: [{ canvas: CANVAS, id: SEEDED.lead, request: request(21) }],
       worker: [{ canvas: CANVAS, id: SEEDED.worker, request: request(22) }],
       'outside-write': [{ canvas: CANVAS, id: SEEDED.orchestrator, request: request(23) }],

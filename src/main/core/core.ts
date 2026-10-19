@@ -170,6 +170,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     conversations: new Conversations(),
     projectOf: (canvas) => projects.of(canvas),
     memory,
+    sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
       engines.emit(canvas, agentId, connection, event);
       channels.emit(canvas, 'session:event', agentId, connection, event);

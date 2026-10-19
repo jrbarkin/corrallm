@@ -13,7 +13,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 /*
  * A canvas's messages, as the core keeps them (API Spec §5.3, Core Server §5.9): in memory, in the
  * order they came, and journaled to runs/<id>/messages.jsonl through the run journal's one queue,
- * a line for each message each time it changes ({ seq, message, told? }, the last line of a
+ * a line for each message each time it changes ({ seq, message, told?, withdrawal? }, the last line of a
  * message winning). Its order (`seq`) survives restarts, so a cursor into it does too. It keeps the newest
  * STORE_SETTLED_PER_PARTY settled messages of each party within STORE_BYTES, and every pending and
  * unresolved one, dropping the oldest settled first (delivery bounds how many wait: MAX_WAITING),
@@ -49,6 +49,8 @@ interface Kept {
   message: Message;
   bytes: number;
   told?: string;
+  /** What its recipient must still be told of a withdrawal after receipt. */
+  withdrawal?: { text: string; told?: boolean };
 }
 
 export class MessageStore {
@@ -219,12 +221,39 @@ export class MessageStore {
   }
 
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
-  update(id: string, change: Partial<Omit<Message, 'id' | 'canvas'>>): Message | undefined {
+  update(
+    id: string,
+    change: Partial<Omit<Message, 'id' | 'canvas'>>,
+    withdrawal?: string,
+  ): Message | undefined {
     const kept = this.#kept.get(id);
     if (!kept) return undefined;
     const message = { ...kept.message, ...change };
-    this.#keep({ ...kept, message });
+    this.#keep({
+      ...kept,
+      message,
+      ...(withdrawal === undefined ? {} : { withdrawal: { text: withdrawal } }),
+    });
     return message;
+  }
+
+  /** The withdrawals a recipient has not yet been told of, in the order their messages came. */
+  withdrawals(to: PartyId): { id: string; text: string }[] {
+    return [...this.#kept.values()].flatMap(({ message, withdrawal }) =>
+      message.to === to && withdrawal !== undefined && !withdrawal.told
+        ? [{ id: message.id, text: withdrawal.text }]
+        : [],
+    );
+  }
+
+  /** The CLI echoed the message carrying these notes: their withdrawals need no more telling. */
+  toldWithdrawals(ids: readonly string[]): void {
+    for (const id of ids) {
+      const kept = this.#kept.get(id);
+      if (kept?.withdrawal && !kept.withdrawal.told) {
+        this.#keep({ ...kept, withdrawal: { ...kept.withdrawal, told: true } });
+      }
+    }
   }
 
   /** Resolves once every change so far is on disk (forced there); rejects if it couldn't be. */
@@ -311,17 +340,21 @@ export class MessageStore {
     const kept = [...this.#kept.values()];
     const counts = new Map<PartyId, number>();
     const dropped = new Set<string>();
-    for (const { message } of kept.toReversed()) {
-      if (!isSettled(message)) continue;
+    const settled = ({ message, withdrawal }: Kept) =>
+      isSettled(message) && (withdrawal === undefined || withdrawal.told === true);
+    for (const one of kept.toReversed()) {
+      if (!settled(one)) continue;
+      const { message } = one;
       const parties = [message.from, message.to];
       const wanted = parties.some((party) => (counts.get(party) ?? 0) < STORE_SETTLED_PER_PARTY);
       for (const party of parties) counts.set(party, (counts.get(party) ?? 0) + 1);
       if (!wanted) dropped.add(message.id);
     }
     let bytes = kept.reduce((sum, one) => (dropped.has(one.message.id) ? sum : sum + one.bytes), 0);
-    for (const { message, bytes: size } of kept) {
+    for (const one of kept) {
       if (bytes <= STORE_BYTES) break;
-      if (dropped.has(message.id) || !isSettled(message)) continue;
+      const { message, bytes: size } = one;
+      if (dropped.has(message.id) || !settled(one)) continue;
       dropped.add(message.id);
       bytes -= size;
     }
@@ -358,6 +391,14 @@ export class MessageStore {
       message: message as unknown as Message,
       bytes: Buffer.byteLength(line) + 1,
       ...(typeof value.told === 'string' ? { told: value.told } : {}),
+      ...(isRecord(value.withdrawal) && typeof value.withdrawal.text === 'string'
+        ? {
+            withdrawal: {
+              text: value.withdrawal.text,
+              ...(value.withdrawal.told === true ? { told: true } : {}),
+            },
+          }
+        : {}),
     };
   }
 }
@@ -400,8 +441,8 @@ export function readCursor(
 }
 
 /** A message's line in the store's log. */
-function lineOf({ seq, message, told }: Kept): string {
-  return `${JSON.stringify({ seq, message, ...(told === undefined ? {} : { told }) })}\n`;
+function lineOf({ seq, message, told, withdrawal }: Kept): string {
+  return `${JSON.stringify({ seq, message, ...(told === undefined ? {} : { told }), ...(withdrawal === undefined ? {} : { withdrawal }) })}\n`;
 }
 
 /** The place in the store's order a line of its log gives, though it isn't a record it reads. */

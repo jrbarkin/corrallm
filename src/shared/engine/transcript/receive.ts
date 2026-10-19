@@ -618,8 +618,10 @@ export class ConnectedDriver implements SessionDriver {
       interrupted,
       ...(failed ? { failed: true } : {}),
     });
-    // The next queued message starts first: one sent as the sender hears goes after it.
-    io.idle();
+    // A native message may precede a turn the backend is still sending (a withdrawal note
+    // before the user's shell command). Ending that message must not let the queue overtake it.
+    if (this.#turns.size > 0) io.dispatch({ type: 'status', status: 'working' });
+    else io.idle();
     for (const turn of turns) turn.done(interrupted || failed, result);
   }
 }

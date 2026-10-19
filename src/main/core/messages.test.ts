@@ -148,6 +148,7 @@ async function keepCanvas(
 /** Starts the core over the profile, its App Server and Terminal agents on the given connectors. */
 async function start(
   connectors: { appServer?: Connector<SessionMode>; terminal?: Connector<SessionMode> } = {},
+  open = true,
 ): Promise<Core> {
   core = await createCore(
     {
@@ -166,7 +167,7 @@ async function start(
     },
     NO_DESKTOP,
   );
-  await core.engines.open(CANVAS);
+  if (open) await core.engines.open(CANVAS);
   return core;
 }
 
@@ -1050,6 +1051,285 @@ describe('a turn waiting for you', () => {
         body: 'Checker is waiting for the user: Approve Bash: echo hello?',
       }),
     ]);
+  });
+});
+
+/** What corrallm tells an agent whose earlier instruction was withdrawn after receipt. */
+const withdrawalNote = (id: string, sender = 'orchestrator') =>
+  `Message ${id} from "${sender}" was withdrawn by its sender after it reached you, and its turn was interrupted. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
+
+/** A received turn withdrawn before its fake session finishes. */
+async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
+  const id = await send(to, '/question Do this old work', caller);
+  await vi.waitFor(() => {
+    expect(
+      core?.engines
+        .canvas(CANVAS)
+        ?.engine.sessions.of(to)
+        .entries.some((entry) => entry.kind === 'user' && entry.reached),
+    ).toBe(true);
+  });
+  expect(await ok('withdraw', { id }, caller)).toEqual({ reached: true, interrupted: true });
+  expect((await find(id, caller))?.state).toBe('withdrawn');
+  return id;
+}
+
+describe('telling an agent of a withdrawal after receipt', () => {
+  beforeEach(() => {
+    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
+  });
+  it.each([
+    ['the same sender', OUTSIDE],
+    ['another outside party', OTHER],
+    ['another agent', BUILDER],
+    ['the user', YOU],
+  ])('rides the next message from %s, without starting a turn of its own', async (_who, caller) => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('helper');
+    const delivered = () => appServer.sessions[0]?.sent.map(({ text }) => text) ?? [];
+    expect(delivered()).toHaveLength(1);
+    const next = await send('helper', 'Only do this new work', caller);
+    await vi.waitFor(async () => {
+      expect((await find(next, caller))?.state).toBe('replied');
+    });
+    const text = delivered()[1] ?? '';
+    expect(text).toContain(withdrawalNote(id));
+    expect(text.match(/\[corrallm\]/g)).toHaveLength(1);
+    expect(text.endsWith('Only do this new work')).toBe(true);
+    expect(delivered()).toHaveLength(2);
+    const later = await send('helper', 'Then this', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(later, OTHER))?.state).toBe('replied');
+    });
+    expect(delivered()[2]).not.toContain(id);
+  });
+
+  it('names an agent sender as frames name it', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('helper', BUILDER);
+    const next = await send('helper', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id, 'Builder'));
+  });
+
+  it('names the user explicitly when the withdrawn message was theirs', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('builder', YOU);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id, 'the user'));
+  });
+
+  it('returns no receipt or interrupt and adds no note for a message still waiting for delivery', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const id = await send('builder', 'Never sent');
+    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false });
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(1);
+    expect(sent(appServer)[0]).not.toContain(id);
+  });
+
+  it('returns no receipt or interrupt for a message taken off the session’s queue', async () => {
+    await keepCanvas();
+    await start();
+    const first = await send('builder', '/question Keep the turn open');
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('delivered');
+    });
+    const queued = await send('builder', 'Never received', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(queued, YOU))?.state).toBe('delivering');
+    });
+    expect(await ok('withdraw', { id: queued }, YOU)).toEqual({
+      reached: false,
+      interrupted: false,
+    });
+    await ok('session.interrupt', { agent: 'builder' }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(2);
+    expect(sent(appServer)[1]).not.toContain(queued);
+  });
+
+  it('keeps the note durably across a restart, and keeps its delivered acknowledgement across the next', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    expect(await readFile(log, 'utf8')).toContain(withdrawalNote(id).replaceAll('"', '\\"'));
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const next = await send('builder', 'After restarting', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const later = await send('builder', 'After restarting again', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(later, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).not.toContain(id);
+  });
+
+  it('combines several still-untold withdrawals in one frame with the next message', async () => {
+    await keepCanvas();
+    const ids = [crypto.randomUUID(), crypto.randomUUID()];
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(
+      log,
+      ids
+        .map((id, i) =>
+          JSON.stringify({
+            seq: i + 1,
+            message: {
+              id,
+              canvas: CANVAS,
+              from: 'outside:orchestrator',
+              to: 'agent:builder',
+              kind: 'text',
+              body: 'Old work',
+              state: 'withdrawn',
+              by: 'outside:orchestrator',
+              at: 1000,
+            },
+            withdrawal: { text: withdrawalNote(id) },
+          }),
+        )
+        .join('\n') + '\n',
+    );
+    await start();
+    expect(sent(appServer)).toEqual([]);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(1);
+    for (const id of ids) expect(sent(appServer)[0]?.split(withdrawalNote(id))).toHaveLength(2);
+    expect(sent(appServer)[0]?.match(/\[corrallm\]/g)).toHaveLength(1);
+  });
+
+  it('sends a separate framed note first when the user’s next message starts with a shell prefix', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('shell');
+    expect(sent(terminal)).toHaveLength(1);
+    const next = await send('shell', '!echo hello', YOU);
+    await vi.waitFor(() => {
+      expect(sent(terminal)).toHaveLength(2);
+    });
+    const later = await send('shell', 'After the shell command', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    await vi.waitFor(
+      async () => {
+        expect((await find(later, YOU))?.state).toBe('replied');
+      },
+      { timeout: 3000 },
+    );
+    expect(sent(terminal).slice(1)).toEqual([
+      `[corrallm] ${withdrawalNote(id)}`,
+      '!echo hello',
+      'After the shell command',
+    ]);
+    expect(terminal.sessions[0]?.sent[1]?.from).toEqual({ party: 'corrallm', name: 'corrallm' });
+    expect(terminal.sessions[0]?.sent[2]?.from).toBeUndefined();
+  });
+
+  it('adds the note even when the next user message was already in the session queue', async () => {
+    await keepCanvas();
+    await start();
+    const id = await send('builder', '/question Old work');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('delivered');
+    });
+    const next = await send('builder', 'Already waiting for the next turn', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('delivering');
+    });
+    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true });
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id));
+  });
+
+  it('keeps a note when its carrier fails before the CLI echoes it', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    const session = appServer.sessions[0];
+    if (!session) throw new Error('The agent has no session.');
+    const fail = vi
+      .spyOn(session, 'send')
+      .mockRejectedValueOnce(new Error('The CLI did not receive it.'));
+    const failed = await send('builder', 'An unreceived carrier', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(failed, OTHER))?.state).toBe('replied');
+    });
+    fail.mockRestore();
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const next = await send('builder', 'Try again', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+  });
+
+  it('rides the app’s session channel after a restart, before any API operation opens the canvas', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    await core?.close();
+    core = undefined;
+    appServer = new FakeConnector({ adapter: 'codex' });
+    const started = await start({}, false);
+    expect(started.engines.opened()).toEqual([]);
+    expect(await started.channels.call(7, 'run:get', [])).toMatchObject({ id: CANVAS });
+    await started.channels.call(7, 'session:start', [
+      'builder',
+      { connection: 'codex.app-server', model: null, mode: null },
+    ]);
+    await started.channels.call(7, 'session:send', [
+      'builder',
+      { id: crypto.randomUUID(), text: 'Typed in the app' },
+    ]);
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+  });
+
+  it('rides a direct session send too, rather than waiting for another message operation', async () => {
+    await keepCanvas();
+    const started = await start();
+    const id = await withdrawReceived();
+    const engine = started.engines.canvas(CANVAS)?.engine;
+    engine?.sessions.send('builder', 'codex', 'A manual message');
+    await vi.waitFor(() => {
+      expect(sent(appServer)).toHaveLength(2);
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id));
   });
 });
 
@@ -2028,7 +2308,10 @@ describe('reads', () => {
       ok: false,
       error: { code: 'invalid', sentence },
     });
-    expect(await started.call('withdraw', { id }, both)).toEqual({ ok: true, value: {} });
+    expect(await started.call('withdraw', { id }, both)).toEqual({
+      ok: true,
+      value: { reached: false, interrupted: false },
+    });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
   });
 

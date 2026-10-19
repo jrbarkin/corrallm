@@ -60,6 +60,13 @@ export interface SessionManagerDeps {
   projectOf: (canvas: CanvasId) => string | undefined;
   /** Where each canvas's agents' conversations are remembered. */
   memory: CanvasMemory;
+  /** Sends at the CLI boundary, with any core-owned additions, whichever caller sent it. */
+  sending?: (
+    canvas: CanvasId,
+    agentId: string,
+    message: UserMessage,
+    send: (message: UserMessage) => Promise<void>,
+  ) => Promise<void>;
   /**
    * What an agent of each adapter can be set to run with, read in a folder for the agents'
    * environment (claude-settings.ts, codex/options.ts): without a session, or a prompt.
@@ -149,7 +156,10 @@ export class SessionManager {
   }
 
   async send(canvas: CanvasId, agentId: string, message: UserMessage): Promise<void> {
-    await (await this.#session(canvas, agentId)).send(message);
+    const session = await this.#session(canvas, agentId);
+    const send = (next: UserMessage) => session.send(next);
+    if (this.#deps.sending) await this.#deps.sending(canvas, agentId, message, send);
+    else await send(message);
   }
 
   async answer(

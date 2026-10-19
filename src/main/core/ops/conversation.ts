@@ -136,14 +136,13 @@ export function conversationOps(
         return failed(error);
       }
     },
-    withdraw: ({ canvas, id }, ctx) => {
+    withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
-        open.delivery.withdraw(id, partyIdOf(ctx.caller));
+        return await open.delivery.withdraw(id, partyIdOf(ctx.caller));
       } catch (error) {
         return failed(error);
       }
-      return {};
     },
   };
 }
