@@ -3,8 +3,8 @@ import type { WebContents } from 'electron';
 
 import { CORE_PORT } from '../../shared/gui-link';
 import type { CorePort } from '../../shared/gui-link';
-import type { CoreProcess } from './core-process';
 import { originKey } from '../url-policy';
+import type { CoreSupervisor } from './supervisor';
 
 /*
  * Windows' ports to the core (B8 Design §3), main's half of the handshake. A window's preload asks
@@ -12,21 +12,24 @@ import { originKey } from '../url-policy';
  * frame of the app's own origin); main makes a channel, hands the core one end, tagged with the
  * window, and posts the window the other, which the preload keeps from the page. The core makes
  * every call on it yours, at that window (core/gui.ts). Main tells the core when the window is
- * gone: closed, crashed or reloaded.
+ * gone: closed, crashed or reloaded. Each port names the epoch of the core it reaches.
+ *
+ * When a core crashes, the supervisor brings up a new one (host/supervisor.ts) and every window
+ * is reloaded: until the canvas and its run live in the core (B9, B11), a window's page holds
+ * them, so its page restores its canvas from the new core's journal, paused, as after any reload,
+ * and asks for a port to the new core as it loads.
  */
 
-export class CorePorts {
-  readonly #core: Pick<CoreProcess, 'connect' | 'windowGone'>;
-  readonly #origin: string;
-  /**
-   * Which core a port reaches. There is one until supervision restarts a core that stops, each
-   * restart a new epoch (B8 Design §6).
-   */
-  readonly #epoch = 1;
-  /** The windows followed, whose going the core hears. */
-  readonly #followed = new WeakSet<WebContents>();
+/** The core windows' ports reach: the one up now (supervised), as its epoch. */
+export type CoreEnd = Pick<CoreSupervisor, 'connect' | 'windowGone' | 'epoch'>;
 
-  constructor(core: Pick<CoreProcess, 'connect' | 'windowGone'>, origin: string) {
+export class CorePorts {
+  readonly #core: CoreEnd;
+  readonly #origin: string;
+  /** The windows followed, whose going the core hears, until they are destroyed. */
+  readonly #followed = new Set<WebContents>();
+
+  constructor(core: CoreEnd, origin: string) {
     this.#core = core;
     this.#origin = origin;
   }
@@ -35,8 +38,17 @@ export class CorePorts {
   connect(contents: WebContents): void {
     this.#follow(contents);
     const { port1, port2 } = new MessageChannelMain();
+    // Read first: a port made while a new core comes up reaches the new one.
+    const epoch = this.#core.epoch;
     this.#core.connect(contents.id, port1);
-    contents.postMessage(CORE_PORT, { epoch: this.#epoch } satisfies CorePort, [port2]);
+    contents.postMessage(CORE_PORT, { epoch } satisfies CorePort, [port2]);
+  }
+
+  /** A new core is up after one crashed: every window reloads, and so reconnects to it. */
+  reconnect(): void {
+    for (const contents of this.#followed) {
+      if (!contents.isDestroyed()) contents.reload();
+    }
   }
 
   #follow(contents: WebContents): void {
@@ -57,6 +69,7 @@ export class CorePorts {
       gone();
     });
     contents.once('destroyed', () => {
+      this.#followed.delete(contents);
       gone(true);
     });
   }

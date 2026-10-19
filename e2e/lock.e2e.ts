@@ -11,9 +11,10 @@ import { launchApp } from './launch';
 
 /*
  * One owner per profile (<profile>/core.lock), both ways, with the built app: `corrallm serve`
- * (the CLI bundle, built by the global setup) refuses a profile the app holds, and the app refuses
- * to start on a profile `corrallm serve` holds, saying so (in a dialog; the hidden e2e app, which
- * may show nothing on screen, says it on stderr only) and leaving the lock as it was.
+ * (the CLI bundle, built by the global setup) refuses a profile the app holds (its core process
+ * holds the lock), and the app refuses to start on a profile `corrallm serve` holds, saying so (in
+ * a dialog; the hidden e2e app, which may show nothing on screen, says it on stderr only) and
+ * leaving the lock as it was.
  */
 
 const projectDir = path.dirname(import.meta.dirname);
@@ -53,7 +54,15 @@ test('corrallm serve refuses a profile the app holds', async () => {
   const { app, close } = await launchApp({ profile });
   try {
     await app.firstWindow();
-    const pid = app.process().pid;
+    // The app's core process holds the profile, not its main process.
+    const [pid, ...others] = await app.evaluate(({ app: electronApp }) =>
+      electronApp
+        .getAppMetrics()
+        .filter((metric) => metric.type === 'Utility' && metric.name === 'corrallm core')
+        .map((metric) => metric.pid),
+    );
+    expect(others).toEqual([]);
+    expect(pid).not.toBe(app.process().pid);
     const lock = JSON.parse(await readFile(path.join(profile, 'core.lock'), 'utf8')) as unknown;
     expect(lock).toMatchObject({ owner: 'app', pid });
 

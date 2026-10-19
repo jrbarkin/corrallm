@@ -47,10 +47,16 @@ const { CorePorts } = await import('./ports');
 const ORIGIN = 'app://main_window';
 
 class FakeContents extends EventEmitter {
-  readonly id = 7;
+  readonly id: number;
   readonly setWindowOpenHandler = vi.fn();
+  readonly reload = vi.fn();
+  destroyed = false;
+  constructor(id = 7) {
+    super();
+    this.id = id;
+  }
   isDestroyed() {
-    return false;
+    return this.destroyed;
   }
   isCrashed() {
     return false;
@@ -62,13 +68,14 @@ function setup() {
   const core = {
     connect: vi.fn<(window: number, port: unknown) => void>(),
     windowGone: vi.fn<(window: number) => void>(),
+    epoch: 1,
   };
   const ports = new CorePorts(core, ORIGIN);
   const window = new FakeContents();
   const connect = () => {
     ports.connect(window as unknown as WebContents);
   };
-  return { core, window, connect };
+  return { core, ports, window, connect };
 }
 
 beforeEach(() => {
@@ -165,6 +172,7 @@ describe('windows’ ports to the core', () => {
       },
     });
     const core = {
+      epoch: 1,
       connect: (window: number, port: Electron.MessagePortMain) => {
         served.open(window, coreEnd(port as unknown as MessagePort));
       },
@@ -216,5 +224,35 @@ describe('windows’ ports to the core', () => {
     window.emit('destroyed');
 
     expect(core.windowGone).toHaveBeenCalledOnce();
+  });
+
+  it('names the epoch of the core the port reaches: each new core’s is the next', () => {
+    const { core, window, connect } = setup();
+    core.epoch = 3;
+
+    connect();
+
+    expect(window.postMessage).toHaveBeenCalledExactlyOnceWith('core:port', { epoch: 3 }, [
+      channels[0]?.port2,
+    ]);
+  });
+});
+
+describe('a new core, after one crashed', () => {
+  it('reloads every window it follows, so each restores its canvas from the new core', () => {
+    const { ports, window, connect } = setup();
+    const other = new FakeContents(8);
+    const gone = new FakeContents(9);
+    connect();
+    ports.connect(other as unknown as WebContents);
+    ports.connect(gone as unknown as WebContents);
+    gone.destroyed = true;
+    gone.emit('destroyed');
+
+    ports.reconnect();
+
+    expect(window.reload).toHaveBeenCalledOnce();
+    expect(other.reload).toHaveBeenCalledOnce();
+    expect(gone.reload).not.toHaveBeenCalled();
   });
 });

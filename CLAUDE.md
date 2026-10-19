@@ -38,7 +38,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - Renderer and engine tests read the catalog main builds (see The catalog) from `src/shared/test-catalog.json`: `src/renderer/test-setup.ts` loads it as the app does before it mounts, and the engine's tests read it, with the lookups the app gives the engine, from `src/shared/engine/test-engine.ts` (shared code, tests included, never imports the renderer). It is a copy, never edited by hand: `src/main/sessions/adapters.test.ts` keeps it equal to main's catalog (a vitest file snapshot), and rewrites it with `pnpm exec vitest run --project main -u src/main/sessions/adapters.test.ts` when a descriptor changes (prettier leaves it alone). What reads the catalog it is given (the engine: the run, the sessions, the words they share) is also tested over `src/shared/test-made-up.ts`, a catalog of an adapter no build has, which the loaded one lacks.
 - Every test file that makes a run makes it with `liveRun` and checks, after each test, that it restores from its checkpoint as it was (`afterEach(expectRestorable)`, `src/shared/engine/run/test-restore.ts`): whatever a run holds, its checkpoint keeps, since the core journals it. The run's tests share a harness (`run/test-run.ts`: a run with its clock and its agents' turns under the test's control), and so do the built-in templates' run tests, which stay with the templates (`src/renderer/graph/templates-run.test.ts`).
 - jsdom cannot draw xterm.js: renderer tests that show a Terminal agent mock `src/renderer/terminal/screen.ts` with `fakeScreens` (`src/renderer/terminal/test-screen.ts`), which also fakes main's terminals (`fakeTerminals`).
-- `src/main/cli/serve.test.ts` runs the CLI bundle (`corrallm serve` and `corrallm wait`), which the vitest `main` project's global setup builds first (`src/main/cli/global-setup.ts`), in child processes on a profile of its own: its canvases.json keeps a canvas and its project folder, as the app would, its tokens.json known tokens' hashes, and its agents run `fake-codex.mjs` (which reads what it is asked after corrallm's frame line); an MCP client (the SDK's `Client`) calls as an outside orchestrator, and `--new-token` runs under `script(1)`, a terminal. `src/main/cli/wait.test.ts` checks how `corrallm wait` exits on each refusal, against a stand-in server. `e2e/lock.e2e.ts` checks `core.lock` with the built app.
+- `src/main/cli/serve.test.ts` runs the CLI bundle (`corrallm serve` and `corrallm wait`), which the vitest `main` project's global setup builds first (`src/main/cli/global-setup.ts`), in child processes on a profile of its own: its canvases.json keeps a canvas and its project folder, as the app would, its tokens.json known tokens' hashes, and its agents run `fake-codex.mjs` (which reads what it is asked after corrallm's frame line); an MCP client (the SDK's `Client`) calls as an outside orchestrator, and `--new-token` runs under `script(1)`, a terminal. `src/main/cli/wait.test.ts` checks how `corrallm wait` exits on each refusal, against a stand-in server. `e2e/lock.e2e.ts` checks `core.lock` with the built app (whose core process holds it, found through `app.getAppMetrics()`), and `e2e/core-crash.e2e.ts` kills that process: the window reconnects to the new core, the canvas restored paused, and a core that keeps stopping is given up on.
 - Before calling a change done: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm test:e2e`.
 
 ## Layout
@@ -66,7 +66,8 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 HostServices, what it asks of the app that hosts it (the open, save and folder
                 dialogs), and TrustedPath, the only paths a canvas is opened from or saved to and
                 the only project folders; entry.ts, the core process's entry (core.cjs): main asks it
-                `init` for the app, then hands it each trusted window's port beside the link, which
+                `init` for the app (it takes core.lock first, and while `serve` holds the profile
+                answers who does), then hands it each trusted window's port beside the link, which
                 gui.ts serves once it is composed (until main's services move in, it composes no
                 store, only app.info: main keeps the profile's stores meanwhile); in the native
                 self-test it only runs the checks; protocol.ts, what main and the core process ask
@@ -79,8 +80,9 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 the app (main, asked over the link, its dialogs' picks branded TrustedPaths on
                 the core's side); host/node.ts, the core's host under plain Node (`corrallm
                 serve`: no dialogs, so what needs one is human-only; `appProfile`, the app's own
-                profile folder); lock.ts, core.lock, one owner per profile (the app or `corrallm
-                serve`; a lock whose process is gone, or whose pid was reused, is taken over, by
+                profile folder); lock.ts, core.lock, one owner per profile (the app's core
+                process, from `init`, or `corrallm serve`; a lock whose process is gone, or whose
+                pid was reused, is taken over, by
                 one process at a time holding core.lock.taking; `stillRuns` also tells whether
                 api.json's server runs); tokens.ts, the outside tokens (TokenStore: tokens.json,
                 hashes only, a new token of a live one's name replacing it). The core's operations
@@ -145,10 +147,16 @@ src/main/host/  Main only, as the core's host: services.ts is main's HostService
                 forks the core process (utilityProcess.fork, stdio piped back, a CoreLink over its
                 parentPort on which main answers HostServices, and windows' ports posted beside
                 it), which main does before the first window; ports.ts hands each window that asks
-                (core:connect) a MessageChannelMain's end, the core the other, and tells the core
-                when a window is gone (closed, crashed, reloaded); supervise.ts is what to do when
-                the core exits (restart a crash at most 3 times in 60 s, then give up; a clean exit
-                is none).
+                (core:connect) a MessageChannelMain's end, the core the other (naming the core's
+                epoch), tells the core when a window is gone (closed, crashed, reloaded), and
+                reloads every window once a new core is up after a crash (until B9 and B11 move
+                the canvas and run into the core, a page restores its canvas from the journal,
+                paused); supervise.ts is what to do when the core exits (restart a crash at most 3
+                times in 60 s, then give up; a clean exit is none), and supervisor.ts carries it
+                out (CoreSupervisor: forks and inits each core, the next epoch each restart, what
+                asks the core waiting while a new one comes up; a new core that can't come up
+                counts as another stop, one refused the profile gives up at once; giving up is
+                "corrallm's core keeps stopping", in a native dialog, and the app exits).
 src/main/sessions/  Connected sessions (see Connected sessions): adapter.ts is what main's registry
                 keeps of an adapter (its descriptor and the usage backends it spends), adapters.ts is
                 the registry (ADAPTERS, the only file meant to import adapters' folders: ESLint's
@@ -521,7 +529,7 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 - Which canvases and agents a caller reaches, and the rules that narrow what tokens may do, are enforced in `core.call` (and, once canvas edits reach the core, at commit), never left to an operation's implementation. Every transport calls `core.call`, which checks the caller's audience on every call, not only when listing tools.
 - Both local servers (MCP, `api/mcp.ts`; hooks, `sessions/terminal/hooks.ts`) listen only on 127.0.0.1 and refuse a foreign Host or any Origin header before checking the token (`loopback.ts`). MCP takes only an `application/json` body, of at most `MAX_REQUEST_BYTES`, read before a body too large is answered 413.
 - Session ids are UUIDs (`sessions/id.ts`), checked in hook signals, resume IPC arguments, remembered sessions loaded from disk, and both Terminal CLIs' argv builders. Claude resume uses `--resume=<id>`; an id must never be read as a CLI flag.
-- Only one app instance may use a profile (`requestSingleInstanceLock` in index.ts), and `<profile>/core.lock` (`core/lock.ts`) admits one owner, so the app and `corrallm serve` never own one profile at once (a lock left behind is taken over by one process at a time): the app's main takes it as it starts (B8 moves it into the core process) and refuses to start while `serve` holds it, saying so in a native dialog; `serve` refuses while the app holds it. A window that crashes ends its canvas's sessions as one that reloads or is destroyed does (`host/windows.ts`).
+- Only one app instance may use a profile (`requestSingleInstanceLock` in index.ts), and `<profile>/core.lock` (`core/lock.ts`) admits one owner, so the app and `corrallm serve` never own one profile at once (a lock left behind is taken over by one process at a time): the app's core process takes it as main asks it up (`init` in `core/entry.ts`, before it composes the core; let go once the core closes, and a crashed core's is taken over by the next) and, while `serve` holds it, answers who does, composing nothing, so main refuses to start, saying so in a native dialog; `serve` refuses while the app holds it. A window that crashes ends its canvas's sessions as one that reloads or is destroyed does (`host/windows.ts`).
 - Paths the core opens, saves to or works in (canvases opened from and saved to, the folders agents run in) are `TrustedPath`s (`core/host.ts`): from a dialog you completed (`host/dialogs.ts`; in the core process, its answer branded by `core/host/app.ts`), or from the journal or memory reading back a path they wrote. No command line mints one, so `corrallm serve` runs a canvas only from the file and in the folder `canvases.json` keeps for it, picked in the app (`Core.keptCanvas`; it has no `--project`).
 - Outside tokens are made by a person (`corrallm serve --new-token`, only with stderr on a terminal), named (the name is the party, `outside:<name>`; a new token of a live one's name replaces it at once), reach only the canvases named when made, by their stable ids, read-only or read-write, expire within 12 hours (1 by default), and are kept only as a SHA-256 hash (`tokens.json`, 0600). A new one is printed once, on that terminal, and no log, result, store or child process's arguments ever hold it; orchestrators register corrallm by the variable that holds it (`CORRALLM_OUTSIDE_TOKEN`, under the server name `corrallm-outside`), and `corrallm wait` reads it only from its environment and sends it only to http on 127.0.0.1 or localhost, with no credentials, query or fragment (`loopbackUrl` in `url-policy.ts`). No operation a token can call creates or widens a token.
 - Read-only Git commands share `SAFE_GIT_OPTIONS` (`main/git.ts`), disabling fsmonitor and implicit bare repositories. The App Server's `/diff` also disables external diff, textconv and filter drivers; file suggestions must never run a repository's fsmonitor.

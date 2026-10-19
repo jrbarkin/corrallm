@@ -6,6 +6,8 @@ import { appHost } from './host/app';
 import { WindowPorts } from './gui';
 import type { WindowPort } from './gui';
 import type { WindowId } from './host';
+import { lockProfile, ProfileLocked } from './lock';
+import type { ProfileLock } from './lock';
 import { isWindowMessage } from './protocol';
 import type { CoreSide, HostSide } from './protocol';
 import { memoryText, runChecks, selfTestChecks } from './selftest';
@@ -13,9 +15,12 @@ import { memoryText, runChecks, selfTestChecks } from './selftest';
 /*
  * The core process's entry (.vite/build/core.cjs): main forks it with utilityProcess.fork
  * (host/core-process.ts) and talks to it over CoreLink on its parentPort. For the app, main asks it
- * `init`, then hands it each trusted window's port beside the link (B8 Design §3), which it serves
- * once composed (core/gui.ts). In the native self-test (CORRALLM_NATIVE_SELFTEST=1,
- * native-selftest.ts) main only asks it to run the checks, and it is never composed.
+ * `init`: it takes the profile (core.lock, one owner per profile: lock.ts) before it composes the
+ * core on it, and holds it until the core closes or the process ends; while `corrallm serve` holds
+ * it, init says who does and composes nothing. Main hands it each trusted window's port beside the
+ * link (B8 Design §3), which it serves once composed (core/gui.ts). In the native self-test
+ * (CORRALLM_NATIVE_SELFTEST=1, native-selftest.ts) main only asks it to run the checks, and it is
+ * never composed.
  */
 
 // Checking that only plain data crosses costs a walk of every value: only under `pnpm dev`.
@@ -78,6 +83,13 @@ if (!parent) {
 const windows = Promise.withResolvers<WindowPorts>();
 let composed = false;
 const ready = Promise.withResolvers<Core>();
+/** The profile, once init holds it: let go once the core closes, or as the process ends. */
+let held: ProfileLock | undefined;
+const release = () => {
+  held?.release();
+  held = undefined;
+};
+process.once('exit', release);
 
 const link = new CoreLink<CoreSide, HostSide>(
   parentPortOf(parent, (window, port) => {
@@ -89,7 +101,16 @@ const link = new CoreLink<CoreSide, HostSide>(
     init: async (config) => {
       if (composed) throw new Error('corrallm’s core is up already.');
       composed = true;
-      const core = await createCore({ ...config, check }, appHost(link));
+      let core: Core;
+      try {
+        held = await lockProfile(config.profile, 'app');
+        core = await createCore({ ...config, check }, appHost(link));
+      } catch (error) {
+        release();
+        composed = false;
+        if (!(error instanceof ProfileLocked)) throw error;
+        return { profileLocked: { holder: error.holder ?? null } };
+      }
       ready.resolve(core);
       windows.resolve(new WindowPorts(core, { check }));
       return null;
@@ -100,7 +121,11 @@ const link = new CoreLink<CoreSide, HostSide>(
       return null;
     },
     close: async () => {
-      await (await ready.promise).close();
+      try {
+        await (await ready.promise).close();
+      } finally {
+        release();
+      }
       return null;
     },
     selftest: async ({ packaged }) => ({

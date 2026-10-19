@@ -14,7 +14,8 @@ import type { CoreSide, HostSide, WindowMessage } from '../core/protocol';
  * its stdout and stderr piped back line by line, and a CoreLink to it over its parentPort, on which
  * main answers what the core asks of the desktop. Each window's port goes to it over the same
  * parentPort, beside the link. A utility process, unlike child_process.fork, works with the
- * RunAsNode fuse off. What to do when it exits is supervise.ts's policy.
+ * RunAsNode fuse off. What to do when it exits is supervise.ts's policy, which supervisor.ts
+ * carries out.
  */
 
 export interface CoreProcessOptions {

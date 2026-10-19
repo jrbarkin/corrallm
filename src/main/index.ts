@@ -7,11 +7,13 @@ import squirrelStartup from 'electron-squirrel-startup';
 import type { Answer } from '../shared/link';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
 import { Closing } from './closing';
-import { lockProfile, ProfileLocked } from './core/lock';
+import { ProfileLocked } from './core/lock';
+import type { CoreInit, CoreSide } from './core/protocol';
 import { PROD_CSP } from './csp';
 import { forkCore } from './host/core-process';
 import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
+import { CoreSupervisor } from './host/supervisor';
 import { registerIpcHandlers, sendEvent } from './ipc';
 import { runNativeSelfTest } from './native-selftest';
 import { RunShutdown } from './run-shutdown';
@@ -87,52 +89,87 @@ function main(): void {
   void app
     .whenReady()
     .then(async () => {
-      // One owner per profile (core.lock): `corrallm serve` may hold this one, and must not write
-      // its stores while the app does. B8 moves this into the core process.
-      let lock;
-      try {
-        lock = await lockProfile(app.getPath('userData'), 'app');
-      } catch (error) {
-        if (!(error instanceof ProfileLocked)) throw error;
-        const detail = `${error.message} ${
-          error.holder === undefined
-            ? 'Try again in a moment.'
-            : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
-        }`;
+      /** Says why corrallm can't go on (in a dialog, unless hidden), then exits. */
+      const refuse = (title: string, detail: string) => {
         console.error(`corrallm: ${detail}`);
         // The hidden e2e app shows nothing on screen, a dialog included.
-        if (!hidden) dialog.showErrorBox('corrallm can’t open its profile', detail);
+        if (!hidden) dialog.showErrorBox(title, detail);
         app.exit(1);
-        return;
-      }
-      const release = () => {
-        lock.release();
       };
-      app.once('will-quit', release);
-      process.once('exit', release);
+      const refuseLocked = (error: ProfileLocked) => {
+        refuse(
+          'corrallm can’t open its profile',
+          `${error.message} ${
+            error.holder === undefined
+              ? 'Try again in a moment.'
+              : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
+          }`,
+        );
+      };
 
       const shutdown = new RunShutdown((contents, requestId) => {
         sendEvent(contents, 'run:stopping', requestId);
       });
-      // The core owns the profile and its sessions; main answers only what needs the desktop.
-      const core = forkCore({
-        entry: path.join(__dirname, 'core.cjs'),
-        output: (line, stream) => {
-          if (stream === 'stdout') console.log(`[core] ${line}`);
-          else console.error(`[core] ${line}`);
+      const host = hostServices(shutdown);
+      const init: CoreInit = {
+        app: { name: app.getName(), version: app.getVersion() },
+        profile: app.getPath('userData'),
+        distribution: CORRALLM_DISTRIBUTION,
+        locale: app.getLocale(),
+        fakeSessions,
+      };
+      // The core owns the profile and its sessions; main answers only what needs the desktop. It
+      // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
+      // must not write its stores while the app does. A core that crashes is restarted.
+      const supervisor = new CoreSupervisor({
+        fork: () =>
+          forkCore({
+            entry: path.join(__dirname, 'core.cjs'),
+            output: (line, stream) => {
+              if (stream === 'stdout') console.log(`[core] ${line}`);
+              else console.error(`[core] ${line}`);
+            },
+            check: devServerUrl !== undefined,
+            host,
+          }),
+        init: async (core) => {
+          const up = await answered(core.link.request('init', init));
+          if (up !== null) throw new ProfileLocked(up.profileLocked.holder ?? undefined);
         },
-        check: devServerUrl !== undefined,
-        host: hostServices(shutdown),
+        restarting: (why) => {
+          console.error(`corrallm: ${why}; starting it again.`);
+        },
+        restarted: () => {
+          ports.reconnect();
+        },
+        gaveUp: (why) => {
+          if (why instanceof ProfileLocked) {
+            refuseLocked(why);
+            return;
+          }
+          refuse(
+            'corrallm’s core keeps stopping',
+            `${why.message} Open corrallm again to go on from what was last saved.`,
+          );
+        },
       });
-      await answered(
-        core.link.request('init', {
-          app: { name: app.getName(), version: app.getVersion() },
-          profile: app.getPath('userData'),
-          distribution: CORRALLM_DISTRIBUTION,
-          locale: app.getLocale(),
-          fakeSessions,
-        }),
-      );
+      const ports = new CorePorts(supervisor, trustedOrigin);
+      try {
+        await supervisor.start();
+      } catch (error) {
+        if (!(error instanceof ProfileLocked)) throw error;
+        refuseLocked(error);
+        return;
+      }
+      app.once('will-quit', () => {
+        supervisor.stop();
+      });
+      /** Asks the core up now (waiting while a new one comes up), failing with its sentence. */
+      const ask = async <K extends keyof CoreSide['requests']>(
+        name: K,
+        ...args: CoreSide['requests'][K]['args']
+      ): Promise<CoreSide['requests'][K]['result']> =>
+        answered((await supervisor.core).link.request(name, ...args));
 
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {
@@ -142,27 +179,26 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      registerIpcHandlers(trustedOrigin, new CorePorts(core, trustedOrigin));
+      registerIpcHandlers(trustedOrigin, ports);
 
       // Renderer acknowledgement precedes closing CLIs or flushing the profile's stores.
       const persistWindows = async (closing: BrowserWindow[]) => {
-        const shown = await answered(
-          core.link.request(
-            'shown',
-            closing.map((window) => window.webContents.id),
-          ),
+        const shown = await ask(
+          'shown',
+          closing.map((window) => window.webContents.id),
         );
         await Promise.all(
           closing.flatMap((window) =>
             shown.includes(window.webContents.id) ? [shutdown.stop(window.webContents)] : [],
           ),
         );
-        await answered(core.link.request('flush'));
+        await ask('flush');
       };
       // Closing without saving, after the user said to: give the core a few seconds to finish.
       const abandon = async () => {
+        supervisor.stop();
         await Promise.race([
-          core.link.request('close').catch(() => undefined),
+          ask('close').catch(() => undefined),
           new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
         ]);
       };
@@ -191,7 +227,9 @@ function main(): void {
       const quit = new Closing({
         save: async () => {
           await persistWindows(BrowserWindow.getAllWindows());
-          await answered(core.link.request('close'));
+          // From here, the core's exit is no crash.
+          supervisor.stop();
+          await ask('close');
         },
         abandon,
         ask: askAnyway('Quit'),
