@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { chmod, copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TerminalSession } from '../terminal/session';
 import { codex } from './adapter';
@@ -92,5 +96,32 @@ describe("Codex's adapter", () => {
       expect(descriptor.registerMcp).toContain(placeholder);
     }
     expect(descriptor.registerMcp).toMatch(/^codex mcp add /);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')("Codex's usage reader", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads its plan’s limits from a private app server of the user’s codex, and nothing else', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-usage-'));
+    try {
+      const fake = path.join(dir, 'codex.mjs');
+      await copyFile(path.join(import.meta.dirname, 'fake-codex.mjs'), fake);
+      await chmod(fake, 0o755);
+      vi.stubEnv('CORRALLM_CODEX_PATH', fake);
+      const context = { env: { PATH: path.dirname(process.execPath) }, cwd: dir };
+      expect(await codex.readUsage?.('codex', context)).toMatchObject({
+        fiveHour: { usedPercent: 12 },
+        weekly: { usedPercent: 3 },
+      });
+      // Not its backend; no codex.
+      expect(await codex.readUsage?.('claude-code', context)).toBeUndefined();
+      vi.stubEnv('CORRALLM_CODEX_PATH', path.join(dir, 'no-codex'));
+      expect(await codex.readUsage?.('codex', context)).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

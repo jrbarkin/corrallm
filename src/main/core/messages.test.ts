@@ -10,6 +10,7 @@ import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionEvent, SessionMode } from '../../shared/session';
+import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
@@ -84,6 +85,8 @@ let project: string;
 let core: Core | undefined;
 let appServer: FakeConnector;
 let terminal: FakeConnector;
+/** What reads a held backend's usage, by backend, instead of its adapter's reader: none unless set. */
+let readUsage: Partial<Record<string, () => Promise<UsageWindows | undefined>>> | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
@@ -91,6 +94,7 @@ beforeEach(async () => {
   await mkdir(project);
   appServer = new FakeConnector({ adapter: 'codex' });
   terminal = new FakeConnector({ adapter: 'codex' });
+  readUsage = undefined;
 });
 
 afterEach(async () => {
@@ -164,6 +168,7 @@ async function start(
           'codex.terminal': connectors.terminal ?? terminal,
         },
         environment: () => Promise.resolve({}),
+        ...(readUsage === undefined ? {} : { readUsage }),
       },
     },
     NO_DESKTOP,
@@ -1396,12 +1401,13 @@ describe('exhausted usage', () => {
 
   /**
    * One failed turn, followed by ordinary turns, with no usage rule set; `unwritable`: usage.json
-   * can't be written once the core has started.
+   * can't be written once the core has started; `resetsAt`: when the failed turn says it resets.
    */
   async function exhausted({
     manual = false,
     another = false,
     unwritable = false,
+    resetsAt = RESET,
   } = {}): Promise<void> {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
@@ -1451,7 +1457,7 @@ describe('exhausted usage', () => {
                     result: {
                       status: 'failed',
                       reason: 'usage-limit',
-                      resetsAt: RESET,
+                      resetsAt,
                     },
                   });
                 } else host.emit(event);
@@ -1489,7 +1495,7 @@ describe('exhausted usage', () => {
       expect((await inbox()).find(({ replyTo }) => replyTo === id)?.turn).toEqual({
         status: 'failed',
         reason: 'usage-limit',
-        resetsAt: RESET,
+        resetsAt,
       });
     });
   }
@@ -1600,6 +1606,100 @@ describe('exhausted usage', () => {
     expect(await state('builder')).toBe('limited');
     const id = await send('builder', 'Wait for room');
     expect((await find(id))?.state).toBe('pending');
+  });
+
+  describe('while a backend with a usage reader is held', () => {
+    const MINUTE = 60_000;
+    /** A weekly window's reset, days off: the hold outlasts many probes. */
+    const WEEKLY = NOW + 3 * 24 * 60 * MINUTE;
+    const full: UsageWindows = { weekly: { usedPercent: 100, resetsAt: WEEKLY } };
+    /** Codex's usage as the user reset it early: a new week, nothing used. */
+    const reset = (): UsageWindows => ({
+      weekly: { usedPercent: 0, resetsAt: Date.now() + 7 * 24 * 60 * MINUTE },
+    });
+
+    it('reads it as the core starts and every 10 minutes, releasing it once it shows room', async () => {
+      const reads: number[] = [];
+      let codex = full;
+      readUsage = {
+        codex: () => {
+          reads.push(Date.now());
+          return Promise.resolve(codex);
+        },
+      };
+      await exhausted({ resetsAt: WEEKLY });
+      const id = await send('builder', 'After the reset');
+      // Not read yet (the hold began after the core started, and no 10 minutes passed); read as the
+      // next core starts.
+      expect(reads).toEqual([]);
+      const started = Date.now();
+      await restart();
+      expect(reads).toEqual([started]);
+      await vi.advanceTimersByTimeAsync(10 * MINUTE);
+      expect(reads).toEqual([started, started + 10 * MINUTE]);
+      expect((await find(id))?.state).toBe('pending');
+      expect(await state('builder')).toBe('limited');
+
+      // The user resets their plan's usage: the next reading releases the hold, and what waited goes.
+      codex = reset();
+      await vi.advanceTimersByTimeAsync(10 * MINUTE);
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+      expect(await state('builder')).toBe('idle');
+      // Released, it is read no more.
+      await vi.advanceTimersByTimeAsync(60 * MINUTE);
+      expect(reads).toHaveLength(3);
+    });
+
+    it('changes nothing when a reading fails or says nothing, and reads again next time', async () => {
+      const reads: string[] = [];
+      const answers: (() => Promise<UsageWindows | undefined>)[] = [
+        () => Promise.reject(new Error('codex app-server exited')),
+        () => Promise.resolve(undefined),
+        () => Promise.resolve(full),
+        () => Promise.resolve(reset()),
+      ];
+      readUsage = {
+        codex: () => {
+          reads.push(new Date(Date.now()).toISOString());
+          return (answers.shift() ?? (() => Promise.resolve(undefined)))();
+        },
+      };
+      await exhausted({ resetsAt: WEEKLY });
+      const id = await send('builder', 'After the reset');
+      for (const read of [1, 2, 3]) {
+        await vi.advanceTimersByTimeAsync(10 * MINUTE);
+        expect(reads).toHaveLength(read);
+        expect((await find(id))?.state).toBe('pending');
+      }
+      await vi.advanceTimersByTimeAsync(10 * MINUTE);
+      await vi.waitFor(async () => {
+        expect((await find(id))?.state).toBe('replied');
+      });
+    });
+
+    it('reads it once at a time', async () => {
+      const slow = Promise.withResolvers<UsageWindows | undefined>();
+      const codex = vi.fn(() => slow.promise);
+      readUsage = { codex };
+      await exhausted({ resetsAt: WEEKLY });
+      await vi.advanceTimersByTimeAsync(30 * MINUTE);
+      expect(codex).toHaveBeenCalledTimes(1);
+      slow.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(10 * MINUTE);
+      expect(codex).toHaveBeenCalledTimes(2);
+    });
+
+    it('never reads a backend whose adapter has no reader, nor one that isn’t held', async () => {
+      const claude = vi.fn(() => Promise.resolve(undefined));
+      readUsage = { 'claude-code': claude };
+      await exhausted({ resetsAt: WEEKLY });
+      await restart();
+      await vi.advanceTimersByTimeAsync(60 * MINUTE);
+      expect(claude).not.toHaveBeenCalled();
+      expect(await state('builder')).toBe('limited');
+    });
   });
 
   it('shows limited in status, agents and a need without choices, even with no waiting message', async () => {

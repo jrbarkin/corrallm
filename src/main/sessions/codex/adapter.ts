@@ -1,7 +1,9 @@
 import { MAX_IMAGE_BYTES, MAX_IMAGES } from '../../../shared/api/limits';
 import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
+import { findCodex } from './codex';
 import logo from './logo.svg?raw';
+import { UsageReader } from './terminal/usage';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -42,6 +44,9 @@ const RANKS: Readonly<Record<(typeof MODES)[number]['id'], number>> = {
   auto: 2,
   'full-access': 3,
 };
+
+/** What reads Codex's limits for the core while they hold its agents: one read at a time. */
+const usageReader = new UsageReader();
 
 /**
  * Codex: its own interactive CLI in a terminal (codex/terminal/), or a thread of its app server
@@ -132,11 +137,17 @@ export const codex: Adapter = {
       id: CODEX_USAGE,
       label: 'Codex',
       source:
-        'Read from Codex’s app server while an App Server agent works, and as a Terminal agent starts and after each turn (asking one of its own, which spends no usage). On an API key, Codex has no usage windows: it reads nothing.',
+        'Read from Codex’s app server while an App Server agent works, and as a Terminal agent starts and after each turn (asking one of its own, which spends no usage), and so every 10 minutes while a hit limit holds its agents. On an API key, Codex has no usage windows: it reads nothing.',
       windows: [
         { id: 'fiveHour', label: '5-hour', lengthMs: 5 * HOUR },
         { id: 'weekly', label: 'weekly', lengthMs: 7 * 24 * HOUR },
       ],
     },
   ],
+  // A private app server of the user's own `codex`, asked only account/rateLimits/read.
+  readUsage: async (backend, { env, cwd }) => {
+    if (backend !== CODEX_USAGE) return undefined;
+    const found = await findCodex(env);
+    return found === undefined ? undefined : usageReader.read({ codex: found, cwd, env });
+  },
 };
