@@ -242,7 +242,7 @@ describe('RunJournal', () => {
     });
   });
 
-  it('forces every write of a record holding a read position to disk, so none that follows can lose it', async () => {
+  it('forces every write of a record to disk, so a crash loses neither a send’s record nor a read position', async () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
@@ -251,19 +251,20 @@ describe('RunJournal', () => {
       writes.mock.calls
         .filter(([file]) => file === record(canvas))
         .map(([, , options]) => options?.durable === true);
-    // No party has waited on it: its saves are as quick as ever.
+    // No party has waited on it: the save before a send is forced all the same (Core Server §7.7).
     await runs.save(canvas, token, checkpoint);
-    expect(forced()).toEqual([false]);
+    expect(forced()).toEqual([true]);
 
-    // Once a record holds one, a save that moves none (the engine's every 250 ms, a canvas saved,
-    // the app's) still replaces it whole: each is forced too, so a crash leaves either record.
+    // A save that moves a read position, and those that move none (the engine's every 250 ms, a
+    // canvas saved, the app's), each replace the record whole: each is forced, so a crash leaves
+    // either record.
     await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 });
     await runs.save(canvas, token, { ...checkpoint, updatedAt: 456 });
     await runs.saved(canvas);
     const app = journal();
     const context = await app.get(canvas);
     await app.save(canvas, context.token, { ...checkpoint, updatedAt: 789 });
-    expect(forced()).toEqual([false, true, true, true, true]);
+    expect(forced()).toEqual([true, true, true, true, true]);
     expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 3 });
   });
 

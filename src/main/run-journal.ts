@@ -306,8 +306,8 @@ export class RunJournal {
 
   /**
    * Writes a canvas's record, with the read positions it had, `moved` moved forward: forced to disk
-   * once it holds any, since each write replaces the record whole, and one torn by a crash would
-   * lose them all.
+   * every time, since a save may come before a send (whose record must be on disk first) or move a
+   * read position, and each write replaces the record whole.
    */
   async #write(canvas: CanvasId, checkpoint: RunCheckpoint, moved?: MovedRead): Promise<void> {
     const { file, ...remembered } = await this.#deps.memory.get(canvas);
@@ -316,7 +316,6 @@ export class RunJournal {
       moved === undefined || moved.seq <= (kept[moved.party] ?? 0)
         ? kept
         : { ...kept, [moved.party]: moved.seq };
-    const holdsReads = Object.keys(reads).length > 0;
     await mkdir(path.dirname(this.#recordFile(canvas)), PRIVATE);
     await writeWhole(
       this.#recordFile(canvas),
@@ -326,9 +325,9 @@ export class RunJournal {
         ...(file === undefined ? {} : { file }),
         checkpoint,
         remembered,
-        ...(holdsReads ? { reads } : {}),
+        ...(Object.keys(reads).length > 0 ? { reads } : {}),
       }),
-      { durable: holdsReads },
+      { durable: true },
     );
     this.#reads.set(canvas, reads);
   }
