@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { turnResult, UNASKING_MODES } from '../../../../shared/session';
+import { UNASKING_MODES } from '../../../../shared/session';
 
 import type {
   CodexMode,
@@ -238,12 +238,12 @@ export class AppServerSession implements LiveSession<CodexMode> {
     turn.interrupted = true;
     if (turn.plan !== undefined) {
       this.#host.emit({ type: 'withdrawn', id: turn.plan });
-      this.#end(turn, { interrupted: true, failed: false });
+      this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
       return;
     }
     if (turn.consent !== undefined) {
       this.#withdrawConsent();
-      this.#end(turn, { interrupted: true, failed: false });
+      this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
       return;
     }
     if (turn.codex === undefined) {
@@ -317,7 +317,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       ours &&
       property(property(params, 'item'), 'type') === 'contextCompaction'
     ) {
-      this.#end(turn, { interrupted: false, failed: false });
+      this.#end(turn, { status: 'completed', reason: 'completed' });
     }
   }
 
@@ -347,7 +347,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       promise.catch((error: unknown) => {
         if (this.#turn !== turn) return;
         this.#host.emit(notice('error', failureText(error)));
-        this.#end(turn, { interrupted: false, failed: true, result: requestResult(error) });
+        this.#end(turn, requestResult(error));
       });
     };
     if (parsed.kind === 'command') {
@@ -409,7 +409,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     const given = await consent.given().catch(() => false);
     if (this.#turn !== turn) return false;
     if (turn.stop) {
-      this.#end(turn, { interrupted: true, failed: false });
+      this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
       return false;
     }
     if (!given) {
@@ -496,11 +496,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       this.#host.emit({ type: 'status', status: 'waiting' });
       return;
     }
-    this.#end(turn, {
-      interrupted: status === 'interrupted' || (turn.interrupted && status !== 'completed'),
-      failed: status === 'failed',
-      result: this.#translator.takeResult(codex, turn.interrupted && status !== 'completed'),
-    });
+    this.#end(turn, this.#translator.takeResult(codex, turn.interrupted && status !== 'completed'));
   }
 
   /** The plan was approved (carried out in Default mode), or not (planning goes on, if told how). */
@@ -515,7 +511,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
       next = answer.feedback.trim();
       // "No, stay in Plan mode": the turn ends, the plan not carried out.
       if (next === '') {
-        this.#end(turn, { interrupted: false, failed: false });
+        this.#end(turn, { status: 'completed', reason: 'completed' });
         return;
       }
     }
@@ -523,7 +519,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     this.#start(turn, [textInput(next)]).catch((error: unknown) => {
       if (this.#turn !== turn) return;
       this.#host.emit(notice('error', failureText(error)));
-      this.#end(turn, { interrupted: false, failed: true, result: requestResult(error) });
+      this.#end(turn, requestResult(error));
     });
   }
 
@@ -533,7 +529,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
     } catch (error) {
       // It ended before it heard (no active turn to interrupt): it ends here.
       if (this.#turn === turn && error instanceof RpcFailure) {
-        this.#end(turn, { interrupted: true, failed: false });
+        this.#end(turn, { status: 'cancelled', reason: 'interrupted' });
         return;
       }
       throw error;
@@ -541,16 +537,13 @@ export class AppServerSession implements LiveSession<CodexMode> {
   }
 
   /** Ends corrallm's turn: whoever sent its message hears; the next message, if any, goes. */
-  #end(turn: Turn, ending: { interrupted: boolean; failed: boolean; result?: TurnResult }): void {
+  #end(turn: Turn, result: TurnResult): void {
     if (this.#turn !== turn) return;
-    const result = turnResult(ending);
     this.#turn = undefined;
     this.#host.emit({
       type: 'end',
       messages: turn.messages,
       seconds: Math.max(1, Math.round((this.#now() - turn.began) / 1000)),
-      interrupted: result.status === 'cancelled',
-      failed: result.status === 'failed',
       result,
     });
     const next = this.#queue.shift();
@@ -561,7 +554,7 @@ export class AppServerSession implements LiveSession<CodexMode> {
   async #command(turn: Turn, message: UserMessage, name: CommandName, args: string): Promise<void> {
     const local = (events: SessionEvent[]) => {
       for (const event of events) this.#host.emit(event);
-      this.#end(turn, { interrupted: false, failed: false });
+      this.#end(turn, { status: 'completed', reason: 'completed' });
     };
     const said = (markdown: string): SessionEvent => ({
       type: 'text',

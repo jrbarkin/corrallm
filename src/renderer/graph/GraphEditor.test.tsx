@@ -609,7 +609,12 @@ describe('GraphEditor', () => {
         'claude-code.sdk',
         { type: 'user', id: message, text: 'Inspect the failure' },
         { type: 'text', id: 'answer', text: 'I inspected it.' },
-        { type: 'end', messages: [message], seconds: 1, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [message],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
     });
     expect(

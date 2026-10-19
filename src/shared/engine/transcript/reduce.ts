@@ -48,10 +48,8 @@ export type SessionAction =
       type: 'end';
       id: string;
       seconds: number;
-      interrupted: boolean;
-      failed?: boolean;
       messages?: readonly string[];
-      result?: TurnResult;
+      result: TurnResult;
     }
   | { type: 'queue'; id: string; text: string; images?: MessageImage[] }
   | { type: 'unqueue'; id: string }
@@ -194,7 +192,9 @@ export function reduce(session: Session, action: SessionAction): Session {
     case 'status':
       return { ...session, status: action.status };
     case 'end': {
-      const { id, seconds, interrupted, failed, result } = action;
+      const { id, seconds, result } = action;
+      const interrupted = result.status === 'cancelled';
+      const failed = result.status === 'failed';
       const entries = session.entries.map((entry): Entry => {
         if (isOpen(entry)) return { ...entry, withdrawn: true };
         return interrupted && entry.kind === 'tool' && entry.status === 'running'
@@ -212,7 +212,7 @@ export function reduce(session: Session, action: SessionAction): Session {
             seconds,
             interrupted,
             ...(failed ? { failed: true } : {}),
-            ...(result === undefined ? {} : { result }),
+            result,
           },
         ],
       };

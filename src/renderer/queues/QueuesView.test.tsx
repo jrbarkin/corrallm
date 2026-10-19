@@ -248,8 +248,7 @@ describe('the queues view', () => {
             type: 'end',
             messages: [fake.sent()],
             seconds: 1,
-            interrupted: false,
-            failed: false,
+            result: { status: 'completed', reason: 'completed' },
           },
         );
       });

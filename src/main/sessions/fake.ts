@@ -284,8 +284,9 @@ class FakeSession implements LiveSession<SessionMode> {
       type: 'end',
       messages: [id],
       seconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
-      interrupted: !finished,
-      failed: false,
+      result: finished
+        ? { status: 'completed', reason: 'completed' }
+        : { status: 'cancelled', reason: 'interrupted' },
     });
   }
 }

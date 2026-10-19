@@ -1,6 +1,6 @@
 import type { SDKMessage, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 
-import type { SessionEvent } from '../../../shared/session';
+import type { SessionEvent, TurnResult } from '../../../shared/session';
 import type { Places } from './tools';
 import { property, text } from './tools';
 import { Translator } from './translate';
@@ -10,7 +10,8 @@ import { Translator } from './translate';
  * transcript (read back with the SDK's getSessionMessages), as the events they would have been
  * live, each turn ending with an 'end'. The transcript keeps what the model saw: since the last
  * compaction, without subagents' own work, and without the tools' structured results (an edit's
- * diff is rebuilt from what it was asked to change).
+ * diff is rebuilt from what it was asked to change). It keeps no SDK result records: an end
+ * needs a saved completion, refusal or interruption marker; unfinished turns have none.
  */
 
 /** What the CLI notes in the transcript when the user interrupts a turn. */
@@ -23,20 +24,25 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
   const translate = new Translator({ places, history: true });
   const events: SessionEvent[] = [];
   let turn:
-    | { id: string; began: number | undefined; last: number | undefined; interrupted: boolean }
+    | {
+        id: string;
+        began: number | undefined;
+        last: number | undefined;
+        result: TurnResult | undefined;
+      }
     | undefined;
   const end = () => {
     if (!turn) return;
     events.push(...translate.endTurn());
     const seconds =
       turn.began === undefined || turn.last === undefined ? 0 : (turn.last - turn.began) / 1000;
-    events.push({
-      type: 'end',
-      messages: [turn.id],
-      seconds: Math.max(1, Math.round(seconds)),
-      interrupted: turn.interrupted,
-      failed: false,
-    });
+    if (turn.result !== undefined)
+      events.push({
+        type: 'end',
+        messages: [turn.id],
+        seconds: Math.max(1, Math.round(seconds)),
+        result: turn.result,
+      });
     turn = undefined;
   };
 
@@ -51,6 +57,23 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
     };
     if (message.type === 'assistant') {
       worked();
+      if (turn && message.parent_tool_use_id === null) {
+        const stop = property(message.message, 'stop_reason');
+        const said = typed(property(message.message, 'content'))?.trim().slice(0, 4000) ?? '';
+        turn.result =
+          stop === 'refusal'
+            ? {
+                status: 'failed',
+                reason: 'declined',
+                message: said || 'The model declined the request.',
+              }
+            : property(message.message, 'model') !== '<synthetic>' &&
+                (stop === 'end_turn' || stop === 'max_tokens' || stop === 'stop_sequence')
+              ? { status: 'completed', reason: 'completed' }
+              : undefined;
+        if (flag(message, 'interruptedByShutdown'))
+          turn.result = { status: 'cancelled', reason: 'connection-closed' };
+      }
       events.push(...translate.translate(asSdk({ ...message, type: 'assistant' })));
       continue;
     }
@@ -73,6 +96,11 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
       worked();
       // /compact's "Compacted": the compaction's own notice says it.
       const output = local[2]?.trim() ?? '';
+      if (turn)
+        turn.result =
+          local[1] === 'stderr'
+            ? { status: 'failed', reason: 'error', ...(output ? { message: output } : {}) }
+            : { status: 'completed', reason: 'completed' };
       if (output !== '' && !output.startsWith('Compacted')) {
         events.push({
           type: 'notice',
@@ -93,11 +121,18 @@ export function historyEvents(messages: readonly SessionMessage[], places: Place
     }
     if (said.startsWith(INTERRUPTED)) {
       worked();
-      if (turn) turn.interrupted = true;
+      if (turn) turn.result = { status: 'cancelled', reason: 'interrupted' };
       continue;
     }
     end();
-    turn = { id: message.uuid, began: at, last: at, interrupted: false };
+    turn = {
+      id: message.uuid,
+      began: at,
+      last: at,
+      result: flag(message, 'isCompletedLocalCommand')
+        ? { status: 'completed', reason: 'completed' }
+        : undefined,
+    };
     events.push({ type: 'user', id: message.uuid, text: command(said) ?? said });
   }
   end();

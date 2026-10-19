@@ -730,8 +730,6 @@ describe('delivery', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: true,
               result: { status: 'failed', reason: 'usage-limit', resetsAt },
             });
             return Promise.resolve();
@@ -1136,7 +1134,12 @@ describe('telling an agent of a withdrawal after receipt', () => {
             type: 'history',
             events: before.flatMap(({ id, text }): SessionEvent[] => [
               { type: 'user', id, text },
-              { type: 'end', messages: [id], seconds: 1, interrupted: false, failed: false },
+              {
+                type: 'end',
+                messages: [id],
+                seconds: 1,
+                result: { status: 'completed', reason: 'completed' },
+              },
             ]),
           });
           return live;
@@ -1504,7 +1507,6 @@ describe('exhausted usage', () => {
                   first = false;
                   host.emit({
                     ...event,
-                    failed: true,
                     result: {
                       status: 'failed',
                       reason: 'usage-limit',
@@ -2466,8 +2468,7 @@ describe('reads', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: false,
+              result: { status: 'completed', reason: 'completed' },
             });
             return idle();
           },
@@ -2550,8 +2551,7 @@ describe('reads', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: false,
+              result: { status: 'completed', reason: 'completed' },
             });
             return idle();
           },

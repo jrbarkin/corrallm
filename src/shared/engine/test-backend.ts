@@ -87,8 +87,6 @@ export function automaticBackend() {
       type: 'end',
       messages: [turn.id],
       seconds: 1,
-      interrupted,
-      failed: false,
       result: {
         status: interrupted ? 'cancelled' : 'completed',
         reason: interrupted ? 'interrupted' : 'completed',

@@ -1,5 +1,5 @@
 import type { AdapterId, ConnectionId } from '../../adapter';
-import { isSessionMode, turnResult } from '../../session';
+import { isSessionMode } from '../../session';
 import type {
   AgentStartSettings,
   FilesRewind,
@@ -195,8 +195,6 @@ export class ConnectedDriver implements SessionDriver {
         }
         this.#notice('error', errorMessage(error));
         this.#end([turn.id], {
-          interrupted: false,
-          failed: true,
           result: {
             status: 'failed',
             reason: sent.sent ? 'error' : 'start-failed',
@@ -228,8 +226,6 @@ export class ConnectedDriver implements SessionDriver {
     const unsent = [...this.#turns].flatMap(([id, turn]) => (turn.sent ? [] : [id]));
     if (unsent.length > 0) {
       this.#end(unsent, {
-        interrupted: true,
-        failed: false,
         result: { status: 'cancelled', reason: 'taken-back' },
       });
       return;
@@ -261,8 +257,6 @@ export class ConnectedDriver implements SessionDriver {
     this.#stopAsking();
     if (this.#turns.size > 0 || this.#io.session().status !== 'idle') {
       this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
-        interrupted: true,
-        failed: false,
         result: { status: 'cancelled', reason: 'connection-closed' },
       });
     }
@@ -488,8 +482,6 @@ export class ConnectedDriver implements SessionDriver {
         if (event.error !== undefined) this.#notice('error', event.error);
         if (this.#turns.size > 0 || io.session().status !== 'idle') {
           this.#end([...new Set([...this.#turns.keys(), ...this.#messages])], {
-            interrupted: event.error === undefined,
-            failed: event.error !== undefined,
             result: {
               status: event.error === undefined ? 'cancelled' : 'failed',
               reason: 'connection-closed',
@@ -589,18 +581,13 @@ export class ConnectedDriver implements SessionDriver {
   }
 
   /** Ends the turn of messages `ids`: the session is idle, and whoever sent them hears. */
-  #end(
-    ids: readonly string[],
-    ending: { interrupted: boolean; failed: boolean; seconds?: number; result?: TurnResult },
-  ): void {
+  #end(ids: readonly string[], ending: { seconds?: number; result: TurnResult }): void {
     const io = this.#io;
-    const fallback = turnResult(ending);
+    const native = ending.result;
     const result =
-      fallback.status === 'failed' &&
-      fallback.message === undefined &&
-      this.#lastError !== undefined
-        ? { ...fallback, message: this.#lastError }
-        : fallback;
+      native.status === 'failed' && native.message === undefined && this.#lastError !== undefined
+        ? { ...native, message: this.#lastError }
+        : native;
     this.#lastError = undefined;
     const interrupted = result.status === 'cancelled';
     const failed = result.status === 'failed';
@@ -619,8 +606,6 @@ export class ConnectedDriver implements SessionDriver {
       messages: ids,
       result,
       seconds: ending.seconds ?? Math.max(1, Math.round((io.now() - since) / 1000)),
-      interrupted,
-      ...(failed ? { failed: true } : {}),
     });
     // A native message may precede a turn the backend is still sending (a withdrawal note
     // before the user's shell command). Ending that message must not let the queue overtake it.

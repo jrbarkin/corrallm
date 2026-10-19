@@ -130,7 +130,7 @@ const seen = (skip = 0) =>
       case 'notice':
         return `notice:${event.level}:${event.text}`;
       case 'end':
-        return `end:${event.interrupted ? 'interrupted' : event.failed ? 'failed' : 'done'}`;
+        return `end:${event.result.status === 'cancelled' ? 'interrupted' : event.result.status === 'failed' ? 'failed' : 'done'}`;
       case 'mode':
         return `mode:${event.mode}`;
       case 'closed':
@@ -626,7 +626,10 @@ describe('a Terminal session', () => {
       expect(last('end')).toBeDefined();
     });
     expect(claude().written.at(-1)).toBe('\x1b');
-    expect(last('end')).toMatchObject({ messages: ['m1'], interrupted: true, failed: false });
+    expect(last('end')).toMatchObject({
+      messages: ['m1'],
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
   });
 
   it('interrupts what Claude Code just said it started, though its screen copy has yet to read it', async () => {
@@ -646,7 +649,10 @@ describe('a Terminal session', () => {
     const session = await start();
     await session.send({ id: 'm1', text: 'never typed' });
     await session.interrupt();
-    expect(last('end')).toMatchObject({ messages: ['m1'], interrupted: true });
+    expect(last('end')).toMatchObject({
+      messages: ['m1'],
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
     claude().write('\r');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(claude().prompts).toEqual([]);
@@ -694,8 +700,8 @@ describe('a Terminal session', () => {
     expect(claude().prompts).toEqual(['Hello', 'And the changelog']);
     expect(seen()).not.toContainEqual(expect.stringMatching(/^notice:/));
     expect(ends()).toMatchObject([
-      { messages: ['m1'], interrupted: false, failed: false },
-      { messages: ['m2'], interrupted: false, failed: false },
+      { messages: ['m1'], result: { status: 'completed', reason: 'completed' } },
+      { messages: ['m2'], result: { status: 'completed', reason: 'completed' } },
     ]);
   });
 
