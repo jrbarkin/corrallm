@@ -230,12 +230,16 @@ export class RunJournal {
     });
   }
 
-  /** Writes the canvas's message log anew, whole, as `text`: what its store keeps now. */
+  /**
+   * Writes the canvas's message log anew, whole, as `text`: what its store keeps now, forced to
+   * disk (the log before it is moved into place, its folder after) before it resolves, so that no
+   * power loss brings the old log back over what is appended to the new one.
+   */
   rewriteMessages(canvas: CanvasId, text: string): Promise<void> {
     return this.#serialize(async () => {
       const file = this.#messagesFile(canvas);
       await mkdir(path.dirname(file), PRIVATE);
-      await writeWhole(file, text);
+      await writeWhole(file, text, { durable: true });
     });
   }
 

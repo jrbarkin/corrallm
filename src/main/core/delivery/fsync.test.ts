@@ -235,7 +235,10 @@ it('forces a delivering record written with the log anew to disk before it sends
   const sendAt = events.findIndex((event) => event.startsWith('send '));
   const rewriteAt = events.indexOf('rewrite messages.jsonl');
   expect(rewriteAt).toBeGreaterThan(-1);
-  expect(events.slice(rewriteAt, sendAt)).toContain('fsync messages.jsonl');
+  // The log written anew was forced to disk before it was moved into place, and the folder it was
+  // moved into after: a power loss can't bring the old log back over what was appended since.
+  expect(events[rewriteAt - 1]).toMatch(/^fsync messages\.jsonl\..+\.partial$/);
+  expect(events.slice(rewriteAt, sendAt)).toContain(`fsync ${CANVAS}`);
 });
 
 it('delivers the next message once one taken back while it was journaled is withdrawn', async () => {

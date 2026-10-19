@@ -33,6 +33,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 export interface MessageLog {
   readMessages(canvas: CanvasId): Promise<string | undefined>;
   appendMessages(canvas: CanvasId, text: string, durable: boolean): Promise<void>;
+  /** Writes the log anew, whole: always forced to disk, its file and its folder. */
   rewriteMessages(canvas: CanvasId, text: string): Promise<void>;
   setAsideMessages(canvas: CanvasId): Promise<string>;
 }
@@ -306,14 +307,15 @@ export class MessageStore {
       if (!this.#broken && appended <= Math.max(this.#compacted, STORE_BYTES)) {
         await this.#log.appendMessages(this.canvas, text, durable);
         this.#size += bytes;
+        this.#unsynced = !durable;
       } else {
+        // Written anew, the log is on disk, its folder too, before anything is appended to it.
         const whole = this.#whole();
         await this.#log.rewriteMessages(this.canvas, whole);
         this.#size = this.#compacted = Buffer.byteLength(whole);
-        if (durable) await this.#log.appendMessages(this.canvas, '', true);
         this.#broken = false;
+        this.#unsynced = false;
       }
-      this.#unsynced = !durable;
     } catch (error) {
       // The log may lack what this was to write, or hold a line it tore: written whole next.
       this.#broken = true;
