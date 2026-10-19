@@ -3,18 +3,20 @@ import type { UsageBackendId } from '../../shared/adapter';
 import type { UsageReading, UsageRule, UsageState, UsageWindows } from '../../shared/usage';
 import { ipcErrorMessage } from '../ipc-error';
 
-/** Main's usage readings and rules (window.api's usage functions; src/main/usage.ts). */
+/** The core's usage topic mirror and the operations that set rules or simulate readings. */
 export interface UsageSource {
-  get: () => Promise<UsageState>;
-  setRule: (backend: UsageBackendId, rule: UsageRule | null) => Promise<null>;
-  simulate: (backend: UsageBackendId, windows: UsageWindows | null) => Promise<null>;
-  onChanged: (listener: (state: UsageState) => void) => () => void;
+  topics: {
+    snapshot: (topic: 'usage') => UsageState | undefined;
+    subscribe: (topic: 'usage', listener: () => void) => () => void;
+  };
+  setRule: (backend: UsageBackendId, rule: UsageRule | null) => Promise<unknown>;
+  simulate: (backend: UsageBackendId, windows: UsageWindows | null) => Promise<unknown>;
 }
 
 /**
- * Every backend's usage reading and rule, as main keeps them (one per backend, for every canvas),
+ * Every backend's usage reading and rule, as the core keeps them (one per backend, for every canvas),
  * for the gauges and the run (useSyncExternalStore). Rules are set and readings simulated through
- * main, which tells every renderer the change. Without main (`source`, as in tests), it keeps them
+ * the core, which pushes its usage topic. Without a source (as in tests), it keeps them
  * itself.
  */
 export class UsageStore {
@@ -23,25 +25,15 @@ export class UsageStore {
   readonly #source: UsageSource | undefined;
   readonly #now: () => number;
   readonly #stop: (() => void) | undefined;
-  /** Whether main has told a change, which is newer than what it was asked for at the start. */
-  #told = false;
 
   constructor(source?: UsageSource, now: () => number = Date.now) {
     this.#source = source;
     this.#now = now;
     if (!source) return;
-    this.#stop = source.onChanged((state) => {
-      this.#told = true;
-      this.#set(state);
+    this.#state = source.topics.snapshot('usage') ?? NO_USAGE;
+    this.#stop = source.topics.subscribe('usage', () => {
+      this.#set(source.topics.snapshot('usage') ?? NO_USAGE);
     });
-    source.get().then(
-      (state) => {
-        if (!this.#told) this.#set(state);
-      },
-      (error: unknown) => {
-        console.error('Could not read usage:', ipcErrorMessage(error));
-      },
-    );
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -82,7 +74,7 @@ export class UsageStore {
     this.#set({ ...this.#state, readings: [...others, ...simulated] });
   }
 
-  /** Stops hearing main. */
+  /** Stops observing the topic mirror. */
   dispose(): void {
     this.#stop?.();
   }

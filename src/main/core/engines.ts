@@ -1,3 +1,4 @@
+import type { Children } from './children';
 import type { Catalog, ConnectionId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
@@ -12,7 +13,8 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { SessionEvent } from '../../shared/session';
+import { turnResult } from '../../shared/session';
+import type { SessionEvent, UserMessage } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
 import type { MovedRead, RunJournal } from '../run-journal';
@@ -21,6 +23,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import { Delivery } from './delivery/delivery';
 import { MessageStore } from './delivery/messages';
+import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
 
 /*
@@ -49,6 +52,7 @@ const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.'
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 
 export interface EnginesDeps {
+  processes: Pick<Children, 'run'>;
   /** What every adapter declares: what a canvas's file is read against. */
   catalog: Catalog;
   /** What the engines read of it. */
@@ -56,7 +60,7 @@ export interface EnginesDeps {
   sessions: SessionManager;
   projects: ProjectFolders;
   journal: RunJournal;
-  usage: Pick<UsageReadings, 'state' | 'subscribe'>;
+  usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
   files: ProjectFiles;
   /** The environment agents run in (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
@@ -112,7 +116,10 @@ export class Engines {
   readonly #running = new Map<CanvasId, Promise<Running>>();
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
+  readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
   readonly #watchers = new Set<Watcher>();
+  readonly #events = new Map<string, Promise<void>>();
+  #closed = false;
 
   constructor(deps: EnginesDeps) {
     this.#deps = deps;
@@ -135,6 +142,7 @@ export class Engines {
    * canvas now.
    */
   open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
+    if (this.#closed) return Promise.reject(new Error('The core’s canvases have closed.'));
     let running = this.#running.get(canvas);
     if (!running) {
       running = this.#open(canvas, held);
@@ -164,13 +172,74 @@ export class Engines {
   }
 
   /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
-  emit(canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent): void {
-    void this.#running.get(canvas)?.then(
-      ({ listeners }) => {
-        for (const listener of listeners) listener(agentId, connection, event);
-      },
-      () => undefined,
-    );
+  emit(
+    canvas: CanvasId,
+    agentId: string,
+    connection: ConnectionId,
+    event: SessionEvent,
+  ): Promise<void> {
+    const key = `${canvas}\u0000${agentId}`;
+    const previous = this.#events.get(key) ?? Promise.resolve();
+    const emitted = previous.then(() => this.#emit(canvas, agentId, connection, event));
+    this.#events.set(key, emitted);
+    const forget = () => {
+      if (this.#events.get(key) === emitted) this.#events.delete(key);
+    };
+    void emitted.then(forget, forget);
+    return emitted;
+  }
+
+  async #emit(
+    canvas: CanvasId,
+    agentId: string,
+    connection: ConnectionId,
+    event: SessionEvent,
+  ): Promise<void> {
+    if (event.type === 'end') {
+      const result = turnResult(event);
+      const catalog = this.#deps.engineCatalog;
+      const backend = catalog.usageBackendOf({
+        adapter: catalog.adapterOf(connection),
+        connection,
+      });
+      if (
+        backend !== undefined &&
+        result.status === 'failed' &&
+        result.reason === 'usage-limit' &&
+        result.resetsAt !== undefined
+      ) {
+        await this.#deps.usage.exhaust(backend, result.resetsAt);
+      }
+    }
+    const mail = await this.#mail.get(canvas);
+    mail?.notes.receive(agentId, event);
+    const running = await this.#running.get(canvas);
+    for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
+  }
+
+  /**
+   * Every session send carries untold withdrawals from its message store. The app's run stays
+   * in the renderer until B11: reading its notes never composes or journals another run.
+   */
+  async sending(
+    canvas: CanvasId,
+    agentId: string,
+    message: UserMessage,
+    send: (message: UserMessage) => Promise<void>,
+  ): Promise<void> {
+    if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
+    const { notes } = await this.#mailOf(canvas);
+    await notes.send(agentId, message, send);
+  }
+
+  /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
+  async flush(): Promise<void> {
+    await Promise.all(this.#events.values());
+    const running = await Promise.all(this.#running.values());
+    await Promise.all(running.map((one) => this.#write(one)));
+    const mail = await Promise.all(this.#mail.values());
+    await Promise.all(mail.map(({ messages }) => messages.durable()));
+    await this.#deps.journal.flush();
   }
 
   /**
@@ -179,6 +248,10 @@ export class Engines {
    * run can't be journaled; then it rejects, with why each couldn't.
    */
   async close(): Promise<void> {
+    await Promise.all(this.#events.values());
+    this.#closed = true;
+    const mail = await Promise.all(this.#mail.values());
+    for (const { notes } of mail) notes.close();
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
     this.#canvases.clear();
@@ -189,6 +262,8 @@ export class Engines {
     );
     await this.#deps.journal.flush();
     await this.#deps.sessions.closeEverything();
+    await Promise.all(this.#events.values());
+    await Promise.all(mail.map(({ messages }) => messages.durable()));
     const failed = stopped.flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
@@ -212,8 +287,7 @@ export class Engines {
     if (document.id !== canvas) throw new Error(ANOTHER);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
-    const messages = new MessageStore(canvas, journal, () => Date.now());
-    await messages.load();
+    const { messages } = await this.#mailOf(canvas);
     const warnings: readonly string[] = [context.warning, messages.warning].filter(
       (one) => one !== undefined,
     );
@@ -260,12 +334,16 @@ export class Engines {
       engine,
       store: messages,
       nodes: () => running.document.nodes,
+      usage: this.#deps.usage,
       now: () => Date.now(),
       later: (run, ms) => {
         const timer = setTimeout(run, ms);
         return () => {
           clearTimeout(timer);
         };
+      },
+      changed: () => {
+        this.#look(running);
       },
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
@@ -293,6 +371,7 @@ export class Engines {
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
         delivery.schedule();
+        look();
       }),
     ];
     running.stop = () => {
@@ -303,6 +382,22 @@ export class Engines {
     this.#canvases.set(canvas, running);
     this.#look(running);
     return running;
+  }
+
+  #mailOf(canvas: CanvasId): Promise<{ messages: MessageStore; notes: WithdrawalNotes }> {
+    let mail = this.#mail.get(canvas);
+    if (!mail) {
+      mail = (async () => {
+        const messages = new MessageStore(canvas, this.#deps.journal, () => Date.now());
+        await messages.load();
+        return {
+          messages,
+          notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
+        };
+      })();
+      this.#mail.set(canvas, mail);
+    }
+    return mail;
   }
 
   /**
@@ -360,32 +455,36 @@ export class Engines {
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */
   #backend(canvas: CanvasId, listeners: Running['listeners']): SessionBackend {
     const { sessions, projects, files, environment } = this.#deps;
-    const done = (call: Promise<unknown>) => call.then(() => null);
+    const run = <T>(call: () => T): T => this.#deps.processes.run(call);
+    const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
-      start: (agentId, options) => done(sessions.start(canvas, agentId, options)),
-      installed: async () => installedClis(await environment()),
-      send: (agentId, message) => done(sessions.send(canvas, agentId, message)),
+      start: (agentId, options) => done(() => sessions.start(canvas, agentId, options)),
+      installed: () => run(async () => installedClis(await environment())),
+      send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
       answer: (agentId, promptId, answer) =>
-        done(sessions.answer(canvas, agentId, promptId, answer)),
-      interrupt: (agentId) => done(sessions.interrupt(canvas, agentId)),
-      setMode: (agentId, mode) => done(sessions.setMode(canvas, agentId, mode)),
-      setModel: (agentId, model) => done(sessions.setModel(canvas, agentId, model)),
-      setEffort: (agentId, effort) => done(sessions.setEffort(canvas, agentId, effort)),
-      stopTask: (agentId, taskId) => done(sessions.stopTask(canvas, agentId, taskId)),
-      close: (agentId) => done(sessions.close(canvas, agentId)),
-      fresh: (agentId, adapter) => done(sessions.fresh(canvas, agentId, adapter)),
+        done(() => sessions.answer(canvas, agentId, promptId, answer)),
+      interrupt: (agentId) => done(() => sessions.interrupt(canvas, agentId)),
+      setMode: (agentId, mode) => done(() => sessions.setMode(canvas, agentId, mode)),
+      setModel: (agentId, model) => done(() => sessions.setModel(canvas, agentId, model)),
+      setEffort: (agentId, effort) => done(() => sessions.setEffort(canvas, agentId, effort)),
+      stopTask: (agentId, taskId) => done(() => sessions.stopTask(canvas, agentId, taskId)),
+      close: (agentId) => done(() => sessions.close(canvas, agentId)),
+      fresh: (agentId, adapter) => done(() => sessions.fresh(canvas, agentId, adapter)),
       files: async (query) => {
         const folder = projects.of(canvas);
-        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
+        return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
-      options: (adapter) => sessions.settingsOptions(canvas, adapter),
-      sessions: (agentId) => sessions.listSessions(canvas, agentId),
-      resume: (agentId, sessionId) => done(sessions.resumeSession(canvas, agentId, sessionId)),
-      previewRewind: (agentId, messageId) => sessions.previewRewind(canvas, agentId, messageId),
-      rewind: (agentId, messageId, restore) => sessions.rewind(canvas, agentId, messageId, restore),
-      mcp: (agentId) => sessions.mcpServers(canvas, agentId),
+      options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),
+      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId)),
+      resume: (agentId, sessionId) =>
+        done(() => sessions.resumeSession(canvas, agentId, sessionId)),
+      previewRewind: (agentId, messageId) =>
+        run(() => sessions.previewRewind(canvas, agentId, messageId)),
+      rewind: (agentId, messageId, restore) =>
+        run(() => sessions.rewind(canvas, agentId, messageId, restore)),
+      mcp: (agentId) => run(() => sessions.mcpServers(canvas, agentId)),
       changeMcp: (agentId, server, change) =>
-        sessions.changeMcpServer(canvas, agentId, server, change),
+        run(() => sessions.changeMcpServer(canvas, agentId, server, change)),
       onEvent: (listener) => {
         listeners.add(listener);
         return () => {
@@ -408,6 +507,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     now: Date.now(),
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
+    limited: delivery.limited(),
     ...(locale === undefined ? {} : { locale }),
   };
 }

@@ -32,8 +32,6 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/main/core/selftest.ts': 21,
   'src/main/files.ts': 1,
   'src/main/forge-env.d.ts': 2,
-  'src/main/host/reveal.ts': 1,
-  'src/main/index.ts': 2,
   'src/main/native-selftest.ts': 2,
   'src/main/sessions/args.ts': 4,
   'src/main/sessions/claude-errors.ts': 6,
@@ -104,7 +102,6 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/model/session.ts': 9,
   'src/shared/model/words.ts': 5,
   'src/shared/session.ts': 43,
-  'src/shared/terminal.ts': 1,
   'src/shared/usage.ts': 2,
 };
 

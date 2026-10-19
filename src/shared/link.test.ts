@@ -1,14 +1,12 @@
-import { MessageChannel } from 'node:worker_threads';
-import type { MessagePort } from 'node:worker_threads';
-
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { CoreLink } from './link';
 import type { LinkPort } from './link';
 
 /*
- * CoreLink over a Node MessageChannel pair, as the app's ports (Electron's, structured-cloned the
- * same way) will carry it: a window's calls, the core's changes, and HostServices requests to main.
+ * CoreLink over a MessageChannel pair, as the app's ports (Electron's, structured-cloned the same
+ * way) carry it: a window's calls, the core's changes, and HostServices requests to main. Shared
+ * code, so the web's MessagePort, which Node's is too.
  */
 
 /** What the core side answers and sends, in these tests. */
@@ -41,10 +39,17 @@ function portOf(port: MessagePort): LinkPort {
       port.postMessage(message);
     },
     start: (receive, gone) => {
-      port.on('message', receive);
-      port.once('close', () => {
-        gone('the port closed');
+      port.addEventListener('message', (event) => {
+        receive(event.data);
       });
+      port.addEventListener(
+        'close',
+        () => {
+          gone('the port closed');
+        },
+        { once: true },
+      );
+      port.start();
     },
   };
 }

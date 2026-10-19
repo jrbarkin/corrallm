@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 
 import { launchApp } from './launch';
 
-test('launches, renders the window and round-trips app:ping', async () => {
+test('launches, renders the window and reads app.info through its port to the core', async () => {
   const { app, close } = await launchApp();
   try {
     const page = await app.firstWindow();
@@ -14,9 +14,17 @@ test('launches, renders the window and round-trips app:ping', async () => {
     await expect(page).toHaveURL(/^app:\/\/main_window\//);
     await expect(page.getByRole('heading', { level: 1, name: 'corrallm' })).toBeVisible();
 
-    const ping = page.getByTestId('ping-result');
-    await expect(ping).toHaveAttribute('data-status', 'ok');
-    await expect(ping).toHaveText(/^corrallm \d+\.\d+\.\d+ \(Electron /);
+    // The core process answers app.info over the window's port, which main handed the preload.
+    const info = page.getByTestId('app-info');
+    await expect(info).toHaveAttribute('data-status', 'ok');
+    await expect(info).toHaveText(/^corrallm \d+\.\d+\.\d+$/);
+    expect(await page.evaluate(() => window.api.appInfo())).toEqual({
+      ok: true,
+      value: {
+        name: 'corrallm',
+        version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
+      },
+    });
 
     // Context isolation + sandbox: no Node globals leak into the renderer.
     const leaked = await page.evaluate(() => ({

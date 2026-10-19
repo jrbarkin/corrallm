@@ -1,0 +1,85 @@
+import { MessageChannel } from 'node:worker_threads';
+import type { MessagePort } from 'node:worker_threads';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { CoreLink } from '../../../shared/link';
+import type { Handlers, LinkPort } from '../../../shared/link';
+import type { CoreSide, HostSide } from '../protocol';
+import { appHost } from './app';
+
+/*
+ * The core's host in the app: what needs the desktop, asked of main over the core process's link,
+ * here a MessageChannel pair with main's end answering as host/services.ts does.
+ */
+
+const ports: MessagePort[] = [];
+afterEach(() => {
+  for (const port of ports.splice(0)) port.close();
+});
+
+function portOf(port: MessagePort): LinkPort {
+  return {
+    post: (message) => {
+      port.postMessage(message);
+    },
+    start: (receive, gone) => {
+      port.on('message', receive);
+      port.once('close', () => {
+        gone('the port closed');
+      });
+    },
+  };
+}
+
+/** The core's link to main, whose end answers with `main`'s services. */
+function linked(main: Handlers<HostSide>) {
+  const { port1, port2 } = new MessageChannel();
+  ports.push(port1, port2);
+  new CoreLink<HostSide, CoreSide>(portOf(port2), main);
+  return new CoreLink<CoreSide, HostSide>(portOf(port1), {} as Handlers<CoreSide>);
+}
+
+/** Main's dialogs, each picking `picked`. */
+function dialogs(picked: string | null) {
+  const pick = () => Promise.resolve(picked);
+  return {
+    askOpenLink: () => Promise.resolve({ open: false, always: false }),
+    openExternal: () => Promise.resolve(null),
+    showFile: () => Promise.resolve(null),
+    runReady: () => Promise.resolve(null),
+    pickCanvasToOpen: vi.fn<(window: number) => Promise<string | null>>(pick),
+    pickCanvasToSave: vi.fn<(window: number, defaultPath: string) => Promise<string | null>>(pick),
+    pickFolder: vi.fn<(window: number, current?: string) => Promise<string | null>>(pick),
+  };
+}
+
+describe('the core’s host in the app', () => {
+  it('asks main’s dialogs, for the window named, and takes what was picked as trusted', async () => {
+    const main = dialogs('/Users/me/work');
+    const host = appHost(linked(main));
+
+    await expect(host.pickFolder(7, '/Users/me')).resolves.toBe('/Users/me/work');
+    await expect(host.pickFolder(7)).resolves.toBe('/Users/me/work');
+    await expect(host.pickCanvasToOpen(8)).resolves.toBe('/Users/me/work');
+    await expect(host.pickCanvasToSave(9, 'plan.corral')).resolves.toBe('/Users/me/work');
+
+    expect(main.pickFolder.mock.calls).toEqual([[7, '/Users/me'], [7]]);
+    expect(main.pickCanvasToOpen).toHaveBeenCalledWith(8);
+    expect(main.pickCanvasToSave).toHaveBeenCalledWith(9, 'plan.corral');
+  });
+
+  it('answers null for a dialog cancelled', async () => {
+    const host = appHost(linked(dialogs(null)));
+
+    await expect(host.pickFolder(7)).resolves.toBeNull();
+  });
+
+  it('rejects, saying why, when main’s dialog failed', async () => {
+    const main = dialogs(null);
+    main.pickCanvasToOpen.mockRejectedValue(new Error('The window is gone.'));
+    const host = appHost(linked(main));
+
+    await expect(host.pickCanvasToOpen(7)).rejects.toThrow('The window is gone.');
+  });
+});

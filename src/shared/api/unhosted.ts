@@ -6,9 +6,7 @@ import type { OpName } from './surface';
  * op is on MCP alone, which the registry's tests accept only while it is listed here. B8 and B11
  * shrink the list; B11 empties and deletes it, and the tests are strict from then on.
  */
-export const UNHOSTED: Partial<Record<OpName, 'B8' | 'B11'>> = {
-  'app.info': 'B8',
-  'catalog.get': 'B8',
+export const UNHOSTED = {
   agents: 'B11',
   status: 'B11',
   needs: 'B11',
@@ -21,5 +19,4 @@ export const UNHOSTED: Partial<Record<OpName, 'B8' | 'B11'>> = {
   'run.pause': 'B11',
   'run.kill': 'B11',
   'run.unpause': 'B11',
-  'usage.get': 'B8',
-};
+} as const satisfies Partial<Record<OpName, 'B8' | 'B11'>>;

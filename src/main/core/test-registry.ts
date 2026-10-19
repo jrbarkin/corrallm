@@ -8,8 +8,8 @@ import { PARTIES } from '../../shared/api/surface';
 import type { Party, Reach, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Dispatcher, Implementation, OpContext, Registry, RuleCheck } from './call';
-import { asHuman } from './caller';
 import type { AgentCaller, Caller, OutsideCaller, TokenCaller } from './caller';
+import { asHuman } from './gui';
 import type { HostServices } from './host';
 import type { Resolver } from './reach';
 
@@ -422,4 +422,8 @@ export const NO_DESKTOP: HostServices = {
   pickCanvasToOpen: () => Promise.resolve(null),
   pickCanvasToSave: () => Promise.resolve(null),
   pickFolder: () => Promise.resolve(null),
+  askOpenLink: () => Promise.resolve({ open: false, always: false }),
+  openExternal: () => Promise.resolve(null),
+  showFile: () => Promise.resolve(null),
+  runReady: () => Promise.resolve(null),
 };

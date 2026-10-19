@@ -5,6 +5,7 @@ import type { NeedChoice, NeedQuestion, NeedsItem } from '../model/needs';
 import { agentName } from '../model/queries';
 import { isOpen } from '../model/session';
 import type { Prompt, Session } from '../model/session';
+import { resetTime } from '../model/words';
 import type { AskedQuestion, TerminalAsk, ToolDetail } from '../session';
 import type { EngineCatalog } from './catalog';
 import { heldAsks } from './run/asks';
@@ -39,6 +40,8 @@ export interface NeedsInput {
   stuck?: readonly { agent: string; text: string; clears: string }[];
   /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
   unasking?: readonly string[];
+  /** Agents spending a backend whose hard limit was hit, until its reset. */
+  limited?: readonly { agent: string; backend: string; until: number }[];
 }
 
 /** Something that waits for you, as derived: whose it is, and what it is. */
@@ -46,6 +49,7 @@ export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
   | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
   | { kind: 'unasking'; agent: AgentNode }
+  | { kind: 'limited'; agent: AgentNode; backend: string; until: number }
   | { kind: 'prompt'; agent: AgentNode; prompt: Prompt }
   | { kind: 'ask'; agent: AgentNode; ask: TerminalAsk };
 
@@ -72,6 +76,7 @@ export function needsOf({
   locale,
   stuck = [],
   unasking = [],
+  limited = [],
 }: NeedsInput): Need[] {
   const agents = nodes.filter((node): node is AgentNode => node.type === 'agent');
   const agent = (id: string) => agents.find((node) => node.id === id);
@@ -88,6 +93,10 @@ export function needsOf({
     ...unasking.flatMap((id): Need[] => {
       const found = agent(id);
       return found ? [{ kind: 'unasking', agent: found }] : [];
+    }),
+    ...limited.flatMap(({ agent: id, backend, until }): Need[] => {
+      const found = agent(id);
+      return found ? [{ kind: 'limited', agent: found, backend, until }] : [];
     }),
     ...agents.flatMap((node) =>
       (sessions[node.id]?.entries ?? [])
@@ -106,7 +115,10 @@ export function needs(input: NeedsInput): NeedsItem[] {
 }
 
 /** A need as a NeedsItem, yours: addressed to you, answered by you. */
-export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): NeedsItem {
+export function needsItem(
+  need: Need,
+  { canvas, nodes, run, catalog, now = Date.now(), locale }: NeedsInput,
+): NeedsItem {
   const yours = { canvas, agent: need.agent.id, for: 'you' as const, by: ['you' as const] };
   switch (need.kind) {
     case 'hold': {
@@ -153,6 +165,16 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
         choices: [],
         answerIn: 'api',
       };
+    case 'limited':
+      return {
+        id: idOf('limited', need.agent.id),
+        ...yours,
+        kind: 'hold',
+        title: `${agentName(nodes, need.agent.id)}’s ${catalog.backendName(need.backend)} usage is exhausted until ${resetTime(need.until, now, locale)}`,
+        until: need.until,
+        choices: [],
+        answerIn: 'api',
+      };
     case 'prompt':
       return {
         id: idOf('prompt', need.agent.id, need.prompt.id),
@@ -175,7 +197,11 @@ export function needsItem(need: Need, { canvas, nodes, run }: NeedsInput): Needs
  * one that runs without asking, a prompt), its agent (escaped, so that a slash in an agent's id never runs into what follows),
  * and what of the agent's it is (a queue item's id, a prompt's).
  */
-function idOf(kind: 'hold' | 'start' | 'unasking' | 'prompt', agent: string, of?: string): string {
+function idOf(
+  kind: 'hold' | 'start' | 'unasking' | 'limited' | 'prompt',
+  agent: string,
+  of?: string,
+): string {
   return [kind, encodeURIComponent(agent), ...(of === undefined ? [] : [of])].join('/');
 }
 

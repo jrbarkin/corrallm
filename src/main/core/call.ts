@@ -7,9 +7,9 @@ import { idsIn, UnreadableIds } from '../../shared/api/ids';
 import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
+import { notPlainData } from '../../shared/link';
 import { callerKey, canvasesOf, partyOf } from './caller';
 import type { Caller, TokenCaller } from './caller';
-import { notPlainData } from './link';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
 import { Requests } from './requests';
@@ -231,7 +231,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       const reach = party === 'you' ? surface.access.you : surface.access[party];
       if (reach === undefined) {
         throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
-          ? new OpFailure('human-only', `Only you can call ${name}, in corrallm’s window.`)
+          ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
           : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
       }
       if (caller.kind !== 'human') {

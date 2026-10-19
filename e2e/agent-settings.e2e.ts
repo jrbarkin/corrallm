@@ -47,6 +47,7 @@ let page: Page;
 let problems: string[];
 
 test.beforeEach(async () => {
+  closeApp = undefined;
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-agent-settings-'));
   folder = path.join(dir, 'shop');
   canvas = path.join(dir, 'settings.corral');
@@ -59,13 +60,18 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  await closeApp?.();
+  const close = closeApp;
   closeApp = undefined;
-  await rm(dir, { recursive: true, force: true });
+  try {
+    await close?.();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
   expect(problems).toEqual([]);
 });
 
 async function launch(cli: 'claude' | 'codex' = 'claude') {
+  closeApp = undefined;
   // Startup arguments show which conversation is resumed; the protocol fake separately logs
   // initialization context and user prompts, distinguishing a role from a synthetic turn.
   const fake = pathToFileURL(path.resolve('src/main/sessions/sdk/fake-claude.mjs')).href;

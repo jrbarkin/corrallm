@@ -38,6 +38,11 @@ const REAL: Registry = {
   rules: RULES,
 };
 
+it('leaves only B11 operations unhosted after B8', () => {
+  expect(Object.values(UNHOSTED)).not.toContain('B8');
+  expect(GUI_OPS).toEqual(expect.arrayContaining(['catalog.get', 'catalog.installed']));
+});
+
 const NAME = /^[a-z]+(\.[a-zA-Z]+)?$/;
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,49}$/;
 /** Argument names that hold ids, which must therefore be branded. */
@@ -553,6 +558,16 @@ describe('T1: the surface’s rules', () => {
   });
 });
 
+describe('MCP descriptions', () => {
+  it('explains that a wait with `for` leaves messages for a later wait without `after`', () => {
+    const { description } = toolOf('wait', OPS.wait, SURFACE.wait);
+    expect(description).toContain('A wait with `for` never moves the read position');
+    expect(description).toContain(
+      'a later wait without `after` may return messages a `for` wait already returned.',
+    );
+  });
+});
+
 describe('the envelope', () => {
   const surface = (more: Partial<Surface> = {}): Surface => ({
     access: { you: 'all' },
@@ -610,7 +625,7 @@ function snapshot(): string {
   );
   return `${JSON.stringify(
     {
-      gui: GUI_OPS.filter((name) => !(name in UNHOSTED)).map((name) => `api.${name}`),
+      gui: GUI_OPS.map((name) => `api.${name}`),
       mcp: tools,
       counts: Object.fromEntries(
         Object.entries(tools).map(([party, names]) => [party, names.length]),

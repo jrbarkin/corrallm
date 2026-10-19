@@ -12,9 +12,12 @@ class FakeUtilityProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly posted: unknown[] = [];
+  /** What each message posted transferred with it, by the message's place in `posted`. */
+  readonly transferred: unknown[][] = [];
   readonly kill = vi.fn(() => true);
-  postMessage(message: unknown): void {
+  postMessage(message: unknown, transfer: unknown[] = []): void {
     this.posted.push(message);
+    this.transferred.push(transfer);
   }
 }
 
@@ -38,12 +41,26 @@ beforeEach(() => {
   fork.mockClear();
 });
 
+/** What main answers the core of the desktop: the dialogs' picks, faked. */
+const host = {
+  askOpenLink: () => Promise.resolve({ open: false, always: false }),
+  openExternal: () => Promise.resolve(null),
+  showFile: () => Promise.resolve(null),
+  runReady: () => Promise.resolve(null),
+  pickCanvasToOpen: vi.fn(() => Promise.resolve(null)),
+  pickCanvasToSave: vi.fn(() => Promise.resolve(null)),
+  pickFolder: vi.fn((_window: number, current?: string) =>
+    Promise.resolve(current === undefined ? null : `${current}/picked`),
+  ),
+};
+
 function start() {
   const output: [string, string][] = [];
   const core = forkCore({
     entry: '/app/.vite/build/core.cjs',
     output: (line, stream) => output.push([stream, line]),
     check: true,
+    host,
   });
   const child = forked[0];
   if (!child) throw new Error('nothing was forked');
@@ -105,6 +122,42 @@ describe('forking the core process', () => {
 
     await expect(core.exited).resolves.toBe(11);
     await expect(answer).rejects.toThrow('the core process exited with code 11');
+  });
+
+  it('hands the core a window’s end of its port beside the link, tagged with the window', () => {
+    const { core, child } = start();
+    const port = { end: 'the core’s' };
+
+    core.connect(7, port as unknown as Electron.MessagePortMain);
+
+    expect(child.posted).toEqual([{ kind: 'window', window: 7 }]);
+    expect(child.transferred).toEqual([[port]]);
+  });
+
+  it('tells the core a window is gone, over the link', () => {
+    const { core, child } = start();
+
+    core.windowGone(7);
+
+    expect(child.posted).toEqual([{ kind: 'event', name: 'windowGone', args: [7] }]);
+  });
+
+  it('answers what the core asks of the desktop with the host’s services', async () => {
+    const { child } = start();
+
+    child.emit('message', { kind: 'request', id: 1, name: 'pickFolder', args: [7, '/work'] });
+    child.emit('message', { kind: 'request', id: 2, name: 'pickCanvasToOpen', args: [7] });
+
+    await vi.waitFor(() => {
+      expect(child.posted).toHaveLength(2);
+    });
+    expect(host.pickFolder).toHaveBeenCalledWith(7, '/work');
+    expect(child.posted).toEqual(
+      expect.arrayContaining([
+        { kind: 'answer', id: 1, answer: { ok: true, value: '/work/picked' } },
+        { kind: 'answer', id: 2, answer: { ok: true, value: null } },
+      ]),
+    );
   });
 
   it('kills the process', () => {

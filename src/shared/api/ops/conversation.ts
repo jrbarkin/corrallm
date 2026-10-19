@@ -84,7 +84,7 @@ export const NeedsItem = z.strictObject({
 });
 
 /** How an agent is now: waiting for you, working, paused (its queue held), or idle. */
-export const AGENT_STATES = ['waiting', 'working', 'paused', 'idle'] as const;
+export const AGENT_STATES = ['waiting', 'working', 'paused', 'limited', 'idle'] as const;
 
 const canvas = OpCanvas;
 
@@ -171,8 +171,9 @@ export const conversationOps = {
       'Returns the messages addressed to you on your canvases (replies, corrallm’s notices) after ' +
       '`after`, oldest first, or waits up to timeoutSeconds for the next. Without `after`, it ' +
       'starts where your last wait without `for` ended; `for` keeps those about one message. ' +
-      '`next` is where to read on. Keep waits under 2 minutes here; for longer, run `corrallm ' +
-      'wait` in a background command.',
+      'A wait with `for` never moves the read position, so a later wait without `after` may ' +
+      'return messages a `for` wait already returned. `next` is where to read on. Keep waits ' +
+      'under 2 minutes here; for longer, run `corrallm wait` in a background command.',
     input: z.strictObject({
       after: Cursor.optional(),
       for: MessageId.optional(),
@@ -183,9 +184,11 @@ export const conversationOps = {
   withdraw: define('withdraw', {
     summary:
       'Takes back a message you sent: off its agent’s queue if it is still waiting, or ' +
-      'interrupting its turn if that is going on. The message says which canvas it is on, so ' +
-      '`canvas` may be left out.',
+      'interrupting its turn if that is going on. Returns whether it reached the agent and ' +
+      'whether its turn was interrupted. Work already done stays, and the agent’s history ' +
+      'keeps the message; the agent is told of the withdrawal with its next message. The ' +
+      'message says which canvas it is on, so `canvas` may be left out.',
     input: z.strictObject({ canvas, id: MessageId }),
-    output: z.strictObject({}),
+    output: z.strictObject({ reached: z.boolean(), interrupted: z.boolean() }),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;

@@ -252,13 +252,16 @@ it('delivers the next message once one taken back while it was journaled is with
   await vi.waitFor(() => {
     expect(messages?.get(first.id)?.state).toBe('delivering');
   });
-  await ok('withdraw', { id: first.id });
+  expect(await ok('withdraw', { id: first.id })).toEqual({ reached: false, interrupted: false });
   gate.held = undefined;
   held.resolve(undefined);
   await vi.waitFor(() => {
     expect(messages?.get(second.id)?.state).toBe('replied');
   });
   expect(messages?.get(first.id)?.state).toBe('withdrawn');
+  expect(
+    codex.sessions.flatMap((session) => session.sent).every(({ text }) => !text.includes(first.id)),
+  ).toBe(true);
   expect(codex.sessions.flatMap((session) => session.sent.map(({ text }) => text))).toEqual([
     expect.stringMatching(/Second$/) as string,
   ]);

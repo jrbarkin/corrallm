@@ -1,9 +1,9 @@
-import type { AdapterId, Catalog, ConnectionId, UsageBackendId } from './adapter';
+import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
+import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
   FilesRewind,
-  InstalledClis,
   McpChange,
   McpServer,
   PastSession,
@@ -16,31 +16,29 @@ import type {
   SettingsOptions,
   UserMessage,
 } from './session';
-import type { TerminalEvent } from './terminal';
 import type { UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
- * The IPC contract between the main process and the renderer.
+ * The hand-written channels between the renderer and the core. Each one's name, argument tuple
+ * and result are declared here once: core/channels.ts parses and handles it, and the preload
+ * exposes its fixed function on window.api over the window's port. The checked handshake,
+ * core:connect, stays in main and is never exposed to the page.
  *
- * Every channel is declared here once, mapping its name to the argument tuple the renderer
- * sends and the value main resolves with. Main registers a handler for every channel
- * (src/main/ipc.ts), the preload exposes each one on `window.api` (src/preload/index.ts), and
- * the renderer calls `window.api`. The compiler checks both that the three agree on types and
- * that no channel is missing a handler or an `AppApi` method.
- *
- * Main also sends events to the renderer (`IpcEvents`): the preload exposes a function per event
- * that listens for it and returns a function that stops listening.
+ * The core sends session events over the port; terminals and topics use gui-link.ts. Main still asks the renderer
+ * to freeze/save with run:stopping. The preload strips transport details from each event and
+ * returns a function that stops listening.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 export interface IpcContract {
-  /** Round-trip check. Resolves with a human-readable version string. */
-  'app:ping': { args: []; result: string };
-  /** What every adapter declares (src/shared/adapter.ts): the renderer loads it before it mounts. */
-  'catalog:get': { args: []; result: Catalog };
+  /**
+   * The preload's own, which it invokes as it loads and never exposes to the page: asks for the
+   * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
+   */
+  'core:connect': { args: []; result: null };
   /** Restore the current named canvas or durable draft, without starting an agent. */
   'run:get': { args: []; result: RunContext };
-  /** Main selects storage; the token rejects writes from an earlier canvas generation. */
+  /** The core selects storage; the token rejects writes from an earlier canvas generation. */
   'run:save': { args: [token: string, checkpoint: RunCheckpoint | null]; result: null };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
@@ -78,11 +76,6 @@ export interface IpcContract {
    * it could not start. Starting it again with the same connection does nothing.
    */
   'session:start': { args: [agentId: string, options: SessionOptions]; result: null };
-  /**
-   * Which agents the user has, by adapter, found as their connections would run them: a
-   * template's agents run in a Terminal for those by default.
-   */
-  'session:clis': { args: []; result: InstalledClis };
   /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
   'session:send': { args: [agentId: string, message: UserMessage]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
@@ -117,7 +110,7 @@ export interface IpcContract {
    */
   'session:list': { args: [agentId: string]; result: PastSession[] };
   /**
-   * Makes a conversation main listed (session:list) for the canvas's project folder the agent's
+   * Makes a conversation the core listed (session:list) for the canvas's project folder the agent's
    * own: its session ends, and resumes that one when it starts again. Rejects any other id.
    */
   'session:resume': { args: [agentId: string, sessionId: string]; result: null };
@@ -147,43 +140,13 @@ export interface IpcContract {
     args: [agentId: string, server: string, change: McpChange];
     result: McpServer[];
   };
-  /**
-   * Shows an agent's terminal (a Terminal session's) in the renderer's view: main sends
-   * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
-   * again for each session after, until the view detaches.
-   */
-  'terminal:attach': { args: [agentId: string]; result: null };
-  /** The view no longer shows the agent's terminal. */
-  'terminal:detach': { args: [agentId: string]; result: null };
-  /** Keystrokes typed in an agent's terminal view, for its CLI (dropped if none runs). */
-  'terminal:input': { args: [agentId: string, data: string]; result: null };
-  /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
-  'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
-  /**
-   * Opens a link the user clicked (in a transcript, or in a terminal) in their browser: https, or
-   * http to this machine. Main asks first, in a dialog, unless the site is allowlisted or the user
-   * said to always open it. Resolves with whether it opened.
-   */
-  'link:open': { args: [url: string]; result: boolean };
-  /**
-   * Shows the file or folder a file:// link the user Cmd-clicked in a terminal names in the OS file
-   * manager (Finder), selected, never opened: only if it is in the canvas's project folder, links
-   * resolved (src/main/host/reveal.ts). Resolves with whether it was shown.
-   */
-  'link:reveal': { args: [url: string]; result: boolean };
-  /**
-   * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
-   * dropped files: window.api takes the files, never paths): main pastes those that exist into its
-   * terminal, quoted, as a terminal does.
-   */
-  'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
   /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
   'usage:get': { args: []; result: UsageState };
-  /** Sets a backend's usage rule, or (null) takes it off. Every renderer hears 'usage:changed'. */
+  /** Sets a backend's usage rule, or (null) takes it off. Subscribed windows hear the usage topic. */
   'usage:rule': { args: [backend: UsageBackendId, rule: UsageRule | null]; result: null };
   /**
    * Simulates a backend's usage (to try rules without spending real usage), or (null) forgets
-   * its reading. A real reading replaces a simulated one. Every renderer hears 'usage:changed'.
+   * its reading. A real reading replaces a simulated one. Subscribed windows hear the usage topic.
    */
   'usage:simulate': {
     args: [backend: UsageBackendId, windows: UsageWindows | null];
@@ -191,19 +154,12 @@ export interface IpcContract {
   };
 }
 
-/** Events main sends the renderer: each one's name, and what it carries. */
+/** Events the core and main send the renderer: each one's name, and what it carries. */
 export interface IpcEvents {
   /** Freeze queue dispatch, persist, then acknowledge with run:ready. */
   'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
-  /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
-  'terminal:event': [agentId: string, event: TerminalEvent];
-  /**
-   * Usage readings or rules changed (a reading came, or a rule was set): every renderer hears it,
-   * since usage belongs to the backend's account, not to one canvas.
-   */
-  'usage:changed': [state: UsageState];
 }
 
 /**
@@ -233,18 +189,19 @@ export const CANVAS_EXTENSION = 'corral';
 export const MAX_CANVAS_BYTES = 10 * 1024 * 1024;
 
 export type IpcChannel = keyof IpcContract;
+/** Hand-written channels served on a window’s port, after the checked handshake. */
+export type CoreChannel = Exclude<IpcChannel, 'core:connect'>;
+/** Events from the core; main still asks the renderer to freeze/save. */
+export type CoreEvent = Exclude<IpcEvent, 'run:stopping'>;
 export type IpcArgs<C extends IpcChannel> = IpcContract[C]['args'];
 export type IpcResult<C extends IpcChannel> = IpcContract[C]['result'];
 export type IpcEvent = keyof IpcEvents;
 export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
 
 /**
- * A method per contract channel: what `window.api` invokes, with the channel's arguments (but
- * dropOnTerminal, which takes the dropped files).
+ * A method per remaining contract channel, with its arguments.
  */
 export interface InvokeApi {
-  ping(): Promise<IpcResult<'app:ping'>>;
-  catalog(): Promise<IpcResult<'catalog:get'>>;
   getRun(): Promise<IpcResult<'run:get'>>;
   saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
   runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
@@ -254,7 +211,6 @@ export interface InvokeApi {
   chooseProject(): Promise<IpcResult<'project:choose'>>;
   findProjectFiles(...args: IpcArgs<'project:files'>): Promise<IpcResult<'project:files'>>;
   startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
-  installedClis(): Promise<IpcResult<'session:clis'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
@@ -273,14 +229,6 @@ export interface InvokeApi {
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
-  attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
-  detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
-  writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
-  resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
-  openLink(...args: IpcArgs<'link:open'>): Promise<IpcResult<'link:open'>>;
-  revealFile(...args: IpcArgs<'link:reveal'>): Promise<IpcResult<'link:reveal'>>;
-  /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
-  dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
   getUsage(): Promise<IpcResult<'usage:get'>>;
   setUsageRule(...args: IpcArgs<'usage:rule'>): Promise<IpcResult<'usage:rule'>>;
   simulateUsage(...args: IpcArgs<'usage:simulate'>): Promise<IpcResult<'usage:simulate'>>;
@@ -290,17 +238,16 @@ export interface InvokeApi {
 export interface EventApi {
   onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
-  onTerminalEvent(listener: (...args: IpcEventArgs<'terminal:event'>) => void): () => void;
-  onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
 }
 
-/** The API the preload script exposes to the renderer as `window.api`. */
-export interface AppApi extends InvokeApi, EventApi {}
+/**
+ * The API the preload script exposes to the renderer as `window.api`: a function per channel and
+ * per event, and one per GUI operation, over the window's port to the core.
+ */
+export interface AppApi extends InvokeApi, EventApi, GuiBridge {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
-  ping: 'app:ping',
-  catalog: 'catalog:get',
   getRun: 'run:get',
   saveRun: 'run:save',
   runReady: 'run:ready',
@@ -310,7 +257,6 @@ export const API_CHANNELS = {
   chooseProject: 'project:choose',
   findProjectFiles: 'project:files',
   startSession: 'session:start',
-  installedClis: 'session:clis',
   sendToSession: 'session:send',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',
@@ -327,13 +273,6 @@ export const API_CHANNELS = {
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
-  attachTerminal: 'terminal:attach',
-  detachTerminal: 'terminal:detach',
-  writeTerminal: 'terminal:input',
-  resizeTerminal: 'terminal:resize',
-  openLink: 'link:open',
-  revealFile: 'link:reveal',
-  dropOnTerminal: 'terminal:drop',
   getUsage: 'usage:get',
   setUsageRule: 'usage:rule',
   simulateUsage: 'usage:simulate',
@@ -343,14 +282,15 @@ export const API_CHANNELS = {
 export const API_EVENTS = {
   onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
-  onTerminalEvent: 'terminal:event',
-  onUsageChanged: 'usage:changed',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;
-/** Fails to compile, naming the channel, if a contract channel has no `AppApi` method. */
+/**
+ * Fails to compile, naming the channel, if a contract channel has no `AppApi` method (but the
+ * preload's own, core:connect).
+ */
 export type UnexposedChannels = AssertNever<
-  Exclude<IpcChannel, (typeof API_CHANNELS)[keyof typeof API_CHANNELS]>
+  Exclude<IpcChannel, (typeof API_CHANNELS)[keyof typeof API_CHANNELS] | 'core:connect'>
 >;
 /** Fails to compile, naming the event, if an event has no `AppApi` function to listen for it. */
 export type UnexposedEvents = AssertNever<

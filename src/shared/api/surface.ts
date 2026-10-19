@@ -1,10 +1,13 @@
+import { UNHOSTED } from './unhosted';
+
 /*
  * Every operation of corrallm's one API, as plain data (Core Server §3.1): who may call it (its
  * audience), its kind and scope, the rules that narrow what a token may do with it, whether an
  * agent may aim it at itself, which result fields differ by caller, and the state the GUI reads
  * instead of calling it. The GUI's IPC and the agents' MCP are both generated from this one list,
  * and core.call checks the audience on every call, whatever the transport. Each op's schemas sit
- * beside it (ops/*.ts, registry.ts). No imports: the preload may import it.
+ * beside it (ops/*.ts, registry.ts). Plain data, importing only the list of what the app doesn't
+ * host yet (unhosted.ts): the preload imports it.
  */
 
 /**
@@ -92,6 +95,8 @@ const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as
 const R = { ...O, lead: 'linked' } as const;
 /** Reads every caller makes: you, leads and workers on the agents they reach, outside tokens. */
 const A = { ...R, worker: 'linked' } as const;
+/** Operations only you may call, in the GUI. */
+const Y = { you: 'all' } as const;
 /** Writes on agents and queues: you; leads, on their team; outside write tokens. */
 const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
 /** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
@@ -100,8 +105,12 @@ const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canv
 const T = { 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 
 export const SURFACE = {
+  'topics.subscribe': { access: Y, kind: 'command', scope: 'none' },
+  'topics.unsubscribe': { access: Y, kind: 'command', scope: 'none' },
   'app.info': { access: A, kind: 'read', scope: 'none' },
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
+  'catalog.installed': { access: R, kind: 'read', scope: 'none' },
+  'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
   agents: { access: A, kind: 'read', scope: 'none', varies: ['agents'] },
   status: {
     access: R,
@@ -166,6 +175,16 @@ export const SURFACE = {
     self: 'allowed',
   },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
+  'usage.setRule': { access: Y, kind: 'command', scope: 'app' },
+  'usage.simulate': { access: Y, kind: 'command', scope: 'app' },
+  'link.open': { access: Y, kind: 'command', scope: 'none' },
+  'link.reveal': { access: Y, kind: 'command', scope: 'none' },
+  'window.get': { access: Y, kind: 'read', scope: 'none' },
+  'terminal.attach': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.detach': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.input': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.resize': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.drop': { access: Y, kind: 'command', scope: 'none' },
   wait: { access: T, kind: 'read', scope: 'none', waits: true, varies: ['messages', 'next'] },
 } as const satisfies Record<string, Surface>;
 
@@ -174,5 +193,16 @@ export type OpName = keyof typeof SURFACE;
 /** Every operation, by name. */
 export const OP_NAMES = Object.keys(SURFACE) as OpName[];
 
-/** The operations the GUI is the audience for: those you may call. */
-export const GUI_OPS = OP_NAMES.filter((name) => 'you' in SURFACE[name].access);
+/** The operations a window may call: those you may call that the app hosts (unhosted.ts). */
+export type GuiOp = Exclude<
+  { [N in OpName]: 'you' extends keyof (typeof SURFACE)[N]['access'] ? N : never }[OpName],
+  keyof typeof UNHOSTED
+>;
+
+/**
+ * Every operation a window may call, by name: what its port serves (core/gui.ts) and the preload
+ * exposes, one function each. Any other is refused before it is dispatched.
+ */
+export const GUI_OPS = OP_NAMES.filter(
+  (name): name is GuiOp => 'you' in SURFACE[name].access && !(name in UNHOSTED),
+);

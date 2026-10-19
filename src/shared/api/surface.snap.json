@@ -1,10 +1,29 @@
 {
-  "gui": [],
+  "gui": [
+    "api.topics.subscribe",
+    "api.topics.unsubscribe",
+    "api.app.info",
+    "api.catalog.get",
+    "api.catalog.installed",
+    "api.settings.get",
+    "api.usage.get",
+    "api.usage.setRule",
+    "api.usage.simulate",
+    "api.link.open",
+    "api.link.reveal",
+    "api.window.get",
+    "api.terminal.attach",
+    "api.terminal.detach",
+    "api.terminal.input",
+    "api.terminal.resize",
+    "api.terminal.drop"
+  ],
   "mcp": {
     "lead": [
       "agents",
       "app_info",
       "catalog_get",
+      "catalog_installed",
       "message",
       "messages",
       "needs",
@@ -14,6 +33,7 @@
       "session_get",
       "session_interrupt",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "withdraw"
@@ -34,10 +54,12 @@
       "agents",
       "app_info",
       "catalog_get",
+      "catalog_installed",
       "messages",
       "needs",
       "session_get",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "wait"
@@ -46,6 +68,7 @@
       "agents",
       "app_info",
       "catalog_get",
+      "catalog_installed",
       "message",
       "messages",
       "needs",
@@ -55,6 +78,7 @@
       "session_get",
       "session_interrupt",
       "session_transcript",
+      "settings_get",
       "status",
       "usage_get",
       "wait",
@@ -62,14 +86,12 @@
     ]
   },
   "counts": {
-    "lead": 15,
+    "lead": 17,
     "worker": 10,
-    "outside-read": 10,
-    "outside-write": 16
+    "outside-read": 12,
+    "outside-write": 18
   },
   "unhosted": {
-    "app.info": "B8",
-    "catalog.get": "B8",
     "agents": "B11",
     "status": "B11",
     "needs": "B11",
@@ -81,13 +103,32 @@
     "session.interrupt": "B11",
     "run.pause": "B11",
     "run.kill": "B11",
-    "run.unpause": "B11",
-    "usage.get": "B8"
+    "run.unpause": "B11"
   },
   "deviations": {
+    "topics.subscribe": "transport",
+    "topics.unsubscribe": "transport",
+    "usage.setRule": "spending-guard",
+    "usage.simulate": "spending-guard",
+    "link.open": "os-action",
+    "link.reveal": "os-action",
+    "window.get": "view",
+    "terminal.attach": "view",
+    "terminal.detach": "view",
+    "terminal.input": "acts-as-you",
+    "terminal.resize": "view",
+    "terminal.drop": "os-action",
     "wait": "transport"
   },
   "schemas": {
+    "topics.subscribe": {
+      "input": "eb59d888d198bdf1",
+      "output": "ba803cbcde9ca0e3"
+    },
+    "topics.unsubscribe": {
+      "input": "eb59d888d198bdf1",
+      "output": "e5fa5cc18e054cdd"
+    },
     "app.info": {
       "input": "e5fa5cc18e054cdd",
       "output": "fb1ca6c18e59cdb2"
@@ -96,13 +137,17 @@
       "input": "e5fa5cc18e054cdd",
       "output": "a617933cd2efbe50"
     },
+    "catalog.installed": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "de9aacd07a220d13"
+    },
     "agents": {
       "input": "41356bc15da6df1b",
-      "output": "0fc1468ebef7a324"
+      "output": "48d08855f6623662"
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "53a1dfc10c6a3a46"
+      "output": "02d9acf9230d7a3c"
     },
     "needs": {
       "input": "41356bc15da6df1b",
@@ -122,7 +167,7 @@
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
-      "output": "e5fa5cc18e054cdd"
+      "output": "3d1b490b47599ef4"
     },
     "session.get": {
       "input": "c804536f3eb2a39b",
@@ -135,6 +180,10 @@
     "session.interrupt": {
       "input": "dafe7f6753754290",
       "output": "e5fa5cc18e054cdd"
+    },
+    "settings.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "ca640021dc5b5fbe"
     },
     "run.pause": {
       "input": "a85fe9cb1eb6d55a",
@@ -151,6 +200,46 @@
     "usage.get": {
       "input": "e5fa5cc18e054cdd",
       "output": "3586006a7a5073f0"
+    },
+    "usage.setRule": {
+      "input": "9019a4803080df29",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "usage.simulate": {
+      "input": "8cbbd0959972a51d",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "link.open": {
+      "input": "c15bb3817c6ef6b3",
+      "output": "e66a3e83d3926508"
+    },
+    "link.reveal": {
+      "input": "c15bb3817c6ef6b3",
+      "output": "b40c0d650f7a979a"
+    },
+    "window.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "fe7f4592313235fe"
+    },
+    "terminal.attach": {
+      "input": "a80925bfbd4d86d2",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "terminal.detach": {
+      "input": "a80925bfbd4d86d2",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "terminal.input": {
+      "input": "e2ae5af40f432ab7",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "terminal.resize": {
+      "input": "6f7b91a783617018",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "terminal.drop": {
+      "input": "2007c6b60eae3b5c",
+      "output": "e5fa5cc18e054cdd"
     }
   }
 }

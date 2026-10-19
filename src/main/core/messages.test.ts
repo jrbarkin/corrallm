@@ -16,7 +16,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
-import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
+import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
  * Messages in the core (Build Plan B6): what parties send agents, delivered when the agent is idle
@@ -96,6 +96,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await core?.close();
   core = undefined;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
 });
@@ -148,6 +149,7 @@ async function keepCanvas(
 /** Starts the core over the profile, its App Server and Terminal agents on the given connectors. */
 async function start(
   connectors: { appServer?: Connector<SessionMode>; terminal?: Connector<SessionMode> } = {},
+  open = true,
 ): Promise<Core> {
   core = await createCore(
     {
@@ -166,7 +168,7 @@ async function start(
     },
     NO_DESKTOP,
   );
-  await core.engines.open(CANVAS);
+  if (open) await core.engines.open(CANVAS);
   return core;
 }
 
@@ -580,7 +582,7 @@ describe('delivery', () => {
     });
     expect((await find(first))?.state).toBe('pending');
     const waits =
-      'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.';
+      'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.';
     expect(await notices()).toEqual([expect.objectContaining({ replyTo: first, body: waits })]);
     expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([
       expect.objectContaining({
@@ -734,6 +736,22 @@ describe('delivery', () => {
     });
     const id = await send('helper', 'Fail this', BUILDER);
     await vi.waitFor(async () => {
+      expect((await inbox(BUILDER)).find((message) => message.replyTo === id)?.state).toBe(
+        'pending',
+      );
+    });
+    // The reply spends the same backend: a new reading releases its hard limit first.
+    expect(
+      await core?.call(
+        'usage.simulate',
+        {
+          backend: 'codex',
+          windows: { fiveHour: { usedPercent: 10, resetsAt } },
+        },
+        YOU,
+      ),
+    ).toEqual({ ok: true, value: {} });
+    await vi.waitFor(async () => {
       const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
       expect(reply?.state).toBe('replied');
     });
@@ -825,7 +843,7 @@ describe('delivery', () => {
     expect((await inbox()).find((message) => message.kind === 'notice')).toMatchObject({
       from: 'corrallm',
       replyTo: id,
-      body: 'Checker is waiting for you: Approve Bash: echo hello?',
+      body: 'Checker is waiting for the user: Approve Bash: echo hello?',
     });
     // You see the prompt with its choices; a token sees it, without them.
     const yours = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
@@ -1032,7 +1050,7 @@ describe('a turn waiting for you', () => {
     expect(notice).toMatchObject({
       replyTo: id,
       body: expect.stringMatching(
-        /^Builder is waiting for you: (Approve Bash: echo a+|Which of these (very )*very)…$/,
+        /^Builder is waiting for the user: (Approve Bash: echo a+|Which of these (very )*very)…$/,
       ) as string,
     });
     expect(new TextEncoder().encode(notice?.body).length).toBeLessThan(MAX_MESSAGE_BYTES / 16);
@@ -1047,9 +1065,288 @@ describe('a turn waiting for you', () => {
     expect(await notices()).toEqual([
       expect.objectContaining({
         replyTo: id,
-        body: 'Checker is waiting for you: Approve Bash: echo hello?',
+        body: 'Checker is waiting for the user: Approve Bash: echo hello?',
       }),
     ]);
+  });
+});
+
+/** What corrallm tells an agent whose earlier instruction was withdrawn after receipt. */
+const withdrawalNote = (id: string, sender = 'orchestrator') =>
+  `Message ${id} from "${sender}" was withdrawn by its sender after it reached you, and its turn was interrupted. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
+
+/** A received turn withdrawn before its fake session finishes. */
+async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
+  const id = await send(to, '/question Do this old work', caller);
+  await vi.waitFor(() => {
+    expect(
+      core?.engines
+        .canvas(CANVAS)
+        ?.engine.sessions.of(to)
+        .entries.some((entry) => entry.kind === 'user' && entry.reached),
+    ).toBe(true);
+  });
+  expect(await ok('withdraw', { id }, caller)).toEqual({ reached: true, interrupted: true });
+  expect((await find(id, caller))?.state).toBe('withdrawn');
+  return id;
+}
+
+describe('telling an agent of a withdrawal after receipt', () => {
+  beforeEach(() => {
+    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
+  });
+  it.each([
+    ['the same sender', OUTSIDE],
+    ['another outside party', OTHER],
+    ['another agent', BUILDER],
+    ['the user', YOU],
+  ])('rides the next message from %s, without starting a turn of its own', async (_who, caller) => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('helper');
+    const delivered = () => appServer.sessions[0]?.sent.map(({ text }) => text) ?? [];
+    expect(delivered()).toHaveLength(1);
+    const next = await send('helper', 'Only do this new work', caller);
+    await vi.waitFor(async () => {
+      expect((await find(next, caller))?.state).toBe('replied');
+    });
+    const text = delivered()[1] ?? '';
+    expect(text).toContain(withdrawalNote(id));
+    expect(text.match(/\[corrallm\]/g)).toHaveLength(1);
+    expect(text.endsWith('Only do this new work')).toBe(true);
+    expect(delivered()).toHaveLength(2);
+    const later = await send('helper', 'Then this', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(later, OTHER))?.state).toBe('replied');
+    });
+    expect(delivered()[2]).not.toContain(id);
+  });
+
+  it('names an agent sender as frames name it', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('helper', BUILDER);
+    const next = await send('helper', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id, 'Builder'));
+  });
+
+  it('names the user explicitly when the withdrawn message was theirs', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('builder', YOU);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id, 'the user'));
+  });
+
+  it('returns no receipt or interrupt and adds no note for a message still waiting for delivery', async () => {
+    await keepCanvas();
+    await start();
+    await ok('run.pause', { target: { agent: 'builder' } }, YOU);
+    const id = await send('builder', 'Never sent');
+    expect(await ok('withdraw', { id })).toEqual({ reached: false, interrupted: false });
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(1);
+    expect(sent(appServer)[0]).not.toContain(id);
+  });
+
+  it('returns no receipt or interrupt for a message taken off the session’s queue', async () => {
+    await keepCanvas();
+    await start();
+    const first = await send('builder', '/question Keep the turn open');
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('delivered');
+    });
+    const queued = await send('builder', 'Never received', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(queued, YOU))?.state).toBe('delivering');
+    });
+    expect(await ok('withdraw', { id: queued }, YOU)).toEqual({
+      reached: false,
+      interrupted: false,
+    });
+    await ok('session.interrupt', { agent: 'builder' }, YOU);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(2);
+    expect(sent(appServer)[1]).not.toContain(queued);
+  });
+
+  it('keeps the note durably across a restart, and keeps its delivered acknowledgement across the next', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    expect(await readFile(log, 'utf8')).toContain(withdrawalNote(id).replaceAll('"', '\\"'));
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const next = await send('builder', 'After restarting', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const later = await send('builder', 'After restarting again', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(later, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).not.toContain(id);
+  });
+
+  it('combines several still-untold withdrawals in one frame with the next message', async () => {
+    await keepCanvas();
+    const ids = [crypto.randomUUID(), crypto.randomUUID()];
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(
+      log,
+      ids
+        .map((id, i) =>
+          JSON.stringify({
+            seq: i + 1,
+            message: {
+              id,
+              canvas: CANVAS,
+              from: 'outside:orchestrator',
+              to: 'agent:builder',
+              kind: 'text',
+              body: 'Old work',
+              state: 'withdrawn',
+              by: 'outside:orchestrator',
+              at: 1000,
+            },
+            withdrawal: { text: withdrawalNote(id) },
+          }),
+        )
+        .join('\n') + '\n',
+    );
+    await start();
+    expect(sent(appServer)).toEqual([]);
+    const next = await send('builder', 'New work', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)).toHaveLength(1);
+    for (const id of ids) expect(sent(appServer)[0]?.split(withdrawalNote(id))).toHaveLength(2);
+    expect(sent(appServer)[0]?.match(/\[corrallm\]/g)).toHaveLength(1);
+  });
+
+  it('sends a separate framed note first when the user’s next message starts with a shell prefix', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived('shell');
+    expect(sent(terminal)).toHaveLength(1);
+    const next = await send('shell', '!echo hello', YOU);
+    await vi.waitFor(() => {
+      expect(sent(terminal)).toHaveLength(2);
+    });
+    const later = await send('shell', 'After the shell command', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    await vi.waitFor(
+      async () => {
+        expect((await find(later, YOU))?.state).toBe('replied');
+      },
+      { timeout: 3000 },
+    );
+    expect(sent(terminal).slice(1)).toEqual([
+      `[corrallm] ${withdrawalNote(id)}`,
+      '!echo hello',
+      'After the shell command',
+    ]);
+    expect(terminal.sessions[0]?.sent[1]?.from).toEqual({ party: 'corrallm', name: 'corrallm' });
+    expect(terminal.sessions[0]?.sent[2]?.from).toBeUndefined();
+  });
+
+  it('adds the note even when the next user message was already in the session queue', async () => {
+    await keepCanvas();
+    await start();
+    const id = await send('builder', '/question Old work');
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('delivered');
+    });
+    const next = await send('builder', 'Already waiting for the next turn', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('delivering');
+    });
+    expect(await ok('withdraw', { id })).toEqual({ reached: true, interrupted: true });
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id));
+  });
+
+  it('keeps a note when its carrier fails before the CLI echoes it', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    const session = appServer.sessions[0];
+    if (!session) throw new Error('The agent has no session.');
+    const fail = vi
+      .spyOn(session, 'send')
+      .mockRejectedValueOnce(new Error('The CLI did not receive it.'));
+    const failed = await send('builder', 'An unreceived carrier', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(failed, OTHER))?.state).toBe('replied');
+    });
+    fail.mockRestore();
+    appServer = new FakeConnector({ adapter: 'codex' });
+    await restart({ appServer });
+    const next = await send('builder', 'Try again', OTHER);
+    await vi.waitFor(async () => {
+      expect((await find(next, OTHER))?.state).toBe('replied');
+    });
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+  });
+
+  it('rides the app’s session channel after a restart, before any API operation opens the canvas', async () => {
+    await keepCanvas();
+    await start();
+    const id = await withdrawReceived();
+    await core?.close();
+    core = undefined;
+    appServer = new FakeConnector({ adapter: 'codex' });
+    const started = await start({}, false);
+    expect(started.engines.opened()).toEqual([]);
+    expect(await started.channels.call(7, 'run:get', [])).toMatchObject({ id: CANVAS });
+    await started.channels.call(7, 'session:start', [
+      'builder',
+      { connection: 'codex.app-server', model: null, mode: null },
+    ]);
+    await started.channels.call(7, 'session:send', [
+      'builder',
+      { id: crypto.randomUUID(), text: 'Typed in the app' },
+    ]);
+    expect(sent(appServer)[0]).toContain(withdrawalNote(id));
+  });
+
+  it('rides a direct session send too, rather than waiting for another message operation', async () => {
+    await keepCanvas();
+    const started = await start();
+    const id = await withdrawReceived();
+    const engine = started.engines.canvas(CANVAS)?.engine;
+    engine?.sessions.send('builder', 'codex', 'A manual message');
+    await vi.waitFor(() => {
+      expect(sent(appServer)).toHaveLength(2);
+    });
+    expect(sent(appServer)[1]).toContain(withdrawalNote(id));
   });
 });
 
@@ -1063,7 +1360,7 @@ describe('the shell prefix', () => {
         error: {
           code: 'refused',
           sentence:
-            'It starts with "!", which Codex · Terminal runs as a shell command without asking: only you may send that.',
+            'It starts with "!", which Codex · Terminal runs as a shell command without asking: only the user may send that.',
         },
       });
     }
@@ -1083,6 +1380,222 @@ describe('the shell prefix', () => {
       expect((await find(theirs))?.state).toBe('replied');
     });
     expect(sent(appServer)).toEqual([`${FRAME(theirs)}!ls`]);
+  });
+});
+
+describe('exhausted usage', () => {
+  const NOW = new Date(2026, 9, 18, 15, 30).getTime();
+  const RESET = NOW + 10 * 60_000;
+  const NOTICE =
+    'Builder’s Codex usage is exhausted until 15:40, so your message waits until then.';
+
+  async function state(agent: string): Promise<string | undefined> {
+    const result = await ok<{ agents: { id: string; state: string }[] }>('status', {});
+    return result.agents.find(({ id }) => id === agent)?.state;
+  }
+
+  /** One failed turn, followed by ordinary turns, with no usage rule set. */
+  async function exhausted({ manual = false, another = false } = {}): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    await keepCanvas();
+    if (manual) {
+      await mkdir(path.join(profile, 'runs'));
+      await writeFile(
+        path.join(profile, 'runs', 'last.json'),
+        JSON.stringify({ version: 2, canvas: CANVAS }),
+      );
+    }
+    if (another) {
+      const file = path.join(profile, 'other.corral');
+      const doc = JSON.parse(await readFile(path.join(profile, 'canvas.corral'), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      await writeFile(file, JSON.stringify({ ...doc, id: OTHER_CANVAS }));
+      const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
+        canvases: Record<string, unknown>;
+      };
+      await writeFile(
+        path.join(profile, 'canvases.json'),
+        JSON.stringify({
+          ...memory,
+          canvases: {
+            ...memory.canvases,
+            [OTHER_CANVAS]: { file, project, conversations: {} },
+          },
+        }),
+      );
+    }
+    const startSession = appServer.start.bind(appServer);
+    let first = true;
+    const started = await start(
+      {
+        appServer: {
+          start: (spec, host) =>
+            startSession(spec, {
+              ...host,
+              emit: (event) => {
+                if (event.type === 'end' && first) {
+                  first = false;
+                  host.emit({
+                    ...event,
+                    failed: true,
+                    result: {
+                      status: 'failed',
+                      reason: 'usage-limit',
+                      resetsAt: RESET,
+                    },
+                  });
+                } else host.emit(event);
+              },
+            }),
+        },
+      },
+      !manual,
+    );
+    if (another) await started.engines.open(OTHER_CANVAS);
+    if (manual) {
+      await started.channels.call(7, 'run:get', []);
+      await started.channels.call(7, 'session:start', [
+        'builder',
+        { connection: 'codex.app-server', model: null, mode: null },
+      ]);
+      await started.channels.call(7, 'session:send', [
+        'builder',
+        { id: crypto.randomUUID(), text: 'Typed in the app' },
+      ]);
+      await vi.waitFor(() => {
+        expect(first).toBe(false);
+      });
+      expect(started.engines.opened()).toEqual([]);
+      await started.engines.open(CANVAS);
+      return;
+    }
+    const id = await send('builder', 'Use the last of the window');
+    await vi.waitFor(async () => {
+      expect((await inbox()).find(({ replyTo }) => replyTo === id)?.turn).toEqual({
+        status: 'failed',
+        reason: 'usage-limit',
+        resetsAt: RESET,
+      });
+    });
+  }
+
+  it('holds without a rule, tells each sender once and delivers at the reset on its own clock', async () => {
+    await exhausted();
+    const first = await send('builder', 'First');
+    const second = await send('builder', 'Second');
+    const other = await send('builder', 'Other', OTHER);
+    expect((await find(first))?.state).toBe('pending');
+    expect((await find(second))?.state).toBe('pending');
+    expect((await notices()).map(({ body }) => body)).toEqual([NOTICE]);
+    expect((await notices(OTHER)).map(({ body }) => body)).toEqual([NOTICE]);
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+      expect((await find(second))?.state).toBe('replied');
+      expect((await find(other, OTHER))?.state).toBe('replied');
+    });
+    expect(await notices()).toHaveLength(1);
+  });
+
+  it('keeps the hold and what it told each sender across a restart', async () => {
+    await exhausted();
+    const id = await send('builder', 'After the reset');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    await restart();
+    expect((await find(id))?.state).toBe('pending');
+    expect(await notices()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await notices()).toHaveLength(1);
+  });
+
+  it('still sends what the user types past the hold', async () => {
+    await exhausted();
+    const waiting = await send('builder', 'Wait');
+    const yours = await send('builder', 'Typed by the user', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect(sent(appServer).at(-1)).toBe('Typed by the user');
+    expect((await find(waiting))?.state).toBe('pending');
+  });
+
+  it('releases on a simulated reading below the limit', async () => {
+    await exhausted();
+    const id = await send('builder', 'Now there is room');
+    expect((await find(id))?.state).toBe('pending');
+    const result = await core?.call(
+      'usage.simulate',
+      {
+        backend: 'codex',
+        windows: { fiveHour: { usedPercent: 10, resetsAt: RESET } },
+      },
+      YOU,
+    );
+    expect(result?.ok).toBe(true);
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await state('builder')).toBe('idle');
+    expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([]);
+  });
+
+  it('limits every agent on the backend, including another canvas', async () => {
+    await exhausted({ another: true });
+    const id = await send('shell', 'Another connection on the backend');
+    expect((await find(id))?.state).toBe('pending');
+    expect(sent(terminal)).toEqual([]);
+    const result = await core?.call(
+      'message',
+      {
+        canvas: OTHER_CANVAS,
+        to: 'builder',
+        body: 'Another canvas',
+      },
+      { ...OUTSIDE, canvases: [OTHER_CANVAS] },
+    );
+    expect(result?.ok).toBe(true);
+    const open = core?.engines.canvas(OTHER_CANVAS);
+    expect(open?.messages.all().find(({ body }) => body === 'Another canvas')?.state).toBe(
+      'pending',
+    );
+    expect(await state('helper')).toBe('limited');
+  });
+
+  it('records a manual turn’s limit before any API operation has opened its canvas', async () => {
+    await exhausted({ manual: true });
+    expect(await state('builder')).toBe('limited');
+    const id = await send('builder', 'Wait for room');
+    expect((await find(id))?.state).toBe('pending');
+  });
+
+  it('shows limited in status, agents and a need without choices, even with no waiting message', async () => {
+    await exhausted();
+    expect(await state('builder')).toBe('limited');
+    const agents = await ok<{ agents: { id: string; state: string }[] }>('agents', {});
+    expect(agents.agents.every(({ state }) => state === 'limited')).toBe(true);
+    const items = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
+    expect(items).toHaveLength(4);
+    expect(items.find(({ agent }) => agent === 'builder')).toMatchObject({
+      title: 'Builder’s Codex usage is exhausted until 15:40',
+      until: RESET,
+      choices: [],
+    });
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    expect(await state('builder')).toBe('idle');
+    expect(
+      (await ok<{ agents: { state: string }[] }>('agents', {})).agents.every(
+        ({ state }) => state === 'idle',
+      ),
+    ).toBe(true);
+    expect((await ok<{ items: NeedsItem[] }>('needs', {})).items).toEqual([]);
   });
 });
 
@@ -1436,7 +1949,7 @@ describe('a restart', () => {
       // Told it waited on a pause, then that it was withdrawn.
       expect((await notices(caller)).filter(({ replyTo }) => replyTo === id)).toEqual([
         expect.objectContaining({
-          body: expect.stringMatching(/^Helper is paused by you/) as string,
+          body: 'Helper is paused by the user, so your message waits until it is released: only the party that set a pause, or the user, can release it.',
         }),
         expect.objectContaining({
           body: 'Your message was withdrawn: the agent it was for, helper, is no longer on the canvas.',
@@ -1515,7 +2028,7 @@ describe('pauses', () => {
       error: {
         code: 'refused',
         sentence:
-          'Builder stays paused by "other" and by you on its group "Team": only the party that set a pause, or you, can release it.',
+          'Builder stays paused by "other" and by the user on its group "Team": only the party that set a pause, or the user, can release it.',
       },
     });
     // You release only Builder's own pauses; its group's still holds it.
@@ -1544,26 +2057,32 @@ describe('pauses', () => {
       error: {
         code: 'refused',
         sentence:
-          'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or you, can release it.',
+          'Builder is held by your pause on its group "Team": release it with run.unpause on that group. It is also paused by "other": only the party that set a pause, or the user, can release it.',
       },
     });
     expect(await ok('run.unpause', { target: { group: 'team' } })).toEqual({ held: [] });
   });
 
-  it('tells a party once that its message waits on a pause, naming who set it', async () => {
-    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
-    await start();
-    await ok('run.pause', { target: { group: 'team' } }, YOU);
-    const first = await send('builder', 'First');
-    await send('builder', 'Second');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(await notices()).toEqual([
-      expect.objectContaining({
-        replyTo: first,
-        body: 'Builder is paused by you on its group "Team", so your message waits until it is released: only the party that set a pause, or you, can release it.',
-      }),
-    ]);
-  });
+  it.each([
+    ['an outside orchestrator', OUTSIDE],
+    ['an agent', { ...BUILDER, agent: 'helper', session: 'helper-session' }],
+  ] as const)(
+    'tells %s once that its message waits on a pause, naming who set it',
+    async (_, caller) => {
+      await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+      await start();
+      await ok('run.pause', { target: { group: 'team' } }, YOU);
+      const first = await send('builder', 'First', caller);
+      await send('builder', 'Second', caller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await notices(caller)).toEqual([
+        expect.objectContaining({
+          replyTo: first,
+          body: 'Builder is paused by the user on its group "Team", so your message waits until it is released: only the party that set a pause, or the user, can release it.',
+        }),
+      ]);
+    },
+  );
 
   it('tells a party anew when the agent it messages is paused again', async () => {
     await keepCanvas();
@@ -1690,8 +2209,8 @@ describe('a kill', () => {
     const messages = await inbox();
     expect(messages.filter((message) => message.kind === 'notice').map(({ body }) => body)).toEqual(
       [
-        'Your message to Builder was withdrawn by you.',
-        'Your message to Builder was withdrawn by you.',
+        'Your message to Builder was withdrawn by the user.',
+        'Your message to Builder was withdrawn by the user.',
       ],
     );
     expect(
@@ -2022,7 +2541,10 @@ describe('reads', () => {
       ok: false,
       error: { code: 'invalid', sentence },
     });
-    expect(await started.call('withdraw', { id }, both)).toEqual({ ok: true, value: {} });
+    expect(await started.call('withdraw', { id }, both)).toEqual({
+      ok: true,
+      value: { reached: false, interrupted: false },
+    });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
   });
 

@@ -19,7 +19,7 @@ export function catalogOf(adapters: readonly Adapter[]): Catalog {
   };
 }
 
-/** The catalog every process reads (catalog:get). */
+/** The catalog every process reads (catalog.get). */
 export const CATALOG: Catalog = catalogOf(ADAPTERS);
 
 /**

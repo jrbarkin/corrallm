@@ -25,6 +25,17 @@ export type Reason = keyof typeof REASONS;
 
 /** Each operation on one surface only, with its reason. */
 export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
-  // The GUI's half, topics, comes with B8.
+  'topics.subscribe': 'transport',
+  'topics.unsubscribe': 'transport',
+  'usage.setRule': 'spending-guard',
+  'usage.simulate': 'spending-guard',
+  'link.open': 'os-action',
+  'link.reveal': 'os-action',
+  'window.get': 'view',
+  'terminal.attach': 'view',
+  'terminal.detach': 'view',
+  'terminal.input': 'acts-as-you',
+  'terminal.resize': 'view',
+  'terminal.drop': 'os-action',
   wait: 'transport',
 };

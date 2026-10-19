@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LinkOpener } from './links';
 import type { LinkAnswer, LinkOpenerDeps } from './links';
 
-/** A stand-in for a renderer's web contents: whose window the dialog belongs to. */
-const renderer = () => ({}) as Electron.WebContents;
+/** The window the dialog belongs to, by its id. */
+let nextWindow = 0;
+const renderer = () => ++nextWindow;
 
 let dir: string;
 let file: string;

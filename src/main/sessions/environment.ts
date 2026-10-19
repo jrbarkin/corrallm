@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from './process';
 
 /*
  * The environment agents run in. An app opened from the Finder or the Dock gets a bare PATH, so

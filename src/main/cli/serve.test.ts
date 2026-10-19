@@ -412,7 +412,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'ask me' });
     const notice = await waitFor(client, (message) => message.kind === 'notice');
     expect(notice).toMatchObject({ from: 'corrallm', replyTo: id });
-    expect(notice.body).toMatch(/^Builder is waiting for you: \S/);
+    expect(notice.body).toMatch(/^Builder is waiting for the user: \S/);
     const { items } = await call<{ items: { kind: string; agent: string; choices: unknown[] }[] }>(
       client,
       'needs',
@@ -620,6 +620,23 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     running.push(server);
     return { printed, server };
   }
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux').each([false, true])(
+    'prints the URL hint once on another profile (new token: %s)',
+    async (newToken) => {
+      const server = newToken ? (await serveOnTerminal([])).server : await serve();
+      await vi.waitFor(() => {
+        expect(server.stderr()).toContain('corrallm serve: serving ');
+      });
+      await server.stop();
+      const printed = server.stderr();
+      const hint = `corrallm wait finds this server only by its URL: export CORRALLM_URL=${server.url} where your orchestrator runs.`;
+      expect(printed.split(hint)).toHaveLength(2);
+      const serving = printed.indexOf('corrallm serve: serving ');
+      if (newToken) expect(printed.indexOf(hint)).toBeLessThan(serving);
+      else expect(printed.indexOf(hint)).toBeGreaterThan(serving);
+    },
+  );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     'makes a token on a terminal: printed once, kept as its hash, with each adapter’s registration',

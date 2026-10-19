@@ -11,6 +11,7 @@ import type { ModelInfo, Options, SDKUserMessage } from '@anthropic-ai/claude-ag
 import { PERMISSION_MODES } from '../../../shared/session';
 import type { ModelChoice, SessionEvent } from '../../../shared/session';
 import { requireClaude } from '../claude';
+import { spawn } from '../process';
 import { CLAUDE_TERMINAL } from '../claude-code/adapter';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from '../connector';
 import { effortChoice } from '../transcript';
@@ -170,6 +171,19 @@ export class SdkConnector implements Connector {
     const model = spec.model === null || spec.model === 'default' ? undefined : spec.model;
     const options: Options = {
       pathToClaudeCodeExecutable: claude,
+      spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
+        const child = spawn(command, args, {
+          ...(cwd === undefined ? {} : { cwd }),
+          env,
+          signal,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
+        child.stderr.on('data', (data: Buffer) => {
+          stderr.write(data.toString('utf8'));
+        });
+        return child;
+      },
       cwd: spec.cwd,
       env: {
         ...spec.env,

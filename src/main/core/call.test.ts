@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
 import { createDispatcher, OpFailure, scopeOf } from './call';
 import type { DispatchOptions } from './call';
-import { asHuman, partyOf } from './caller';
+import { partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
+import { asHuman } from './gui';
 import { REMEMBERED_REQUESTS } from './requests';
 import {
   CALLERS,
@@ -89,7 +90,10 @@ describe('core.call', () => {
     for (const party of ['lead', 'worker', 'outside-read', 'outside-write'] as const) {
       expect(await core.call('test.yours', {}, CALLERS[party])).toEqual({
         ok: false,
-        error: { code: 'human-only', sentence: expect.stringContaining('test.yours') as unknown },
+        error: {
+          code: 'human-only',
+          sentence: 'Only the user can call test.yours, in corrallm’s window.',
+        },
       });
     }
     expect(

@@ -210,6 +210,33 @@ describe('a connected session', () => {
     });
   });
 
+  it('keeps an outgoing turn ahead of its queue while a preceding native message ends', async () => {
+    const { store, backend, emit, sent } = connected();
+    const done = vi.fn();
+    store.send('a', 'claude-code', 'The user’s command', done);
+    await settle();
+    const id = sent();
+    store.send('a', 'claude-code', 'After the command');
+    // The backend sends a framed withdrawal note before this command, as its own CLI turn.
+    emit(
+      'a',
+      'claude-code.sdk',
+      { type: 'user', id: 'note', text: '[corrallm] An earlier instruction was withdrawn.' },
+      end(['note']),
+    );
+    await settle();
+    expect(store.of('a').status).toBe('working');
+    expect(backend.send).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+    emit('a', 'claude-code.sdk', { type: 'user', id, text: 'The user’s command' }, end([id]));
+    await settle();
+    expect(backend.send).toHaveBeenLastCalledWith(
+      'a',
+      expect.objectContaining({ text: 'After the command' }),
+    );
+    expect(done).toHaveBeenCalledOnce();
+  });
+
   it('tells whoever sent a message what the agent replied in its turn, not its subagents', async () => {
     const { store, emit, sent } = connected();
     const done = vi.fn<(interrupted: boolean, reply: string) => void>();

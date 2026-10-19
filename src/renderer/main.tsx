@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { api } from './api/client';
 import { App } from './App';
 import { boot } from './boot';
 import './index.css';
@@ -10,7 +11,7 @@ if (container === null) throw new Error('Missing #root element');
 
 void boot(
   createRoot(container),
-  () => window.api.catalog(),
+  () => api.catalogGet(),
   <StrictMode>
     <App />
   </StrictMode>,

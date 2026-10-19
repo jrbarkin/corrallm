@@ -14,7 +14,7 @@ import type { HostServices } from '../host';
 
 /** Why the host can't show a dialog: there is nobody to show it to. */
 const NO_DIALOG =
-  'Only you can choose a file or a folder, in corrallm’s window: corrallm serve has no window.';
+  'Only the user can choose a file or a folder, in corrallm’s window: corrallm serve has no window.';
 
 const refuse = () => Promise.reject(new OpFailure('human-only', NO_DIALOG));
 
@@ -22,6 +22,10 @@ export const NODE_HOST: HostServices = {
   pickCanvasToOpen: refuse,
   pickCanvasToSave: refuse,
   pickFolder: refuse,
+  askOpenLink: refuse,
+  openExternal: refuse,
+  showFile: refuse,
+  runReady: refuse,
 };
 
 /**

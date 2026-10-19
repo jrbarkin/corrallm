@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ESLint, Linter } from 'eslint';
@@ -70,6 +70,24 @@ function importsOf(file: string): string[] {
     ...text.matchAll(/^(?:import|export)\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/gm),
     ...text.matchAll(/^import\s*['"]([^'"]+)['"]/gm),
   ].flatMap(([, from]) => (from === undefined ? [] : [from]));
+}
+
+/** Every file of the repository's own that `entry` loads as it runs: what it imports, but types. */
+function loadedBy(entry: string, seen = new Set<string>()): string[] {
+  seen.add(entry);
+  const text = read(entry);
+  for (const [, from] of [
+    ...text.matchAll(/^(?:import|export)(?!\s+type\b)[^;'"]*?\bfrom\s*['"](\.[^'"]+)['"]/gm),
+    ...text.matchAll(/^import\s*['"](\.[^'"]+)['"]/gm),
+  ]) {
+    if (from === undefined) continue;
+    const base = path.posix.join(path.posix.dirname(entry), from);
+    const file = [`${base}.ts`, `${base}/index.ts`].find((candidate) =>
+      existsSync(path.join(ROOT, candidate)),
+    );
+    if (file !== undefined && !seen.has(file)) loadedBy(file, seen);
+  }
+  return [...seen];
 }
 
 describe('ESLint’s boundaries in main', () => {
@@ -158,10 +176,7 @@ describe('ESLint’s boundaries in main', () => {
       ),
     ).toEqual([]);
     expect(
-      await importErrors(
-        'src/main/host/dialogs.ts',
-        "import { dialog } from 'electron';\nimport { mintTrustedPath } from '../core/host';\n",
-      ),
+      await importErrors('src/main/host/dialogs.ts', "import { dialog } from 'electron';\n"),
     ).toEqual([]);
   });
 });
@@ -246,17 +261,39 @@ describe('main’s files', () => {
     ).toEqual([]);
   });
 
-  it('make a human caller nowhere: no token, and nothing an agent or a page sends, is you', () => {
-    // core/gui.ts (B8), for a window's port main made, will be the one place that makes one.
+  it('make a human caller only for a window’s port main made: no token, agent or page is you', () => {
     const makers = mainFiles().filter((file) => /\basHuman\b/.test(read(file)));
-    expect(makers).toEqual(['src/main/core/caller.ts']);
+    expect(makers).toEqual(['src/main/core/gui.ts']);
+    // Loaded only in the core process, whose parentPort only main posts to: under plain Node (the
+    // CLI) no human caller can exist.
+    const loaders = mainFiles().filter((file) =>
+      importsOf(file).some(
+        (from) => path.posix.join(path.posix.dirname(file), from) === 'src/main/core/gui',
+      ),
+    );
+    expect(loaders).toEqual(['src/main/core/entry.ts']);
   });
 
-  it('mint trusted paths only from the dialogs and the stores reading back what they wrote', () => {
+  it('compose the profile’s stores only in the core process', () => {
+    const stores = [
+      'src/main/memory.ts',
+      'src/main/settings.ts',
+      'src/main/usage.ts',
+      'src/main/run-journal.ts',
+      'src/main/core/tokens.ts',
+      'src/main/core/core.ts',
+      'src/main/core/engines.ts',
+      'src/main/sessions/manager.ts',
+    ];
+    expect(loadedBy('src/main/core/entry.ts')).toEqual(expect.arrayContaining(stores));
+    expect(loadedBy('src/main/index.ts').filter((file) => stores.includes(file))).toEqual([]);
+  });
+
+  it('mint trusted paths only from the host’s dialog answers in the core and the stores reading back what they wrote', () => {
     const minting = mainFiles().filter((file) => read(file).includes('mintTrustedPath('));
     expect(minting.sort()).toEqual([
       'src/main/core/host.ts',
-      'src/main/host/dialogs.ts',
+      'src/main/core/host/app.ts',
       'src/main/memory.ts',
       'src/main/run-journal.ts',
     ]);

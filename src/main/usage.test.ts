@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,6 +47,76 @@ const fiveHour = (usedPercent: number, resetsAt: number | null = START + 2 * HOU
 });
 
 describe('UsageReadings', () => {
+  it('can exit immediately after an exhaustion notification without losing its hold', async () => {
+    await writeFile(file, JSON.stringify({ version: 2, readings: [], rules: {} }));
+    let atExit: unknown;
+    readings.subscribe(() => {
+      // The disk image at notification is all a restarted process would have after this exit.
+      atExit = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    });
+    await readings.exhaust('codex', START + HOUR);
+    expect(atExit).toMatchObject({ exhausted: { codex: { resetsAt: START + HOUR } } });
+    const restarted = await open();
+    expect(restarted.exhausted('codex')).toBe(START + HOUR);
+  });
+
+  it('remembers a backend’s exhausted limit across restarts, independently of its rule', async () => {
+    await readings.exhaust('codex', START + HOUR);
+    expect(readings.exhausted('codex')).toBe(START + HOUR);
+    expect(readings.exhausted('claude-code')).toBeUndefined();
+    await readings.flush();
+    const again = await open();
+    expect(again.exhausted('codex')).toBe(START + HOUR);
+    now += HOUR;
+    expect(again.exhausted('codex')).toBeUndefined();
+    expect(readings.state().rules).toEqual({});
+  });
+
+  it('releases on a fresh real reading below the exhausted window, even if the reading is unchanged', async () => {
+    readings.take('codex', fiveHour(10));
+    await readings.exhaust('codex', START + 2 * HOUR);
+    heard.length = 0;
+    readings.take('codex', fiveHour(10));
+    expect(readings.exhausted('codex')).toBeUndefined();
+    expect(heard).toHaveLength(1);
+  });
+
+  it('keeps a hard limit when a reading omits its window or still shows it exhausted', async () => {
+    readings.take('codex', fiveHour(100));
+    await readings.exhaust('codex', START + 2 * HOUR);
+    readings.take('codex', { weekly: { usedPercent: 10, resetsAt: START + 7 * 24 * HOUR } });
+    expect(readings.exhausted('codex')).toBe(START + 2 * HOUR);
+    readings.take('codex', fiveHour(100));
+    expect(readings.exhausted('codex')).toBe(START + 2 * HOUR);
+    readings.simulate('codex', fiveHour(10));
+    expect(readings.exhausted('codex')).toBeUndefined();
+  });
+
+  it('does not turn a missing reading or rule removal into room to spend', async () => {
+    await readings.exhaust('codex', START + HOUR);
+    readings.simulate('codex', null);
+    readings.setRule('codex', null);
+    expect(readings.exhausted('codex')).toBe(START + HOUR);
+  });
+
+  it('does not mistake another window’s partial reading for a reset, before the exhausted window is known', async () => {
+    await readings.exhaust('codex', START + 2 * HOUR);
+    readings.take('codex', { weekly: { usedPercent: 10, resetsAt: START + 7 * 24 * HOUR } });
+    expect(readings.exhausted('codex')).toBe(START + 2 * HOUR);
+    readings.take('codex', fiveHour(100));
+    readings.take('codex', { weekly: { usedPercent: 5, resetsAt: START + 7 * 24 * HOUR } });
+    expect(readings.exhausted('codex')).toBe(START + 2 * HOUR);
+    readings.take('codex', fiveHour(1));
+    expect(readings.exhausted('codex')).toBeUndefined();
+  });
+
+  it('ignores an unknown backend, an invalid reset and a reset already past', async () => {
+    for (const reset of [START, START - 1, NaN, Infinity]) await readings.exhaust('codex', reset);
+    await readings.exhaust('unknown', START + HOUR);
+    expect(readings.exhausted('codex')).toBeUndefined();
+    expect(readings.exhausted('unknown')).toBeUndefined();
+  });
+
   it('keeps one reading per backend, with when it was read, and tells listeners', () => {
     readings.take('claude-code', fiveHour(42));
     expect(readings.state().readings).toEqual([
@@ -165,7 +236,7 @@ describe('UsageReadings', () => {
     expect(heard).toEqual([]);
   });
 
-  it('writes nothing but shares, times and rules', async () => {
+  it('writes nothing but shares, times, rules and hard limits', async () => {
     readings.take('claude-code', fiveHour(42));
     await readings.flush();
     const text = await readFile(file, 'utf8');
@@ -173,6 +244,7 @@ describe('UsageReadings', () => {
       version: 2,
       readings: [{ backend: 'claude-code', windows: fiveHour(42), at: START }],
       rules: {},
+      exhausted: {},
     });
   });
 });

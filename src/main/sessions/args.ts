@@ -1,16 +1,7 @@
-import path from 'node:path';
-
 import { adapterIn, connectionIn, isStartMode } from '../../shared/adapter';
 import type { AdapterId, Catalog } from '../../shared/adapter';
 import type { IpcArgs } from '../../shared/ipc';
 import { parseRole } from '../../shared/role';
-import {
-  MAX_DROPPED_FILES,
-  MAX_DROPPED_PATH,
-  MAX_TERMINAL_COLS,
-  MAX_TERMINAL_INPUT,
-  MAX_TERMINAL_ROWS,
-} from '../../shared/terminal';
 import {
   CODEX_MODES,
   ELICITATION_ACTIONS,
@@ -153,7 +144,7 @@ export function parseOptionsArgs(args: unknown[], catalog: Catalog): IpcArgs<'se
   return [parseAdapter(adapter, catalog)];
 }
 
-/** For channels that take only the agent: session:interrupt, session:close, terminal:attach and terminal:detach. */
+/** For channels that take only the agent: session:interrupt and session:close. */
 export function parseAgentArgs(args: unknown[]): [agentId: string] {
   const [agentId] = expect(args, 1, 'an agent');
   return [parseId(agentId, 'agent')];
@@ -172,57 +163,6 @@ function parseAdapter(value: unknown, catalog: Catalog): AdapterId {
     throw new TypeError(`Expected an adapter: ${catalog.adapters.map((a) => a.id).join(', ')}`);
   }
   return found.id;
-}
-
-/** terminal:input: an agent, and the keystrokes typed (any characters: they are keys). */
-export function parseTerminalInputArgs(args: unknown[]): IpcArgs<'terminal:input'> {
-  const [agentId, data] = expect(args, 2, 'an agent and what was typed');
-  if (typeof data !== 'string' || data === '' || data.length > MAX_TERMINAL_INPUT) {
-    throw new TypeError('Expected what was typed');
-  }
-  return [parseId(agentId, 'agent'), data];
-}
-
-/**
- * terminal:drop: an agent, and the paths of the files dropped on its terminal (read from the files
- * by the preload): a few, each absolute, not too long, with no control characters.
- */
-export function parseTerminalDropArgs(args: unknown[]): IpcArgs<'terminal:drop'> {
-  const [agentId, paths] = expect(args, 2, 'an agent and the files dropped');
-  if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_DROPPED_FILES) {
-    throw new TypeError(`Expected 1 to ${String(MAX_DROPPED_FILES)} files dropped`);
-  }
-  const files = paths.map((file: unknown) => {
-    if (
-      typeof file !== 'string' ||
-      file.length > MAX_DROPPED_PATH ||
-      !path.isAbsolute(file) ||
-      // eslint-disable-next-line no-control-regex
-      /[\u0000-\u001f\u007f]/.test(file)
-    ) {
-      throw new TypeError('Expected the path of a file dropped');
-    }
-    return file;
-  });
-  return [parseId(agentId, 'agent'), files];
-}
-
-/** terminal:resize: an agent, and its terminal's columns and rows. */
-export function parseTerminalResizeArgs(args: unknown[]): IpcArgs<'terminal:resize'> {
-  const [agentId, cols, rows] = expect(args, 3, 'an agent and a size');
-  const count = (value: unknown, max: number) => {
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
-      throw new TypeError(
-        `Expected a terminal size of up to ${String(MAX_TERMINAL_COLS)}×${String(MAX_TERMINAL_ROWS)}`,
-      );
-    }
-    return value;
-  };
-  return [
-    parseId(agentId, 'agent'),
-    count(cols, MAX_TERMINAL_COLS),
-    count(rows, MAX_TERMINAL_ROWS),
-  ];
 }
 
 /** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */

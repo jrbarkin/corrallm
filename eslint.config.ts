@@ -33,8 +33,8 @@ const ADAPTER_IMPORTERS = [
   'src/main/sessions/adapters.ts',
   'src/main/sessions/{claude,claude-errors,claude-settings}.ts',
   'src/main/sessions/terminal/{claude-code,connector,fake-claude}.ts',
-  'src/main/{index,forge-env.d}.ts',
-  'src/main/core/selftest.ts',
+  'src/main/forge-env.d.ts',
+  'src/main/core/{core,selftest}.ts',
   'src/main/sessions/{manager,installed,connectors}.ts',
   '**/*.test.ts',
 ];
@@ -46,7 +46,7 @@ const ADAPTER_IMPORTERS = [
  */
 const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
 const CORE_SERVICES =
-  'src/main/{memory,settings,usage,files,git,canvas,project,run-journal,loopback}.ts';
+  'src/main/{memory,settings,usage,files,git,canvas,project,run-journal,loopback,links,reveal}.ts';
 const ELECTRON = {
   group: ['electron', 'electron/*'],
   message:

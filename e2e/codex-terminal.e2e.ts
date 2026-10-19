@@ -235,19 +235,23 @@ test('the fake preserves text and bracketed paste coalesced with terminal report
   await canvasFile();
   await chooseProject();
   const { view } = await openShop();
+  const type = async (data: string) => {
+    const result = await page.evaluate(
+      (data) => window.api.terminalInput({ agent: 'shop', data }),
+      data,
+    );
+    if (!result.ok) throw new Error(result.error.sentence);
+  };
   const reports = '\x1b[<0;4;4M\x1b[I\x1b[1;1R\x1b]10;rgb:ffff/ffff/ffff\x1b\\';
   const manual = 'Remember the current API';
   // A PTY can deliver mouse/focus/query responses together with the first typed characters.
-  await page.evaluate((data) => window.api.writeTerminal('shop', data), reports + manual);
-  await page.evaluate(() => window.api.writeTerminal('shop', '\r'));
+  await type(reports + manual);
+  await type('\r');
   await expect.poll(prompts).toEqual([manual]);
   await expect(status(view)).toHaveText('Idle');
   const pasted = 'Keep both lines\nand their text';
-  await page.evaluate(
-    (data) => window.api.writeTerminal('shop', data),
-    reports + '\x1b[200~' + pasted + '\x1b[201~',
-  );
-  await page.evaluate(() => window.api.writeTerminal('shop', '\r'));
+  await type(reports + '\x1b[200~' + pasted + '\x1b[201~');
+  await type('\r');
   await expect.poll(prompts).toEqual([manual, pasted]);
   await expect(status(view)).toHaveText('Idle');
 });

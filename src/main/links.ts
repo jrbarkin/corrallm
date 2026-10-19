@@ -1,13 +1,12 @@
 import { readFile } from 'node:fs/promises';
 
-import type { WebContents } from 'electron';
-
-import { writeWhole } from '../memory';
-import { EXTERNAL_URL_ALLOWLIST, linkTarget } from '../url-policy';
+import type { LinkAnswer, WindowId } from './core/host';
+import { writeWhole } from './memory';
+import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*
  * Links the user clicks in the app (a transcript's Markdown, a terminal's links) open in their
- * browser, once main has said so: the renderer only names the URL (link:open). Main normalizes it
+ * browser, once the core has said so: the renderer only names the URL (link.open). The core normalizes it
  * and opens it only if it is https, or http to this machine (url-policy.ts). A site on
  * EXTERNAL_URL_ALLOWLIST opens at once; any other asks first, in a native dialog ("Open
  * docs.example.com in your browser?", with "Always for this site"); a site the user said to
@@ -16,17 +15,12 @@ import { EXTERNAL_URL_ALLOWLIST, linkTarget } from '../url-policy';
  *   { "version": 1, "sites": ["https://docs.example.com", …] }
  */
 
-/** What the user answered: whether to open the link, and to open its site's links from now on. */
-export interface LinkAnswer {
-  open: boolean;
-  always: boolean;
-}
-
+export type { LinkAnswer } from './core/host';
 export interface LinkOpenerDeps {
   /** Where the sites the user always opens are kept. */
   file: string;
   /** Asks the user whether to open `url`, on `host`, in their browser (a dialog on the window). */
-  ask: (contents: WebContents, host: string, url: string) => Promise<LinkAnswer>;
+  ask: (window: WindowId, host: string, url: string) => Promise<LinkAnswer>;
   /** Opens a URL in the user's default browser. */
   openExternal: (url: string) => Promise<void>;
   allowlist?: ReadonlySet<string>;
@@ -41,7 +35,7 @@ export class LinkOpener {
   #sites: Promise<Set<string>> | undefined;
   #writing: Promise<void> = Promise.resolve();
   /** Renderers asked something right now: one question at a time each. */
-  readonly #asking = new WeakSet<WebContents>();
+  readonly #asking = new Set<WindowId>();
 
   constructor({ allowlist = EXTERNAL_URL_ALLOWLIST, ...deps }: LinkOpenerDeps) {
     this.#deps = { ...deps, allowlist };
@@ -52,17 +46,17 @@ export class LinkOpener {
    * allowlisted or always opened. Resolves with whether it opened. A link clicked while the
    * renderer's dialog is up is dropped.
    */
-  async open(contents: WebContents, raw: string): Promise<boolean> {
+  async open(window: WindowId, raw: string): Promise<boolean> {
     const target = linkTarget(raw, this.#deps.allowlist);
     if (target === null) return false;
     if (!target.allowlisted && !(await this.#load()).has(target.origin)) {
-      if (this.#asking.has(contents)) return false;
-      this.#asking.add(contents);
+      if (this.#asking.has(window)) return false;
+      this.#asking.add(window);
       let answer: LinkAnswer;
       try {
-        answer = await this.#deps.ask(contents, target.host, target.url);
+        answer = await this.#deps.ask(window, target.host, target.url);
       } finally {
-        this.#asking.delete(contents);
+        this.#asking.delete(window);
       }
       if (!answer.open) return false;
       if (answer.always) await this.#allow(target.origin);

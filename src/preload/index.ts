@@ -1,31 +1,36 @@
 // Runs sandboxed: only 'electron' may be imported, and Vite bundles this into one CJS file.
-// Never expose ipcRenderer itself; expose one typed function per contract channel, and one per
-// event that listens for it (never passing Electron's event object on).
+// Never expose ipcRenderer itself, the core's port or a function that takes a channel or an
+// operation; expose one typed function per contract channel, one per event that listens for it
+// (never passing Electron's event object on), and one per GUI operation, generated from the
+// registry's fixed list (GUI_OPS), each calling its own operation over the window's port.
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 
+import { GUI_OPS } from '../shared/api/surface';
+import { guiFunction } from '../shared/gui-link';
+import type { GuiBridge } from '../shared/gui-link';
 import {
   API_CHANNELS,
   API_EVENTS,
   type AppApi,
   type IpcArgs,
-  type IpcChannel,
-  type IpcEvent,
+  type CoreChannel,
   type IpcEventArgs,
   type IpcResult,
 } from '../shared/ipc';
+import { connectCore } from './core';
 
-function invoke<C extends IpcChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
-  return ipcRenderer.invoke(channel, ...args) as Promise<IpcResult<C>>;
+function invoke<C extends CoreChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> {
+  return core.channel(channel, args);
 }
 
 /** Calls `listener` with each `event` main sends; returns a function that stops it. */
-function listen<E extends IpcEvent>(
-  event: E,
-  listener: (...args: IpcEventArgs<E>) => void,
+function listen(
+  event: 'run:stopping',
+  listener: (...args: IpcEventArgs<'run:stopping'>) => void,
 ): () => void {
   const receive = (_event: IpcRendererEvent, ...args: unknown[]) => {
-    listener(...(args as IpcEventArgs<E>));
+    listener(...(args as IpcEventArgs<'run:stopping'>));
   };
   ipcRenderer.on(event, receive);
   return () => {
@@ -33,9 +38,20 @@ function listen<E extends IpcEvent>(
   };
 }
 
+const core = connectCore();
+
+/** A function per GUI operation, by its camel-cased name (app.info → appInfo). */
+const ops = Object.fromEntries(
+  GUI_OPS.filter((op) => op !== 'terminal.drop').map((op) => [
+    guiFunction(op),
+    (args?: unknown) => core.call(op, args),
+  ]),
+) as Omit<GuiBridge, 'terminalDrop' | 'terminalOnEvent' | 'topicsOnChange' | 'topicsOnEpoch'>;
+
 const api: AppApi = {
-  ping: () => invoke(API_CHANNELS.ping),
-  catalog: () => invoke(API_CHANNELS.catalog),
+  ...ops,
+  topicsOnChange: (listener) => core.onTopic(listener),
+  topicsOnEpoch: (listener) => core.onEpoch(listener),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
@@ -46,7 +62,6 @@ const api: AppApi = {
   chooseProject: () => invoke(API_CHANNELS.chooseProject),
   findProjectFiles: (query) => invoke(API_CHANNELS.findProjectFiles, query),
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
-  installedClis: () => invoke(API_CHANNELS.installedClis),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),
@@ -66,28 +81,25 @@ const api: AppApi = {
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),
-  attachTerminal: (agentId) => invoke(API_CHANNELS.attachTerminal, agentId),
-  detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
-  writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
-  resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
-  openLink: (url) => invoke(API_CHANNELS.openLink, url),
-  revealFile: (url) => invoke(API_CHANNELS.revealFile, url),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
-  // never names a path, and main checks these again.
-  dropOnTerminal: (agentId, files) => {
+  // never names a path, and the core checks these again.
+  terminalDrop: ({ agent, files, request }) => {
     const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter(
       (file) => file !== '',
     );
     return paths.length === 0
-      ? Promise.resolve(null)
-      : invoke(API_CHANNELS.dropOnTerminal, agentId, paths);
+      ? Promise.resolve({ ok: true, value: {} } as const)
+      : (core.call('terminal.drop', {
+          agent,
+          paths,
+          ...(request === undefined ? {} : { request }),
+        }) as ReturnType<GuiBridge['terminalDrop']>);
   },
   getUsage: () => invoke(API_CHANNELS.getUsage),
   setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
   simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
-  onSessionEvent: (listener) => listen(API_EVENTS.onSessionEvent, listener),
-  onTerminalEvent: (listener) => listen(API_EVENTS.onTerminalEvent, listener),
-  onUsageChanged: (listener) => listen(API_EVENTS.onUsageChanged, listener),
+  onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
+  terminalOnEvent: (listener) => core.listen('terminal', listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

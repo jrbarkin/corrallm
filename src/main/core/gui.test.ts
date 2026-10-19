@@ -1,0 +1,167 @@
+import { MessageChannel } from 'node:worker_threads';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { OpResult } from '../../shared/api/errors';
+import { GUI_OPS } from '../../shared/api/surface';
+import type { Dispatcher } from './call';
+import { partyOf } from './caller';
+import { WindowPorts } from './gui';
+import { coreEnd, openWindow } from './test-window';
+
+/*
+ * A window's port, as the core serves it (B8 Design §4), over MessageChannel pairs: the core's end
+ * as core/gui.ts holds it, the window's as the preload links it. That a GUI op answers through a
+ * port as core.call does for you is T3a's (core/transport.test.ts).
+ */
+
+const closing: (() => void)[] = [];
+afterEach(() => {
+  for (const close of closing.splice(0)) close();
+});
+
+/** A core whose calls say who made them, unless a test answers otherwise. */
+function fakeCore() {
+  const call = vi.fn<Dispatcher['call']>((name, raw, caller) =>
+    Promise.resolve({ ok: true, value: { name, raw, caller } }),
+  );
+  return { call };
+}
+
+/** Serves a new port as `window`'s: the window's end of it. */
+function connect(served: WindowPorts, window: number) {
+  const { link, close } = openWindow(served, window);
+  closing.push(close);
+  return link;
+}
+
+/** An operation a window may call. */
+const OP = 'app.info';
+
+describe('a window’s port', () => {
+  it('calls each operation as you, at the window the port is for', async () => {
+    const core = fakeCore();
+    const served = new WindowPorts(core);
+    const seven = connect(served, 7);
+    const eight = connect(served, 8);
+
+    await expect(seven.request('call', OP, { x: 1 })).resolves.toEqual({
+      ok: true,
+      value: { ok: true, value: { name: OP, raw: { x: 1 }, caller: { kind: 'human', window: 7 } } },
+    });
+    await eight.request('call', OP, undefined);
+
+    const callers = core.call.mock.calls.map(([, , caller]) => caller);
+    expect(callers).toEqual([
+      { kind: 'human', window: 7 },
+      { kind: 'human', window: 8 },
+    ]);
+    expect(callers.map((caller) => partyOf(caller))).toEqual(['you', 'you']);
+  });
+
+  it('serves only GUI_OPS: the operations you may call that the app hosts', () => {
+    expect(GUI_OPS).toContain('app.info');
+    // Not yours (an outside token's long poll), and yours but not hosted yet (B11).
+    expect(GUI_OPS).not.toContain('wait');
+    expect(GUI_OPS).not.toContain('message');
+  });
+
+  it.each([
+    ['an operation that isn’t yours', 'wait'],
+    ['an operation the app doesn’t host yet', 'message'],
+    ['no operation at all', 'nonsense'],
+    ['a name that isn’t text', 42],
+  ])('refuses %s before it is dispatched', async (_label, op) => {
+    const core = fakeCore();
+    const window = connect(new WindowPorts(core), 1);
+
+    const answer = await window.request('call', op as string, {});
+
+    expect(answer).toEqual({
+      ok: true,
+      value: {
+        ok: false,
+        error: {
+          code: 'not-found',
+          sentence: `corrallm’s window has no operation named ${String(op)}.`,
+        },
+      } satisfies OpResult<unknown>,
+    });
+    expect(core.call).not.toHaveBeenCalled();
+  });
+
+  it('serves a hand-written channel for the window its port belongs to', async () => {
+    const channels = {
+      call: vi.fn(() => 'team.corral'),
+      listen: vi.fn(() => () => undefined),
+      gone: vi.fn(),
+    };
+    const core = { ...fakeCore(), channels };
+    const window = connect(new WindowPorts(core), 7);
+
+    await expect(window.request('channel', 'canvas:save', ['{}', false])).resolves.toEqual({
+      ok: true,
+      value: 'team.corral',
+    });
+    expect(channels.call).toHaveBeenCalledWith(7, 'canvas:save', ['{}', false]);
+    expect(core.call).not.toHaveBeenCalled();
+  });
+
+  it('closes a window’s port when it goes, cancelling its calls still going', async () => {
+    const core = fakeCore();
+    const signals: AbortSignal[] = [];
+    core.call.mockImplementation((_name, _raw, _caller, signal) => {
+      if (signal) signals.push(signal);
+      return new Promise<never>(() => undefined);
+    });
+    const served = new WindowPorts(core);
+    const window = connect(served, 3);
+
+    const pending = window.request('call', OP, {});
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    served.gone(3);
+
+    await expect(pending).rejects.toThrow('the port closed');
+    expect(signals[0]?.aborted).toBe(true);
+    // Gone again, or never served: nothing to do.
+    served.gone(3);
+    served.gone(4);
+  });
+
+  it('takes a window’s new port in place of the one before (a reload)', async () => {
+    const core = fakeCore();
+    const served = new WindowPorts(core);
+    const before = connect(served, 5);
+    const after = connect(served, 5);
+
+    await expect(before.request('call', OP, {})).rejects.toThrow('the port closed');
+    await expect(after.request('call', OP, {})).resolves.toMatchObject({
+      ok: true,
+      value: { ok: true },
+    });
+    expect(core.call).toHaveBeenCalledOnce();
+  });
+
+  it('forgets a window whose port closed at the other end', async () => {
+    const core = fakeCore();
+    const served = new WindowPorts(core);
+    const { port1, port2 } = new MessageChannel();
+    closing.push(() => {
+      port2.close();
+    });
+    const end = coreEnd(port1);
+    const close = vi.spyOn(end, 'close');
+    served.open(6, end);
+    // Heard after the core's own listener, which was there first.
+    const closed = new Promise((resolve) => port1.once('close', resolve));
+
+    port2.close();
+    await closed;
+    served.gone(6);
+
+    expect(close).not.toHaveBeenCalled();
+    expect(core.call).not.toHaveBeenCalled();
+  });
+});

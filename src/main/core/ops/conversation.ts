@@ -136,14 +136,13 @@ export function conversationOps(
         return failed(error);
       }
     },
-    withdraw: ({ canvas, id }, ctx) => {
+    withdraw: async ({ canvas, id }, ctx) => {
       const open = openCanvas(engines, canvas);
       try {
-        open.delivery.withdraw(id, partyIdOf(ctx.caller));
+        return await open.delivery.withdraw(id, partyIdOf(ctx.caller));
       } catch (error) {
         return failed(error);
       }
-      return {};
     },
   };
 }
@@ -154,11 +153,15 @@ function failed(error: unknown): never {
   throw error;
 }
 
-/** How an agent is now: waiting for you, working, paused, or idle. */
-export function stateOf({ engine }: OpenCanvas, id: string): (typeof AGENT_STATES)[number] {
+/** How an agent is now: waiting for you, working, limited by usage, paused, or idle. */
+export function stateOf(
+  { engine, delivery }: OpenCanvas,
+  id: string,
+): (typeof AGENT_STATES)[number] {
   const session = engine.sessions.of(id);
   if (session.status === 'waiting' || (session.asking?.length ?? 0) > 0) return 'waiting';
   if (session.status === 'working') return 'working';
+  if (delivery.limited().some(({ agent }) => agent === id)) return 'limited';
   return engine.run.snapshot().agents[id]?.paused ? 'paused' : 'idle';
 }
 

@@ -14,6 +14,7 @@ import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
 import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
+import type { UsageReadings } from '../../usage';
 import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
 import type { MessageStore } from './messages';
 
@@ -39,8 +40,11 @@ export interface DeliveryDeps {
   store: MessageStore;
   /** The canvas's nodes now. */
   nodes: () => readonly CanvasNode[];
+  usage: Pick<UsageReadings, 'exhausted'>;
   now: () => number;
   later: (run: () => void, ms: number) => () => void;
+  /** Delivery's clock released a hold: needs may have changed without a session event. */
+  changed: () => void;
   /** The locale times of day are told in (the host's): the runtime's own, when none. */
   locale?: string;
 }
@@ -57,6 +61,7 @@ type Hold =
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking' }
+  | { kind: 'limited'; backend: string; until: number }
   | { kind: 'usage'; hold: UsageHold; until: number };
 
 /**
@@ -68,6 +73,20 @@ interface Stuck {
   text: string;
   at: number;
   retrying: boolean;
+}
+
+/** What taking a message back did, rather than what its recorded delivery state implied. */
+interface Withdrawal {
+  reached: boolean;
+  interrupted: boolean;
+}
+
+interface TakingBack {
+  by: PartyId;
+  tell: boolean;
+  reached: boolean;
+  ended: Promise<Withdrawal>;
+  finish: (result: Withdrawal) => void;
 }
 
 /** What an agent with no connection this build runs is told. */
@@ -107,7 +126,7 @@ export class Delivery {
   /** The messages sent whose records are on their way to disk: none goes before it is there. */
   readonly #recording = new Set<string>();
   /** Who asked for each message whose turn is going to be taken back, by its id. */
-  readonly #withdrawing = new Map<string, PartyId>();
+  readonly #withdrawing = new Map<string, TakingBack>();
   /** What each party was told, so that it is told once (kept with each notice, by its key). */
   readonly #told = new Set<string>();
   /** The agents whose sessions would not start, by id. */
@@ -167,7 +186,10 @@ export class Delivery {
     this.#unrecordable?.();
     this.#unrecordable = undefined;
     for (const message of this.#deps.store.all()) {
-      if (this.#inFlight(message)) this.#cutOff(message);
+      if (!this.#inFlight(message)) continue;
+      const taking = this.#withdrawing.get(message.id);
+      if (taking) this.#takenBack(message, taking, false);
+      else this.#cutOff(message);
     }
     await this.#deps.store.durable();
   }
@@ -228,7 +250,7 @@ export class Delivery {
    * taken off its session's queue, or its turn interrupted, and is withdrawn once that ends.
    * Throws, saying why, a message that can't be.
    */
-  withdraw(id: string, by: PartyId): void {
+  async withdraw(id: string, by: PartyId): Promise<Withdrawal> {
     const message = this.#deps.store.get(id);
     if (!message) throw new DeliveryError('not-found', 'There is no such message.');
     if (by !== 'you' && message.from !== by) {
@@ -237,7 +259,7 @@ export class Delivery {
     if (message.state === 'pending') {
       this.#withdrawn(message, by);
       this.schedule();
-      return;
+      return { reached: false, interrupted: false };
     }
     if (message.kind !== 'text') {
       throw new DeliveryError(
@@ -254,7 +276,9 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    this.#takeBack(message, by);
+    const result = await this.#takeBack(message, by, true);
+    if (result.reached) await this.#deps.store.durable();
+    return result;
   }
 
   /**
@@ -266,7 +290,7 @@ export class Delivery {
     for (const message of this.#deps.store.all()) {
       if (message.kind !== 'text' || (message.to !== party && message.from !== party)) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) this.#takeBack(message, by);
+      else if (this.#inFlight(message)) void this.#takeBack(message, by, false);
     }
     this.schedule();
   }
@@ -282,6 +306,25 @@ export class Delivery {
         ? [{ agent: node.id, ...stuck }]
         : [];
     });
+  }
+
+  /** Every agent spending an exhausted backend, even when no message waits for it. */
+  limited(): { agent: string; backend: string; until: number }[] {
+    return this.#deps.nodes().flatMap((node) => {
+      const hold = node.type === 'agent' ? this.#limited(node) : undefined;
+      return hold === undefined
+        ? []
+        : [{ agent: node.id, backend: hold.backend, until: hold.until }];
+    });
+  }
+
+  #limited(node: AgentNode): Extract<Hold, { kind: 'limited' }> | undefined {
+    const backend = this.#deps.engine.catalog.usageBackendOf(node.data);
+    const until =
+      backend === undefined ? undefined : this.#deps.usage.exhausted(backend, this.#deps.now());
+    return backend === undefined || until === undefined
+      ? undefined
+      : { kind: 'limited', backend, until };
   }
 
   /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
@@ -347,6 +390,8 @@ export class Delivery {
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
+      const limited = this.#limited(node);
+      if (limited !== undefined) alarm = Math.min(alarm ?? limited.until, limited.until);
       const waits = waiting.get(node.id);
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
@@ -381,7 +426,7 @@ export class Delivery {
           this.#tell(
             holdKey('unasking', node.id, message.from),
             message,
-            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only you can switch it.`,
+            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.`,
           );
         }
         if (hold.kind === 'usage') {
@@ -391,6 +436,13 @@ export class Delivery {
             holdKey('usage', node.id, String(until), message.from),
             message,
             `${holdText(hold.hold, engine.catalog)}, so your message to ${this.#name(node.id)} waits until it resets at ${resetTime(until, this.#deps.now(), this.#deps.locale)}.`,
+          );
+        }
+        if (hold.kind === 'limited') {
+          this.#tell(
+            holdKey('limited', node.id, String(hold.until), message.from),
+            message,
+            `${this.#name(node.id)}’s ${engine.catalog.backendName(hold.backend)} usage is exhausted until ${resetTime(hold.until, this.#deps.now(), this.#deps.locale)}, so your message waits until then.`,
           );
         }
       }
@@ -445,6 +497,8 @@ export class Delivery {
   /** What holds a message from a party (anyone but you) to agent `node` now, if anything. */
   #holdOf(node: AgentNode): Hold | undefined {
     const { engine } = this.#deps;
+    const limited = this.#limited(node);
+    if (limited !== undefined) return limited;
     const holding = engine.run.holding({ agent: node.id });
     if (holding.length > 0) return { kind: 'paused', holding };
     const stuck = this.#stuckHold(node);
@@ -538,6 +592,7 @@ export class Delivery {
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
     if (!this.#unasking(node)) this.#forget('unasking', node.id);
+    if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
 
   /** Forgets what each sender was told of a hold of `kind` on agent `agent`. */
@@ -618,10 +673,13 @@ export class Delivery {
     const message = store.get(id);
     // Cut off as the canvas closed, or back to waiting: its session would not start.
     if (this.#closed || !message || !this.#inFlight(message)) return;
-    const by = this.#withdrawing.get(id);
-    this.#withdrawing.delete(id);
-    if (by !== undefined) {
-      this.#withdrawn(message, by);
+    const taking = this.#withdrawing.get(id);
+    if (taking !== undefined) {
+      this.#takenBack(
+        message,
+        taking,
+        (result ?? turnResult({ interrupted })).status === 'cancelled',
+      );
       this.schedule();
       return;
     }
@@ -663,20 +721,57 @@ export class Delivery {
   }
 
   /** Takes back a message being delivered for `by`: withdrawn once its turn has ended. */
-  #takeBack(message: Message, by: PartyId): void {
+  #takeBack(message: Message, by: PartyId, tell: boolean): Promise<Withdrawal> {
+    const existing = this.#withdrawing.get(message.id);
+    if (existing) return existing.ended;
     const takeBack = this.#sent.get(message.id);
     if (!takeBack) {
       // Still being journaled: it is never sent.
       this.#withdrawn(message, by);
-      return;
+      return Promise.resolve({ reached: false, interrupted: false });
     }
-    this.#withdrawing.set(message.id, by);
+    let finish!: TakingBack['finish'];
+    const ended = new Promise<Withdrawal>((resolve) => {
+      finish = resolve;
+    });
+    this.#withdrawing.set(message.id, { by, tell, reached: this.#reached(message), ended, finish });
     takeBack();
+    return ended;
+  }
+
+  /** Whether the CLI has the message: delivering also covers journaling and the session queue. */
+  #reached(message: Message): boolean {
+    const agent = agentOf(message.to);
+    return (
+      message.state === 'delivered' ||
+      (agent !== undefined &&
+        this.#deps.engine.sessions
+          .of(agent)
+          .entries.some(
+            (entry) =>
+              entry.id === message.delivery?.as && entry.kind === 'user' && entry.reached === true,
+          ))
+    );
+  }
+
+  /** The take-back ended: keep its note in the same record as the withdrawal, before the next send. */
+  #takenBack(message: Message, taking: TakingBack, interrupted: boolean): void {
+    this.#withdrawing.delete(message.id);
+    const reached = taking.reached || this.#reached(message);
+    const result = { reached, interrupted: reached && interrupted };
+    const sender =
+      message.from === 'you' ? 'the user' : partyName(this.#deps.nodes(), message.from);
+    const note =
+      taking.tell && reached
+        ? `Message ${message.id} from "${sender}" was withdrawn by its sender after it reached you${result.interrupted ? ', and its turn was interrupted' : ''}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`
+        : undefined;
+    this.#withdrawn(message, taking.by, note);
+    taking.finish(result);
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
-  #withdrawn(message: Message, by: PartyId): void {
-    this.#deps.store.update(message.id, { state: 'withdrawn', by });
+  #withdrawn(message: Message, by: PartyId, note?: string): void {
+    this.#deps.store.update(message.id, { state: 'withdrawn', by }, note);
     if (by !== message.from) {
       this.#notice(
         message,
@@ -744,7 +839,7 @@ export class Delivery {
         this.#tell(
           `waiting:${message.id}`,
           message,
-          `${this.#name(agent)} is waiting for you: ${threadTitle(needsItem(need, input).title, TITLE)}`,
+          `${this.#name(agent)} is waiting for the user: ${threadTitle(needsItem(need, input).title, TITLE)}`,
         );
       }
     }
@@ -829,6 +924,7 @@ export class Delivery {
       () => {
         this.#alarm = undefined;
         this.schedule();
+        this.#deps.changed();
       },
       Math.max(0, at - this.#deps.now()) + 1,
     );
@@ -847,7 +943,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage';
+type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
 
 /**
  * The key of what a sender is told of a hold of `kind` on agent `agent`, and what it is told of

@@ -2,13 +2,13 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { CanvasId } from '../../shared/canvas';
-import { MAX_LINK_LENGTH } from '../../shared/ipc';
+import type { CanvasId } from '../shared/canvas';
+import { MAX_LINK_LENGTH } from '../shared/ipc';
 
 /*
- * file:// links the user Cmd-clicks in a terminal (Claude Code prints the files it names as OSC 8
+ * file:// links the user Cmd-clicks in a terminal (a CLI prints the files it names as OSC 8
  * links) are shown in the OS file manager (Finder), selected in their folder, if they are in the
- * canvas's project folder: the renderer only names the link (link:reveal). Main decides: the link
+ * canvas's project folder: the renderer only names the link (link.reveal). The core decides: the link
  * must be a file:// URL on this machine (no host), to a file or folder that exists, whose real
  * path (links resolved) is the project folder's real path or inside it. Anything else stays
  * inert. A file is only ever shown, never opened (no executable runs, whatever it is).
@@ -18,7 +18,7 @@ export interface FileRevealerDeps {
   /** The project folder of a canvas, if one was chosen (project.ts). */
   folderOf: (canvas: CanvasId) => string | undefined;
   /** Shows a file or folder in the OS file manager, selected (shell.showItemInFolder). */
-  show: (file: string) => void;
+  show: (file: string) => void | Promise<void>;
 }
 
 export class FileRevealer {
@@ -34,7 +34,7 @@ export class FileRevealer {
     if (folder === undefined) return false;
     const file = await revealTarget(raw, folder);
     if (file === null) return false;
-    this.#deps.show(file);
+    await this.#deps.show(file);
     return true;
   }
 }

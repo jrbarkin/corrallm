@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { newCanvasId } from '../../shared/canvas';
+import { newCanvasId } from '../shared/canvas';
 import { FileRevealer, revealTarget } from './reveal';
 
 let root: string;

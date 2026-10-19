@@ -2,20 +2,20 @@ import { connectionIn } from '../shared/adapter';
 import type { AdapterId, Catalog, ConnectionId } from '../shared/adapter';
 
 /*
- * The catalog: what every adapter declares (src/shared/adapter.ts), as main gives it
- * (catalog:get). The renderer loads it once, before the app mounts (boot.ts), so that whatever the
+ * The catalog: what every adapter declares (src/shared/adapter.ts), as the core gives it
+ * (catalog.get). The renderer loads it once, before the app mounts (boot.ts), so that whatever the
  * app shows reads it at once.
  */
 
 let loaded: Catalog | undefined;
 
-/** Loads the catalog from main (`get`: its catalog:get). */
+/** Loads the catalog from the core (`get`: its catalog.get). */
 export async function loadCatalog(get: () => Promise<Catalog>): Promise<Catalog> {
   loaded = await get();
   return loaded;
 }
 
-/** The catalog main gave: loaded before the app mounts. */
+/** The catalog the core gave: loaded before the app mounts. */
 export function catalog(): Catalog {
   if (loaded === undefined) throw new Error('The catalog is not loaded yet.');
   return loaded;

@@ -411,6 +411,7 @@ export function QuestionsSidebar({
         ];
       case 'stuck':
       case 'unasking':
+      case 'limited':
         return [];
     }
   });

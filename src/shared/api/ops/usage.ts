@@ -29,6 +29,12 @@ const UsageRule = z.strictObject({
   action: z.enum(USAGE_ACTIONS),
 });
 
+const SimulatedWindow = WindowUsage.extend({ resetsAt: z.number().min(0).nullable() });
+const SimulatedWindows = z.strictObject({
+  fiveHour: SimulatedWindow.optional(),
+  weekly: SimulatedWindow.optional(),
+});
+
 export const usageOps = {
   'usage.get': define('usage.get', {
     summary:
@@ -39,5 +45,19 @@ export const usageOps = {
       readings: z.array(UsageReading),
       rules: z.partialRecord(UsageBackendId, UsageRule),
     }),
+  }),
+  'usage.setRule': define('usage.setRule', {
+    summary: 'Sets a usage backend’s rule; null removes it. Only the user may change usage rules.',
+    input: z.strictObject({ backend: UsageBackendId.max(32), rule: UsageRule.nullable() }),
+    output: z.strictObject({}),
+  }),
+  'usage.simulate': define('usage.simulate', {
+    summary:
+      'Sets a simulated usage reading to try rules with; null forgets the backend’s reading. Only the user may simulate usage.',
+    input: z.strictObject({
+      backend: UsageBackendId.max(32),
+      windows: SimulatedWindows.nullable(),
+    }),
+    output: z.strictObject({}),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;

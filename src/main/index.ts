@@ -1,35 +1,24 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, dialog, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, session } from 'electron';
 import type { MessageBoxOptions } from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 
+import type { Answer } from '../shared/link';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
-import { CanvasFiles } from './canvas';
 import { Closing } from './closing';
-import { lockProfile, ProfileLocked } from './core/lock';
+import { ProfileLocked } from './core/lock';
+import type { CoreInit, CoreSide } from './core/protocol';
 import { PROD_CSP } from './csp';
-import { ProjectFiles } from './files';
-import { LinkOpener } from './host/links';
-import { FileRevealer } from './host/reveal';
+import { forkCore } from './host/core-process';
+import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
-import { Windows } from './host/windows';
+import { CoreSupervisor } from './host/supervisor';
 import { registerIpcHandlers, sendEvent } from './ipc';
-import { CanvasMemory } from './memory';
 import { runNativeSelfTest } from './native-selftest';
-import { ProjectFolders } from './project';
-import { RunJournal } from './run-journal';
 import { RunShutdown } from './run-shutdown';
 import { hardenSession, installNavigationGuards } from './security';
-import { Settings } from './settings';
-import { CATALOG } from './sessions/adapters';
-import { createConnectors, createOptions } from './sessions/connectors';
-import { agentEnvironment, loginShellEnvironment } from './sessions/environment';
-import { installedClis } from './sessions/installed';
-import { SessionManager } from './sessions/manager';
-import { Conversations } from './sessions/sdk/conversations';
 import { originKey } from './url-policy';
-import { UsageReadings } from './usage';
 import { createMainWindow } from './window';
 
 // Defined only under `electron-forge start`. Production builds (packaged or not) serve the
@@ -76,7 +65,7 @@ function main(): void {
   }
 
   // e2e tests (e2e/launch.ts) run the unpackaged app with its window hidden, and connected
-  // sessions with a fake connector instead of Claude Code. Never in packaged builds.
+  // sessions with fake connectors. Never in packaged builds.
   const hidden = !app.isPackaged && process.env.CORRALLM_HIDE_WINDOW === '1';
   const fakeSessions = !app.isPackaged && process.env.CORRALLM_FAKE_SESSIONS === '1';
   // On macOS, also no Dock icon or menu bar, from the start rather than once the app is ready.
@@ -100,29 +89,87 @@ function main(): void {
   void app
     .whenReady()
     .then(async () => {
-      // One owner per profile (core.lock): `corrallm serve` may hold this one, and must not write
-      // its stores while the app does. B8 moves this into the core process.
-      let lock;
-      try {
-        lock = await lockProfile(app.getPath('userData'), 'app');
-      } catch (error) {
-        if (!(error instanceof ProfileLocked)) throw error;
-        const detail = `${error.message} ${
-          error.holder === undefined
-            ? 'Try again in a moment.'
-            : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
-        }`;
+      /** Says why corrallm can't go on (in a dialog, unless hidden), then exits. */
+      const refuse = (title: string, detail: string) => {
         console.error(`corrallm: ${detail}`);
         // The hidden e2e app shows nothing on screen, a dialog included.
-        if (!hidden) dialog.showErrorBox('corrallm can’t open its profile', detail);
+        if (!hidden) dialog.showErrorBox(title, detail);
         app.exit(1);
+      };
+      const refuseLocked = (error: ProfileLocked) => {
+        refuse(
+          'corrallm can’t open its profile',
+          `${error.message} ${
+            error.holder === undefined
+              ? 'Try again in a moment.'
+              : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
+          }`,
+        );
+      };
+
+      const shutdown = new RunShutdown((contents, requestId) => {
+        sendEvent(contents, 'run:stopping', requestId);
+      });
+      const host = hostServices(shutdown);
+      const init: CoreInit = {
+        app: { name: app.getName(), version: app.getVersion() },
+        profile: app.getPath('userData'),
+        distribution: CORRALLM_DISTRIBUTION,
+        locale: app.getLocale(),
+        fakeSessions,
+      };
+      // The core owns the profile and its sessions; main answers only what needs the desktop. It
+      // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
+      // must not write its stores while the app does. A core that crashes is restarted.
+      const supervisor = new CoreSupervisor({
+        fork: () =>
+          forkCore({
+            entry: path.join(__dirname, 'core.cjs'),
+            output: (line, stream) => {
+              if (stream === 'stdout') console.log(`[core] ${line}`);
+              else console.error(`[core] ${line}`);
+            },
+            check: devServerUrl !== undefined,
+            host,
+          }),
+        init: async (core) => {
+          const up = await answered(core.link.request('init', init));
+          if (up !== null) throw new ProfileLocked(up.profileLocked.holder ?? undefined);
+        },
+        restarting: (why) => {
+          console.error(`corrallm: ${why}; starting it again.`);
+        },
+        restarted: () => {
+          ports.reconnect();
+        },
+        gaveUp: (why) => {
+          if (why instanceof ProfileLocked) {
+            refuseLocked(why);
+            return;
+          }
+          refuse(
+            'corrallm’s core keeps stopping',
+            `${why.message} Open corrallm again to go on from what was last saved.`,
+          );
+        },
+      });
+      const ports = new CorePorts(supervisor, trustedOrigin);
+      try {
+        await supervisor.start();
+      } catch (error) {
+        if (!(error instanceof ProfileLocked)) throw error;
+        refuseLocked(error);
         return;
       }
-      const release = () => {
-        lock.release();
-      };
-      app.once('will-quit', release);
-      process.once('exit', release);
+      app.once('will-quit', () => {
+        supervisor.stop();
+      });
+      /** Asks the core up now (waiting while a new one comes up), failing with its sentence. */
+      const ask = async <K extends keyof CoreSide['requests']>(
+        name: K,
+        ...args: CoreSide['requests'][K]['args']
+      ): Promise<CoreSide['requests'][K]['result']> =>
+        answered((await supervisor.core).link.request(name, ...args));
 
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {
@@ -132,144 +179,49 @@ function main(): void {
           csp: PROD_CSP,
         });
       }
-      // What main remembers of each canvas: its file, its project folder, its agents' conversations.
-      const memory = new CanvasMemory(path.join(app.getPath('userData'), 'canvases.json'));
-      // What the user chose for the app as a whole.
-      const settings = new Settings(path.join(app.getPath('userData'), 'settings.json'));
-      const canvases = new CanvasFiles({ host: hostServices, memory });
-      const projects = new ProjectFolders({ host: hostServices, memory });
-      const runs = new RunJournal(path.join(app.getPath('userData'), 'runs'), {
-        memory,
-        projectOf: (canvas) => projects.of(canvas),
-      });
-      // Which canvas each window shows: a new window shows the one the profile had open last.
-      const windows: Windows = new Windows(trustedOrigin, {
-        restore: async () => {
-          const canvas = await runs.last();
-          await projects.restore(canvas);
-          return canvas;
-        },
-        left: (canvas) => sessions.closeCanvas(canvas),
-      });
-      const shutdown = new RunShutdown((contents, requestId) => {
-        sendEvent(contents, 'run:stopping', requestId);
-      });
-      // Every backend's usage, read from its agents' CLIs: every window hears each change.
-      const usage = new UsageReadings({
-        file: path.join(app.getPath('userData'), 'usage.json'),
-        backends: CATALOG.usageBackends.map((backend) => backend.id),
-      });
-      await usage.load();
-      usage.subscribe((state) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          sendEvent(window.webContents, 'usage:changed', state);
-        }
-      });
-      let environment: Promise<Record<string, string>> | undefined;
-      // Resolved once, when the first session starts.
-      const agentsEnvironment = () =>
-        (environment ??= fakeSessions
-          ? Promise.resolve(agentEnvironment(process.env))
-          : loginShellEnvironment().then(agentEnvironment));
-      const sessions = new SessionManager({
-        catalog: CATALOG,
-        connectors: createConnectors({
-          fake: fakeSessions,
-          clientApp: `${app.getName()}/${app.getVersion()}`,
-          distribution: CORRALLM_DISTRIBUTION,
-          consent: (adapter, key) => settings.consent(adapter, key),
-          usage: (backend, windows) => {
-            usage.take(backend, windows);
-          },
-        }),
-        environment: agentsEnvironment,
-        options: createOptions({ fake: fakeSessions }),
-        // The conversations Claude Code kept, whichever connection ran them.
-        conversations: new Conversations(),
-        projectOf: (canvas) => projects.of(canvas),
-        memory,
-        emit: (canvas, agentId, connection, event) => {
-          for (const contents of windows.showing(canvas)) {
-            sendEvent(contents, 'session:event', agentId, connection, event);
-          }
-        },
-        terminal: (canvas, agentId, event) => {
-          for (const contents of windows.showing(canvas)) {
-            sendEvent(contents, 'terminal:event', agentId, event);
-          }
-        },
-      });
-      const files = new ProjectFiles({ environment: agentsEnvironment });
-      const links = new LinkOpener({
-        file: path.join(app.getPath('userData'), 'links.json'),
-        ask: async (contents, host, url) => {
-          const options: MessageBoxOptions = {
-            type: 'question',
-            message: `Open ${host} in your browser?`,
-            detail: url.length > 300 ? `${url.slice(0, 300)}…` : url,
-            buttons: ['Open', 'Cancel'],
-            defaultId: 0,
-            cancelId: 1,
-            checkboxLabel: 'Always for this site',
-            noLink: true,
-          };
-          const window = BrowserWindow.fromWebContents(contents);
-          const { response, checkboxChecked } = await (window
-            ? dialog.showMessageBox(window, options)
-            : dialog.showMessageBox(options));
-          return { open: response === 0, always: response === 0 && checkboxChecked };
-        },
-        openExternal: (url) => shell.openExternal(url),
-      });
-      // Which agents the user has, for the templates' agents.
-      const clis = { installed: async () => installedClis(await agentsEnvironment()) };
-      // file:// links in a terminal: shown in the file manager, if in the project folder.
-      const reveal = new FileRevealer({
-        folderOf: (canvas) => projects.of(canvas),
-        show: (file) => {
-          shell.showItemInFolder(file);
-        },
-      });
-      registerIpcHandlers(trustedOrigin, {
-        catalog: CATALOG,
-        windows,
-        canvases,
-        runs,
-        shutdown,
-        projects,
-        files,
-        links,
-        reveal,
-        sessions,
-        clis,
-        usage,
-      });
+      registerIpcHandlers(trustedOrigin, ports);
 
-      // Renderer acknowledgement comes before closing CLIs or flushing native session IDs.
+      // Renderer acknowledgement precedes closing CLIs or flushing the profile's stores.
       const persistWindows = async (closing: BrowserWindow[]) => {
+        const shown = await ask(
+          'shown',
+          closing.map((window) => window.webContents.id),
+        );
         await Promise.all(
-          closing.map((window) =>
-            windows.has(window.webContents) ? shutdown.stop(window.webContents) : Promise.resolve(),
+          closing.flatMap((window) =>
+            shown.includes(window.webContents.id) ? [shutdown.stop(window.webContents)] : [],
           ),
         );
-        await runs.flush();
-        await sessions.closeEverything();
-        await Promise.all([memory.flush(), settings.flush(), links.flush(), usage.flush()]);
+        await ask('flush');
       };
-      // Closing without saving (the user said to, after it failed): what can be closed, within a
-      // few seconds.
-      const abandon = async () => {
-        await Promise.race([
-          Promise.allSettled([sessions.closeEverything()]).then(() =>
-            Promise.allSettled([memory.flush(), settings.flush(), links.flush(), usage.flush()]),
-          ),
-          new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
-        ]);
+      // Closing without saving, after the user said to: give the core a few seconds to finish.
+      let finishing: Promise<void> | undefined;
+      const abandon = () => (finishing ??= finish());
+      const finish = async () => {
+        supervisor.stop();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            ask('close').catch((error: unknown) => {
+              console.error('Could not finish closing the core:', error);
+            }),
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, ABANDON_MS);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
       };
       const askAnyway =
         (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
         async (why: string): Promise<boolean> => {
           console.error('Could not save before closing:', why);
+          if (hidden) {
+            await abandon();
+            app.exit(1);
+            return false;
+          }
           const options: MessageBoxOptions = {
             type: 'warning',
             message: 'The run could not be saved',
@@ -284,24 +236,25 @@ function main(): void {
           return response === 1;
         };
       const quit = new Closing({
-        save: () => persistWindows(BrowserWindow.getAllWindows()),
+        save: async () => {
+          await persistWindows(BrowserWindow.getAllWindows());
+        },
         abandon,
         ask: askAnyway('Quit'),
         done: () => {
-          app.quit();
+          void abandon().then(() => {
+            app.quit();
+          });
         },
       });
       app.on('before-quit', (event) => {
         if (!quit.request()) event.preventDefault();
       });
       app.on('browser-window-created', (_event, window) => {
-        // A reload keeps the window's canvas but ends its sessions (run:get waits for them to
-        // close before restoring); a crash or close ends them too.
-        windows.watch(window.webContents);
         // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({
           save: () => persistWindows([window]),
-          abandon,
+          abandon: () => Promise.resolve(),
           ask: askAnyway('Close', window),
           done: () => {
             window.close();
@@ -329,6 +282,13 @@ function main(): void {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
+}
+
+/** A failed core request must stop a save/close, with its sentence intact. */
+async function answered<T>(asked: Promise<Answer<T>>): Promise<T> {
+  const answer = await asked;
+  if (!answer.ok) throw new Error(answer.error.message);
+  return answer.value;
 }
 
 main();

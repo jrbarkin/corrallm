@@ -28,7 +28,7 @@ export function ruleChecks(engines: Engines): { [R in keyof typeof RULES]: RuleC
         return undefined;
       }
       return {
-        refuse: `It starts with "${prefix}", which ${catalog.connectionName(connection) ?? 'its connection'} runs as a shell command without asking: only you may send that.`,
+        refuse: `It starts with "${prefix}", which ${catalog.connectionName(connection) ?? 'its connection'} runs as a shell command without asking: only the user may send that.`,
       };
     },
     // R9: a token releases only the pauses its own party set; yours (and others') stay. One whose

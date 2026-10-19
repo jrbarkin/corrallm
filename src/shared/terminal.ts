@@ -1,14 +1,14 @@
 /*
- * A Terminal connection's screen: the real `claude` CLI runs in a pseudo-terminal in the main
+ * A Terminal connection's screen: its CLI runs in a pseudo-terminal in the core
  * process (src/main/sessions/terminal/), and its agent view shows that terminal
- * (src/renderer/terminal/). Main keeps a copy of what the terminal shows, so a view that opens
+ * (src/renderer/terminal/). The core keeps a copy of what the terminal shows, so a view that opens
  * (again) starts from the screen as it is, then follows what the CLI prints. What the user types
  * in the view goes back to the CLI as keystrokes.
  *
  * Keep this module free of Node, Electron and DOM imports: it is compiled into every process.
  */
 
-/** What main tells an agent's terminal view, once the view has asked to see the terminal. */
+/** What the core tells an agent's terminal view, once the view has asked to see the terminal. */
 export type TerminalEvent =
   /**
    * The screen as it is (to start the view from, replacing what it showed), and its size. Sent when

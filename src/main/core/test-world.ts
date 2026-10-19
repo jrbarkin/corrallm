@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { MAX_LINK_LENGTH } from '../../shared/ipc';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { OpName, Reach } from '../../shared/api/surface';
 import type { SessionMode } from '../../shared/session';
@@ -207,6 +208,8 @@ const TARGETS = [
 export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
   'catalog.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
+  'catalog.installed': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
+  'settings.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: 1 }],
@@ -254,7 +257,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   withdraw: {
     valid: [],
     by: {
-      you: [{ canvas: CANVAS, id: SEEDED.you, request: request(20) }],
+      you: [
+        { canvas: CANVAS, id: SEEDED.you, request: request(20) },
+        { id: SEEDED.you, request: request(20) },
+      ],
       lead: [{ canvas: CANVAS, id: SEEDED.lead, request: request(21) }],
       worker: [{ canvas: CANVAS, id: SEEDED.worker, request: request(22) }],
       'outside-write': [{ canvas: CANVAS, id: SEEDED.orchestrator, request: request(23) }],
@@ -299,9 +305,105 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     // The lead's pause is yours.
     meetsRule: { sticky: { canvas: CANVAS, target: { agent: 'lead' }, request: request(70) } },
   },
+  'topics.subscribe': {
+    valid: [
+      { topic: 'usage', request: request(75) },
+      { topic: 'settings', request: request(76) },
+    ],
+    invalid: [{}, { topic: 'missing' }, { topic: 'usage', window: 2 }],
+    fresh: ['epoch'],
+  },
+  'topics.unsubscribe': {
+    valid: [
+      { topic: 'usage', request: request(77) },
+      { topic: 'settings', request: request(78) },
+    ],
+    invalid: [{}, { topic: 'missing' }],
+  },
   'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
+  'usage.setRule': {
+    valid: [
+      {
+        backend: 'codex',
+        rule: { window: 'weekly', percent: 80, action: 'warn' },
+        request: request(80),
+      },
+      { backend: 'codex', rule: null, request: request(81) },
+    ],
+    invalid: [
+      { backend: 'missing', rule: null },
+      { backend: 'codex' },
+      { backend: 'codex', rule: { window: 'weekly', percent: 100, action: 'ask' } },
+      { backend: 'codex', rule: { window: 'weekly', percent: 80, action: 'nextBackend' } },
+    ],
+  },
+  'usage.simulate': {
+    valid: [
+      {
+        backend: 'codex',
+        windows: { fiveHour: { usedPercent: 42, resetsAt: null } },
+        request: request(90),
+      },
+      { backend: 'codex', windows: {}, request: request(91) },
+      { backend: 'codex', windows: null, request: request(92) },
+    ],
+    invalid: [
+      { backend: 'missing', windows: null },
+      { backend: 'codex' },
+      { backend: 'codex', windows: { fiveHour: { usedPercent: 101, resetsAt: null } } },
+      { backend: 'codex', windows: { weekly: { usedPercent: 50, resetsAt: -1 } } },
+      {
+        backend: 'codex',
+        windows: { weekly: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } },
+      },
+    ],
+  },
   // From the start first, which moves each party's read position past all it was sent: a wait
   // with no cursor then answers alike however often it is called.
+  'link.open': {
+    valid: [{ url: 'https://example.com/a', request: request(93) }],
+    invalid: [
+      {},
+      { url: 1 },
+      { url: 'x'.repeat(MAX_LINK_LENGTH + 1) },
+      { url: 'https://example.com', window: 8 },
+    ],
+  },
+  'link.reveal': {
+    valid: [{ url: 'file:///not-a-project-file', request: request(94) }],
+    invalid: [
+      {},
+      { url: 1 },
+      { url: 'x'.repeat(MAX_LINK_LENGTH + 1) },
+      { url: 'file:///work/app', canvas: CANVAS },
+    ],
+  },
+  'window.get': {
+    valid: [{}],
+    invalid: [{ window: 8 }, { c: CANVAS }],
+  },
+  'terminal.attach': {
+    valid: [{ agent: 'shell', request: request(95) }],
+    invalid: [{}, { agent: 1 }, { agent: 'shell', canvas: CANVAS }],
+  },
+  'terminal.detach': {
+    valid: [{ agent: 'shell', request: request(96) }],
+    invalid: [{}, { agent: 'shell', extra: true }],
+  },
+  'terminal.input': {
+    valid: [{ agent: 'shell', data: '\x1b[Z\x03', request: request(97) }],
+    invalid: [{}, { agent: 'shell', data: '' }, { agent: 'shell', data: 1 }],
+  },
+  'terminal.resize': {
+    valid: [{ agent: 'shell', cols: 120, rows: 40, request: request(98) }],
+    invalid: [{}, { agent: 'shell', cols: 80.5, rows: 24 }, { agent: 'shell', cols: 80, rows: 0 }],
+  },
+  'terminal.drop': {
+    valid: [
+      { agent: 'shell', paths: [path.join(tmpdir(), 'not-a-dropped-file')], request: request(99) },
+    ],
+    invalid: [{}, { agent: 'shell', paths: [] }, { agent: 'shell', paths: ['relative.png'] }],
+  },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],
     by: {

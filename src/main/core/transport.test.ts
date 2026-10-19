@@ -6,13 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { OpError, OpResult } from '../../shared/api/errors';
 import { toolName } from '../../shared/api/registry';
-import { PARTIES } from '../../shared/api/surface';
+import { GUI_OPS, PARTIES } from '../../shared/api/surface';
 import type { Party } from '../../shared/api/surface';
 import { callTool, startApiServer } from '../api/mcp';
 import type { ApiServer } from '../api/mcp';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { TokenCaller } from './caller';
+import { WindowPorts } from './gui';
 import {
   allValid,
   CALLERS,
@@ -24,6 +25,7 @@ import {
   unreachableCalls,
 } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
+import { openWindow } from './test-window';
 import { REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld } from './test-world';
 
 /*
@@ -31,8 +33,8 @@ import { REAL_FIXTURES, REAL_OUT_OF_REACH, startWorld } from './test-world';
  * calls) and dispatch (what the call answers); every op's fixtures are called through each
  * transport's dispatch half with the same synthetic caller (you, then each party), and must answer
  * byte for byte as core.call does directly. MCP is also driven end to end, over HTTP, for every
- * caller a token can be. B8 adds a window's port; B21 the Agent SDK's in-process server and Codex's
- * dynamic tools.
+ * caller a token can be, and a window's port (core/gui.ts) for you, whose window it is. B21 adds the
+ * Agent SDK's in-process server and Codex's dynamic tools.
  */
 
 const TOKENS: Readonly<Partial<Record<Party, string>>> = {
@@ -166,4 +168,31 @@ describe.each(REGISTRIES)('T3a on %s', (_label, fixtures, world, start) => {
       }
     },
   );
+});
+
+describe('T3a on a window’s port', () => {
+  let setup: Setup;
+  let window: ReturnType<typeof openWindow>;
+
+  beforeAll(async () => {
+    setup = await startWorld();
+    // The world's you is at window 1.
+    window = openWindow(new WindowPorts(setup.core), 1);
+  });
+
+  afterAll(async () => {
+    window.close();
+    await setup.close();
+  });
+
+  it.each(GUI_OPS)('answers %s through a window’s port as directly, for you', async (name) => {
+    for (const args of argsOf(setup.core, name, REAL_FIXTURES[name], REAL_OUT_OF_REACH)) {
+      const direct = await setup.core.call(name, args, CALLERS.you);
+      const answer = await window.link.request('call', name, args);
+      expect(answer.ok).toBe(true);
+      expect(JSON.stringify(answer.ok && answer.value), JSON.stringify(args)).toBe(
+        JSON.stringify(direct),
+      );
+    }
+  });
 });

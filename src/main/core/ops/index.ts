@@ -1,8 +1,14 @@
-import type { Catalog } from '../../../shared/adapter';
+import type { AdapterId, Catalog } from '../../../shared/adapter';
 import type { ArgsOf, ResultOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
+import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
+import type { LinkOpener } from '../../links';
+import type { FileRevealer } from '../../reveal';
+import type { SessionManager } from '../../sessions/manager';
+import type { Windows } from '../windows';
+import type { Topics } from '../topics';
 import type { OpContext } from '../call';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
@@ -10,10 +16,15 @@ import type { TokenStore } from '../tokens';
 import { appOps } from './app';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
+import { linkOps } from './link';
 import { runOps } from './run';
 import { sessionOps } from './session';
+import { settingsOps } from './settings';
+import { terminalOps } from './terminal';
+import { topicsOps } from './topics';
 import { usageOps } from './usage';
 import { waitOps } from './wait';
+import { windowOps } from './window';
 
 /*
  * What each operation does, by area (Core Server §8.2): one implementation per op in the registry,
@@ -27,11 +38,24 @@ export type Implementations = {
 
 /** What the operations act on: the services the core composes (createCore). */
 export interface OpServices {
+  topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
   /** What every adapter declares. */
   catalog: Catalog;
-  usage: Pick<UsageReadings, 'state'>;
+  /** The adapter agents run when none is chosen. */
+  defaultAdapter: AdapterId;
+  settings: Pick<Settings, 'get'>;
+  /** The agents’ environment, read from the login shell when first needed. */
+  environment: () => Promise<Readonly<Record<string, string>>>;
+  usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
+  links: Pick<LinkOpener, 'open'>;
+  reveal: Pick<FileRevealer, 'reveal'>;
+  windows: Pick<Windows, 'canvasOf'>;
+  sessions: Pick<
+    SessionManager,
+    'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'
+  >;
   /** The canvases the core runs. */
   engines: Engines;
   /** Whether an agent is a lead now, as kept on this machine. */
@@ -46,12 +70,17 @@ export interface OpServices {
 
 export function implementations(services: OpServices): Implementations {
   return {
+    ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
     ...conversationOps(services),
     ...sessionOps(services),
+    ...settingsOps(services),
     ...runOps(services),
     ...usageOps(services),
     ...waitOps(services),
+    ...linkOps(services),
+    ...windowOps(services),
+    ...terminalOps(services),
   };
 }
