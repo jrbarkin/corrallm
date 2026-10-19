@@ -95,18 +95,32 @@ export interface Surface {
   readonly reads?: TopicKind;
 }
 
+/*
+ * The audiences ops share (Core Server §4's shorthands), which the core's test registry uses too.
+ */
+
 /** Reads no agent makes: you, and outside tokens on their canvases. */
-const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
+export const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 /** Reads leads make too, on the agents they reach. */
-const R = { ...O, lead: 'linked' } as const;
+export const R = { ...O, lead: 'linked' } as const;
 /** Reads every caller makes: you, leads and workers on the agents they reach, outside tokens. */
-const A = { ...R, worker: 'linked' } as const;
+export const A = { ...R, worker: 'linked' } as const;
 /** Operations only you may call, in the GUI. */
-const Y = { you: 'all' } as const;
+export const Y = { you: 'all' } as const;
 /** Writes on agents and queues: you; leads, on their team; outside write tokens. */
-const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
+export const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
+/**
+ * Canvas-wide writes no agent makes, and resuming another conversation: you, and outside write
+ * tokens (a lead acts only on its team).
+ */
+export const W = { you: 'all', 'outside-write': 'canvas' } as const;
 /** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
-const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
+export const M = {
+  you: 'all',
+  lead: 'linked',
+  worker: 'linked',
+  'outside-write': 'canvas',
+} as const;
 /** Outside tokens alone, read-only or read-write, on their canvases. */
 const T = { 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 

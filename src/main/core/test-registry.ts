@@ -4,7 +4,7 @@ import { withEnvelope } from '../../shared/api/define';
 import type { OpDef } from '../../shared/api/define';
 import { brandedId, idsIn, NeedId } from '../../shared/api/ids';
 import type { Brand, IdRef } from '../../shared/api/ids';
-import { PARTIES } from '../../shared/api/surface';
+import { A, L, M, PARTIES, W, Y } from '../../shared/api/surface';
 import type { Party, Reach, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Dispatcher, Implementation, OpContext, Registry, RuleCheck } from './call';
@@ -76,23 +76,13 @@ export const RESOLVERS: Readonly<Record<string, Resolver>> = {
 const Canvas = brandedId('CanvasId', z.uuid());
 const Agent = brandedId('AgentId', z.string().min(1).max(64));
 
-const Y = { you: 'all' } as const;
+/** Every caller but you. */
 const T = {
   lead: 'linked',
   worker: 'linked',
   'outside-read': 'canvas',
   'outside-write': 'canvas',
 } as const;
-const A = {
-  you: 'all',
-  lead: 'linked',
-  worker: 'linked',
-  'outside-read': 'canvas',
-  'outside-write': 'canvas',
-} as const;
-const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
-const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canvas' } as const;
-const W = { you: 'all', 'outside-write': 'canvas' } as const;
 
 const SURFACES = {
   'test.read': { access: A, kind: 'read', scope: 'none', varies: ['caller'] },
