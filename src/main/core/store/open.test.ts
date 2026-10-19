@@ -268,8 +268,9 @@ describe('a damaged database', () => {
   }
 
   const canvases = (store: Store) => store.prepare('SELECT id FROM canvas').all();
+  /** How many messages the store keeps from parties: not corrallm's notices of them. */
   const messages = (store: Store) =>
-    store.prepare('SELECT count(*) AS messages FROM message').get();
+    store.prepare("SELECT count(*) AS messages FROM message WHERE kind = 'text'").get();
   /** That the store opened keeps what is written to it. */
   function works(store: Store): void {
     store.tx(() => store.prepare("INSERT INTO canvas (id, used_at) VALUES ('after', 2)").run());
@@ -412,6 +413,63 @@ describe('a damaged database', () => {
       ]);
     });
   }
+
+  it('never sends what waited in the snapshot it restores: unresolved, each sender told after every place given', async () => {
+    const { store: before } = await open(stoppedAt(Date.UTC(2026, 9, 19, 12)));
+    const row = (id: string, from: string, state: string, kind = 'text') =>
+      before
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+           VALUES (?, ?, ?, 'agent:a', ?, 'Hello', ?, 1)`,
+        )
+        .run(id, CANVAS, from, kind, state);
+    before.tx(() => {
+      before.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS);
+      row('waited', 'outside:orchestrator', 'pending');
+      row('yours', 'you', 'pending');
+      row('out', 'outside:orchestrator', 'delivering');
+      row('done', 'outside:orchestrator', 'replied');
+      row('told', 'corrallm', 'delivered', 'notice');
+    });
+    await before.close();
+    await writeFile(file, 'This is not a database. '.repeat(500));
+
+    const { store } = await open(stoppedAt(Date.UTC(2026, 9, 19, 18)));
+
+    const sentence = (id: string) =>
+      `Your message ${id} won’t be sent: corrallm’s database was restored from a snapshot taken while it waited, so whether it went since is unknown.`;
+    const turn = (id: string) =>
+      JSON.stringify({ status: 'failed', reason: 'error', message: sentence(id) });
+    expect(
+      store
+        .prepare('SELECT seq, id, state, turn FROM message WHERE kind <> ? ORDER BY seq')
+        .all('notice'),
+    ).toEqual([
+      { seq: 1, id: 'waited', state: 'unresolved', turn: turn('waited') },
+      { seq: 2, id: 'yours', state: 'unresolved', turn: turn('yours') },
+      // Being delivered, it is cut off as its canvas opens, as after any restart.
+      { seq: 3, id: 'out', state: 'delivering', turn: null },
+      { seq: 4, id: 'done', state: 'replied', turn: null },
+    ]);
+    const notices = store
+      .prepare(
+        `SELECT seq, from_party, to_party, body, reply_to, turn, state, sent_at FROM message
+         WHERE kind = 'notice' AND reply_to IS NOT NULL ORDER BY seq`,
+      )
+      .all();
+    expect(notices).toEqual(
+      ['waited', 'yours'].map((id, i) => ({
+        seq: Date.UTC(2026, 9, 19, 18) + i + 1,
+        from_party: 'corrallm',
+        to_party: id === 'yours' ? 'you' : 'outside:orchestrator',
+        body: sentence(id),
+        reply_to: id,
+        turn: turn(id),
+        state: 'delivered',
+        sent_at: Date.UTC(2026, 9, 19, 18),
+      })),
+    );
+  });
 
   it('sets aside a database SQLite finds damaged as it opens it', async () => {
     await keepMessages(Date.UTC(2026, 9, 19, 12));

@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
+import { settleRestored } from './restored';
 import { restoreSnapshot, snapshots, snapshotTime } from './snapshots';
 import {
   connect,
@@ -39,7 +40,8 @@ import { transaction } from './transaction';
  * without its database could otherwise be replayed into the next one. Then the newest snapshot that
  * passes the same checks is restored, else the store starts empty, and it says so; a restore cut
  * short (core.db gone, its snapshots there) is finished as the store next opens. Whatever
- * restoring loses, the core treats as a restart does: what was being sent is never sent again.
+ * restoring loses, the core treats as a restart does: what was being sent is never sent again, nor
+ * is what waited to be sent (restored.ts).
  */
 
 export const STORE_FILE = 'core.db';
@@ -161,7 +163,8 @@ async function restore(
  * place the database a restore replaced may have given, which a cursor may hold: from the clock,
  * in milliseconds, unless the snapshot's places are past it already. A profile gives far fewer
  * than one place a millisecond, even since a restore last did this: only a clock set back since
- * then could give a place again.
+ * then could give a place again. Then, in the same transaction, it settles what waited in the
+ * snapshot (restored.ts).
  */
 function numberOn(connection: Connection, now: number): Connection {
   try {
@@ -175,6 +178,7 @@ function numberOn(connection: Connection, now: number): Connection {
           .prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, CAST(? AS INTEGER))')
           .run(table, now);
       }
+      settleRestored(connection, now);
     });
     return connection;
   } catch (error) {
