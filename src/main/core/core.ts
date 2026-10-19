@@ -28,6 +28,7 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
+import { Documents } from './canvas/documents';
 import { Channels } from './channels';
 import { Windows } from './windows';
 import { createDispatcher } from './call';
@@ -159,6 +160,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
   const memory = new CanvasMemory(store);
+  const documents = new Documents({
+    store,
+    memory,
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+  });
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
   const journal = new RunJournal({
@@ -252,7 +259,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     processes: children,
     catalog: CATALOG,
     windows,
-    canvases: new CanvasFiles({ host, memory }),
+    canvases: new CanvasFiles({ host, memory, documents }),
+    documents,
     runs: journal,
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
     projects,
@@ -279,11 +287,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     ]);
   const engines: Engines = new Engines({
     processes: children,
-    catalog: CATALOG,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,
     projects,
     journal,
+    documents,
     messages: new MessageTable(store, memory),
     store,
     usage,

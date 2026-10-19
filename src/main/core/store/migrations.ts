@@ -120,6 +120,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 2,
     minReader: 2,
     sql: `
+      -- The workflow a run ran goes: a canvas's document is kept in its rows, and a canvas with
+      -- none is read from its file (no profile ran schema 1 with work to keep: B9 Design §2).
+      DROP TABLE run_workflow;
+
       -- A canvas's document: the last revision given (an op takes the next), whether structural
       -- edits lay it out, the SHA-256 of its text as last saved or read (saved_hash: whether it is
       -- edited), of its file's bytes as last read or written (file_hash: whether the file changed

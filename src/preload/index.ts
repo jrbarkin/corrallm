@@ -53,7 +53,8 @@ const api: AppApi = {
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
   getRun: () => invoke(API_CHANNELS.getRun),
-  saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
+  saveRun: (token, checkpoint, document) =>
+    invoke(API_CHANNELS.saveRun, token, checkpoint, document),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
   onRunStopping: (listener) => listen(API_EVENTS.onRunStopping, listener),
   openCanvas: () => invoke(API_CHANNELS.openCanvas),

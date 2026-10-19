@@ -295,10 +295,10 @@ function Editor({
       persistence = new RunPersistence(runSource, {
         capture: () => ({
           version: 2,
-          workflow: documentState.read(),
           ...engine.checkpoint(),
           updatedAt: Date.now(),
         }),
+        document: () => documentState.read(),
         freeze: () => {
           flushDrafts();
           runStore.pause();
@@ -308,11 +308,10 @@ function Editor({
         },
         restore: (context) => {
           const checkpoint = context.checkpoint;
-          const next = checkpoint
-            ? graphOf(fromFile(checkpoint.workflow, catalog(), DEFAULT_AGENT))
-            : context.savedText
-              ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
-              : undefined;
+          // The core's document, with its edits since it was saved: none for an empty draft.
+          const next = context.document
+            ? graphOf(fromFile(context.document, catalog(), DEFAULT_AGENT))
+            : undefined;
           const savedGraph = context.savedText
             ? graphOf(fromFile(context.savedText, catalog(), DEFAULT_AGENT))
             : EMPTY_GRAPH;
@@ -776,18 +775,15 @@ function Editor({
               );
             return;
           }
-          files.open().then((file) => {
-            if (!file) return;
-            try {
+          // The core refuses a file that isn't a canvas, and sends the document it keeps.
+          files
+            .open()
+            .then((file) => {
+              if (!file) return;
               load(graphOf(fromFile(file.text, catalog(), DEFAULT_AGENT)), file.name, file.id);
               setProject(file.project ?? null);
-            } catch (error) {
-              setProblem(`Could not open ${file.name}: ${ipcErrorMessage(error)}`);
-              // Main took it as the canvas's file: never save this canvas over it.
-              setProject(null);
-              files.forget().then(setCanvasId, failed('open the canvas'));
-            }
-          }, failed('open the canvas'));
+            })
+            .catch(failed('open the canvas'));
         });
       },
       /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */

@@ -1,15 +1,20 @@
 import type { RunCheckpoint, RunContext } from '../../shared/run';
 
-/** Main owns storage and native conversation identity; the renderer supplies queue metadata. */
+/**
+ * The core owns storage, the canvas's document and native conversation identity; the renderer
+ * supplies queue metadata, and its edits to the document until they are operations of their own.
+ */
 export interface RunSource {
   get: () => Promise<RunContext>;
-  save: (token: string, checkpoint: RunCheckpoint | null) => Promise<null>;
+  save: (token: string, checkpoint: RunCheckpoint | null, document: string) => Promise<null>;
   ready: (request: string, error: string | null) => Promise<null>;
   onStopping: (listener: (request: string) => void) => () => void;
 }
 
 interface Owner {
   capture: () => RunCheckpoint;
+  /** The canvas as the renderer has it: its file's text. */
+  document: () => string;
   restore: (context: RunContext) => void;
   freeze: () => void;
   error: (error: unknown) => void;
@@ -42,7 +47,7 @@ export class RunPersistence {
     const owner = this.#owner;
     this.#unsubscribe ??= source.onStopping((request) => {
       if (this.#failedInitialization) {
-        const unchanged = this.#failedBaseline === contentsKey(owner.capture());
+        const unchanged = this.#failedBaseline === contentsKey(owner);
         const error = unchanged
           ? null
           : 'Run progress could not be loaded. Use New or Open before closing changed work.';
@@ -79,7 +84,7 @@ export class RunPersistence {
       .catch((error: unknown) => {
         if (!this.#failedInitialization) {
           this.#failedInitialization = true;
-          this.#failedBaseline = contentsKey(this.#owner.capture());
+          this.#failedBaseline = contentsKey(this.#owner);
         }
         throw error;
       });
@@ -140,7 +145,8 @@ export class RunPersistence {
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
     const checkpoint = this.#owner.capture();
-    const key = JSON.stringify([token, checkpoint.workflow, checkpoint.state, checkpoint.messages]);
+    const document = this.#owner.document();
+    const key = JSON.stringify([token, document, checkpoint.state, checkpoint.messages]);
     if (key === this.#last) {
       await this.#writes;
       return;
@@ -149,7 +155,7 @@ export class RunPersistence {
     const write = this.#writes
       .catch(() => undefined)
       .then(async () => {
-        await this.#source.save(token, checkpoint);
+        await this.#source.save(token, checkpoint, document);
       })
       .catch((error: unknown) => {
         if (this.#last === key) this.#last = '';
@@ -214,6 +220,7 @@ export class RunPersistence {
   }
 }
 
-function contentsKey(checkpoint: RunCheckpoint): string {
-  return JSON.stringify([checkpoint.workflow, checkpoint.state, checkpoint.messages]);
+function contentsKey(owner: Owner): string {
+  const { state, messages } = owner.capture();
+  return JSON.stringify([owner.document(), state, messages]);
 }

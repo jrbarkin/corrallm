@@ -243,7 +243,6 @@ describe('GraphEditor', () => {
     const id = newCanvasId();
     const checkpoint: RunCheckpoint = {
       version: 2,
-      workflow: toFile(documentOf(saved, id)),
       state: JSON.stringify({
         version: 2,
         run: {
@@ -269,6 +268,7 @@ describe('GraphEditor', () => {
         token: 'saved',
         name: 'saved.corral',
         checkpoint,
+        document: toFile(documentOf(saved, id)),
       }),
       save: vi.fn<RunSource['save']>().mockResolvedValue(null),
       ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
@@ -293,10 +293,10 @@ describe('GraphEditor', () => {
     fireEvent.change(labelInput(), { target: { value: 'Shown' } });
     fireEvent.keyDown(labelInput(), { key: 'Enter' });
     await waitFor(() => {
-      const saved = source.save.mock.calls.at(-1)?.[1];
-      expect(
-        saved && graphOf(fromFile(saved.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
-      ).toBe('Shown');
+      const saved = source.save.mock.calls.at(-1)?.[2];
+      expect(saved && graphOf(fromFile(saved, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label).toBe(
+        'Shown',
+      );
     });
     fireEvent.click(button('Show all queues'));
     const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
@@ -311,10 +311,10 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
     });
-    const stopped = source.save.mock.calls.at(-1)?.[1];
-    expect(
-      stopped && graphOf(fromFile(stopped.workflow, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label,
-    ).toBe('Shown');
+    const [, stopped, canvas] = source.save.mock.calls.at(-1) ?? [];
+    expect(canvas && graphOf(fromFile(canvas, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label).toBe(
+      'Shown',
+    );
     expect(stopped && readRun(stopped.state).run).toMatchObject({
       running: false,
       paused: true,
@@ -2118,7 +2118,6 @@ describe('GraphEditor', () => {
 
     it.each([
       'unreadable journal',
-      'invalid workflow',
       'invalid queue state',
       'invalid submitted messages',
       'invalid saved canvas',
@@ -2138,12 +2137,11 @@ describe('GraphEditor', () => {
             id: replaced ? draft : before,
             token: replaced ? 'new-draft' : 'old',
             name: null,
+            ...(replaced ? {} : { document: toFile(documentOf(coder, before)) }),
             checkpoint: replaced
               ? null
               : {
                   version: 2 as const,
-                  workflow:
-                    failure === 'invalid workflow' ? '{}' : toFile(documentOf(coder, before)),
                   state:
                     failure === 'invalid queue state'
                       ? '{}'
@@ -2195,111 +2193,19 @@ describe('GraphEditor', () => {
       expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
     });
 
-    it('saves each canvas with main’s id for it: the restored one’s, a new draft’s, an opened file’s', async () => {
-      const [restored, draft, opened] = [newCanvasId(), newCanvasId(), newCanvasId()];
-      let shown = restored;
-      const files = fakeFiles({
-        id: opened,
-        name: 'team.corral',
-        text: toFile(documentOf(coder, opened)),
-      });
-      files.forget.mockImplementation(() => {
-        shown = draft;
-        return Promise.resolve(draft);
-      });
-      files.open.mockImplementation(() => {
-        shown = opened;
-        return Promise.resolve({
-          id: opened,
-          name: 'team.corral',
-          text: toFile(documentOf(coder, opened)),
-        });
-      });
+    it('keeps the canvas, saving it under its own token, when the core refuses a file', async () => {
+      const id = newCanvasId();
+      const files = fakeFiles();
+      files.open.mockRejectedValue(new Error('notes.corral: This is not a corrallm canvas'));
       const runSource = {
         get: vi.fn(() =>
           Promise.resolve({
-            id: shown,
-            token: shown,
+            id,
+            token: 'kept',
             checkpoint: null,
-            name: shown === opened ? 'team.corral' : null,
-            ...(shown === opened ? { savedText: toFile(documentOf(coder, opened)) } : {}),
-          }),
-        ),
-        save: vi.fn().mockResolvedValue(null),
-        ready: vi.fn().mockResolvedValue(null),
-        onStopping: () => () => undefined,
-      };
-      render(<GraphEditor files={files} runSource={runSource} />);
-      // Restored: unsaved, and not edited.
-      await waitFor(() => {
-        expect(runSource.save).toHaveBeenCalled();
-      });
-      expect(document.title).toBe('Untitled — corrallm');
-      const saves = async (id: string) => {
-        const before = files.save.mock.calls.length;
-        fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
-        await waitFor(() => {
-          expect(files.save.mock.calls).toHaveLength(before + 1);
-        });
-        expect(canvasIdOf(files.save.mock.calls.at(-1)?.[0] ?? '')).toBe(id);
-        // Saved, it is not edited: its text and the saved text hold the same id.
-        await waitFor(() => {
-          expect(document.title).not.toContain('(edited)');
-        });
-      };
-      await saves(restored);
-      fireEvent.click(button('New'));
-      await waitFor(() => {
-        expect(runSource.get).toHaveBeenCalledTimes(2);
-      });
-      await saves(draft);
-      fireEvent.click(button('Open…'));
-      await waitFor(() => {
-        expect(document.title).toBe('team.corral — corrallm');
-      });
-      await saves(opened);
-    });
-
-    it('keeps a rejected persisted file detached from the retained canvas on the next Save', async () => {
-      let association: 'original' | 'invalid' | 'draft' = 'original';
-      const ids = { original: newCanvasId(), invalid: newCanvasId(), draft: newCanvasId() };
-      const files = fakeFiles({
-        id: ids.invalid,
-        name: 'invalid.corral',
-        text: 'Remember the milk',
-      });
-      files.open.mockImplementation(() => {
-        association = 'invalid';
-        return Promise.resolve({
-          id: ids.invalid,
-          name: 'invalid.corral',
-          text: 'Remember the milk',
-        });
-      });
-      files.forget.mockImplementation(() => {
-        association = 'draft';
-        return Promise.resolve(ids.draft);
-      });
-      const savedAssociations: string[] = [];
-      files.save.mockImplementation(() => {
-        savedAssociations.push(association);
-        return Promise.resolve('recovered.corral');
-      });
-      const runSource = {
-        get: vi.fn(() =>
-          Promise.resolve({
-            id: ids[association],
-            token: association,
-            checkpoint: null,
-            name: association === 'draft' ? null : `${association}.corral`,
-            ...(association === 'draft'
-              ? {}
-              : {
-                  savedText:
-                    association === 'invalid'
-                      ? 'Remember the milk'
-                      : toFile(documentOf(coder, ids.original)),
-                }),
+            name: 'kept.corral',
+            document: toFile(documentOf(coder, id)),
+            savedText: toFile(documentOf(coder, id)),
           }),
         ),
         save: vi.fn().mockResolvedValue(null),
@@ -2311,32 +2217,30 @@ describe('GraphEditor', () => {
         expect(button('Open…').disabled).toBe(false);
       });
       fireEvent.click(button('Open…'));
-      expect((await screen.findByRole('alert')).textContent).toContain(
-        'This is not a corrallm canvas',
+      expect((await screen.findByRole('alert')).textContent).toMatch(
+        /^Could not open the canvas: notes\.corral: This is not a corrallm canvas/,
       );
-      expect(files.forget).toHaveBeenCalledOnce();
+      expect(files.forget).not.toHaveBeenCalled();
       expect(container.querySelector('.react-flow__node[data-id="x"]')).not.toBeNull();
       fireEvent.click(button('Save'));
       await waitFor(() => {
-        expect(savedAssociations).toEqual(['draft']);
+        expect(files.save).toHaveBeenCalledOnce();
       });
-      expect(runSource.save.mock.calls.at(-1)?.[0]).toBe('draft');
+      expect(canvasIdOf(files.save.mock.calls[0]?.[0] ?? '')).toBe(id);
+      expect(runSource.save.mock.calls.every(([token]) => token === 'kept')).toBe(true);
     });
 
     it('says why a file cannot be opened, and keeps the canvas', async () => {
-      const files = fakeFiles({
-        id: newCanvasId(),
-        name: 'notes.corral',
-        text: 'Remember the milk',
-      });
+      const files = fakeFiles();
+      files.open.mockRejectedValue(new Error('notes.corral: This is not a corrallm canvas'));
       const { nodes } = setup(coder, files);
       fireEvent.click(button('Open…'));
       expect((await screen.findByRole('alert')).textContent).toMatch(
-        /^Could not open notes\.corral: This is not a corrallm canvas/,
+        /^Could not open the canvas: notes\.corral: This is not a corrallm canvas/,
       );
       expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
-      // Main took the file as the canvas's; it must not be saved over.
-      expect(files.forget).toHaveBeenCalled();
+      // The core never took it as the canvas's file: nothing to begin anew.
+      expect(files.forget).not.toHaveBeenCalled();
     });
   });
 });

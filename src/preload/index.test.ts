@@ -536,17 +536,11 @@ describe('run persistence preload', () => {
   it('exposes only typed get/save/ready calls and strips the stopping event object', async () => {
     const api = await exposed();
     postPort(answerInfo);
-    const checkpoint = {
-      version: 2,
-      workflow: '{}',
-      state: '{}',
-      messages: '[]',
-      updatedAt: 1,
-    } as const;
+    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
     await api.getRun();
     expect(channel).toHaveBeenLastCalledWith('run:get');
-    await api.saveRun('token', checkpoint);
-    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
+    await api.saveRun('token', checkpoint, '{"canvas":true}');
+    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint, '{"canvas":true}');
     await api.runReady('request', null);
     expect(channel).toHaveBeenLastCalledWith('run:ready', 'request', null);
     const listener = vi.fn();

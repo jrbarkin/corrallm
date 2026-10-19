@@ -96,10 +96,10 @@ describe('App', () => {
       expect(windowGet).toHaveBeenCalled();
     });
     await waitFor(() => {
-      const workflows = saveRun.mock.calls.flatMap(([, checkpoint]) =>
-        checkpoint ? [JSON.parse(checkpoint.workflow) as { id: string }] : [],
+      const documents = saveRun.mock.calls.map(
+        ([, , document]) => JSON.parse(document) as { id: string },
       );
-      expect(workflows.at(-1)?.id).toBe(c);
+      expect(documents.at(-1)?.id).toBe(c);
     });
   });
 

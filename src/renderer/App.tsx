@@ -19,7 +19,7 @@ const runSource: RunSource = {
     const [context, { c }] = await Promise.all([window.api.getRun(), api.windowGet()]);
     return { ...context, id: c as CanvasId };
   },
-  save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
+  save: (token, checkpoint, document) => window.api.saveRun(token, checkpoint, document),
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),
 };

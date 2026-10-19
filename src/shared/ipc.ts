@@ -38,21 +38,30 @@ export interface IpcContract {
   'core:connect': { args: []; result: null };
   /** Restore the current named canvas or durable draft, without starting an agent. */
   'run:get': { args: []; result: RunContext };
-  /** The core selects storage; the token rejects writes from an earlier canvas generation. */
-  'run:save': { args: [token: string, checkpoint: RunCheckpoint | null]; result: null };
+  /**
+   * Journals the run and commits the canvas's document as the renderer has it (its file's text),
+   * until its gestures are operations of their own. The core selects storage; the token rejects
+   * writes from an earlier canvas generation.
+   */
+  'run:save': {
+    args: [token: string, checkpoint: RunCheckpoint | null, document: string];
+    result: null;
+  };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
   /**
-   * Asks for a canvas file to open (the Open dialog). Resolves with it, or null if cancelled. The
-   * canvas before's agents' sessions end, and the opened one's project folder, if one was chosen
-   * for it, comes back.
+   * Asks for a canvas file to open (the Open dialog). Resolves with it, its canvas's document as
+   * the core keeps it (edits since it was saved included), or null if cancelled; rejects, keeping
+   * nothing of it, for a file that isn't a canvas. The canvas before's agents' sessions end, and
+   * the opened one's project folder, if one was chosen for it, comes back.
    */
   'canvas:open': { args: []; result: CanvasFile | null };
   /**
-   * Saves a canvas (its file's text, holding its id) to the file it was opened from or last saved
-   * to, or, when it has none or `choose` is true, to one picked in the Save dialog (Save As, which
-   * keeps its id, and so its project folder and its agents' conversations). Resolves with the
-   * file's name, or null if cancelled.
+   * Commits a canvas as the renderer has it (its file's text, holding its id), then saves the
+   * core's document to the file it was opened from or last saved to, or, when it has none or
+   * `choose` is true, to one picked in the Save dialog (Save As, which keeps its id, and so its
+   * project folder and its agents' conversations). Resolves with the file's name, or null if
+   * cancelled.
    */
   'canvas:save': { args: [text: string, choose: boolean]; result: string | null };
   /**
@@ -163,7 +172,8 @@ export interface IpcEvents {
 
 /**
  * A canvas file opened: its canvas's id (its own, or a new one for a copy of a canvas kept in
- * another file), its name (without folders) and its text (src/shared/model/file.ts).
+ * another file), its name (without folders) and its canvas's document as the core keeps it, as a
+ * file's text (src/shared/model/file.ts).
  */
 export interface CanvasFile {
   id: CanvasId;

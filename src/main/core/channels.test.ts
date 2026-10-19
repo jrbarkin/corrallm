@@ -28,10 +28,15 @@ function fakeServices() {
       open: vi.fn<ChannelServices['canvases']['open']>().mockResolvedValue(null),
       save: vi.fn<ChannelServices['canvases']['save']>().mockResolvedValue(null),
     },
+    documents: {
+      edit: vi.fn<ChannelServices['documents']['edit']>().mockResolvedValue(1),
+      textOf: vi.fn<ChannelServices['documents']['textOf']>().mockResolvedValue(undefined),
+    },
     runs: {
       get: vi
         .fn<ChannelServices['runs']['get']>()
         .mockResolvedValue({ id: CANVAS, token: 'canvas-token', checkpoint: null, name: null }),
+      check: vi.fn<ChannelServices['runs']['check']>(),
       save: vi.fn<ChannelServices['runs']['save']>().mockResolvedValue(undefined),
       opened: vi.fn<ChannelServices['runs']['opened']>().mockResolvedValue(undefined),
       saved: vi.fn<ChannelServices['runs']['saved']>().mockResolvedValue(undefined),
@@ -130,15 +135,17 @@ describe('canvas:* handlers', () => {
   it('opens a canvas file in the sender’s window, which shows it, its folder restored', async () => {
     const sender = 7;
     const id = newCanvasId();
-    services.canvases.open.mockResolvedValue({ id, name: 'team.corral', text: '{}' });
+    services.canvases.open.mockResolvedValue({ id, name: 'team.corral' });
+    services.documents.textOf.mockResolvedValue('{"its":"document"}');
     services.projects.restore.mockResolvedValue({ name: 'app', path: '/work/app' });
     await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
       id,
       name: 'team.corral',
-      text: '{}',
+      text: '{"its":"document"}',
       project: { name: 'app', path: '/work/app' },
     });
     expect(services.canvases.open).toHaveBeenCalledWith(7);
+    expect(services.documents.textOf).toHaveBeenCalledWith(id);
     expect(services.runs.opened).toHaveBeenCalledWith(id, undefined);
     expect(services.windows.show).toHaveBeenCalledWith(sender, id);
     expect(services.projects.restore).toHaveBeenCalledWith(id);
@@ -147,7 +154,8 @@ describe('canvas:* handlers', () => {
   it('says once why a file opened as a copy, and opens nothing when cancelled', async () => {
     const id = newCanvasId();
     const copy = 'team.corral is a copy of a canvas saved as other.corral: it opened as its own.';
-    services.canvases.open.mockResolvedValueOnce({ id, name: 'team.corral', text: '{}', copy });
+    services.canvases.open.mockResolvedValueOnce({ id, name: 'team.corral', copy });
+    services.documents.textOf.mockResolvedValue('{}');
     await expect(invoke('canvas:open', [])).resolves.toEqual({
       id,
       name: 'team.corral',
@@ -158,10 +166,11 @@ describe('canvas:* handlers', () => {
     expect(services.windows.show).toHaveBeenCalledOnce();
   });
 
-  it('saves the sender’s canvas, and its record names the file then', async () => {
+  it('saves the sender’s canvas as its renderer has it, and its record names the file then', async () => {
     services.canvases.save.mockResolvedValueOnce('team.corral').mockResolvedValueOnce(null);
     await expect(invoke('canvas:save', ['{}', true])).resolves.toBe('team.corral');
-    expect(services.canvases.save).toHaveBeenCalledWith(7, CANVAS, '{}', true);
+    expect(services.documents.edit).toHaveBeenCalledWith(CANVAS, '{}');
+    expect(services.canvases.save).toHaveBeenCalledWith(7, CANVAS, true);
     expect(services.runs.saved).toHaveBeenCalledWith(CANVAS);
     // Cancelled: nothing changes.
     await expect(invoke('canvas:save', ['{}', false])).resolves.toBeNull();
@@ -188,7 +197,8 @@ describe('canvas replacement after a failed restore', () => {
     const sender = 7;
     const id = newCanvasId();
     services.windows.canvasOf.mockRejectedValue(new Error('Corrupt journal'));
-    services.canvases.open.mockResolvedValue({ id, name: 'replacement.corral', text: '{}' });
+    services.canvases.open.mockResolvedValue({ id, name: 'replacement.corral' });
+    services.documents.textOf.mockResolvedValue('{}');
     await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
       id,
       name: 'replacement.corral',
@@ -231,12 +241,30 @@ describe('the sender’s canvas', () => {
     expect(called.mock.calls[0]).toContain(CANVAS);
   });
 
-  it('is what run:get restores and run:save journals', async () => {
-    await expect(invoke('run:get', [])).resolves.toMatchObject({ id: CANVAS });
+  it('is what run:get restores and run:save journals, its document with it', async () => {
+    services.documents.textOf.mockResolvedValue('{"its":"document"}');
+    await expect(invoke('run:get', [])).resolves.toMatchObject({
+      id: CANVAS,
+      document: '{"its":"document"}',
+    });
     expect(services.runs.get).toHaveBeenCalledWith(CANVAS);
-    const checkpoint = { version: 2, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
-    await invoke('run:save', ['canvas-token', checkpoint]);
+    expect(services.documents.textOf).toHaveBeenCalledWith(CANVAS);
+    const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
+    await invoke('run:save', ['canvas-token', checkpoint, '{"edited":true}']);
+    expect(services.runs.check).toHaveBeenCalledWith(CANVAS, 'canvas-token');
+    expect(services.documents.edit).toHaveBeenCalledWith(CANVAS, '{"edited":true}');
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
+  });
+
+  it('commits no document for an earlier canvas’s token', async () => {
+    services.runs.check.mockImplementation(() => {
+      throw new Error('This run belongs to an earlier canvas');
+    });
+    await expect(invoke('run:save', ['stale', null, '{"edited":true}'])).rejects.toThrow(
+      'earlier canvas',
+    );
+    expect(services.documents.edit).not.toHaveBeenCalled();
+    expect(services.runs.save).not.toHaveBeenCalled();
   });
 });
 
@@ -754,11 +782,11 @@ describe('usage:* handlers', () => {
 });
 
 describe('run journal channels', () => {
-  const checkpoint = { version: 2, workflow: '{}', state: '{}', messages: '[]', updatedAt: 1 };
+  const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
   it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
     const sender = 7;
     await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });
-    await invoke('run:save', ['canvas-token', checkpoint], sender);
+    await invoke('run:save', ['canvas-token', checkpoint, '{}'], sender);
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
     // The shutdown handshake is the window's.
     await invoke('run:ready', ['request', null], sender);
@@ -767,8 +795,12 @@ describe('run journal channels', () => {
   it.each([
     ['run:get', ['/a/path']],
     ['run:save', []],
-    ['run:save', ['t', { ...checkpoint, file: '/a/path' }]],
-    ['run:save', ['t', { ...checkpoint, state: 'broken' }]],
+    ['run:save', ['t', checkpoint]],
+    ['run:save', ['t', { ...checkpoint, file: '/a/path' }, '{}']],
+    ['run:save', ['t', { ...checkpoint, state: 'broken' }, '{}']],
+    ['run:save', ['t', { ...checkpoint, workflow: '{}' }, '{}']],
+    ['run:save', ['t', checkpoint, 7]],
+    ['run:save', ['t', checkpoint, 'x'.repeat(MAX_CANVAS_BYTES + 1)]],
     ['run:ready', ['request']],
   ])('rejects invalid %s arguments', (channel, args) => {
     expect(() => invoke(channel, args as unknown[])).toThrow();
@@ -776,6 +808,8 @@ describe('run journal channels', () => {
   });
   it('surfaces a journal write error to the renderer', async () => {
     services.runs.save.mockRejectedValue(new Error('Disk full'));
-    await expect(invoke('run:save', ['canvas-token', checkpoint])).rejects.toThrow('Disk full');
+    await expect(invoke('run:save', ['canvas-token', checkpoint, '{}'])).rejects.toThrow(
+      'Disk full',
+    );
   });
 });

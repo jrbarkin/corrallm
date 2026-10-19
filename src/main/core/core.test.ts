@@ -9,6 +9,7 @@ import { PARTIES } from '../../shared/api/surface';
 import { newCanvasId } from '../../shared/canvas';
 import type { RunContext } from '../../shared/run';
 import { EXAMPLES } from '../../shared/examples';
+import { toFile } from '../../shared/model/file';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
@@ -300,7 +301,6 @@ describe('createCore', () => {
 describe('the core’s database', () => {
   const CHECKPOINT = {
     version: 2,
-    workflow: '{}',
     state: '{"paused":true}',
     messages: '[]',
     updatedAt: 1,
@@ -310,7 +310,8 @@ describe('the core’s database', () => {
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     // A window's canvas, a draft, its run journaled.
     const run = (await started.channels.call(7, 'run:get', [])) as RunContext;
-    await started.channels.call(7, 'run:save', [run.token, CHECKPOINT]);
+    const empty = toFile({ id: run.id, arrange: false, nodes: [], links: [] });
+    await started.channels.call(7, 'run:save', [run.token, CHECKPOINT, empty]);
     expect(journaledRun(profile, run.id)).toEqual(CHECKPOINT);
     await started.close();
     core = undefined;

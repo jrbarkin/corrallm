@@ -8,6 +8,7 @@ import type { RunSource } from './persistence';
 function setup() {
   const stopping = new Set<(request: string) => void>();
   let snapshot = 'running';
+  let document = '{"canvas":"as edited"}';
   const context: RunContext = {
     id: newCanvasId(),
     token: 'original',
@@ -28,11 +29,11 @@ function setup() {
   const owner = {
     capture: (): RunCheckpoint => ({
       version: 2,
-      workflow: '{}',
       state: JSON.stringify({ snapshot }),
       messages: '{}',
       updatedAt: 1,
     }),
+    document: () => document,
     restore: vi.fn(),
     freeze: vi.fn(() => {
       snapshot = 'paused';
@@ -50,6 +51,9 @@ function setup() {
     listeners: () => stopping.size,
     change: (value: string) => {
       snapshot = value;
+    },
+    edit: (value: string) => {
+      document = value;
     },
   };
 }
@@ -90,7 +94,7 @@ describe('run persistence coordinator', () => {
       expect(owner.restore).toHaveBeenCalledExactlyOnceWith(context);
       expect(source.get).toHaveBeenCalledOnce();
       await persistence.flush();
-      expect(source.save).toHaveBeenCalledWith('restored', expect.any(Object));
+      expect(source.save).toHaveBeenCalledWith('restored', expect.any(Object), expect.any(String));
     },
   );
 
@@ -115,6 +119,7 @@ describe('run persistence coordinator', () => {
       expect(source.save).toHaveBeenLastCalledWith(
         'original',
         expect.objectContaining({ state: '{"snapshot":"edited"}' }),
+        '{"canvas":"as edited"}',
       );
     });
     stop();
@@ -125,6 +130,7 @@ describe('run persistence coordinator', () => {
     expect(source.save).toHaveBeenLastCalledWith(
       'original',
       expect.objectContaining({ state: '{"snapshot":"paused"}' }),
+      '{"canvas":"as edited"}',
     );
     persistence.dispose();
     expect(listeners()).toBe(0);
@@ -204,7 +210,7 @@ describe('run persistence coordinator', () => {
     finish?.();
     await transition;
     await save;
-    expect(source.save).toHaveBeenCalledWith('new', expect.any(Object));
+    expect(source.save).toHaveBeenCalledWith('new', expect.any(Object), expect.any(String));
   });
 
   it('saves a flush asked for while it rebinds once the rebind is done, under the new token', async () => {
@@ -227,7 +233,11 @@ describe('run persistence coordinator', () => {
     rebound.resolve({ id: newCanvasId(), token: 'rebound', checkpoint: null, name: null });
     await rebinding;
     await flush;
-    expect(source.save).toHaveBeenCalledExactlyOnceWith('rebound', expect.any(Object));
+    expect(source.save).toHaveBeenCalledExactlyOnceWith(
+      'rebound',
+      expect.any(Object),
+      expect.any(String),
+    );
   });
 
   it('still refuses a flush asked for while it rebinds once it is disposed', async () => {
@@ -279,6 +289,19 @@ describe('run persistence coordinator', () => {
     ]);
   });
 
+  it('saves the canvas as the renderer has it beside its run, again when only the canvas changed', async () => {
+    const { persistence, source, edit } = setup();
+    await persistence.initialize();
+    await persistence.flush();
+    await persistence.flush();
+    edit('{"canvas":"edited again"}');
+    await persistence.flush();
+    expect(vi.mocked(source.save).mock.calls.map(([, , document]) => document)).toEqual([
+      '{"canvas":"as edited"}',
+      '{"canvas":"edited again"}',
+    ]);
+  });
+
   it('retries the same checkpoint after a failed write', async () => {
     const { persistence, source } = setup();
     vi.mocked(source.save).mockRejectedValueOnce(new Error('Disk full'));
@@ -323,7 +346,7 @@ describe('run persistence coordinator', () => {
     expect(source.save).not.toHaveBeenCalled();
     finishSecond?.();
     await Promise.all([second, write]);
-    expect(source.save).toHaveBeenCalledWith('second', expect.any(Object));
+    expect(source.save).toHaveBeenCalledWith('second', expect.any(Object), expect.any(String));
   });
 
   it('recovers a rejected restore as a draft before allowing the original canvas to save', async () => {
@@ -346,7 +369,11 @@ describe('run persistence coordinator', () => {
     ).rejects.toThrow('Invalid canvas');
     expect(recover).toHaveBeenCalledOnce();
     await persistence.flush();
-    expect(source.save).toHaveBeenCalledWith('recovered-draft', expect.any(Object));
+    expect(source.save).toHaveBeenCalledWith(
+      'recovered-draft',
+      expect.any(Object),
+      expect.any(String),
+    );
     expect(owner.restore).toHaveBeenCalledTimes(2);
   });
 
@@ -362,7 +389,7 @@ describe('run persistence coordinator', () => {
     expect(source.save).not.toHaveBeenCalled();
     await persistence.transition(() => Promise.resolve(undefined), false);
     await persistence.flush();
-    expect(source.save).toHaveBeenCalledWith('original', expect.any(Object));
+    expect(source.save).toHaveBeenCalledWith('original', expect.any(Object), expect.any(String));
   });
 
   it('refuses to discard changes made after a failed initialization on close', async () => {

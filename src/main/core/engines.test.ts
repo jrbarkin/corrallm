@@ -15,7 +15,13 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
 import { snapshots, takeSnapshot } from './store/snapshots';
-import { journaledRun, keepCanvases, keepMessages, refuseWrites } from './store/test-store';
+import {
+  journaledRun,
+  keepCanvases,
+  keepMessages,
+  readOnDisk,
+  refuseWrites,
+} from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
@@ -81,7 +87,7 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 }
 
 describe('the core runs each canvas’s engine', () => {
-  it('keeps the renderer’s edited checkpoint when a manual send reads the canvas’s messages', async () => {
+  it('keeps the renderer’s checkpoint and edits when a manual send reads the canvas’s messages', async () => {
     await keepCanvas();
     await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     await core?.close();
@@ -112,16 +118,21 @@ describe('the core runs each canvas’s engine', () => {
     ]);
     expect(app.engines.opened()).toEqual([]);
     const checkpoint = context.checkpoint;
-    if (!checkpoint) throw new Error('No checkpoint was restored.');
-    const workflow = JSON.parse(checkpoint.workflow) as { nodes: { label: string }[] };
-    const worker = workflow.nodes[0];
+    if (!checkpoint || context.document === undefined) throw new Error('Nothing was restored.');
+    const document = JSON.parse(context.document) as { nodes: { label: string }[] };
+    const worker = document.nodes[0];
     if (!worker) throw new Error('No worker was restored.');
     worker.label = 'Edited in renderer';
-    const edited = { ...checkpoint, workflow: JSON.stringify(workflow), updatedAt: Date.now() };
-    await app.channels.call(7, 'run:save', [context.token, edited]);
+    const edited = { ...checkpoint, updatedAt: Date.now() };
+    await app.channels.call(7, 'run:save', [context.token, edited, JSON.stringify(document)]);
     await app.close();
     core = undefined;
     expect(journaledRun(profile, CANVAS)).toEqual(edited);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare("SELECT label FROM node WHERE canvas_id = ? AND id = 'worker'").get(CANVAS),
+      ),
+    ).toEqual({ label: 'Edited in renderer' });
     expect(app.engines.opened()).toEqual([]);
   });
 

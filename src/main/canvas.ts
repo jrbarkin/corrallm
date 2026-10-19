@@ -5,31 +5,34 @@ import { canvasIdOf, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { HostServices, TrustedPath, WindowId } from './core/host';
+import type { Documents } from './core/canvas/documents';
 import type { CanvasMemory } from './memory';
-import { writeWhole } from './whole-file';
 
 /*
- * Canvas files on disk, for the canvas:* channels. The renderer never names a path: it gets a
- * file's name and text, and main remembers which file each canvas is (memory.ts, by the canvas's
- * id), so a save can only write where the user picked in a dialog.
+ * Canvas files on disk, for the canvas:* channels: the Open and Save dialogs, and which canvas a
+ * file is. The renderer never names a path: main remembers which file each canvas is (memory.ts,
+ * by the canvas's id), so a save can only write where the user picked in a dialog, and the core
+ * reads and saves its own document (core/canvas/documents.ts).
  *
  * A canvas's id is in its file. Opening a file makes it that canvas, unless the canvas is kept in
  * another file that still holds its id (the original after Save As, or a copy made in the Finder):
  * then it opens as a copy, with an id of its own, which it keeps the next time it opens. A moved or
- * renamed file keeps its canvas.
+ * renamed file keeps its canvas. A file that isn't a canvas this corrallm reads is refused before
+ * any of that, and no canvas takes it as its file.
  */
 
 export interface CanvasFilesDeps {
   /** The Open and Save dialogs (host/dialogs.ts). */
   host: Pick<HostServices, 'pickCanvasToOpen' | 'pickCanvasToSave'>;
   memory: CanvasMemory;
+  /** Each canvas's document, which the core reads from its file and saves to it. */
+  documents: Pick<Documents, 'read' | 'open' | 'save'>;
 }
 
-/** A canvas file opened: its canvas, its name and text, and why it opened as a copy, if it did. */
+/** A canvas file opened: its canvas, its name, and why it opened as a copy, if it did. */
 export interface OpenedCanvas {
   id: CanvasId;
   name: string;
-  text: string;
   copy?: string;
 }
 
@@ -40,51 +43,50 @@ export class CanvasFiles {
     this.#deps = deps;
   }
 
-  /** The Open dialog on `window`, then the file picked, as a canvas. Null if cancelled. */
+  /**
+   * The Open dialog on `window`, then the file picked, as a canvas, its document read. Null if
+   * cancelled. Rejects, naming the file and saying why, for one that isn't a canvas.
+   */
   async open(window: WindowId): Promise<OpenedCanvas | null> {
     const file = await this.#deps.host.pickCanvasToOpen(window);
     if (file === null) return null;
+    const name = path.basename(file);
     const text = await read(file);
-    const own = canvasIdOf(text);
-    const { memory } = this.#deps;
-    const kept = await memory.canvasWithFile(file);
-    if (kept !== undefined) return { id: kept, name: path.basename(file), text };
-    const owner = (await memory.get(own)).file;
-    if (owner !== undefined && owner !== file && (await holds(owner, own))) {
-      const id = newCanvasId();
-      await memory.setFile(id, file);
-      return {
-        id,
-        name: path.basename(file),
-        text,
-        copy: `${path.basename(file)} is a copy of a canvas saved as ${path.basename(owner)}: it opened as a canvas of its own.`,
-      };
+    const { memory, documents } = this.#deps;
+    let own: CanvasId;
+    try {
+      own = documents.read(text).id;
+    } catch (error) {
+      throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`, {
+        cause: error,
+      });
     }
-    await memory.setFile(own, file);
-    return { id: own, name: path.basename(file), text };
+    const kept = await memory.canvasWithFile(file);
+    let id = kept ?? own;
+    let copy: string | undefined;
+    const owner = kept === undefined ? (await memory.get(own)).file : undefined;
+    if (owner !== undefined && owner !== file && (await holds(owner, own))) {
+      id = newCanvasId();
+      copy = `${name} is a copy of a canvas saved as ${path.basename(owner)}: it opened as a canvas of its own.`;
+    }
+    await documents.open(id, text);
+    await memory.setFile(id, file);
+    return { id, name, ...(copy === undefined ? {} : { copy }) };
   }
 
   /**
-   * Writes `text` (the canvas's, by its id) to the canvas's file, or to one picked in the Save
-   * dialog on `window` when it has none or `choose` is true (Save As, which keeps its id). Resolves
-   * with the file's name, or null if cancelled.
+   * Saves the canvas's document to its file, or to one picked in the Save dialog on `window` when
+   * it has none or `choose` is true (Save As, which keeps its id). Resolves with the file's name,
+   * or null if cancelled.
    */
-  async save(
-    window: WindowId,
-    canvas: CanvasId,
-    text: string,
-    choose: boolean,
-  ): Promise<string | null> {
-    if (canvasIdOf(text) !== canvas) throw new Error('This canvas’s text is another canvas’s.');
+  async save(window: WindowId, canvas: CanvasId, choose: boolean): Promise<string | null> {
     const known = (await this.#deps.memory.get(canvas)).file;
     let file = choose ? undefined : known;
     file ??=
       (await this.#deps.host.pickCanvasToSave(window, known ?? `Untitled.${CANVAS_EXTENSION}`)) ??
       undefined;
     if (file === undefined) return null;
-    // Written beside the file, then moved over it, so a failed write never leaves half a canvas.
-    await writeWhole(file, text);
-    await this.#deps.memory.setFile(canvas, file);
+    await this.#deps.documents.save(canvas, file);
     return path.basename(file);
   }
 }

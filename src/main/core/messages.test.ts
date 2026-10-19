@@ -14,12 +14,22 @@ import type { SessionEvent, SessionMode } from '../../shared/session';
 import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
+import { CanvasMemory } from '../memory';
+import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
+import { Documents } from './canvas/documents';
 import { createCore } from './core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
-import { forgetRun, keepCanvases, keepMessages, openedLast, readOnDisk } from './store/test-store';
+import {
+  forgetRun,
+  keepCanvases,
+  keepMessages,
+  openedLast,
+  openTestStore,
+  readOnDisk,
+} from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
@@ -148,6 +158,27 @@ async function keepCanvas(
     }),
   );
   await keepCanvases(profile, { [CANVAS]: { file, project } });
+}
+
+/**
+ * Commits the canvas's document as its file holds it now, while no core has the profile open, as
+ * the app's edits would.
+ */
+async function editInApp(): Promise<void> {
+  const store = await openTestStore(profile);
+  try {
+    const memory = new CanvasMemory(store);
+    const documents = new Documents({
+      store,
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+    });
+    await documents.edit(CANVAS, await readFile(path.join(profile, 'canvas.corral'), 'utf8'));
+    await memory.flush();
+  } finally {
+    await store.close();
+  }
 }
 
 /** Starts the core over the profile, its App Server and Terminal agents on the given connectors. */
@@ -2095,6 +2126,7 @@ describe('a restart', () => {
       AGENTS.filter(({ id }) => id !== 'helper'),
       [['builder', 'checker']],
     );
+    await editInApp();
     await start();
     await vi.waitFor(async () => {
       expect(await find(theirs)).toMatchObject({ state: 'withdrawn', by: 'corrallm' });

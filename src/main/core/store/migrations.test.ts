@@ -107,7 +107,6 @@ describe('the schema', () => {
       { name: 'read_position', strict: 1, wr: 1 },
       { name: 'revision', strict: 1, wr: 1 },
       { name: 'run', strict: 1, wr: 0 },
-      { name: 'run_workflow', strict: 1, wr: 0 },
     ]);
   });
 
@@ -227,7 +226,7 @@ describe('the schema', () => {
     raise.run('second', CANVAS);
   });
 
-  it('migrates a schema-1 database to schema 2 keeping its rows, which a schema-1 corrallm may no longer open', () => {
+  it('migrates a schema-1 database to schema 2 keeping its rows but its runs’ workflows, which a schema-1 corrallm may no longer open', () => {
     const [first] = MIGRATIONS;
     if (first === undefined) throw new Error('No schema 1');
     migrate(connection, [first]);
@@ -242,6 +241,9 @@ describe('the schema', () => {
       .run(CANVAS);
     connection
       .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, \'{"version":2}\', 1)')
+      .run(CANVAS);
+    connection
+      .prepare("INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, '{}', 'h')")
       .run(CANVAS);
     const seq = addMessage('m');
     connection
@@ -258,8 +260,10 @@ describe('the schema', () => {
     expect(schemaOf(connection)).toBe(2);
     expect(minReaderOf(connection)).toBe(2);
     expect(Object.fromEntries(kept.map((table) => [table, rowsOf(table)]))).toEqual(before);
-    // Its canvases have no document yet: each is read from its file as it next opens.
+    // Its canvases have no document yet: each is read from its file as it next opens. The workflow
+    // a run ran went.
     expect(rowsOf('document')).toEqual([]);
+    expect(tables().map(({ name }) => name)).not.toContain('run_workflow');
     expect(addMessage('after')).toBe(seq + 1);
   });
 
@@ -426,9 +430,6 @@ describe('the schema', () => {
       .prepare("INSERT INTO run (canvas_id, state, updated_at) VALUES (?, '{}', 1)")
       .run(CANVAS);
     connection
-      .prepare("INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, '{}', 'h')")
-      .run(CANVAS);
-    connection
       .prepare("INSERT INTO read_position (canvas_id, party, seq) VALUES (?, 'you', 1)")
       .run(CANVAS);
     connection.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(CANVAS);
@@ -466,7 +467,6 @@ describe('the schema', () => {
     const kept = [
       'conversation',
       'run',
-      'run_workflow',
       'message',
       'read_position',
       'open_canvas',

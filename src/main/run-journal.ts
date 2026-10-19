@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -40,10 +40,7 @@ const EARLIER = 'This run belongs to an earlier canvas';
  * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
  * where each party's `wait` has read to in its messages, and the canvas the profile had open last:
  *
- *   run            the run's state
- *   run_workflow   the workflow it runs, written only when its hash changes: whether it did is
- *                  read from the row, within the write, so a write of the run's state alone
- *                  never writes the workflow again
+ *   run            the run's state (the document it runs is the core's: core/canvas/documents.ts)
  *   read_position  each party's read position in the canvas's messages
  *   open_canvas    the canvas the profile had open last: a window that shows none restores it
  *
@@ -94,9 +91,8 @@ export class RunJournal {
       .prepare(
         `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.version') AS version,
            json_extract(r.state, '$.state') AS state, json_extract(r.state, '$.messages') AS messages,
-           w.workflow AS workflow, r.updated_at AS updated_at
+           r.updated_at AS updated_at
          FROM canvas c LEFT JOIN run r ON r.canvas_id = c.id
-           LEFT JOIN run_workflow w ON w.canvas_id = c.id
          WHERE c.id = ?`,
       )
       .get(canvas);
@@ -109,7 +105,6 @@ export class RunJournal {
       try {
         checkpoint = parseRunCheckpoint({
           version: row.version,
-          workflow: row.workflow,
           state: row.state,
           messages: row.messages,
           updatedAt: row.updated_at,
@@ -162,12 +157,17 @@ export class RunJournal {
     return Object.fromEntries(rows.map(({ party, seq }) => [String(party), Number(seq)]));
   }
 
+  /** Throws unless `token` is the canvas's generation's: a renderer's of the canvas it shows. */
+  check(canvas: CanvasId, token: string): void {
+    if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
+  }
+
   /**
    * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, keeping
    * where each party's `wait` has read to. On disk once it resolves.
    */
   async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
-    if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
+    this.check(canvas, token);
     await this.#write(() => {
       this.keep(canvas, token, checkpoint);
     });
@@ -187,14 +187,7 @@ export class RunJournal {
       store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
       return;
     }
-    // The workflow the row has, unchanged, was read as it was written: it isn't read again. (One
-    // that isn't text has no hash: parseRunCheckpoint refuses it.)
-    const hash = typeof checkpoint.workflow === 'string' ? sha256(checkpoint.workflow) : '';
-    const kept = store.prepare('SELECT hash FROM run_workflow WHERE canvas_id = ?').get(canvas);
-    const unchanged = kept?.hash === hash;
-    const { version, workflow, state, messages, updatedAt } = parseRunCheckpoint(checkpoint, {
-      workflow: unchanged,
-    });
+    const { version, state, messages, updatedAt } = parseRunCheckpoint(checkpoint);
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
       throw new RangeError('The run checkpoint is too large');
     }
@@ -209,13 +202,6 @@ export class RunJournal {
         `{"version":${String(version)},"state":${state},"messages":${messages}}`,
         updatedAt,
       );
-    if (unchanged) return;
-    store
-      .prepare(
-        `INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, ?, ?)
-         ON CONFLICT (canvas_id) DO UPDATE SET workflow = excluded.workflow, hash = excluded.hash`,
-      )
-      .run(canvas, workflow, hash);
   }
 
   /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
@@ -292,9 +278,6 @@ export class RunJournal {
   }
 }
 
-function sha256(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
-}
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);
 }

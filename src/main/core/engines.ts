@@ -1,5 +1,5 @@
 import type { Children } from './children';
-import type { Catalog, ConnectionId } from '../../shared/adapter';
+import type { ConnectionId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { EngineCatalog } from '../../shared/engine/catalog';
@@ -8,7 +8,6 @@ import { needs } from '../../shared/engine/needs';
 import type { NeedsInput } from '../../shared/engine/needs';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import { fromFile, toFile } from '../../shared/model/file';
 import type { Message, PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
@@ -20,6 +19,7 @@ import type { RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
+import type { Documents } from './canvas/documents';
 import { Delivery } from './delivery/delivery';
 import { MessageStore } from './delivery/messages';
 import type { MessageTable } from './delivery/messages';
@@ -32,9 +32,10 @@ import type { Database } from './store/store';
  * sessions it sends to, the sessions run by the core's own SessionManager, in the same process; and
  * its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts). A
  * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
- * the user picked in the app (canvas memory), and its run as the journal last kept it, restored
- * paused. A draft, which has no file, never opens, nor does a canvas whose file holds another
- * canvas. One opened held delivers nothing until `deliver()`, so a host that may still refuse to
+ * the user picked in the app (canvas memory), its document as the core keeps it (from its rows,
+ * else read from its file: core/canvas/documents.ts), whose live document it reads from then on,
+ * and its run as the journal last kept it, restored paused. A draft, which has no file, never
+ * opens, nor does a canvas whose file holds another canvas. One opened held delivers nothing until `deliver()`, so a host that may still refuse to
  * start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
  * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
  * always on disk first. Its run and its messages are one record: each write of either holds every
@@ -56,13 +57,13 @@ const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core close
 
 export interface EnginesDeps {
   processes: Pick<Children, 'run'>;
-  /** What every adapter declares: what a canvas's file is read against. */
-  catalog: Catalog;
-  /** What the engines read of it. */
+  /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
   sessions: SessionManager;
   projects: ProjectFolders;
   journal: RunJournal;
+  /** Each canvas's document. */
+  documents: Pick<Documents, 'load' | 'live'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
   /** The profile's database, whose commits hold what changes together. */
@@ -77,7 +78,8 @@ export interface EnginesDeps {
 
 /** A canvas the core runs: its document, its engine and its messages. */
 export interface OpenCanvas {
-  document: CanvasDocument;
+  /** Its document as the core has it now. */
+  readonly document: CanvasDocument;
   engine: Engine;
   messages: MessageStore;
   delivery: Delivery;
@@ -154,9 +156,9 @@ export class Engines {
   }
 
   /**
-   * The canvas's engine, opening it if it isn't yet: its document and run as the journal last kept
-   * them (else its file), restored paused, delivering at once unless `held`. Rejects, saying why,
-   * for a canvas the profile keeps no project folder or file for, or whose file holds another
+   * The canvas's engine, opening it if it isn't yet: its document as the core keeps it, and its run
+   * as the journal last kept it, restored paused, delivering at once unless `held`. Rejects, saying
+   * why, for a canvas the profile keeps no project folder or file for, or whose file holds another
    * canvas now.
    */
   open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
@@ -317,20 +319,15 @@ export class Engines {
   }
 
   async #open(canvas: CanvasId, held: boolean): Promise<Running> {
-    const { projects, journal } = this.#deps;
+    const { projects, journal, documents } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
     // Only a canvas saved in the file canvas memory names for it, while that file still holds it:
     // never a draft, though the journal keeps one's run.
     if (context.savedText === undefined) throw new Error(NO_FILE);
     if (canvasIdOf(context.savedText) !== canvas) throw new Error(ANOTHER);
-    // With its edits since, as the app journaled them.
-    const document = fromFile(
-      context.checkpoint?.workflow ?? context.savedText,
-      this.#deps.catalog,
-      this.#deps.engineCatalog.defaultAdapter,
-    );
-    if (document.id !== canvas) throw new Error(ANOTHER);
+    // With its edits since, as the core keeps them.
+    const { document } = await documents.load(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
     const { messages } = await this.#mailOf(canvas);
@@ -339,7 +336,9 @@ export class Engines {
     );
     // The engine and what journals it need each other.
     const running = {
-      document,
+      get document() {
+        return documents.live(canvas).document;
+      },
       messages,
       warnings,
       unwatch: messages.subscribe((message) => {
@@ -523,7 +522,6 @@ export class Engines {
     if (!force && covered <= running.saved) return () => undefined;
     const checkpoint: RunCheckpoint = {
       version: 2,
-      workflow: toFile(running.document),
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
