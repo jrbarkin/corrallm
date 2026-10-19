@@ -14,6 +14,7 @@ import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
 import type { SessionEvent, TurnReason, TurnResult, UserMessage } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
+import type { UsageReadings } from '../../usage';
 import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
 import type { MessageStore } from './messages';
 
@@ -39,8 +40,11 @@ export interface DeliveryDeps {
   store: MessageStore;
   /** The canvas's nodes now. */
   nodes: () => readonly CanvasNode[];
+  usage: Pick<UsageReadings, 'exhausted'>;
   now: () => number;
   later: (run: () => void, ms: number) => () => void;
+  /** Delivery's clock released a hold: needs may have changed without a session event. */
+  changed: () => void;
   /** The locale times of day are told in (the host's): the runtime's own, when none. */
   locale?: string;
 }
@@ -57,6 +61,7 @@ type Hold =
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking' }
+  | { kind: 'limited'; backend: string; until: number }
   | { kind: 'usage'; hold: UsageHold; until: number };
 
 /**
@@ -387,6 +392,25 @@ export class Delivery {
     });
   }
 
+  /** Every agent spending an exhausted backend, even when no message waits for it. */
+  limited(): { agent: string; backend: string; until: number }[] {
+    return this.#deps.nodes().flatMap((node) => {
+      const hold = node.type === 'agent' ? this.#limited(node) : undefined;
+      return hold === undefined
+        ? []
+        : [{ agent: node.id, backend: hold.backend, until: hold.until }];
+    });
+  }
+
+  #limited(node: AgentNode): Extract<Hold, { kind: 'limited' }> | undefined {
+    const backend = this.#deps.engine.catalog.usageBackendOf(node.data);
+    const until =
+      backend === undefined ? undefined : this.#deps.usage.exhausted(backend, this.#deps.now());
+    return backend === undefined || until === undefined
+      ? undefined
+      : { kind: 'limited', backend, until };
+  }
+
   /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
   unasking(): string[] {
     return this.#deps
@@ -450,6 +474,8 @@ export class Delivery {
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
+      const limited = this.#limited(node);
+      if (limited !== undefined) alarm = Math.min(alarm ?? limited.until, limited.until);
       const waits = waiting.get(node.id);
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
@@ -494,6 +520,13 @@ export class Delivery {
             holdKey('usage', node.id, String(until), message.from),
             message,
             `${holdText(hold.hold, engine.catalog)}, so your message to ${this.#name(node.id)} waits until it resets at ${resetTime(until, this.#deps.now(), this.#deps.locale)}.`,
+          );
+        }
+        if (hold.kind === 'limited') {
+          this.#tell(
+            holdKey('limited', node.id, String(hold.until), message.from),
+            message,
+            `${this.#name(node.id)}’s ${engine.catalog.backendName(hold.backend)} usage is exhausted until ${resetTime(hold.until, this.#deps.now(), this.#deps.locale)}, so your message waits until then.`,
           );
         }
       }
@@ -548,6 +581,8 @@ export class Delivery {
   /** What holds a message from a party (anyone but you) to agent `node` now, if anything. */
   #holdOf(node: AgentNode): Hold | undefined {
     const { engine } = this.#deps;
+    const limited = this.#limited(node);
+    if (limited !== undefined) return limited;
     const holding = engine.run.holding({ agent: node.id });
     if (holding.length > 0) return { kind: 'paused', holding };
     const stuck = this.#stuckHold(node);
@@ -641,6 +676,7 @@ export class Delivery {
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
     if (!this.#unasking(node)) this.#forget('unasking', node.id);
+    if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
 
   /** Forgets what each sender was told of a hold of `kind` on agent `agent`. */
@@ -972,6 +1008,7 @@ export class Delivery {
       () => {
         this.#alarm = undefined;
         this.schedule();
+        this.#deps.changed();
       },
       Math.max(0, at - this.#deps.now()) + 1,
     );
@@ -990,7 +1027,7 @@ export class Delivery {
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage';
+type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
 
 /**
  * The key of what a sender is told of a hold of `kind` on agent `agent`, and what it is told of

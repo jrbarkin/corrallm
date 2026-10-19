@@ -2,7 +2,13 @@ import { readFile } from 'node:fs/promises';
 
 import type { UsageBackendId } from '../shared/adapter';
 import { parseBackend, parseRule, parseWindows, USAGE_WINDOWS } from '../shared/usage';
-import type { UsageReading, UsageRule, UsageState, UsageWindows } from '../shared/usage';
+import type {
+  UsageReading,
+  UsageRule,
+  UsageState,
+  UsageWindow,
+  UsageWindows,
+} from '../shared/usage';
 import { writeWhole } from './memory';
 
 /*
@@ -14,7 +20,8 @@ import { writeWhole } from './memory';
  * and rules are remembered across restarts, in a JSON file in the app's user data:
  *
  *   { "version": 2, "readings": [{ "backend", "windows", "at", "simulated"? }],
- *     "rules": { "<backend>": { "window", "percent", "action" } } }
+ *     "rules": { "<backend>": { "window", "percent", "action" } },
+ *     "exhausted": { "<backend>": { "resetsAt", "window"? } } }
  *
  * A file of another version reads as nothing read and no rules.
  */
@@ -24,6 +31,12 @@ const VERSION = 2;
 const REFRESH_MS = 60_000;
 /** How long after a change the file is written: readings come several times a second. */
 const WRITE_DELAY_MS = 2000;
+
+/** A hard limit a turn hit, independently of the user's rule. */
+interface Exhausted {
+  resetsAt: number;
+  window?: UsageWindow;
+}
 
 export interface UsageReadingsOptions {
   file: string;
@@ -39,6 +52,7 @@ export class UsageReadings {
   readonly #now: () => number;
   readonly #writeDelay: number;
   readonly #readings = new Map<UsageBackendId, UsageReading>();
+  readonly #exhausted = new Map<UsageBackendId, Exhausted>();
   #rules: Partial<Record<UsageBackendId, UsageRule>> = {};
   readonly #listeners = new Set<(state: UsageState) => void>();
   /** When listeners last heard each backend's reading. */
@@ -80,6 +94,16 @@ export class UsageReadings {
         // Left out.
       }
     }
+    const exhausted = isRecord(file.exhausted) ? file.exhausted : {};
+    for (const backend of this.#backends) {
+      const limit = exhausted[backend];
+      if (!isRecord(limit) || !future(limit.resetsAt, now)) continue;
+      const window = USAGE_WINDOWS.find((name) => name === limit.window);
+      this.#exhausted.set(backend, {
+        resetsAt: limit.resetsAt,
+        ...(window === undefined ? {} : { window }),
+      });
+    }
   }
 
   /** Every backend's latest reading, and their rules. */
@@ -101,6 +125,24 @@ export class UsageReadings {
     };
   }
 
+  /** A failed turn hit the backend's hard limit: kept at once, without needing a rule. */
+  exhaust(backend: UsageBackendId, resetsAt: number): void {
+    if (!this.#backends.includes(backend) || !future(resetsAt, this.#now())) return;
+    const last = this.#exhausted.get(backend);
+    if (last && last.resetsAt >= resetsAt) return;
+    const windows = this.#readings.get(backend)?.windows;
+    const window = USAGE_WINDOWS.find((name) => windows?.[name]?.resetsAt === resetsAt);
+    this.#exhausted.set(backend, { resetsAt, ...(window === undefined ? {} : { window }) });
+    this.#write();
+    this.#tell(backend);
+  }
+
+  /** Until when a backend is exhausted now, if it is. Expired facts hold nothing. */
+  exhausted(backend: UsageBackendId, now = this.#now()): number | undefined {
+    const until = this.#exhausted.get(backend)?.resetsAt;
+    return until !== undefined && until > now ? until : undefined;
+  }
+
   /**
    * A reading from a backend's CLI (validated: shared/usage.ts parseWindows). Windows it leaves
    * out are kept from the last real reading. The same reading again only says when it was read.
@@ -115,8 +157,9 @@ export class UsageReadings {
     const same =
       last !== undefined && !last.simulated && sameWindows(last.windows, reading.windows);
     this.#readings.set(backend, reading);
+    const released = this.#release(backend, windows);
     this.#save();
-    if (same && now - (this.#told.get(backend) ?? 0) < REFRESH_MS) return;
+    if (!released && same && now - (this.#told.get(backend) ?? 0) < REFRESH_MS) return;
     this.#tell(backend);
   }
 
@@ -124,6 +167,7 @@ export class UsageReadings {
   simulate(backend: UsageBackendId, windows: UsageWindows | null): void {
     if (windows === null) this.#readings.delete(backend);
     else this.#readings.set(backend, { backend, windows, at: this.#now(), simulated: true });
+    if (windows !== null) this.#release(backend, windows, true);
     this.#save();
     this.#tell(backend);
   }
@@ -159,16 +203,49 @@ export class UsageReadings {
     }, this.#writeDelay);
   }
 
+  /** Only a new reading of the exhausted window can show room; an omitted window says nothing. */
+  #release(backend: UsageBackendId, windows: UsageWindows, simulated = false): boolean {
+    const limit = this.#exhausted.get(backend);
+    if (!limit) return false;
+    const name =
+      limit.window ?? USAGE_WINDOWS.find((name) => windows[name]?.resetsAt === limit.resetsAt);
+    if (name !== undefined) limit.window = name;
+    const seen =
+      name === undefined
+        ? simulated
+          ? Object.values(windows)
+          : []
+        : [windows[name]].filter((window) => window !== undefined);
+    if (
+      seen.length === 0 ||
+      seen.some(
+        ({ usedPercent, resetsAt }) =>
+          usedPercent >= 100 && (resetsAt === null || resetsAt > this.#now()),
+      )
+    )
+      return false;
+    this.#exhausted.delete(backend);
+    this.#write();
+    return true;
+  }
+
   #write(): void {
     const { readings, rules } = this.state();
-    const text = `${JSON.stringify({ version: VERSION, readings, rules }, null, 2)}\n`;
-    // A failed write is logged: readings are a convenience, never worth failing for.
+    const exhausted = Object.fromEntries(
+      [...this.#exhausted].filter(([, limit]) => limit.resetsAt > this.#now()),
+    );
+    const text = `${JSON.stringify({ version: VERSION, readings, rules, exhausted }, null, 2)}\n`;
+    // A failed write is logged, as for readings and rules.
     this.#writing = this.#writing
       .then(() => writeWhole(this.#file, text))
       .catch((error: unknown) => {
         console.error('Could not remember usage readings:', error);
       });
   }
+}
+
+function future(value: unknown, now: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > now;
 }
 
 /** A remembered reading of one of `backends`, or undefined if it is not right. */

@@ -16,7 +16,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
-import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
+import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
  * Messages in the core (Build Plan B6): what parties send agents, delivered when the agent is idle
@@ -96,6 +96,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await core?.close();
   core = undefined;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
 });
@@ -735,6 +736,22 @@ describe('delivery', () => {
     });
     const id = await send('helper', 'Fail this', BUILDER);
     await vi.waitFor(async () => {
+      expect((await inbox(BUILDER)).find((message) => message.replyTo === id)?.state).toBe(
+        'pending',
+      );
+    });
+    // The reply spends the same backend: a new reading releases its hard limit first.
+    expect(
+      await core?.call(
+        'usage.simulate',
+        {
+          backend: 'codex',
+          windows: { fiveHour: { usedPercent: 10, resetsAt } },
+        },
+        YOU,
+      ),
+    ).toEqual({ ok: true, value: {} });
+    await vi.waitFor(async () => {
       const reply = (await inbox(BUILDER)).find((message) => message.replyTo === id);
       expect(reply?.state).toBe('replied');
     });
@@ -1363,6 +1380,222 @@ describe('the shell prefix', () => {
       expect((await find(theirs))?.state).toBe('replied');
     });
     expect(sent(appServer)).toEqual([`${FRAME(theirs)}!ls`]);
+  });
+});
+
+describe('exhausted usage', () => {
+  const NOW = new Date(2026, 9, 18, 15, 30).getTime();
+  const RESET = NOW + 10 * 60_000;
+  const NOTICE =
+    'Builder’s Codex usage is exhausted until 15:40, so your message waits until then.';
+
+  async function state(agent: string): Promise<string | undefined> {
+    const result = await ok<{ agents: { id: string; state: string }[] }>('status', {});
+    return result.agents.find(({ id }) => id === agent)?.state;
+  }
+
+  /** One failed turn, followed by ordinary turns, with no usage rule set. */
+  async function exhausted({ manual = false, another = false } = {}): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    await keepCanvas();
+    if (manual) {
+      await mkdir(path.join(profile, 'runs'));
+      await writeFile(
+        path.join(profile, 'runs', 'last.json'),
+        JSON.stringify({ version: 2, canvas: CANVAS }),
+      );
+    }
+    if (another) {
+      const file = path.join(profile, 'other.corral');
+      const doc = JSON.parse(await readFile(path.join(profile, 'canvas.corral'), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      await writeFile(file, JSON.stringify({ ...doc, id: OTHER_CANVAS }));
+      const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
+        canvases: Record<string, unknown>;
+      };
+      await writeFile(
+        path.join(profile, 'canvases.json'),
+        JSON.stringify({
+          ...memory,
+          canvases: {
+            ...memory.canvases,
+            [OTHER_CANVAS]: { file, project, conversations: {} },
+          },
+        }),
+      );
+    }
+    const startSession = appServer.start.bind(appServer);
+    let first = true;
+    const started = await start(
+      {
+        appServer: {
+          start: (spec, host) =>
+            startSession(spec, {
+              ...host,
+              emit: (event) => {
+                if (event.type === 'end' && first) {
+                  first = false;
+                  host.emit({
+                    ...event,
+                    failed: true,
+                    result: {
+                      status: 'failed',
+                      reason: 'usage-limit',
+                      resetsAt: RESET,
+                    },
+                  });
+                } else host.emit(event);
+              },
+            }),
+        },
+      },
+      !manual,
+    );
+    if (another) await started.engines.open(OTHER_CANVAS);
+    if (manual) {
+      await started.channels.call(7, 'run:get', []);
+      await started.channels.call(7, 'session:start', [
+        'builder',
+        { connection: 'codex.app-server', model: null, mode: null },
+      ]);
+      await started.channels.call(7, 'session:send', [
+        'builder',
+        { id: crypto.randomUUID(), text: 'Typed in the app' },
+      ]);
+      await vi.waitFor(() => {
+        expect(first).toBe(false);
+      });
+      expect(started.engines.opened()).toEqual([]);
+      await started.engines.open(CANVAS);
+      return;
+    }
+    const id = await send('builder', 'Use the last of the window');
+    await vi.waitFor(async () => {
+      expect((await inbox()).find(({ replyTo }) => replyTo === id)?.turn).toEqual({
+        status: 'failed',
+        reason: 'usage-limit',
+        resetsAt: RESET,
+      });
+    });
+  }
+
+  it('holds without a rule, tells each sender once and delivers at the reset on its own clock', async () => {
+    await exhausted();
+    const first = await send('builder', 'First');
+    const second = await send('builder', 'Second');
+    const other = await send('builder', 'Other', OTHER);
+    expect((await find(first))?.state).toBe('pending');
+    expect((await find(second))?.state).toBe('pending');
+    expect((await notices()).map(({ body }) => body)).toEqual([NOTICE]);
+    expect((await notices(OTHER)).map(({ body }) => body)).toEqual([NOTICE]);
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+      expect((await find(second))?.state).toBe('replied');
+      expect((await find(other, OTHER))?.state).toBe('replied');
+    });
+    expect(await notices()).toHaveLength(1);
+  });
+
+  it('keeps the hold and what it told each sender across a restart', async () => {
+    await exhausted();
+    const id = await send('builder', 'After the reset');
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    await restart();
+    expect((await find(id))?.state).toBe('pending');
+    expect(await notices()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await notices()).toHaveLength(1);
+  });
+
+  it('still sends what the user types past the hold', async () => {
+    await exhausted();
+    const waiting = await send('builder', 'Wait');
+    const yours = await send('builder', 'Typed by the user', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect(sent(appServer).at(-1)).toBe('Typed by the user');
+    expect((await find(waiting))?.state).toBe('pending');
+  });
+
+  it('releases on a simulated reading below the limit', async () => {
+    await exhausted();
+    const id = await send('builder', 'Now there is room');
+    expect((await find(id))?.state).toBe('pending');
+    const result = await core?.call(
+      'usage.simulate',
+      {
+        backend: 'codex',
+        windows: { fiveHour: { usedPercent: 10, resetsAt: RESET } },
+      },
+      YOU,
+    );
+    expect(result?.ok).toBe(true);
+    await vi.waitFor(async () => {
+      expect((await find(id))?.state).toBe('replied');
+    });
+    expect(await state('builder')).toBe('idle');
+    expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([]);
+  });
+
+  it('limits every agent on the backend, including another canvas', async () => {
+    await exhausted({ another: true });
+    const id = await send('shell', 'Another connection on the backend');
+    expect((await find(id))?.state).toBe('pending');
+    expect(sent(terminal)).toEqual([]);
+    const result = await core?.call(
+      'message',
+      {
+        canvas: OTHER_CANVAS,
+        to: 'builder',
+        body: 'Another canvas',
+      },
+      { ...OUTSIDE, canvases: [OTHER_CANVAS] },
+    );
+    expect(result?.ok).toBe(true);
+    const open = core?.engines.canvas(OTHER_CANVAS);
+    expect(open?.messages.all().find(({ body }) => body === 'Another canvas')?.state).toBe(
+      'pending',
+    );
+    expect(await state('helper')).toBe('limited');
+  });
+
+  it('records a manual turn’s limit before any API operation has opened its canvas', async () => {
+    await exhausted({ manual: true });
+    expect(await state('builder')).toBe('limited');
+    const id = await send('builder', 'Wait for room');
+    expect((await find(id))?.state).toBe('pending');
+  });
+
+  it('shows limited in status, agents and a need without choices, even with no waiting message', async () => {
+    await exhausted();
+    expect(await state('builder')).toBe('limited');
+    const agents = await ok<{ agents: { id: string; state: string }[] }>('agents', {});
+    expect(agents.agents.every(({ state }) => state === 'limited')).toBe(true);
+    const items = (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
+    expect(items).toHaveLength(4);
+    expect(items.find(({ agent }) => agent === 'builder')).toMatchObject({
+      title: 'Builder’s Codex usage is exhausted until 15:40',
+      until: RESET,
+      choices: [],
+    });
+    await vi.advanceTimersByTimeAsync(RESET - Date.now() + 1);
+    expect(await state('builder')).toBe('idle');
+    expect(
+      (await ok<{ agents: { state: string }[] }>('agents', {})).agents.every(
+        ({ state }) => state === 'idle',
+      ),
+    ).toBe(true);
+    expect((await ok<{ items: NeedsItem[] }>('needs', {})).items).toEqual([]);
   });
 });
 

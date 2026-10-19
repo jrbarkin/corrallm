@@ -12,6 +12,7 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
+import { turnResult } from '../../shared/session';
 import type { SessionEvent, UserMessage } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
@@ -56,7 +57,7 @@ export interface EnginesDeps {
   sessions: SessionManager;
   projects: ProjectFolders;
   journal: RunJournal;
-  usage: Pick<UsageReadings, 'state' | 'subscribe'>;
+  usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
   files: ProjectFiles;
   /** The environment agents run in (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
@@ -167,6 +168,22 @@ export class Engines {
 
   /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
   emit(canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent): void {
+    if (event.type === 'end') {
+      const result = turnResult(event);
+      const catalog = this.#deps.engineCatalog;
+      const backend = catalog.usageBackendOf({
+        adapter: catalog.adapterOf(connection),
+        connection,
+      });
+      if (
+        backend !== undefined &&
+        result.status === 'failed' &&
+        result.reason === 'usage-limit' &&
+        result.resetsAt !== undefined
+      ) {
+        this.#deps.usage.exhaust(backend, result.resetsAt);
+      }
+    }
     void this.#running.get(canvas)?.then(
       ({ listeners, delivery }) => {
         delivery.receive(agentId, event);
@@ -287,12 +304,16 @@ export class Engines {
       engine,
       store: messages,
       nodes: () => running.document.nodes,
+      usage: this.#deps.usage,
       now: () => Date.now(),
       later: (run, ms) => {
         const timer = setTimeout(run, ms);
         return () => {
           clearTimeout(timer);
         };
+      },
+      changed: () => {
+        this.#look(running);
       },
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
@@ -320,6 +341,7 @@ export class Engines {
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
         delivery.schedule();
+        look();
       }),
     ];
     running.stop = () => {
@@ -435,6 +457,7 @@ export function needsInput(open: OpenCanvas, locale: string | undefined): NeedsI
     now: Date.now(),
     stuck: delivery.stuck(),
     unasking: delivery.unasking(),
+    limited: delivery.limited(),
     ...(locale === undefined ? {} : { locale }),
   };
 }

@@ -84,7 +84,7 @@ export const NeedsItem = z.strictObject({
 });
 
 /** How an agent is now: waiting for you, working, paused (its queue held), or idle. */
-export const AGENT_STATES = ['waiting', 'working', 'paused', 'idle'] as const;
+export const AGENT_STATES = ['waiting', 'working', 'paused', 'limited', 'idle'] as const;
 
 const canvas = OpCanvas;
 
