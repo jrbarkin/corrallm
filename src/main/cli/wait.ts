@@ -1,8 +1,10 @@
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 
+import { TOKEN_REPLACED } from '../../shared/api/errors';
 import type { OpError } from '../../shared/api/errors';
 import { appProfile } from '../core/host/node';
+import { loopbackUrl } from '../url-policy';
 import { readApiFile } from './api-file';
 import type { WaitCommand } from './args';
 
@@ -10,11 +12,11 @@ import type { WaitCommand } from './args';
  * `corrallm wait` (decision 20a; API Spec §8.6): one call of the server's `wait`, on the same
  * endpoint an orchestrator's MCP client calls, for a wait longer than an MCP call may run (an
  * orchestrator's CLI may move one still running after 2 minutes to the background). The server's
- * URL comes from CORRALLM_URL, else from the app's profile's api.json while its server runs; the
- * token only from CORRALLM_OUTSIDE_TOKEN, never from the command line, which any process may read.
- * It makes one `tools/call` POST, waits a little longer than the wait, prints one JSON line (the
- * result, with `next`, or `{ error }`) and exits: 0 when something came, 1 when the time limit
- * passed, 2 when refused (no token, a wrong one, an expired one), 3 when no server answered.
+ * URL comes from CORRALLM_URL, else from the app's profile's api.json while its server runs, and
+ * must be corrallm's own on this machine (http to 127.0.0.1 or localhost); the token only from
+ * CORRALLM_OUTSIDE_TOKEN, never from the command line, which any process may read. It makes one
+ * `tools/call` POST, waits a little longer than the wait, prints one JSON line (the result, with
+ * `next`, or `{ error }`) and exits as EXIT says.
  */
 
 /** The variable an orchestrator's token is in: what it registers corrallm's MCP server with. */
@@ -22,7 +24,14 @@ export const TOKEN_VARIABLE = 'CORRALLM_OUTSIDE_TOKEN';
 /** The variable that names the server's URL, for a server on another profile than the app's. */
 export const URL_VARIABLE = 'CORRALLM_URL';
 
-export const EXIT = { came: 0, timedOut: 1, refused: 2, noServer: 3 } as const;
+/**
+ * How it exits: 0 when something came; 1 when the time limit passed; 2 when its token was refused
+ * (none, a wrong one, one expired or replaced); 3 when no server answered (none found, a URL that
+ * isn't corrallm's on this machine, or a server that can't wait now); 5 when the server refused
+ * the wait for what it asked (a cursor or message id it doesn't know: the line says why). A
+ * command line that can never work exits 64 (index.ts).
+ */
+const EXIT = { came: 0, timedOut: 1, refused: 2, noServer: 3, failed: 5 } as const;
 
 /** How much longer than the wait itself the call may take, in ms. */
 const SLACK_MS = 30 * 1000;
@@ -44,12 +53,19 @@ export async function waitCommand(
     });
   }
   const given = env[URL_VARIABLE];
-  const url =
+  const found =
     given !== undefined && given !== '' ? given : (await readApiFile(appProfile({ env })))?.url;
-  if (url === undefined) {
+  if (found === undefined) {
     return fail(EXIT.noServer, {
       code: 'unavailable',
       sentence: `No corrallm server runs on the app’s profile: start corrallm serve, or set ${URL_VARIABLE} to the URL it printed.`,
+    });
+  }
+  const url = loopbackUrl(found);
+  if (url === null) {
+    return fail(EXIT.noServer, {
+      code: 'unavailable',
+      sentence: `${URL_VARIABLE} (or api.json) names no corrallm server on this machine: its token goes only to http://127.0.0.1:<port>/mcp (or localhost), with no name, password or query, as corrallm serve printed.`,
     });
   }
   const args = {
@@ -93,16 +109,16 @@ export async function waitCommand(
     });
   }
   if (reply.error !== undefined) {
-    return fail(EXIT.refused, { code: 'invalid', sentence: reply.error.message });
+    return fail(EXIT.failed, { code: 'invalid', sentence: reply.error.message });
   }
   const result = reply.result;
   if (result?.isError === true) {
-    const [, error] = result.content ?? [];
-    const parsed = parseJson(error?.text) as { error?: OpError } | undefined;
-    return fail(
-      EXIT.refused,
-      parsed?.error ?? { code: 'refused', sentence: 'The wait was refused.' },
-    );
+    const [, text] = result.content ?? [];
+    const error = (parseJson(text?.text) as { error?: OpError } | undefined)?.error ?? {
+      code: 'refused',
+      sentence: 'The wait was refused.',
+    };
+    return fail(exitFor(error), error);
   }
   const value = result?.structuredContent as { messages?: unknown[]; next?: string } | undefined;
   if (!Array.isArray(value?.messages)) {
@@ -110,6 +126,15 @@ export async function waitCommand(
   }
   print(JSON.stringify(value));
   return value.messages.length > 0 ? EXIT.came : EXIT.timedOut;
+}
+
+/**
+ * How a wait the core refused exits: 2 only for its token, replaced or expired while it waited; 3
+ * for a server that can't wait now; 5 for anything it asked.
+ */
+function exitFor({ code, sentence }: OpError): number {
+  if (code === 'refused' && sentence === TOKEN_REPLACED) return EXIT.refused;
+  return code === 'unavailable' ? EXIT.noServer : EXIT.failed;
 }
 
 interface RpcReply {

@@ -2,8 +2,9 @@ import { execFile, spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { request } from 'node:http';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { createServer as createHttpServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { opsFor, toolName } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { Message } from '../../shared/model/messages';
+import { registrations } from './serve';
 
 /*
  * `corrallm serve` and `corrallm wait` (Build Plan B7; API Spec §8.6), as a person runs them: the
@@ -34,7 +36,10 @@ const FAKE_CLAUDE = path.resolve('e2e/fake-claude.mjs');
 
 const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01';
 const SECOND = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b02';
-/** A token for the canvas, read-write; one read-only; one expired; one for the second canvas only. */
+/**
+ * A token for the canvas, read-write; one read-only; one expired; one for the second canvas
+ * only.
+ */
 const TOKEN = 'known-token-of-the-orchestrator-0123456789abcdef';
 const READ_ONLY = 'known-read-only-token-0123456789abcdef';
 const EXPIRED = 'known-expired-token-0123456789abcdef';
@@ -115,8 +120,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** A canvas file: Builder on Codex's App Server, Shell on its Terminal. */
-  async function canvasFile(name: string, id: string): Promise<string> {
+  /** A canvas file: Builder (or `builder`) on Codex's App Server, Shell on its Terminal. */
+  async function canvasFile(name: string, id: string, builder = 'Builder'): Promise<string> {
     const at = path.join(dir, name);
     await writeFile(
       at,
@@ -128,7 +133,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
           {
             id: 'builder',
             kind: 'agent',
-            label: 'Builder',
+            label: builder,
             position: { x: 0, y: 0 },
             adapter: 'codex',
             connection: 'codex.app-server',
@@ -226,16 +231,19 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     throw new Error(`serve never wrote api.json: ${said()}`);
   }
 
-  /** Runs `corrallm serve` expecting it to refuse: its exit code and what it said. */
-  async function refused(args: string[]): Promise<{ code: number | null; stderr: string }> {
-    const child = spawn(
-      process.execPath,
-      [BUNDLE, 'serve', '--profile', profile, '--port', '0', ...args],
-      {
-        env: cliEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+  /**
+   * Runs `corrallm serve` expecting it to refuse (on a free port, unless `args` name one): its exit
+   * code and what it said.
+   */
+  async function refused(
+    args: string[],
+    at = profile,
+  ): Promise<{ code: number | null; stderr: string }> {
+    const port = args.includes('--port') ? [] : ['--port', '0'];
+    const child = spawn(process.execPath, [BUNDLE, 'serve', '--profile', at, ...port, ...args], {
+      env: cliEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -300,6 +308,26 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     throw new Error('Nothing came');
   }
 
+  /** Sends Builder a turn that runs until it is interrupted, once it is delivered: its id. */
+  async function midTurn(client: Client): Promise<string> {
+    const { id } = await call<{ id: string }>(client, 'message', {
+      to: 'builder',
+      body: 'slow down',
+    });
+    await vi.waitFor(async () => {
+      const { items } = await call<{ items: Message[] }>(client, 'messages');
+      expect(items.find((message) => message.id === id)?.state).toBe('delivered');
+    });
+    return id;
+  }
+
+  /** What the canvas's messages are, as a restarted serve has them. */
+  async function messagesAfterRestart(): Promise<Message[]> {
+    const server = await serve();
+    const client = await connect(server.url);
+    return (await call<{ items: Message[] }>(client, 'messages')).items;
+  }
+
   /** A raw POST to the server: its status. */
   function post(url: string, headers: Record<string, string>, body: string): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -345,6 +373,28 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       expect(server.stderr()).toMatch(new RegExp(`message ${id}`));
       expect(server.stderr()).toMatch(new RegExp(`reply to ${id}`));
     });
+    // It said what it serves, by name and id, and how `corrallm wait` finds it on this profile.
+    expect(server.stderr()).toContain(`serving m1.corral (${CANVAS}) at ${server.url}`);
+    expect(server.stderr()).toContain(`export CORRALLM_URL=${server.url}`);
+    // Only you may read where it listens.
+    expect((await stat(path.join(profile, 'api.json'))).mode & 0o777).toBe(0o600);
+    expect((await stat(path.join(profile, 'runs', CANVAS))).mode & 0o777).toBe(0o700);
+  });
+
+  it('says nothing it is given as it came: no control character from a canvas or a prompt reaches its terminal', async () => {
+    // A shared canvas's agent named to move the cursor, erase a line and ring the bell.
+    await canvasFile('m1.corral', CANVAS, 'Builder\u001b[1A\u001b[2K\u0007\u009b');
+    const server = await serve();
+    const client = await connect(server.url);
+    const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'ask me' });
+    await waitFor(client, (message) => message.kind === 'notice' && message.replyTo === id);
+    await vi.waitFor(() => {
+      expect(server.stderr()).toMatch(/need on Builder/);
+      expect(server.stderr()).toMatch(/notice to outside:orchestrator about/);
+    });
+    expect(server.stderr()).toContain('Builder\\x1b[1A\\x1b[2K\\x07\\x9b');
+    // No control character but the line breaks between its lines.
+    expect(server.stderr().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
   });
 
   it('wakes the orchestrator when its message’s turn waits for you, lists it without choices, and an interrupt withdraws it', async () => {
@@ -398,19 +448,82 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
     const second = path.join(dir, 'second.corral');
 
-    for (const [canvas, why] of [
-      [unknown, /isn’t a canvas corrallm keeps: open unknown\.corral in corrallm/],
-      [copy, /copy/],
-      [second, /project folder/],
+    // A canvas whose project folder corrallm keeps is gone (a worktree removed).
+    const gone = await canvasFile('gone.corral', '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04');
+    const removed = path.join(dir, 'removed');
+    memory.canvases['0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04'] = {
+      file: gone,
+      project: removed,
+      conversations: {},
+    } as { project?: string };
+    await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
+
+    const sentences = {
+      unknown: 'unknown.corral isn’t a canvas corrallm keeps: open unknown.corral in corrallm',
+      copy: 'copy of m1.corral is a copy of a canvas corrallm keeps at ',
+      second: 'second.corral has no project folder: open second.corral in corrallm',
+      gone: `gone.corral has a project folder corrallm keeps at ${removed}, which isn’t there any more: open gone.corral in corrallm`,
+    };
+    for (const [canvas, which] of [
+      [unknown, 'unknown'],
+      [copy, 'copy'],
+      [second, 'second'],
+      [gone, 'gone'],
     ] as const) {
       const { code, stderr } = await refused(['--canvas', canvas]);
       expect(code, stderr).toBe(1);
-      expect(stderr).toMatch(why);
-      expect(stderr).toMatch(/in corrallm/);
+      expect(stderr).toContain(sentences[which]);
+      for (const [other, sentence] of Object.entries(sentences)) {
+        if (other !== which) expect(stderr).not.toContain(sentence);
+      }
     }
     // Nothing was left behind: no server, and the profile free.
     expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
     expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+
+    // A profile it makes, though it then refuses, is the user's alone, as the app's is.
+    const fresh = path.join(dir, 'profiles', 'orchestration');
+    expect((await refused(['--canvas', file], fresh)).code).toBe(1);
+    expect((await stat(fresh)).mode & 0o777).toBe(0o700);
+  });
+
+  it('sends nothing when it refuses to start after opening a canvas: a message waiting still waits', async () => {
+    const first = await serve();
+    const client = await connect(first.url);
+    // Builder is mid-turn, and a second message waits behind it.
+    await midTurn(client);
+    const { id: behind } = await call<{ id: string }>(client, 'message', {
+      to: 'builder',
+      body: 'hello behind',
+    });
+    expect(await first.stop()).toBe(0);
+
+    // Started again with a canvas it then refuses, and on a port that is taken: each refused.
+    const unknown = await canvasFile('unknown.corral', '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b03');
+    expect((await refused(['--canvas', file, '--canvas', unknown])).code).toBe(1);
+    const squatter = createServer();
+    await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = squatter.address() as { port: number };
+      expect((await refused(['--canvas', file, '--port', String(port)])).code).toBe(1);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
+    // Nothing reached Builder meanwhile.
+    const sent = () =>
+      readFile(codexLog, 'utf8').then((log) =>
+        log
+          .split('\n')
+          .filter((line) => line.includes('"turn/start"') && line.includes('hello behind')),
+      );
+    expect(await sent()).toEqual([]);
+
+    // The next start that serves delivers it, never told it was cut off.
+    const server = await serve();
+    const again = await connect(server.url);
+    const reply = await waitFor(again, (message) => message.replyTo === behind);
+    expect(reply).toMatchObject({ kind: 'text', turn: { status: 'completed' } });
+    expect(await sent()).toHaveLength(1);
   });
 
   it('refuses a new token with stderr on a pipe, so a person sees it when it is made', async () => {
@@ -498,6 +611,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
         access: 'write',
       });
       expect(printed()).toContain(server.url);
+      expect(printed()).toContain(`reaching m1.corral (${CANVAS})`);
+      expect(printed()).toContain(`export CORRALLM_URL=${server.url}`);
       expect(printed()).toContain(
         `claude mcp add --transport http corrallm-outside ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
       );
@@ -559,7 +674,6 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(await exited).toBe(0);
 
     // Taken by another server meanwhile: it says so, naming the port.
-    const { createServer } = await import('node:net');
     const squatter = createServer();
     await new Promise<void>((resolve) => squatter.listen(api.port, '127.0.0.1', resolve));
     try {
@@ -578,10 +692,82 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
       expect(code).toBe(1);
       expect(stderr).toContain(String(api.port));
+      expect(stderr).toContain('--port');
       expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
     }
+
+    // A port given is kept in its place, so a start without one listens there again.
+    const free = createServer();
+    await new Promise<void>((resolve) => free.listen(0, '127.0.0.1', resolve));
+    const { port } = free.address() as { port: number };
+    await new Promise((resolve) => free.close(resolve));
+    const given = await serve(['--port', String(port)]);
+    expect(given.url).toBe(`http://127.0.0.1:${String(port)}/mcp`);
+    expect(await given.stop()).toBe(0);
+    const kept = spawn(
+      process.execPath,
+      [BUNDLE, 'serve', '--profile', profile, '--canvas', file],
+      {
+        env: cliEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const keptExited = new Promise<number | null>((resolve) => kept.once('exit', resolve));
+    expect((await apiFile(keptExited, () => '')).port).toBe(port);
+    kept.kill('SIGTERM');
+    expect(await keptExited).toBe(0);
+  });
+
+  it.each([
+    ['Ctrl-C (SIGINT)', 'SIGINT', false],
+    ['its terminal closing (SIGHUP)', 'SIGHUP', false],
+    ['SIGTERM, with no one reading what it says any more', 'SIGTERM', true],
+  ] as const)(
+    'stops cleanly on %s: the message cut off unresolved, its sender told, the profile let go',
+    async (_how, signal, deaf) => {
+      const server = await serve();
+      const client = await connect(server.url);
+      const slow = await midTurn(client);
+      // Its stderr's reader gone (a pipe to `tee` stopped first), each line it says fails.
+      if (deaf) server.child.stderr?.destroy();
+      server.child.kill(signal);
+      expect(await server.exited).toBe(0);
+      expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+      expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      if (!deaf) {
+        // What it told the sender as it stopped is in its log too.
+        expect(server.stderr()).toMatch(
+          new RegExp(`notice to outside:orchestrator about ${slow}: .*cut off`),
+        );
+      }
+      const items = await messagesAfterRestart();
+      expect(items.find((message) => message.id === slow)?.state).toBe('unresolved');
+      expect(
+        items.find((message) => message.kind === 'notice' && message.replyTo === slow)?.body,
+      ).toMatch(/cut off/);
+    },
+  );
+
+  it('says, as it starts after a crash, what it cut off, and a run record it set aside', async () => {
+    const first = await serve();
+    const client = await connect(first.url);
+    const slow = await midTurn(client);
+    first.child.kill('SIGKILL');
+    await first.exited;
+    await rm(path.join(profile, 'api.json'));
+    await writeFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'not a record');
+
+    const server = await serve();
+    await vi.waitFor(() => {
+      expect(server.stderr()).toMatch(
+        new RegExp(`\\[m1\\.corral\\] notice to outside:orchestrator about ${slow}: .*cut off`),
+      );
+    });
+    expect(server.stderr()).toMatch(
+      /\[m1\.corral\] The run progress could not be restored and its record was moved to /,
+    );
   });
 
   /** Runs `corrallm wait`: its exit code, and the one line it printed. */
@@ -607,17 +793,26 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     const client = await connect(server.url);
     const env = { CORRALLM_URL: server.url, CORRALLM_OUTSIDE_TOKEN: TOKEN };
 
-    const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'Hello' });
+    const { id: first } = await call<{ id: string }>(client, 'message', {
+      to: 'builder',
+      body: 'Hello',
+    });
+    const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'Again' });
+    // --for waits for what concerns that message alone, and moves no read position.
     const came = await cliWait(['--timeout', '30', '--for', id], env);
     expect(came.code).toBe(0);
     expect(came.line.split('\n').filter(Boolean)).toHaveLength(1);
     const result = JSON.parse(came.line) as { messages: Message[]; next: string };
-    expect(result.messages[0]).toMatchObject({ replyTo: id, kind: 'text' });
+    expect(result.messages.map(({ replyTo, kind }) => [replyTo, kind])).toEqual([[id, 'text']]);
     expect(result.next).toEqual(expect.any(String));
+    const all = await cliWait(['--timeout', '30'], env);
+    expect(all.code).toBe(0);
+    const everything = JSON.parse(all.line) as { messages: Message[]; next: string };
+    expect(everything.messages.map(({ replyTo }) => replyTo)).toEqual([first, id]);
 
-    const nothing = await cliWait(['--timeout', '1', '--after', result.next], env);
+    const nothing = await cliWait(['--timeout', '1', '--after', everything.next], env);
     expect(nothing.code).toBe(1);
-    expect(JSON.parse(nothing.line)).toEqual({ messages: [], next: result.next });
+    expect(JSON.parse(nothing.line)).toEqual({ messages: [], next: everything.next });
 
     expect(
       (await cliWait(['--timeout', '1'], { ...env, CORRALLM_OUTSIDE_TOKEN: 'wrong' })).code,
@@ -626,6 +821,32 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(
       (await cliWait(['--timeout', '1'], { ...env, CORRALLM_OUTSIDE_TOKEN: EXPIRED })).code,
     ).toBe(2);
+
+    // A wait the server refuses for what it asked is neither a bad token nor a time limit.
+    const stale = await cliWait(['--timeout', '1', '--after', 'not-a-cursor'], env);
+    expect(stale.code).toBe(5);
+    expect(JSON.parse(stale.line)).toMatchObject({ error: { code: 'invalid' } });
+    // Nor is a command line that can never work, which says why on stdout too.
+    for (const args of [
+      ['--timeout', '4000'],
+      ['--for', 'abc'],
+    ]) {
+      const usage = await cliWait(args, env);
+      expect(usage.code).toBe(64);
+      expect(JSON.parse(usage.line)).toMatchObject({ error: { code: 'invalid' } });
+    }
+
+    // Its token goes only to corrallm's own server on this machine.
+    for (const url of [
+      'http://example.com/mcp',
+      'https://127.0.0.1:1/mcp',
+      `${server.url}?token=1`,
+      server.url.replace('http://', 'http://user:pass@'),
+    ]) {
+      const elsewhere = await cliWait(['--timeout', '1'], { ...env, CORRALLM_URL: url });
+      expect(elsewhere.code, url).toBe(3);
+      expect(JSON.parse(elsewhere.line)).toMatchObject({ error: { code: 'unavailable' } });
+    }
 
     await server.stop();
     expect((await cliWait(['--timeout', '1'], env)).code).toBe(3);
@@ -645,17 +866,37 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await rm(appProfile, { recursive: true, force: true });
     await copyDir(profile, appProfile);
     profile = appProfile;
-    const server = await serve();
+    const server = await serve([], { HOME: home, XDG_CONFIG_HOME: '' });
     expect((await cliWait(['--timeout', '0'], env)).code).toBe(1);
+    // On the app's profile, CORRALLM_URL isn't needed: it says nothing of it.
+    expect(server.stderr()).not.toContain('CORRALLM_URL');
     await server.stop();
     expect(existsSync(path.join(appProfile, 'api.json'))).toBe(false);
 
-    // One left by a process that is gone finds nothing.
-    await writeFile(
-      path.join(appProfile, 'api.json'),
-      JSON.stringify({ url: server.url, port: 1, pid: 999_999 }),
-    );
-    expect((await cliWait(['--timeout', '0'], env)).code).toBe(3);
+    // One left by a process that is gone finds nothing, nor one whose pid another process has
+    // since been given (this one, which started an hour after the server it names), though
+    // something listens on its port now.
+    const squatter = createHttpServer((_request, response) => {
+      response.writeHead(401).end();
+    });
+    await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = squatter.address() as { port: number };
+      const url = `http://127.0.0.1:${String(port)}/mcp`;
+      await writeFile(
+        path.join(appProfile, 'api.json'),
+        JSON.stringify({ url, port, pid: 999_999, started: Date.now() }),
+      );
+      expect((await cliWait(['--timeout', '0'], env)).code).toBe(3);
+      const before = Date.now() - process.uptime() * 1000 - HOUR;
+      await writeFile(
+        path.join(appProfile, 'api.json'),
+        JSON.stringify({ url, port, pid: process.pid, started: before }),
+      );
+      expect((await cliWait(['--timeout', '0'], env)).code).toBe(3);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
   });
 
   async function copyDir(from: string, to: string): Promise<void> {
@@ -800,5 +1041,18 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     client = await connect(server.url);
     const after = await call<{ items: Message[] }>(client, 'messages');
     expect(after.items.find((message) => message.id === later)?.state).toBe('pending');
+  });
+});
+
+describe('registrations', () => {
+  it('registers corrallm only in the installed CLIs that say how, by the token’s variable', () => {
+    const url = 'http://127.0.0.1:4100/mcp';
+    expect(registrations({ codex: true }, url)).toEqual([
+      `codex mcp add corrallm-outside --url ${url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+    ]);
+    expect(registrations({ 'claude-code': true, codex: false }, url)).toEqual([
+      `claude mcp add --transport http corrallm-outside ${url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
+    ]);
+    expect(registrations({}, url)).toEqual([]);
   });
 });

@@ -91,12 +91,16 @@ export interface Core extends Dispatcher {
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
-   * Opens the canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvases.json
-   * names that file for the canvas it holds, and keeps a project folder for it, both picked in the
-   * app. Rejects, saying what to do in the app, for any other file: one corrallm doesn't keep, a
-   * copy of one it does, or one with no project folder. Its id.
+   * Opens the canvas kept in `file`, as `corrallm serve --canvas` names it, held: nothing is
+   * delivered on it until `deliver()`. Only if canvases.json names that file for the canvas it
+   * holds, and keeps a project folder for it that is still there, both picked in the app. Rejects,
+   * naming the file and saying what to do in the app, for any other: one corrallm doesn't keep, a
+   * copy of one it does, one with no project folder, or one that can't open. Its id, and what
+   * opening it found to say (its run record set aside).
    */
-  openFile(file: string): Promise<CanvasId>;
+  openFile(file: string): Promise<{ canvas: CanvasId; warnings: readonly string[] }>;
+  /** Starts delivering on every canvas `openFile` opened: what waits on each goes once it can. */
+  deliver(): Promise<void>;
   /** Hears every canvas it runs: each message, and what newly waits for an answer. */
   watch(watcher: Watcher): () => void;
   /**
@@ -196,9 +200,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     settings,
     openFile: async (file) => {
       const canvas = await keptCanvas(file, memory);
-      await engines.open(canvas);
-      return canvas;
+      try {
+        await engines.open(canvas, { held: true });
+      } catch (error) {
+        throw new Error(`${path.basename(file)} can’t be served: ${reasonOf(error)}`, {
+          cause: error,
+        });
+      }
+      return { canvas, warnings: engines.canvas(canvas)?.warnings ?? [] };
     },
+    deliver: () => engines.deliver(),
     watch: (watcher) => engines.watch(watcher),
     close: async () => {
       try {
@@ -213,8 +224,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
 
 /**
  * The canvas `file` holds, if canvases.json names that very file for it (by its real path) and
- * keeps a project folder for it; else rejects, saying what to do in the app. The file is only read
- * for the id it holds: the canvas opens from the file canvases.json names, never from `file`.
+ * keeps a project folder for it that is still there; else rejects, saying what to do in the app.
+ * The file is only read for the id it holds: the canvas opens from the file canvases.json names,
+ * never from `file`.
  */
 async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId> {
   const name = path.basename(file);
@@ -243,6 +255,12 @@ async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId>
   }
   if (project === undefined) {
     throw new Error(`${name} has no project folder: ${open}, so its agents can work.`);
+  }
+  const folder = await stat(project).catch(() => undefined);
+  if (!folder?.isDirectory()) {
+    throw new Error(
+      `${name} has a project folder corrallm keeps at ${project}, which isn’t there any more: ${open}.`,
+    );
   }
   return canvas;
 }

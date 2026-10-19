@@ -69,8 +69,9 @@ export interface Surface {
   /** It runs ahead of its scope's queue, aborting what it supersedes (an interrupt, a stop). */
   readonly preempt?: true;
   /**
-   * It waits for what comes (a long poll): a token's limit on calls in flight leaves it out, and its
-   * limit on waits in flight counts it instead. Only a read on MCP alone (the transport deviation).
+   * It waits for what comes (a long poll): a token's limit on calls in flight leaves it out, and
+   * its limit on waits in flight counts it instead. Only a read on MCP alone (the transport
+   * deviation).
    */
   readonly waits?: true;
   /** It removes, discards or interrupts: MCP's destructiveHint. */

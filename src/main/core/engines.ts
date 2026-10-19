@@ -30,12 +30,14 @@ import { ReadPositions } from './delivery/reads';
  * A canvas opens by its id, from what the profile keeps of it: its file and its project folder,
  * which the user picked in the app (canvases.json), and its run as the journal last kept it
  * (runs/<id>/record.json), restored paused. A draft, which has no file, never opens, nor does a
- * canvas whose file holds another canvas. Whatever its engine does is journaled again: at most
- * one write per COALESCE_MS, and one before every message the run sends, so a sent message's
- * record is always on disk first; its messages are journaled beside its run, each one delivering
- * forced to disk before it is sent, and so is where each party's `wait` has read to in them, before
- * the `wait` that moved it returns. Whoever watches hears each message added to a canvas's store,
- * and each thing newly waiting for an answer on it (`corrallm serve` logs them).
+ * canvas whose file holds another canvas. One opened held delivers nothing until `deliver()`, so a
+ * host that may still refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is
+ * journaled again: at most one write per COALESCE_MS, and one before every message the run sends,
+ * so a sent message's record is always on disk first; its messages are journaled beside its run,
+ * each one delivering forced to disk before it is sent, and so is where each party's `wait` has
+ * read to in them, before the `wait` that moved it returns. Whoever watches hears each message
+ * added to a canvas's store, closing it included, and each thing newly waiting for an answer on it
+ * (`corrallm serve` logs them).
  */
 
 const COALESCE_MS = 250;
@@ -70,6 +72,14 @@ export interface OpenCanvas {
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
+  /** What opening it found to say: its run record, or its message log, set aside. */
+  warnings: readonly string[];
+}
+
+/** How a canvas opens. */
+export interface OpenOptions {
+  /** Held: nothing is delivered on it until `deliver()`, though messages may be sent meanwhile. */
+  held?: boolean;
 }
 
 /** What hears the canvases the core runs. */
@@ -89,6 +99,8 @@ interface Running extends OpenCanvas {
   timer: ReturnType<typeof setTimeout> | undefined;
   /** What stops it hearing its engine change, and usage readings. */
   stop: () => void;
+  /** What stops watchers hearing its messages: once what closing it said is said too. */
+  unwatch: () => void;
   /** The ids of what waited for an answer on it when watchers last looked. */
   needs: Set<string>;
   /** Whether watchers look at what waits on it again soon. */
@@ -118,19 +130,25 @@ export class Engines {
 
   /**
    * The canvas's engine, opening it if it isn't yet: its document and run as the journal last kept
-   * them (else its file), restored paused. Rejects, saying why, for a canvas the profile keeps no
-   * project folder or file for, or whose file holds another canvas now.
+   * them (else its file), restored paused, delivering at once unless `held`. Rejects, saying why,
+   * for a canvas the profile keeps no project folder or file for, or whose file holds another
+   * canvas now.
    */
-  open(canvas: CanvasId): Promise<Engine> {
+  open(canvas: CanvasId, { held = false }: OpenOptions = {}): Promise<Engine> {
     let running = this.#running.get(canvas);
     if (!running) {
-      running = this.#open(canvas);
+      running = this.#open(canvas, held);
       running.catch(() => {
         if (this.#running.get(canvas) === running) this.#running.delete(canvas);
       });
       this.#running.set(canvas, running);
     }
     return running.then(({ engine }) => engine);
+  }
+
+  /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
+  async deliver(): Promise<void> {
+    await Promise.all([...this.#canvases.values()].map(({ delivery }) => delivery.start()));
   }
 
   /**
@@ -177,7 +195,7 @@ export class Engines {
     if (failed.length > 0) throw new AggregateError(failed, JOURNAL_FAILED);
   }
 
-  async #open(canvas: CanvasId): Promise<Running> {
+  async #open(canvas: CanvasId, held: boolean): Promise<Running> {
     const { projects, journal } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
@@ -196,11 +214,17 @@ export class Engines {
     const listeners: Running['listeners'] = new Set();
     const messages = new MessageStore(canvas, journal, () => Date.now());
     await messages.load();
-    if (messages.warning !== undefined) console.warn(messages.warning);
+    const warnings: readonly string[] = [context.warning, messages.warning].filter(
+      (one) => one !== undefined,
+    );
     // The engine and what journals it need each other.
     const running = {
       document,
       messages,
+      warnings,
+      unwatch: messages.subscribe((message) => {
+        for (const watcher of this.#watchers) watcher.message?.(message);
+      }),
       token: context.token,
       listeners,
       timer: undefined,
@@ -246,7 +270,7 @@ export class Engines {
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;
-    await delivery.start();
+    if (!held) await delivery.start();
     const changed = () => {
       running.timer ??= setTimeout(() => {
         running.timer = undefined;
@@ -263,9 +287,6 @@ export class Engines {
       engine.sessions.subscribe(changed),
       engine.run.subscribe(look),
       engine.sessions.subscribe(look),
-      messages.subscribe((message) => {
-        for (const watcher of this.#watchers) watcher.message?.(message);
-      }),
       // Usage rules are checked again with each reading.
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();
@@ -304,14 +325,15 @@ export class Engines {
   }
 
   /**
-   * Stops a canvas as the core closes: what its messages were doing cut off, its run held where it
-   * is, and journaled.
+   * Stops a canvas as the core closes: what its messages were doing cut off (which watchers hear),
+   * its run held where it is, and journaled.
    */
   async #stop(running: Running): Promise<void> {
     running.stop();
     try {
       await running.delivery.close();
     } finally {
+      running.unwatch();
       running.engine.run.pause();
       await this.#write(running);
     }

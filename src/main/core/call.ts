@@ -335,7 +335,10 @@ function withCanvas(
       return unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller));
     });
     if (holding.length === 1) return { ...given, canvas: holding[0] };
-    throw new OpFailure('invalid', 'Name the canvas: there is more than one to choose from.');
+    throw new OpFailure(
+      'invalid',
+      `Name the canvas: there is more than one to choose from (${canvases.join(', ')}).`,
+    );
   }
   const [only] = canvases;
   return only === undefined ? raw : { ...given, canvas: only };

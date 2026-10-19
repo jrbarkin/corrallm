@@ -27,7 +27,10 @@ export interface LockHolder {
 
 /** A profile this process holds, until it lets it go. */
 export interface ProfileLock {
-  /** Lets the profile go, if this process still holds it. Synchronous: it runs as a process exits. */
+  /**
+   * Lets the profile go, if this process still holds it. Synchronous: it runs as a process
+   * exits.
+   */
   release(): void;
 }
 
@@ -62,11 +65,7 @@ export class ProfileLocked extends Error {
  */
 export async function lockProfile(profile: string, owner: LockOwner): Promise<ProfileLock> {
   const file = path.join(profile, LOCK_FILE);
-  const mine: LockHolder = {
-    owner,
-    pid: process.pid,
-    started: Math.round(Date.now() - process.uptime() * 1000),
-  };
+  const mine: LockHolder = { owner, pid: process.pid, started: processStart() };
   const taking = `${file}.taking`;
   // Once to take it, and again after a lock left behind was removed, or went meanwhile.
   for (let tries = 0; tries < 3; tries++) {
@@ -79,7 +78,8 @@ export async function lockProfile(profile: string, owner: LockOwner): Promise<Pr
       if (other !== 'gone' && !(await leftBehind(taking, other))) {
         throw new ProfileLocked(undefined);
       }
-      // A process taking the lock over ended before it was done: its claim goes, and it tries again.
+      // A process taking the lock over ended before it was done: its claim goes, and this one
+      // tries again.
       await rm(taking, { force: true });
       continue;
     }
@@ -118,7 +118,7 @@ async function create(file: string, holder: LockHolder): Promise<boolean> {
  * long enough ago that no one is writing it.
  */
 async function leftBehind(file: string, { holder }: { holder?: LockHolder }): Promise<boolean> {
-  return holder === undefined ? !(await beingWritten(file)) : !alive(holder);
+  return holder === undefined ? !(await beingWritten(file)) : !stillRuns(holder);
 }
 
 /** The lock this process holds in `file`, as `mine`. */
@@ -180,11 +180,17 @@ function sameHolder(a: LockHolder | undefined, b: LockHolder): boolean {
   return a?.owner === b.owner && a.pid === b.pid && a.started === b.started;
 }
 
+/** When this process started, in epoch ms, as a lock (or api.json) keeps it. */
+export function processStart(): number {
+  return Math.round(Date.now() - process.uptime() * 1000);
+}
+
 /**
- * Whether the process a lock names still runs: its pid is alive, and wasn't given to another
- * process since (one that started after the lock's).
+ * Whether the process a lock (or api.json) names still runs: its pid is alive, and wasn't given to
+ * another process since (one that started after it did).
  */
-function alive({ pid, started }: LockHolder): boolean {
+export function stillRuns({ pid, started }: { pid: number; started: number }): boolean {
+  if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
   } catch (error) {

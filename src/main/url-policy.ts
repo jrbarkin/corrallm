@@ -91,3 +91,28 @@ export function linkTarget(
     allowlisted: allowedExternalUrl(url.href, allowlist) !== null,
   };
 }
+
+/**
+ * The URL of a corrallm server on this machine, normalized, as `corrallm wait` may send a token to
+ * it: http to localhost or 127.0.0.1 (where its server only ever listens), without credentials, a
+ * query or a fragment; null for any other, which would carry the token off the machine or into a
+ * log.
+ */
+export function loopbackUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const local =
+    url.protocol === 'http:' &&
+    LOCAL_HOSTS.has(url.hostname) &&
+    url.username === '' &&
+    url.password === '' &&
+    url.search === '' &&
+    url.hash === '' &&
+    !raw.includes('?') &&
+    !raw.includes('#');
+  return local ? url.href : null;
+}

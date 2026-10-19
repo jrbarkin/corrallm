@@ -2,18 +2,23 @@ import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { stillRuns } from '../core/lock';
 import { writeWhole } from '../memory';
 
 /*
  * <profile>/api.json (API Spec §8.1): where the server that holds a profile listens, written by
  * `corrallm serve` once it listens and removed as it stops, only the user may read it. `corrallm
- * wait` finds the server through it when CORRALLM_URL doesn't say, while its process lives.
+ * wait` finds the server through it when CORRALLM_URL doesn't say, while its process lives: by its
+ * pid and its start time, as core.lock is, so a pid another process has since been given (serve
+ * killed, the file left behind) finds nothing, rather than whatever listens on its port now.
  */
 
 export interface ApiFile {
   url: string;
   port: number;
   pid: number;
+  /** When the server's process started, in epoch ms. */
+  started: number;
 }
 
 const API_FILE = 'api.json';
@@ -36,20 +41,15 @@ export async function readApiFile(profile: string): Promise<ApiFile | undefined>
     return undefined;
   }
   if (typeof value !== 'object' || value === null) return undefined;
-  const { url, port, pid } = value as Record<string, unknown>;
-  if (typeof url !== 'string' || !Number.isSafeInteger(port) || !Number.isSafeInteger(pid)) {
+  const { url, port, pid, started } = value as Record<string, unknown>;
+  if (
+    typeof url !== 'string' ||
+    !Number.isSafeInteger(port) ||
+    !Number.isSafeInteger(pid) ||
+    !Number.isFinite(started)
+  ) {
     return undefined;
   }
-  return runs(pid as number) ? { url, port: port as number, pid: pid as number } : undefined;
-}
-
-/** Whether a process runs (as anyone) with this pid. */
-function runs(pid: number): boolean {
-  if (pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: unknown }).code === 'EPERM';
-  }
+  const api = { url, port: port as number, pid: pid as number, started: started as number };
+  return stillRuns(api) ? api : undefined;
 }

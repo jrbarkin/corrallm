@@ -8,7 +8,8 @@ import type { HostServices } from '../host';
  * The core's host under plain Node (`corrallm serve`, Core Server §7.6). It has no desktop: no
  * dialog, so whatever needs one (choosing a file or a project folder) is yours, in the app, and it
  * mints no TrustedPath of its own; the paths the core opens and works in are those the app's
- * dialogs gave, read back from the profile. The profile is the app's own folder unless told another.
+ * dialogs gave, read back from the profile. The profile is the app's own folder unless told
+ * another.
  */
 
 /** Why the host can't show a dialog: there is nobody to show it to. */

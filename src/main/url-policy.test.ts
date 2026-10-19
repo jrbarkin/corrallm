@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_LINK_LENGTH } from '../shared/ipc';
-import { allowedExternalUrl, linkTarget, originKey } from './url-policy';
+import { allowedExternalUrl, linkTarget, loopbackUrl, originKey } from './url-policy';
 
 describe('originKey', () => {
   it.each([
@@ -131,5 +131,30 @@ describe('linkTarget', () => {
 
   it('is allowlisted only on the default port', () => {
     expect(linkTarget('https://github.com:8443/')?.allowlisted).toBe(false);
+  });
+});
+
+describe('loopbackUrl', () => {
+  it.each([
+    ['http://127.0.0.1:4100/mcp', 'http://127.0.0.1:4100/mcp'],
+    ['http://localhost:4100/mcp', 'http://localhost:4100/mcp'],
+    ['HTTP://LOCALHOST:4100/mcp', 'http://localhost:4100/mcp'],
+  ])('takes corrallm’s server on this machine: %s', (raw, expected) => {
+    expect(loopbackUrl(raw)).toBe(expected);
+  });
+
+  it.each([
+    'http://example.com/mcp',
+    'https://127.0.0.1:4100/mcp',
+    'http://127.0.0.2:4100/mcp',
+    'http://[::1]:4100/mcp',
+    'http://user:pass@127.0.0.1:4100/mcp',
+    'http://127.0.0.1:4100/mcp?token=1',
+    'http://127.0.0.1:4100/mcp?',
+    'http://127.0.0.1:4100/mcp#here',
+    'http://127.0.0.1.example.com/mcp',
+    'not a url',
+  ])('refuses anywhere else a token could go: %s', (raw) => {
+    expect(loopbackUrl(raw)).toBeNull();
   });
 });

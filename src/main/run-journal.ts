@@ -60,9 +60,9 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  * disk) is on disk before anything journaled after it.
  *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
- * canvas memory lost it, and where each party's `wait` has read to in its messages: every save keeps
- * them as they were (the app's never moves one), but the save that moves one forward, which is
- * forced to disk. A window's renderer saves with the token of the canvas it showed: a save meant
+ * canvas memory lost it, and where each party's `wait` has read to in its messages: every save
+ * keeps them as they were (the app's never moves one), but the save that moves one forward, which
+ * is forced to disk. A window's renderer saves with the token of the canvas it showed: a save meant
  * for a canvas it has since replaced (or opened again) is refused. A record that can't be read as
  * one is set aside, saying where; a last canvas of another version reads as none. The folders it
  * makes are the user's alone.
