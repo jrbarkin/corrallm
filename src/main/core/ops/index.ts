@@ -38,7 +38,7 @@ export interface OpServices {
   settings: Pick<Settings, 'get'>;
   /** The agents’ environment, read from the login shell when first needed. */
   environment: () => Promise<Readonly<Record<string, string>>>;
-  usage: Pick<UsageReadings, 'state'>;
+  usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
   /** The canvases the core runs. */
   engines: Engines;
   /** Whether an agent is a lead now, as kept on this machine. */

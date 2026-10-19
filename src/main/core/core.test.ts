@@ -27,6 +27,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await core?.close();
   core = undefined;
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await rm(profile, { recursive: true, force: true });
 });
@@ -108,6 +109,94 @@ describe('createCore', () => {
       });
     }
   });
+
+  it('sets and removes a usage rule through usage.setRule, reflected by usage.get', async () => {
+    const started = await start();
+    expect(
+      await started.call('usage.setRule', { backend: 'codex', rule: RULE }, CALLERS.you),
+    ).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { readings: [], rules: { codex: RULE } },
+    });
+    expect(
+      await started.call('usage.setRule', { backend: 'codex', rule: null }, CALLERS.you),
+    ).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { readings: [], rules: {} },
+    });
+  });
+
+  it('sets and forgets a simulated reading through usage.simulate, reflected by usage.get', async () => {
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const windows = {
+      fiveHour: { usedPercent: 95, resetsAt: now + 60 * 60 * 1000 },
+      weekly: { usedPercent: 50, resetsAt: null },
+    };
+    const started = await start();
+    expect(
+      await started.call('usage.simulate', { backend: 'codex', windows }, CALLERS.you),
+    ).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { readings: [{ backend: 'codex', windows, at: now, simulated: true }], rules: {} },
+    });
+    expect(
+      await started.call('usage.simulate', { backend: 'codex', windows: null }, CALLERS.you),
+    ).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
+      ok: true,
+      value: { readings: [], rules: {} },
+    });
+  });
+
+  it.each([
+    ['usage.setRule', { backend: 'missing', rule: RULE }],
+    ['usage.setRule', { backend: 'codex', rule: { ...RULE, percent: 100 } }],
+    ['usage.simulate', { backend: 'missing', windows: READING.windows }],
+    [
+      'usage.simulate',
+      { backend: 'codex', windows: { fiveHour: { usedPercent: 101, resetsAt: null } } },
+    ],
+    [
+      'usage.simulate',
+      { backend: 'codex', windows: { fiveHour: { usedPercent: 50, resetsAt: -1 } } },
+    ],
+    [
+      'usage.simulate',
+      {
+        backend: 'codex',
+        windows: { fiveHour: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } },
+      },
+    ],
+  ] as const)(
+    '%s refuses an invalid usage write without changing the state: %j',
+    async (name, args) => {
+      const started = await start();
+      expect(await started.call(name, args, CALLERS.you)).toMatchObject({
+        ok: false,
+        error: { code: 'invalid' },
+      });
+      expect(await started.call('usage.get', {}, CALLERS.you)).toEqual({
+        ok: true,
+        value: { readings: [], rules: {} },
+      });
+    },
+  );
 
   it('starts with no readings in a new profile, and refuses arguments neither op takes', async () => {
     const started = await start();

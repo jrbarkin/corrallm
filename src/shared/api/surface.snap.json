@@ -1,5 +1,8 @@
 {
-  "gui": [],
+  "gui": [
+    "api.usage.setRule",
+    "api.usage.simulate"
+  ],
   "mcp": {
     "lead": [
       "agents",
@@ -93,6 +96,8 @@
     "usage.get": "B8"
   },
   "deviations": {
+    "usage.setRule": "spending-guard",
+    "usage.simulate": "spending-guard",
     "wait": "transport"
   },
   "schemas": {
@@ -167,6 +172,14 @@
     "usage.get": {
       "input": "e5fa5cc18e054cdd",
       "output": "3586006a7a5073f0"
+    },
+    "usage.setRule": {
+      "input": "9019a4803080df29",
+      "output": "e5fa5cc18e054cdd"
+    },
+    "usage.simulate": {
+      "input": "8cbbd0959972a51d",
+      "output": "e5fa5cc18e054cdd"
     }
   }
 }

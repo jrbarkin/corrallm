@@ -302,6 +302,43 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     meetsRule: { sticky: { canvas: CANVAS, target: { agent: 'lead' }, request: request(70) } },
   },
   'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
+  'usage.setRule': {
+    valid: [
+      {
+        backend: 'codex',
+        rule: { window: 'weekly', percent: 80, action: 'warn' },
+        request: request(80),
+      },
+      { backend: 'codex', rule: null, request: request(81) },
+    ],
+    invalid: [
+      { backend: 'missing', rule: null },
+      { backend: 'codex' },
+      { backend: 'codex', rule: { window: 'weekly', percent: 100, action: 'ask' } },
+      { backend: 'codex', rule: { window: 'weekly', percent: 80, action: 'nextBackend' } },
+    ],
+  },
+  'usage.simulate': {
+    valid: [
+      {
+        backend: 'codex',
+        windows: { fiveHour: { usedPercent: 42, resetsAt: null } },
+        request: request(90),
+      },
+      { backend: 'codex', windows: {}, request: request(91) },
+      { backend: 'codex', windows: null, request: request(92) },
+    ],
+    invalid: [
+      { backend: 'missing', windows: null },
+      { backend: 'codex' },
+      { backend: 'codex', windows: { fiveHour: { usedPercent: 101, resetsAt: null } } },
+      { backend: 'codex', windows: { weekly: { usedPercent: 50, resetsAt: -1 } } },
+      {
+        backend: 'codex',
+        windows: { weekly: { usedPercent: 50, resetsAt: Date.now() + 30 * 86_400_000 } },
+      },
+    ],
+  },
   // From the start first, which moves each party's read position past all it was sent: a wait
   // with no cursor then answers alike however often it is called.
   wait: {

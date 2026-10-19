@@ -92,6 +92,8 @@ const O = { you: 'all', 'outside-read': 'canvas', 'outside-write': 'canvas' } as
 const R = { ...O, lead: 'linked' } as const;
 /** Reads every caller makes: you, leads and workers on the agents they reach, outside tokens. */
 const A = { ...R, worker: 'linked' } as const;
+/** Operations only you may call, in the GUI. */
+const Y = { you: 'all' } as const;
 /** Writes on agents and queues: you; leads, on their team; outside write tokens. */
 const L = { you: 'all', lead: 'team', 'outside-write': 'canvas' } as const;
 /** Conversation writes: you; leads and workers, on the agents they reach; outside write tokens. */
@@ -168,6 +170,8 @@ export const SURFACE = {
     self: 'allowed',
   },
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
+  'usage.setRule': { access: Y, kind: 'command', scope: 'app' },
+  'usage.simulate': { access: Y, kind: 'command', scope: 'app' },
   wait: { access: T, kind: 'read', scope: 'none', waits: true, varies: ['messages', 'next'] },
 } as const satisfies Record<string, Surface>;
 
