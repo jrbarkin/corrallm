@@ -2193,6 +2193,23 @@ describe('GraphEditor', () => {
       expect(source.save.mock.calls.every(([token]) => token === 'new-draft')).toBe(true);
     });
 
+    it('sends the restored canvas’s id with its document from its first save, a draft’s too', async () => {
+      const id = newCanvasId();
+      const runSource = {
+        get: vi.fn(() => Promise.resolve({ id, token: 'restored', checkpoint: null, name: null })),
+        save: vi.fn<RunSource['save']>().mockResolvedValue(null),
+        ready: vi.fn().mockResolvedValue(null),
+        onStopping: () => () => undefined,
+      };
+      render(<GraphEditor files={fakeFiles()} runSource={runSource} />);
+      await waitFor(() => {
+        expect(runSource.save).toHaveBeenCalled();
+      });
+      expect(runSource.save.mock.calls.map(([, , document]) => canvasIdOf(document))).toEqual(
+        runSource.save.mock.calls.map(() => id),
+      );
+    });
+
     it('keeps the canvas, saving it under its own token, when the core refuses a file', async () => {
       const id = newCanvasId();
       const files = fakeFiles();

@@ -20,6 +20,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
+import type { CanvasDocument } from '../../shared/model/canvas';
 import type { CanvasFile, ProjectFolder } from '../../shared/ipc';
 import { UNASKING_MODES } from '../../shared/session';
 import type { AgentSettingsChange, InstalledClis } from '../../shared/session';
@@ -257,11 +258,16 @@ function Editor({
    */
   const [{ engine, sessionStore, runStore, persistence, documentState }] = useState(() => {
     let persistence: RunPersistence | undefined = undefined;
-    let workflow = toFile(documentOf(initialGraph, canvasId));
+    /** The canvas as the renderer has it, under the id of the canvas its window shows. */
+    let current = documentOf(initialGraph, canvasId);
     const documentState = {
-      read: () => workflow,
-      write: (next: string) => {
-        workflow = next;
+      read: () => toFile(current),
+      write: (next: CanvasDocument) => {
+        current = next;
+      },
+      /** The window shows canvas `id` now: the canvas it has is that one's. */
+      rebind: (id: CanvasId) => {
+        current = { ...current, id };
       },
     };
     const engine = new Engine({
@@ -317,9 +323,11 @@ function Editor({
             : EMPTY_GRAPH;
           if (checkpoint) Engine.check(checkpoint);
           setCanvasId(context.id);
+          // Its next save, which may come before the canvas is drawn again, is the canvas's.
+          documentState.rebind(context.id);
           if (next) {
             engine.reset();
-            documentState.write(toFile(documentOf(next, context.id)));
+            documentState.write(documentOf(next, context.id));
             setLoads((n) => n + 1);
             setRawGraph(next);
             engine.update(canvasNodes(next.nodes));
@@ -373,7 +381,7 @@ function Editor({
     };
   }, [persistence, runStore, sessionStore]);
   useEffect(() => {
-    documentState.write(toFile(documentOf(graph, canvasId)));
+    documentState.write(documentOf(graph, canvasId));
     persistence?.changed();
   }, [graph, canvasId, documentState, persistence]);
   /** Submitted messages are visible rows; the saved graph and the runner keep planned work only. */
@@ -688,7 +696,7 @@ function Editor({
   const load = useCallback(
     (next: Graph, name: string | undefined, id: CanvasId) => {
       setCanvasId(id);
-      documentState.write(toFile(documentOf(next, id)));
+      documentState.write(documentOf(next, id));
       setLoads((n) => n + 1);
       setRawGraph(next);
       runStore.reset();
