@@ -30,6 +30,7 @@ import { NO_BACKEND } from '../../shared/engine/transcript/receive';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import { adapterOf, catalog, continuesIn } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
+import { flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
 import { lanesOf } from '../queues/lanes';
 import { queueMarks } from '../queues/marks';
@@ -96,11 +97,12 @@ import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/
 import type { Graph } from './graph';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
-import { EXAMPLES } from './examples';
-import type { Example } from './examples';
+import { exampleOf } from '../../shared/examples';
+import type { Example } from '../../shared/examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate, withAgents, withConnections } from './templates';
+import { fillTemplate } from '../../shared/templates';
+import { withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import { arrange } from './layout';
@@ -298,6 +300,7 @@ function Editor({
           updatedAt: Date.now(),
         }),
         freeze: () => {
+          flushDrafts();
           runStore.pause();
         },
         error: (error) => {
@@ -460,8 +463,8 @@ function Editor({
   }, [gallery, sessionBackend]);
   /** Every agent's queue, side by side, if shown: opened from the canvas, or from an agent. */
   const [queues, setQueues] = useState<{ from?: string }>();
-  /** Whether the graph is laid out automatically (and nodes cannot be dragged). */
-  const [arranging, setArranging] = useState(false);
+  /** The canvas's saved automatic layout setting (nodes cannot be dragged while it is on). */
+  const arranging = graph.arrange ?? false;
   const [editing, setEditing] = useState<string>();
   /**
    * The agents opened in the agent view, by a double-click (or from a list of them) or from its
@@ -526,15 +529,15 @@ function Editor({
     gallery ||
     queues !== undefined;
   // The keyboard handler and file commands read these without re-subscribing on every change.
-  const latest = useRef({ graph, modal, arranging, text, edited });
+  const latest = useRef({ graph, modal, text, edited });
   useEffect(() => {
-    latest.current = { graph, modal, arranging, text, edited };
+    latest.current = { graph, modal, text, edited };
   });
   /** Every change to the graph goes through here, so it stays arranged while arranging is on. */
   const setGraph = useCallback((op: (graph: Graph) => Graph) => {
     setRawGraph((g) => {
       const next = op(g);
-      return latest.current.arranging ? arrange(next) : next;
+      return next.arrange ? arrange(next) : next;
     });
   }, []);
 
@@ -693,7 +696,6 @@ function Editor({
       // Another canvas: main has ended the old one's connected sessions.
       sessionStore.reset();
       setSaved({ name, graph: next });
-      setArranging(false);
       setEditing(undefined);
       setOpened({ ids: [] });
       setSettingsAgent(undefined);
@@ -862,6 +864,7 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
+        flushDrafts();
         if (file === 'save' || file === 'saveAs') {
           commands.save(latest.current.text, file === 'saveAs');
         } else if (!latest.current.modal) {
@@ -873,6 +876,7 @@ function Editor({
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
+      flushDrafts();
       event.preventDefault();
       if (action !== 'rename') {
         apply(operation(action));
@@ -1173,8 +1177,7 @@ function Editor({
                   : 'Arrange automatically'
               }
               onClick={() => {
-                if (!arranging) setRawGraph(arrange);
-                setArranging(!arranging);
+                setGraph((g) => ({ ...g, arrange: !g.arrange }));
               }}
             >
               <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -1445,6 +1448,7 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
+              flushDrafts();
               runStore.start();
             }}
             onStop={() => {
@@ -1468,10 +1472,14 @@ function Editor({
         )}
         {gallery && (
           <ExampleGallery
-            examples={EXAMPLES}
             canInsert={graph.nodes.length > 0}
             installed={installed}
-            onPick={(example, choices, use) => {
+            onPick={(template, choices, use) => {
+              const example = exampleOf(template.id);
+              if (!example) {
+                setProblem('That template is no longer available in this build.');
+                return;
+              }
               setGallery(false);
               if (use === 'new') {
                 commands?.example(example, choices, edited);

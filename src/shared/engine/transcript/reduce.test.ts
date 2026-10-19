@@ -52,7 +52,12 @@ describe('reduce', () => {
       status: 'working',
       entries: [tool('a', 'done'), tool('b')],
     };
-    const ended = reduce(running, { type: 'end', id: 'e', seconds: 3, interrupted: true });
+    const ended = reduce(running, {
+      type: 'end',
+      id: 'e',
+      seconds: 3,
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
     expect(ended.status).toBe('idle');
     expect(ended.entries.map((e) => (e.kind === 'tool' ? e.status : e.kind))).toEqual([
       'done',
@@ -140,7 +145,12 @@ describe('reduce, for connected sessions', () => {
     expect(s.entries.at(-1)).toMatchObject({ id: 'p', withdrawn: true });
 
     s = reduce(s, { type: 'ask', entry: { id: 'p2', kind: 'plan', plan: 'Plan' } });
-    s = reduce(s, { type: 'end', id: 'e', seconds: 2, interrupted: true });
+    s = reduce(s, {
+      type: 'end',
+      id: 'e',
+      seconds: 2,
+      result: { status: 'cancelled', reason: 'interrupted' },
+    });
     expect(s.entries.find((e) => e.id === 'p2')).toMatchObject({ withdrawn: true });
     expect(pending(s)).toEqual([]);
   });
@@ -150,8 +160,7 @@ describe('reduce, for connected sessions', () => {
       type: 'end',
       id: 'e',
       seconds: 1,
-      interrupted: false,
-      failed: true,
+      result: { status: 'failed', reason: 'error' },
     });
     expect(ended.entries.at(-1)).toEqual({
       id: 'e',
@@ -159,6 +168,7 @@ describe('reduce, for connected sessions', () => {
       seconds: 1,
       interrupted: false,
       failed: true,
+      result: { status: 'failed', reason: 'error' },
     });
   });
 

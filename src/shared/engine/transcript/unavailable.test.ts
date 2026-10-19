@@ -41,7 +41,12 @@ describe('sessions without placeholder execution', () => {
         'a',
         connection,
         { type: 'text', id: 'answer', text: 'Native answer.' },
-        { type: 'end', messages: [sent()], seconds: 1, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [sent()],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
       expect(done).toHaveBeenCalledExactlyOnceWith(false, 'Native answer.', {
         status: 'completed',

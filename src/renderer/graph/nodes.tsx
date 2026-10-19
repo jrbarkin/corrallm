@@ -12,6 +12,7 @@ import { startTransition, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { AdapterId } from '../../shared/adapter';
+import { useDraft } from '../useDraft';
 import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
 import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agents';
@@ -248,7 +249,9 @@ function Label({ id, label }: { id: string; label: string }) {
 
 function LabelInput({ id, label }: { id: string; label: string }) {
   const { rename, stopEditing } = useGraphActions();
-  const [original] = useState(label);
+  const draft = useDraft(label, (text) => {
+    rename(id, text);
+  });
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     input.current?.focus();
@@ -259,18 +262,16 @@ function LabelInput({ id, label }: { id: string; label: string }) {
       ref={input}
       className="graph-label nodrag"
       aria-label="Label"
-      value={label}
-      onChange={(event) => {
-        rename(id, event.target.value);
-      }}
+      {...draft}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') stopEditing();
-        if (event.key === 'Escape') {
-          rename(id, original);
+        draft.onKeyDown(event);
+        if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape'))
           stopEditing();
-        }
       }}
-      onBlur={stopEditing}
+      onBlur={() => {
+        draft.onBlur();
+        stopEditing();
+      }}
     />
   );
 }

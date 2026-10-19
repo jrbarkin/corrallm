@@ -168,7 +168,12 @@ describe('a Terminal agent', () => {
     session({ type: 'status', status: 'waiting' });
     expect(status().textContent).toBe('Needs you, in the terminal');
     expect(card().classList.contains('asking')).toBe(true);
-    session({ type: 'end', messages: ['typed'], seconds: 3, interrupted: false, failed: false });
+    session({
+      type: 'end',
+      messages: ['typed'],
+      seconds: 3,
+      result: { status: 'completed', reason: 'completed' },
+    });
     expect(status().textContent).toBe('Idle');
     expect(card().classList.contains('working')).toBe(false);
     // The native prompt is observed once as a read-only completed message.
@@ -352,7 +357,12 @@ describe('a Terminal agent', () => {
       'Codex needs you: see its terminal.',
     );
     session({ type: 'asking', asks: [] });
-    session({ type: 'end', messages: ['typed'], seconds: 2, interrupted: false, failed: false });
+    session({
+      type: 'end',
+      messages: ['typed'],
+      seconds: 2,
+      result: { status: 'completed', reason: 'completed' },
+    });
     expect(status().textContent).toBe('Idle');
     expect(card().classList.contains('working')).toBe(false);
   });
@@ -461,7 +471,12 @@ describe('a Terminal agent', () => {
     expect(sessions.backend.send).not.toHaveBeenCalled();
 
     // The user's turn ends: the message goes to Claude Code (main types it in).
-    session({ type: 'end', messages: ['typed'], seconds: 3, interrupted: false, failed: false });
+    session({
+      type: 'end',
+      messages: ['typed'],
+      seconds: 3,
+      result: { status: 'completed', reason: 'completed' },
+    });
     await settle();
     expect(sessions.backend.send).toHaveBeenCalledWith('a', {
       id: expect.any(String) as unknown,
@@ -495,7 +510,12 @@ describe('a Terminal agent', () => {
         { type: 'user', id: sent, text },
         { type: 'status', status: 'working' },
         { type: 'text', id: `${sent}/reply`, text: reply },
-        { type: 'end', messages: [sent], seconds: 4, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [sent],
+          seconds: 4,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
       await settle();
     };
@@ -548,7 +568,12 @@ describe('a Terminal agent', () => {
     session(
       { type: 'user', id: sent, text: 'Use the Bash tool for this step (run shell commands).' },
       { type: 'status', status: 'working' },
-      { type: 'end', messages: [sent], seconds: 4, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent],
+        seconds: 4,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     await settle();
     expect(terminalSession.getByRole('note').textContent).toMatch(
@@ -606,7 +631,12 @@ describe('a Terminal agent', () => {
     session(
       { type: 'user', id: sent, text: 'Cover the empty state too' },
       { type: 'status', status: 'working' },
-      { type: 'end', messages: [sent], seconds: 5, interrupted: false, failed: false },
+      {
+        type: 'end',
+        messages: [sent],
+        seconds: 5,
+        result: { status: 'completed', reason: 'completed' },
+      },
     );
     expect(row()?.dataset.run).toBe('asking');
     fireEvent.click(asks().getByRole('button', { name: 'Approve' }));

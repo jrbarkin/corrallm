@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { canvasIdOf } from '../../shared/canvas';
 import { catalog } from '../catalog';
 import { actionsOf, connectionsOf, DEFAULT_AGENT } from './agents';
-import { EXAMPLES } from './examples';
+import { EXAMPLES } from '../../shared/examples';
 import { fromFile, toFile } from '../../shared/model/file';
-import { placeholdersOf } from './templates';
+import { placeholdersOf } from '../../shared/templates';
 import {
   findItem,
   isApproval,

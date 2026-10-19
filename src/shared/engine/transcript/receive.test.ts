@@ -25,7 +25,13 @@ function connected(connection: ConnectionId = 'claude-code.sdk') {
 }
 
 const end = (messages: string[], extra: Partial<Extract<SessionEvent, { type: 'end' }>> = {}) =>
-  ({ type: 'end', messages, seconds: 3, interrupted: false, failed: false, ...extra }) as const;
+  ({
+    type: 'end',
+    messages,
+    seconds: 3,
+    result: { status: 'completed', reason: 'completed' },
+    ...extra,
+  }) as const;
 
 describe('a connected session', () => {
   it('starts when its view opens, and takes the models it offers', async () => {
@@ -228,6 +234,12 @@ describe('a connected session', () => {
     expect(store.of('a').status).toBe('working');
     expect(backend.send).toHaveBeenCalledTimes(1);
     expect(done).not.toHaveBeenCalled();
+    expect(
+      store
+        .of('a')
+        .entries.filter((entry) => entry.kind === 'user')
+        .map(({ text }) => text),
+    ).toEqual(['[corrallm] An earlier instruction was withdrawn.', 'The user’s command']);
     emit('a', 'claude-code.sdk', { type: 'user', id, text: 'The user’s command' }, end([id]));
     await settle();
     expect(backend.send).toHaveBeenLastCalledWith(
@@ -235,6 +247,16 @@ describe('a connected session', () => {
       expect.objectContaining({ text: 'After the command' }),
     );
     expect(done).toHaveBeenCalledOnce();
+  });
+
+  it('shows the echoed text, with backend additions, while keeping the message’s images', async () => {
+    const { store, emit, sent } = connected();
+    const images = [{ mediaType: 'image/png' as const, data: 'aGVsbG8=' }];
+    store.send('a', 'claude-code', 'New work', undefined, images);
+    await settle();
+    const text = '[corrallm] An earlier instruction was withdrawn.\n\nNew work';
+    emit('a', 'claude-code.sdk', { type: 'user', id: sent(), text });
+    expect(store.of('a').entries[0]).toMatchObject({ kind: 'user', text, images, reached: true });
   });
 
   it('tells whoever sent a message what the agent replied in its turn, not its subagents', async () => {
@@ -285,7 +307,11 @@ describe('a connected session', () => {
     takeSecond();
     await settle();
     expect(backend.interrupt).toHaveBeenCalledWith('a');
-    emit('a', 'claude-code.sdk', end([sent()], { interrupted: true }));
+    emit(
+      'a',
+      'claude-code.sdk',
+      end([sent()], { result: { status: 'cancelled', reason: 'interrupted' } }),
+    );
     expect(first).toHaveBeenCalledWith(false, '', { status: 'completed', reason: 'completed' });
     expect(second).toHaveBeenCalledWith(true, '', { status: 'cancelled', reason: 'interrupted' });
   });
@@ -406,7 +432,11 @@ describe('a connected session', () => {
     store.stop('a');
     await settle();
     expect(backend.interrupt).toHaveBeenCalledWith('a');
-    emit('a', 'claude-code.sdk', end([sent()], { interrupted: true }));
+    emit(
+      'a',
+      'claude-code.sdk',
+      end([sent()], { result: { status: 'cancelled', reason: 'interrupted' } }),
+    );
     expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'end', interrupted: true });
   });
 
@@ -596,7 +626,12 @@ describe('a connected session of an adapter only the catalog it is given declare
       type: 'history',
       events: [
         { type: 'user', id: 'past', text: 'Before' },
-        { type: 'end', messages: ['past'], seconds: 1, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: ['past'],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
       ],
     });
     expect(
@@ -614,7 +649,12 @@ describe('a connected session, resumed or completed', () => {
     { type: 'user', id: 'u1', text: 'Fix the bug' },
     { type: 'text', id: 'm1:0', text: 'Fixed.' },
     { type: 'tool', id: 'toolu_1', tool: 'Edit', summary: 'a.ts', status: 'done' },
-    { type: 'end', messages: ['u1'], seconds: 4, interrupted: false, failed: false },
+    {
+      type: 'end',
+      messages: ['u1'],
+      seconds: 4,
+      result: { status: 'completed', reason: 'completed' },
+    },
   ];
 
   it('shows what a resumed session did before, ahead of what it does now', async () => {
@@ -757,7 +797,12 @@ describe('a connected session opened on another conversation (/resume)', () => {
       type: 'history',
       events: [
         { type: 'user', id: 'k1-u', text: 'Earlier' },
-        { type: 'end', messages: ['k1-u'], seconds: 2, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: ['k1-u'],
+          seconds: 2,
+          result: { status: 'completed', reason: 'completed' },
+        },
       ],
     });
     expect(store.of('a').entries.map((e) => e.kind)).toEqual(['user', 'end']);

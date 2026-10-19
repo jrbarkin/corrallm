@@ -330,7 +330,12 @@ it('commits a turn’s reply with what its end changed in the run, or neither', 
   const allow = refuseWrites(profile, 'run', 'The disk is full');
   try {
     host?.emit({ type: 'text', id: `${turn}/reply`, text: 'Hello back' });
-    host?.emit({ type: 'end', messages: [turn], seconds: 1, interrupted: false, failed: false });
+    host?.emit({
+      type: 'end',
+      messages: [turn],
+      seconds: 1,
+      result: { status: 'completed', reason: 'completed' },
+    });
     await vi.waitFor(() => {
       expect(open?.messages.get(id)?.state).toBe('replied');
     });

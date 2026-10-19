@@ -35,6 +35,23 @@ describe('mergeHistory', () => {
     );
   });
 
+  it.each(['u1', 'native-u1'])(
+    'refreshes a known turn with the text the CLI kept, including its withdrawal note (user id %s)',
+    (id) => {
+      const shown: Entry[] = [
+        { id: 'u1', kind: 'user', text: 'New work', conversation: 'zed', reached: true },
+        reply('r1', 'Done'),
+        end('live-end'),
+      ];
+      const text = '[corrallm] An earlier instruction was withdrawn.\n\nNew work';
+      expect(mergeHistory(shown, [user(id, text), reply('r1', 'Done'), end('past-end')])).toEqual([
+        { ...shown[0], text },
+        shown[1],
+        shown[2],
+      ]);
+    },
+  );
+
   it('inserts the turns it does not show where they happened', () => {
     const shown = [user('u1', 'One'), reply('m1:0', 'A'), end('x1'), user('u3', 'Three')];
     const past = [

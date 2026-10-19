@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import nativePath from 'node:path';
 
@@ -6,6 +6,8 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
+import { newCanvasId } from '../src/shared/canvas';
+import { CARD_SIZE } from '../src/shared/model/geometry';
 
 interface Point {
   x: number;
@@ -15,6 +17,64 @@ interface Point {
 /** Height of a frame's title bar and a container's padding (src/renderer/graph/graph.ts). */
 const HEADER = 32;
 const PADDING = 20;
+
+test('long names and full queues keep ordinary and parent cards at the model’s fixed size', async () => {
+  const file = nativePath.join(dir, 'cards.corral');
+  const queue = Array.from({ length: 100 }, (_, i) => ({
+    id: `m${String(i)}`,
+    message: 'Queued work',
+  }));
+  const agent = (id: string, parent?: string) => ({
+    id,
+    kind: 'agent',
+    label: `${id} ${'A very long name '.repeat(40)}`,
+    position: { x: 20, y: 70 },
+    queue,
+    ...(parent === undefined ? {} : { parent }),
+  });
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'corrallm',
+      version: 2,
+      id: newCanvasId(),
+      nodes: [
+        { id: 'group', kind: 'group', label: 'Frame', position: { x: 0, y: 0 } },
+        agent('parent', 'group'),
+        agent('child', 'parent'),
+        { ...agent('worker'), position: { x: 500, y: 200 } },
+      ],
+      links: [],
+    }),
+  );
+  await app.evaluate(({ dialog }, picked) => {
+    Object.assign(dialog, {
+      showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
+    });
+  }, file);
+  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  const shown = (id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
+  for (const id of ['worker', 'parent', 'child']) {
+    const card = shown(id).locator('.graph-card');
+    await expect(card).toBeVisible();
+    // offsetWidth/Height measure the rendered border box before the canvas's zoom transform.
+    await expect
+      .poll(() =>
+        card.evaluate((element) => ({
+          width: (element as HTMLElement).offsetWidth,
+          height: (element as HTMLElement).offsetHeight,
+        })),
+      )
+      .toEqual(CARD_SIZE);
+    await expect(card.locator('.graph-queue-count')).toHaveAttribute('data-count', '100');
+    const label = card.locator('.graph-label');
+    expect(await label.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await expect(label).toHaveCSS('text-overflow', 'ellipsis');
+    await expect(label).toHaveCSS('white-space', 'nowrap');
+  }
+  expectInside(await box(shown('child').locator('.graph-card')), await box(shown('parent')));
+  expectInside(await box(shown('parent')), await box(shown('group')));
+});
 
 let app: ElectronApplication;
 let closeApp: () => Promise<void>;
@@ -641,6 +701,29 @@ test('double-clicking a node opens it in a panel that grows out of it, to edit i
 
   await page.mouse.click(editor.x + 10, editor.y + 10);
   await expect(panel).toHaveCount(0);
+});
+
+test('loads catalog logos as images under the production CSP', async () => {
+  const a = await addAgentAt('Agent 1', 300, 200);
+  await a.dblclick();
+  const view = page.getByRole('dialog', { name: 'Agent 1' });
+  const loaded = async (name: string) => {
+    const image = view.getByRole('button', { name: /^Agent:/ }).getByRole('img', { name });
+    await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+    await expect
+      .poll(() =>
+        image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
+      )
+      .toBe(true);
+    expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
+  };
+  await loaded('Claude Code');
+  await view.getByRole('button', { name: /^Agent:/ }).click();
+  await page.keyboard.type('codex app server');
+  await page.keyboard.press('Enter');
+  await loaded('Codex');
+  // The shared afterEach also rejects console warnings/errors, including CSP violations.
+  expect(problems).toEqual([]);
 });
 
 test('opens an agent as a full Claude Code-style session, and goes back to the canvas', async () => {

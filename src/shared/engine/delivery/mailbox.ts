@@ -1,6 +1,5 @@
 import type { AdapterId, ConnectionId } from '../../adapter';
 import type { SubmittedMessage } from '../../model/queue';
-import { turnResult } from '../../session';
 import { parseRole } from '../../role';
 import type {
   AgentSettings,
@@ -74,7 +73,7 @@ export class SessionStore {
    */
   readonly #onDone = new Map<
     string,
-    (interrupted: boolean, reply: string, result?: TurnResult) => void
+    (interrupted: boolean, reply: string, result: TurnResult) => void
   >();
   /** Who to tell when a message's session would not start (it stays queued), by its id. */
   readonly #onRefused = new Map<string, (refusal: Refusal) => void>();
@@ -279,7 +278,7 @@ export class SessionStore {
     agentId: string,
     agent: AdapterId,
     text: string,
-    onDone?: (interrupted: boolean, reply: string, result?: TurnResult) => void,
+    onDone?: (interrupted: boolean, reply: string, result: TurnResult) => void,
     images?: MessageImage[],
     onRefused?: (refusal: Refusal) => void,
     origin: 'user' | 'queue' | 'run' = 'user',
@@ -584,7 +583,7 @@ export class SessionStore {
   /** Who hears when message `id`'s turn ends, now that it does: forgotten, as it ends once. */
   #heard(
     id: string,
-  ): ((interrupted: boolean, reply: string, result?: TurnResult) => void) | undefined {
+  ): ((interrupted: boolean, reply: string, result: TurnResult) => void) | undefined {
     const onDone = this.#onDone.get(id);
     this.#onDone.delete(id);
     this.#onRefused.delete(id);
@@ -761,7 +760,7 @@ export class SessionStore {
         entry.id === action.id ? { ...entry, status: 'queued' } : entry,
       );
     } else if (action.type === 'end') {
-      const result = turnResult(action);
+      const result = action.result;
       submissions = submissions?.map((entry) => {
         if (
           entry.status !== 'running' ||

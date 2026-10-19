@@ -113,7 +113,33 @@ const open = () => {
 };
 
 describe('shared agent settings', () => {
-  it('retains spaces in a focused local role draft while saving normalized standing instructions', () => {
+  it('shows the selected adapter’s logo in the CLI choice', () => {
+    render(<Editor />);
+    const { panel } = open();
+    const choice = panel.getByRole('button', { name: /^Agent:/ });
+    expect(within(choice).getByRole('img', { name: 'Claude Code' }).tagName).toBe('IMG');
+  });
+
+  it('drafts the name until Enter and cancels a role draft with Escape without closing the sheet', () => {
+    const onRole = vi.fn();
+    const onClose = vi.fn();
+    render(<Editor onRole={onRole} onClose={onClose} />);
+    const { panel } = open();
+    const name = panel.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Builder' } });
+    expect(screen.getByRole('dialog', { name: 'Agent settings: Reviewer' })).toBeTruthy();
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(screen.getByRole('dialog', { name: 'Agent settings: Builder' })).toBeTruthy();
+    const role = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
+    focus(role);
+    fireEvent.change(role, { target: { value: 'Uncommitted role' } });
+    fireEvent.keyDown(role, { key: 'Escape' });
+    expect(role.value).toBe('');
+    expect(onRole).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('retains spaces in a focused local role draft and saves normalized instructions on leave', () => {
     const onRole = vi.fn();
     render(<Editor onRole={onRole} />);
     const { panel } = open();
@@ -122,10 +148,11 @@ describe('shared agent settings', () => {
     for (const draft of [' ', '  Review ', '  Review  changes\n\tCheck results.  ']) {
       fireEvent.change(role, { target: { value: draft } });
       expect(role.value).toBe(draft);
-      expect(onRole).toHaveBeenLastCalledWith(draft.trim() || undefined);
+      expect(onRole).not.toHaveBeenCalled();
     }
     // A saved-value rerender must not erase spaces still being typed. Blur adopts the saved value.
     focus(panel.getByRole('textbox', { name: 'Name' }));
+    expect(onRole).toHaveBeenCalledExactlyOnceWith('Review  changes\n\tCheck results.');
     expect(role.value).toBe('Review  changes\n\tCheck results.');
     expect(screen.getByRole('button', { name: 'Agent settings: Reviewer' }).textContent).toContain(
       'Review  changes',
@@ -139,9 +166,10 @@ describe('shared agent settings', () => {
     const role = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
     focus(role);
     fireEvent.change(role, { target: { value: ' \n\t ' } });
-    expect(onRole).toHaveBeenLastCalledWith(undefined);
+    expect(onRole).not.toHaveBeenCalled();
     expect(role.value).toBe(' \n\t ');
     focus(panel.getByRole('textbox', { name: 'Name' }));
+    expect(onRole).toHaveBeenCalledExactlyOnceWith(undefined);
     expect(role.value).toBe('');
     expect(screen.getByRole('button', { name: 'Agent settings: Reviewer' }).textContent).toContain(
       'No role',
@@ -165,6 +193,8 @@ describe('shared agent settings', () => {
     fireEvent.change(role, { target: { value: 'Review safely.' } });
     expect(role.getAttribute('aria-invalid')).toBe('false');
     expect(panel.queryByRole('alert')).toBeNull();
+    expect(onRole).not.toHaveBeenCalled();
+    fireEvent.blur(role);
     expect(onRole).toHaveBeenLastCalledWith('Review safely.');
   });
 
@@ -189,6 +219,8 @@ describe('shared agent settings', () => {
       const role = panel.getByRole('textbox', { name: 'Role' });
       focus(role);
       fireEvent.change(role, { target: { value: 'Revised role' } });
+      expect(onRole).not.toHaveBeenCalled();
+      fireEvent.blur(role);
       expect(onRole).toHaveBeenLastCalledWith('Revised role');
       expect(panel.getByRole('status').textContent).toContain('Changes saved.');
       const restart = panel.getByRole<HTMLButtonElement>('button', { name: 'Restart with these' });
@@ -197,6 +229,7 @@ describe('shared agent settings', () => {
       expect(onRestart).not.toHaveBeenCalled();
       // Returning the authored role to what this session runs removes the pending restart.
       fireEvent.change(role, { target: { value: 'Original role' } });
+      fireEvent.blur(role);
       expect(panel.queryByRole('status')).toBeNull();
     },
   );
@@ -215,6 +248,7 @@ describe('shared agent settings', () => {
       expect(panel.getByRole('button', { name: 'Model: Default (Opus)' })).toBeTruthy();
     });
     fireEvent.change(panel.getByRole('textbox', { name: 'Role' }), { target: { value: '' } });
+    fireEvent.blur(panel.getByRole('textbox', { name: 'Role' }));
     expect(
       panel.getByRole<HTMLButtonElement>('button', { name: 'Restart with these' }).disabled,
     ).toBe(true);

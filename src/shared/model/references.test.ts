@@ -334,6 +334,7 @@ describe('clearDeletedReferences', () => {
     ]);
     const canvas: CanvasDocument = {
       id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId,
+      arrange: false,
       nodes: result.nodes.filter((n) => n.id !== 'builder'),
       links: [],
     };

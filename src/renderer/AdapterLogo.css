@@ -1,0 +1,38 @@
+.adapter-logo {
+  flex: none;
+  vertical-align: middle;
+  object-fit: contain;
+}
+
+.adapter-logo-fallback {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 25%;
+  color: white;
+  background: #c15f3c;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.adapter-logo-fallback[data-size='16'] {
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+
+.adapter-logo-fallback[data-size='18'] {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+
+.adapter-logo-fallback[data-size='30'] {
+  width: 30px;
+  height: 30px;
+  font-size: 18px;
+}
+
+/* The platform's agent accents, indexed by the catalog. */
+.adapter-logo-fallback[data-accent='1'] {
+  background: #0e8a6b;
+}

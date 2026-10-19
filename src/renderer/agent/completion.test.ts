@@ -1,6 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { complete, completing, isCommand, matchCommands } from './completion';
+import { newCanvasId } from '../../shared/canvas';
+import type { AppApi } from '../../shared/ipc';
+import { complete, completing, findProjectFiles, isCommand, matchCommands } from './completion';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+it('reads file completions through project.files for the canvas the window now shows', async () => {
+  const first = newCanvasId();
+  const second = newCanvasId();
+  const windowGet = vi
+    .fn<AppApi['windowGet']>()
+    .mockResolvedValueOnce({ ok: true, value: { c: first } })
+    .mockResolvedValueOnce({ ok: true, value: { c: second } });
+  const projectFiles = vi
+    .fn()
+    .mockResolvedValue({ ok: true, value: { items: ['src/main/', 'src/main/ipc.ts'] } });
+  vi.stubGlobal('api', { windowGet, projectFiles } satisfies Partial<AppApi>);
+  expect(await findProjectFiles('ma')).toEqual(['src/main/', 'src/main/ipc.ts']);
+  expect(projectFiles).toHaveBeenLastCalledWith({ canvas: first, query: 'ma' });
+  await findProjectFiles('ipc');
+  expect(projectFiles).toHaveBeenLastCalledWith({ canvas: second, query: 'ipc' });
+});
 
 describe('completing', () => {
   it('completes a slash command typed at the start of the message', () => {

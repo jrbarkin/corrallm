@@ -5,7 +5,9 @@
     "api.app.info",
     "api.catalog.get",
     "api.catalog.installed",
+    "api.templates.list",
     "api.settings.get",
+    "api.project.files",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -27,6 +29,7 @@
       "message",
       "messages",
       "needs",
+      "project_files",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -35,6 +38,7 @@
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "withdraw"
     ],
@@ -57,10 +61,12 @@
       "catalog_installed",
       "messages",
       "needs",
+      "project_files",
       "session_get",
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "wait"
     ],
@@ -72,6 +78,7 @@
       "message",
       "messages",
       "needs",
+      "project_files",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -80,16 +87,17 @@
       "session_transcript",
       "settings_get",
       "status",
+      "templates_list",
       "usage_get",
       "wait",
       "withdraw"
     ]
   },
   "counts": {
-    "lead": 17,
+    "lead": 19,
     "worker": 10,
-    "outside-read": 12,
-    "outside-write": 18
+    "outside-read": 14,
+    "outside-write": 20
   },
   "unhosted": {
     "agents": "B11",
@@ -140,6 +148,14 @@
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
       "output": "de9aacd07a220d13"
+    },
+    "templates.list": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "fb72ff50789dfefc"
+    },
+    "project.files": {
+      "input": "c42bffd7c0a78bc0",
+      "output": "48481aeb891f3b2d"
     },
     "agents": {
       "input": "41356bc15da6df1b",

@@ -24,6 +24,18 @@ export function mergeHistory(shown: readonly Entry[], past: readonly Entry[]): E
       .map((entry) => merged.findIndex((other) => other.id === entry.id))
       .filter((place) => place !== -1);
     if (places.length > 0) {
+      // The CLI may name its user message differently; a known reply still identifies the turn.
+      // Keep the live entry's images and identity, but show the text the agent actually received.
+      const user = turn.user;
+      if (user) {
+        const same = merged.findIndex((entry) => entry.id === user.id);
+        const place =
+          same !== -1
+            ? same
+            : merged.findLastIndex((entry, i) => i <= Math.min(...places) && entry.kind === 'user');
+        const shown = merged[place];
+        if (shown?.kind === 'user') merged[place] = { ...shown, text: user.text };
+      }
       after = endOfTurn(merged, Math.max(...places));
       continue;
     }

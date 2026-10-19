@@ -7,7 +7,8 @@ import { fromFile, toFile } from '../../shared/model/file';
 import { documentOf, graphOf, setAgent, setConnection, setRole } from './graph';
 import type { Graph } from './graph';
 import { insertGraph } from './insert';
-import { fillTemplate, placeholdersOf, withAgents, withConnections } from './templates';
+import { fillTemplate, placeholdersOf } from '../../shared/templates';
+import { withAgents, withConnections } from './templates';
 import { DEFAULT_AGENT } from './agents';
 
 const graph = (): Graph => ({

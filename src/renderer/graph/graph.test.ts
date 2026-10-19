@@ -49,6 +49,43 @@ import { GROUP_COLORS, EMPTY_FRAME, HEADER, CARD_SIZE, PADDING } from '../../sha
 import type { Graph, GraphNode } from './graph';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
+import { insertGraph } from './insert';
+
+it('carries arrangement between the graph and its model', () => {
+  const graph = { nodes: [], edges: [], arrange: true };
+  const model = documentOf(graph, '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId);
+  expect(model).toHaveProperty('arrange', true);
+  expect(graphOf(model)).toEqual(graph);
+});
+
+it.each(['add', 'delete', 'group', 'parent', 'ungroup', 'insert'] as const)(
+  'keeps arrangement through %s',
+  (change) => {
+    const graph = {
+      nodes: [agentNode('a', 0, 0, { selected: true }), agentNode('b', 200, 0, { selected: true })],
+      edges: [],
+      arrange: true,
+    };
+    const grouped = { ...groupSelection(graph, 'frame', 'G'), arrange: true };
+    const result =
+      change === 'add'
+        ? addAgent(graph, 'c', { x: 500, y: 200 })
+        : change === 'delete'
+          ? deleteSelection(graph)
+          : change === 'group'
+            ? groupSelection(graph, 'frame', 'G')
+            : change === 'parent'
+              ? addParent(grouped, 'G')
+              : change === 'ungroup'
+                ? ungroupSelection(grouped)
+                : insertGraph(
+                    graph,
+                    { nodes: [], edges: [] },
+                    { group: 'G', name: 'Template', newId: () => 'new' },
+                  );
+    expect(result).toHaveProperty('arrange', true);
+  },
+);
 
 /** An item measured at 100×40. */
 function agentNode(id: string, x: number, y: number, extra: Partial<GraphNode> = {}): GraphNode {
@@ -1410,6 +1447,7 @@ describe('a canvas, drawn', () => {
   /** A group holding an agent, another agent outside it, and a link between the two. */
   const canvas: CanvasDocument = {
     id: ID,
+    arrange: false,
     nodes: [
       { id: 'G', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Team', color: 2 } },
       {

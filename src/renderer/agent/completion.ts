@@ -1,4 +1,12 @@
 import type { SlashCommand } from '../../shared/session';
+import { api } from '../api/client';
+
+/** Files of the canvas this window shows now: the core alone knows its project folder. */
+export async function findProjectFiles(query: string): Promise<string[]> {
+  const { c } = await api.windowGet();
+  const { items } = await api.projectFiles({ canvas: c, query });
+  return items;
+}
 
 /*
  * What the composer completes as the user types, as Claude Code does: a slash command at the start

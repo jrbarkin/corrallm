@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import type { Message } from '../../shared/model/messages';
+import type { Entry } from '../../shared/model/session';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
@@ -728,8 +729,6 @@ describe('delivery', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: true,
               result: { status: 'failed', reason: 'usage-limit', resetsAt },
             });
             return Promise.resolve();
@@ -1100,6 +1099,61 @@ describe('telling an agent of a withdrawal after receipt', () => {
     appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
     terminal = new FakeConnector({ adapter: 'codex', pause: 100 });
   });
+
+  it.each(['builder', 'shell'])(
+    'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',
+    async (agent) => {
+      await keepCanvas();
+      await start();
+      const id = await withdrawReceived(agent);
+      const shell = agent === 'shell';
+      const next = await send(agent, shell ? '!echo hello' : 'New work', shell ? YOU : OUTSIDE);
+      await vi.waitFor(async () => {
+        expect((await find(next, shell ? YOU : OUTSIDE))?.state).toBe('replied');
+      });
+      const connector = shell ? terminal : appServer;
+      const before = connector.sessions.flatMap((session) => session.sent);
+      expect(before.slice(1).map(({ text }) => text)).toEqual(
+        shell
+          ? [`[corrallm] ${withdrawalNote(id)}`, '!echo hello']
+          : [`${FRAME(next)}${withdrawalNote(id)}\n\nNew work`],
+      );
+      const users = async () =>
+        (await ok<{ entries: Entry[] }>('session.transcript', { agent, limit: 100 }, YOU)).entries
+          .filter((entry) => entry.kind === 'user')
+          .map(({ text }) => text);
+      expect(await users()).toEqual(before.map(({ text }) => text));
+
+      // A CLI keeps what it actually received, and gives those messages back on resume.
+      const resumed: Connector<SessionMode> = {
+        start: async (spec, host) => {
+          expect(spec.resume).not.toBeNull();
+          const live = await connector.start(spec, host);
+          host.emit({
+            type: 'history',
+            events: before.flatMap(({ id, text }): SessionEvent[] => [
+              { type: 'user', id, text },
+              {
+                type: 'end',
+                messages: [id],
+                seconds: 1,
+                result: { status: 'completed', reason: 'completed' },
+              },
+            ]),
+          });
+          return live;
+        },
+      };
+      await restart(shell ? { terminal: resumed } : { appServer: resumed });
+      const later = await send(agent, 'After resuming');
+      await vi.waitFor(async () => {
+        expect((await find(later))?.state).toBe('replied');
+      });
+      const expected = [...before.map(({ text }) => text), `${FRAME(later)}After resuming`];
+      expect(await users()).toEqual(expected);
+      expect(sent(connector)).toEqual(expected);
+    },
+  );
   it.each([
     ['the same sender', OUTSIDE],
     ['another outside party', OTHER],
@@ -1430,7 +1484,6 @@ describe('exhausted usage', () => {
                   first = false;
                   host.emit({
                     ...event,
-                    failed: true,
                     result: {
                       status: 'failed',
                       reason: 'usage-limit',
@@ -2391,8 +2444,7 @@ describe('reads', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: false,
+              result: { status: 'completed', reason: 'completed' },
             });
             return idle();
           },
@@ -2475,8 +2527,7 @@ describe('reads', () => {
               type: 'end',
               messages: [message.id],
               seconds: 1,
-              interrupted: false,
-              failed: false,
+              result: { status: 'completed', reason: 'completed' },
             });
             return idle();
           },

@@ -28,7 +28,7 @@ export interface Turn {
   from?: MessageSender;
 }
 
-export type DriverDone = (interrupted: boolean, result?: TurnResult) => void;
+export type DriverDone = (interrupted: boolean, result: TurnResult) => void;
 
 export interface SessionDriver {
   /** Starts a turn; `done` hears when it ends (true if it was interrupted, or failed). */

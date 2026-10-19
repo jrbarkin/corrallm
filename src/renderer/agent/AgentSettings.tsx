@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useDraft } from '../useDraft';
 
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
@@ -88,9 +89,20 @@ export function AgentSettingsPanel({
   onClose: () => void;
 }) {
   const sheet = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState(node.data.role ?? '');
   const [problem, setProblem] = useState<string>();
+  const title = useDraft(node.data.label, onRename);
+  const role = useDraft(
+    node.data.role ?? '',
+    (raw) => {
+      try {
+        onRole(parseRole(raw));
+        setProblem(undefined);
+      } catch (error) {
+        setProblem(error instanceof Error ? error.message : 'Invalid role');
+      }
+    },
+    { multiline: true },
+  );
   const name = node.data.label || 'Unnamed agent';
   const adapter = node.data.adapter ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
@@ -114,15 +126,12 @@ export function AgentSettingsPanel({
     };
   }, []);
   useEffect(() => {
-    if (document.activeElement !== input.current) setDraft(node.data.role ?? '');
-  }, [node.data.role]);
-  useEffect(() => {
     // A menu choice can remove the focused element. Escape still belongs to this sheet then.
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (
         event.target instanceof Element &&
-        (event.target.closest('.search-picker') ||
+        (event.target.closest('[data-draft], .search-picker') ||
           event.target.closest('.agent-choice')?.querySelector('[aria-expanded="true"]'))
       )
         return;
@@ -185,14 +194,7 @@ export function AgentSettingsPanel({
         </header>
         <label className="agent-settings-field">
           Name
-          <input
-            aria-label="Name"
-            value={node.data.label}
-            placeholder="Unnamed agent"
-            onChange={(event) => {
-              onRename(event.target.value);
-            }}
-          />
+          <input aria-label="Name" {...title} placeholder="Unnamed agent" />
         </label>
         <div className="agent-settings-connection">
           <span>CLI and connection</span>
@@ -209,26 +211,29 @@ export function AgentSettingsPanel({
         <label className="agent-settings-field">
           Role
           <textarea
-            ref={input}
             aria-label="Role"
             aria-describedby="agent-role-help"
             aria-invalid={problem !== undefined}
-            value={draft}
+            {...role}
             maxLength={MAX_ROLE_LENGTH}
             rows={6}
             placeholder="For example: Review changes for correctness and explain concrete risks."
             onChange={(event) => {
-              const raw = event.target.value;
-              setDraft(raw);
+              role.onChange(event);
               try {
-                onRole(parseRole(raw));
+                parseRole(event.target.value);
                 setProblem(undefined);
               } catch (error) {
                 setProblem(error instanceof Error ? error.message : 'Invalid role');
               }
             }}
             onBlur={() => {
-              if (problem === undefined) setDraft(node.data.role ?? '');
+              role.onBlur();
+              setProblem(undefined);
+            }}
+            onKeyDown={(event) => {
+              role.onKeyDown(event);
+              if (event.key === 'Escape') setProblem(undefined);
             }}
           />
         </label>

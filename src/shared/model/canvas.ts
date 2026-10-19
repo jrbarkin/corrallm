@@ -73,6 +73,8 @@ export interface Link {
 /** A canvas: its stable id (src/shared/canvas.ts), its nodes, parents before children, and links. */
 export interface CanvasDocument {
   id: CanvasId;
+  /** Whether structural edits lay the canvas out automatically. Files omit it when off. */
+  arrange: boolean;
   nodes: CanvasNode[];
   links: Link[];
 }

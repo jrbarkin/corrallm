@@ -11,7 +11,6 @@ import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
-import { turnResult } from '../../../shared/session';
 import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
@@ -670,7 +669,7 @@ export class Delivery {
   }
 
   /** A message's turn ended: it was withdrawn, or replied to, its reply a message to its sender. */
-  #ended(id: string, interrupted: boolean, reply: string, result: TurnResult | undefined): void {
+  #ended(id: string, _interrupted: boolean, reply: string, result: TurnResult): void {
     this.#sent.delete(id);
     const { store } = this.#deps;
     const message = store.get(id);
@@ -678,11 +677,7 @@ export class Delivery {
     if (this.#closed || !message || !this.#inFlight(message)) return;
     const taking = this.#withdrawing.get(id);
     if (taking !== undefined) {
-      this.#takenBack(
-        message,
-        taking,
-        (result ?? turnResult({ interrupted })).status === 'cancelled',
-      );
+      this.#takenBack(message, taking, result.status === 'cancelled');
       this.schedule();
       return;
     }
@@ -695,7 +690,7 @@ export class Delivery {
         kind: 'text',
         body: cut(reply),
         replyTo: id,
-        turn: result ?? turnResult({ interrupted }),
+        turn: result,
         state: agentOf(message.from) === undefined ? 'delivered' : 'pending',
       });
     }

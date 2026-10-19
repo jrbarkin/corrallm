@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { useDraft } from '../useDraft';
 
 import type { AdapterId } from '../../shared/adapter';
 import type { ProjectFolder } from '../../shared/ipc';
@@ -371,6 +372,7 @@ export function AgentView({
   };
 
   const label = node.data.label;
+  const title = useDraft(label, onRename);
   const name = label || 'Unnamed agent';
   const agent = node.data.adapter ?? DEFAULT_AGENT;
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
@@ -452,11 +454,8 @@ export function AgentView({
               <input
                 className="agent-title"
                 aria-label="Name"
-                value={label}
+                {...title}
                 placeholder="Unnamed agent"
-                onChange={(event) => {
-                  onRename(event.target.value);
-                }}
               />
               {queueState && <span className="agent-control-state">{queueState}</span>}
               {changed.added + changed.removed > 0 && (

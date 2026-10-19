@@ -327,8 +327,6 @@ describe('preload', () => {
     expect(channel).toHaveBeenLastCalledWith('canvas:forget');
     await api.chooseProject();
     expect(channel).toHaveBeenLastCalledWith('project:choose');
-    await api.findProjectFiles('src/ma');
-    expect(channel).toHaveBeenLastCalledWith('project:files', 'src/ma');
   });
 
   it('calls the session channels with their arguments', async () => {

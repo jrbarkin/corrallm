@@ -1,12 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
+import { api } from '../api/client';
+import { EXAMPLES } from '../../shared/examples';
+import { templateInfo } from '../../shared/templates';
 import { readRun } from '../../shared/engine/run/checkpoint';
 import type { RunSource } from '../run/persistence';
 import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend';
@@ -79,11 +82,85 @@ const actions = (id: string) => {
   return within(toolbar);
 };
 
+beforeEach(() => {
+  vi.spyOn(api, 'templatesList').mockResolvedValue({
+    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('GraphEditor', () => {
+  it('commits the agent name before the composer sends without blur', async () => {
+    const { fake, node } = setup({
+      nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('a'));
+    const view = within(screen.getByRole('dialog', { name: 'a' }));
+    const name = view.getByRole('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Drafted name' } });
+    expect(screen.getByRole('dialog', { name: 'a' })).toBeTruthy();
+    fake.backend.send.mockImplementationOnce(() => {
+      expect(screen.getByRole('dialog', { name: 'Drafted name' })).toBeTruthy();
+      return Promise.resolve(null);
+    });
+    const composer = view.getByRole('textbox', { name: 'Message a' });
+    fireEvent.change(composer, { target: { value: 'Hello' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await waitFor(() => {
+      expect(fake.backend.send).toHaveBeenCalledOnce();
+    });
+    expect(node('a').textContent).toContain('Drafted name');
+  });
+
+  it('saves the drafted label from the file shortcut before blur', async () => {
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
+    };
+    setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] }, files);
+    fireEvent.keyDown(document.body, { key: 'F2' });
+    fireEvent.change(labelInput(), { target: { value: 'Drafted label' } });
+    fireEvent.keyDown(labelInput(), { key: 's', ctrlKey: true });
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledOnce();
+    });
+    expect(
+      fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
+    ).toBe('Drafted label');
+  });
+
+  it('runs a pending message draft before the idle commit or blur', async () => {
+    const { fake } = setup({
+      nodes: [
+        agentNode('a', 0, 0, {
+          data: {
+            label: 'a',
+            connection: 'claude-code.sdk',
+            queue: [{ id: 'work', message: 'Original' }],
+          },
+        }),
+      ],
+      edges: [],
+    });
+    fireEvent.click(button('Show all queues'));
+    const queues = within(screen.getByRole('dialog', { name: 'All queues' }));
+    const input = queues.getByRole('textbox', { name: 'Message to the agent' });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Run this draft' } });
+    // A synthetic click deliberately skips blur: Run itself must flush the draft.
+    fireEvent.click(queues.getByRole('button', { name: 'Run' }));
+    await waitFor(() => {
+      expect(fake.backend.send).toHaveBeenCalledOnce();
+    });
+    expect(fake.backend.send.mock.calls[0]?.[1].text).toBe('Run this draft');
+  });
+
   it.each([
     ['Model: Opus', 'Default (Opus)', { effort: 'low', mode: 'plan' }],
     ['Effort: Low', 'Default (Low)', { model: 'opus', mode: 'plan' }],
@@ -532,7 +609,12 @@ describe('GraphEditor', () => {
         'claude-code.sdk',
         { type: 'user', id: message, text: 'Inspect the failure' },
         { type: 'text', id: 'answer', text: 'I inspected it.' },
-        { type: 'end', messages: [message], seconds: 1, interrupted: false, failed: false },
+        {
+          type: 'end',
+          messages: [message],
+          seconds: 1,
+          result: { status: 'completed', reason: 'completed' },
+        },
       );
     });
     expect(
@@ -614,6 +696,8 @@ describe('GraphEditor', () => {
     });
     expect(message.value).toBe('');
     fireEvent.change(message, { target: { value: 'Fix the flaky test' } });
+    expect(count()).toBeUndefined();
+    fireEvent.blur(message);
     expect(count()).toBe('1');
   });
 
@@ -1747,6 +1831,8 @@ describe('GraphEditor', () => {
     // Renamed in the panel a double-click opens.
     fireEvent.doubleClick(node('a'));
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Gamma' } });
+    expect(edge()?.getAttribute('aria-label')).toBe('Alpha and Beta can talk');
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Name' }), { key: 'Enter' });
     expect(screen.getByRole('dialog', { name: 'Gamma' })).toBeTruthy();
     expect(edge()?.getAttribute('aria-label')).toBe('Gamma and Beta can talk');
   });
@@ -1764,6 +1850,39 @@ describe('GraphEditor', () => {
       nodes: [agentNode('x', 0, 0, { data: { label: 'Coder' } })],
       edges: [],
     };
+
+    it('saves arrangement as an edit even on an empty canvas, restores it on open, and omits it when off', async () => {
+      const files = fakeFiles();
+      const { unmount } = render(<GraphEditor files={files} />);
+      expect(document.title).toBe('Untitled — corrallm');
+      fireEvent.click(button('Arrange automatically'));
+      expect(document.title).toBe('Untitled (edited) — corrallm');
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(files.save).toHaveBeenCalledOnce();
+      });
+      const text = files.save.mock.calls[0]?.[0] ?? '';
+      expect(JSON.parse(text)).toHaveProperty('arrange', true);
+      unmount();
+      const reopened = fakeFiles({ id: canvasIdOf(text), name: 'team.corral', text });
+      const { pane, nodes } = setup(undefined, reopened);
+      fireEvent.click(button('Open…'));
+      await waitFor(() => {
+        expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
+      });
+      expect(document.title).toBe('team.corral — corrallm');
+      fireEvent.doubleClick(pane, { clientX: 200, clientY: 100 });
+      expect(nodes()[0]?.classList.contains('draggable')).toBe(false);
+      expect(button('Arrange automatically').getAttribute('aria-pressed')).toBe('true');
+      fireEvent.click(button('Arrange automatically'));
+      expect(document.title).toBe('team.corral (edited) — corrallm');
+      expect(nodes()[0]?.classList.contains('draggable')).toBe(true);
+      fireEvent.click(button('Save'));
+      await waitFor(() => {
+        expect(reopened.save).toHaveBeenCalledOnce();
+      });
+      expect(JSON.parse(reopened.save.mock.calls[0]?.[0] ?? '')).not.toHaveProperty('arrange');
+    });
 
     it('saves the canvas, and titles the window with its file and whether it is edited', async () => {
       const files = fakeFiles();
@@ -1823,7 +1942,7 @@ describe('GraphEditor', () => {
       const { nodes } = setup(undefined, files);
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^Team lead/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^Team lead/ }));
       fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       // A new canvas, with main's new draft's id.
@@ -1877,7 +1996,7 @@ describe('GraphEditor', () => {
       const { nodes, node } = setup(undefined, fakeFiles());
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each blank starts from the template's own example; Back returns to the templates.
       const framework = gallery.getByRole('textbox', { name: 'Which test framework?' });
       expect((framework as HTMLTextAreaElement).value).toBe('pytest');
@@ -1900,11 +2019,11 @@ describe('GraphEditor', () => {
       );
     });
 
-    it('inserts a template into the canvas as a group, each agent of the type chosen', () => {
+    it('inserts a template into the canvas as a group, each agent of the type chosen', async () => {
       const { nodes, container } = setup(coder, fakeFiles());
       fireEvent.click(button('Templates…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       // Each agent starts as the template names it; the Tester is left to the default agent.
       const tester = gallery.getByRole('combobox', { name: "Tester's agent" });
       expect((tester as HTMLSelectElement).value).toBe('codex');
@@ -1938,7 +2057,7 @@ describe('GraphEditor', () => {
       );
       fireEvent.click(button('Start from a template…'));
       const gallery = within(screen.getByRole('dialog', { name: 'Templates' }));
-      fireEvent.click(gallery.getByRole('button', { name: /^TDD relay/ }));
+      fireEvent.click(await gallery.findByRole('button', { name: /^TDD relay/ }));
       const how = (role: string) =>
         gallery.getByRole<HTMLSelectElement>('combobox', { name: `How ${role} runs` });
       const options = (role: string) => [...how(role).options].map((o) => o.textContent);
