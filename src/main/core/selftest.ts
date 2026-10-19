@@ -1,6 +1,6 @@
 import { fork, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -14,7 +14,9 @@ import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
 import fakeClaude from './selftest-claude.mjs?raw';
+import { openStore } from './store/open';
 import { connect } from './store/sqlite';
+import type { Store } from './store/store';
 
 /*
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
@@ -179,46 +181,65 @@ export async function checkAgentSdk(
   }
 }
 
-/** A file-backed WAL transaction through Node's SQLite, reopened read-only after committing. */
+/**
+ * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
+ * SQLite: its pragmas as set, a write through its lane read back by another connection, and its
+ * file, log and index the user's alone (not on Windows, whose files have no such modes).
+ */
 export async function checkSqlite(folder = tmpdir()): Promise<string> {
   try {
-    const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
+    const profile = await mkdtemp(path.join(folder, 'corrallm-selftest-store-'));
     try {
-      const file = path.join(dir, 'selftest.sqlite');
-      const database = connect(file);
-      let version: string;
+      const { store, said } = await openStore(profile);
+      if (store === undefined) throw new Error(said.join(' '));
       try {
-        const sqlite = database.prepare('SELECT sqlite_version() AS version').get()?.version;
-        if (typeof sqlite !== 'string') throw new Error('SQLite did not report its version');
-        version = sqlite;
-        const mode = database.prepare('PRAGMA journal_mode=WAL').get()?.journal_mode;
-        if (mode !== 'wal') throw new Error(`journal_mode was ${String(mode)}, not WAL`);
-        database.exec('PRAGMA synchronous=FULL');
-        if (database.prepare('PRAGMA synchronous').get()?.synchronous !== 2) {
-          throw new Error('synchronous was not FULL');
-        }
-        database.exec('CREATE TABLE selftest (value TEXT NOT NULL); BEGIN IMMEDIATE');
-        database.prepare('INSERT INTO selftest (value) VALUES (?)').run('committed');
-        database.exec('COMMIT');
+        return await checkStore(store);
       } finally {
-        database.close();
-      }
-      const reader = connect(file, { readOnly: true });
-      try {
-        if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'committed') {
-          throw new Error('the reopened database did not read back the committed row');
-        }
-        return `SQLite ${version}, WAL, a transaction read back`;
-      } finally {
-        reader.close();
+        await store.close();
       }
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     }
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
-    throw new Error(`SQLite transaction check failed: ${why}`, { cause: error });
+    throw new Error(`The core’s database check failed: ${why}`, { cause: error });
   }
+}
+
+async function checkStore(store: Store): Promise<string> {
+  const pragma = (name: string): unknown => store.prepare(`PRAGMA ${name}`).get()?.[name];
+  const version = store.prepare('SELECT sqlite_version() AS version').get()?.version;
+  if (typeof version !== 'string') throw new Error('SQLite did not report its version');
+  const seen = [`SQLite ${version}`];
+  if (pragma('journal_mode') !== 'wal') throw new Error('it keeps no write-ahead log');
+  seen.push('WAL');
+  if (pragma('synchronous') !== 2) throw new Error('synchronous is not FULL');
+  seen.push('synchronous FULL');
+  if (process.platform === 'darwin') {
+    if (pragma('fullfsync') !== 1) throw new Error('fullfsync is off');
+    seen.push('fullfsync');
+  }
+  await store.write(() => {
+    store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
+    store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
+  });
+  const reader = connect(store.file, { readOnly: true });
+  try {
+    if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'written') {
+      throw new Error('another connection did not read back what the lane wrote');
+    }
+  } finally {
+    reader.close();
+  }
+  seen.push('a write through the lane read back');
+  if (process.platform !== 'win32') {
+    for (const suffix of ['', '-wal', '-shm']) {
+      const mode = (await stat(`${store.file}${suffix}`)).mode & 0o777;
+      if (mode !== 0o600) throw new Error(`core.db${suffix} is ${mode.toString(8)}, not 600`);
+    }
+    seen.push('core.db, -wal and -shm 0600');
+  }
+  return seen.join(', ');
 }
 
 /** Serves HTTP on 127.0.0.1 and calls it, as agents call the hook and MCP servers. */

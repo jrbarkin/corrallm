@@ -24,7 +24,7 @@ Requires Node 24.21.0 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 - `E2E_SKIP_BUILD=1 pnpm test:e2e` reuses the existing production build in `.vite/` and the CLI bundle in `dist-cli/` (note `pnpm dev` overwrites `.vite/`). Headless Linux: `xvfb-run -a pnpm test:e2e`.
 - `CORRALLM_CLAUDE_PATH=/path/to/claude` makes connected agents run that `claude` instead of the user's own, and only that one: the core looks nowhere else, even if nothing can run there (the e2e tests point it at a fake: `e2e/fake-claude.mjs` for Terminal agents, `src/main/sessions/sdk/fake-claude.mjs` for the Agent SDK). `CORRALLM_CODEX_PATH` does the same for `codex`. Set empty, the user's own are found as usual.
 - `CORRALLM_DISTRIBUTION=commercial` (or `hosted`) when building (`pnpm package`, `pnpm make`) makes a build for a commercial or hosted product, whose App Server connection refuses a ChatGPT login (see Codex); the default is `local`.
-- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). `runNativeSelfTest` (`src/main/native-selftest.ts`) runs `src/main/core/selftest.ts`'s checks in main, then forks the core process (`core.cjs`, an Electron utility process: `host/core-process.ts`) and asks it over CoreLink to run them there too, printing how soon it was ready after the fork and its memory. The checks (Electron-free): a shell that exits in a node-pty pseudo-terminal (through `spawnPty`, as Terminal agents run); a terminal screen copy (@xterm/headless and its addons) reads a status report and snapshots; the bundled Agent SDK (its `import.meta.url` define, its spawning) runs a query against `src/main/core/selftest-claude.mjs`, a tiny fake `claude` bundled as text (`?raw`, typed in `src/main/raw.d.ts`) only for this, written to a temporary folder and run with the `node` on the PATH (no login); Node’s built-in `node:sqlite` commits a file-backed WAL transaction with `synchronous=FULL`, closes it and reads it back from a read-only connection, then removes its temporary folder; a loopback HTTP server is called; a shell is spawned; and, packaged, `child_process.fork` throws (the RunAsNode fuse). It exits 0 on success, 2 if a check fails (saying which) or the core process does, 3 on a timeout, 4 on an uncaught error. CI runs this on all three OSes; `scripts/check-linux.sh` runs it (and the launch-switch checks, and the CLI's) for Linux arm64 in Docker; `src/main/core/selftest.test.ts` runs the checks in the unit tests, and `e2e/selftest.e2e.ts` runs the unpackaged build's in main and its core process. `CORRALLM_NATIVE_SELFTEST=1 pnpm corrallm` runs them under plain Node, in the CLI bundle (built by `pnpm build:cli`), exiting the same way.
+- Packaged-app native check: after `pnpm package`, run the app binary with `CORRALLM_NATIVE_SELFTEST=1` (e.g. `CORRALLM_NATIVE_SELFTEST=1 out/corrallm-darwin-arm64/corrallm.app/Contents/MacOS/corrallm`). `runNativeSelfTest` (`src/main/native-selftest.ts`) runs `src/main/core/selftest.ts`'s checks in main, then forks the core process (`core.cjs`, an Electron utility process: `host/core-process.ts`) and asks it over CoreLink to run them there too, printing how soon it was ready after the fork and its memory. The checks (Electron-free): a shell that exits in a node-pty pseudo-terminal (through `spawnPty`, as Terminal agents run); a terminal screen copy (@xterm/headless and its addons) reads a status report and snapshots; the bundled Agent SDK (its `import.meta.url` define, its spawning) runs a query against `src/main/core/selftest-claude.mjs`, a tiny fake `claude` bundled as text (`?raw`, typed in `src/main/raw.d.ts`) only for this, written to a temporary folder and run with the `node` on the PATH (no login); the core's database (`core/store/`, through Node's built-in `node:sqlite`) opens in a temporary profile as the core opens it, and reports SQLite's version, WAL, `synchronous=FULL`, on macOS `fullfsync`, a write through its lane read back by a read-only connection, and (but on Windows) `core.db`, `-wal` and `-shm` at 0600, then the profile is removed; a loopback HTTP server is called; a shell is spawned; and, packaged, `child_process.fork` throws (the RunAsNode fuse). It exits 0 on success, 2 if a check fails (saying which) or the core process does, 3 on a timeout, 4 on an uncaught error. CI runs this on all three OSes; `scripts/check-linux.sh` runs it (and the launch-switch checks, and the CLI's) for Linux arm64 in Docker; `src/main/core/selftest.test.ts` runs the checks in the unit tests, and `e2e/selftest.e2e.ts` runs the unpackaged build's in main and its core process. `CORRALLM_NATIVE_SELFTEST=1 pnpm corrallm` runs them under plain Node, in the CLI bundle (built by `pnpm build:cli`), exiting the same way.
 
 ## Testing
 
@@ -128,6 +128,32 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 registry's generated tests run on (a canvas of the test callers' agents, messages
                 waiting, nothing ever running a turn); test-worker.corral the canvas the engines'
                 test runs.
+src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/core.db, through
+                Node's SQLite, which sqlite.ts alone reaches, lazily (`process.getBuiltinModule`,
+                never a static import, which the bundler would hoist above the CLI's check of
+                Node's version; a test keeps it so). open.ts is openStore, which never rejects:
+                core.db made 0600 before SQLite opens it (so its -wal and -shm are too); one that
+                was there checked read-only first (corrallm's application id, meta.min_reader,
+                quick_check); then incremental vacuuming on a new one, WAL, synchronous FULL and
+                F_FULLFSYNC on macOS, foreign keys, an untrusted schema, a 4 MiB journal size
+                limit, no automatic checkpoints, no busy timeout (the core is the only writer),
+                and migrations.ts' forward-only migrations (each with its user_version and
+                meta.min_reader in one transaction; schema 1: canvas, conversation, run, message,
+                read_position, open_canvas, meta, STRICT). One a newer corrallm made that this one
+                can't read is refused, left untouched; a damaged one is set aside
+                (core.rejected-<uuid>.db, its -wal first) and the newest sound snapshot restored,
+                else it starts empty, saying so. store.ts is the open Store: `prepare` (cached),
+                `tx` (transaction.ts: BEGIN IMMEDIATE, a synchronous function, COMMIT, a savepoint
+                within one, rolled back only if SQLite hasn't, as on a full disk), `write` (the
+                lane: writes queued in one turn of the loop share one commit, each in a savepoint,
+                each resolving only once that commit returned: "on disk before it is sent"), a
+                PASSIVE checkpoint once idle a second (at most 30 s after the first unchecked
+                commit), `snapshot` (snapshots.ts: SQLite's backup into backups/core-<time>.db,
+                read through a connection of its own in one step, the newest three kept; taken
+                as it closes and every four hours) and `close` (the lane drained, a TRUNCATE
+                checkpoint, a snapshot; once). Today's stores (memory.ts, run-journal.ts,
+                delivery/messages.ts, delivery/reads.ts) keep their files until B9.0's second
+                part puts them behind it.
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside

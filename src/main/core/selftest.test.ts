@@ -23,31 +23,40 @@ import {
  * unit tests never load native modules.
  */
 
+/** What the core database's check reports, as it reports it on this platform. */
+const STORE_CHECKED = new RegExp(
+  [
+    '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous FULL',
+    process.platform === 'darwin' ? ', fullfsync' : '',
+    ', a write through the lane read back',
+    process.platform === 'win32' ? '' : ', core\\.db, -wal and -shm 0600',
+    '$',
+  ].join(''),
+);
+
 describe('the native self-test', () => {
-  it('checks a file-backed SQLite transaction through the native self-test', async () => {
+  it('opens the core’s database as the core does, reporting what it checked', async () => {
     const check = selfTestChecks({ packaged: false }).find(({ name }) => name === 'node:sqlite');
     expect(check).toBeDefined();
-    await expect(check?.run()).resolves.toMatch(
-      /^SQLite \d+\.\d+\.\d+, WAL, a transaction read back$/,
-    );
+    await expect(check?.run()).resolves.toMatch(STORE_CHECKED);
   });
 
-  it('removes the temporary database folder after reading the transaction back', async () => {
+  it('removes the temporary profile after checking the database', async () => {
     const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
     try {
-      await expect(checkSqlite(folder)).resolves.toMatch(/WAL, a transaction read back$/);
+      await expect(checkSqlite(folder)).resolves.toMatch(STORE_CHECKED);
       expect(await readdir(folder)).toEqual([]);
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
   });
 
-  it('says why SQLite failed when its temporary folder cannot be written', async () => {
+  it('says why the database failed when its temporary profile cannot be written', async () => {
     const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
     const blocked = path.join(folder, 'not-a-folder');
-    await writeFile(blocked, 'a file cannot hold the database folder');
+    await writeFile(blocked, 'a file cannot hold the profile');
     try {
-      await expect(checkSqlite(blocked)).rejects.toThrow(/^SQLite transaction check failed: /);
+      await expect(checkSqlite(blocked)).rejects.toThrow(/^The core’s database check failed: /);
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
