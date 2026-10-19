@@ -38,7 +38,7 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
  * shown once, on a terminal only, with how to register corrallm by its variable in each installed
  * CLI that says how (its adapter's `registerMcp`). Told to stop (SIGINT, SIGTERM, SIGHUP), it holds
  * each run where it is, journals, ends its sessions, writes out what it keeps, removes api.json
- * and lets the profile go.
+ * and lets the profile go; told as it starts, it makes no token and delivers nothing.
  */
 
 /** The name orchestrators register corrallm's MCP server under: never the agents' `corrallm`. */
@@ -93,6 +93,18 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
 
   let core: Core | undefined;
   let server: ApiServer | undefined;
+  /**
+   * Whether it was told to stop. Told as it starts, it makes no token and delivers nothing, and
+   * stops as soon as what it is doing then is done.
+   */
+  let stopping = false;
+  void io.stopped.then(() => {
+    stopping = true;
+  });
+  const stop = () => {
+    say('corrallm serve: stopping…');
+    return 0;
+  };
   /** Serves until told to stop: 0, or 1 if it can't start. */
   const serving = async (): Promise<number> => {
     const opened = await createCore(
@@ -175,6 +187,8 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       const installed = await installedClis(
         agentEnvironment(await loginShellEnvironment({ env: io.env })),
       );
+      // Told to stop meanwhile (a login shell may take seconds): the token it would replace stays.
+      if (stopping) return stop();
       const token = await opened.tokens.create({
         ...command.newToken,
         canvases: [...names.keys()],
@@ -184,7 +198,8 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
       }
     }
 
-    // Every check passed: what waits on each canvas goes from now on.
+    // Every check passed: what waits on each canvas goes from now on, unless it was told to stop.
+    if (stopping) return stop();
     await opened.deliver();
     say(`corrallm serve: serving ${served} at ${url}, on the profile ${profile}. Ctrl-C stops it.`);
     for (const line of findIt) say(`corrallm serve: ${line}`);
@@ -196,8 +211,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     });
     wroteApi = true;
     await io.stopped;
-    say('corrallm serve: stopping…');
-    return 0;
+    return stop();
   };
 
   let code: number;

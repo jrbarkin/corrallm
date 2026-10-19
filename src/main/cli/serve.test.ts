@@ -544,12 +544,13 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   });
 
   /**
-   * Runs `corrallm serve --new-token` on a terminal (script(1): a pty), until it serves: what it
-   * printed there, and the server.
+   * Starts `corrallm serve --new-token` on a terminal (script(1): a pty), in its environment with
+   * `extra`: script, what it printed there, and its exit.
    */
-  async function serveOnTerminal(
+  function onTerminal(
     args: string[],
-  ): Promise<{ printed: () => string; server: Serve }> {
+    extra: Record<string, string> = {},
+  ): { child: ChildProcess; printed: () => string; exited: Promise<number | null> } {
     const command = [
       process.execPath,
       BUNDLE,
@@ -564,15 +565,16 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       ...args,
     ];
     const quote = (part: string) => `'${part.replaceAll("'", `'\\''`)}'`;
+    const env = cliEnv({ CORRALLM_CLAUDE_PATH: FAKE_CLAUDE, ...extra });
     const child =
       process.platform === 'darwin'
         ? spawn('script', ['-q', '/dev/null', ...command], {
-            env: cliEnv({ CORRALLM_CLAUDE_PATH: FAKE_CLAUDE }),
+            env,
             // Its input no terminal (macOS's script reads the terminal's settings from it).
             stdio: ['ignore', 'pipe', 'pipe'],
           })
         : spawn('script', ['-qec', command.map(quote).join(' '), '/dev/null'], {
-            env: cliEnv({ CORRALLM_CLAUDE_PATH: FAKE_CLAUDE }),
+            env,
             stdio: ['ignore', 'pipe', 'pipe'],
           });
     let printed = '';
@@ -580,12 +582,23 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       printed += chunk.toString();
     });
     const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
-    const api = await apiFile(exited, () => printed);
+    return { child, printed: () => printed.replaceAll('\r\n', '\n'), exited };
+  }
+
+  /**
+   * Runs `corrallm serve --new-token` on a terminal until it serves: what it printed there, and the
+   * server.
+   */
+  async function serveOnTerminal(
+    args: string[],
+  ): Promise<{ printed: () => string; server: Serve }> {
+    const { child, printed, exited } = onTerminal(args);
+    const api = await apiFile(exited, printed);
     const server: Serve = {
       child,
       url: api.url,
       pid: api.pid,
-      stderr: () => printed,
+      stderr: printed,
       exited,
       stop: async () => {
         try {
@@ -597,7 +610,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       },
     };
     running.push(server);
-    return { printed: () => printed.replaceAll('\r\n', '\n'), server };
+    return { printed, server };
   }
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
@@ -657,6 +670,57 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       });
       expect(messages.map(({ replyTo, kind }) => [replyTo, kind])).toEqual([[id, 'text']]);
       expect(await post(server.url, HEADERS, LIST)).toBe(401);
+    },
+  );
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
+    'stops when told to as it starts, making no token and sending nothing: a message waiting still waits',
+    async () => {
+      // Builder is mid-turn, and a second message waits behind it.
+      const first = await serve();
+      const client = await connect(first.url);
+      await midTurn(client);
+      const { id: behind } = await call<{ id: string }>(client, 'message', {
+        to: 'builder',
+        body: 'hello behind',
+      });
+      expect(await first.stop()).toBe(0);
+      const tokens = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+
+      // Started again to make a token, its login shell slow to say the environment CLIs run in.
+      const shell = path.join(dir, 'slow-shell');
+      const reading = path.join(dir, 'shell-reading');
+      await writeFile(
+        shell,
+        `#!/bin/sh\necho $PPID > "${reading}"\nsleep 2\nexec /bin/sh -c "$2"\n`,
+      );
+      await chmod(shell, 0o755);
+      const { printed, exited } = onTerminal([], { SHELL: shell });
+      // Told to stop while serve (the shell's parent) reads it.
+      const pid = await vi.waitFor(
+        async () => {
+          const read = Number(await readFile(reading, 'utf8'));
+          expect(read).toBeGreaterThan(0);
+          return read;
+        },
+        { timeout: 20_000, interval: 50 },
+      );
+      process.kill(pid, 'SIGTERM');
+      expect(await exited).toBe(0);
+      expect(printed()).toContain('stopping…');
+      expect(printed()).not.toMatch(/^ {2}[A-Za-z0-9_-]{43}$/m);
+      // The orchestrator's token wasn't replaced, and nothing was left behind or sent.
+      expect(await readFile(path.join(profile, 'tokens.json'), 'utf8')).toBe(tokens);
+      expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+      expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      const log = await readFile(codexLog, 'utf8');
+      expect(log.split('\n').filter((line) => line.includes('hello behind'))).toEqual([]);
+
+      // The next start that serves delivers it, never told it was cut off.
+      const server = await serve();
+      const again = await connect(server.url);
+      const reply = await waitFor(again, (message) => message.replyTo === behind);
+      expect(reply).toMatchObject({ kind: 'text', turn: { status: 'completed' } });
     },
   );
 
