@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +13,9 @@ import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { createCore } from './core';
 import type { Core } from './core';
+import { STORE_FILE } from './store/open';
+import { snapshots, takeSnapshot } from './store/snapshots';
+import { journaledRun, keepCanvases, refuseWrites } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
@@ -38,15 +40,14 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-/** The canvas's run, as the journal keeps it. */
-async function journaled(): Promise<{
+/** The canvas's run's state, as the journal keeps it on disk. */
+function journaled(): {
   run: { agents: Record<string, unknown> };
   replies: unknown;
-}> {
-  const record = JSON.parse(
-    await readFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8'),
-  ) as { checkpoint: { state: string } };
-  return JSON.parse(record.checkpoint.state) as {
+} {
+  const checkpoint = journaledRun(profile, CANVAS);
+  if (checkpoint === undefined) throw new Error('No run was journaled.');
+  return JSON.parse(checkpoint.state) as {
     run: { agents: Record<string, unknown> };
     replies: unknown;
   };
@@ -59,13 +60,7 @@ async function journaled(): Promise<{
 async function keepCanvas({ folder = true } = {}): Promise<void> {
   const file = path.join(profile, 'worker.corral');
   await copyFile(FIXTURE, file);
-  await writeFile(
-    path.join(profile, 'canvases.json'),
-    JSON.stringify({
-      version: 2,
-      canvases: { [CANVAS]: { file, ...(folder ? { project } : {}), conversations: {} } },
-    }),
-  );
+  await keepCanvases(profile, { [CANVAS]: { file, ...(folder ? { project } : {}) } });
 }
 
 async function start(codex: Connector<SessionMode>): Promise<Core> {
@@ -91,7 +86,9 @@ describe('the core runs each canvas’s engine', () => {
     await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
     await core?.close();
     core = undefined;
-    await writeFile(path.join(profile, 'runs', CANVAS, 'messages.jsonl'), '');
+    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, '');
 
     const app = await start(new FakeConnector({ adapter: 'codex' }));
     const context = (await app.channels.call(7, 'run:get', [])) as RunContext;
@@ -114,10 +111,7 @@ describe('the core runs each canvas’s engine', () => {
     await app.channels.call(7, 'run:save', [context.token, edited]);
     await app.close();
     core = undefined;
-    const record = JSON.parse(
-      await readFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8'),
-    ) as { checkpoint: typeof edited };
-    expect(record.checkpoint).toEqual(edited);
+    expect(journaledRun(profile, CANVAS)).toEqual(edited);
     expect(app.engines.opened()).toEqual([]);
   });
 
@@ -131,10 +125,8 @@ describe('the core runs each canvas’s engine', () => {
         const session = await codex.start(spec, host);
         const send = session.send.bind(session);
         session.send = (message) => {
-          const record = readFileSync(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8');
-          before.push(
-            JSON.parse((JSON.parse(record) as { checkpoint: { state: string } }).checkpoint.state),
-          );
+          // Read through a connection of its own: what is on disk.
+          before.push(journaled());
           return send(message);
         };
         return session;
@@ -149,14 +141,14 @@ describe('the core runs each canvas’s engine', () => {
       });
     });
     expect(codex.started).toMatchObject([{ cwd: project, mode: null }]);
-    // The run's record reached the journal before its message reached the agent.
+    // The run's record was on disk before its message reached the agent.
     expect(before).toMatchObject([
       { run: { running: true, agents: { worker: { status: 'running', current: 'hello' } } } },
     ]);
 
     await core?.close();
     core = undefined;
-    const state = await journaled();
+    const state = journaled();
     expect(state.run.agents.worker).toMatchObject({ outcomes: { hello: 'succeeded' } });
     expect(state.replies).toEqual([[JSON.stringify(['worker', 'hello']), REPLY]]);
   });
@@ -183,6 +175,49 @@ describe('the core runs each canvas’s engine', () => {
     expect(codex.started).toEqual([]);
   });
 
+  it('restores a run from a snapshot taken while its message was out paused, sending nothing again', async () => {
+    await keepCanvas();
+    // Its agent takes the run's message, and its turn goes on as long as the test does.
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const sent: string[] = [];
+    const busy: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        const session = await codex.start(spec, host);
+        session.send = (message) => {
+          sent.push(message.text);
+          host.emit({ type: 'user', id: message.id, text: message.text });
+          host.emit({ type: 'status', status: 'working' });
+          return Promise.resolve();
+        };
+        return session;
+      },
+    };
+    const engine = await (await start(busy)).engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toEqual(['Say hello']);
+    });
+    // A snapshot of the database now, as the store takes them every few hours; then the database
+    // is damaged, and every later snapshot lost with it.
+    const kept = await takeSnapshot(path.join(profile, STORE_FILE), profile, Date.now() - 60_000);
+    await core?.close();
+    core = undefined;
+    for (const other of await snapshots(profile)) if (other !== kept) await rm(other);
+    await writeFile(path.join(profile, STORE_FILE), 'not a database');
+
+    const again = new FakeConnector({ adapter: 'codex' });
+    const restarted = await start(again);
+    const restored = await restarted.engines.open(CANVAS);
+    expect(restarted.engines.canvas(CANVAS)?.warnings).toEqual([
+      expect.stringMatching(/damaged.*restored from its snapshot/) as string,
+    ]);
+    // Its message was out: never sent again, the run paused where the snapshot had it.
+    expect(restored.run.snapshot()).toMatchObject({ running: false, paused: true });
+    expect(restored.run.snapshot().agents.worker?.status).not.toBe('done');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(again.started).toEqual([]);
+  });
+
   it('closes every session as it closes, and writes out what it keeps, though a run can’t be journaled', async () => {
     await keepCanvas();
     const codex = new FakeConnector({ adapter: 'codex' });
@@ -200,15 +235,13 @@ describe('the core runs each canvas’s engine', () => {
     };
     const engine = await (await start(watched)).engines.open(CANVAS);
     engine.run.start();
-    await vi.waitFor(async () => {
-      expect((await journaled()).run.agents.worker).toMatchObject({
+    await vi.waitFor(() => {
+      expect(journaled().run.agents.worker).toMatchObject({
         outcomes: { hello: 'succeeded' },
       });
     });
-    // The canvas's record can't be written any more: a file stands where its folder was.
-    const record = path.join(profile, 'runs', CANVAS);
-    await rm(record, { recursive: true });
-    await writeFile(record, '');
+    // The canvas's run can't be written any more.
+    refuseWrites(profile, 'run', 'The disk is full');
     const flushes = [
       vi.spyOn(Settings.prototype, 'flush'),
       vi.spyOn(UsageReadings.prototype, 'flush'),
@@ -226,20 +259,18 @@ describe('the core runs each canvas’s engine', () => {
     const started = await start(codex);
     const engine = await started.engines.open(CANVAS);
     engine.run.start();
-    await vi.waitFor(async () => {
-      expect((await journaled()).run.agents.worker).toMatchObject({
+    await vi.waitFor(() => {
+      expect(journaled().run.agents.worker).toMatchObject({
         outcomes: { hello: 'succeeded' },
       });
     });
     await started.channels.call(7, 'run:get', []);
-    const record = path.join(profile, 'runs', CANVAS, 'record.json');
-    await rm(record);
-    await mkdir(record);
+    const allow = refuseWrites(profile, 'run', 'The disk is full');
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      await expect(started.flush()).rejects.toThrow();
+      await expect(started.flush()).rejects.toThrow('The disk is full');
     } finally {
-      await rm(record, { recursive: true, force: true });
+      allow();
     }
     errors.mockRestore();
     await started.channels.call(7, 'session:start', [
@@ -269,10 +300,7 @@ describe('the core runs each canvas’s engine', () => {
   it('refuses an unsaved canvas, though its run was journaled and its folder kept', async () => {
     await journalRun();
     // A draft: the profile keeps its folder and its run, and no file.
-    await writeFile(
-      path.join(profile, 'canvases.json'),
-      JSON.stringify({ version: 2, canvases: { [CANVAS]: { project, conversations: {} } } }),
-    );
+    await keepCanvases(profile, { [CANVAS]: { project } });
     await expect(
       (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
     ).rejects.toThrow(/isn’t saved/);

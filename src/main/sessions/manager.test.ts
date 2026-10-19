@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,8 @@ import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionEvent, SessionOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
+import type { Store } from '../core/store/store';
+import { openTestStore, readOnDisk } from '../core/store/test-store';
 import { CanvasMemory } from '../memory';
 import type { Connector, LiveSession, SessionHost, SessionSpec } from './connector';
 import { unavailable } from './connector';
@@ -29,6 +31,7 @@ const FORKED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e33';
 const REMEMBERED = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e34';
 
 let dir: string;
+let store: Store;
 let memory: CanvasMemory;
 let fake: FakeConnector;
 let terminal: FakeConnector;
@@ -82,7 +85,8 @@ const conversations = async (canvas: CanvasId) => (await memory.get(canvas)).con
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-sessions-'));
-  memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+  store = await openTestStore(dir);
+  memory = new CanvasMemory(store);
   fake = new FakeConnector();
   terminal = new FakeConnector();
   projects = new Map();
@@ -100,6 +104,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await memory.flush();
+  await store.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -120,7 +125,10 @@ describe('SessionManager', () => {
       expect(connector.started.at(-1)).not.toHaveProperty('roleChanged');
       await memory.flush();
       expect((await conversations(canvas))[cli]?.a?.role).toBe(fingerprint);
-      expect(await readFile(path.join(dir, 'canvases.json'), 'utf8')).not.toContain(role);
+      // Its fingerprint, never its text.
+      const kept = readOnDisk(dir, (disk) => disk.prepare('SELECT * FROM conversation').all());
+      expect(JSON.stringify(kept)).toContain(fingerprint);
+      expect(JSON.stringify(kept)).not.toContain(role);
 
       await sessions.start(canvas, 'a', { ...OPTIONS, connection: other, role });
       const next = connection === 'claude-code.sdk' ? terminal : codex;
@@ -128,7 +136,9 @@ describe('SessionManager', () => {
       await sessions.closeEverything();
 
       // Load the fingerprint from disk, as after an app restart.
-      memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+      await store.close();
+      store = await openTestStore(dir);
+      memory = new CanvasMemory(store);
       const after = manager({ 'codex.app-server': codex });
       for (const [currentRole, changed] of [
         [role, false],
@@ -222,7 +232,7 @@ describe('SessionManager', () => {
     await expect(sessions.send(canvas, 'a', { id: 'm', text: 'Hello' })).rejects.toThrow(
       /not running/,
     );
-    const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
+    const disk = new CanvasMemory(store);
     expect((await disk.get(canvas)).conversations).toEqual({
       'claude-code': { a: { id: claudeId, role: 'none' } },
       codex: { b: { id: otherCodexId, role: 'none' } },
@@ -267,10 +277,8 @@ describe('SessionManager', () => {
     release?.();
     await Promise.all([closing, fresh]);
     expect(
-      (await new CanvasMemory(path.join(dir, 'canvases.json')).get(canvas)).conversations[
-        'claude-code'
-      ],
-    ).toEqual({});
+      (await new CanvasMemory(store).get(canvas)).conversations['claude-code']?.a,
+    ).toBeUndefined();
   });
 
   it('clears only its own canvas’s conversation, whatever another canvas does meanwhile', async () => {
@@ -305,8 +313,8 @@ describe('SessionManager', () => {
     await sessions.start(other, 'b', OPTIONS);
     release?.();
     await Promise.all([fresh, closing]);
-    const disk = new CanvasMemory(path.join(dir, 'canvases.json'));
-    expect((await disk.get(canvas)).conversations['claude-code']).toEqual({});
+    const disk = new CanvasMemory(store);
+    expect((await disk.get(canvas)).conversations['claude-code']?.a).toBeUndefined();
     expect((await disk.get(other)).conversations['claude-code']?.a?.id).toBe(otherId);
     await sessions.start(other, 'a', OPTIONS);
     expect(fake.started.at(-1)?.resume).toBe(otherId);
@@ -1078,7 +1086,7 @@ describe('SessionManager rewinding a session', () => {
     await sessions.rewind(canvas, 'a', 'u1', 'conversation');
     expect(fork).not.toHaveBeenCalled();
     await memory.flush();
-    expect((await conversations(canvas))['claude-code']).toEqual({});
+    expect((await conversations(canvas))['claude-code']?.a).toBeUndefined();
     await sessions.start(canvas, 'a', OPTIONS);
     expect(started).toEqual([null, null]);
   });

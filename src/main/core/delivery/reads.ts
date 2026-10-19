@@ -5,10 +5,9 @@ import type { KeptReads, MovedRead } from '../../run-journal';
  * Where each party has read to in a canvas's messages: its `wait` read position (API Spec §7.7,
  * Core Server §5.9), the place in the store's order of the last message a `wait` without `for`
  * returned it. It is the party's, never its token's, so a token renewed by name reads on from it;
- * it only moves forward, and only once the canvas's record holding it (runs/<id>/record.json,
- * `reads`, forced to disk at every write once it holds any) is on disk, before the `wait` that
- * moved it returns: a restart never returns what one already did, and a `wait` whose record
- * couldn't be written moves nothing.
+ * it only moves forward, and only once it is on disk (the journal's `read_position`, committed
+ * with the canvas's run), before the `wait` that moved it returns: a restart never returns what one
+ * already did, and a `wait` whose position couldn't be written moves nothing.
  */
 
 export class ReadPositions {

@@ -17,6 +17,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
+import { forgetRun, keepCanvases, openedLast } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
@@ -144,10 +145,7 @@ async function keepCanvas(
       links: links.map((agents) => ({ agents })),
     }),
   );
-  await writeFile(
-    path.join(profile, 'canvases.json'),
-    JSON.stringify({ version: 2, canvases: { [CANVAS]: { file, project, conversations: {} } } }),
-  );
+  await keepCanvases(profile, { [CANVAS]: { file, project } });
 }
 
 /** Starts the core over the profile, its App Server and Terminal agents on the given connectors. */
@@ -1412,13 +1410,7 @@ describe('exhausted usage', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
     await keepCanvas();
-    if (manual) {
-      await mkdir(path.join(profile, 'runs'));
-      await writeFile(
-        path.join(profile, 'runs', 'last.json'),
-        JSON.stringify({ version: 2, canvas: CANVAS }),
-      );
-    }
+    if (manual) await openedLast(profile, CANVAS);
     if (another) {
       const file = path.join(profile, 'other.corral');
       const doc = JSON.parse(await readFile(path.join(profile, 'canvas.corral'), 'utf8')) as Record<
@@ -1426,19 +1418,7 @@ describe('exhausted usage', () => {
         unknown
       >;
       await writeFile(file, JSON.stringify({ ...doc, id: OTHER_CANVAS }));
-      const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
-        canvases: Record<string, unknown>;
-      };
-      await writeFile(
-        path.join(profile, 'canvases.json'),
-        JSON.stringify({
-          ...memory,
-          canvases: {
-            ...memory.canvases,
-            [OTHER_CANVAS]: { file, project, conversations: {} },
-          },
-        }),
-      );
+      await keepCanvases(profile, { [OTHER_CANVAS]: { file, project } });
     }
     const startSession = appServer.start.bind(appServer);
     let first = true;
@@ -2059,7 +2039,7 @@ describe('a restart', () => {
     await core?.close();
     core = undefined;
     // Deleted in the app meanwhile.
-    await rm(path.join(profile, 'runs', CANVAS, 'record.json'), { force: true });
+    await forgetRun(profile, CANVAS);
     await keepCanvas(
       AGENTS.filter(({ id }) => id !== 'helper'),
       [['builder', 'checker']],

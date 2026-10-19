@@ -18,13 +18,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { opsFor, toolName } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { Message } from '../../shared/model/messages';
+import { keepCanvases, writeOnDisk } from '../core/store/test-store';
 import { registrations } from './serve';
 
 /*
  * `corrallm serve` and `corrallm wait` (Build Plan B7; API Spec §8.6), as a person runs them: the
  * CLI bundle (dist-cli/corrallm.cjs, which the vitest `main` project's global setup builds) in a
- * child process, on a profile of its own whose canvases.json keeps a canvas and its project folder,
- * as the app would once the canvas was opened and its folder picked there. Its agents run a fake
+ * child process, on a profile of its own whose database keeps a canvas and its project folder, as
+ * the app would once the canvas was opened and its folder picked there. Its agents run a fake
  * `codex` (sessions/codex/fake-codex.mjs): Builder on the App Server, and Shell on the Terminal,
  * which no test ever starts. tokens.json holds known tokens' hashes; an MCP client (the SDK's
  * Client) calls with them, as an outside orchestrator would.
@@ -68,16 +69,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await mkdir(project);
     file = await canvasFile('m1.corral', CANVAS);
     const second = await canvasFile('second.corral', SECOND);
-    await writeFile(
-      path.join(profile, 'canvases.json'),
-      JSON.stringify({
-        version: 2,
-        canvases: {
-          [CANVAS]: { file, project, conversations: {} },
-          [SECOND]: { file: second, project, conversations: {} },
-        },
-      }),
-    );
+    await keepCanvases(profile, {
+      [CANVAS]: { file, project },
+      [SECOND]: { file: second, project },
+    });
     const now = Date.now();
     const token = (id: string, canvases: string[], access: string, expires: number) => ({
       id,
@@ -446,26 +441,19 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
   });
 
-  it('runs a canvas only from the file canvases.json keeps for it, in the folder picked in the app', async () => {
+  it('runs a canvas only from the file corrallm keeps for it, in the folder picked in the app', async () => {
     const unknown = await canvasFile('unknown.corral', '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b03');
     const copy = path.join(dir, 'copy of m1.corral');
     await copyFile(file, copy);
-    const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
-      canvases: Record<string, { project?: string }>;
-    };
-    delete memory.canvases[SECOND]?.project;
-    await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
     const second = path.join(dir, 'second.corral');
-
     // A canvas whose project folder corrallm keeps is gone (a worktree removed).
     const gone = await canvasFile('gone.corral', '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04');
     const removed = path.join(dir, 'removed');
-    memory.canvases['0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04'] = {
-      file: gone,
-      project: removed,
-      conversations: {},
-    } as { project?: string };
-    await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
+    await keepCanvases(profile, {
+      // Its folder not picked.
+      [SECOND]: { file: second },
+      '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04': { file: gone, project: removed },
+    });
 
     const sentences = {
       unknown: 'unknown.corral isn’t a canvas corrallm keeps: open unknown.corral in corrallm',
@@ -873,14 +861,15 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     ).toMatch(/cut off/);
   });
 
-  it('says, as it starts after a crash, what it cut off, and a run record it set aside', async () => {
+  it('says, as it starts after a crash, what it cut off, and a run it discarded', async () => {
     const first = await serve();
     const client = await connect(first.url);
     const slow = await midTurn(client);
     first.child.kill('SIGKILL');
     await first.exited;
     await rm(path.join(profile, 'api.json'));
-    await writeFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'not a record');
+    // Its run, as an older corrallm wrote it.
+    writeOnDisk(profile, `UPDATE run SET state = '{"version":1}'`);
 
     const server = await serve();
     await vi.waitFor(() => {
@@ -889,7 +878,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       );
     });
     expect(server.stderr()).toMatch(
-      /\[m1\.corral\] The run progress could not be restored and its record was moved to /,
+      /\[m1\.corral\] The run progress could not be restored, so it was discarded \(/,
     );
   });
 
@@ -1105,11 +1094,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     await mkdir(path.join(dir, 'other'));
     const twin = path.join(dir, 'other', 'm1.corral');
     await copyFile(path.join(dir, 'second.corral'), twin);
-    const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
-      canvases: Record<string, { file: string }>;
-    };
-    (memory.canvases[SECOND] as { file: string }).file = twin;
-    await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
+    await keepCanvases(profile, { [SECOND]: { file: twin, project: path.join(dir, 'project') } });
     const server = await serve(['--canvas', twin]);
     expect(server.stderr()).toContain(`serving m1.corral (${CANVAS}), m1.corral (${SECOND}) at`);
     const client = await connect(server.url, SECOND_ONLY);

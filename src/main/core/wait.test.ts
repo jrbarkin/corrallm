@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -16,12 +15,13 @@ import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf, readCursor } from './delivery/messages';
+import { keepCanvases, readPositions, refuseWrites } from './store/test-store';
 import { NO_DESKTOP } from './test-registry';
 
 /*
  * `wait` (decision 20a; API Spec §7.7): one call that returns the next things addressed to an
  * outside party after a cursor, or waits for them. It never consumes; the party's read position,
- * which a `wait` without `for` moves forward, is kept in each canvas's record across restarts, and
+ * which a `wait` without `for` moves forward, is kept on disk for each canvas across restarts, and
  * is the party's, not its token's, so a token renewed by name reads on from it.
  */
 
@@ -72,11 +72,10 @@ async function canvasFile(id: CanvasId, name: string): Promise<{ file: string; p
 
 /** A profile keeping m1 (and the worker canvas, with `both`). */
 async function keep(both = false): Promise<void> {
-  const canvases: Record<string, unknown> = {
-    [M1]: { ...(await canvasFile(M1, 'm1')), conversations: {} },
-  };
-  if (both) canvases[WORKER] = { ...(await canvasFile(WORKER, 'worker')), conversations: {} };
-  await writeFile(path.join(profile, 'canvases.json'), JSON.stringify({ version: 2, canvases }));
+  await keepCanvases(profile, {
+    [M1]: await canvasFile(M1, 'm1'),
+    ...(both ? { [WORKER]: await canvasFile(WORKER, 'worker') } : {}),
+  });
 }
 
 async function start(open: CanvasId[] = [M1]): Promise<Core> {
@@ -156,13 +155,9 @@ async function failure(
   return result.error;
 }
 
-/** Where the canvas's record says each party's `wait` has read to: none if it has no record. */
-async function keptReads(canvas: CanvasId = M1): Promise<Record<string, number> | undefined> {
-  const file = path.join(profile, 'runs', canvas, 'record.json');
-  // A canvas whose record was never written keeps none.
-  if (!existsSync(file)) return undefined;
-  const record = JSON.parse(await readFile(file, 'utf8')) as { reads?: Record<string, number> };
-  return record.reads;
+/** Where the canvas's messages say each party's `wait` has read to, as on disk. */
+function keptReads(canvas: CanvasId = M1): Record<string, number> {
+  return readPositions(profile, canvas);
 }
 
 /** Sends Builder a message on `canvas` and waits for its reply to come back: the message's id. */
@@ -246,7 +241,7 @@ describe('wait', () => {
     expect(woken.messages.map(({ replyTo, kind }) => [replyTo, kind])).toEqual([[id, 'text']]);
   });
 
-  it('keeps the party’s read position in the canvas’s record before it returns, across restarts', async () => {
+  it('keeps the party’s read position on disk before it returns, across restarts', async () => {
     await keep();
     await start();
     const { token: made } = await token();
@@ -254,10 +249,8 @@ describe('wait', () => {
     await exchange(caller, 'One');
     const waited = await wait(caller);
     expect(waited.messages).toHaveLength(1);
-    const record = JSON.parse(
-      await readFile(path.join(profile, 'runs', M1, 'record.json'), 'utf8'),
-    ) as { reads?: Record<string, number> };
-    expect(record.reads?.['outside:orchestrator']).toEqual(expect.any(Number));
+    // On disk as it returned.
+    expect(keptReads()['outside:orchestrator']).toEqual(expect.any(Number));
 
     await restart();
     // The same token, kept in tokens.json, reads on where its party left off.
@@ -410,36 +403,32 @@ describe('wait', () => {
     expect(second.messages.map(({ replyTo }) => replyTo)).toEqual(sent.slice(returned));
     // And so is its next: from it, the rest again.
     expect(await wait(caller, { after: first.next })).toEqual(second);
-    const kept = await keptReads();
+    const kept = keptReads();
 
     // A wait from before them all returns the first page again, and leaves the read position
     // where it was.
     const again = await wait(caller, { after: status.next });
     expect(again.messages.map(({ replyTo }) => replyTo)).toEqual(sent.slice(0, returned));
-    expect(await keptReads()).toEqual(kept);
+    expect(keptReads()).toEqual(kept);
     expect((await wait(caller)).messages).toEqual([]);
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'moves no read position it couldn’t journal: that wait fails, and the next returns what it didn’t',
-    async () => {
-      await keep();
-      await start();
-      const { caller } = await token();
-      const id = await exchange(caller, 'One');
-      // The canvas's record can't be written meanwhile.
-      const runs = path.join(profile, 'runs', M1);
-      await chmod(runs, 0o500);
-      try {
-        expect((await current().call('wait', { timeoutSeconds: 0 }, caller)).ok).toBe(false);
-      } finally {
-        await chmod(runs, 0o700);
-      }
-      expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
-    },
-  );
+  it('moves no read position it couldn’t journal: that wait fails, and the next returns what it didn’t', async () => {
+    await keep();
+    await start();
+    const { caller } = await token();
+    const id = await exchange(caller, 'One');
+    // Where it has read to can't be written meanwhile.
+    const allow = refuseWrites(profile, 'read_position', 'The disk is full');
+    try {
+      expect((await current().call('wait', { timeoutSeconds: 0 }, caller)).ok).toBe(false);
+    } finally {
+      allow();
+    }
+    expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
+  });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([false, true])(
+  it.each([false, true])(
     'returns only the canvases whose read positions landed, losing none (with cursor: %s)',
     async (withCursor) => {
       await keep(true);
@@ -448,8 +437,8 @@ describe('wait', () => {
       const first = await exchange(caller, 'One', M1);
       const second = await exchange(caller, 'Two', WORKER);
       const before = cursorOf('wait', { [M1]: 0, [WORKER]: 0 });
-      const runs = path.join(profile, 'runs', WORKER);
-      await chmod(runs, 0o500);
+      // Where it has read to on the worker canvas can't be written meanwhile.
+      const allow = refuseWrites(profile, 'read_position', 'The disk is full', WORKER);
       let waited: Waited;
       try {
         waited = await wait(caller, withCursor ? { after: before } : {});
@@ -461,11 +450,11 @@ describe('wait', () => {
             ?.messages.seqOf(waited.messages[0]?.id ?? ''),
           [WORKER]: 0,
         });
-        expect(await keptReads(M1)).toEqual({ 'outside:orchestrator': next?.[M1] });
-        expect((await keptReads(WORKER))?.['outside:orchestrator'] ?? 0).toBe(0);
+        expect(keptReads(M1)).toEqual({ 'outside:orchestrator': next?.[M1] });
+        expect(keptReads(WORKER)).toEqual({});
         expect(current().engines.canvas(WORKER)?.reads.of('outside:orchestrator')).toBe(0);
       } finally {
-        await chmod(runs, 0o700);
+        allow();
       }
       const following = await wait(caller, withCursor ? { after: waited.next } : {});
       expect(following.messages.map(({ replyTo }) => replyTo)).toEqual([second]);
@@ -496,7 +485,7 @@ describe('wait', () => {
     const onM1 = await exchange(caller, 'On m1', M1);
     const { messages } = await wait(caller);
     expect(messages).toHaveLength(2);
-    const kept = await keptReads(M1);
+    const kept = keptReads(M1);
 
     // messages' cursor names the one canvas it paged: as wait's, it would read the worker anew.
     const paged = await call<{ next: string }>('messages', { canvas: M1 }, caller);
@@ -508,7 +497,7 @@ describe('wait', () => {
     expect(await failure('wait', { timeoutSeconds: 0, after: past }, caller)).toMatchObject({
       code: 'invalid',
     });
-    expect(await keptReads(M1)).toEqual(kept);
+    expect(keptReads(M1)).toEqual(kept);
     const later = await exchange(caller, 'Later', M1);
     expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([later]);
     expect(onM1).not.toBe(later);

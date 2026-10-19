@@ -279,3 +279,22 @@ export class Store {
 function closed(): Error {
   return new Error('The core’s database is closed.');
 }
+
+/**
+ * What the stores kept in the database (canvas memory, the run journal) read and write it through:
+ * the open store, or, when it couldn't be opened, one that refuses (`unopened`).
+ */
+export type Database = Pick<Store, 'prepare' | 'write'>;
+
+/**
+ * The database of a core whose store couldn't be opened: every read and write fails, saying `why`,
+ * so the core journals nothing, and sends nothing whose record must be on disk first.
+ */
+export function unopened(why: string): Database {
+  return {
+    prepare: () => {
+      throw new Error(why);
+    },
+    write: () => Promise.reject(new Error(why)),
+  };
+}

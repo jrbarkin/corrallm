@@ -28,19 +28,19 @@ import { ReadPositions } from './delivery/reads';
 
 /*
  * The canvases the core runs, each with its engine (src/shared/engine/engine.ts): the run and the
- * sessions it sends to, the sessions run by the core's own SessionManager, in the same process;
- * and its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts).
- * A canvas opens by its id, from what the profile keeps of it: its file and its project folder,
- * which the user picked in the app (canvases.json), and its run as the journal last kept it
- * (runs/<id>/record.json), restored paused. A draft, which has no file, never opens, nor does a
- * canvas whose file holds another canvas. One opened held delivers nothing until `deliver()`, so a
- * host that may still refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is
- * journaled again: at most one write per COALESCE_MS, and one before every message the run sends,
- * so a sent message's record is always on disk first; its messages are journaled beside its run,
- * each one delivering forced to disk before it is sent, and so is where each party's `wait` has
- * read to in them, before the `wait` that moved it returns. Whoever watches hears each message
- * added to a canvas's store, closing it included, and each thing newly waiting for an answer on it
- * (`corrallm serve` logs them).
+ * sessions it sends to, the sessions run by the core's own SessionManager, in the same process; and
+ * its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts). A
+ * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
+ * the user picked in the app (canvas memory), and its run as the journal last kept it, restored
+ * paused. A draft, which has no file, never opens, nor does a canvas whose file holds another
+ * canvas. One opened held delivers nothing until `deliver()`, so a host that may still refuse to
+ * start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
+ * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
+ * always on disk first; its messages are journaled beside its run, each one delivering forced to
+ * disk before it is sent, and so is where each party's `wait` has read to in them, before the
+ * `wait` that moved it returns. Whoever watches hears each message added to a canvas's store,
+ * closing it included, and each thing newly waiting for an answer on it (`corrallm serve` logs
+ * them).
  */
 
 const COALESCE_MS = 250;
@@ -78,7 +78,10 @@ export interface OpenCanvas {
   reads: ReadPositions;
   /** Forces the run as it is now to disk, replacing its coalesced write. */
   journal(): Promise<void>;
-  /** What opening it found to say: its run record, or its message log, set aside. */
+  /**
+   * What opening it found to say: its run discarded, its message log set aside, the database it is
+   * kept in restored.
+   */
   warnings: readonly string[];
 }
 
@@ -282,7 +285,7 @@ export class Engines {
     const { projects, journal } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
-    // Only a canvas saved in the file canvases.json names for it, while that file still holds it:
+    // Only a canvas saved in the file canvas memory names for it, while that file still holds it:
     // never a draft, though the journal keeps one's run.
     if (context.savedText === undefined) throw new Error(NO_FILE);
     if (canvasIdOf(context.savedText) !== canvas) throw new Error(ANOTHER);

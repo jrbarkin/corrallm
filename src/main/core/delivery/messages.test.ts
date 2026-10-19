@@ -9,24 +9,30 @@ import type { CanvasId } from '../../../shared/canvas';
 import type { Message } from '../../../shared/model/messages';
 import { CanvasMemory } from '../../memory';
 import { RunJournal } from '../../run-journal';
+import type { Store } from '../store/store';
+import { openTestStore } from '../store/test-store';
 import { MessageStore } from './messages';
 import type { MessageLog } from './messages';
 
 const CANVAS = '0b8c6f1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e' as CanvasId;
 
 let profile: string;
+let database: Store;
 let journal: RunJournal;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-messages-'));
+  database = await openTestStore(profile);
   journal = new RunJournal(path.join(profile, 'runs'), {
-    memory: new CanvasMemory(path.join(profile, 'canvases.json')),
+    store: database,
+    memory: new CanvasMemory(database),
     projectOf: () => undefined,
   });
 });
 
 afterEach(async () => {
   await journal.flush();
+  await database.close();
   await rm(profile, { recursive: true, force: true });
 });
 

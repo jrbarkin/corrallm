@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -6,12 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
-import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
+import type { Connection } from './core/store/sqlite';
+import { unopened } from './core/store/store';
+import type { Database, Store } from './core/store/store';
+import { onDisk, openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
-import * as wholeFile from './whole-file';
+
+/*
+ * Each canvas's run, journaled in the profile's database (Core Database §5): its row in `run` (the
+ * run's state, and the workflow it runs, written only when it changed), where each party's `wait`
+ * has read to in its messages (`read_position`), and the canvas the profile had open last
+ * (`open_canvas`). A window saves with its canvas's generation token.
+ */
 
 const checkpoint: RunCheckpoint = {
   version: 2,
@@ -20,49 +29,68 @@ const checkpoint: RunCheckpoint = {
   messages: '[]',
   updatedAt: 123,
 };
-const SESSION = '11111111-1111-4111-8111-111111111111';
-const THREAD = '22222222-2222-4222-8222-222222222222';
 
-let directory: string;
+let profile: string;
+let store: Store;
 let memory: CanvasMemory;
-function journal() {
-  return new RunJournal(path.join(directory, 'runs'), {
+/** A second connection, which only reads: what is on disk. */
+let reader: Connection;
+
+function journal(database: Database = store, said?: readonly string[]): RunJournal {
+  return new RunJournal(path.join(profile, 'runs'), {
+    store: database,
     memory,
     projectOf: () => '/work/project',
+    ...(said === undefined ? {} : { said }),
   });
 }
 /** A canvas kept in file `name`, which holds `text`. */
 async function named(name: string, text = '{"saved":true}'): Promise<[CanvasId, string]> {
   const canvas = newCanvasId();
-  const file = path.join(directory, name);
+  const file = path.join(profile, name);
   await writeFile(file, text);
   await memory.setFile(canvas, mintTrustedPath(file));
   return [canvas, file];
 }
-const record = (canvas: CanvasId) => path.join(directory, 'runs', canvas, 'record.json');
+/** The canvas's run, as on disk. */
+const ran = (canvas: CanvasId) =>
+  reader.prepare('SELECT state, workflow, updated_at FROM run WHERE canvas_id = ?').get(canvas);
+/** Where each party has read to in the canvas's messages, as on disk. */
+const readTo = (canvas: CanvasId) =>
+  reader
+    .prepare('SELECT party, seq FROM read_position WHERE canvas_id = ? ORDER BY party')
+    .all(canvas);
+/** Closes the store and opens it again, as the core does when it starts again. */
+async function reopen(): Promise<void> {
+  await store.close();
+  store = await openTestStore(profile);
+  memory = new CanvasMemory(store);
+}
+
 beforeEach(async () => {
-  directory = await mkdtemp(path.join(tmpdir(), 'corrallm-runs-'));
-  memory = new CanvasMemory(path.join(directory, 'memory.json'));
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-runs-'));
+  store = await openTestStore(profile);
+  memory = new CanvasMemory(store);
+  reader = onDisk(profile);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  reader.close();
   await memory.flush();
-  await rm(directory, { recursive: true, force: true });
+  await store.close();
+  await rm(profile, { recursive: true, force: true });
 });
 
 describe('RunJournal', () => {
-  it('persists an unsaved draft under its id, with its conversations, across journal instances', async () => {
+  it('persists an unsaved draft under its id, across journals and restarts', async () => {
     const first = journal();
     const canvas = await first.last();
     const context = await first.get(canvas);
     expect(context).toMatchObject({ id: canvas, checkpoint: null, name: null });
-    await memory.update(canvas, () => ({
-      project: mintTrustedPath('/work/project'),
-      conversations: { 'claude-code': { a: { id: SESSION } } },
-    }));
     await first.save(canvas, context.token, checkpoint);
     expect(await first.get(canvas)).toMatchObject({ checkpoint, token: context.token });
 
+    await reopen();
     const second = journal();
     expect(await second.last()).toBe(canvas);
     expect(await second.get(canvas)).toMatchObject({
@@ -71,30 +99,34 @@ describe('RunJournal', () => {
       name: null,
       project: { path: '/work/project' },
     });
-    expect((await memory.get(canvas)).conversations['claude-code']?.a?.id).toBe(SESSION);
-    expect(
-      (await readdir(path.join(directory, 'runs', canvas))).some((name) =>
-        name.endsWith('.partial'),
-      ),
-    ).toBe(false);
   });
 
-  it('keeps one record per canvas, naming its file, and the canvas the profile had last', async () => {
-    const [canvas, file] = await named('team.corral');
+  it('has a canvas’s run on disk once its save resolves, one row a canvas, and the canvas the profile had last', async () => {
+    const [canvas] = await named('team.corral');
     const runs = journal();
     await runs.opened(canvas);
-    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
-    expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toEqual({
-      version: 2,
-      id: canvas,
-      file,
-      checkpoint,
-      remembered: { conversations: {} },
+    let seen: unknown;
+    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint).then(() => {
+      seen = ran(canvas);
     });
-    expect(JSON.parse(await readFile(path.join(directory, 'runs', 'last.json'), 'utf8'))).toEqual({
-      version: 2,
-      canvas,
+    expect(seen).toEqual({
+      state: '{"version":2,"state":{"paused":true},"messages":[]}',
+      workflow: '{"nodes":[]}',
+      updated_at: 123,
     });
+    await runs.save(canvas, (await runs.get(canvas)).token, { ...checkpoint, updatedAt: 456 });
+    expect(reader.prepare('SELECT count(*) AS runs FROM run').get()).toEqual({ runs: 1 });
+    expect(reader.prepare('SELECT canvas_id FROM open_canvas').all()).toEqual([
+      { canvas_id: canvas },
+    ]);
+
+    // Another canvas opened is the one the profile had last now, and the only one.
+    const [other] = await named('other.corral');
+    await runs.opened(other);
+    expect(reader.prepare('SELECT canvas_id FROM open_canvas').all()).toEqual([
+      { canvas_id: other },
+    ]);
+    expect(await journal().last()).toBe(other);
   });
 
   it('restores a named canvas and its saved text, keeping checkpoint edits separate', async () => {
@@ -102,6 +134,7 @@ describe('RunJournal', () => {
     const runs = journal();
     await runs.opened(canvas);
     await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
+    await reopen();
     const next = journal();
     expect(await next.last()).toBe(canvas);
     expect(await next.get(canvas)).toMatchObject({
@@ -111,77 +144,69 @@ describe('RunJournal', () => {
     });
   });
 
-  it('reads a record with none of the fields later versions add', async () => {
-    const canvas = newCanvasId();
-    await mkdir(path.dirname(record(canvas)), { recursive: true });
-    await writeFile(record(canvas), JSON.stringify({ version: 2, id: canvas, checkpoint }));
-    expect(await journal().get(canvas)).toMatchObject({ id: canvas, checkpoint, name: null });
-  });
-
-  it.each([
-    {
-      change: 'the project changed',
-      current: { project: mintTrustedPath('/work/other'), conversations: {} },
-    },
-    {
-      change: 'a conversation was explicitly cleared',
-      current: {
-        project: mintTrustedPath('/work/project'),
-        conversations: { codex: { b: { id: THREAD } } },
-      },
-    },
-  ])('does not resurrect backed-up conversations after $change', async ({ current }) => {
+  it('writes the workflow only when it changed, and the run’s state every time', async () => {
+    const [canvas] = await named('team.corral');
+    store.exec(`CREATE TABLE written (workflow TEXT NOT NULL) STRICT;
+      CREATE TRIGGER workflow_made AFTER INSERT ON run
+        BEGIN INSERT INTO written VALUES (NEW.workflow); END;
+      CREATE TRIGGER workflow_written AFTER UPDATE OF workflow ON run
+        BEGIN INSERT INTO written VALUES (NEW.workflow); END;`);
+    const written = () => reader.prepare('SELECT workflow FROM written').all();
     const runs = journal();
-    const canvas = await runs.last();
     const { token } = await runs.get(canvas);
-    await memory.update(canvas, () => ({
-      project: mintTrustedPath('/work/project'),
-      conversations: {
-        'claude-code': { a: { id: SESSION, role: 'a'.repeat(64) } },
-        codex: { a: { id: SESSION, role: 'none' } },
-      },
-    }));
     await runs.save(canvas, token, checkpoint);
+    await runs.save(canvas, token, { ...checkpoint, state: '{"paused":false}', updatedAt: 456 });
+    expect(written()).toEqual([{ workflow: '{"nodes":[]}' }]);
+    expect(ran(canvas)).toMatchObject({ state: expect.stringContaining('false') as string });
 
-    // Native metadata can change without the queue checkpoint changing (and being written again).
-    await memory.update(canvas, () => current);
-    memory = new CanvasMemory(path.join(directory, 'memory.json'));
-    await journal().last();
-    expect(await memory.get(canvas)).toEqual(current);
-  });
+    const edited = '{"nodes":[{"id":"a"}]}';
+    await runs.save(canvas, token, { ...checkpoint, workflow: edited, updatedAt: 789 });
+    await runs.save(canvas, token, { ...checkpoint, workflow: edited, updatedAt: 790 });
+    expect(written()).toEqual([{ workflow: '{"nodes":[]}' }, { workflow: edited }]);
 
-  it('recovers a canvas’s file, folder and conversations when canvas memory lost them', async () => {
-    const [canvas, file] = await named('team.corral');
-    const runs = journal();
-    await runs.opened(canvas);
-    const { token } = await runs.get(canvas);
-    const remembered = {
-      file: mintTrustedPath(file),
-      project: mintTrustedPath('/work/project'),
-      conversations: {
-        'claude-code': { a: { id: SESSION, role: 'a'.repeat(64) } },
-        codex: { b: { id: THREAD, role: 'none' } },
-      },
-    };
-    await memory.update(canvas, () => remembered);
-    await runs.save(canvas, token, checkpoint);
-    await memory.flush();
-    await rm(path.join(directory, 'memory.json'));
-    memory = new CanvasMemory(path.join(directory, 'memory.json'));
-
+    // Read back after a restart, the workflow it has is known: written again only once changed.
+    await reopen();
     const again = journal();
-    expect(await again.last()).toBe(canvas);
-    expect(await memory.get(canvas)).toEqual(remembered);
-    expect(await again.get(canvas)).toMatchObject({ name: 'team.corral', checkpoint });
+    const context = await again.get(canvas);
+    await again.save(canvas, context.token, { ...checkpoint, workflow: edited, updatedAt: 800 });
+    expect(written()).toHaveLength(2);
+    expect(await again.get(canvas)).toMatchObject({
+      checkpoint: { workflow: edited, updatedAt: 800 },
+    });
   });
 
-  it('keeps the canvas’s run and token through Save As: its record names the new file', async () => {
+  it('writes the workflow again after a save of it failed, or its run was forgotten', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    await runs.save(canvas, token, checkpoint);
+    const edited = { ...checkpoint, workflow: '{"nodes":[{"id":"a"}]}', updatedAt: 456 };
+    store.exec(`CREATE TRIGGER refuse BEFORE UPDATE ON run
+      BEGIN SELECT RAISE(ABORT, 'The disk is full'); END`);
+    await expect(runs.save(canvas, token, edited)).rejects.toThrow('The disk is full');
+    store.exec('DROP TRIGGER refuse');
+    await runs.save(canvas, token, { ...edited, updatedAt: 457 });
+    expect(ran(canvas)).toMatchObject({ workflow: edited.workflow, updated_at: 457 });
+
+    // Forgotten with its canvas, as canvas memory forgets the canvases used least recently: its run
+    // is written whole again, and its canvas kept again.
+    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await runs.save(canvas, token, { ...edited, updatedAt: 458 });
+    expect(ran(canvas)).toMatchObject({ workflow: edited.workflow, updated_at: 458 });
+    // Journaled as none, then again: written whole.
+    await runs.save(canvas, token, null);
+    expect(ran(canvas)).toBeUndefined();
+    await runs.save(canvas, token, edited);
+    expect(ran(canvas)).toMatchObject({ workflow: edited.workflow, updated_at: 456 });
+  });
+
+  it('keeps the canvas’s run and token through Save As', async () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     await runs.opened(canvas);
     const before = await runs.get(canvas);
     await runs.save(canvas, before.token, checkpoint);
-    const target = path.join(directory, 'team v2.corral');
+    const target = path.join(profile, 'team v2.corral');
     await writeFile(target, '{"copy":true}');
     // canvas:save has written the new file, and memory has it as the canvas's.
     await memory.setFile(canvas, mintTrustedPath(target));
@@ -193,95 +218,42 @@ describe('RunJournal', () => {
       name: 'team v2.corral',
       savedText: '{"copy":true}',
     });
-    expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({ file: target });
   });
 
-  it('keeps each party’s wait read position in the record, whoever journals the run next', async () => {
+  it('keeps each party’s wait read position, whoever journals the run next, never moving it back', async () => {
     const [canvas] = await named('team.corral');
     const runs = journal();
     const { token } = await runs.get(canvas);
     expect(await runs.reads(canvas)).toEqual({});
-    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 7 });
-    expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({
-      reads: { 'outside:orchestrator': 7 },
-    });
+    let seen: unknown;
+    await runs
+      .save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 7 })
+      .then(() => {
+        seen = readTo(canvas);
+      });
+    // On disk once the save that moved it resolves.
+    expect(seen).toEqual([{ party: 'outside:orchestrator', seq: 7 }]);
 
-    // The app journals the run with no read positions of its own: they are kept as they were.
+    // The app journals the run with no read positions of its own: they are kept as they were, and
+    // so they are when it journals none.
     const app = journal();
     const context = await app.get(canvas);
     await app.save(canvas, context.token, { ...checkpoint, updatedAt: 456 });
     await app.saved(canvas);
+    await app.save(canvas, context.token, null);
     expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 7 });
 
-    // Moved on by the next save that moves one, and never back.
-    await runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 2 });
-    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 9 });
-    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 8 });
+    // Moved on by the next save that moves one, and never back, saves at once included.
+    await Promise.all([
+      runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 2 }),
+      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 9 }),
+      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 8 }),
+    ]);
+    await reopen();
     expect(await journal().reads(canvas)).toEqual({
       'outside:orchestrator': 9,
       'outside:other': 2,
     });
-  });
-
-  it('forces a save that moves a read position to disk, and keeps what saves at once moved', async () => {
-    const [canvas] = await named('team.corral');
-    const runs = journal();
-    const { token } = await runs.get(canvas);
-    const writes = vi.spyOn(wholeFile, 'writeWhole');
-    // Two parties' positions moved at once, and a save of the run between them.
-    await Promise.all([
-      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 }),
-      runs.save(canvas, token, checkpoint),
-      runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 5 }),
-    ]);
-    const records = writes.mock.calls.filter(([file]) => file === record(canvas));
-    expect(records.map(([, , options]) => options?.durable === true)).toEqual([true, true, true]);
-    expect(await journal().reads(canvas)).toEqual({
-      'outside:orchestrator': 3,
-      'outside:other': 5,
-    });
-  });
-
-  it('forces every write of a record to disk, so a crash loses neither a send’s record nor a read position', async () => {
-    const [canvas] = await named('team.corral');
-    const runs = journal();
-    const { token } = await runs.get(canvas);
-    const writes = vi.spyOn(wholeFile, 'writeWhole');
-    const forced = () =>
-      writes.mock.calls
-        .filter(([file]) => file === record(canvas))
-        .map(([, , options]) => options?.durable === true);
-    // No party has waited on it: the save before a send is forced all the same (Core Server §7.7).
-    await runs.save(canvas, token, checkpoint);
-    expect(forced()).toEqual([true]);
-
-    // A save that moves a read position, and those that move none (the engine's every 250 ms, a
-    // canvas saved, the app's), each replace the record whole: each is forced, so a crash leaves
-    // either record.
-    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 });
-    await runs.save(canvas, token, { ...checkpoint, updatedAt: 456 });
-    await runs.saved(canvas);
-    const app = journal();
-    const context = await app.get(canvas);
-    await app.save(canvas, context.token, { ...checkpoint, updatedAt: 789 });
-    expect(forced()).toEqual([true, true, true, true, true]);
-    expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 3 });
-  });
-
-  it('reads no read position that isn’t a party’s place in the store', async () => {
-    const [canvas] = await named('team.corral');
-    const runs = journal();
-    const { token } = await runs.get(canvas);
-    await runs.save(canvas, token, checkpoint);
-    const kept = JSON.parse(await readFile(record(canvas), 'utf8')) as Record<string, unknown>;
-    await writeFile(
-      record(canvas),
-      JSON.stringify({
-        ...kept,
-        reads: { 'outside:ok': 3, nobody: 4, 'outside:neg': -1, 'outside:half': 1.5 },
-      }),
-    );
-    expect(await journal().reads(canvas)).toEqual({ 'outside:ok': 3 });
   });
 
   it('refuses a save of the canvas a window showed before it opened or began another', async () => {
@@ -335,128 +307,86 @@ describe('RunJournal', () => {
     expect((await runs.get(canvas)).name).toBeNull();
   });
 
-  it('reports a failed write without blocking reads or the next save', async () => {
+  it('fails a save that couldn’t be written, keeping the run before it, and saves the next', async () => {
     const runs = journal();
     const canvas = await runs.last();
     const { token } = await runs.get(canvas);
     await runs.save(canvas, token, checkpoint);
-    const writing = Promise.withResolvers<undefined>();
-    const release = Promise.withResolvers<undefined>();
-    vi.spyOn(wholeFile, 'writeWhole').mockImplementationOnce(async () => {
-      writing.resolve(undefined);
-      await release.promise;
-      throw new Error('Disk full');
-    });
-    const failed = runs
-      .save(canvas, token, { ...checkpoint, updatedAt: 456 })
-      .catch((error: unknown) => error);
-    await writing.promise;
-    const context = runs.get(canvas);
-    release.resolve(undefined);
-    expect(await failed).toEqual(new Error('Disk full'));
-    expect(await context).toMatchObject({ token, checkpoint });
+    store.exec(`CREATE TRIGGER refuse BEFORE UPDATE ON run
+      BEGIN SELECT RAISE(ABORT, 'The disk is full'); END`);
+    await expect(runs.save(canvas, token, { ...checkpoint, updatedAt: 456 })).rejects.toThrow(
+      'The disk is full',
+    );
+    await expect(runs.flush()).resolves.toBeUndefined();
+    expect(await runs.get(canvas)).toMatchObject({ token, checkpoint });
+    store.exec('DROP TRIGGER refuse');
     const next = { ...checkpoint, updatedAt: 789 };
     await runs.save(canvas, token, next);
     expect((await runs.get(canvas)).checkpoint).toEqual(next);
   });
 
-  it('surfaces write failure and allows a later retry', async () => {
-    const runs = journal();
-    const canvas = await runs.last();
-    const { token } = await runs.get(canvas);
-    await rm(path.join(directory, 'runs'), { recursive: true });
-    await writeFile(path.join(directory, 'runs'), 'blocks directory');
-    await expect(runs.save(canvas, token, checkpoint)).rejects.toThrow();
-    await expect(runs.flush()).resolves.toBeUndefined();
-    await rm(path.join(directory, 'runs'));
-    await runs.save(canvas, token, checkpoint);
-    expect((await runs.get(canvas)).checkpoint).toEqual(checkpoint);
-    expect(
-      JSON.parse(await readFile(path.join(directory, 'runs', 'last.json'), 'utf8')),
-    ).toHaveProperty('version', 2);
-  });
-
   it.each([
-    { reason: 'malformed JSON', text: '{unreadable journal' },
-    { reason: 'version 1', text: JSON.stringify({ version: 1, checkpoint }) },
-    {
-      reason: 'another canvas’s id',
-      text: JSON.stringify({ version: 2, id: newCanvasId(), checkpoint }),
+    { reason: 'version 1', state: '{"version":1,"state":{},"messages":[]}' },
+    { reason: 'its state not JSON', state: '{"version":2,"state":"invalid","messages":[]}' },
+    { reason: 'no messages', state: '{"version":2,"state":{}}' },
+    { reason: 'its state not an object', state: '[2]' },
+    { reason: 'its workflow not JSON', workflow: 'not a workflow' },
+  ])(
+    'discards a run with $reason, saying so, and opens without progress',
+    async ({ state, workflow }) => {
+      const [canvas] = await named('team.corral');
+      const runs = journal();
+      await runs.opened(canvas);
+      await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
+      store
+        .prepare('UPDATE run SET state = coalesce(?, state), workflow = coalesce(?, workflow)')
+        .run(state ?? null, workflow ?? null);
+      const next = journal();
+      const context = await next.get(canvas);
+      expect(context).toMatchObject({
+        checkpoint: null,
+        name: 'team.corral',
+        savedText: '{"saved":true}',
+      });
+      expect(context.warning).toMatch(
+        /^The run progress could not be restored, so it was discarded \(.+\)\.$/,
+      );
+      expect(ran(canvas)).toBeUndefined();
+      expect((await next.get(canvas)).checkpoint).toBeNull();
+      await next.save(canvas, context.token, checkpoint);
+      expect((await next.get(canvas)).checkpoint).toEqual(checkpoint);
     },
-    {
-      reason: 'an invalid checkpoint',
-      text: (canvas: CanvasId) =>
-        JSON.stringify({ version: 2, id: canvas, checkpoint: { ...checkpoint, state: 'invalid' } }),
-    },
-    { reason: 'an oversized record', text: 'too large', size: MAX_RUN_BYTES * 2 + 1 },
-  ])('sets aside a record with $reason and opens without progress', async ({ text, size }) => {
-    const [canvas] = await named('team.corral');
-    const runs = journal();
-    await runs.opened(canvas);
-    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
-    const written = typeof text === 'string' ? text : text(canvas);
-    await writeFile(record(canvas), written);
-    if (size !== undefined) await truncate(record(canvas), size);
-    const next = journal();
-    const context = await next.get(canvas);
-    expect(context).toMatchObject({
-      checkpoint: null,
-      name: 'team.corral',
-      savedText: '{"saved":true}',
-    });
-    const folder = path.dirname(record(canvas));
-    const preserved = (await readdir(folder)).filter((name) => name.includes('.rejected-'));
-    expect(preserved).toHaveLength(1);
-    const rejected = path.join(folder, preserved[0] ?? '');
-    expect(context.warning).toMatch(/progress.*not.*restored/i);
-    expect(context.warning).toContain(rejected);
-    expect((await stat(rejected)).size).toBe(size ?? Buffer.byteLength(written));
-    await expect(stat(record(canvas))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await next.get(canvas)).checkpoint).toBeNull();
-    await next.save(canvas, context.token, checkpoint);
-    expect((await stat(rejected)).size).toBe(size ?? Buffer.byteLength(written));
-  });
+  );
 
-  it('leaves a record it could not read for another reason where it is, and says why', async () => {
-    // Only a record that can't be parsed or checked is set aside: a read that fails (here, the
-    // record's path is a folder) may work next time.
-    const [canvas] = await named('team.corral');
-    const runs = journal();
-    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
-    await rm(record(canvas));
-    await mkdir(record(canvas));
-    await expect(journal().get(canvas)).rejects.toMatchObject({ code: 'EISDIR' });
-    const folder = path.dirname(record(canvas));
-    expect((await readdir(folder)).filter((name) => name.includes('.rejected-'))).toEqual([]);
-    expect((await stat(record(canvas))).isDirectory()).toBe(true);
-  });
-
-  it('reads a version 1 last canvas as none: a new draft', async () => {
-    const folder = path.join(directory, 'runs');
-    await mkdir(folder, { recursive: true });
-    await writeFile(
-      path.join(folder, 'last.json'),
-      JSON.stringify({ version: 1, identity: '/work/team.corral', canvas: '/work/team.corral' }),
+  it('says what the store said as it opened with the first canvas restored, once', async () => {
+    const said = [
+      'The core’s database was damaged (it isn’t corrallm’s), and was moved to /p/core.rejected.db.',
+      'It starts empty.',
+    ];
+    const runs = journal(store, said);
+    const canvas = await runs.last();
+    expect((await runs.get(canvas)).warning).toBe(said.join(' '));
+    const [other] = await named('team.corral');
+    await runs.opened(other, 'team.corral is a copy of a canvas saved as other.corral.');
+    expect((await runs.get(other)).warning).toBe(
+      'team.corral is a copy of a canvas saved as other.corral.',
     );
-    const canvas = await journal().last();
-    expect((await journal().get(canvas)).name).toBeNull();
-    expect(JSON.parse(await readFile(path.join(folder, 'last.json'), 'utf8'))).toEqual({
-      version: 2,
-      canvas,
-    });
   });
 
-  it('preserves malformed last-canvas metadata before New replaces it', async () => {
-    const folder = path.join(directory, 'runs');
-    await mkdir(folder, { recursive: true });
-    const rejected = '{malformed last canvas';
-    await writeFile(path.join(folder, 'last.json'), rejected);
-    const runs = journal();
-    await expect(runs.last()).rejects.toThrow();
-    const canvas = await runs.draft();
-    expect((await runs.get(canvas)).checkpoint).toBeNull();
-    const preserved = (await readdir(folder)).filter((name) => name.startsWith('last.rejected-'));
-    expect(preserved).toHaveLength(1);
-    expect(await readFile(path.join(folder, preserved[0] ?? ''), 'utf8')).toBe(rejected);
+  it('fails every read and write, saying why, when the database couldn’t be opened', async () => {
+    const why = 'The core’s database could not be opened (disk I/O error).';
+    const runs = journal(unopened(why));
+    const canvas = newCanvasId();
+    const asked = await Promise.allSettled([
+      runs.last(),
+      runs.get(canvas),
+      runs.reads(canvas),
+      runs.draft(),
+      runs.opened(canvas),
+      runs.saved(canvas),
+    ]);
+    for (const result of asked) {
+      expect(result).toMatchObject({ status: 'rejected', reason: { message: why } });
+    }
   });
 });

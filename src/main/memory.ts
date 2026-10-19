@@ -6,8 +6,8 @@ import { isCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
+import type { Database } from './core/store/store';
 import { isSessionId } from './sessions/id';
-import { readWhole, writeWhole } from './whole-file';
 
 /** A native conversation an agent runs in a CLI: its id, and the role it launched with. */
 export interface Conversation {
@@ -20,7 +20,7 @@ export interface Conversation {
 }
 
 /**
- * What main remembers of a canvas: the file it was opened from or saved to (none for a draft),
+ * What the core remembers of a canvas: the file it was opened from or saved to (none for a draft),
  * the folder its agents work in, and its agents' conversations, by adapter and then by agent
  * (each CLI's: the one every connection of it resumes). What its agents are set to run with (their
  * models, efforts, modes and role text) is in the canvas's file itself.
@@ -39,60 +39,51 @@ export function roleFingerprint(role: string | undefined): string {
 const NOTHING: Remembered = { conversations: {} };
 /** How many canvases it remembers: the ones used most recently. */
 const LIMIT = 200;
-const VERSION = 2;
 
 /**
- * What main remembers of each canvas between runs, by the canvas's id, in a JSON file in the app's
- * user data. The canvas file itself only holds what the canvas means (src/shared/model/file.ts),
- * so it can be shared: where it is and where it runs on this machine is kept here.
+ * What the core remembers of each canvas between runs, by the canvas's id, in the profile's
+ * database (core/store/): its row in `canvas` (its file and project folder) and its agents' rows in
+ * `conversation`. The canvas file itself only holds what the canvas means
+ * (src/shared/model/file.ts), so it can be shared: where it is and where it runs on this machine is
+ * kept here.
  *
- *   { "version": 2, "canvases": { "<canvas id>": { "file"?, "project"?,
- *       "conversations": { "<adapter>": { "<agent>": { "id", "role"? } } } } } }
- *
- * A file belongs to one canvas at most. Updates are applied one at a time, in order, and written
- * whole (beside it, then moved over it). The paths it reads back are trusted: it wrote them, from
- * the app's dialogs. A file of another version, or one that isn't JSON, reads as empty and is set
- * aside (readWhole); one that can't be read fails what needed it, and is read again next time.
+ * A file belongs to one canvas at most. Changes go through the store's write lane, in order, each
+ * reading what those before it left, and are on disk once they resolve; one that fails changes
+ * nothing, is said, and fails `flush` until another is written. It keeps the LIMIT canvases used
+ * most recently (`used_at`, which each change moves past every other's), forgetting the others with
+ * everything the database keeps of them. The paths it reads back are trusted: it wrote them, from
+ * the app's dialogs. What isn't right (a path that isn't absolute, a conversation whose id isn't a
+ * session's) is left out.
  */
 export class CanvasMemory {
-  readonly #file: string;
+  readonly #store: Database;
   readonly #limit: number;
-  #canvases: Promise<Map<CanvasId, Remembered>> | undefined;
-  #writing: Promise<void> = Promise.resolve();
+  /** Every change asked for so far, written or failed. */
+  #writing: Promise<unknown> = Promise.resolve();
   #writeError: Error | undefined;
 
-  constructor(file: string, limit = LIMIT) {
-    this.#file = file;
+  constructor(store: Database, limit = LIMIT) {
+    this.#store = store;
     this.#limit = limit;
   }
 
-  /** What it remembers of a canvas, with every update asked for so far. */
+  /** What it remembers of a canvas, with every change asked for so far. */
   async get(canvas: CanvasId): Promise<Remembered> {
     await this.#writing;
-    return (await this.#load()).get(canvas) ?? NOTHING;
+    return this.#read(canvas);
   }
 
   /** The canvas whose file `file` is, if any. */
   async canvasWithFile(file: string): Promise<CanvasId | undefined> {
     await this.#writing;
-    for (const [canvas, remembered] of await this.#load()) {
-      if (remembered.file === file) return canvas;
-    }
-    return undefined;
+    const id = this.#store.prepare('SELECT id FROM canvas WHERE file = ?').get(file)?.id;
+    return isCanvasId(id) ? id : undefined;
   }
 
-  /**
-   * Changes what it remembers of `canvas`, which becomes the canvas used most recently.
-   * `known` distinguishes an intentionally empty record from one absent from memory.
-   */
-  update(
-    canvas: CanvasId,
-    change: (remembered: Remembered, known: boolean) => Remembered,
-  ): Promise<void> {
-    return this.#change((canvases) => {
-      const next = change(canvases.get(canvas) ?? NOTHING, canvases.has(canvas));
-      canvases.delete(canvas);
-      canvases.set(canvas, next);
+  /** Changes what it remembers of `canvas`, which becomes the canvas used most recently. */
+  update(canvas: CanvasId, change: (remembered: Remembered) => Remembered): Promise<void> {
+    return this.#change(() => {
+      this.#keep(canvas, change(this.#read(canvas)));
     });
   }
 
@@ -101,57 +92,138 @@ export class CanvasMemory {
    * that had that file has it no more.
    */
   setFile(canvas: CanvasId, file: TrustedPath | undefined): Promise<void> {
-    return this.#change((canvases) => {
-      for (const [other, remembered] of canvases) {
-        if (other !== canvas && file !== undefined && remembered.file === file) {
-          canvases.set(other, withFile(remembered, undefined));
-        }
+    return this.#change(() => {
+      if (file !== undefined) {
+        this.#store
+          .prepare('UPDATE canvas SET file = NULL WHERE file = ? AND id <> ?')
+          .run(file, canvas);
       }
-      const next = withFile(canvases.get(canvas) ?? NOTHING, file);
-      canvases.delete(canvas);
-      canvases.set(canvas, next);
+      this.#keep(canvas, withFile(this.#read(canvas), file));
     });
   }
 
-  /** Resolves once every update so far is written; rejects a still-unrecovered write failure. */
+  /**
+   * Within a write: gives `canvas` a row if it has none, as the canvas used most recently, for what
+   * else the database keeps of it (a draft's run) to refer to. One that has a row keeps it as it is.
+   */
+  ensure(canvas: CanvasId): void {
+    const made = this.#store
+      .prepare('INSERT INTO canvas (id, used_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING')
+      .run(canvas, this.#nextUse());
+    if (made.changes > 0) this.#forgetOldest();
+  }
+
+  /** Resolves once every change so far is written; rejects a still-unrecovered write failure. */
   async flush(): Promise<void> {
     await this.#writing;
     if (this.#writeError !== undefined) throw this.#writeError;
   }
 
-  #change(apply: (canvases: Map<CanvasId, Remembered>) => void): Promise<void> {
-    const run = async () => {
-      const canvases = await this.#load();
-      apply(canvases);
-      for (const oldest of canvases.keys()) {
-        if (canvases.size <= this.#limit) break;
-        canvases.delete(oldest);
-      }
-      await this.#write(canvases);
-      this.#writeError = undefined;
+  #change(apply: () => void): Promise<void> {
+    const written = this.#store
+      .write(() => {
+        apply();
+        this.#forgetOldest();
+      })
+      .then(
+        () => {
+          this.#writeError = undefined;
+        },
+        // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs.
+        (error: unknown) => {
+          this.#writeError = error instanceof Error ? error : new Error(String(error));
+          console.error('Could not remember the canvas:', error);
+        },
+      );
+    this.#writing = Promise.all([this.#writing, written]);
+    return written;
+  }
+
+  #read(canvas: CanvasId): Remembered {
+    const row = this.#store.prepare('SELECT file, project FROM canvas WHERE id = ?').get(canvas);
+    if (row === undefined) return NOTHING;
+    const byAdapter = new Map<string, [agent: string, conversation: Conversation][]>();
+    const rows = this.#store
+      .prepare(
+        `SELECT adapter, agent_id, native_id, role_fingerprint FROM conversation
+         WHERE canvas_id = ? ORDER BY adapter, agent_id`,
+      )
+      .all(canvas);
+    for (const { adapter, agent_id: agent, native_id: id, role_fingerprint: role } of rows) {
+      if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
+      if (typeof agent !== 'string' || !isSessionId(id)) continue;
+      const agents = byAdapter.get(adapter) ?? [];
+      agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
+      byAdapter.set(adapter, agents);
+    }
+    const { file, project } = row;
+    return {
+      ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
+      ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
+      conversations: Object.fromEntries(
+        [...byAdapter].map(([adapter, agents]) => [adapter, Object.fromEntries(agents)]),
+      ),
     };
-    // Ordinary updates remain nonfatal, but shutdown must not lose native resume IDs.
-    this.#writing = this.#writing.then(run).catch((error: unknown) => {
-      this.#writeError = error instanceof Error ? error : new Error(String(error));
-      console.error('Could not remember the canvas:', error);
-    });
-    return this.#writing;
   }
 
-  #load(): Promise<Map<CanvasId, Remembered>> {
-    this.#canvases ??= readWhole(this.#file, VERSION).then(parse, (error: unknown) => {
-      // Never read as empty, nor written over: read again next time.
-      this.#canvases = undefined;
-      throw error;
-    });
-    return this.#canvases;
-  }
-
-  async #write(canvases: Map<CanvasId, Remembered>): Promise<void> {
-    await writeWhole(
-      this.#file,
-      `${JSON.stringify({ version: VERSION, canvases: Object.fromEntries(canvases) }, null, 2)}\n`,
+  /**
+   * Writes what is remembered of `canvas`, as the canvas used most recently: its row, and its
+   * conversations (those it no longer has deleted; each column written by name, so that what a
+   * newer corrallm keeps beside them stays).
+   */
+  #keep(canvas: CanvasId, { file, project, conversations }: Remembered): void {
+    this.#store
+      .prepare(
+        `INSERT INTO canvas (id, file, project, used_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET
+           file = excluded.file, project = excluded.project, used_at = excluded.used_at`,
+      )
+      .run(canvas, file ?? null, project ?? null, this.#nextUse());
+    const kept = this.#store
+      .prepare('SELECT adapter, agent_id FROM conversation WHERE canvas_id = ?')
+      .all(canvas);
+    const forget = this.#store.prepare(
+      'DELETE FROM conversation WHERE canvas_id = ? AND adapter = ? AND agent_id = ?',
     );
+    for (const { adapter, agent_id: agent } of kept) {
+      const agents =
+        typeof adapter === 'string' && Object.hasOwn(conversations, adapter)
+          ? conversations[adapter]
+          : undefined;
+      if (agents === undefined || typeof agent !== 'string' || !Object.hasOwn(agents, agent)) {
+        forget.run(canvas, adapter ?? null, agent ?? null);
+      }
+    }
+    const remember = this.#store.prepare(
+      `INSERT INTO conversation (canvas_id, adapter, agent_id, native_id, role_fingerprint)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (canvas_id, adapter, agent_id) DO UPDATE SET
+         native_id = excluded.native_id, role_fingerprint = excluded.role_fingerprint`,
+    );
+    for (const [adapter, agents] of Object.entries(conversations)) {
+      for (const [agent, { id, role }] of Object.entries(agents)) {
+        remember.run(canvas, adapter, agent, id, role ?? null);
+      }
+    }
+  }
+
+  /**
+   * When a canvas used now was used: now, unless another was used at or after it (in the same
+   * millisecond, or by a clock set back since), then just after that one.
+   */
+  #nextUse(): number {
+    const last = this.#store.prepare('SELECT max(used_at) AS last FROM canvas').get()?.last;
+    return Math.max(Date.now(), typeof last === 'number' ? last + 1 : 0);
+  }
+
+  /** Forgets every canvas but the LIMIT used most recently, with all the database keeps of them. */
+  #forgetOldest(): void {
+    this.#store
+      .prepare(
+        `DELETE FROM canvas WHERE id IN
+           (SELECT id FROM canvas ORDER BY used_at DESC LIMIT -1 OFFSET ?)`,
+      )
+      .run(this.#limit);
   }
 }
 
@@ -163,54 +235,11 @@ function withFile(remembered: Remembered, file: TrustedPath | undefined): Rememb
   return next;
 }
 
-/** The canvases a memory file holds (none if there is none); entries not right are left out. */
-function parse(file: Record<string, unknown> | undefined): Map<CanvasId, Remembered> {
-  const canvases = new Map<CanvasId, Remembered>();
-  if (!isRecord(file?.canvases)) return canvases;
-  for (const [canvas, value] of Object.entries(file.canvases)) {
-    const remembered = readRemembered(value);
-    if (isCanvasId(canvas) && remembered !== undefined) canvases.set(canvas, remembered);
-  }
-  return canvases;
-}
-
-/**
- * What is remembered of a canvas, as written (in canvases.json, or a run record's copy of it):
- * undefined if it is not right. Conversations whose ids are not ids are left out, and role
- * fingerprints that are not fingerprints.
- */
-export function readRemembered(value: unknown): Remembered | undefined {
-  if (!isRecord(value)) return undefined;
-  const { file, project, conversations } = value;
-  if (file !== undefined && !isAbsolute(file)) return undefined;
-  if (project !== undefined && !isAbsolute(project)) return undefined;
-  return {
-    ...(file === undefined ? {} : { file: mintTrustedPath(file) }),
-    ...(project === undefined ? {} : { project: mintTrustedPath(project) }),
-    conversations: Object.fromEntries(
-      Object.entries(isRecord(conversations) ? conversations : {}).flatMap(([adapter, agents]) =>
-        ID_PATTERN.test(adapter) && isRecord(agents) ? [[adapter, readConversations(agents)]] : [],
-      ),
-    ),
-  };
-}
-
-/** An adapter's agents' conversations; those that are not right are left out. */
-function readConversations(agents: Record<string, unknown>): Record<string, Conversation> {
-  return Object.fromEntries(
-    Object.entries(agents).flatMap(([agent, value]) => {
-      if (!isRecord(value) || !isSessionId(value.id)) return [];
-      const { role } = value;
-      const known = typeof role === 'string' && (role === 'none' || /^[a-f0-9]{64}$/.test(role));
-      return [[agent, { id: value.id, ...(known ? { role } : {}) }]];
-    }),
-  );
+/** A role's fingerprint as roleFingerprint gives it. */
+function isFingerprint(value: unknown): value is string {
+  return typeof value === 'string' && (value === 'none' || /^[a-f0-9]{64}$/.test(value));
 }
 
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

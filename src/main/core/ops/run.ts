@@ -11,8 +11,8 @@ import type { Implementations, OpServices } from '.';
  * run is going. Each pause and kill is stamped with the party that set it: a token releases only
  * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
  * target still (another party's pause, or one on a group it is in). Each takes effect at once, and
- * returns once it is on disk: the canvas's run record forced there, and for a kill, after it, what
- * it took back in the message log. One that can't be fails, saying it is in place all the same but
+ * returns once it is on disk: the canvas's run committed to the database, and for a kill, after
+ * it, what it took back in the message log. One that can't be fails, saying it is in place all the same but
  * may not survive a restart.
  */
 export function runOps({

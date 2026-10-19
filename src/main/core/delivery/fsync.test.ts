@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,21 +12,27 @@ import { FakeConnector } from '../../sessions/fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
 import type { Core } from '../core';
+import { Store } from '../store/store';
+import { journaledRun, keepCanvases, refuseWrites } from '../store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
 
 /*
  * A message's record reaches the disk before it is sent (API Spec §5.3): the core journals it
  * delivering, with the id it will send under, forces that to disk, and only then sends. A fake fs
  * records each record appended to the message log (its message, state and delivery id) and each
- * fsync, and the agent's session each message it is sent, in one list; and holds every fsync while
- * a test holds its gate, or fails it while the gate says so.
+ * fsync, and the agent's session each message it is sent, in one list; and holds every fsync of
+ * the message log while a test holds its gate, or fails it while the gate says so. The run's record
+ * is in the profile's database: on disk once the commit that holds it returned, which a connection
+ * of the test's own reads.
  */
 
 const events = vi.hoisted(() => [] as string[]);
 const gate = vi.hoisted(() => ({
   held: undefined as Promise<void> | undefined,
   fails: false,
-  only: undefined as 'record' | 'messages' | undefined,
+  only: undefined as 'messages' | undefined,
+  /** Hears each record appended to the message log, as it is appended. */
+  appended: undefined as ((message: Message) => void) | undefined,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -43,17 +49,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
           for (const line of data.split('\n').filter(Boolean)) {
             const { message } = JSON.parse(line) as { message: Message };
             events.push(`append ${message.id} ${message.state} ${message.delivery?.as ?? '-'}`);
+            gate.appended?.(message);
           }
         }
         await append(data, options);
       };
       const sync = handle.sync.bind(handle);
       handle.sync = async () => {
-        if (
-          gate.only === undefined ||
-          (gate.only === 'record' && file.startsWith('record.json.')) ||
-          (gate.only === 'messages' && file === 'messages.jsonl')
-        ) {
+        if (gate.only === undefined || file === 'messages.jsonl') {
           await gate.held;
           if (gate.fails) throw new Error('EIO: i/o error, fsync');
         }
@@ -82,9 +85,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   gate.held = undefined;
   gate.fails = false;
   gate.only = undefined;
+  gate.appended = undefined;
   await core?.close();
   core = undefined;
   await rm(profile, { recursive: true, force: true });
@@ -118,10 +123,8 @@ async function start(connector: Connector<SessionMode>, queue?: unknown[]): Prom
       links: [],
     }),
   );
-  await writeFile(
-    path.join(profile, 'canvases.json'),
-    JSON.stringify({ version: 2, canvases: { [CANVAS]: { file, project, conversations: {} } } }),
-  );
+  await keepCanvases(profile, { [CANVAS]: { file, project } });
+  events.length = 0;
   core = await createCore(
     {
       profile,
@@ -150,18 +153,33 @@ async function ok<T = Record<string, unknown>>(
   return result.value;
 }
 
+/** The pauses the canvas's run, as on disk, holds its agents by. */
+function pausesOnDisk(): { id: string; by: string }[] {
+  const state = journaledRun(profile, CANVAS)?.state;
+  if (state === undefined) return [];
+  const { run } = JSON.parse(state) as { run: { individualPauses?: { id: string; by: string }[] } };
+  return run.individualPauses ?? [];
+}
+
 it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
-  '%s takes effect at once but returns only once its run record is forced to disk',
+  '%s takes effect at once but returns only once its run record is on disk',
   async (op) => {
     const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
     const target = { agent: 'builder' };
     if (op === 'run.unpause') await ok('run.pause', { target });
+    // The database's commits are held meanwhile.
     const held = Promise.withResolvers<undefined>();
-    gate.only = 'record';
-    gate.held = held.promise;
+    const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'write') as {
+      value: Store['write'];
+    };
+    vi.spyOn(Store.prototype, 'write').mockImplementation(function (this: Store, run) {
+      return held.promise.then(() => write.call(this, run));
+    });
     let settled = false;
+    let seen: { id: string; by: string }[] | undefined;
     const result = ok(op, { target }).then((value) => {
       settled = true;
+      seen = pausesOnDisk();
       return value;
     });
     try {
@@ -170,34 +188,26 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
           op === 'run.unpause' ? 0 : 1,
         );
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
       expect(settled).toBe(false);
     } finally {
-      gate.held = undefined;
       held.resolve(undefined);
       await result;
     }
-    const record = JSON.parse(
-      await readFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8'),
-    ) as { checkpoint: { state: string } };
-    const { run } = JSON.parse(record.checkpoint.state) as {
-      run: { individualPauses?: { id: string; by: string }[] };
-    };
-    expect(run.individualPauses ?? []).toEqual(
+    // As it returned, the run's record on disk had the change.
+    expect(seen).toEqual(
       op === 'run.unpause' ? [] : [{ id: 'builder', by: 'outside:orchestrator' }],
     );
-    expect(events.some((event) => /^fsync record\.json\..+\.partial$/.test(event))).toBe(true);
   },
 );
 
 it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
-  '%s says its immediate change may not survive a restart when its record cannot be forced',
+  '%s says its immediate change may not survive a restart when its record cannot be written',
   async (op) => {
     const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
     const target = { agent: 'builder' };
     if (op === 'run.unpause') await ok('run.pause', { target });
-    gate.only = 'record';
-    gate.fails = true;
+    const allow = refuseWrites(profile, 'run', 'The disk is full');
     try {
       expect(await core?.call(op, { canvas: CANVAS, target }, OUTSIDE)).toEqual({
         ok: false,
@@ -217,12 +227,12 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
         op === 'run.unpause' ? 0 : 1,
       );
     } finally {
-      gate.fails = false;
+      allow();
     }
   },
 );
 
-it('returns from a kill only once its hold and pending and active withdrawals are forced to disk', async () => {
+it('returns from a kill only once its hold and pending and active withdrawals are on disk, the hold first', async () => {
   const { engines } = await start(new FakeConnector({ adapter: 'codex', pause: 100 }));
   const open = engines.canvas(CANVAS);
   const active = await ok<{ id: string }>('message', { to: 'builder', body: 'Working' });
@@ -230,6 +240,11 @@ it('returns from a kill only once its hold and pending and active withdrawals ar
     expect(open?.messages.get(active.id)?.state).toBe('delivered');
   });
   const waiting = await ok<{ id: string }>('message', { to: 'builder', body: 'Next' });
+  // What the run's record on disk held as each withdrawal reached the log.
+  const holds: string[][] = [];
+  gate.appended = (message) => {
+    if (message.state === 'withdrawn') holds.push(pausesOnDisk().map(({ by }) => by));
+  };
   const held = Promise.withResolvers<undefined>();
   gate.only = 'messages';
   gate.held = held.promise;
@@ -256,11 +271,9 @@ it('returns from a kill only once its hold and pending and active withdrawals ar
     expect(appended).toBeGreaterThan(-1);
     expect(forced).toBeGreaterThan(appended);
   }
-  const record = events.findIndex((event) => /^fsync record\.json\..+\.partial$/.test(event));
-  expect(record).toBeGreaterThan(-1);
-  expect(record).toBeLessThan(
-    events.findIndex((event) => event.startsWith(`append ${waiting.id} withdrawn `)),
-  );
+  // Its hold was on disk before any withdrawal reached the log.
+  expect(holds.length).toBeGreaterThan(0);
+  for (const by of holds) expect(by).toEqual(['outside:orchestrator']);
 });
 
 it('sends a message only once its delivering record is on disk', async () => {
@@ -290,6 +303,8 @@ it('sends a message only once its delivering record is on disk', async () => {
 
 it('sends the run’s own message only once the run’s record is on disk (Core Server §7.7)', async () => {
   const codex = new FakeConnector({ adapter: 'codex' });
+  /** The builder's run, as on disk, as each message reached its session. */
+  const before: unknown[] = [];
   const engine = await (
     await start(
       {
@@ -297,7 +312,8 @@ it('sends the run’s own message only once the run’s record is on disk (Core 
           const session = await codex.start(spec, host);
           const send = session.send.bind(session);
           session.send = (message) => {
-            events.push(`send ${message.id}`);
+            const state = journaledRun(profile, CANVAS)?.state;
+            before.push(state && (JSON.parse(state) as { run: { agents: unknown } }).run.agents);
             return send(message);
           };
           return session;
@@ -308,16 +324,9 @@ it('sends the run’s own message only once the run’s record is on disk (Core 
   ).engines.open(CANVAS);
   engine.run.start();
   await vi.waitFor(() => {
-    expect(events.some((event) => event.startsWith('send '))).toBe(true);
+    expect(before).toHaveLength(1);
   });
-  const before = events.slice(
-    0,
-    events.findIndex((event) => event.startsWith('send ')),
-  );
-  // The record written whole for the send was forced to disk, and then the folder it was moved into.
-  const recordAt = before.findLastIndex((event) => /^fsync record\.json\..+\.partial$/.test(event));
-  expect(recordAt).toBeGreaterThan(-1);
-  expect(before.slice(recordAt)).toContain(`fsync ${CANVAS}`);
+  expect(before).toMatchObject([{ builder: { status: 'running', current: 'hello' } }]);
 });
 
 it('forces a delivering record written with the log anew to disk before it sends', async () => {

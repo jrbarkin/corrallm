@@ -13,6 +13,7 @@ import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { WindowPorts } from './gui';
 import { mintTrustedPath } from './host';
+import { journaledRun, readOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
 
@@ -226,13 +227,15 @@ describe('the app’s core and window channels', () => {
     await channel(window, 'usage:rule', 'codex', { window: 'weekly', percent: 80, action: 'ask' });
     await core.flush();
 
-    expect(
-      JSON.parse(await readFile(path.join(profile, 'runs', id, 'record.json'), 'utf8')),
-    ).toMatchObject({ checkpoint });
+    expect(journaledRun(profile, id)).toEqual(checkpoint);
     expect(JSON.parse(await readFile(path.join(profile, 'usage.json'), 'utf8'))).toMatchObject({
       rules: { codex: { percent: 80 } },
     });
-    expect(await readFile(path.join(profile, 'canvases.json'), 'utf8')).toContain('codex');
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT adapter FROM conversation WHERE canvas_id = ?').all(id),
+      ),
+    ).toEqual([{ adapter: 'codex' }]);
   });
 
   it('refuses a page-supplied window or malformed channel arguments before any dialog', async () => {

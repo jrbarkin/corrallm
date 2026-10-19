@@ -11,6 +11,7 @@ import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
+import { keepCanvases } from './store/test-store';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 
@@ -102,10 +103,7 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
       links: LINKS.map((agents) => ({ agents })),
     }),
   );
-  await writeFile(
-    path.join(profile, 'canvases.json'),
-    JSON.stringify({ version: 2, canvases: { [CANVAS]: { file, project, conversations: {} } } }),
-  );
+  await keepCanvases(profile, { [CANVAS]: { file, project } });
   const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
   await mkdir(path.dirname(log), { recursive: true });
   const notice = {
