@@ -2,6 +2,7 @@ import { closeSync, openSync } from 'node:fs';
 import path from 'node:path';
 
 import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
+import { snapshots, snapshotTime } from './snapshots';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
 import { Store, SYSTEM_DEPS } from './store';
@@ -48,17 +49,19 @@ export interface Opened {
 }
 
 /** Opens the profile's database, as the core opens it once it holds core.lock. Never rejects. */
-export function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
+export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
   const file = path.join(profile, STORE_FILE);
   try {
-    return Promise.resolve({ store: new Store(openConnection(file), file, deps), said: [] });
+    const connection = openConnection(file);
+    const [newest] = await snapshots(profile).catch(() => []);
+    const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
+    return { store: new Store(connection, { profile, file, deps, snapshotAt }), said: [] };
   } catch (error) {
-    if (error instanceof Refusal)
-      return Promise.resolve({ store: undefined, said: [error.message] });
-    return Promise.resolve({
+    if (error instanceof Refusal) return { store: undefined, said: [error.message] };
+    return {
       store: undefined,
       said: [`The core’s database could not be opened (${reason(error)}).`],
-    });
+    };
   }
 }
 

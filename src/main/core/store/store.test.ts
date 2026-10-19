@@ -1,8 +1,8 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
@@ -13,7 +13,8 @@ import type { Store, StoreDeps } from './store';
  * The core's database, open (Core Database §4): one write lane, whose writes queued within one
  * turn of the loop share one transaction (group commit), each resolving only once the commit that
  * holds it has returned: what "on disk before it is sent" means now. Its log is checkpointed when
- * it is idle, and truncated as it closes.
+ * it is idle, and truncated as it closes; snapshots of it are taken as it closes and every few
+ * hours, the newest three kept.
  */
 
 /** A timer the store set, and whether it ran or was cancelled since. */
@@ -250,5 +251,97 @@ describe('checkpoints', () => {
     } finally {
       reopened.close();
     }
+  });
+});
+
+describe('snapshots', () => {
+  const backups = () => path.join(profile, 'backups');
+  const names = async () => (await readdir(backups())).sort();
+  /** What a snapshot holds, read as it would be restored: on its own, checked. */
+  function inSnapshot(name: string): { check: unknown; journal: unknown; notes: number } {
+    const snapshot = connect(path.join(backups(), name), { readOnly: true });
+    try {
+      return {
+        check: snapshot.prepare('PRAGMA quick_check').get()?.quick_check,
+        journal: snapshot.prepare('PRAGMA journal_mode').get()?.journal_mode,
+        notes: snapshot.prepare('SELECT count(*) AS notes FROM note').get()?.notes as number,
+      };
+    } finally {
+      snapshot.close();
+    }
+  }
+
+  it('takes one as it closes, into backups/, a file of its own that only the user may read', async () => {
+    await store.write(() => add('kept'));
+    reader.close();
+    await store.close();
+    expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
+    expect(inSnapshot('core-2026-10-19T12-00-00-000Z.db')).toEqual({
+      check: 'ok',
+      journal: 'delete',
+      notes: 1,
+    });
+    if (process.platform !== 'win32') {
+      expect((await stat(backups())).mode & 0o777).toBe(0o700);
+      expect(
+        (await stat(path.join(backups(), 'core-2026-10-19T12-00-00-000Z.db'))).mode & 0o777,
+      ).toBe(0o600);
+    }
+  });
+
+  it('takes one every four hours, once idle after writes, the first as soon as it is', async () => {
+    const idleAfterWriting = async () => {
+      await store.write(() => add('a note'));
+      fire();
+    };
+    await idleAfterWriting();
+    await vi.waitFor(async () => {
+      expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
+    });
+    now += 3 * 3600_000;
+    await idleAfterWriting();
+    now += 3600_000;
+    await idleAfterWriting();
+    await vi.waitFor(async () => {
+      expect(await names()).toEqual([
+        'core-2026-10-19T12-00-00-000Z.db',
+        'core-2026-10-19T16-00-00-000Z.db',
+      ]);
+    });
+  });
+
+  it('keeps the newest three', async () => {
+    for (let hour = 0; hour < 5; hour++) {
+      now = Date.UTC(2026, 9, 19, hour);
+      await store.snapshot();
+    }
+    expect(await names()).toEqual([
+      'core-2026-10-19T02-00-00-000Z.db',
+      'core-2026-10-19T03-00-00-000Z.db',
+      'core-2026-10-19T04-00-00-000Z.db',
+    ]);
+  });
+
+  it('takes a sound one while it goes on being written', async () => {
+    await store.write(() => {
+      for (let i = 0; i < 2000; i++) add('x'.repeat(1000));
+    });
+    let written = 0;
+    let writtenBefore: number | undefined;
+    const taken = store.snapshot().then((file) => {
+      writtenBefore = written;
+      return file;
+    });
+    while (writtenBefore === undefined) {
+      await store.write(() => {
+        add('during');
+        store.prepare('DELETE FROM note WHERE rowid = (SELECT min(rowid) FROM note)').run();
+      });
+      written++;
+    }
+    const { check, notes } = inSnapshot(path.basename(await taken));
+    expect(writtenBefore).toBeGreaterThan(0);
+    expect(check).toBe('ok');
+    expect(notes).toBe(2000);
   });
 });

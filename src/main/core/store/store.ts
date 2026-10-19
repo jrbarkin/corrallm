@@ -1,3 +1,4 @@
+import { takeSnapshot } from './snapshots';
 import type { Connection, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
 
@@ -16,11 +17,12 @@ import { rollback, savepoint, transaction } from './transaction';
  * SQLite checkpoints nothing by itself (wal_autocheckpoint is off: its checkpoints would land in
  * the middle of a commit): the store checkpoints its log into the database once it is idle
  * (PASSIVE: never waiting for a reader), and truncates the log as it closes.
+ *
+ * It takes a snapshot of itself (snapshots.ts) as it closes, and every SNAPSHOT_EVERY_MS once
+ * idle after writes: the first as soon as it is, if the profile has none.
  */
 
-/**
- * What the store's timers run on: in tests, by the test's hand.
- */
+/** What the store's timers and snapshots' times run on: in tests, by the test's hand. */
 export interface StoreDeps {
   /** Runs `run` after `ms`; returns what cancels it. */
   later: (run: () => void, ms: number) => () => void;
@@ -47,6 +49,21 @@ export const SYSTEM_DEPS: StoreDeps = {
 const CHECKPOINT_IDLE_MS = 1000;
 /** The longest a store that never pauses goes without checkpointing, so its log stays short. */
 const CHECKPOINT_AT_MOST_MS = 30_000;
+/**
+ * How often the store takes a snapshot of itself besides as it closes: every four hours, so the
+ * three kept span most of a day's work, and restoring one loses at most a few hours of it.
+ */
+export const SNAPSHOT_EVERY_MS = 4 * 3600_000;
+
+/** What the store is opened with besides its connection. */
+export interface Opening {
+  profile: string;
+  /** The database's file. */
+  file: string;
+  deps: StoreDeps;
+  /** When the profile's newest snapshot was taken, if it has one. */
+  snapshotAt: number | undefined;
+}
 
 /** A write waiting in the lane. */
 interface Queued {
@@ -58,6 +75,7 @@ interface Queued {
 export class Store {
   /** The database's file. */
   readonly file: string;
+  readonly #profile: string;
   readonly #connection: Connection;
   readonly #deps: StoreDeps;
   /** Each statement prepared, by its SQL. */
@@ -69,12 +87,18 @@ export class Store {
   #cancelCheckpoint: (() => void) | undefined;
   /** When the first commit the log holds unchecked came, if one did. */
   #uncheckpointedSince: number | undefined;
+  /** When the newest snapshot was taken, if one was. */
+  #snapshotAt: number | undefined;
+  /** The snapshot being taken, if one is. */
+  #snapshotting: Promise<string> | undefined;
   #closing: Promise<void> | undefined;
 
-  constructor(connection: Connection, file: string, deps: StoreDeps) {
+  constructor(connection: Connection, { profile, file, deps, snapshotAt }: Opening) {
     this.#connection = connection;
+    this.#profile = profile;
     this.file = file;
     this.#deps = deps;
+    this.#snapshotAt = snapshotAt;
   }
 
   /**
@@ -127,8 +151,24 @@ export class Store {
   }
 
   /**
-   * Closes the database once the writes queued so far are committed, checkpointing its log into it.
-   * Writes asked for meanwhile are refused. Closing it again does nothing more.
+   * Takes a snapshot of the database now, as it goes on being written (one at a time: asked for
+   * while one is being taken, it is that one). Resolves with its file.
+   */
+  snapshot(): Promise<string> {
+    if (this.#snapshotting !== undefined) return this.#snapshotting;
+    const at = this.#deps.now();
+    const taking = takeSnapshot(this.#connection, this.#profile, at).finally(() => {
+      this.#snapshotting = undefined;
+    });
+    this.#snapshotting = taking;
+    this.#snapshotAt = at;
+    return taking;
+  }
+
+  /**
+   * Closes the database once the writes queued so far are committed, checkpointing its log into it
+   * and taking a snapshot of it. Writes asked for meanwhile are refused. Closing it again does
+   * nothing more.
    */
   close(): Promise<void> {
     this.#closing ??= this.#close();
@@ -136,13 +176,18 @@ export class Store {
   }
 
   async #close(): Promise<void> {
-    await Promise.resolve();
     this.#flush();
     this.#cancelCheckpoint?.();
+    await this.#snapshotting?.catch(() => undefined);
     try {
       this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     } catch (error) {
       console.error('Could not checkpoint the core’s database as it closed:', error);
+    }
+    try {
+      await this.snapshot();
+    } catch (error) {
+      console.error('Could not take a snapshot of the core’s database as it closed:', error);
     }
     this.#connection.close();
   }
@@ -202,6 +247,7 @@ export class Store {
     );
   }
 
+  /** Once idle: checkpoints the log, and takes the snapshot due, if one is. */
   #checkpoint(): void {
     this.#cancelCheckpoint = undefined;
     this.#uncheckpointedSince = undefined;
@@ -209,6 +255,14 @@ export class Store {
       this.#connection.prepare('PRAGMA wal_checkpoint(PASSIVE)').get();
     } catch (error) {
       console.error('Could not checkpoint the core’s database:', error);
+    }
+    if (
+      this.#snapshotAt === undefined ||
+      this.#deps.now() - this.#snapshotAt >= SNAPSHOT_EVERY_MS
+    ) {
+      this.snapshot().catch((error: unknown) => {
+        console.error('Could not take a snapshot of the core’s database:', error);
+      });
     }
   }
 }
