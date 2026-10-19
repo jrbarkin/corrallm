@@ -11,10 +11,12 @@ import {
   checkLoopbackHttp,
   checkSpawn,
   checkSqlite,
+  checkStore,
   checkTerminalScreen,
   runChecks,
   selfTestChecks,
 } from './selftest';
+import { openStore } from './store/open';
 
 /*
  * The native self-test's checks, run here as they run in the packaged app's main process, in its
@@ -28,7 +30,7 @@ const STORE_CHECKED = new RegExp(
   [
     '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous FULL',
     process.platform === 'darwin' ? ', fullfsync' : '',
-    ', a write through the lane read back',
+    ', its other pragmas as set, a write through the lane read back, a snapshot read back',
     process.platform === 'win32' ? '' : ', core\\.db, -wal and -shm 0600',
     '$',
   ].join(''),
@@ -48,6 +50,21 @@ describe('the native self-test', () => {
       expect(await readdir(folder)).toEqual([]);
     } finally {
       await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names a pragma of the database that isn’t as the core sets it', async () => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
+    try {
+      const { store } = await openStore(profile);
+      try {
+        store?.exec('PRAGMA trusted_schema = ON');
+        await expect(store && checkStore(store)).rejects.toThrow('trusted_schema is 1, not 0');
+      } finally {
+        await store?.close();
+      }
+    } finally {
+      await rm(profile, { recursive: true, force: true });
     }
   });
 

@@ -14,7 +14,7 @@ import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
 import fakeClaude from './selftest-claude.mjs?raw';
-import { openStore } from './store/open';
+import { APPLICATION_ID, JOURNAL_SIZE_LIMIT, openStore } from './store/open';
 import { connect } from './store/sqlite';
 import type { Store } from './store/store';
 
@@ -183,8 +183,9 @@ export async function checkAgentSdk(
 
 /**
  * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
- * SQLite: its pragmas as set, a write through its lane read back by another connection, and its
- * file, log and index the user's alone (not on Windows, whose files have no such modes).
+ * SQLite: each of its pragmas as set, a write through its lane read back by another connection, a
+ * snapshot of it (SQLite's backup, Node's one call on its thread pool) read back, and its file,
+ * log and index the user's alone (not on Windows, whose files have no such modes).
  */
 export async function checkSqlite(folder = tmpdir()): Promise<string> {
   try {
@@ -206,32 +207,43 @@ export async function checkSqlite(folder = tmpdir()): Promise<string> {
   }
 }
 
-async function checkStore(store: Store): Promise<string> {
+/** Each pragma openStore sets, as it reads back (Core Database §5). */
+function storePragmas(): Record<string, unknown> {
+  return {
+    journal_mode: 'wal',
+    // FULL
+    synchronous: 2,
+    ...(process.platform === 'darwin' ? { fullfsync: 1, checkpoint_fullfsync: 1 } : {}),
+    foreign_keys: 1,
+    trusted_schema: 0,
+    // INCREMENTAL
+    auto_vacuum: 2,
+    journal_size_limit: JOURNAL_SIZE_LIMIT,
+    wal_autocheckpoint: 0,
+    application_id: APPLICATION_ID,
+  };
+}
+
+/** Checks the core's database, opened: rejects naming the first thing that isn't as it must be. */
+export async function checkStore(store: Store): Promise<string> {
   const pragma = (name: string): unknown => store.prepare(`PRAGMA ${name}`).get()?.[name];
   const version = store.prepare('SELECT sqlite_version() AS version').get()?.version;
   if (typeof version !== 'string') throw new Error('SQLite did not report its version');
-  const seen = [`SQLite ${version}`];
-  if (pragma('journal_mode') !== 'wal') throw new Error('it keeps no write-ahead log');
-  seen.push('WAL');
-  if (pragma('synchronous') !== 2) throw new Error('synchronous is not FULL');
-  seen.push('synchronous FULL');
-  if (process.platform === 'darwin') {
-    if (pragma('fullfsync') !== 1) throw new Error('fullfsync is off');
-    seen.push('fullfsync');
+  for (const [name, value] of Object.entries(storePragmas())) {
+    const read = pragma(name);
+    if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
   }
+  const seen = [`SQLite ${version}`, 'WAL', 'synchronous FULL'];
+  if (process.platform === 'darwin') seen.push('fullfsync');
+  seen.push('its other pragmas as set');
   await store.write(() => {
     store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
     store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
   });
-  const reader = connect(store.file, { readOnly: true });
-  try {
-    if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'written') {
-      throw new Error('another connection did not read back what the lane wrote');
-    }
-  } finally {
-    reader.close();
-  }
+  readBack(store.file, 'core.db, read by another connection,');
   seen.push('a write through the lane read back');
+  readBack(await store.snapshot(), 'its snapshot');
+  seen.push('a snapshot read back');
   if (process.platform !== 'win32') {
     for (const suffix of ['', '-wal', '-shm']) {
       const mode = (await stat(`${store.file}${suffix}`)).mode & 0o777;
@@ -240,6 +252,27 @@ async function checkStore(store: Store): Promise<string> {
     seen.push('core.db, -wal and -shm 0600');
   }
   return seen.join(', ');
+}
+
+/**
+ * Reads the database in `file` (`what`, in what it says) through a connection of its own that
+ * only reads: it must be sound, corrallm's, and hold what the check wrote.
+ */
+function readBack(file: string, what: string): void {
+  const reader = connect(file, { readOnly: true });
+  try {
+    if (reader.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') {
+      throw new Error(`${what} isn’t sound`);
+    }
+    if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
+      throw new Error(`${what} isn’t corrallm’s`);
+    }
+    if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'written') {
+      throw new Error(`${what} doesn’t hold what the lane wrote`);
+    }
+  } finally {
+    reader.close();
+  }
 }
 
 /** Serves HTTP on 127.0.0.1 and calls it, as agents call the hook and MCP servers. */
