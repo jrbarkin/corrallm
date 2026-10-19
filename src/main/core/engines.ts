@@ -287,6 +287,8 @@ export class Engines {
       engine.sessions.subscribe(changed),
       engine.run.subscribe(look),
       engine.sessions.subscribe(look),
+      // A message to an agent that can't start, or runs in a mode that never asks, waits for you.
+      messages.subscribe(look),
       // Usage rules are checked again with each reading.
       this.#deps.usage.subscribe(() => {
         engine.run.usageChanged();

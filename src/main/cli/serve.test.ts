@@ -770,6 +770,30 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
   });
 
+  /** Adds Ghost to the canvas: on a connection this build lacks, so what is sent it waits for you. */
+  async function withGhost(): Promise<void> {
+    const document = JSON.parse(await readFile(file, 'utf8')) as { nodes: unknown[] };
+    document.nodes.push({
+      id: 'ghost',
+      kind: 'agent',
+      label: 'Ghost',
+      position: { x: 0, y: 200 },
+      adapter: 'codex',
+      connection: 'codex.retired',
+    });
+    await writeFile(file, JSON.stringify(document));
+  }
+
+  it('says a need a message makes: one waiting for an agent that can’t start', async () => {
+    await withGhost();
+    const server = await serve();
+    const client = await connect(server.url);
+    await call(client, 'message', { to: 'ghost', body: 'Hello' });
+    await vi.waitFor(() => {
+      expect(server.stderr()).toMatch(/\[m1\.corral\] need on Ghost: Ghost can’t start/);
+    });
+  });
+
   /** Runs `corrallm wait`: its exit code, and the one line it printed. */
   async function cliWait(
     args: string[],
