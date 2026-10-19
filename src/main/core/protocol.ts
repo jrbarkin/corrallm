@@ -1,4 +1,5 @@
 import type { HostServices, WindowId } from './host';
+import type { LockHolder } from './lock';
 import type { CheckResult } from './selftest';
 
 /*
@@ -12,13 +13,19 @@ import type { CheckResult } from './selftest';
 /** What the core process answers and sends. */
 export interface CoreSide {
   requests: {
-    /** Composes the app's core: windows' ports are served once it has. */
-    init: { args: [config: CoreInit]; result: null };
+    /**
+     * Takes the profile (core.lock) and composes the app's core on it: windows' ports are served
+     * once it has.
+     */
+    init: { args: [config: CoreInit]; result: CoreInitAnswer };
     /** Which windows have a canvas to freeze/save before closing. */
     shown: { args: [windows: WindowId[]]; result: WindowId[] };
     /** Finishes journal writes, ends sessions and flushes the profile's stores. */
     flush: { args: []; result: null };
-    /** Stops the core and writes out everything it owns before the app quits. */
+    /**
+     * Stops the core and writes out everything it owns before the app quits, then lets the profile
+     * go.
+     */
     close: { args: []; result: null };
     /** Runs the native self-test's checks (`packaged`: whether the app is) and reports them. */
     selftest: { args: [options: { packaged: boolean }]; result: SelfTestReport };
@@ -28,6 +35,13 @@ export interface CoreSide {
     ready: [memory: string];
   };
 }
+
+/**
+ * What `init` answers: null once the core holds the profile and is composed; or, while another
+ * process holds the profile (`corrallm serve`), who does, as its lock says (null if it can't be
+ * read), the core having composed nothing.
+ */
+export type CoreInitAnswer = null | { profileLocked: { holder: LockHolder | null } };
 
 /** What the app's core is composed with. */
 export interface CoreInit {

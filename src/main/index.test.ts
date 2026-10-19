@@ -5,8 +5,8 @@ import type { RunShutdown } from './run-shutdown';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox } = vi.hoisted(
-  () => ({
+const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox, showErrorBox } =
+  vi.hoisted(() => ({
     app: {
       isPackaged: false,
       requestSingleInstanceLock: vi.fn(() => true),
@@ -25,16 +25,16 @@ const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox } 
     },
     getAllWindows: vi.fn<() => unknown[]>(() => []),
     showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
+    showErrorBox: vi.fn(),
     registerPrivileges: vi.fn(),
     installGuards: vi.fn(),
-  }),
-);
+  }));
 
 // The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
   BrowserWindow: { getAllWindows },
-  dialog: { showMessageBox },
+  dialog: { showMessageBox, showErrorBox },
   session: { defaultSession: {} },
   shell: {},
   ipcMain: { handle: vi.fn() },
@@ -60,7 +60,6 @@ const { request, createWindow, makeHost } = vi.hoisted(() => ({
 }));
 vi.mock('./host/core-process', () => ({ forkCore: () => ({ link: { request } }) }));
 vi.mock('./host/services', () => ({ hostServices: makeHost }));
-vi.mock('./core/lock', () => ({ lockProfile: () => Promise.resolve({ release: vi.fn() }) }));
 vi.mock('./window', () => ({ createMainWindow: createWindow }));
 
 beforeEach(() => {
@@ -210,4 +209,37 @@ it('keeps the core up until the window has finished saving and main receives run
     expect(app.quit).toHaveBeenCalledOnce();
   });
   expect(request.mock.calls.map(([name]) => name)).toEqual(['init', 'shown', 'flush', 'close']);
+});
+
+describe('the profile held by corrallm serve', () => {
+  const locked = {
+    ok: true,
+    value: { profileLocked: { holder: { owner: 'serve', pid: 42, started: 1 } } },
+  } as const;
+  const detail =
+    'corrallm serve (process 42) is using this profile. Stop it (Ctrl-C where it runs), then open corrallm again.';
+
+  it.each([false, true])(
+    'refuses to start when the core says serve holds the profile, saying so (hidden: %s)',
+    async (hidden) => {
+      if (hidden) vi.stubEnv('CORRALLM_HIDE_WINDOW', '1');
+      app.whenReady.mockResolvedValueOnce();
+      request.mockResolvedValueOnce(locked);
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await import('./index');
+      await vi.waitFor(() => {
+        expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+      });
+
+      expect(stderr).toHaveBeenCalledWith(`corrallm: ${detail}`);
+      // The hidden e2e app shows nothing on screen, a dialog included.
+      if (hidden) expect(showErrorBox).not.toHaveBeenCalled();
+      else
+        expect(showErrorBox).toHaveBeenCalledExactlyOnceWith(
+          'corrallm can’t open its profile',
+          detail,
+        );
+      expect(createWindow).not.toHaveBeenCalled();
+    },
+  );
 });

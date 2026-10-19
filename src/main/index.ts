@@ -7,7 +7,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import type { Answer } from '../shared/link';
 import { APP_SCHEME, registerAppSchemePrivileges, serveAppScheme } from './app-protocol';
 import { Closing } from './closing';
-import { lockProfile, ProfileLocked } from './core/lock';
+import { ProfileLocked } from './core/lock';
 import { PROD_CSP } from './csp';
 import { forkCore } from './host/core-process';
 import { CorePorts } from './host/ports';
@@ -87,34 +87,12 @@ function main(): void {
   void app
     .whenReady()
     .then(async () => {
-      // One owner per profile (core.lock): `corrallm serve` may hold this one, and must not write
-      // its stores while the app does. B8 moves this into the core process.
-      let lock;
-      try {
-        lock = await lockProfile(app.getPath('userData'), 'app');
-      } catch (error) {
-        if (!(error instanceof ProfileLocked)) throw error;
-        const detail = `${error.message} ${
-          error.holder === undefined
-            ? 'Try again in a moment.'
-            : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
-        }`;
-        console.error(`corrallm: ${detail}`);
-        // The hidden e2e app shows nothing on screen, a dialog included.
-        if (!hidden) dialog.showErrorBox('corrallm can’t open its profile', detail);
-        app.exit(1);
-        return;
-      }
-      const release = () => {
-        lock.release();
-      };
-      app.once('will-quit', release);
-      process.once('exit', release);
-
       const shutdown = new RunShutdown((contents, requestId) => {
         sendEvent(contents, 'run:stopping', requestId);
       });
-      // The core owns the profile and its sessions; main answers only what needs the desktop.
+      // The core owns the profile and its sessions; main answers only what needs the desktop. It
+      // takes the profile (core.lock) as it comes up: `corrallm serve` may hold this one, and
+      // must not write its stores while the app does.
       const core = forkCore({
         entry: path.join(__dirname, 'core.cjs'),
         output: (line, stream) => {
@@ -124,7 +102,7 @@ function main(): void {
         check: devServerUrl !== undefined,
         host: hostServices(shutdown),
       });
-      await answered(
+      const up = await answered(
         core.link.request('init', {
           app: { name: app.getName(), version: app.getVersion() },
           profile: app.getPath('userData'),
@@ -133,6 +111,19 @@ function main(): void {
           fakeSessions,
         }),
       );
+      if (up !== null) {
+        const { holder } = up.profileLocked;
+        const detail = `${new ProfileLocked(holder ?? undefined).message} ${
+          holder === null
+            ? 'Try again in a moment.'
+            : 'Stop it (Ctrl-C where it runs), then open corrallm again.'
+        }`;
+        console.error(`corrallm: ${detail}`);
+        // The hidden e2e app shows nothing on screen, a dialog included.
+        if (!hidden) dialog.showErrorBox('corrallm can’t open its profile', detail);
+        app.exit(1);
+        return;
+      }
 
       hardenSession(session.defaultSession, trustedOrigin);
       if (devServerUrl === undefined) {

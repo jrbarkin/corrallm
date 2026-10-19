@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
@@ -150,5 +151,41 @@ describe('the core process’s init', () => {
     });
     main.emit('windowGone', 7, true);
     expect(await main.request('shown', [7])).toEqual({ ok: true, value: [] });
+  });
+});
+
+describe('the profile’s lock, held by the core process', () => {
+  it('init takes core.lock as the app’s, before composing, and close lets it go', async () => {
+    const entry = await start();
+    expect(await entry.init()).toEqual({ ok: true, value: null });
+    expect(JSON.parse(await readFile(path.join(profile, 'core.lock'), 'utf8'))).toMatchObject({
+      owner: 'app',
+      pid: process.pid,
+    });
+
+    expect(await main.request('close')).toEqual({ ok: true, value: null });
+    initialized = false;
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+  });
+
+  it('answers who holds the profile while corrallm serve does, composing nothing', async () => {
+    // Held by a live process: this one, standing in for `corrallm serve`.
+    const holder = {
+      owner: 'serve',
+      pid: process.pid,
+      started: Math.round(Date.now() - process.uptime() * 1000),
+    };
+    const held = JSON.stringify(holder);
+    await writeFile(path.join(profile, 'core.lock'), held);
+    const entry = await start();
+
+    expect(await entry.init()).toEqual({ ok: true, value: { profileLocked: { holder } } });
+    // Nothing of the profile was read or written, and the lock is left as it was.
+    expect(await readdir(profile)).toEqual(['core.lock']);
+    expect(await readFile(path.join(profile, 'core.lock'), 'utf8')).toBe(held);
+
+    // Once serve lets the profile go, the app's core may come up after all.
+    await rm(path.join(profile, 'core.lock'));
+    expect(await entry.init()).toEqual({ ok: true, value: null });
   });
 });
