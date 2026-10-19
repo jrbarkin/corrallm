@@ -1,3 +1,5 @@
+import { recordPty } from '../process';
+
 /*
  * The pseudo-terminal a Terminal session's CLI runs in. node-pty is a native module: it is loaded
  * only when a session starts (unit tests pass a fake `SpawnPty` and never load it).
@@ -29,7 +31,7 @@ export type SpawnPty = (file: string, args: readonly string[], options: PtyOptio
 /** Runs `file` in a pseudo-terminal with node-pty, as an xterm-256color terminal. */
 export const spawnPty: SpawnPty = async (file, args, { cwd, env, cols, rows }) => {
   const pty = await import('node-pty');
-  return pty.spawn(file, [...args], {
+  const child = pty.spawn(file, [...args], {
     name: 'xterm-256color',
     cols,
     rows,
@@ -39,4 +41,6 @@ export const spawnPty: SpawnPty = async (file, args, { cwd, env, cols, rows }) =
     // bundled ConPTY DLL's does not.
     ...(process.platform === 'win32' ? { useConptyDll: true } : {}),
   });
+  recordPty(child);
+  return child;
 };

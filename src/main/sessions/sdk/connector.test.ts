@@ -240,6 +240,7 @@ describe('SdkConnector', () => {
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       },
     });
+    expect(options.spawnClaudeCodeProcess).toBeTypeOf('function');
     // The CLI's default model, and a new conversation.
     expect(options).not.toHaveProperty('model');
     expect(options).not.toHaveProperty('resume');

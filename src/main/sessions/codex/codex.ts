@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile } from '../process';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';

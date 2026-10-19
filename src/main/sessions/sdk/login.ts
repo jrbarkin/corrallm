@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from '../process';
 
 /*
  * How the `claude` the Agent SDK would run is logged in. Anthropic doesn't allow other products to

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile } from '../../process';
 
 import { SAFE_GIT_OPTIONS } from '../../../git';
 

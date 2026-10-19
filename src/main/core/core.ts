@@ -41,6 +41,8 @@ import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
+import { Children } from './children';
+import type { ChildSystem } from './children';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -52,6 +54,8 @@ import { Topics } from './topics';
  */
 
 export interface CoreConfig {
+  /** For tests: process identity and group signalling instead of the OS. */
+  children?: ChildSystem;
   /** The profile folder, where the core keeps its stores. */
   profile: string;
   /** Which app this is, as app.info says. */
@@ -131,6 +135,8 @@ export interface Core extends Dispatcher {
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
   const { profile } = config;
+  const children = new Children(profile, config.children);
+  await children.recover();
   const usage = new UsageReadings({
     file: path.join(profile, 'usage.json'),
     backends: CATALOG.usageBackends.map((backend) => backend.id),
@@ -204,6 +210,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const channels = new Channels({
+    processes: children,
     catalog: CATALOG,
     windows,
     canvases: new CanvasFiles({ host, memory }),
@@ -227,6 +234,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const stores = () =>
     Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush(), links.flush()]);
   const engines: Engines = new Engines({
+    processes: children,
     catalog: CATALOG,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
     sessions,
@@ -276,7 +284,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     ops: dispatcher.ops,
     partyOf: (caller) => dispatcher.partyOf(caller),
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
-      dispatcher.call(name, raw, caller, signal) as Promise<OpResult<ResultOf<N>>>,
+      children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
+        OpResult<ResultOf<N>>
+      >,
     engines,
     topics,
     channels,

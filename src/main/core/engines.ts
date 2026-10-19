@@ -1,3 +1,4 @@
+import type { Children } from './children';
 import type { Catalog, ConnectionId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
@@ -50,6 +51,7 @@ const NO_SWITCH = 'Switch this agent to another connection in the corrallm app.'
 const JOURNAL_FAILED = 'Could not journal every canvas’s run as the core closed.';
 
 export interface EnginesDeps {
+  processes: Pick<Children, 'run'>;
   /** What every adapter declares: what a canvas's file is read against. */
   catalog: Catalog;
   /** What the engines read of it. */
@@ -409,32 +411,36 @@ export class Engines {
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */
   #backend(canvas: CanvasId, listeners: Running['listeners']): SessionBackend {
     const { sessions, projects, files, environment } = this.#deps;
-    const done = (call: Promise<unknown>) => call.then(() => null);
+    const run = <T>(call: () => T): T => this.#deps.processes.run(call);
+    const done = (call: () => Promise<unknown>) => run(() => call().then(() => null));
     return {
-      start: (agentId, options) => done(sessions.start(canvas, agentId, options)),
-      installed: async () => installedClis(await environment()),
-      send: (agentId, message) => done(sessions.send(canvas, agentId, message)),
+      start: (agentId, options) => done(() => sessions.start(canvas, agentId, options)),
+      installed: () => run(async () => installedClis(await environment())),
+      send: (agentId, message) => done(() => sessions.send(canvas, agentId, message)),
       answer: (agentId, promptId, answer) =>
-        done(sessions.answer(canvas, agentId, promptId, answer)),
-      interrupt: (agentId) => done(sessions.interrupt(canvas, agentId)),
-      setMode: (agentId, mode) => done(sessions.setMode(canvas, agentId, mode)),
-      setModel: (agentId, model) => done(sessions.setModel(canvas, agentId, model)),
-      setEffort: (agentId, effort) => done(sessions.setEffort(canvas, agentId, effort)),
-      stopTask: (agentId, taskId) => done(sessions.stopTask(canvas, agentId, taskId)),
-      close: (agentId) => done(sessions.close(canvas, agentId)),
-      fresh: (agentId, adapter) => done(sessions.fresh(canvas, agentId, adapter)),
+        done(() => sessions.answer(canvas, agentId, promptId, answer)),
+      interrupt: (agentId) => done(() => sessions.interrupt(canvas, agentId)),
+      setMode: (agentId, mode) => done(() => sessions.setMode(canvas, agentId, mode)),
+      setModel: (agentId, model) => done(() => sessions.setModel(canvas, agentId, model)),
+      setEffort: (agentId, effort) => done(() => sessions.setEffort(canvas, agentId, effort)),
+      stopTask: (agentId, taskId) => done(() => sessions.stopTask(canvas, agentId, taskId)),
+      close: (agentId) => done(() => sessions.close(canvas, agentId)),
+      fresh: (agentId, adapter) => done(() => sessions.fresh(canvas, agentId, adapter)),
       files: async (query) => {
         const folder = projects.of(canvas);
-        return folder === undefined ? [] : files.find(folder, query, MAX_FILE_MATCHES);
+        return folder === undefined ? [] : run(() => files.find(folder, query, MAX_FILE_MATCHES));
       },
-      options: (adapter) => sessions.settingsOptions(canvas, adapter),
-      sessions: (agentId) => sessions.listSessions(canvas, agentId),
-      resume: (agentId, sessionId) => done(sessions.resumeSession(canvas, agentId, sessionId)),
-      previewRewind: (agentId, messageId) => sessions.previewRewind(canvas, agentId, messageId),
-      rewind: (agentId, messageId, restore) => sessions.rewind(canvas, agentId, messageId, restore),
-      mcp: (agentId) => sessions.mcpServers(canvas, agentId),
+      options: (adapter) => run(() => sessions.settingsOptions(canvas, adapter)),
+      sessions: (agentId) => run(() => sessions.listSessions(canvas, agentId)),
+      resume: (agentId, sessionId) =>
+        done(() => sessions.resumeSession(canvas, agentId, sessionId)),
+      previewRewind: (agentId, messageId) =>
+        run(() => sessions.previewRewind(canvas, agentId, messageId)),
+      rewind: (agentId, messageId, restore) =>
+        run(() => sessions.rewind(canvas, agentId, messageId, restore)),
+      mcp: (agentId) => run(() => sessions.mcpServers(canvas, agentId)),
       changeMcp: (agentId, server, change) =>
-        sessions.changeMcpServer(canvas, agentId, server, change),
+        run(() => sessions.changeMcpServer(canvas, agentId, server, change)),
       onEvent: (listener) => {
         listeners.add(listener);
         return () => {

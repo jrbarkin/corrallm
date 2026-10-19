@@ -1,3 +1,4 @@
+import type { Children } from './children';
 import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
 import type { Catalog } from '../../shared/adapter';
@@ -50,6 +51,7 @@ export type ChannelHandler<C extends CoreChannel> = (
  * the user has, and usage. A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
+  processes?: Pick<Children, 'run'>;
   /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
   catalog: Catalog;
   windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'gone'>;
@@ -368,7 +370,10 @@ export class Channels {
       throw new Error(`corrallm’s window has no channel named ${name}.`);
     }
     if (!Array.isArray(args)) throw new TypeError('Expected channel arguments');
-    return this.#call(window, name as CoreChannel, args);
+    const processes = this.#services.processes;
+    return processes
+      ? processes.run(() => this.#call(window, name as CoreChannel, args))
+      : this.#call(window, name as CoreChannel, args);
   }
 
   #call<C extends CoreChannel>(

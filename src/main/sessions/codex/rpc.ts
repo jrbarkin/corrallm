@@ -1,4 +1,4 @@
-import { spawn as spawnProcess } from 'node:child_process';
+import { spawn as spawnProcess } from '../process';
 import type {
   ChildProcessWithoutNullStreams,
   SpawnOptionsWithStdioTuple,

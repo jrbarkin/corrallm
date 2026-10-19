@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from './sessions/process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
