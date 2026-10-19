@@ -4,7 +4,7 @@ import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { faults } from './faults';
-import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
+import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import { restoreSnapshot, snapshots, snapshotTime } from './snapshots';
 import {
   connect,
@@ -17,6 +17,7 @@ import {
 import type { Connection } from './sqlite';
 import { Store, SYSTEM_DEPS } from './store';
 import type { StoreDeps } from './store';
+import { transaction } from './transaction';
 
 /*
  * Opening the profile's database (Core Database §5): <profile>/core.db, made 0600 before SQLite
@@ -79,13 +80,13 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
     if (!existsSync(file) && (await snapshots(profile)).length > 0) {
       // Set aside without a snapshot in its place yet: a restore cut short, finished now.
       said.push(`The core’s database (${file}) was missing.`);
-      connection = await restore(profile, file, said);
+      connection = await restore(profile, file, deps.now(), said);
     } else {
       try {
         connection = openConnection(file);
       } catch (error) {
         if (!isDamage(error)) throw error;
-        connection = await recover(profile, file, reason(error), said);
+        connection = await recover(profile, file, reason(error), deps.now(), said);
       }
     }
     const [newest] = await snapshots(profile).catch(() => []);
@@ -119,6 +120,7 @@ async function recover(
   profile: string,
   file: string,
   why: string,
+  now: number,
   said: string[],
 ): Promise<Connection> {
   const rejected = path.join(profile, `core.rejected-${randomUUID()}.db`);
@@ -127,14 +129,19 @@ async function recover(
     await moveIfThere(`${file}${suffix}`, `${rejected}${suffix}`);
   }
   said.push(`The core’s database was damaged (${why}), and was moved to ${rejected}.`);
-  return restore(profile, file, said);
+  return restore(profile, file, now, said);
 }
 
 /**
  * Opens the newest sound snapshot in the place of a database that is gone, or an empty database,
- * saying which in `said`.
+ * saying which in `said`, numbering rows on from past every place the one gone gave (`numberOn`).
  */
-async function restore(profile: string, file: string, said: string[]): Promise<Connection> {
+async function restore(
+  profile: string,
+  file: string,
+  now: number,
+  said: string[],
+): Promise<Connection> {
   // A log or journal left without its database belongs to none (SQLite deletes one it finds
   // beside an empty file): replayed into the snapshot, it would damage it.
   for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
@@ -143,10 +150,37 @@ async function restore(profile: string, file: string, said: string[]): Promise<C
     await restoreSnapshot(snapshot, file);
     const at = new Date(snapshotTime(path.basename(snapshot)) ?? 0).toISOString();
     said.push(`It was restored from its snapshot of ${at}: what changed since then is lost.`);
-    return openConnection(file);
+    return numberOn(openConnection(file), now);
   }
   said.push('It starts empty.');
-  return openConnection(file);
+  return numberOn(openConnection(file), now);
+}
+
+/**
+ * Numbers rows on, in each table whose places are never given again (SEQUENCES), from past every
+ * place the database a restore replaced may have given, which a cursor may hold: from the clock,
+ * in milliseconds, unless the snapshot's places are past it already. A profile gives far fewer
+ * than one place a millisecond, even since a restore last did this: only a clock set back since
+ * then could give a place again.
+ */
+function numberOn(connection: Connection, now: number): Connection {
+  try {
+    transaction(connection, () => {
+      for (const table of SEQUENCES) {
+        const raised = connection
+          .prepare('UPDATE sqlite_sequence SET seq = max(seq, CAST(? AS INTEGER)) WHERE name = ?')
+          .run(now, table);
+        if (raised.changes > 0) continue;
+        connection
+          .prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, CAST(? AS INTEGER))')
+          .run(table, now);
+      }
+    });
+    return connection;
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
 }
 
 /**

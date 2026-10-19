@@ -377,6 +377,42 @@ describe('a damaged database', () => {
     expect(store.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' });
   });
 
+  for (const snapshot of [true, false]) {
+    it(`gives no message a place given before, restored ${snapshot ? 'from a snapshot' : 'empty'}`, async () => {
+      await keepMessages(Date.UTC(2026, 9, 19, 12));
+      if (!snapshot) await rm(path.join(profile, 'backups'), { recursive: true });
+      // Places given after the snapshot, which a cursor may hold, lost with the database.
+      const lost = connect(file);
+      const given = [301, 302, 303].map(
+        (seq) =>
+          lost
+            .prepare(
+              `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+               VALUES (?, ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
+            )
+            .get(`lost ${String(seq)}`, CANVAS)?.seq,
+      );
+      lost.close();
+      expect(given).toEqual([301, 302, 303]);
+      await writeFile(file, 'This is not a database. '.repeat(500));
+
+      const { store } = await open(stoppedAt(Date.UTC(2026, 9, 19, 18)));
+
+      if (!snapshot) store.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS);
+      const next = store
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+           VALUES ('after', ?, 'you', 'agent:a', 'text', 'Hello', 'pending', 1) RETURNING seq`,
+        )
+        .get(CANVAS)?.seq;
+      expect(next).toBeGreaterThan(303);
+      expect(Number.isSafeInteger(next)).toBe(true);
+      expect(store.prepare('SELECT typeof(seq) AS type FROM sqlite_sequence').all()).toEqual([
+        { type: 'integer' },
+      ]);
+    });
+  }
+
   it('sets aside a database SQLite finds damaged as it opens it', async () => {
     await keepMessages(Date.UTC(2026, 9, 19, 12));
     await rm(path.join(profile, 'backups'), { recursive: true });

@@ -68,7 +68,8 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT;
 
       -- A canvas's messages, in the order they came: seq is never given again, even once the
-      -- newest are deleted, so a cursor into it survives pruning and restarts.
+      -- newest are deleted or a snapshot restored, so a cursor into it survives pruning,
+      -- restarts and restores.
       CREATE TABLE message (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT NOT NULL UNIQUE,
@@ -108,6 +109,12 @@ export const MIGRATIONS: readonly Migration[] = [
 
 /** The schema this code makes and reads. */
 export const SCHEMA = MIGRATIONS.length;
+
+/**
+ * The tables whose rows are numbered with places never given again (AUTOINCREMENT), which cursors
+ * hold: a database restored numbers them on from past every place given before (open.ts).
+ */
+export const SEQUENCES: readonly string[] = ['message'];
 
 /**
  * Runs the migrations a database lacks, in order, each with its version in one transaction. Each

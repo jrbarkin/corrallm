@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { migrate, MIGRATIONS, minReaderOf, SCHEMA, schemaOf } from './migrations';
+import { migrate, MIGRATIONS, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import type { Migration } from './migrations';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
@@ -188,6 +188,17 @@ describe('the schema', () => {
     connection = connect(file);
     expect(addMessage('d')).toBe(4);
     expect(() => addMessage('a')).toThrow(/UNIQUE constraint failed: message\.id/);
+  });
+
+  it('names each table whose places are never given again', () => {
+    migrate(connection);
+    const numbered = connection
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND sql LIKE '%AUTOINCREMENT%' ORDER BY name",
+      )
+      .all()
+      .map((row) => row.name);
+    expect(numbered).toEqual([...SEQUENCES].sort());
   });
 
   it('finds a canvas’s messages after a place, and a message by its id, by index', () => {
