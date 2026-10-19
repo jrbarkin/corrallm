@@ -8,7 +8,11 @@ import type { Brand, IdRef, NeedId } from '../../shared/api/ids';
 import type { Party, Rule, Surface } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import { notPlainData } from '../../shared/link';
-import { callerKey, canvasesOf, partyOf } from './caller';
+import type { CanvasDocument } from '../../shared/model/canvas';
+import type { PartyId } from '../../shared/model/messages';
+import { callerKey, canvasesOf, partyIdOf, partyOf } from './caller';
+import type { Committer } from './canvas/commit';
+import type { Built } from './canvas/documents';
 import type { Caller, TokenCaller } from './caller';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
@@ -47,12 +51,26 @@ export class OpFailure extends Error {
   }
 }
 
-/** What an op is called with besides its arguments: who called, as what party, and its signal. */
+/**
+ * What an op is called with besides its arguments: who called, as what party, its signal, and how
+ * it changes a canvas's document.
+ */
 export interface OpContext {
   readonly caller: Caller;
   readonly party: Party;
+  /** The party the caller is: what each change it commits is stamped with. */
+  readonly by: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
+  /**
+   * Commits to canvas `canvas`'s document (the canvas the op names) what `build` makes of it,
+   * purely, from the live one (B9 Design §3): checked against the revisions the call expects and,
+   * for a token, the change rules, then written past the call's point of no return. Resolves with
+   * the op's result once it is on disk, the revision it took the call's (`revs`); rejects, changing
+   * nothing, if the canvas isn't open, an entity the call expects is at another revision (a
+   * conflict, saying what each is now), a change rule refuses it, or it couldn't be written.
+   */
+  commit<R>(canvas: string | undefined, build: (document: CanvasDocument) => Built<R>): Promise<R>;
 }
 
 /** An op's implementation: its arguments, parsed, to its result. */
@@ -95,6 +113,8 @@ export interface DispatchOptions {
    * canvas that does (`withdraw` takes no canvas). Without it, none does.
    */
   holds?: (canvas: CanvasId, ref: IdRef, caller: Caller) => boolean;
+  /** Commits an op's change to a canvas's document (canvas/commit.ts). Without it, none can. */
+  commit?: Committer;
   /**
    * Whether each call's arguments and result are checked to be plain data (as CoreLink checks
    * what crosses a port) and each result against its schema: in dev and tests.
@@ -137,6 +157,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     resolvers = {},
     openCanvases = () => [],
     holds = () => false,
+    commit,
     check = false,
     now = Date.now,
   } = options;
@@ -199,7 +220,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         scopeOf(surface, args),
         { preempt: surface.preempt === true, drains: drainsOf(surface, args) },
         signal,
-        async (opSignal) => {
+        async (opSignal, noReturn) => {
           ran = opSignal;
           if (caller.kind !== 'human') {
             for (const rule of surface.rules ?? []) {
@@ -215,15 +236,43 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
               if (outcome) return { proposed: outcome.propose };
             }
           }
+          const by = partyIdOf(caller);
+          const { request, expect } = args as {
+            request?: string;
+            expect?: Readonly<Record<string, number>>;
+          };
+          /** The revision of each topic the op reached. */
+          const revs: Record<string, number> = {};
           const result = await implementation(args as never, {
             caller,
             party,
+            by,
             signal: opSignal,
+            commit: async (canvas, build) => {
+              if (commit === undefined) {
+                throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
+              }
+              if (canvas === undefined) {
+                throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
+              }
+              const done = await commit(canvas as CanvasId, build, {
+                op: name,
+                caller,
+                party,
+                by,
+                ...(request === undefined ? {} : { request }),
+                ...(expect === undefined ? {} : { expect }),
+                signal: opSignal,
+                noReturn,
+              });
+              if (done.rev !== undefined) revs[`canvas:${canvas}`] = done.rev;
+              return done.result;
+            },
           });
           // A write says what it reached: the revisions of the topics it changed.
           return surface.kind === 'read' || isProposal(result)
             ? result
-            : { ...(result as object), revs: {} };
+            : { ...(result as object), revs };
         },
       );
       if (check) checkResult(def, value);

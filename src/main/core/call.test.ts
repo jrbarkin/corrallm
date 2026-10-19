@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
 import { withEnvelope } from '../../shared/api/define';
 import { createDispatcher, drainsOf, OpFailure, scopeOf } from './call';
-import type { DispatchOptions } from './call';
+import type { DispatchOptions, OpContext } from './call';
+import type { Committer } from './canvas/commit';
+import { CommitFailed } from './canvas/documents';
 import { partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { asHuman } from './gui';
@@ -134,6 +136,94 @@ describe('core.call', () => {
     expect(await core.call('test.read', {}, CALLERS.you)).toEqual({
       ok: true,
       value: { caller: 'you', same: 1 },
+    });
+  });
+
+  describe('ctx.commit', () => {
+    /** The test registry with test.agent committing a change to its canvas's document. */
+    function committing(commit: Committer) {
+      const registry = testRegistry();
+      return createDispatcher(
+        {
+          ...registry,
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas, agent }: { canvas?: string; agent: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (document) => ({ next: document, result: { agent } })),
+          },
+        },
+        { isLead, resolvers: RESOLVERS, check: true, commit, openCanvases: () => [] },
+      );
+    }
+    const DOCUMENT = { id: CANVAS, arrange: false, nodes: [], links: [] };
+
+    it('commits as the caller’s party, giving the call the revision it reached', async () => {
+      const calls: unknown[] = [];
+      const core = committing((canvas, build, call) => {
+        calls.push({ canvas, op: call.op, by: call.by, request: call.request });
+        call.noReturn();
+        return Promise.resolve({ result: build(DOCUMENT).result, rev: 7 });
+      });
+      const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+      expect(await core.call('test.agent', args, CALLERS['outside-write'])).toEqual({
+        ok: true,
+        value: { agent: 'helper', revs: { [`canvas:${CANVAS}`]: 7 } },
+      });
+      expect(calls).toEqual([
+        { canvas: CANVAS, op: 'test.agent', by: 'outside:orchestrator', request: REQUEST },
+      ]);
+    });
+
+    it('gives a commit that changed nothing no revision', async () => {
+      const core = committing((_canvas, build) =>
+        Promise.resolve({ result: build(DOCUMENT).result }),
+      );
+      expect(
+        await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you),
+      ).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
+    });
+
+    it('runs a request again whose commit couldn’t be written', async () => {
+      let tries = 0;
+      const core = committing((_canvas, build) => {
+        tries += 1;
+        if (tries === 1) throw new CommitFailed(new Error('The disk is full.'));
+        return Promise.resolve({ result: build(DOCUMENT).result, rev: 2 });
+      });
+      const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };
+      expect(await core.call('test.agent', args, CALLERS.you)).toEqual({
+        ok: false,
+        error: {
+          code: 'unavailable',
+          sentence: 'The change couldn’t be written, so nothing changed: The disk is full.',
+        },
+      });
+      expect(await core.call('test.agent', args, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { revs: { [`canvas:${CANVAS}`]: 2 } },
+      });
+      expect(tries).toBe(2);
+    });
+
+    it('refuses a commit in a core that keeps no documents', async () => {
+      const registry = testRegistry();
+      const bare = createDispatcher(
+        {
+          ...registry,
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas }: { canvas?: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (document) => ({ next: document, result: {} })),
+          },
+        },
+        { isLead, resolvers: RESOLVERS },
+      );
+      expect(
+        await bare.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you),
+      ).toEqual({
+        ok: false,
+        error: { code: 'unavailable', sentence: 'This core keeps no canvas’s document.' },
+      });
     });
   });
 

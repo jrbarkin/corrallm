@@ -138,12 +138,19 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 the document's next revision, each stamped with it and its party, with `revision`
                 and `change`; the live document changes only once it is on disk, and a failed write
                 is CommitFailed; one commit at a time a canvas; revisions past the last 1,000
-                trimmed every 100 commits), the renderer's whole document committed as `canvas.edit` by you until its
-                gestures are operations (`edit`, for run:save and canvas:save), and saved by the core
+                trimmed every 100 commits), the renderer's whole document committed as
+                `canvas.edit` by you until its gestures are operations (`edit`, for run:save and
+                canvas:save), and saved by the core
                 itself (`save`: writing_hash committed, the file written whole and forced to disk,
                 then file_hash and saved_hash with canvas memory's file; a save cut short is settled
                 as the canvas next loads, by whether the file's bytes hash to writing_hash); `edited`
-                is whether its text's hash is saved_hash. delivery/messages.ts is
+                is whether its text's hash is saved_hash. canvas/commit.ts is what an op's
+                `ctx.commit` does (B9 Design §3): its change built in the canvas's turn unless the
+                call was superseded, checked against the revisions the call `expect`s (a conflict
+                with `current` otherwise) and, for a token, every change rule (`ChangeRule`,
+                rules.ts' `changeChecks`), written past the call's point of no return, its
+                revision the call's `revs`; then the canvas's engine follows its document
+                (`Engines.changed`). delivery/messages.ts is
                 the message store (MessageStore, a canvas's, over MessageTable, every canvas's rows
                 of `message`); delivery/delivery.ts delivers them, framed, and brings replies back;
                 delivery/withdrawals.ts carries durable withdrawal notes into the next CLI message

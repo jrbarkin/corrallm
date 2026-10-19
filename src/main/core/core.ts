@@ -28,6 +28,7 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
+import { committer } from './canvas/commit';
 import { Documents } from './canvas/documents';
 import { Channels } from './channels';
 import { Windows } from './windows';
@@ -40,7 +41,7 @@ import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
 import { holder, resolvers } from './reach';
-import { ruleChecks } from './rules';
+import { changeChecks, ruleChecks } from './rules';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
@@ -330,6 +331,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       check: config.check,
       isLead,
       resolvers: resolvers(engines, isLead),
+      commit: committer({
+        documents,
+        rules: changeChecks(),
+        committed: (canvas) => {
+          engines.changed(canvas);
+        },
+      }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),
       ...(config.limitsClock === undefined ? {} : { now: config.limitsClock }),

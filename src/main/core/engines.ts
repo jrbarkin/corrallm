@@ -150,6 +150,17 @@ export class Engines {
     return this.#canvases.get(canvas);
   }
 
+  /**
+   * The canvas's document changed (an op committed to it): its engine follows it, its sessions and
+   * its run, and what waits on it to be delivered is looked at again.
+   */
+  changed(canvas: CanvasId): void {
+    const running = this.#canvases.get(canvas);
+    if (!running) return;
+    running.engine.update(running.document.nodes);
+    running.delivery.schedule();
+  }
+
   /** The canvases the core has open, in the order they opened. */
   opened(): CanvasId[] {
     return [...this.#canvases.keys()];

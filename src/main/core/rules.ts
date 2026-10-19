@@ -1,24 +1,38 @@
 import type { ArgsOf } from '../../shared/api/registry';
 import type { RULES } from '../../shared/api/rules';
-import type { OpName, Party, SURFACE } from '../../shared/api/surface';
+import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import { andList } from '../../shared/model/words';
 import type { RuleOutcome } from './call';
+import type { ChangeRule } from './canvas/commit';
 import { partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
 import type { Engines } from './engines';
 import { nameOf, pausesText, RELEASES } from './parties';
 
 /*
- * How the core checks each rule an operation carries on a token's arguments (Core Server §3.6),
- * in the op's scope before it runs: one check per RULES row checked on arguments, for each op that
- * carries it. A rule met refuses the token, saying why; you are never checked.
+ * How the core checks the rules that narrow what a token may do (Core Server §3.6): each rule an
+ * operation carries on a token's arguments, in the op's scope before it runs (one check per RULES
+ * row checked on arguments, for each op that carries it); and each rule checked on the change a
+ * token's op commits, whatever op made it (canvas/commit.ts). A rule met refuses the token, saying
+ * why; you are never checked.
  */
 
 /** The rules RULES checks on arguments. */
 type ArgumentRule = {
   [R in keyof typeof RULES]: (typeof RULES)[R]['kind'] extends 'change' ? never : R;
 }[keyof typeof RULES];
+
+/** The rules RULES checks on the change an op commits. */
+type ChangeRuleOf = {
+  [R in keyof typeof RULES]: (typeof RULES)[R]['kind'] extends 'argument' ? never : R;
+}[keyof typeof RULES];
+
+/**
+ * Each rule checked on a token's change: its check, run at every commit of a token's. The compiler
+ * refuses a RULES row checked on changes without one.
+ */
+export type ChangeChecks = Partial<Record<Rule, ChangeRule>> & Record<ChangeRuleOf, ChangeRule>;
 
 /** The rules op `N` carries. */
 type RulesOf<N extends OpName> = (typeof SURFACE)[N] extends {
@@ -93,4 +107,9 @@ export function ruleChecks(engines: Engines): ArgumentChecks {
       },
     },
   };
+}
+
+/** Each rule checked on the change a token's op commits (none yet: each lands with its RULES row). */
+export function changeChecks(): ChangeChecks {
+  return {};
 }
