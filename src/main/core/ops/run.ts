@@ -10,20 +10,24 @@ import type { Implementations, OpServices } from '.';
  * The run (Core Server §4 F): pausing, killing and releasing an agent or a group, whether or not a
  * run is going. Each pause and kill is stamped with the party that set it: a token releases only
  * its own (Core Server rule R9, checked in core.call), you any; a release says what holds its
- * target still (another party's pause, or one on a group it is in).
+ * target still (another party's pause, or one on a group it is in). Each takes effect at once, and
+ * returns once it is on disk: the canvas's run record forced there, and for a kill, after it, what
+ * it took back in the message log. One that can't be fails, saying it is in place all the same but
+ * may not survive a restart.
  */
 export function runOps({
   engines,
 }: OpServices): Pick<Implementations, 'run.pause' | 'run.kill' | 'run.unpause'> {
   return {
-    'run.pause': ({ canvas, target }, { caller }) => {
+    'run.pause': async ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);
       const by = partyIdOf(caller);
       if ('agent' in target) open.engine.run.pauseAgent(agentOf(open, target.agent).id, by);
       else open.engine.run.pauseGroup(groupOf(open, target), by);
+      await saved(open.journal(), HOLD_UNSAVED);
       return {};
     },
-    'run.kill': ({ canvas, target }, { caller }) => {
+    'run.kill': async ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);
       const by = partyIdOf(caller);
       const { engine, delivery } = open;
@@ -34,21 +38,50 @@ export function runOps({
       // Held first, so that nothing taken back lets another member's work start.
       if ('agent' in target) engine.run.killAgent(target.agent, by);
       else engine.run.killGroup(target.group, by);
-      for (const agent of members) {
-        delivery.kill(agent, by);
+      // Its record is queued before anything it takes back is appended to the same journal, so no
+      // withdrawal reaches the disk without the hold. One being delivered is withdrawn once its
+      // interrupted turn ends.
+      const record = open.journal();
+      const withdrawing = members.map((agent) => {
+        const withdrawn = delivery.kill(agent, by);
         engine.sessions.stop(agent);
-      }
+        return withdrawn;
+      });
+      await saved(
+        record.then(async () => {
+          await Promise.all(withdrawing);
+          await open.messages.durable();
+        }),
+        KILL_UNSAVED,
+      );
       return {};
     },
-    'run.unpause': ({ canvas, target }, { caller }) => {
+    'run.unpause': async ({ canvas, target }, { caller }) => {
       const open = openCanvas(engines, canvas);
       const by = partyIdOf(caller);
       const { run } = open.engine;
       if ('agent' in target) run.resumeAgent(agentOf(open, target.agent).id, by);
       else run.resumeGroup(groupOf(open, target), by);
+      await saved(open.journal(), RELEASE_UNSAVED);
       return { held: run.holding(target).map(({ id, by: party }) => ({ by: party, on: id })) };
     },
   };
+}
+
+const HOLD_UNSAVED =
+  'The hold is in place now, but it could not be saved and may not survive a restart.';
+const KILL_UNSAVED =
+  'The hold is in place now, and what was sent to or from it taken back, but not all of it could be saved, so it may not survive a restart.';
+const RELEASE_UNSAVED =
+  'The pause is released now, but the release could not be saved and may not survive a restart.';
+
+/** Resolves once `write` is on disk; a write that fails says `sentence`, undoing nothing. */
+async function saved(write: Promise<void>, sentence: string): Promise<void> {
+  try {
+    await write;
+  } catch {
+    throw new OpFailure('unavailable', sentence);
+  }
 }
 
 /** The group a target names: not-found if it names none. */

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,7 +23,11 @@ import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
  */
 
 const events = vi.hoisted(() => [] as string[]);
-const gate = vi.hoisted(() => ({ held: undefined as Promise<void> | undefined, fails: false }));
+const gate = vi.hoisted(() => ({
+  held: undefined as Promise<void> | undefined,
+  fails: false,
+  only: undefined as 'record' | 'messages' | undefined,
+}));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
@@ -45,8 +49,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       };
       const sync = handle.sync.bind(handle);
       handle.sync = async () => {
-        await gate.held;
-        if (gate.fails) throw new Error('EIO: i/o error, fsync');
+        if (
+          gate.only === undefined ||
+          (gate.only === 'record' && file.startsWith('record.json.')) ||
+          (gate.only === 'messages' && file === 'messages.jsonl')
+        ) {
+          await gate.held;
+          if (gate.fails) throw new Error('EIO: i/o error, fsync');
+        }
         await sync();
         events.push(`fsync ${file}`);
       };
@@ -74,6 +84,7 @@ beforeEach(async () => {
 afterEach(async () => {
   gate.held = undefined;
   gate.fails = false;
+  gate.only = undefined;
   await core?.close();
   core = undefined;
   await rm(profile, { recursive: true, force: true });
@@ -138,6 +149,119 @@ async function ok<T = Record<string, unknown>>(
   if (!result?.ok) throw new Error(`${name} failed: ${JSON.stringify(result)}`);
   return result.value;
 }
+
+it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
+  '%s takes effect at once but returns only once its run record is forced to disk',
+  async (op) => {
+    const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+    const target = { agent: 'builder' };
+    if (op === 'run.unpause') await ok('run.pause', { target });
+    const held = Promise.withResolvers<undefined>();
+    gate.only = 'record';
+    gate.held = held.promise;
+    let settled = false;
+    const result = ok(op, { target }).then((value) => {
+      settled = true;
+      return value;
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(engines.canvas(CANVAS)?.engine.run.holding(target).length).toBe(
+          op === 'run.unpause' ? 0 : 1,
+        );
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+    } finally {
+      gate.held = undefined;
+      held.resolve(undefined);
+      await result;
+    }
+    const record = JSON.parse(
+      await readFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8'),
+    ) as { checkpoint: { state: string } };
+    const { run } = JSON.parse(record.checkpoint.state) as {
+      run: { individualPauses?: { id: string; by: string }[] };
+    };
+    expect(run.individualPauses ?? []).toEqual(
+      op === 'run.unpause' ? [] : [{ id: 'builder', by: 'outside:orchestrator' }],
+    );
+    expect(events.some((event) => /^fsync record\.json\..+\.partial$/.test(event))).toBe(true);
+  },
+);
+
+it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
+  '%s says its immediate change may not survive a restart when its record cannot be forced',
+  async (op) => {
+    const { engines } = await start(new FakeConnector({ adapter: 'codex' }));
+    const target = { agent: 'builder' };
+    if (op === 'run.unpause') await ok('run.pause', { target });
+    gate.only = 'record';
+    gate.fails = true;
+    try {
+      expect(await core?.call(op, { canvas: CANVAS, target }, OUTSIDE)).toEqual({
+        ok: false,
+        error: {
+          code: 'unavailable',
+          sentence: {
+            'run.pause':
+              'The hold is in place now, but it could not be saved and may not survive a restart.',
+            'run.kill':
+              'The hold is in place now, and what was sent to or from it taken back, but not all of it could be saved, so it may not survive a restart.',
+            'run.unpause':
+              'The pause is released now, but the release could not be saved and may not survive a restart.',
+          }[op],
+        },
+      });
+      expect(engines.canvas(CANVAS)?.engine.run.holding(target).length).toBe(
+        op === 'run.unpause' ? 0 : 1,
+      );
+    } finally {
+      gate.fails = false;
+    }
+  },
+);
+
+it('returns from a kill only once its hold and pending and active withdrawals are forced to disk', async () => {
+  const { engines } = await start(new FakeConnector({ adapter: 'codex', pause: 100 }));
+  const open = engines.canvas(CANVAS);
+  const active = await ok<{ id: string }>('message', { to: 'builder', body: 'Working' });
+  await vi.waitFor(() => {
+    expect(open?.messages.get(active.id)?.state).toBe('delivered');
+  });
+  const waiting = await ok<{ id: string }>('message', { to: 'builder', body: 'Next' });
+  const held = Promise.withResolvers<undefined>();
+  gate.only = 'messages';
+  gate.held = held.promise;
+  let settled = false;
+  const result = ok('run.kill', { target: { agent: 'builder' } }).then(() => {
+    settled = true;
+  });
+  try {
+    await vi.waitFor(() => {
+      expect([active.id, waiting.id].map((id) => open?.messages.get(id)?.state)).toEqual([
+        'withdrawn',
+        'withdrawn',
+      ]);
+    });
+    expect(settled).toBe(false);
+  } finally {
+    gate.held = undefined;
+    held.resolve(undefined);
+    await result;
+  }
+  const forced = events.lastIndexOf('fsync messages.jsonl');
+  for (const { id } of [active, waiting]) {
+    const appended = events.findIndex((event) => event.startsWith(`append ${id} withdrawn `));
+    expect(appended).toBeGreaterThan(-1);
+    expect(forced).toBeGreaterThan(appended);
+  }
+  const record = events.findIndex((event) => /^fsync record\.json\..+\.partial$/.test(event));
+  expect(record).toBeGreaterThan(-1);
+  expect(record).toBeLessThan(
+    events.findIndex((event) => event.startsWith(`append ${waiting.id} withdrawn `)),
+  );
+});
 
 it('sends a message only once its delivering record is on disk', async () => {
   const codex = new FakeConnector({ adapter: 'codex' });
@@ -250,6 +374,7 @@ it('delivers the next message once one taken back while it was journaled is with
   const second = await ok<{ id: string }>('message', { to: 'builder', body: 'Second' }, other);
   // The first's delivering record is held on its way to disk, and taken back meanwhile.
   const held = Promise.withResolvers<undefined>();
+  gate.only = 'messages';
   gate.held = held.promise;
   await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
   await vi.waitFor(() => {
@@ -278,6 +403,7 @@ it('keeps waiting what it couldn’t record as delivering, and sends it once its
   const other: OutsideCaller = { ...OUTSIDE, token: 'other-token', name: 'other' };
   const second = await ok<{ id: string }>('message', { to: 'builder', body: 'Second' }, other);
   // Its pending record is on disk; its delivering one can't be forced there.
+  gate.only = 'messages';
   gate.fails = true;
   await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
   await vi.waitFor(() => {
@@ -313,6 +439,7 @@ it('holds a party’s message in its session’s queue when its agent is paused 
   const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Wait for me' });
   // Its delivering record is held on its way to disk; meanwhile its agent is paused again.
   const held = Promise.withResolvers<undefined>();
+  gate.only = 'messages';
   gate.held = held.promise;
   await ok('run.unpause', { target: { agent: 'builder' } }, CALLERS.you);
   await vi.waitFor(() => {
