@@ -100,11 +100,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
     codex = path.join(dir, 'codex');
     codexLog = path.join(dir, 'codex.log');
-    await writeFile(
-      codex,
-      `#!/bin/sh\nFAKE_CODEX_STATE="${path.join(dir, 'threads.json')}" FAKE_CODEX_LOG="${codexLog}" exec "${process.execPath}" "${FAKE_CODEX}" "$@"\n`,
-    );
-    await chmod(codex, 0o755);
+    await fakeCodex();
     running = [];
     clients = [];
     results = [];
@@ -119,6 +115,19 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     }
     await rm(dir, { recursive: true, force: true });
   });
+
+  /** The `codex` agents run: the fake, keeping its threads and log in `dir`, with `env` set. */
+  async function fakeCodex(env: Record<string, string> = {}): Promise<void> {
+    const set = Object.entries({
+      FAKE_CODEX_STATE: path.join(dir, 'threads.json'),
+      FAKE_CODEX_LOG: codexLog,
+      ...env,
+    })
+      .map(([name, value]) => `${name}="${value}"`)
+      .join(' ');
+    await writeFile(codex, `#!/bin/sh\n${set} exec "${process.execPath}" "${FAKE_CODEX}" "$@"\n`);
+    await chmod(codex, 0o755);
+  }
 
   /** A canvas file: Builder (or `builder`) on Codex's App Server, Shell on its Terminal. */
   async function canvasFile(name: string, id: string, builder = 'Builder'): Promise<string> {
@@ -749,6 +758,31 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       ).toMatch(/cut off/);
     },
   );
+
+  it('stops cleanly though told again as it stops: it says so, and still lets the profile go', async () => {
+    // Builder's session takes a while to close.
+    await fakeCodex({ FAKE_CODEX_LINGER: '1500' });
+    const server = await serve();
+    const client = await connect(server.url);
+    const slow = await midTurn(client);
+    server.child.kill('SIGINT');
+    await vi.waitFor(() => {
+      expect(server.stderr()).toContain('stopping…');
+    });
+    // A second Ctrl-C while it closes Builder's session: never Node's own, which would kill it.
+    server.child.kill('SIGINT');
+    expect(await server.exited).toBe(0);
+    expect(server.child.signalCode).toBeNull();
+    expect(server.stderr()).toContain('stopping already');
+    expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+    expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+    // It journaled the run and the message cut off, its sender told.
+    const items = await messagesAfterRestart();
+    expect(items.find((message) => message.id === slow)?.state).toBe('unresolved');
+    expect(
+      items.find((message) => message.kind === 'notice' && message.replyTo === slow)?.body,
+    ).toMatch(/cut off/);
+  });
 
   it('says, as it starts after a crash, what it cut off, and a run record it set aside', async () => {
     const first = await serve();

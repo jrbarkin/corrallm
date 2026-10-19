@@ -24,7 +24,8 @@
 // default), FAKE_CODEX_FAIL (it prints that on stderr and exits 1 at once), FAKE_CODEX_STATE (a
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
 // it appends each request it gets to, one JSON line each), FAKE_CODEX_CONFIG_FAIL (config/read
-// fails with that message).
+// fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
+// as one finishing what it runs: none by default).
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -633,5 +634,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.id !== undefined) handle(message);
 });
-// Its input ends: it exits, as the real one does.
-process.stdin.on('end', () => process.exit(0));
+// Its input ends: it exits, as the real one does (FAKE_CODEX_LINGER ms later, if set).
+const linger = Number(process.env.FAKE_CODEX_LINGER ?? 0);
+process.stdin.on('end', () => {
+  if (linger > 0) setTimeout(() => process.exit(0), linger);
+  else process.exit(0);
+});
