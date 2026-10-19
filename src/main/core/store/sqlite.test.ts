@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { connect, resultCode, SQLITE_CORRUPT, SQLITE_NOTADB } from './sqlite';
+import { connect, extendedCode, resultCode, SQLITE_CORRUPT, SQLITE_NOTADB } from './sqlite';
 
 /*
  * The one module that reaches Node's SQLite (Core Database §3), lazily: a static import of it would
@@ -62,7 +62,7 @@ describe('node:sqlite', () => {
     }
   });
 
-  it('reads the primary result code of SQLite’s errors, and none of others', async () => {
+  it('reads the primary and extended result codes of SQLite’s errors, and none of others', async () => {
     const file = path.join(folder, 'text.db');
     await writeFile(file, 'This is not a database. '.repeat(100));
     const text = connect(file);
@@ -73,12 +73,14 @@ describe('node:sqlite', () => {
       // An extended code (a primary key's, 1555) is read as its primary one, a constraint's (19).
       const insert = memory.prepare('INSERT INTO a VALUES (1)');
       expect(resultCode(thrown(() => insert.run()))).toBe(19);
+      expect(extendedCode(thrown(() => insert.run()))).toBe(1555);
     } finally {
       text.close();
       memory.close();
     }
     expect(resultCode(new Error('not SQLite’s'))).toBeUndefined();
     expect(resultCode(undefined)).toBeUndefined();
+    expect(extendedCode(new Error('not SQLite’s'))).toBeUndefined();
     expect(SQLITE_CORRUPT).toBe(11);
   });
 });

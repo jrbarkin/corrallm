@@ -5,7 +5,14 @@ import path from 'node:path';
 
 import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
 import { snapshots, snapshotTime } from './snapshots';
-import { connect, resultCode, SQLITE_CORRUPT, SQLITE_NOTADB } from './sqlite';
+import {
+  connect,
+  extendedCode,
+  resultCode,
+  SQLITE_CORRUPT,
+  SQLITE_NOTADB,
+  SQLITE_READONLY_ROLLBACK,
+} from './sqlite';
 import type { Connection } from './sqlite';
 import { Store, SYSTEM_DEPS } from './store';
 import type { StoreDeps } from './store';
@@ -26,8 +33,8 @@ import type { StoreDeps } from './store';
  * resolves with the store, or none, and what it found to say. A database a newer corrallm made
  * that this one can't read (meta.min_reader above SCHEMA) is left as it is. A damaged one (SQLite
  * says it is corrupt or no database, its quick check finds a fault, or it isn't corrallm's) is
- * set aside as core.rejected-<uuid>.db with its log and index, the log first: a log left without
- * its database could otherwise be replayed into the next one. Then the newest snapshot that
+ * set aside as core.rejected-<uuid>.db with its log, index and journal, the log first: a log left
+ * without its database could otherwise be replayed into the next one. Then the newest snapshot that
  * passes the quick check is restored, else the store starts empty, and it says so. Whatever
  * restoring loses, the core treats as a restart does: what was being sent is never sent again.
  */
@@ -47,8 +54,11 @@ export const JOURNAL_SIZE_LIMIT = 4 * 2 ** 20;
  * synchronous); a reader of the log never blocks a writer.
  */
 const BUSY_TIMEOUT_MS = 0;
-/** The files SQLite keeps beside the database: its log and the log's index. */
-const SIDECARS = ['-wal', '-shm'];
+/**
+ * The files SQLite keeps beside the database: its log, the log's index, and the journal it keeps
+ * before it keeps a log (as it is set up).
+ */
+const SIDECARS = ['-wal', '-shm', '-journal'];
 
 /** What opening the store found: the store, or none, and what to say. */
 export interface Opened {
@@ -184,8 +194,27 @@ function create(file: string): boolean {
  * reads, so that one it refuses or sets aside is left as it was, its log with it: a connection
  * that writes would checkpoint the log into it, and delete it, as it closed. The log and index
  * SQLite makes for it meanwhile go again if it fails.
+ *
+ * But a transaction a crash left in its journal (as while it is set up, before it keeps a log),
+ * which a connection that only reads can't roll back, is rolled back first, as any connection
+ * that writes to it would: a database with a journal to roll back keeps no log to checkpoint.
  */
 function vet(file: string): void {
+  try {
+    check(file);
+  } catch (error) {
+    if (extendedCode(error) !== SQLITE_READONLY_ROLLBACK) throw error;
+    const writer = connect(file, { timeout: BUSY_TIMEOUT_MS });
+    try {
+      writer.prepare('SELECT count(*) FROM sqlite_schema').get();
+    } finally {
+      writer.close();
+    }
+    check(file);
+  }
+}
+
+function check(file: string): void {
   const made = SIDECARS.filter((suffix) => !existsSync(`${file}${suffix}`));
   const reader = connect(file, { readOnly: true, timeout: BUSY_TIMEOUT_MS });
   try {

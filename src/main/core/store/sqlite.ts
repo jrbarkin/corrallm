@@ -18,6 +18,8 @@ export const SQLITE_BUSY = 5;
 export const SQLITE_CORRUPT = 11;
 export const SQLITE_FULL = 13;
 export const SQLITE_NOTADB = 26;
+/** An extended one: a connection that only reads found a journal it must roll back first. */
+export const SQLITE_READONLY_ROLLBACK = 776;
 
 let loaded: typeof Sqlite | undefined;
 
@@ -44,6 +46,12 @@ export function backup(source: Connection, file: string, rate: number): Promise<
  * 1555 is a constraint's 19), or undefined for an error of something else.
  */
 export function resultCode(error: unknown): number | undefined {
+  const code = extendedCode(error);
+  return code === undefined ? undefined : code & 0xff;
+}
+
+/** The extended result code of an error SQLite gave, or undefined for an error of something else. */
+export function extendedCode(error: unknown): number | undefined {
   if (!(error instanceof Error) || !('errcode' in error)) return undefined;
-  return typeof error.errcode === 'number' ? error.errcode & 0xff : undefined;
+  return typeof error.errcode === 'number' ? error.errcode : undefined;
 }

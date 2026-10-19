@@ -121,6 +121,46 @@ describe('openStore', () => {
     expect(store.prepare('SELECT id FROM canvas').all()).toEqual([{ id: 'kept' }]);
   });
 
+  it('rolls back what a crash left in a rollback journal, as SQLite does, and opens what was committed', async () => {
+    const first = await open();
+    first.store.tx(() =>
+      first.store.prepare("INSERT INTO canvas (id, used_at) VALUES ('kept', 1)").run(),
+    );
+    await first.store.close();
+    // The database before it keeps a write-ahead log (as a snapshot just restored is), and a
+    // transaction cut short in it: its pages spilled into the file, the journal hot beside it.
+    const [snapshot] = await readdir(path.join(profile, 'backups'));
+    const elsewhere = await mkdtemp(path.join(tmpdir(), 'corrallm-crash-'));
+    const crashing = path.join(elsewhere, 'core.db');
+    await copyFile(path.join(profile, 'backups', snapshot ?? ''), crashing);
+    const writer = connect(crashing);
+    writer.exec('PRAGMA cache_size = 1; PRAGMA cache_spill = 1; BEGIN IMMEDIATE');
+    for (let i = 0; i < 200; i++) {
+      writer
+        .prepare(
+          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+           VALUES (?, 'kept', 'you', 'agent:a', 'text', ?, 'pending', 1)`,
+        )
+        .run(`message ${String(i)}`, 'x'.repeat(500));
+    }
+    await copyFile(crashing, file);
+    await copyFile(`${crashing}-journal`, `${file}-journal`);
+    writer.exec('ROLLBACK');
+    writer.close();
+    await rm(elsewhere, { recursive: true, force: true });
+
+    const { store, said } = await open();
+
+    expect(said).toEqual([]);
+    expect(store.prepare('SELECT id FROM canvas').all()).toEqual([{ id: 'kept' }]);
+    expect(store.prepare('SELECT count(*) AS messages FROM message').get()).toEqual({
+      messages: 0,
+    });
+    expect(store.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' });
+    expect(pragma(store, 'journal_mode')).toBe('wal');
+    await expect(stat(`${file}-journal`)).rejects.toThrow(/ENOENT/);
+  });
+
   it('refuses a database a newer corrallm made that this one can’t read, leaving it as it was', async () => {
     const { store } = await open();
     await store.close();
@@ -225,10 +265,13 @@ describe('a damaged database', () => {
     expect(canvases(store)).toContainEqual({ id: 'after' });
   }
 
-  it('sets aside a file that isn’t a database, with its log and index, and starts empty', async () => {
+  it('sets aside a file that isn’t a database, with its log, index and journal, and starts empty', async () => {
     await writeFile(file, 'This is not a database. '.repeat(500));
     await writeFile(`${file}-wal`, 'its log');
     await writeFile(`${file}-shm`, 'its index');
+    // A journal with no transaction in it to roll back (its header zeroed, as SQLite may leave it).
+    const journal = Buffer.concat([Buffer.alloc(28), Buffer.from('its journal')]);
+    await writeFile(`${file}-journal`, journal);
 
     const { store, said } = await open();
 
@@ -239,6 +282,7 @@ describe('a damaged database', () => {
     ]);
     expect(await readFile(rejected, 'utf8')).toBe('This is not a database. '.repeat(500));
     expect(await readFile(`${rejected}-wal`, 'utf8')).toBe('its log');
+    expect(Buffer.compare(await readFile(`${rejected}-journal`), journal)).toBe(0);
     // The log's index, which SQLite rebuilds from the log whenever it reads it, went with it.
     await expect(stat(`${rejected}-shm`)).resolves.toBeDefined();
     expect(canvases(store)).toEqual([]);
