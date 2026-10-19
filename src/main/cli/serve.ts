@@ -111,15 +111,17 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
         say(needLine(opened, names, canvas, item));
       },
     });
-    const files = command.canvases.map((file) => path.basename(file));
+    const files = new Map<CanvasId, string>();
+    const basenames = command.canvases.map((file) => path.basename(file));
     for (const file of command.canvases) {
       try {
         const { canvas, warnings } = await opened.openFile(file);
         const name = path.basename(file);
-        // Two files of one name are told apart by their canvases' ids.
+        files.set(canvas, name);
+        // In the log, two files of one name are told apart by their canvases' ids.
         names.set(
           canvas,
-          files.filter((one) => one === name).length > 1 ? `${name} ${canvas}` : name,
+          basenames.filter((one) => one === name).length > 1 ? `${name} ${canvas}` : name,
         );
         for (const warning of warnings) say(`${where(names, canvas)} ${warning}`);
       } catch (error) {
@@ -151,7 +153,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     if (command.port === undefined ? kept === undefined : command.port !== 0) {
       await opened.settings.keepApiPort(server.port);
     }
-    const served = [...names].map(([canvas, name]) => `${name} (${canvas})`).join(', ');
+    const served = [...files].map(([canvas, name]) => `${name} (${canvas})`).join(', ');
     // `corrallm wait` finds a server by api.json only on the app's own profile.
     const findIt =
       profile === path.resolve(appProfile({ env: io.env }))

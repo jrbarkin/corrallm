@@ -935,6 +935,25 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
   });
 
+  it('tells apart two canvases whose files share a name, by their ids', async () => {
+    // The second canvas kept in a file named as the first's, in another folder.
+    await mkdir(path.join(dir, 'other'));
+    const twin = path.join(dir, 'other', 'm1.corral');
+    await copyFile(path.join(dir, 'second.corral'), twin);
+    const memory = JSON.parse(await readFile(path.join(profile, 'canvases.json'), 'utf8')) as {
+      canvases: Record<string, { file: string }>;
+    };
+    (memory.canvases[SECOND] as { file: string }).file = twin;
+    await writeFile(path.join(profile, 'canvases.json'), JSON.stringify(memory));
+    const server = await serve(['--canvas', twin]);
+    expect(server.stderr()).toContain(`serving m1.corral (${CANVAS}), m1.corral (${SECOND}) at`);
+    const client = await connect(server.url, SECOND_ONLY);
+    const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'Hi' });
+    await vi.waitFor(() => {
+      expect(server.stderr()).toContain(`[m1.corral ${SECOND}] message ${id}`);
+    });
+  });
+
   it('checks every request’s token, its canvases and access, and refuses a page’s request or a body that isn’t JSON', async () => {
     const server = await serve(['--canvas', path.join(dir, 'second.corral')]);
     expect(await post(server.url, HEADERS, LIST)).toBe(200);
