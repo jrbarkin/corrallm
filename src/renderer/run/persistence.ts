@@ -99,19 +99,34 @@ export class RunPersistence {
     return this.#failedInitialization;
   }
 
-  /** Call after main opens/saves/forgets a canvas: it rotates the storage generation. */
+  /**
+   * Call after main opens/saves/forgets a canvas: it rotates the storage generation. A flush asked
+   * for meanwhile (as main quits) waits for it, then saves under the new token.
+   */
   async rebind(restore: boolean): Promise<RunContext> {
-    await this.#writes.catch(() => undefined);
-    this.#token = undefined;
-    const context = await this.#source.get();
-    if (this.#disposed) return context;
-    if (restore) this.#owner.restore(context);
-    this.#token = context.token;
-    this.#last = '';
-    this.#context = this.#loading = Promise.resolve(context);
-    this.#failedInitialization = false;
-    this.#failedBaseline = undefined;
-    return context;
+    let release: (() => void) | undefined;
+    const before = this.#changing;
+    const changing = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#changing = changing;
+    try {
+      await before;
+      await this.#writes.catch(() => undefined);
+      this.#token = undefined;
+      const context = await this.#source.get();
+      if (this.#disposed) return context;
+      if (restore) this.#owner.restore(context);
+      this.#token = context.token;
+      this.#last = '';
+      this.#context = this.#loading = Promise.resolve(context);
+      this.#failedInitialization = false;
+      this.#failedBaseline = undefined;
+      return context;
+    } finally {
+      if (this.#changing === changing) this.#changing = undefined;
+      release?.();
+    }
   }
 
   changed(): void {
