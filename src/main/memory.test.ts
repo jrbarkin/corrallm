@@ -196,24 +196,35 @@ describe('CanvasMemory', () => {
     expect((await memory.get(TEAM)).conversations['claude-code']).toEqual({ a: { id: SESSION } });
   });
 
-  it('rejects flush after a write failure until a later write succeeds', async () => {
+  it('keeps a change whose write failed, writes it with the next, and rejects flush until then', async () => {
     const memory = new CanvasMemory(store);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    store.exec(`CREATE TRIGGER refuse BEFORE INSERT ON conversation
+    store.exec(`CREATE TRIGGER refuse BEFORE INSERT ON conversation WHEN NEW.canvas_id = '${TEAM}'
       BEGIN SELECT RAISE(ABORT, 'The disk is full'); END`);
     // Ordinary updates remain nonfatal; shutdown must still see their failed write.
     await memory.update(TEAM, () => ({ conversations: { 'claude-code': { a: { id: SESSION } } } }));
     expect(logged).toHaveBeenCalledOnce();
     await expect(memory.flush()).rejects.toThrow('The disk is full');
-    // Nothing of the update that failed was kept.
-    expect(await memory.get(TEAM)).toEqual({ conversations: {} });
-
-    store.exec('DROP TRIGGER refuse');
-    await memory.update(TEAM, () => ({ conversations: { 'claude-code': { a: { id: SESSION } } } }));
-    await expect(memory.flush()).resolves.toBeUndefined();
-    expect((await new CanvasMemory(store).get(TEAM)).conversations).toEqual({
+    // Still remembered, though not on disk: an agent starting now resumes it.
+    expect((await memory.get(TEAM)).conversations).toEqual({
       'claude-code': { a: { id: SESSION } },
     });
+    expect(await new CanvasMemory(store).get(TEAM)).toEqual({ conversations: {} });
+
+    // Another canvas's change is written only with it.
+    await memory.setFile(OTHER, at('/work/other.corral'));
+    await expect(memory.flush()).rejects.toThrow('The disk is full');
+    expect(await memory.canvasWithFile('/work/other.corral')).toBe(OTHER);
+
+    store.exec('DROP TRIGGER refuse');
+    await memory.update(TEAM, (current) => current);
+    await expect(memory.flush()).resolves.toBeUndefined();
+    await reopen();
+    const again = new CanvasMemory(store);
+    expect((await again.get(TEAM)).conversations).toEqual({
+      'claude-code': { a: { id: SESSION } },
+    });
+    expect(await again.canvasWithFile('/work/other.corral')).toBe(OTHER);
   });
 
   it('keeps only the canvases used most recently, across restarts, with everything kept of them', async () => {

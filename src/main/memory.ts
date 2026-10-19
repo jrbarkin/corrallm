@@ -48,18 +48,28 @@ const LIMIT = 200;
  * kept here.
  *
  * A file belongs to one canvas at most. Changes go through the store's write lane, in order, each
- * reading what those before it left, and are on disk once they resolve; one that fails changes
- * nothing, is said, and fails `flush` until another is written. It keeps the LIMIT canvases used
- * most recently (`used_at`, which each change moves past every other's), forgetting the others with
- * everything the database keeps of them. The paths it reads back are trusted: it wrote them, from
- * the app's dialogs. What isn't right (a path that isn't absolute, a conversation whose id isn't a
- * session's) is left out.
+ * reading what those before it left, and are on disk once they resolve. A change is remembered as
+ * it is made (what `get` reads), and written with every canvas changed whose row isn't on disk as
+ * it is yet: one whose write failed is said, written again with the next, and fails `flush` until
+ * it is on disk, so no conversation remembered is lost to a write that failed once. It keeps the
+ * LIMIT canvases used most recently (`used_at`, which each change moves past every other's),
+ * forgetting the others with everything the database keeps of them. The paths it reads back are
+ * trusted: it wrote them, from the app's dialogs. What isn't right (a path that isn't absolute, a
+ * conversation whose id isn't a session's) is left out.
  */
 export class CanvasMemory {
   readonly #store: Database;
   readonly #limit: number;
   /** Every change asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
+  /**
+   * The canvases changed whose rows aren't on disk as they are yet, as changed (the canvas changed
+   * last, last), each with the number of its last change: a write marks one on disk only if it
+   * hasn't changed since.
+   */
+  readonly #unwritten = new Map<CanvasId, { remembered: Remembered; change: number }>();
+  #changes = 0;
+  /** Why the last write failed, until a write leaves nothing unwritten. */
   #writeError: Error | undefined;
 
   constructor(store: Database, limit = LIMIT) {
@@ -70,20 +80,19 @@ export class CanvasMemory {
   /** What it remembers of a canvas, with every change asked for so far. */
   async get(canvas: CanvasId): Promise<Remembered> {
     await this.#writing;
-    return this.#read(canvas);
+    return this.#current(canvas);
   }
 
   /** The canvas whose file `file` is, if any. */
   async canvasWithFile(file: string): Promise<CanvasId | undefined> {
     await this.#writing;
-    const id = this.#store.prepare('SELECT id FROM canvas WHERE file = ?').get(file)?.id;
-    return isCanvasId(id) ? id : undefined;
+    return this.#withFile(file);
   }
 
   /** Changes what it remembers of `canvas`, which becomes the canvas used most recently. */
   update(canvas: CanvasId, change: (remembered: Remembered) => Remembered): Promise<void> {
     return this.#change(() => {
-      this.#keep(canvas, change(this.#read(canvas)));
+      this.#set(canvas, change(this.#current(canvas)));
     });
   }
 
@@ -93,12 +102,11 @@ export class CanvasMemory {
    */
   setFile(canvas: CanvasId, file: TrustedPath | undefined): Promise<void> {
     return this.#change(() => {
-      if (file !== undefined) {
-        this.#store
-          .prepare('UPDATE canvas SET file = NULL WHERE file = ? AND id <> ?')
-          .run(file, canvas);
+      const other = file === undefined ? undefined : this.#withFile(file);
+      if (other !== undefined && other !== canvas) {
+        this.#set(other, withFile(this.#current(other), undefined));
       }
-      this.#keep(canvas, withFile(this.#read(canvas), file));
+      this.#set(canvas, withFile(this.#current(canvas), file));
     });
   }
 
@@ -113,30 +121,75 @@ export class CanvasMemory {
     if (made.changes > 0) this.#forgetOldest();
   }
 
-  /** Resolves once every change so far is written; rejects a still-unrecovered write failure. */
+  /** Resolves once every change so far is on disk; rejects while a write that failed isn't. */
   async flush(): Promise<void> {
     await this.#writing;
     if (this.#writeError !== undefined) throw this.#writeError;
   }
 
+  /** Makes a change, then writes every canvas changed whose row isn't on disk as it is. */
   #change(apply: () => void): Promise<void> {
-    const written = this.#store
+    let written: () => void = () => undefined;
+    const writing = this.#store
       .write(() => {
         apply();
-        this.#forgetOldest();
+        written = this.#writeUnwritten();
       })
       .then(
         () => {
-          this.#writeError = undefined;
+          written();
+          if (this.#unwritten.size === 0) this.#writeError = undefined;
         },
-        // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs.
+        // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs: what
+        // failed stays unwritten, for the next write, and fails `flush` meanwhile.
         (error: unknown) => {
           this.#writeError = error instanceof Error ? error : new Error(String(error));
           console.error('Could not remember the canvas:', error);
         },
       );
-    this.#writing = Promise.all([this.#writing, written]);
-    return written;
+    this.#writing = Promise.all([this.#writing, writing]);
+    return writing;
+  }
+
+  /**
+   * Within a write: every canvas changed whose row isn't on disk as it is, as the canvas used most
+   * recently (the one changed last, last), each file cleared first from any other row that has it;
+   * then the canvases used least recently forgotten. Returns what marks them on disk once the
+   * write's commit returned.
+   */
+  #writeUnwritten(): () => void {
+    const written = [...this.#unwritten];
+    const clear = this.#store.prepare('UPDATE canvas SET file = NULL WHERE file = ? AND id <> ?');
+    for (const [canvas, { remembered }] of written) {
+      if (remembered.file !== undefined) clear.run(remembered.file, canvas);
+    }
+    for (const [canvas, { remembered }] of written) this.#keep(canvas, remembered);
+    this.#forgetOldest();
+    return () => {
+      for (const [canvas, { change }] of written) {
+        if (this.#unwritten.get(canvas)?.change === change) this.#unwritten.delete(canvas);
+      }
+    };
+  }
+
+  /** What it remembers of a canvas now: as changed, else as on disk. */
+  #current(canvas: CanvasId): Remembered {
+    return this.#unwritten.get(canvas)?.remembered ?? this.#read(canvas);
+  }
+
+  /** Remembers `canvas` as `remembered`, its row unwritten until a write has it on disk. */
+  #set(canvas: CanvasId, remembered: Remembered): void {
+    this.#unwritten.delete(canvas);
+    this.#unwritten.set(canvas, { remembered, change: ++this.#changes });
+  }
+
+  /** The canvas whose file `file` is now, if any. */
+  #withFile(file: string): CanvasId | undefined {
+    for (const [canvas, { remembered }] of this.#unwritten) {
+      if (remembered.file === file) return canvas;
+    }
+    const id = this.#store.prepare('SELECT id FROM canvas WHERE file = ?').get(file)?.id;
+    return isCanvasId(id) && !this.#unwritten.has(id) ? id : undefined;
   }
 
   #read(canvas: CanvasId): Remembered {

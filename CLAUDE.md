@@ -181,9 +181,11 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 read and write fails, saying why). createCore opens it first (once core.lock is
                 held: entry.ts, serve) and closes it last, after journaling; what opening it said is
                 said with the first canvas restored, as the journal's warnings are. Kept in it:
-                canvas memory (memory.ts: canvas, conversation; the 200 canvases used most recently,
-                by used_at, the rest forgotten with all the database keeps of them, their runs
-                included) and the run journal (run-journal.ts: run, run_workflow, read_position,
+                canvas memory (memory.ts: canvas, conversation; a change remembered as it is made,
+                and written with every canvas changed whose row isn't on disk as it is yet, so one
+                whose write failed is written with the next, and fails `flush` until it is; the 200
+                canvases used most recently, by used_at, the rest forgotten with all the database
+                keeps of them, their runs included) and the run journal (run-journal.ts: run, run_workflow, read_position,
                 open_canvas, each referring to its canvas's row, which it makes for a draft:
                 `ensure`; `keep` and `moveRead` within a write another store makes too) and the
                 message store
