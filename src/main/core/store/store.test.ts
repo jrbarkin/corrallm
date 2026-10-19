@@ -1,10 +1,11 @@
 import { fstatSync } from 'node:fs';
-import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { JOURNAL_SIZE_LIMIT } from './checkpointer';
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import type { Connection } from './sqlite';
@@ -354,17 +355,49 @@ describe('checkpoints', () => {
     expect(pending()).toEqual([]);
   });
 
-  it('checkpoints on a thread of its own, its connection committing meanwhile', async () => {
+  it('checkpoints on a thread of its own, the lane committing what came meanwhile once it is done', async () => {
     const size = async () => (await stat(store.file)).size;
     await store.write(() => {
       for (let i = 0; i < 200; i++) add(`note ${String(i)}`);
     });
     const before = await size();
-    const checkpointed = store.checkpoint();
-    store.tx(() => add('meanwhile'));
-    await expect(checkpointed).resolves.toBeUndefined();
+    const order: string[] = [];
+    const checkpointed = store.checkpoint().then(() => order.push('checkpointed'));
+    // The store reads meanwhile, as the core goes on.
+    expect(store.prepare('SELECT count(*) AS notes FROM note').get()).toEqual({ notes: 200 });
+    const written = store.write(() => {
+      order.push('committed');
+      add('meanwhile');
+    });
+    await Promise.all([checkpointed, written]);
+    expect(order).toEqual(['checkpointed', 'committed']);
     expect(await size()).toBeGreaterThan(before);
     expect(notes()).toHaveLength(201);
+  });
+
+  it('begins its log anew on its checkpointer’s thread, never as it commits', async () => {
+    // The log's header: its checkpoint's number and its salts, which beginning it anew changes.
+    const header = async () =>
+      (await readFile(`${store.file}-wal`)).subarray(12, 24).toString('hex');
+    await store.write(() => add('one'));
+    const before = await header();
+    await store.checkpoint();
+    const begun = await header();
+    expect(begun).not.toBe(before);
+    await store.write(() => add('two'));
+    expect(await header()).toBe(begun);
+    expect(notes()).toEqual(['one', 'two']);
+  });
+
+  it('cuts its log back to its size limit as it begins it anew', async () => {
+    const log = async () => (await stat(`${store.file}-wal`)).size;
+    await store.write(() => {
+      for (let i = 0; i < 3000; i++) add('x'.repeat(2000));
+    });
+    expect(await log()).toBeGreaterThan(JOURNAL_SIZE_LIMIT);
+    await store.checkpoint();
+    expect(await log()).toBeLessThanOrEqual(JOURNAL_SIZE_LIMIT);
+    expect(notes()).toHaveLength(3000);
   });
 
   it('waits for a pause after each commit, but never more than 30 seconds in all', async () => {

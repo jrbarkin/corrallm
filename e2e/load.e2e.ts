@@ -19,8 +19,10 @@ import { keepCanvases } from '../src/main/core/store/test-store';
  * Gate G2 of the core's database (Core Database §8; the Build Plan's load test, B11's, built here
  * first): the core's event loop stays within budget, p99 under 25 ms and max under 100 ms, under a
  * burst of messages, waits and run saves, with every commit on the drive before it resolves (its
- * log flushed off the loop, F_FULLFSYNC on macOS) and its log checkpointed when idle, on a thread
- * of its own (and at least every 30 s under load: the burst outlasts that).
+ * log flushed off the loop, F_FULLFSYNC on macOS) and its log checkpointed when idle, and begun
+ * anew, on a thread of its own (and at least every 30 s under load: the burst outlasts that). On a
+ * quiet drive: while another program writes heavily to it, a commit's own writes into the log,
+ * which run on the loop, can stall it past 100 ms (store.ts).
  * Until B11 the app's core process serves none of `message`, `wait` or `run.pause` (UNHOSTED; nor
  * MCP), so the core runs here as `corrallm serve` runs it, under plain Node (the CLI bundle the
  * global setup builds), its loop measured from inside (loop-delay.mjs), while outside orchestrators

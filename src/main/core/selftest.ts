@@ -1,6 +1,6 @@
 import { fork, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -14,7 +14,8 @@ import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
 import fakeClaude from './selftest-claude.mjs?raw';
-import { APPLICATION_ID, JOURNAL_SIZE_LIMIT, openStore } from './store/open';
+import { JOURNAL_SIZE_LIMIT } from './store/checkpointer';
+import { APPLICATION_ID, openStore } from './store/open';
 import { connect } from './store/sqlite';
 import type { Store } from './store/store';
 
@@ -184,9 +185,10 @@ export async function checkAgentSdk(
 /**
  * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
  * SQLite: each of its pragmas as set, a write through its lane (its log flushed on Node's thread
- * pool) read back by another connection, a checkpoint on its checkpointer's worker thread, a
- * snapshot of it (SQLite's backup, Node's one call on its thread pool) read back, and its file,
- * log and index the user's alone (not on Windows, whose files have no such modes).
+ * pool) read back by another connection, a checkpoint on its checkpointer's worker thread, which
+ * begins the log anew there (its header's salts change), a snapshot of it (SQLite's backup,
+ * Node's one call on its thread pool) read back, and its file, log and index the user's alone
+ * (not on Windows, whose files have no such modes).
  */
 export async function checkSqlite(folder = tmpdir()): Promise<string> {
   try {
@@ -243,8 +245,11 @@ export async function checkStore(store: Store): Promise<string> {
   });
   readBack(store.file, 'core.db, read by another connection,');
   seen.push('a write through the lane flushed and read back');
+  const header = async () => (await readFile(`${store.file}-wal`)).subarray(12, 24).toString('hex');
+  const before = await header();
   await store.checkpoint();
-  seen.push('a checkpoint off the loop');
+  if ((await header()) === before) throw new Error('its checkpointer didn’t begin its log anew');
+  seen.push('a checkpoint off the loop, its log begun anew there');
   readBack(await store.snapshot(), 'its snapshot');
   seen.push('a snapshot read back');
   if (process.platform !== 'win32') {

@@ -23,7 +23,7 @@ const PASSED = [
   /node-pty ok \(pid \d+, exit 0\)/,
   /@xterm\/headless ok \(40×5\)/,
   /Agent SDK ok \(the fake claude said “ok”\)/,
-  /SQLite \d+\.\d+\.\d+, WAL, synchronous NORMAL(?:, fullfsync)?, its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, a snapshot read back/,
+  /SQLite \d+\.\d+\.\d+, WAL, synchronous NORMAL(?:, fullfsync)?, its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, its log begun anew there, a snapshot read back/,
   /loopback HTTP ok \(127\.0\.0\.1:\d+\)/,
   /spawn ok \(pid \d+, exit 0\)/,
 ];

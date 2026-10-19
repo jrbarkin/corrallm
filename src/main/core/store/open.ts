@@ -3,6 +3,7 @@ import { closeSync, existsSync, openSync, rmSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { beginLog, JOURNAL_SIZE_LIMIT } from './checkpointer';
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import { settleRestored } from './restored';
@@ -34,7 +35,8 @@ import { transaction } from './transaction';
  * (trusted_schema); the log kept within JOURNAL_SIZE_LIMIT and checkpointed by the store when it
  * is idle, never in the middle of a commit; then the migrations it lacks. What opening wrote is
  * checkpointed into the database before the store is used, so it is on the drive (a restore's
- * settling with it).
+ * settling with it), and the log begun anew (checkpointer.ts' `beginLog`), so that no commit of
+ * the store's syncs a new log's header on the core's loop.
  *
  * Opening never throws (the host gives up on a core that crashes three times in a minute): it
  * resolves with the store, or none, and what it found to say. A database a newer corrallm made
@@ -52,11 +54,6 @@ import { transaction } from './transaction';
 export const STORE_FILE = 'core.db';
 /** Marks core.db as corrallm's: "CRLM". */
 export const APPLICATION_ID = 0x43524c4d;
-/**
- * How large the log may stay once checkpointed (its file is reused, not regrown): 4 MiB, about
- * what a thousand pages fill, so a burst of writes between checkpoints doesn't regrow it.
- */
-export const JOURNAL_SIZE_LIMIT = 4 * 2 ** 20;
 /**
  * How long a statement waits for another connection to let go of the database: not at all. The
  * core is its only writer (core.lock) through one connection, so the database is never busy but
@@ -97,8 +94,9 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
       }
     }
     // On the drive before the store is used: SQLite syncs the log before it checkpoints it, and
-    // the database after.
+    // the database after. Then the log begun anew, as it opens, not by the store's first commit.
     connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    beginLog(connection);
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
     return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };

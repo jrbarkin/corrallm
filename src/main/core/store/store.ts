@@ -19,13 +19,19 @@ import { rollback, savepoint, transaction } from './transaction';
  * SQLite syncs nothing as it commits (synchronous NORMAL: open.ts): the store flushes the log
  * itself, off the loop, on Node's thread pool (Node's fsync, F_FULLFSYNC on macOS, which flushes
  * the drive's cache too), one flush at a time, each for every commit made before it began. So the
- * drive's flush, milliseconds at best and far more while other programs write, never stalls the
- * loop (Core Database §4, G2), and one flush covers every commit made while the last went on.
+ * drive's flush, milliseconds at best and far more while other programs write, never waits on the
+ * loop while the store is open, and one flush covers every commit made while the last went on.
+ * The commit's own writes into the log do run on the loop: into the system's cache, which is
+ * quick, but which the system holds back while other programs fill it, as heavy writing to the
+ * same drive does (Core Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a
+ * quiet drive, and only a connection on a thread of its own would under such writing).
  *
  * SQLite checkpoints nothing by itself (wal_autocheckpoint is off: its checkpoints would land in
  * the middle of a commit): the store checkpoints its log into the database once it is idle, off the
- * loop, on a thread of its own (checkpointer.ts: PASSIVE, never waiting for the store's own
- * connection), and truncates the log as it closes.
+ * loop, on a thread of its own (checkpointer.ts: PASSIVE, which also begins the log anew there once
+ * it copied all of it, since beginning it syncs), committing nothing meanwhile, so that writes
+ * queued wait for it rather than either connection failing for the other; it truncates the log as
+ * it closes (on the loop, as it opens: neither while it serves).
  *
  * It takes a snapshot of itself (snapshots.ts) as it closes, and every SNAPSHOT_EVERY_MS once
  * idle after writes: the first as soon as it is, if the profile has none.
@@ -131,7 +137,7 @@ export class Store {
   /** The flush going on, if one is. */
   #flushing: Promise<void> | undefined;
   readonly #checkpointer: Checkpointer;
-  /** The checkpoint going on, if one is. */
+  /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
 
   constructor(connection: Connection, { profile, file, deps, snapshotAt }: Opening) {
@@ -198,7 +204,8 @@ export class Store {
 
   /**
    * Checkpoints the log into the database now, off the loop (one at a time: asked for while one
-   * goes on, it is that one). Resolves once it is done; rejects if it couldn't be.
+   * goes on, it is that one), beginning it anew there if it copied all of it. The writes queued
+   * meanwhile commit once it is done. Resolves once it is done; rejects if it couldn't be.
    */
   checkpoint(): Promise<void> {
     if (this.#checkpointing !== undefined) return this.#checkpointing;
@@ -215,6 +222,7 @@ export class Store {
       .catch(() => undefined)
       .then(() => {
         if (this.#checkpointing === checkpointing) this.#checkpointing = undefined;
+        this.#flush();
       });
     return checkpointing;
   }
@@ -248,10 +256,11 @@ export class Store {
   }
 
   async #close(): Promise<void> {
-    this.#flush();
     this.#cancelCheckpoint?.();
+    // The writes queued commit now, or once the checkpoint going on is done.
+    while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
+    this.#flush();
     while (this.#flushing !== undefined) await this.#flushing;
-    await this.#checkpointing?.catch(() => undefined);
     await this.#checkpointer.close();
     await this.#snapshotting?.catch(() => undefined);
     try {
@@ -268,8 +277,9 @@ export class Store {
     if (this.#log !== undefined) closeSync(this.#log);
   }
 
-  /** Commits every write queued, a batch at a time. */
+  /** Commits every write queued, a batch at a time, unless a checkpoint goes on. */
   #flush(): void {
+    if (this.#checkpointing !== undefined) return;
     let batch = this.#queue;
     this.#queue = [];
     while (batch.length > 0) batch = this.#commit(batch);
@@ -347,8 +357,12 @@ export class Store {
     return this.#log;
   }
 
-  /** Sets the checkpoint due once the store is idle, or at most so long after the first commit. */
+  /**
+   * Sets the checkpoint due once the store is idle, or at most so long after the first commit: none
+   * once it is closing, which checkpoints as it closes.
+   */
   #committed(): void {
+    if (this.#shut) return;
     this.#cancelCheckpoint?.();
     const now = this.#deps.now();
     this.#uncheckpointedSince ??= now;

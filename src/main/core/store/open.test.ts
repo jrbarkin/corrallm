@@ -14,8 +14,9 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { JOURNAL_SIZE_LIMIT } from './checkpointer';
 import { MIGRATIONS, SCHEMA } from './migrations';
-import { APPLICATION_ID, JOURNAL_SIZE_LIMIT, openStore } from './open';
+import { APPLICATION_ID, openStore } from './open';
 import { connect } from './sqlite';
 import { SYSTEM_DEPS } from './store';
 import type { Store, StoreDeps } from './store';
@@ -104,14 +105,31 @@ describe('openStore', () => {
 
   it('has what opening wrote on the drive before it is used: checkpointed into the database', async () => {
     const { store } = await open();
-    expect((await stat(`${file}-wal`)).size).toBe(0);
-    const schema = connect(file, { readOnly: true });
+    // The database's file alone, without its log.
+    const alone = path.join(profile, 'alone.db');
+    await copyFile(file, alone);
+    const schema = connect(alone, { readOnly: true });
     try {
       expect(schema.prepare('PRAGMA user_version').get()).toEqual({ user_version: SCHEMA });
+      expect(
+        schema.prepare("SELECT count(*) AS tables FROM sqlite_schema WHERE name = 'message'").get(),
+      ).toEqual({ tables: 1 });
     } finally {
       schema.close();
     }
     expect(pragma(store, 'user_version')).toBe(SCHEMA);
+  });
+
+  it('begins its log as it opens, so that no commit of its own begins it', async () => {
+    const { store } = await open();
+    // The log's header: its checkpoint's number and its salts, which beginning it anew changes.
+    const header = async () => (await readFile(`${file}-wal`)).subarray(12, 24).toString('hex');
+    const begun = await header();
+    expect(begun).toMatch(/^[0-9a-f]{24}$/);
+    await store.write(() =>
+      store.prepare("INSERT INTO canvas (id, used_at) VALUES ('c', 1)").run(),
+    );
+    expect(await header()).toBe(begun);
   });
 
   it('vacuums incrementally an empty database SQLite had begun before it', async () => {

@@ -30,7 +30,7 @@ const STORE_CHECKED = new RegExp(
   [
     '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous NORMAL',
     process.platform === 'darwin' ? ', fullfsync' : '',
-    ', its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, a snapshot read back',
+    ', its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, its log begun anew there, a snapshot read back',
     process.platform === 'win32' ? '' : ', core\\.db, -wal and -shm 0600',
     '$',
   ].join(''),
