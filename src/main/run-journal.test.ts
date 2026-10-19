@@ -259,6 +259,30 @@ describe('RunJournal', () => {
     expect(ran(canvas)).toMatchObject({ workflow: edited.workflow, updated_at: 456 });
   });
 
+  it('forgets drafts before a canvas kept with its file, folder or conversations', async () => {
+    memory = new CanvasMemory(store, 3);
+    const [saved, file] = await named('team.corral');
+    await memory.update(saved, (kept) => ({ ...kept, project: mintTrustedPath('/work/app') }));
+    const runs = journal();
+    // New, pressed more often than memory keeps canvases: each a draft whose window journals its
+    // run, as the app's does.
+    const drafts: CanvasId[] = [];
+    for (let i = 0; i < 5; i++) {
+      const draft = await runs.draft();
+      await runs.save(draft, (await runs.get(draft)).token, { ...checkpoint, updatedAt: i });
+      drafts.push(draft);
+    }
+    expect(await memory.get(saved)).toEqual({
+      file,
+      project: '/work/app',
+      conversations: {},
+    });
+    expect(await journal().last()).toBe(drafts.at(-1));
+    // The oldest drafts are forgotten, with their runs: the drafts kept are as many as the
+    // canvases kept with a file, folder or conversations may be.
+    expect(drafts.map((draft) => ran(draft)?.updated_at)).toEqual([undefined, undefined, 2, 3, 4]);
+  });
+
   it('keeps the canvas’s run and token through Save As', async () => {
     const [canvas] = await named('team.corral');
     const runs = journal();

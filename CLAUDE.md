@@ -184,16 +184,18 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 canvas memory (memory.ts: canvas, conversation; a change remembered as it is made,
                 and written with every canvas changed whose row isn't on disk as it is yet, so one
                 whose write failed is written with the next, and fails `flush` until it is; the 200
-                canvases used most recently, by used_at, the rest forgotten with all the database
-                keeps of them, their runs included) and the run journal (run-journal.ts: run, run_workflow, read_position,
-                open_canvas, each referring to its canvas's row, which it makes for a draft:
-                `ensure`; `keep` and `moveRead` within a write another store makes too) and the
-                message store
-                (delivery/messages.ts: message, each message a row with what it told and its
-                withdrawal note). test-store.ts seeds and reads a profile's database for tests,
-                through the stores' API (keepCanvases, keepMessages, openedLast, forgetRun) or a
-                connection of the test's own (onDisk, journaledRun, readPositions, refuseWrites:
-                triggers that fail a table's writes), never by writing its files.
+                canvases used most recently with a file, folder or conversations, by used_at, and
+                apart from them the 200 drafts used most recently (each New makes one, with its
+                run), so drafts never push out a saved canvas; the rest forgotten with all the
+                database keeps of them, their runs included) and the run journal (run-journal.ts:
+                run, run_workflow, read_position, open_canvas, each referring to its canvas's row,
+                which it makes for a draft: `ensure`; `keep` and `moveRead` within a write another
+                store makes too) and the message store (delivery/messages.ts: message, each message
+                a row with what it told and its withdrawal note). test-store.ts seeds and reads a
+                profile's database for tests, through the stores' API (keepCanvases, keepMessages,
+                openedLast, forgetRun) or a connection of the test's own (onDisk, journaledRun,
+                readPositions, refuseWrites: triggers that fail a table's writes), never by writing
+                its files.
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside

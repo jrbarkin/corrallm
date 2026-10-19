@@ -247,7 +247,7 @@ describe('CanvasMemory', () => {
     expect(reader.prepare('SELECT count(*) AS kept FROM conversation').get()).toEqual({ kept: 0 });
   });
 
-  it('keeps a row for a canvas only its run refers to, as the one used most recently', async () => {
+  it('keeps a row for a canvas only its run refers to, a draft, forgetting no other canvas for it', async () => {
     const memory = new CanvasMemory(store, 2);
     await memory.setFile(TEAM, at('/1.corral'));
     await memory.setFile(OTHER, at('/2.corral'));
@@ -255,8 +255,11 @@ describe('CanvasMemory', () => {
     await store.write(() => {
       memory.ensure(THIRD);
     });
+    expect(reader.prepare('SELECT id FROM canvas WHERE file IS NULL').all()).toEqual([
+      { id: THIRD },
+    ]);
     expect(await memory.get(THIRD)).toEqual({ conversations: {} });
-    expect(await memory.get(TEAM)).toEqual({ conversations: {} });
+    expect((await memory.get(TEAM)).file).toBe('/1.corral');
     expect((await memory.get(OTHER)).file).toBe('/2.corral');
     // A canvas that has a row keeps all it had.
     await store.write(() => {

@@ -37,8 +37,14 @@ export function roleFingerprint(role: string | undefined): string {
 }
 
 const NOTHING: Remembered = { conversations: {} };
-/** How many canvases it remembers: the ones used most recently. */
+/**
+ * How many canvases it keeps with a file, folder or conversations, the ones used most recently, and
+ * how many drafts besides.
+ */
 const LIMIT = 200;
+/** A canvas kept with a file, folder or conversations: not a draft, which has its run at most. */
+const KEPT = `(file IS NOT NULL OR project IS NOT NULL
+  OR EXISTS (SELECT 1 FROM conversation WHERE conversation.canvas_id = canvas.id))`;
 
 /**
  * What the core remembers of each canvas between runs, by the canvas's id, in the profile's
@@ -52,8 +58,10 @@ const LIMIT = 200;
  * it is made (what `get` reads), and written with every canvas changed whose row isn't on disk as
  * it is yet: one whose write failed is said, written again with the next, and fails `flush` until
  * it is on disk, so no conversation remembered is lost to a write that failed once. It keeps the
- * LIMIT canvases used most recently (`used_at`, which each change moves past every other's),
- * forgetting the others with everything the database keeps of them. The paths it reads back are
+ * LIMIT canvases used most recently (`used_at`, which each change moves past every other's) with a
+ * file, folder or conversations, and the LIMIT drafts used most recently (each New makes one, with
+ * its run), forgetting the others with everything the database keeps of them: drafts never push
+ * out a canvas kept for its file or folder. The paths it reads back are
  * trusted: it wrote them, from the app's dialogs. What isn't right (a path that isn't absolute, a
  * conversation whose id isn't a session's) is left out.
  */
@@ -269,14 +277,20 @@ export class CanvasMemory {
     return Math.max(Date.now(), typeof last === 'number' ? last + 1 : 0);
   }
 
-  /** Forgets every canvas but the LIMIT used most recently, with all the database keeps of them. */
+  /**
+   * Forgets every canvas kept with a file, folder or conversations but the LIMIT used most
+   * recently, and every draft but the LIMIT used most recently, with all the database keeps of
+   * them.
+   */
   #forgetOldest(): void {
-    this.#store
-      .prepare(
-        `DELETE FROM canvas WHERE id IN
-           (SELECT id FROM canvas ORDER BY used_at DESC LIMIT -1 OFFSET ?)`,
-      )
-      .run(this.#limit);
+    for (const kind of [KEPT, `NOT ${KEPT}`]) {
+      this.#store
+        .prepare(
+          `DELETE FROM canvas WHERE id IN
+             (SELECT id FROM canvas WHERE ${kind} ORDER BY used_at DESC LIMIT -1 OFFSET ?)`,
+        )
+        .run(this.#limit);
+    }
   }
 }
 
