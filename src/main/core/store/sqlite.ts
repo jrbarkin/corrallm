@@ -31,9 +31,12 @@ export function connect(file: string, options: ConnectOptions = {}): Connection 
   return new (sqlite().DatabaseSync)(file, options);
 }
 
-/** Copies `source`'s database into `file`, a page at a time, as it goes on being written. */
-export function backup(source: Connection, file: string): Promise<number> {
-  return sqlite().backup(source, file);
+/**
+ * Copies `source`'s database into `file`, `rate` pages a step (each step on Node's thread pool).
+ * Resolves with how many pages it copied.
+ */
+export function backup(source: Connection, file: string, rate: number): Promise<number> {
+  return sqlite().backup(source, file, { rate });
 }
 
 /**

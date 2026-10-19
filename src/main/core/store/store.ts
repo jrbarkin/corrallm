@@ -157,7 +157,7 @@ export class Store {
   snapshot(): Promise<string> {
     if (this.#snapshotting !== undefined) return this.#snapshotting;
     const at = this.#deps.now();
-    const taking = takeSnapshot(this.#connection, this.#profile, at).finally(() => {
+    const taking = takeSnapshot(this.file, this.#profile, at).finally(() => {
       this.#snapshotting = undefined;
     });
     this.#snapshotting = taking;
