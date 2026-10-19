@@ -1,18 +1,20 @@
 import { createInterface } from 'node:readline';
 
 import { utilityProcess } from 'electron';
-import type { UtilityProcess } from 'electron';
+import type { MessagePortMain, UtilityProcess } from 'electron';
 
 import { CoreLink } from '../../shared/link';
-import type { LinkPort } from '../../shared/link';
-import type { CoreSide, HostSide } from '../core/protocol';
+import type { Handlers, LinkPort } from '../../shared/link';
+import type { WindowId } from '../core/host';
+import type { CoreSide, HostSide, WindowMessage } from '../core/protocol';
 
 /*
  * The core process, as main forks it: an Electron utility process running core.cjs (core/entry.ts)
  * with the app's environment (so CORRALLM_FAKE_SESSIONS and the CLIs' path overrides reach it),
- * its stdout and stderr piped back line by line, and a CoreLink to it over its parentPort. A
- * utility process, unlike child_process.fork, works with the RunAsNode fuse off. What to do when
- * it exits is supervise.ts's policy.
+ * its stdout and stderr piped back line by line, and a CoreLink to it over its parentPort, on which
+ * main answers what the core asks of the desktop. Each window's port goes to it over the same
+ * parentPort, beside the link. A utility process, unlike child_process.fork, works with the
+ * RunAsNode fuse off. What to do when it exits is supervise.ts's policy.
  */
 
 export interface CoreProcessOptions {
@@ -22,16 +24,22 @@ export interface CoreProcessOptions {
   output: (line: string, stream: 'stdout' | 'stderr') => void;
   /** Whether the link checks that every value it posts is plain data. */
   check: boolean;
+  /** What main answers the core of the desktop: its HostServices (host/services.ts). */
+  host: Handlers<HostSide>;
 }
 
 export interface CoreProcess {
   readonly link: CoreLink<HostSide, CoreSide>;
   /** Resolves with the process's exit code once it has exited. */
   readonly exited: Promise<number>;
+  /** Hands the core its end of `window`'s port (the window has the other end). */
+  connect(window: WindowId, port: MessagePortMain): void;
+  /** Tells the core that `window` closed, crashed or reloaded: its port is done. */
+  windowGone(window: WindowId): void;
   kill(): void;
 }
 
-export function forkCore({ entry, output, check }: CoreProcessOptions): CoreProcess {
+export function forkCore({ entry, output, check, host }: CoreProcessOptions): CoreProcess {
   const child = utilityProcess.fork(entry, [], { serviceName: 'corrallm core', stdio: 'pipe' });
   for (const [stream, readable] of [
     ['stdout', child.stdout],
@@ -45,10 +53,16 @@ export function forkCore({ entry, output, check }: CoreProcessOptions): CoreProc
   const exited = new Promise<number>((resolve) => {
     child.once('exit', resolve);
   });
-  const link = new CoreLink<HostSide, CoreSide>(processPort(child, exited), {}, { check });
+  const link = new CoreLink<HostSide, CoreSide>(processPort(child, exited), host, { check });
   return {
     link,
     exited,
+    connect: (window, port) => {
+      child.postMessage({ kind: 'window', window } satisfies WindowMessage, [port]);
+    },
+    windowGone: (window) => {
+      link.emit('windowGone', window);
+    },
     kill: () => {
       child.kill();
     },

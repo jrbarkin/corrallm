@@ -1,5 +1,7 @@
 {
-  "gui": [],
+  "gui": [
+    "api.app.info"
+  ],
   "mcp": {
     "lead": [
       "agents",
@@ -74,7 +76,6 @@
     "outside-write": 18
   },
   "unhosted": {
-    "app.info": "B8",
     "catalog.get": "B8",
     "catalog.installed": "B8",
     "settings.get": "B8",

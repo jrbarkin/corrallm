@@ -119,6 +119,7 @@ function fakeServices() {
       setRule: vi.fn<IpcServices['usage']['setRule']>(),
       simulate: vi.fn<IpcServices['usage']['simulate']>(),
     },
+    core: { connect: vi.fn<IpcServices['core']['connect']>() },
   };
 }
 
@@ -141,6 +142,30 @@ const pingListener = () => listenerFor('app:ping');
 beforeEach(() => {
   handle.mockReset();
   services = fakeServices();
+});
+
+describe('core:connect handler', () => {
+  it('hands the trusted window that asks a port to the core', () => {
+    const sender = { id: 7 };
+    expect(invoke('core:connect', [], sender)).toBeNull();
+    expect(services.core.connect).toHaveBeenCalledExactlyOnceWith(sender);
+  });
+
+  it.each([
+    ['a null sender frame', null],
+    ['another origin', frame('https://evil.example')],
+    ['a subframe', frame(TRUSTED_ORIGIN, { parent: {} })],
+    ['a detached frame', frame(TRUSTED_ORIGIN, { detached: true })],
+  ])('refuses %s, handing it no port', (_label, senderFrame) => {
+    const listener = listenerFor('core:connect');
+    expect(() => listener({ senderFrame, sender: { id: 7 } })).toThrow(/untrusted sender/);
+    expect(services.core.connect).not.toHaveBeenCalled();
+  });
+
+  it('takes no arguments', () => {
+    expect(() => invoke('core:connect', ['window 1'])).toThrow(/Expected no arguments/);
+    expect(services.core.connect).not.toHaveBeenCalled();
+  });
 });
 
 describe('catalog:get handler', () => {
@@ -176,15 +201,19 @@ describe('app:ping handler', () => {
 });
 
 describe('every channel', () => {
-  it.each(Object.values(API_CHANNELS))('%s rejects an untrusted sender', (channel) => {
-    const listener = listenerFor(channel);
-    expect(() => listener({ senderFrame: frame('https://evil.example') })).toThrow(
-      /untrusted sender/,
-    );
-    expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.links.open).not.toHaveBeenCalled();
-    expect(services.reveal.reveal).not.toHaveBeenCalled();
-  });
+  it.each([...Object.values(API_CHANNELS), 'core:connect'])(
+    '%s rejects an untrusted sender',
+    (channel) => {
+      const listener = listenerFor(channel);
+      expect(() => listener({ senderFrame: frame('https://evil.example') })).toThrow(
+        /untrusted sender/,
+      );
+      expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+      expect(services.links.open).not.toHaveBeenCalled();
+      expect(services.reveal.reveal).not.toHaveBeenCalled();
+      expect(services.core.connect).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('link:open handler', () => {

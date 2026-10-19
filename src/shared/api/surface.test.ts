@@ -620,7 +620,7 @@ function snapshot(): string {
   );
   return `${JSON.stringify(
     {
-      gui: GUI_OPS.filter((name) => !(name in UNHOSTED)).map((name) => `api.${name}`),
+      gui: GUI_OPS.map((name) => `api.${name}`),
       mcp: tools,
       counts: Object.fromEntries(
         Object.entries(tools).map(([party, names]) => [party, names.length]),

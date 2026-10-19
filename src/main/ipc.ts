@@ -13,6 +13,7 @@ import { parseBackend, parseRule, parseWindows } from '../shared/usage';
 import type { CanvasFiles } from './canvas';
 import type { ProjectFiles } from './files';
 import type { LinkOpener } from './host/links';
+import type { CorePorts } from './host/ports';
 import type { FileRevealer } from './host/reveal';
 import type { Windows } from './host/windows';
 import type { ProjectFolders } from './project';
@@ -54,8 +55,8 @@ export type IpcHandler<C extends IpcChannel> = (
 /**
  * What the handlers act on: the catalog, which canvas each window shows, canvas files, runs,
  * project folders, their files, links to open (and project files to show), sessions, the agents
- * the user has, and usage. Every service but the window map knows canvases by their ids, never windows: a handler
- * looks up the sender's canvas first.
+ * the user has, usage, and windows' ports to the core. Every service but the window map and the
+ * ports knows canvases by their ids, never windows: a handler looks up the sender's canvas first.
  */
 export interface IpcServices {
   /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
@@ -97,6 +98,8 @@ export interface IpcServices {
   /** Which agents the user has, by adapter (sessions/installed.ts). */
   clis: { installed: () => Promise<InstalledClis> };
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
+  /** Windows' ports to the core (host/ports.ts). */
+  core: Pick<CorePorts, 'connect'>;
 }
 
 /**
@@ -206,10 +209,18 @@ function createHandlers({
   sessions,
   clis,
   usage,
+  core,
 }: IpcServices): HandlerTable {
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (contents: WebContents) => windows.canvasOf(contents);
   return {
+    'core:connect': {
+      parseArgs: noArgs,
+      handler: ({ contents }) => {
+        core.connect(contents);
+        return null;
+      },
+    },
     'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'catalog:get': { parseArgs: noArgs, handler: () => catalog },
     'run:get': { parseArgs: noArgs, handler: async ({ contents }) => runs.get(await of(contents)) },

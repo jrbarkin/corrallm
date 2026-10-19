@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { TOKEN_IN_FLIGHT, TOKEN_WRITES_PER_SECOND } from '../../shared/api/limits';
 import { createDispatcher, OpFailure, scopeOf } from './call';
 import type { DispatchOptions } from './call';
-import { asHuman, partyOf } from './caller';
+import { partyOf } from './caller';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
+import { asHuman } from './gui';
 import { REMEMBERED_REQUESTS } from './requests';
 import {
   CALLERS,
