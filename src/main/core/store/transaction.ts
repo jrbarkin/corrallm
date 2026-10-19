@@ -17,7 +17,7 @@ export function transaction<T>(connection: Connection, run: () => T): T {
     connection.exec('COMMIT');
     return value;
   } catch (error) {
-    rollback(connection, 'ROLLBACK');
+    rollback(connection);
     throw error;
   }
 }
@@ -33,7 +33,7 @@ export function savepoint<T>(connection: Connection, run: () => T): T {
     connection.exec('RELEASE nested');
     return value;
   } catch (error) {
-    rollback(connection, 'ROLLBACK TO nested; RELEASE nested');
+    undo(connection, 'ROLLBACK TO nested; RELEASE nested');
     throw error;
   }
 }
@@ -49,8 +49,15 @@ function synchronously<T>(run: () => T): T {
   return value;
 }
 
-/** Rolls back what is left to roll back, keeping the error that made it: SQLite's says more. */
-function rollback(connection: Connection, sql: string): void {
+/**
+ * Rolls back the transaction going on, if SQLite hasn't already. Never throws: the error that made
+ * it is the one to throw.
+ */
+export function rollback(connection: Connection): void {
+  undo(connection, 'ROLLBACK');
+}
+
+function undo(connection: Connection, sql: string): void {
   if (!connection.isTransaction) return;
   try {
     connection.exec(sql);
