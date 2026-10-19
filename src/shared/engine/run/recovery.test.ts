@@ -82,6 +82,42 @@ describe('task recovery', () => {
     expect(failed.sent).toHaveLength(0);
   });
 
+  it('is sending to an agent while its message’s record is on its way to disk, and says when it goes', async () => {
+    let release: (() => void) | undefined;
+    const beforeSend = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const running = setup([step], { beforeSend });
+    running.store.start();
+    await Promise.resolve();
+    expect(running.store.sending('a')).toBe(true);
+    expect(running.store.sending('b')).toBe(false);
+    release?.();
+    await vi.waitFor(() => {
+      expect(running.sent).toHaveLength(1);
+    });
+    expect(running.store.sending('a')).toBe(false);
+
+    // Held once it is on disk (its agent paused meanwhile), it is no longer on its way: its
+    // subscribers hear so, though nothing they read of the run changed.
+    const held = setup([step], { beforeSend });
+    held.store.start();
+    await Promise.resolve();
+    held.store.pauseAgent('a');
+    expect(held.store.sending('a')).toBe(true);
+    let heard = 0;
+    held.store.subscribe(() => {
+      heard += 1;
+    });
+    release?.();
+    await vi.waitFor(() => {
+      expect(held.store.sending('a')).toBe(false);
+    });
+    expect(held.sent).toHaveLength(0);
+    expect(heard).toBeGreaterThan(0);
+  });
+
   it('keeps saved output evidence for a condition after a delay', () => {
     const queue: QueueItem[] = [
       step,

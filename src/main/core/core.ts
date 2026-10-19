@@ -33,6 +33,7 @@ import { Windows } from './windows';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { Caller } from './caller';
+import { MessageTable } from './delivery/messages';
 import { Engines } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
@@ -45,6 +46,8 @@ import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import type { ChildSystem } from './children';
+import { openStore } from './store/open';
+import { unopened } from './store/store';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -115,7 +118,7 @@ export interface Core extends Dispatcher {
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
-   * The canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvases.json names
+   * The canvas kept in `file`, as `corrallm serve --canvas` names it: only if canvas memory names
    * that file for the canvas it holds, and keeps a project folder for it that is still there, both
    * picked in the app. Rejects, naming the file and saying what to do in the app, for any other:
    * one corrallm doesn't keep, a copy of one it does, or one with no project folder.
@@ -123,7 +126,8 @@ export interface Core extends Dispatcher {
   keptCanvas(file: string): Promise<CanvasId>;
   /**
    * Opens a canvas held: nothing is delivered on it until `deliver()`. Rejects, saying why, if it
-   * can't open. What opening it found to say (its run record set aside).
+   * can't open. What opening it found to say (its run discarded, its messages unread, the database
+   * restored).
    */
   openHeld(canvas: CanvasId): Promise<readonly string[]>;
   /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
@@ -139,6 +143,12 @@ export interface Core extends Dispatcher {
 
 export async function createCore(config: CoreConfig, host: HostServices): Promise<Core> {
   const { profile } = config;
+  // Before anything reads what it keeps. One that can't be opened fails every read and write of
+  // what it keeps, saying why: the core journals nothing, and sends nothing whose record can't be
+  // on disk first.
+  const opened = await openStore(profile);
+  if (opened.store === undefined) console.error(opened.said.join(' '));
+  const store = opened.store ?? unopened(opened.said.join(' '));
   const children = new Children(profile, config.children);
   await children.recover();
   const usage = new UsageReadings({
@@ -148,12 +158,15 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   await usage.load();
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
-  const memory = new CanvasMemory(path.join(profile, 'canvases.json'));
+  const memory = new CanvasMemory(store);
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
-  const journal = new RunJournal(path.join(profile, 'runs'), {
+  const journal = new RunJournal({
+    store,
     memory,
     projectOf: (canvas) => projects.of(canvas),
+    // What it set aside or restored, said with the first canvas restored, as its runs' are.
+    ...(opened.store === undefined ? {} : { said: opened.said }),
   });
   const fake = config.fakeSessions ?? false;
   let shell: Promise<Record<string, string>> | undefined;
@@ -256,7 +269,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     topics.changed('settings', 'you');
   });
   const stores = () =>
-    Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush(), links.flush()]);
+    Promise.all([
+      memory.flush(),
+      journal.flush(),
+      settings.flush(),
+      usage.flush(),
+      tokens.flush(),
+      links.flush(),
+    ]);
   const engines: Engines = new Engines({
     processes: children,
     catalog: CATALOG,
@@ -264,6 +284,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     projects,
     journal,
+    messages: new MessageTable(store, memory),
+    store,
     usage,
     files,
     environment,
@@ -339,18 +361,23 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       try {
         await engines.close();
       } finally {
-        // What the core keeps is written out even if a canvas's run couldn't be.
-        await children.flush();
-        await stores();
+        // What the core keeps is written out even if a canvas's run couldn't be, and its database
+        // closed last.
+        try {
+          await children.flush();
+          await stores();
+        } finally {
+          await opened.store?.close();
+        }
       }
     },
   };
 }
 
 /**
- * The canvas `file` holds, if canvases.json names that very file for it (by its real path) and
+ * The canvas `file` holds, if canvas memory names that very file for it (by its real path) and
  * keeps a project folder for it that is still there; else rejects, saying what to do in the app.
- * The file is only read for the id it holds: the canvas opens from the file canvases.json names,
+ * The file is only read for the id it holds: the canvas opens from the file canvas memory names,
  * never from `file`.
  */
 async function keptCanvas(file: string, memory: CanvasMemory): Promise<CanvasId> {

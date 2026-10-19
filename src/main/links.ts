@@ -1,5 +1,5 @@
 import type { LinkAnswer, WindowId } from './core/host';
-import { readWhole, unknownFields, writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './whole-file';
 import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*

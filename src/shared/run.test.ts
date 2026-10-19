@@ -19,4 +19,11 @@ describe('run checkpoint boundary', () => {
   ])('rejects invalid or excessive data', (checkpoint) => {
     expect(() => parseRunCheckpoint(checkpoint)).toThrow();
   });
+  it('reads a workflow already read no further, but bounds it still', () => {
+    const kept = { ...valid, workflow: '{"nodes":' };
+    expect(parseRunCheckpoint(kept, { workflow: true })).toEqual(kept);
+    const large = { ...valid, workflow: ' '.repeat(MAX_RUN_BYTES + 1) };
+    expect(() => parseRunCheckpoint(large, { workflow: true })).toThrow(/too large/);
+    expect(() => parseRunCheckpoint({ ...valid, workflow: 1 }, { workflow: true })).toThrow();
+  });
 });

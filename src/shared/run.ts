@@ -27,7 +27,11 @@ export const MAX_RUN_BYTES = 32 * 1024 * 1024;
 const MAX_JSON_NODES = 200_000;
 
 /** Main bounds the opaque JSON; the renderer validates its workflow/run schema in depth. */
-export function parseRunCheckpoint(value: unknown): RunCheckpoint {
+export function parseRunCheckpoint(
+  value: unknown,
+  /** The workflow is one already read as it is (a run's, unchanged): its JSON isn't read again. */
+  checked: { workflow?: boolean } = {},
+): RunCheckpoint {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Expected a run checkpoint');
   }
@@ -49,6 +53,7 @@ export function parseRunCheckpoint(value: unknown): RunCheckpoint {
     if (typeof text !== 'string') throw new TypeError(`Expected run ${key} JSON`);
     size += text.length;
     if (size > MAX_RUN_BYTES) throw new RangeError('The run checkpoint is too large');
+    if (key === 'workflow' && checked.workflow === true) continue;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);

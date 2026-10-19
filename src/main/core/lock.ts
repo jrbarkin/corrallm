@@ -8,8 +8,8 @@ import path from 'node:path';
  * start time of the process that owns the profile: the app's core process (core/entry.ts takes it
  * as main asks it up, so a core that crashed leaves a lock its next one takes over) or `corrallm
  * serve`. Chromium's single-instance lock keeps two apps off one profile, but `serve` is plain
- * Node: without this, the two could write one profile's stores (canvases.json, the run journal,
- * tokens.json) at once. A lock whose process is gone, or whose pid another process has since been
+ * Node: without this, the two could write one profile's stores (its database, core.db, which only
+ * the owner opens, and tokens.json) at once. A lock whose process is gone, or whose pid another process has since been
  * given (it started after the lock's did), is taken over, and so is one left half written long
  * enough ago: by one process at a time, holding core.lock.taking (opened O_EXCL too) while it
  * checks that the lock is still the one left behind, removes it and takes the profile, so that of

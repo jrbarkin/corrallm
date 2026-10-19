@@ -25,8 +25,9 @@ import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 /*
  * `corrallm serve` (API Spec §8.6, §8.7; Core Server §7.6): corrallm's core under plain Node, with
  * its MCP server on 127.0.0.1, for orchestrators outside corrallm. It owns the profile while it
- * runs (core.lock), and serves only canvases the app keeps: each --canvas file must be the one
- * canvases.json names for the canvas it holds, with the project folder picked for it in the app,
+ * runs (core.lock), and serves only canvases the app keeps: each --canvas file must be the one the
+ * profile's canvas memory names for the canvas it holds, with the project folder picked for it in
+ * the app,
  * since a command line, which an agent can type as easily as you, never grants folder trust. Each
  * run restores paused, which holds only the run's own sends, so orchestrators' messages still
  * reach idle agents; but nothing is delivered until every check that may refuse the start has

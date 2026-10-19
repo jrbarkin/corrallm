@@ -1,18 +1,17 @@
-import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
-import { PARTY_PATTERN } from '../shared/model/messages';
 import type { PartyId } from '../shared/model/messages';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
-import { readRemembered, writeWhole } from './memory';
-import type { CanvasMemory, Remembered } from './memory';
+import type { Database } from './core/store/store';
+import type { CanvasMemory } from './memory';
 
 /** What the journal keeps of a canvas a window shows: its generation's token, and what to say. */
 interface Entry {
@@ -20,90 +19,70 @@ interface Entry {
   warning?: string;
 }
 /**
- * Where each party has read to in a canvas's message store, as its record keeps them, by party: the
- * place of the last message its `wait` returned (API Spec §7.7).
+ * Where each party has read to in a canvas's message store, by party: the place of the last message
+ * its `wait` returned (API Spec §7.7).
  */
 export type KeptReads = Readonly<Record<string, number>>;
-/** A party's read position moved forward to `seq`, as a `wait` moves it. */
-export interface MovedRead {
-  party: PartyId;
-  seq: number;
-}
-/** A canvas's run record, as written (runs/<id>/record.json). */
-interface RecordFile {
-  checkpoint: RunCheckpoint;
-  /** The canvas's file, and what memory has of it besides: recovered if memory lost it. */
-  file?: TrustedPath;
-  remembered?: Remembered;
-  reads?: KeptReads;
-}
 interface JournalDeps {
+  /** The profile's database, which keeps the runs, where parties have read to, and the last canvas. */
+  store: Database;
+  /** What the canvases' rows are kept by. */
   memory: CanvasMemory;
   projectOf(canvas: CanvasId): string | undefined;
+  /** What opening the database found to say (core/store/open.ts): said with the first run restored. */
+  said?: readonly string[];
 }
 
-const VERSION = 2;
-/** How the journal makes its folders: only the user may list or enter them. */
-const PRIVATE = { recursive: true, mode: 0o700 } as const;
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
+const EARLIER = 'This run belongs to an earlier canvas';
 
 /**
- * Each canvas's run, journaled atomically by the canvas's id, its messages, and the canvas the
- * profile had open last:
+ * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
+ * where each party's `wait` has read to in its messages, and the canvas the profile had open last:
  *
- *   runs/<canvas id>/record.json     { "version": 2, "id", "file"?, "checkpoint", "remembered"?,
- *                                      "reads"? }
- *   runs/<canvas id>/messages.jsonl  the canvas's message store's log, appended (a line a change)
- *   runs/last.json                   { "version": 2, "canvas" }
+ *   run            the run's state
+ *   run_workflow   the workflow it runs, written only when its hash changes: whether it did is
+ *                  read from the row, within the write, so a write of the run's state alone
+ *                  never writes the workflow again
+ *   read_position  each party's read position in the canvas's messages
+ *   open_canvas    the canvas the profile had open last: a window that shows none restores it
  *
- * Every write goes through one queue, in order: a message's record appended durably (forced to
- * disk) is on disk before anything journaled after it.
- *
- * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
- * canvas memory lost it, and where each party's `wait` has read to in its messages: every save
- * keeps them as they were (the app's never moves one), but the save that moves one forward; and
- * once a record holds any, every write of it is forced to disk, so that no crash, during that write
- * or any after it, loses a position a `wait` returned past (a record with none, which no party has
- * waited on, is written as quickly as ever). A window's renderer saves with the token of the
- * canvas it showed: a save meant for a canvas it has since replaced (or opened again) is refused.
- * A record that can't be read as one is set aside, saying where; a last canvas of another version
- * reads as none. The folders it makes are the user's alone.
+ * Its writes go through the database's write lane, in order, each on the drive once it resolves
+ * (the commit that holds it returned and the log was flushed); the core's canvases journal their
+ * runs within writes of their own (`keep`, `moveRead`), with what else commits with them (their
+ * messages; every position a `wait` moves). A save keeps the read positions as they are: only a `wait` moves one, and only
+ * forward. A window's renderer saves with the token of the canvas it showed: a save meant for a
+ * canvas it has since replaced (or opened again) is refused. A run that can't be restored as one
+ * is discarded, saying so. The canvas's file is read back with its run, as canvas memory wrote it,
+ * from the app's dialogs.
  */
 export class RunJournal {
-  readonly #directory: string;
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
-  /** Each canvas's read positions, as its record last had them, once read or written. */
-  readonly #reads = new Map<CanvasId, KeptReads>();
-  #writing: Promise<void> = Promise.resolve();
+  /** What opening the database found to say, until the first run restored says it. */
+  #said: string | undefined;
+  /** Every write asked for so far, written or failed. */
+  #writing: Promise<unknown> = Promise.resolve();
 
-  constructor(directory: string, deps: JournalDeps) {
-    this.#directory = directory;
+  constructor(deps: JournalDeps) {
     this.#deps = deps;
+    this.#said =
+      deps.said === undefined || deps.said.length === 0 ? undefined : deps.said.join(' ');
   }
 
   /**
-   * The canvas the profile had open last, its memory recovered from its record if it lost it: a new
-   * draft if there is none. Rejects, keeping it, if what says which it was can't be read.
+   * The canvas the profile had open last: a new draft if there is none. Rejects if what says which
+   * it was can't be read.
    */
   async last(): Promise<CanvasId> {
-    let last: unknown;
-    try {
-      last = JSON.parse(await readFile(this.#lastFile(), 'utf8'));
-    } catch (error) {
-      if (!missing(error)) throw error;
-    }
-    const canvas = isLast(last) ? last.canvas : newCanvasId();
-    const record = await this.#read(canvas, this.#entry(canvas));
-    if (record !== undefined) {
-      const { file, remembered } = record;
-      // A present memory is authoritative, including conversations cleared by a project change or
-      // a rewind: the record only recovers a canvas memory lost.
-      await this.#deps.memory.update(canvas, (current, known) =>
-        known ? current : { ...(remembered ?? { conversations: {} }), ...(file ? { file } : {}) },
-      );
-    }
-    await this.#serialize(() => this.#last(canvas));
+    await this.flush();
+    const id = this.#deps.store
+      .prepare('SELECT canvas_id FROM open_canvas ORDER BY opened_at DESC LIMIT 1')
+      .get()?.canvas_id;
+    const canvas = isCanvasId(id) ? id : newCanvasId();
+    await this.#write(() => {
+      this.#markOpen(canvas);
+    });
     return canvas;
   }
 
@@ -111,8 +90,46 @@ export class RunJournal {
   async get(canvas: CanvasId): Promise<RunContext> {
     await this.flush();
     const entry = this.#entry(canvas);
-    const record = await this.#read(canvas, entry);
-    const { file } = await this.#deps.memory.get(canvas);
+    const row = this.#deps.store
+      .prepare(
+        `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.version') AS version,
+           json_extract(r.state, '$.state') AS state, json_extract(r.state, '$.messages') AS messages,
+           w.workflow AS workflow, r.updated_at AS updated_at
+         FROM canvas c LEFT JOIN run r ON r.canvas_id = c.id
+           LEFT JOIN run_workflow w ON w.canvas_id = c.id
+         WHERE c.id = ?`,
+      )
+      .get(canvas);
+    if (this.#said !== undefined) {
+      entry.warning = [this.#said, entry.warning].filter(Boolean).join(' ');
+      this.#said = undefined;
+    }
+    let checkpoint: RunCheckpoint | null = null;
+    if (typeof row?.ran === 'string') {
+      try {
+        checkpoint = parseRunCheckpoint({
+          version: row.version,
+          workflow: row.workflow,
+          state: row.state,
+          messages: row.messages,
+          updatedAt: row.updated_at,
+        });
+      } catch (error) {
+        // Deleted, so that it is neither read nor said again.
+        await this.#write(() => {
+          this.#deps.store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
+        });
+        const why = error instanceof Error ? error.message : String(error);
+        entry.warning = [
+          entry.warning,
+          `The run progress could not be restored, so it was discarded (${why}).`,
+        ]
+          .filter(Boolean)
+          .join(' ');
+      }
+    }
+    const kept = row?.file;
+    const file = isAbsolute(kept) ? mintTrustedPath(kept) : undefined;
     let savedText: string | undefined;
     if (file !== undefined) {
       try {
@@ -128,7 +145,7 @@ export class RunJournal {
     return {
       id: canvas,
       token: entry.token,
-      checkpoint: record?.checkpoint ?? null,
+      checkpoint,
       name: file === undefined || savedText === undefined ? null : path.basename(file),
       ...(folder === undefined ? {} : { project: { name: path.basename(folder), path: folder } }),
       ...(savedText === undefined ? {} : { savedText }),
@@ -136,39 +153,80 @@ export class RunJournal {
     };
   }
 
-  /** Where each party's `wait` has read to in the canvas's messages, as its record keeps it. */
+  /** Where each party's `wait` has read to in the canvas's messages. */
   async reads(canvas: CanvasId): Promise<KeptReads> {
     await this.flush();
-    return this.#reads.get(canvas) ?? (await this.#read(canvas, this.#entry(canvas)))?.reads ?? {};
+    const rows = this.#deps.store
+      .prepare('SELECT party, seq FROM read_position WHERE canvas_id = ?')
+      .all(canvas);
+    return Object.fromEntries(rows.map(({ party, seq }) => [String(party), Number(seq)]));
   }
 
   /**
-   * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, with where
-   * each party's `wait` has read to as the record kept them; with `moved`, that party's moved
-   * forward (never back). A record holding any is forced to disk before it resolves.
+   * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, keeping
+   * where each party's `wait` has read to. On disk once it resolves.
    */
-  async save(
-    canvas: CanvasId,
-    token: string,
-    checkpoint: RunCheckpoint | null,
-    moved?: MovedRead,
-  ): Promise<void> {
-    const entry = this.#entry(canvas);
-    if (entry.token !== token) throw new Error('This run belongs to an earlier canvas');
-    if (checkpoint !== null) {
-      parseRunCheckpoint(checkpoint);
-      if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
-        throw new RangeError('The run checkpoint is too large');
-      }
-    }
-    return this.#serialize(async () => {
-      if (this.#entries.get(canvas) !== entry || entry.token !== token) {
-        throw new Error('This run belongs to an earlier canvas');
-      }
-      if (checkpoint === null) await rm(this.#recordFile(canvas), { force: true });
-      else await this.#write(canvas, checkpoint, moved);
-      await this.#last(canvas);
+  async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
+    if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
+    await this.#write(() => {
+      this.keep(canvas, token, checkpoint);
     });
+  }
+
+  /**
+   * Within a write: journals a canvas's run (null: none), as `save` does, with whatever else the
+   * write holds. Throws, failing the write, for a token that isn't its canvas's, or a run it can't
+   * journal.
+   */
+  keep(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): void {
+    if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
+    const { store, memory } = this.#deps;
+    memory.ensure(canvas);
+    this.#markOpen(canvas);
+    if (checkpoint === null) {
+      store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
+      return;
+    }
+    // The workflow the row has, unchanged, was read as it was written: it isn't read again. (One
+    // that isn't text has no hash: parseRunCheckpoint refuses it.)
+    const hash = typeof checkpoint.workflow === 'string' ? sha256(checkpoint.workflow) : '';
+    const kept = store.prepare('SELECT hash FROM run_workflow WHERE canvas_id = ?').get(canvas);
+    const unchanged = kept?.hash === hash;
+    const { version, workflow, state, messages, updatedAt } = parseRunCheckpoint(checkpoint, {
+      workflow: unchanged,
+    });
+    if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
+      throw new RangeError('The run checkpoint is too large');
+    }
+    // Its state and messages are JSON texts (parseRunCheckpoint read them): kept as they are.
+    store
+      .prepare(
+        `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (canvas_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
+      )
+      .run(
+        canvas,
+        `{"version":${String(version)},"state":${state},"messages":${messages}}`,
+        updatedAt,
+      );
+    if (unchanged) return;
+    store
+      .prepare(
+        `INSERT INTO run_workflow (canvas_id, workflow, hash) VALUES (?, ?, ?)
+         ON CONFLICT (canvas_id) DO UPDATE SET workflow = excluded.workflow, hash = excluded.hash`,
+      )
+      .run(canvas, workflow, hash);
+  }
+
+  /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
+  moveRead(canvas: CanvasId, party: PartyId, seq: number): void {
+    this.#deps.memory.ensure(canvas);
+    this.#deps.store
+      .prepare(
+        `INSERT INTO read_position (canvas_id, party, seq) VALUES (?, ?, ?)
+         ON CONFLICT (canvas_id, party) DO UPDATE SET seq = max(seq, excluded.seq)`,
+      )
+      .run(canvas, party, seq);
   }
 
   /**
@@ -177,78 +235,31 @@ export class RunJournal {
    */
   async opened(canvas: CanvasId, warning?: string): Promise<void> {
     this.#entries.set(canvas, { token: randomUUID(), ...(warning ? { warning } : {}) });
-    await this.#serialize(() => this.#last(canvas));
+    await this.#write(() => {
+      this.#markOpen(canvas);
+    });
   }
 
-  /** New: a new draft, its id. The canvas before keeps its record. */
+  /** New: a new draft, its id. The canvas before keeps its run. */
   async draft(): Promise<CanvasId> {
     const canvas = newCanvasId();
     this.#entries.set(canvas, { token: randomUUID() });
-    await this.#serialize(() => this.#last(canvas));
+    await this.#write(() => {
+      this.#markOpen(canvas);
+    });
     return canvas;
   }
 
-  /** A canvas was saved (Save As too, which keeps its id): its record names its file now. */
+  /** A canvas was saved (Save As too, which keeps its id): it is the one the profile has open. */
   async saved(canvas: CanvasId): Promise<void> {
-    const record = await this.#read(canvas, this.#entry(canvas));
-    await this.#serialize(async () => {
-      if (record !== undefined) await this.#write(canvas, record.checkpoint);
-      await this.#last(canvas);
+    await this.#write(() => {
+      this.#markOpen(canvas);
     });
   }
 
-  flush(): Promise<void> {
-    return this.#writing;
-  }
-
-  /** The canvas's message log, as written: undefined if it has none yet. */
-  async readMessages(canvas: CanvasId): Promise<string | undefined> {
-    await this.flush();
-    try {
-      return await readFile(this.#messagesFile(canvas), 'utf8');
-    } catch (error) {
-      if (missing(error)) return undefined;
-      throw error;
-    }
-  }
-
-  /**
-   * Appends `text` to the canvas's message log, after whatever was journaled before it; with
-   * `durable`, forced to disk (the log and all appended before it) before it resolves.
-   */
-  appendMessages(canvas: CanvasId, text: string, durable: boolean): Promise<void> {
-    return this.#serialize(async () => {
-      const file = this.#messagesFile(canvas);
-      await mkdir(path.dirname(file), PRIVATE);
-      const handle = await open(file, 'a');
-      try {
-        if (text !== '') await handle.appendFile(text, 'utf8');
-        if (durable) await handle.sync();
-      } finally {
-        await handle.close();
-      }
-    });
-  }
-
-  /**
-   * Writes the canvas's message log anew, whole, as `text`: what its store keeps now, forced to
-   * disk (the log before it is moved into place, its folder after) before it resolves, so that no
-   * power loss brings the old log back over what is appended to the new one.
-   */
-  rewriteMessages(canvas: CanvasId, text: string): Promise<void> {
-    return this.#serialize(async () => {
-      const file = this.#messagesFile(canvas);
-      await mkdir(path.dirname(file), PRIVATE);
-      await writeWhole(file, text, { durable: true });
-    });
-  }
-
-  /** Sets the canvas's message log aside, as one that can't be read: where it is now. */
-  async setAsideMessages(canvas: CanvasId): Promise<string> {
-    const file = this.#messagesFile(canvas);
-    const rejected = file.replace(/\.jsonl$/, `.rejected-${randomUUID()}.jsonl`);
-    await this.#serialize(() => rename(file, rejected));
-    return rejected;
+  /** Resolves once every write asked for so far is done. */
+  async flush(): Promise<void> {
+    await this.#writing;
   }
 
   #entry(canvas: CanvasId): Entry {
@@ -260,141 +271,37 @@ export class RunJournal {
     return entry;
   }
 
-  #recordFile(canvas: CanvasId): string {
-    return path.join(this.#directory, canvas, 'record.json');
+  /** Writes to the database: resolves once the commit holding it returned. */
+  #write(write: () => void): Promise<void> {
+    const written = this.#deps.store.write(write);
+    this.#writing = Promise.all([this.#writing, written.catch(() => undefined)]);
+    return written;
   }
 
-  #messagesFile(canvas: CanvasId): string {
-    return path.join(this.#directory, canvas, 'messages.jsonl');
-  }
-
-  #lastFile(): string {
-    return path.join(this.#directory, 'last.json');
-  }
-
-  async #read(canvas: CanvasId, entry: Entry): Promise<RecordFile | undefined> {
-    const file = this.#recordFile(canvas);
-    let text: string | undefined;
-    try {
-      if ((await stat(file)).size <= MAX_RUN_BYTES * 2) text = await readFile(file, 'utf8');
-    } catch (error) {
-      // A read that fails (not a record that is wrong) may work next time: it is not set aside.
-      if (missing(error)) return undefined;
-      throw error;
-    }
-    try {
-      if (text === undefined) throw new Error('The saved run is too large');
-      const value: unknown = JSON.parse(text);
-      if (!isRecord(value) || value.version !== VERSION || value.id !== canvas) {
-        throw new Error('The saved run is invalid');
-      }
-      if (value.file !== undefined && !isAbsolute(value.file)) {
-        throw new Error('The saved run is invalid');
-      }
-      const remembered = readRemembered(value.remembered);
-      const reads = readPositions(value.reads);
-      this.#reads.set(canvas, reads);
-      return {
-        checkpoint: parseRunCheckpoint(value.checkpoint),
-        ...(value.file === undefined ? {} : { file: mintTrustedPath(value.file) }),
-        ...(remembered === undefined ? {} : { remembered }),
-        reads,
-      };
-    } catch {
-      const rejected = file.replace(/\.json$/, `.rejected-${randomUUID()}.json`);
-      await rename(file, rejected);
-      entry.warning = `The run progress could not be restored and its record was moved to ${rejected}.`;
-      return undefined;
-    }
-  }
-
-  /**
-   * Writes a canvas's record, with the read positions it had, `moved` moved forward: forced to disk
-   * every time, since a save may come before a send (whose record must be on disk first) or move a
-   * read position, and each write replaces the record whole.
-   */
-  async #write(canvas: CanvasId, checkpoint: RunCheckpoint, moved?: MovedRead): Promise<void> {
-    const { file, ...remembered } = await this.#deps.memory.get(canvas);
-    const kept = this.#reads.get(canvas) ?? (await this.#keptReads(canvas));
-    const reads =
-      moved === undefined || moved.seq <= (kept[moved.party] ?? 0)
-        ? kept
-        : { ...kept, [moved.party]: moved.seq };
-    await mkdir(path.dirname(this.#recordFile(canvas)), PRIVATE);
-    await writeWhole(
-      this.#recordFile(canvas),
-      JSON.stringify({
-        version: VERSION,
-        id: canvas,
-        ...(file === undefined ? {} : { file }),
-        checkpoint,
-        remembered,
-        ...(Object.keys(reads).length > 0 ? { reads } : {}),
-      }),
-      { durable: true },
-    );
-    this.#reads.set(canvas, reads);
-  }
-
-  /** The read positions a canvas's record has on disk, read leniently: none if it has none. */
-  async #keptReads(canvas: CanvasId): Promise<KeptReads> {
-    try {
-      const value: unknown = JSON.parse(await readFile(this.#recordFile(canvas), 'utf8'));
-      return isRecord(value) ? readPositions(value.reads) : {};
-    } catch {
-      return {};
-    }
-  }
-
-  async #last(canvas: CanvasId): Promise<void> {
-    await mkdir(this.#directory, PRIVATE);
-    let rejected = false;
-    try {
-      JSON.parse(await readFile(this.#lastFile(), 'utf8'));
-    } catch (error) {
-      if (error instanceof SyntaxError) rejected = true;
-      else if (!missing(error)) throw error;
-    }
-    if (rejected) {
-      await copyFile(
-        this.#lastFile(),
-        path.join(this.#directory, `last.rejected-${randomUUID()}.json`),
-      );
-    }
-    await writeWhole(this.#lastFile(), JSON.stringify({ version: VERSION, canvas }));
-  }
-
-  #serialize(operation: () => Promise<void>): Promise<void> {
-    const writing = this.#writing.then(operation);
-    this.#writing = writing.catch(() => undefined);
-    return writing;
+  /** Within a write: `canvas` is the one the profile has open now, and the only one. */
+  #markOpen(canvas: CanvasId): void {
+    const { store, memory } = this.#deps;
+    memory.ensure(canvas);
+    store.prepare('DELETE FROM open_canvas WHERE canvas_id <> ?').run(canvas);
+    store
+      .prepare(
+        `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
+         ON CONFLICT (canvas_id) DO UPDATE SET opened_at = excluded.opened_at`,
+      )
+      .run(canvas, Date.now());
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-/** Read positions as written: each a party's place in the store, the others left out. */
-function readPositions(value: unknown): KeptReads {
-  if (!isRecord(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      ([party, seq]) =>
-        PARTY_PATTERN.test(party) && Number.isSafeInteger(seq) && (seq as number) >= 0,
-    ),
-  ) as KeptReads;
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);
 }
 function missing(error: unknown): boolean {
-  return isRecord(error) && error.code === 'ENOENT';
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
-async function canvasText(file: string): Promise<string> {
+async function canvasText(file: TrustedPath): Promise<string> {
   if ((await stat(file)).size > MAX_CANVAS_BYTES) throw new Error('The saved canvas is too large');
   return readFile(file, 'utf8');
-}
-/** What says which canvas was open last: of this version, else none. */
-function isLast(value: unknown): value is { version: 2; canvas: CanvasId } {
-  return isRecord(value) && value.version === VERSION && isCanvasId(value.canvas);
 }

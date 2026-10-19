@@ -4,7 +4,7 @@ import { ID_PATTERN } from '../../shared/adapter';
 import { DEFAULT_TOKEN_HOURS, MAX_TOKEN_HOURS } from '../../shared/api/limits';
 import { isCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
-import { readWhole, unknownFields, writeWhole } from '../memory';
+import { readWhole, unknownFields, writeWhole } from '../whole-file';
 import type { OutsideCaller } from './caller';
 
 /*

@@ -10,25 +10,34 @@ import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { CanvasFiles } from './canvas';
 import { mintTrustedPath } from './core/host';
 import type { HostServices } from './core/host';
+import type { Store } from './core/store/store';
+import { openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 
 const WINDOW = 3;
 
 let dir: string;
+/** The profile, beside `dir`: what the core keeps is never among the canvas files. */
+let profile: string;
+let store: Store;
 let memory: CanvasMemory;
 let pickCanvasToOpen: ReturnType<typeof vi.fn<HostServices['pickCanvasToOpen']>>;
 let pickCanvasToSave: ReturnType<typeof vi.fn<HostServices['pickCanvasToSave']>>;
 let canvases: CanvasFiles;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-canvas-'));
-  memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-profile-'));
+  store = await openTestStore(profile);
+  memory = new CanvasMemory(store);
   pickCanvasToOpen = vi.fn<HostServices['pickCanvasToOpen']>();
   pickCanvasToSave = vi.fn<HostServices['pickCanvasToSave']>();
   canvases = new CanvasFiles({ host: { pickCanvasToOpen, pickCanvasToSave }, memory });
 });
 afterEach(async () => {
   await memory.flush();
+  await store.close();
   await rm(dir, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true });
 });
 
 /** A canvas's file's text: a version 2 canvas with id `id`. */

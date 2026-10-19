@@ -1,5 +1,5 @@
 import { ID_PATTERN } from '../shared/adapter';
-import { readWhole, unknownFields, writeWhole } from './memory';
+import { readWhole, unknownFields, writeWhole } from './whole-file';
 
 /** What the user chose for corrallm as a whole, rather than for one canvas (memory.ts). */
 export interface AppSettings {

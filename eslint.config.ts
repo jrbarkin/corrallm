@@ -46,7 +46,7 @@ const ADAPTER_IMPORTERS = [
  */
 const CORE_FOLDERS = 'src/main/{core,sessions,api,cli}/**/*.ts';
 const CORE_SERVICES =
-  'src/main/{memory,settings,usage,files,git,canvas,project,run-journal,loopback,links,reveal}.ts';
+  'src/main/{memory,settings,usage,files,git,canvas,project,run-journal,loopback,links,reveal,whole-file}.ts';
 const ELECTRON = {
   group: ['electron', 'electron/*'],
   message:
