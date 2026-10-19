@@ -1,4 +1,14 @@
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  open as openFile,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,11 +17,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MIGRATIONS, SCHEMA } from './migrations';
 import { APPLICATION_ID, JOURNAL_SIZE_LIMIT, openStore } from './open';
 import { connect } from './sqlite';
-import type { Store } from './store';
+import type { Store, StoreDeps } from './store';
 
 /*
  * Opening the profile's database (Core Database §5): <profile>/core.db, made 0600 before SQLite
- * opens it, its pragmas set and read back, checked, and migrated; never throwing.
+ * opens it, its pragmas set and read back, checked, and migrated; never throwing. A damaged one is
+ * set aside with its log and index, and the newest sound snapshot restored, if there is one.
  */
 
 let profile: string;
@@ -30,8 +41,8 @@ afterEach(async () => {
 });
 
 /** Opens the profile's store, which must open. */
-async function open(): Promise<{ store: Store; said: string[] }> {
-  const { store, said } = await openStore(profile);
+async function open(deps?: StoreDeps): Promise<{ store: Store; said: string[] }> {
+  const { store, said } = await openStore(profile, deps);
   if (store === undefined) throw new Error(`The store did not open: ${said.join(' ')}`);
   opened.push(store);
   return { store, said };
@@ -159,5 +170,150 @@ describe('openStore', () => {
     expect(said).toEqual([
       expect.stringMatching(/^The core’s database could not be opened \(.*ENOTDIR.*\)\.$/),
     ]);
+  });
+});
+
+describe('a damaged database', () => {
+  /** A clock stopped at `at`, and timers that never run. */
+  const stoppedAt = (at: number): StoreDeps => ({ later: () => () => undefined, now: () => at });
+  const CANVAS = '0a6f6a5e-4bb3-4c3e-8a8c-3f7f2c1e9d10';
+
+  /** Keeps a canvas and its messages, then closes: all of it in core.db, and a snapshot of it. */
+  async function keepMessages(at: number): Promise<void> {
+    const { store } = await open(stoppedAt(at));
+    store.tx(() => {
+      store.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS);
+      for (let i = 0; i < 300; i++) {
+        store
+          .prepare(
+            `INSERT INTO message (id, canvas_id, from_party, to_party, kind, body, state, sent_at)
+             VALUES (?, ?, 'you', 'agent:a', 'text', ?, 'pending', 1)`,
+          )
+          .run(`message ${String(i)}`, CANVAS, 'x'.repeat(200));
+      }
+    });
+    await store.close();
+  }
+
+  /** Overwrites part of each of `pages` (numbered from 1) of the database's file. */
+  async function damage(pages: number[]): Promise<void> {
+    const handle = await openFile(file, 'r+');
+    try {
+      for (const page of pages) {
+        await handle.write(Buffer.alloc(512, 0x5a), 0, 512, (page - 1) * 4096 + 100);
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** What was set aside: the database's file, as moved. */
+  async function setAside(): Promise<string> {
+    const [name, ...others] = (await readdir(profile)).filter((one) =>
+      /^core\.rejected-[0-9a-f-]{36}\.db$/.test(one),
+    );
+    if (name === undefined || others.length > 0) throw new Error('Not one database set aside');
+    return path.join(profile, name);
+  }
+
+  const canvases = (store: Store) => store.prepare('SELECT id FROM canvas').all();
+  const messages = (store: Store) =>
+    store.prepare('SELECT count(*) AS messages FROM message').get();
+  /** That the store opened keeps what is written to it. */
+  function works(store: Store): void {
+    store.tx(() => store.prepare("INSERT INTO canvas (id, used_at) VALUES ('after', 2)").run());
+    expect(canvases(store)).toContainEqual({ id: 'after' });
+  }
+
+  it('sets aside a file that isn’t a database, with its log and index, and starts empty', async () => {
+    await writeFile(file, 'This is not a database. '.repeat(500));
+    await writeFile(`${file}-wal`, 'its log');
+    await writeFile(`${file}-shm`, 'its index');
+
+    const { store, said } = await open();
+
+    const rejected = await setAside();
+    expect(said).toEqual([
+      `The core’s database was damaged (file is not a database), and was moved to ${rejected}.`,
+      'It starts empty.',
+    ]);
+    expect(await readFile(rejected, 'utf8')).toBe('This is not a database. '.repeat(500));
+    expect(await readFile(`${rejected}-wal`, 'utf8')).toBe('its log');
+    // The log's index, which SQLite rebuilds from the log whenever it reads it, went with it.
+    await expect(stat(`${rejected}-shm`)).resolves.toBeDefined();
+    expect(canvases(store)).toEqual([]);
+    works(store);
+  });
+
+  it('sets aside a database with damaged pages, restoring the newest snapshot that is sound', async () => {
+    await keepMessages(Date.UTC(2026, 9, 19, 12));
+    // A newer snapshot, which isn't sound.
+    await writeFile(path.join(profile, 'backups', 'core-2026-10-19T13-00-00-000Z.db'), 'torn');
+    const pages = (await stat(file)).size / 4096;
+    await damage([pages - 6, pages - 4, pages - 2]);
+
+    const { store, said } = await open();
+
+    const rejected = await setAside();
+    expect(said).toEqual([
+      expect.stringMatching(
+        /^The core’s database was damaged \(SQLite’s check found: .+\), and was moved to /,
+      ),
+      'It was restored from its snapshot of 2026-10-19T12:00:00.000Z: what changed since then is lost.',
+    ]);
+    expect(said[0]?.endsWith(` ${rejected}.`)).toBe(true);
+    expect(canvases(store)).toEqual([{ id: CANVAS }]);
+    expect(messages(store)).toEqual({ messages: 300 });
+    expect(store.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' });
+    works(store);
+  });
+
+  it('sets aside a database SQLite finds damaged as it opens it', async () => {
+    await keepMessages(Date.UTC(2026, 9, 19, 12));
+    await rm(path.join(profile, 'backups'), { recursive: true });
+    // The first page's tree, past the file's header.
+    await damage([1]);
+
+    const { store, said } = await open();
+
+    expect(said).toEqual([
+      `The core’s database was damaged (database disk image is malformed), and was moved to ${await setAside()}.`,
+      'It starts empty.',
+    ]);
+    expect(canvases(store)).toEqual([]);
+    works(store);
+  });
+
+  it('sets aside a database that isn’t corrallm’s', async () => {
+    const other = connect(file);
+    other.exec('CREATE TABLE theirs (id INTEGER PRIMARY KEY) STRICT');
+    other.close();
+
+    const { store, said } = await open();
+
+    expect(said).toEqual([
+      `The core’s database was damaged (it isn’t corrallm’s), and was moved to ${await setAside()}.`,
+      'It starts empty.',
+    ]);
+    works(store);
+  });
+
+  it('begins a database anew without a log left behind by one that is gone', async () => {
+    // A log another database wrote, and never checkpointed, as one set aside without its log
+    // would leave: SQLite deletes a log it finds beside an empty file, never replaying it.
+    const elsewhere = path.join(profile, 'elsewhere');
+    await mkdir(elsewhere);
+    const gone = connect(path.join(elsewhere, 'gone.db'));
+    gone.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0');
+    gone.exec("CREATE TABLE gone (note TEXT) STRICT; INSERT INTO gone VALUES ('from the log')");
+    await copyFile(path.join(elsewhere, 'gone.db-wal'), `${file}-wal`);
+    gone.close();
+
+    const { store, said } = await open();
+
+    expect(said).toEqual([]);
+    expect(store.prepare("SELECT name FROM sqlite_schema WHERE name = 'gone'").all()).toEqual([]);
+    expect(store.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' });
+    works(store);
   });
 });

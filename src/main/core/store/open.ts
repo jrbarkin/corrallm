@@ -1,9 +1,11 @@
-import { closeSync, openSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, existsSync, openSync, rmSync } from 'node:fs';
+import { copyFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
 import { snapshots, snapshotTime } from './snapshots';
-import { connect } from './sqlite';
+import { connect, resultCode, SQLITE_CORRUPT, SQLITE_NOTADB } from './sqlite';
 import type { Connection } from './sqlite';
 import { Store, SYSTEM_DEPS } from './store';
 import type { StoreDeps } from './store';
@@ -11,17 +13,23 @@ import type { StoreDeps } from './store';
 /*
  * Opening the profile's database (Core Database §5): <profile>/core.db, made 0600 before SQLite
  * opens it, so that its write-ahead log (-wal) and its index (-shm), which SQLite makes with the
- * database's mode, are the user's alone too. Then, in this order: on a new, empty database,
- * incremental vacuuming (which only a database with no tables can take) and corrallm's
- * application id; the write-ahead log; every commit forced to disk (synchronous FULL and, on
- * macOS, F_FULLFSYNC, as Node's own fsync is there: SQLite's plain fsync leaves it in the drive's
- * cache); foreign keys; no functions from the schema it didn't make (trusted_schema); the log
- * kept within JOURNAL_SIZE_LIMIT and checkpointed by the store when it is idle, never in the
- * middle of a commit; then SQLite's quick check, and the migrations it lacks.
+ * database's mode, are the user's alone too. A database that was there is checked first, read
+ * only (`vet`): that it is corrallm's, that this code may read it, and SQLite's quick check. Then,
+ * in this order: on a new, empty database, incremental vacuuming (which only a database with no
+ * tables can take) and corrallm's application id; the write-ahead log; every commit forced to
+ * disk (synchronous FULL and, on macOS, F_FULLFSYNC, as Node's own fsync is there: SQLite's plain
+ * fsync leaves it in the drive's cache); foreign keys; no functions from a schema it didn't make
+ * (trusted_schema); the log kept within JOURNAL_SIZE_LIMIT and checkpointed by the store when it
+ * is idle, never in the middle of a commit; then the migrations it lacks.
  *
  * Opening never throws (the host gives up on a core that crashes three times in a minute): it
  * resolves with the store, or none, and what it found to say. A database a newer corrallm made
- * that this one can't read (meta.min_reader above SCHEMA) is left as it is.
+ * that this one can't read (meta.min_reader above SCHEMA) is left as it is. A damaged one (SQLite
+ * says it is corrupt or no database, its quick check finds a fault, or it isn't corrallm's) is
+ * set aside as core.rejected-<uuid>.db with its log and index, the log first: a log left without
+ * its database could otherwise be replayed into the next one. Then the newest snapshot that
+ * passes the quick check is restored, else the store starts empty, and it says so. Whatever
+ * restoring loses, the core treats as a restart does: what was being sent is never sent again.
  */
 
 export const STORE_FILE = 'core.db';
@@ -39,6 +47,8 @@ export const JOURNAL_SIZE_LIMIT = 4 * 2 ** 20;
  * synchronous); a reader of the log never blocks a writer.
  */
 const BUSY_TIMEOUT_MS = 0;
+/** The files SQLite keeps beside the database: its log and the log's index. */
+const SIDECARS = ['-wal', '-shm'];
 
 /** What opening the store found: the store, or none, and what to say. */
 export interface Opened {
@@ -51,28 +61,105 @@ export interface Opened {
 /** Opens the profile's database, as the core opens it once it holds core.lock. Never rejects. */
 export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
   const file = path.join(profile, STORE_FILE);
+  const said: string[] = [];
   try {
-    const connection = openConnection(file);
+    let connection: Connection;
+    try {
+      connection = openConnection(file);
+    } catch (error) {
+      if (!isDamage(error)) throw error;
+      connection = await recover(profile, file, reason(error), said);
+    }
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
-    return { store: new Store(connection, { profile, file, deps, snapshotAt }), said: [] };
+    return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };
   } catch (error) {
-    if (error instanceof Refusal) return { store: undefined, said: [error.message] };
-    return {
-      store: undefined,
-      said: [`The core’s database could not be opened (${reason(error)}).`],
-    };
+    const why =
+      error instanceof Refusal
+        ? error.message
+        : `The core’s database could not be opened (${reason(error)}).`;
+    return { store: undefined, said: [...said, why] };
   }
 }
 
 /** A database this code must not open: the sentence says why. */
 class Refusal extends Error {}
+/** A database damaged in a way SQLite doesn't throw for: the message says how. */
+class Damage extends Error {}
+
+function isDamage(error: unknown): boolean {
+  if (error instanceof Damage) return true;
+  const code = resultCode(error);
+  return code === SQLITE_CORRUPT || code === SQLITE_NOTADB;
+}
+
+/**
+ * Sets the damaged database aside and opens the newest sound snapshot in its place, or an empty
+ * database, saying which in `said`.
+ */
+async function recover(
+  profile: string,
+  file: string,
+  why: string,
+  said: string[],
+): Promise<Connection> {
+  const rejected = path.join(profile, `core.rejected-${randomUUID()}.db`);
+  // The log first: a log left without its database is never replayed into another.
+  for (const suffix of [...SIDECARS, '']) {
+    await moveIfThere(`${file}${suffix}`, `${rejected}${suffix}`);
+  }
+  said.push(`The core’s database was damaged (${why}), and was moved to ${rejected}.`);
+  for (const snapshot of await snapshots(profile)) {
+    if (!sound(snapshot)) continue;
+    // Copied beside it, then moved over it: never a database cut short.
+    const restoring = `${file}.restoring`;
+    try {
+      await copyFile(snapshot, restoring);
+      await rename(restoring, file);
+    } catch (error) {
+      await rm(restoring, { force: true });
+      throw error;
+    }
+    const at = new Date(snapshotTime(path.basename(snapshot)) ?? 0).toISOString();
+    said.push(`It was restored from its snapshot of ${at}: what changed since then is lost.`);
+    return openConnection(file);
+  }
+  said.push('It starts empty.');
+  return openConnection(file);
+}
+
+/** Whether a snapshot opens and passes SQLite's quick check. */
+function sound(snapshot: string): boolean {
+  try {
+    const copy = connect(snapshot, { readOnly: true });
+    try {
+      return faults(copy) === undefined;
+    } finally {
+      copy.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** What SQLite's quick check finds wrong with a database, in short (its first two faults). */
+function faults(connection: Connection): string | undefined {
+  const found = connection
+    .prepare('PRAGMA quick_check')
+    .all()
+    .map((row) => String(row.quick_check));
+  if (found.length === 1 && found[0] === 'ok') return undefined;
+  const lines = found.flatMap((row) => row.split('\n'));
+  // Its heading (*** in database main ***) says nothing of what it found.
+  const said = lines.filter((line) => line !== '' && !line.startsWith('***'));
+  return said.slice(0, 2).join('; ').slice(0, 300);
+}
 
 function openConnection(file: string): Connection {
-  create(file);
+  if (!create(file)) vet(file);
   const connection = connect(file, { timeout: BUSY_TIMEOUT_MS });
   try {
-    setUp(connection, file);
+    setUp(connection);
     return connection;
   } catch (error) {
     connection.close();
@@ -80,27 +167,58 @@ function openConnection(file: string): Connection {
   }
 }
 
-/** Makes the database's file, the user's alone, unless it is there. */
-function create(file: string): void {
+/** Makes the database's file, the user's alone, unless it is there: whether it made it. */
+function create(file: string): boolean {
   try {
     closeSync(openSync(file, 'wx', 0o600));
+    return true;
   } catch (error) {
-    if (!isCode(error, 'EEXIST')) throw error;
+    if (isCode(error, 'EEXIST')) return false;
+    throw error;
   }
 }
 
-function setUp(connection: Connection, file: string): void {
+/**
+ * Checks a database that was there before it is written: that it is corrallm's, that this code
+ * can read it, and that SQLite's quick check finds nothing wrong. Through a connection that only
+ * reads, so that one it refuses or sets aside is left as it was, its log with it: a connection
+ * that writes would checkpoint the log into it, and delete it, as it closed. The log and index
+ * SQLite makes for it meanwhile go again if it fails.
+ */
+function vet(file: string): void {
+  const made = SIDECARS.filter((suffix) => !existsSync(`${file}${suffix}`));
+  const reader = connect(file, { readOnly: true, timeout: BUSY_TIMEOUT_MS });
+  try {
+    const objects = reader.prepare('SELECT count(*) AS objects FROM sqlite_schema').get();
+    // An empty database SQLite had begun: set up as a new one.
+    if (objects?.objects === 0) return;
+    if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
+      throw new Damage('it isn’t corrallm’s');
+    }
+    if (schemaOf(reader) > 0 && (minReaderOf(reader) ?? 0) > SCHEMA) {
+      throw new Refusal(
+        `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
+      );
+    }
+    const found = faults(reader);
+    if (found !== undefined) throw new Damage(`SQLite’s check found: ${found}`);
+  } catch (error) {
+    reader.close();
+    for (const suffix of made) rmSync(`${file}${suffix}`, { force: true });
+    throw error;
+  }
+  reader.close();
+}
+
+/** Sets up a connection to a database `vet` passed, or a new one, as the core needs it. */
+function setUp(connection: Connection): void {
   const objects = connection.prepare('SELECT count(*) AS objects FROM sqlite_schema').get();
   if (objects?.objects === 0) {
     connection.exec('PRAGMA auto_vacuum = INCREMENTAL');
     // A database SQLite had begun takes it only once vacuumed (an empty one at once).
-    if (connection.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum !== 2)
-      connection.exec('VACUUM');
+    const vacuum = connection.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum;
+    if (vacuum !== 2) connection.exec('VACUUM');
     connection.exec(`PRAGMA application_id = ${String(APPLICATION_ID)}`);
-  } else if (schemaOf(connection) > 0 && (minReaderOf(connection) ?? 0) > SCHEMA) {
-    throw new Refusal(
-      `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
-    );
   }
   const mode = connection.prepare('PRAGMA journal_mode = WAL').get()?.journal_mode;
   if (mode !== 'wal') {
@@ -113,6 +231,14 @@ function setUp(connection: Connection, file: string): void {
   connection.exec(`PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;
     PRAGMA journal_size_limit = ${String(JOURNAL_SIZE_LIMIT)}; PRAGMA wal_autocheckpoint = 0`);
   migrate(connection);
+}
+
+async function moveIfThere(from: string, to: string): Promise<void> {
+  try {
+    await rename(from, to);
+  } catch (error) {
+    if (!isCode(error, 'ENOENT')) throw error;
+  }
 }
 
 function reason(error: unknown): string {
