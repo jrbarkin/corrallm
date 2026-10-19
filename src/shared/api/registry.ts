@@ -5,10 +5,12 @@ import type { OpDef } from './define';
 import { appOps } from './ops/app';
 import { catalogOps } from './ops/catalog';
 import { conversationOps } from './ops/conversation';
+import { linkOps } from './ops/link';
 import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
 import { usageOps } from './ops/usage';
+import { windowOps } from './ops/window';
 import type { OpName, Party, Surface } from './surface';
 
 /*
@@ -25,6 +27,8 @@ export const OPS = {
   ...settingsOps,
   ...runOps,
   ...usageOps,
+  ...linkOps,
+  ...windowOps,
 } satisfies Record<OpName, OpDef>;
 
 /** What op `N` takes, once parsed. */

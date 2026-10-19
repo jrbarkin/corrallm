@@ -1,6 +1,6 @@
 import type { CanvasId } from '../../shared/canvas';
 import type { Catalog } from '../../shared/adapter';
-import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { CoreChannel, CoreEvent, IpcArgs, IpcEventArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
@@ -9,8 +9,6 @@ import type { InstalledClis } from '../../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../../shared/usage';
 import type { CanvasFiles } from '../canvas';
 import type { ProjectFiles } from '../files';
-import type { LinkOpener } from '../links';
-import type { FileRevealer } from '../reveal';
 import type { Windows } from './windows';
 import type { HostServices, WindowId } from './host';
 import type { ProjectFolders } from '../project';
@@ -50,7 +48,7 @@ export type ChannelHandler<C extends CoreChannel> = (
 
 /**
  * What the handlers act on: the catalog, which canvas each window shows, canvas files, runs,
- * project folders, their files, links to open (and project files to show), sessions, the agents
+ * project folders, their files, sessions, the agents
  * the user has, and usage. A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
@@ -62,8 +60,6 @@ export interface ChannelServices {
   shutdown: { ready: HostServices['runReady'] };
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   files: Pick<ProjectFiles, 'find'>;
-  links: Pick<LinkOpener, 'open'>;
-  reveal: Pick<FileRevealer, 'reveal'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -121,18 +117,6 @@ export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
   return [text, choose];
 }
 
-/**
- * `ArgsParser` for link:open and link:reveal: the URL clicked, a string within MAX_LINK_LENGTH.
- * Whether it may open (or its file be shown) is the core's to decide (links.ts, reveal.ts),
- * never the renderer's.
- */
-export function parseLinkArgs(args: unknown[]): IpcArgs<'link:open' | 'link:reveal'> {
-  const [url] = args;
-  if (args.length !== 1 || typeof url !== 'string') throw new TypeError('Expected a link');
-  if (url.length > MAX_LINK_LENGTH) throw new RangeError('The link is too long');
-  return [url];
-}
-
 /** The usage backends the catalog lists: those whose usage corrallm reads. */
 const backendsOf = (catalog: Catalog) => catalog.usageBackends.map((backend) => backend.id);
 
@@ -161,8 +145,6 @@ function createHandlers({
   shutdown,
   projects,
   files,
-  links,
-  reveal,
   sessions,
   clis,
   usage,
@@ -376,14 +358,6 @@ function createHandlers({
         await sessions.inputTerminal(await of(window), agentId, data);
         return null;
       },
-    },
-    'link:open': {
-      parseArgs: parseLinkArgs,
-      handler: ({ window }, url) => links.open(window, url),
-    },
-    'link:reveal': {
-      parseArgs: parseLinkArgs,
-      handler: async ({ window }, url) => reveal.reveal(await of(window), url),
     },
     'terminal:resize': {
       parseArgs: parseTerminalResizeArgs,

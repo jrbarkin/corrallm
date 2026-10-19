@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../shared/canvas';
-import { MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../../shared/ipc';
+import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import {
   MAX_ANSWER_LENGTH,
@@ -52,12 +52,6 @@ function fakeServices() {
     },
     files: {
       find: vi.fn<ChannelServices['files']['find']>().mockResolvedValue([]),
-    },
-    links: {
-      open: vi.fn<ChannelServices['links']['open']>().mockResolvedValue(true),
-    },
-    reveal: {
-      reveal: vi.fn<ChannelServices['reveal']['reveal']>().mockResolvedValue(true),
     },
     sessions: {
       start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
@@ -140,51 +134,17 @@ describe('catalog:get handler', () => {
 });
 
 describe('the channel surface', () => {
-  it.each(['core:connect', 'toString', '__proto__', 'unknown'])('refuses %s', (name) => {
-    expect(() => invoke(name, [])).toThrow(/no channel/);
-    expect(services.links.open).not.toHaveBeenCalled();
-  });
+  it.each(['core:connect', 'link:open', 'link:reveal', 'toString', '__proto__', 'unknown'])(
+    'refuses %s',
+    (name) => {
+      expect(() => invoke(name, [])).toThrow(/no channel/);
+      expect(services.canvases.open).not.toHaveBeenCalled();
+    },
+  );
 
   it('refuses arguments that are not a tuple before running a parser or handler', () => {
     expect(() => channels.call(7, 'canvas:open', null as never)).toThrow(/arguments/);
     expect(services.canvases.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('link:open handler', () => {
-  it('passes the URL on, for the host to check and ask about, for the renderer that sent it', async () => {
-    const sender = 7;
-    await expect(invoke('link:open', ['https://docs.example.com/a'], sender)).resolves.toBe(true);
-    expect(services.links.open).toHaveBeenCalledWith(sender, 'https://docs.example.com/a');
-  });
-
-  it.each([
-    ['no URL', [], /Expected a link/],
-    ['a URL that is not a string', [{ href: 'https://x.example' }], /Expected a link/],
-    ['an extra argument', ['https://docs.example.com/', true], /Expected a link/],
-    ['a URL too long', [`https://x.example/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
-  ])('rejects %s', (_label, args, message) => {
-    expect(() => invoke('link:open', args)).toThrow(message);
-    expect(services.links.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('link:reveal handler', () => {
-  it('passes the link on, for the host to check against the sender’s canvas’s project folder', async () => {
-    const sender = 7;
-    const link = 'file:///work/app/notes.txt';
-    await expect(invoke('link:reveal', [link], sender)).resolves.toBe(true);
-    expect(services.reveal.reveal).toHaveBeenCalledWith(CANVAS, link);
-  });
-
-  it.each([
-    ['no link', [], /Expected a link/],
-    ['a link that is not a string', [{ href: 'file:///work/app' }], /Expected a link/],
-    ['an extra argument', ['file:///work/app/notes.txt', true], /Expected a link/],
-    ['a link too long', [`file:///work/${'a'.repeat(MAX_LINK_LENGTH)}`], /too long/],
-  ])('rejects %s', (_label, args, message) => {
-    expect(() => invoke('link:reveal', args)).toThrow(message);
-    expect(services.reveal.reveal).not.toHaveBeenCalled();
   });
 });
 
@@ -778,8 +738,7 @@ describe('session:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.links.open).not.toHaveBeenCalled();
-    expect(services.reveal.reveal).not.toHaveBeenCalled();
+    expect(services.canvases.open).not.toHaveBeenCalled();
   });
 });
 
@@ -839,8 +798,7 @@ describe('terminal:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.links.open).not.toHaveBeenCalled();
-    expect(services.reveal.reveal).not.toHaveBeenCalled();
+    expect(services.canvases.open).not.toHaveBeenCalled();
   });
 });
 

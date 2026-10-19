@@ -195,6 +195,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await host.openExternal(url);
     },
   });
+  const reveal = new FileRevealer({
+    folderOf: (canvas) => projects.of(canvas),
+    show: async (file) => {
+      await host.showFile(file);
+    },
+  });
   const channels = new Channels({
     catalog: CATALOG,
     windows,
@@ -203,13 +209,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
     projects,
     files,
-    links,
-    reveal: new FileRevealer({
-      folderOf: (canvas) => projects.of(canvas),
-      show: async (file) => {
-        await host.showFile(file);
-      },
-    }),
     sessions,
     clis: { installed: async () => installedClis(await environment()) },
     usage,
@@ -240,6 +239,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
         settings,
+        links,
+        reveal,
+        windows,
         environment,
         usage,
         engines,

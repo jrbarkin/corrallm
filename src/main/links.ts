@@ -6,7 +6,7 @@ import { EXTERNAL_URL_ALLOWLIST, linkTarget } from './url-policy';
 
 /*
  * Links the user clicks in the app (a transcript's Markdown, a terminal's links) open in their
- * browser, once the core has said so: the renderer only names the URL (link:open). The core normalizes it
+ * browser, once the core has said so: the renderer only names the URL (link.open). The core normalizes it
  * and opens it only if it is https, or http to this machine (url-policy.ts). A site on
  * EXTERNAL_URL_ALLOWLIST opens at once; any other asks first, in a native dialog ("Open
  * docs.example.com in your browser?", with "Always for this site"); a site the user said to

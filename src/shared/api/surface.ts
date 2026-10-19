@@ -175,6 +175,9 @@ export const SURFACE = {
   'usage.get': { access: A, kind: 'read', scope: 'none', reads: 'usage' },
   'usage.setRule': { access: Y, kind: 'command', scope: 'app' },
   'usage.simulate': { access: Y, kind: 'command', scope: 'app' },
+  'link.open': { access: Y, kind: 'command', scope: 'none' },
+  'link.reveal': { access: Y, kind: 'command', scope: 'none' },
+  'window.get': { access: Y, kind: 'read', scope: 'none' },
   wait: { access: T, kind: 'read', scope: 'none', waits: true, varies: ['messages', 'next'] },
 } as const satisfies Record<string, Surface>;
 

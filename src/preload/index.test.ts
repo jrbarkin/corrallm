@@ -379,20 +379,30 @@ describe('preload', () => {
     expect(channel).toHaveBeenLastCalledWith('terminal:detach', 'a');
   });
 
-  it('asks main to open a link, with only its URL', async () => {
+  it('calls link.open and link.reveal over the generated operation bridge, with only the URL', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue(true);
-    await expect(api.openLink('https://docs.example.com/a')).resolves.toBe(true);
-    expect(channel).toHaveBeenLastCalledWith('link:open', 'https://docs.example.com/a');
+    const heard = postPort(answerInfo);
+    await expect(api.linkOpen({ url: 'https://docs.example.com/a' })).resolves.toEqual(
+      answerInfo(),
+    );
+    await expect(api.linkReveal({ url: 'file:///work/app/notes.txt' })).resolves.toEqual(
+      answerInfo(),
+    );
+    expect(heard).toEqual([
+      ['link.open', { url: 'https://docs.example.com/a' }],
+      ['link.reveal', { url: 'file:///work/app/notes.txt' }],
+    ]);
+    expect(channel).not.toHaveBeenCalled();
+    expect(api).not.toHaveProperty('openLink');
+    expect(api).not.toHaveProperty('revealFile');
   });
 
-  it('asks main to show a file:// link’s file in the file manager, with only the link', async () => {
+  it('calls window.get without accepting a window id from the page', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue(true);
-    await expect(api.revealFile('file:///work/app/notes.txt')).resolves.toBe(true);
-    expect(channel).toHaveBeenLastCalledWith('link:reveal', 'file:///work/app/notes.txt');
+    const heard = postPort(answerInfo);
+    await api.windowGet();
+    expect(heard).toEqual([['window.get', undefined]]);
+    expect(channel).not.toHaveBeenCalled();
   });
 
   it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {

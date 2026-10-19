@@ -27,6 +27,9 @@ export type Reason = keyof typeof REASONS;
 export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'usage.setRule': 'spending-guard',
   'usage.simulate': 'spending-guard',
+  'link.open': 'os-action',
+  'link.reveal': 'os-action',
+  'window.get': 'view',
   // The GUI's half, topics, comes with B8.
   wait: 'transport',
 };

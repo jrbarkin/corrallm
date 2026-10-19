@@ -8,7 +8,7 @@ import { MAX_LINK_LENGTH } from '../shared/ipc';
 /*
  * file:// links the user Cmd-clicks in a terminal (a CLI prints the files it names as OSC 8
  * links) are shown in the OS file manager (Finder), selected in their folder, if they are in the
- * canvas's project folder: the renderer only names the link (link:reveal). The core decides: the link
+ * canvas's project folder: the renderer only names the link (link.reveal). The core decides: the link
  * must be a file:// URL on this machine (no host), to a file or folder that exists, whose real
  * path (links resolved) is the project folder's real path or inside it. Anything else stays
  * inert. A file is only ever shown, never opened (no executable runs, whatever it is).

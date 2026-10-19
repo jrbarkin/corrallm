@@ -162,18 +162,6 @@ export interface IpcContract {
   /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
   'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
   /**
-   * Opens a link the user clicked (in a transcript, or in a terminal) in their browser: https, or
-   * http to this machine. Main asks first, in a dialog, unless the site is allowlisted or the user
-   * said to always open it. Resolves with whether it opened.
-   */
-  'link:open': { args: [url: string]; result: boolean };
-  /**
-   * Shows the file or folder a file:// link the user Cmd-clicked in a terminal names in the OS file
-   * manager (Finder), selected, never opened: only if it is in the canvas's project folder, links
-   * resolved (src/main/reveal.ts). Resolves with whether it was shown.
-   */
-  'link:reveal': { args: [url: string]; result: boolean };
-  /**
    * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
    * dropped files: window.api takes the files, never paths): the core pastes those that exist into its
    * terminal, quoted, as a terminal does.
@@ -282,8 +270,6 @@ export interface InvokeApi {
   detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
   writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
   resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
-  openLink(...args: IpcArgs<'link:open'>): Promise<IpcResult<'link:open'>>;
-  revealFile(...args: IpcArgs<'link:reveal'>): Promise<IpcResult<'link:reveal'>>;
   /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
   dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
   getUsage(): Promise<IpcResult<'usage:get'>>;
@@ -338,8 +324,6 @@ export const API_CHANNELS = {
   detachTerminal: 'terminal:detach',
   writeTerminal: 'terminal:input',
   resizeTerminal: 'terminal:resize',
-  openLink: 'link:open',
-  revealFile: 'link:reveal',
   dropOnTerminal: 'terminal:drop',
   getUsage: 'usage:get',
   setUsageRule: 'usage:rule',

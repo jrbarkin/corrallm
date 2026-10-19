@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AppApi } from '../shared/ipc';
+import type { GuiApi } from '../shared/gui-link';
 import { linkAction, openLinkWith } from './open-link';
 
 describe('a link the user clicks', () => {
@@ -19,16 +19,16 @@ describe('a link the user clicks', () => {
     }
   });
 
-  it('goes to main: link:open for the browser, link:reveal for a file, with only the link', () => {
+  it('calls link.open for the browser and link.reveal for a file, with only the URL', () => {
     const api = {
-      openLink: vi.fn<AppApi['openLink']>().mockResolvedValue(true),
-      revealFile: vi.fn<AppApi['revealFile']>().mockResolvedValue(false),
+      linkOpen: vi.fn<GuiApi['linkOpen']>().mockResolvedValue({ opened: true }),
+      linkReveal: vi.fn<GuiApi['linkReveal']>().mockResolvedValue({ revealed: false }),
     };
     const open = openLinkWith(() => api);
     open('https://docs.example.com/a');
     open('file:///work/app/notes.txt');
     open('javascript:alert(1)');
-    expect(api.openLink.mock.calls).toEqual([['https://docs.example.com/a']]);
-    expect(api.revealFile.mock.calls).toEqual([['file:///work/app/notes.txt']]);
+    expect(api.linkOpen.mock.calls).toEqual([[{ url: 'https://docs.example.com/a' }]]);
+    expect(api.linkReveal.mock.calls).toEqual([[{ url: 'file:///work/app/notes.txt' }]]);
   });
 });

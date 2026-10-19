@@ -2,7 +2,10 @@
   "gui": [
     "api.app.info",
     "api.usage.setRule",
-    "api.usage.simulate"
+    "api.usage.simulate",
+    "api.link.open",
+    "api.link.reveal",
+    "api.window.get"
   ],
   "mcp": {
     "lead": [
@@ -98,6 +101,9 @@
   "deviations": {
     "usage.setRule": "spending-guard",
     "usage.simulate": "spending-guard",
+    "link.open": "os-action",
+    "link.reveal": "os-action",
+    "window.get": "view",
     "wait": "transport"
   },
   "schemas": {
@@ -180,6 +186,18 @@
     "usage.simulate": {
       "input": "8cbbd0959972a51d",
       "output": "e5fa5cc18e054cdd"
+    },
+    "link.open": {
+      "input": "c15bb3817c6ef6b3",
+      "output": "e66a3e83d3926508"
+    },
+    "link.reveal": {
+      "input": "c15bb3817c6ef6b3",
+      "output": "b40c0d650f7a979a"
+    },
+    "window.get": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "fe7f4592313235fe"
     }
   }
 }

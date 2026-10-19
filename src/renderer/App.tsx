@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
 import { GraphEditor } from './graph/GraphEditor';
@@ -12,7 +13,10 @@ import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
 
 const runSource: RunSource = {
-  get: () => window.api.getRun(),
+  get: async () => {
+    const [context, { c }] = await Promise.all([window.api.getRun(), api.windowGet()]);
+    return { ...context, id: c as CanvasId };
+  },
   save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),
@@ -67,10 +71,10 @@ const terminalBackend: TerminalBackend = {
 };
 
 /**
- * Links clicked in the app open in the browser if main says so (src/main/host/links.ts); a file://
- * link's file is shown in the file manager if it is in the project folder (src/main/host/reveal.ts).
+ * Links clicked in the app open in the browser if the core says so (src/main/links.ts); a file://
+ * link's file is shown in the file manager if it is in the project folder (src/main/reveal.ts).
  */
-const openLink: OpenLink = openLinkWith(() => window.api);
+const openLink: OpenLink = openLinkWith(() => api);
 
 /** Usage readings and rules are main's (src/main/usage.ts): one per backend, for every canvas. */
 const usageSource: UsageSource = {

@@ -12,7 +12,9 @@ vi.mock('./terminal/screen', async () => {
 
 /** Stubs window.api: the usage functions the canvas reads at once, and `api`. */
 function stubApi(api: Partial<AppApi>) {
+  const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
+    windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
     getRun: vi
       .fn<AppApi['getRun']>()
       .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
@@ -63,6 +65,29 @@ describe('App', () => {
       expect(getUsage).toHaveBeenCalled();
     });
     expect(onUsageChanged).toHaveBeenCalled();
+  });
+
+  it('learns the canvas id from window.get when it restores run progress', async () => {
+    const c = newCanvasId();
+    const windowGet = vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c } });
+    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
+    stubApi({
+      appInfo: vi
+        .fn<AppApi['appInfo']>()
+        .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
+      windowGet,
+      saveRun,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(windowGet).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      const workflows = saveRun.mock.calls.flatMap(([, checkpoint]) =>
+        checkpoint ? [JSON.parse(checkpoint.workflow) as { id: string }] : [],
+      );
+      expect(workflows.at(-1)?.id).toBe(c);
+    });
   });
 
   it('says so when the core can’t say', async () => {

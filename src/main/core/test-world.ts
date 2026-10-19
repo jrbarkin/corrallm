@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { MAX_LINK_LENGTH } from '../../shared/ipc';
 import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { OpName, Reach } from '../../shared/api/surface';
 import type { SessionMode } from '../../shared/session';
@@ -344,6 +345,28 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   },
   // From the start first, which moves each party's read position past all it was sent: a wait
   // with no cursor then answers alike however often it is called.
+  'link.open': {
+    valid: [{ url: 'https://example.com/a', request: request(93) }],
+    invalid: [
+      {},
+      { url: 1 },
+      { url: 'x'.repeat(MAX_LINK_LENGTH + 1) },
+      { url: 'https://example.com', window: 8 },
+    ],
+  },
+  'link.reveal': {
+    valid: [{ url: 'file:///not-a-project-file', request: request(94) }],
+    invalid: [
+      {},
+      { url: 1 },
+      { url: 'x'.repeat(MAX_LINK_LENGTH + 1) },
+      { url: 'file:///work/app', canvas: CANVAS },
+    ],
+  },
+  'window.get': {
+    valid: [{}],
+    invalid: [{ window: 8 }, { c: CANVAS }],
+  },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],
     by: {
