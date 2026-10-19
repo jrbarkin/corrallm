@@ -35,7 +35,7 @@ import type { StoreDeps } from './store';
  * says it is corrupt or no database, its quick check finds a fault, or it isn't corrallm's) is
  * set aside as core.rejected-<uuid>.db with its log, index and journal, the log first: a log left
  * without its database could otherwise be replayed into the next one. Then the newest snapshot that
- * passes the quick check is restored, else the store starts empty, and it says so. Whatever
+ * passes the same checks is restored, else the store starts empty, and it says so. Whatever
  * restoring loses, the core treats as a restart does: what was being sent is never sent again.
  */
 
@@ -138,12 +138,15 @@ async function recover(
   return openConnection(file);
 }
 
-/** Whether a snapshot opens and passes SQLite's quick check. */
+/**
+ * Whether a snapshot is one to restore: a database corrallm set up, that this code may read, and
+ * that passes SQLite's quick check, as a database that was there must (not, say, an empty file).
+ */
 function sound(snapshot: string): boolean {
   try {
     const copy = connect(snapshot, { readOnly: true });
     try {
-      return faults(copy) === undefined;
+      return schemaOf(copy) > 0 && unfit(copy, snapshot) === undefined;
     } finally {
       copy.close();
     }
@@ -221,22 +224,32 @@ function check(file: string): void {
     const objects = reader.prepare('SELECT count(*) AS objects FROM sqlite_schema').get();
     // An empty database SQLite had begun: set up as a new one.
     if (objects?.objects === 0) return;
-    if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
-      throw new Damage('it isn’t corrallm’s');
-    }
-    if (schemaOf(reader) > 0 && (minReaderOf(reader) ?? 0) > SCHEMA) {
-      throw new Refusal(
-        `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
-      );
-    }
-    const found = faults(reader);
-    if (found !== undefined) throw new Damage(`SQLite’s check found: ${found}`);
+    const wrong = unfit(reader, file);
+    if (wrong !== undefined) throw wrong;
   } catch (error) {
     reader.close();
     for (const suffix of made) rmSync(`${file}${suffix}`, { force: true });
     throw error;
   }
   reader.close();
+}
+
+/**
+ * Why this code must not open a database that has begun, read through a connection that only
+ * reads: it isn't corrallm's, a newer corrallm made it that this one can't read, or SQLite's quick
+ * check finds a fault. Nothing if it may.
+ */
+function unfit(reader: Connection, file: string): Damage | Refusal | undefined {
+  if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
+    return new Damage('it isn’t corrallm’s');
+  }
+  if (schemaOf(reader) > 0 && (minReaderOf(reader) ?? 0) > SCHEMA) {
+    return new Refusal(
+      `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
+    );
+  }
+  const found = faults(reader);
+  return found === undefined ? undefined : new Damage(`SQLite’s check found: ${found}`);
 }
 
 /** Sets up a connection to a database `vet` passed, or a new one, as the core needs it. */

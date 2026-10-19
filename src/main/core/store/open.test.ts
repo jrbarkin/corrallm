@@ -312,6 +312,33 @@ describe('a damaged database', () => {
     works(store);
   });
 
+  it('restores no snapshot that is empty, isn’t corrallm’s, or that this corrallm can’t read', async () => {
+    await keepMessages(Date.UTC(2026, 9, 19, 12));
+    const backups = path.join(profile, 'backups');
+    const kept = path.join(backups, 'core-2026-10-19T12-00-00-000Z.db');
+    // Newer snapshots: one a newer corrallm made, another app's database, and one whose bytes
+    // never reached the disk.
+    const newer = path.join(backups, 'core-2026-10-19T14-00-00-000Z.db');
+    await copyFile(kept, newer);
+    const raised = connect(newer);
+    raised.exec(`UPDATE meta SET min_reader = ${String(SCHEMA + 1)}`);
+    raised.exec(`PRAGMA user_version = ${String(SCHEMA + 1)}`);
+    raised.close();
+    const theirs = connect(path.join(backups, 'core-2026-10-19T15-00-00-000Z.db'));
+    theirs.exec('CREATE TABLE theirs (id INTEGER PRIMARY KEY) STRICT');
+    theirs.close();
+    await writeFile(path.join(backups, 'core-2026-10-19T16-00-00-000Z.db'), '');
+    await writeFile(file, 'This is not a database. '.repeat(500));
+
+    const { store, said } = await open();
+
+    expect(said[1]).toBe(
+      'It was restored from its snapshot of 2026-10-19T12:00:00.000Z: what changed since then is lost.',
+    );
+    expect(canvases(store)).toEqual([{ id: CANVAS }]);
+    expect(messages(store)).toEqual({ messages: 300 });
+  });
+
   it('sets aside a database SQLite finds damaged as it opens it', async () => {
     await keepMessages(Date.UTC(2026, 9, 19, 12));
     await rm(path.join(profile, 'backups'), { recursive: true });

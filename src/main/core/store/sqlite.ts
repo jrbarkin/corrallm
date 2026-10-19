@@ -50,7 +50,7 @@ export function resultCode(error: unknown): number | undefined {
   return code === undefined ? undefined : code & 0xff;
 }
 
-/** The extended result code of an error SQLite gave, or undefined for an error of something else. */
+/** The extended result code of an error SQLite gave, or undefined for one of something else. */
 export function extendedCode(error: unknown): number | undefined {
   if (!(error instanceof Error) || !('errcode' in error)) return undefined;
   return typeof error.errcode === 'number' ? error.errcode : undefined;
