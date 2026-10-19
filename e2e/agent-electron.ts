@@ -19,11 +19,23 @@ function agentBundle(): string | undefined {
   return path.join(tmpdir(), `corrallm-e2e-electron-${version}`, 'Electron.app');
 }
 
+/** A temp cleaner may leave the executable while removing the bundle's metadata or loader. */
+function completeBundle(bundle: string): boolean {
+  return [
+    'Contents/MacOS/Electron',
+    'Contents/Info.plist',
+    'Contents/PkgInfo',
+    'Contents/Resources/default_app.asar',
+    'Contents/_CodeSignature/CodeResources',
+  ].every((file) => existsSync(path.join(bundle, file)));
+}
+
 /** The agent copy's executable, if it has been made (see `makeAgentElectron`). */
 export function agentElectronExecutable(): string | undefined {
   const bundle = agentBundle();
-  const executable = bundle && path.join(bundle, 'Contents', 'MacOS', 'Electron');
-  return executable && existsSync(executable) ? executable : undefined;
+  return bundle && completeBundle(bundle)
+    ? path.join(bundle, 'Contents', 'MacOS', 'Electron')
+    : undefined;
 }
 
 /**
@@ -32,7 +44,7 @@ export function agentElectronExecutable(): string | undefined {
  */
 export function makeAgentElectron(): void {
   const bundle = agentBundle();
-  if (!bundle || existsSync(bundle)) return;
+  if (!bundle || completeBundle(bundle)) return;
   // require('electron') is the path of its executable, inside Electron.app/Contents/MacOS.
   const source = path.resolve(require('electron') as string, '..', '..', '..');
   mkdirSync(path.dirname(bundle), { recursive: true });
@@ -48,6 +60,7 @@ export function makeAgentElectron(): void {
     const plist = path.join(copy, 'Contents', 'Info.plist');
     execFileSync('plutil', ['-replace', 'LSUIElement', '-bool', 'YES', plist]);
     execFileSync('codesign', ['--force', '--sign', '-', copy]);
+    if (existsSync(bundle)) renameSync(bundle, path.join(work, 'previous.app'));
     renameSync(copy, bundle);
   } finally {
     rmSync(work, { recursive: true, force: true });

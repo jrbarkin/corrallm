@@ -118,7 +118,7 @@ it.each(['operation', 'channel', 'engine'] as const)(
       NO_DESKTOP,
     );
     if (from === 'operation') await core.call('catalog.installed', {}, CALLERS.you);
-    else if (from === 'channel') await core.channels.call(7, 'session:clis', []);
+    else if (from === 'channel') await core.channels.call(7, 'session:options', ['codex']);
     else await (await core.engines.open(canvas)).sessions.settingsOptions('codex');
     const file = path.join(profile, 'sessions', 'pids.json');
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({

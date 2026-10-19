@@ -26,7 +26,7 @@ export interface ChildSystem {
   platform: NodeJS.Platform;
   inspect: (pid: number) => { started: number; group: number } | undefined;
   alive: (group: number) => boolean;
-  signal: (group: number, signal: 'SIGTERM' | 'SIGKILL') => void;
+  signal: (group: number, signal: NodeJS.Signals | number) => void;
   wait: (ms: number) => Promise<void>;
   now: () => number;
 }
@@ -63,6 +63,7 @@ export class Children implements ProcessOwner {
   readonly #file: string;
   readonly #system: ChildSystem;
   readonly #children = new Map<number, ChildRecord>();
+  readonly #stopping = new Map<number, Promise<void>>();
 
   constructor(profile: string, system: ChildSystem = SYSTEM) {
     this.#file = path.join(profile, 'sessions', 'pids.json');
@@ -107,32 +108,89 @@ export class Children implements ProcessOwner {
     }
   }
 
-  async #stop(record: ChildRecord): Promise<void> {
+  async #stop(
+    record: ChildRecord,
+    signal: NodeJS.Signals | number = 'SIGTERM',
+    owned = false,
+  ): Promise<void> {
     // Windows has no POSIX process groups; stale-group cleanup is deferred there.
     if (this.#system.platform === 'win32' || record.pid === process.pid) return;
     const found = this.#system.inspect(record.pid);
-    if (!same(found, record)) return;
-    this.#system.signal(record.pid, 'SIGTERM');
-    await this.#system.wait(GRACE_MS);
+    if (found === undefined ? !owned : !same(found, record)) return;
+    this.#system.signal(record.pid, signal);
+    if (await this.#gone(record.pid, GRACE_MS)) return;
     const after = this.#system.inspect(record.pid);
     // A new process may now have the leader's pid. It is never ours to signal.
     if (after !== undefined && !same(after, record)) return;
-    if (this.#system.alive(record.pid)) {
-      this.#system.signal(record.pid, 'SIGKILL');
-      await this.#system.wait(KILL_WAIT_MS);
-      const last = this.#system.inspect(record.pid);
-      if ((last === undefined || same(last, record)) && this.#system.alive(record.pid)) {
-        throw new Error(`Process group ${String(record.pid)} did not stop.`);
+    this.#system.signal(record.pid, 'SIGKILL');
+    if (await this.#gone(record.pid, KILL_WAIT_MS)) return;
+    const last = this.#system.inspect(record.pid);
+    if (last === undefined || same(last, record)) {
+      throw new Error(`Process group ${String(record.pid)} did not stop.`);
+    }
+  }
+
+  /** The grace is a limit, not a delay once the whole group has already exited. */
+  async #gone(group: number, ms: number): Promise<boolean> {
+    for (let left = ms; ;) {
+      if (!this.#system.alive(group)) return true;
+      if (left === 0) return false;
+      const step = Math.min(left, 50);
+      await this.#system.wait(step);
+      left -= step;
+    }
+  }
+
+  /** A bounded helper failed: end its group while retaining its identity through the grace. */
+  stop(child: Parameters<ProcessOwner['node']>[0], signal: NodeJS.Signals | number): Promise<void> {
+    if (this.#system.platform === 'win32') {
+      child.kill(signal);
+      return Promise.resolve();
+    }
+    const record = child.pid === undefined ? undefined : this.#children.get(child.pid);
+    if (!record) return Promise.resolve();
+    const existing = this.#stopping.get(record.pid);
+    if (existing) return existing;
+    const stopped = Promise.withResolvers<undefined>();
+    this.#stopping.set(record.pid, stopped.promise);
+    void this.#end(record, signal).then(() => {
+      stopped.resolve(undefined);
+    }, stopped.reject);
+    return stopped.promise;
+  }
+
+  /** Finish any group cleanup already begun before the host exits. */
+  async flush(): Promise<void> {
+    await Promise.all(this.#stopping.values());
+  }
+
+  async #end(record: ChildRecord, signal: NodeJS.Signals | number): Promise<void> {
+    try {
+      await this.#stop(record, signal, true);
+      if (this.#children.get(record.pid) === record) this.#children.delete(record.pid);
+    } catch (error) {
+      if (isCode(error, 'ESRCH')) this.#children.delete(record.pid);
+      else
+        console.warn(
+          `Could not stop CLI ${String(record.pid)}; keeping its record to retry at the next start:`,
+          error,
+        );
+    } finally {
+      this.#stopping.delete(record.pid);
+      try {
+        this.#write();
+      } catch (error) {
+        console.warn(`Could not update CLI process record ${this.#file}:`, error);
       }
     }
   }
 
-  node(child: Parameters<ProcessOwner['node']>[0]): void {
+  node(child: Parameters<ProcessOwner['node']>[0], until?: 'close'): void {
     if (child.pid === undefined) return; // A failed spawn emits 'error', but has no process.
     this.#record(
       child.pid,
       (exit) => {
-        child.once('exit', exit);
+        child.once(until ?? 'exit', exit);
       },
       () => {
         child.kill('SIGKILL');
@@ -158,6 +216,7 @@ export class Children implements ProcessOwner {
     onExit(() => {
       state.ended = true;
       if (record === undefined || this.#children.get(pid) !== record) return;
+      if (this.#stopping.has(pid)) return;
       this.#children.delete(pid);
       try {
         this.#write();

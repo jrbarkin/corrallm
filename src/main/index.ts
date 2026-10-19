@@ -195,12 +195,23 @@ function main(): void {
         await ask('flush');
       };
       // Closing without saving, after the user said to: give the core a few seconds to finish.
-      const abandon = async () => {
+      let finishing: Promise<void> | undefined;
+      const abandon = () => (finishing ??= finish());
+      const finish = async () => {
         supervisor.stop();
-        await Promise.race([
-          ask('close').catch(() => undefined),
-          new Promise((resolve) => setTimeout(resolve, ABANDON_MS)),
-        ]);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            ask('close').catch((error: unknown) => {
+              console.error('Could not finish closing the core:', error);
+            }),
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, ABANDON_MS);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
       };
       const askAnyway =
         (verb: 'Quit' | 'Close', window?: BrowserWindow) =>
@@ -227,14 +238,13 @@ function main(): void {
       const quit = new Closing({
         save: async () => {
           await persistWindows(BrowserWindow.getAllWindows());
-          // From here, the core's exit is no crash.
-          supervisor.stop();
-          await ask('close');
         },
         abandon,
         ask: askAnyway('Quit'),
         done: () => {
-          app.quit();
+          void abandon().then(() => {
+            app.quit();
+          });
         },
       });
       app.on('before-quit', (event) => {
@@ -244,7 +254,7 @@ function main(): void {
         // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({
           save: () => persistWindows([window]),
-          abandon,
+          abandon: () => Promise.resolve(),
           ask: askAnyway('Close', window),
           done: () => {
             window.close();

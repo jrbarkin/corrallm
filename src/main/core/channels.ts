@@ -7,7 +7,6 @@ import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
 import { MAX_FILE_MATCHES } from '../../shared/session';
-import type { InstalledClis } from '../../shared/session';
 import { parseBackend, parseRule, parseWindows } from '../../shared/usage';
 import type { CanvasFiles } from '../canvas';
 import type { ProjectFiles } from '../files';
@@ -81,8 +80,6 @@ export interface ChannelServices {
     | 'rewind'
     | 'projectChanged'
   >;
-  /** Which agents the user has, by adapter (sessions/installed.ts). */
-  clis: { installed: () => Promise<InstalledClis> };
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
 
@@ -141,13 +138,11 @@ function createHandlers({
   projects,
   files,
   sessions,
-  clis,
   usage,
 }: ChannelServices): HandlerTable {
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (window: WindowId) => windows.canvasOf(window);
   return {
-    'catalog:get': { parseArgs: noArgs, handler: () => catalog },
     'run:get': { parseArgs: noArgs, handler: async ({ window }) => runs.get(await of(window)) },
     'run:save': {
       parseArgs: (args) => {
@@ -235,7 +230,6 @@ function createHandlers({
         return null;
       },
     },
-    'session:clis': { parseArgs: noArgs, handler: () => clis.installed() },
     'session:send': {
       parseArgs: parseSendArgs,
       handler: async ({ window }, agentId, message) => {

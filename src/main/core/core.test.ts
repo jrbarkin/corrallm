@@ -9,6 +9,8 @@ import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { CALLERS, NO_DESKTOP } from './test-registry';
+import { WindowPorts } from './gui';
+import { openWindow } from './test-window';
 
 const READING = {
   backend: 'codex',
@@ -47,6 +49,22 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
 }
 
 describe('createCore', () => {
+  it('serves both catalog operations on a window’s port', async () => {
+    vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    const window = openWindow(new WindowPorts(started), 1);
+    try {
+      for (const name of ['catalog.get', 'catalog.installed'] as const) {
+        const result = await started.call(name, {}, CALLERS.you);
+        expect(result.ok).toBe(true);
+        expect(await window.link.request('call', name, {})).toEqual({ ok: true, value: result });
+      }
+    } finally {
+      window.close();
+    }
+  });
+
   it('says which app it is, to every party', async () => {
     const started = await start();
     for (const party of PARTIES) {

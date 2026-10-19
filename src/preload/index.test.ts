@@ -314,15 +314,9 @@ describe('preload', () => {
     expect(invoke.mock.calls.map(([name]) => name)).toEqual(['core:connect']);
   });
 
-  it('calls the catalog and canvas channels with their arguments', async () => {
+  it('calls the canvas channels with their arguments', async () => {
     const api = await exposed();
     postPort(answerInfo);
-
-    // The catalog, which the renderer loads before it mounts.
-    const catalog = { adapters: [], usageBackends: [] };
-    channel.mockResolvedValue(catalog);
-    await expect(api.catalog()).resolves.toEqual(catalog);
-    expect(channel).toHaveBeenLastCalledWith('catalog:get');
 
     // The canvas file functions channel their channels with their arguments.
     await api.openCanvas();
@@ -506,12 +500,23 @@ describe('preload', () => {
     expect(heard).toHaveBeenCalledOnce();
   });
 
-  it('asks main which agents the user has', async () => {
+  it('loads the catalog and installed CLIs through their generated operations', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue({ 'claude-code': true, codex: true });
-    await expect(api.installedClis()).resolves.toEqual({ 'claude-code': true, codex: true });
-    expect(channel).toHaveBeenLastCalledWith('session:clis');
+    const catalog = { adapters: [], usageBackends: [] };
+    const installed = { 'claude-code': true, codex: false };
+    const heard = postPort((op) => ({
+      ok: true,
+      value: op === 'catalog.get' ? catalog : installed,
+    }));
+    await expect(api.catalogGet()).resolves.toEqual({ ok: true, value: catalog });
+    await expect(api.catalogInstalled()).resolves.toEqual({ ok: true, value: installed });
+    expect(heard).toEqual([
+      ['catalog.get', undefined],
+      ['catalog.installed', undefined],
+    ]);
+    expect(channel).not.toHaveBeenCalled();
+    expect(api).not.toHaveProperty('catalog');
+    expect(api).not.toHaveProperty('installedClis');
   });
 
   it('calls the usage channels with their arguments', async () => {

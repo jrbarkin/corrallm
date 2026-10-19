@@ -23,6 +23,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import { Delivery } from './delivery/delivery';
 import { MessageStore } from './delivery/messages';
+import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
 
 /*
@@ -115,7 +116,9 @@ export class Engines {
   readonly #running = new Map<CanvasId, Promise<Running>>();
   /** The canvases open now, once opened. */
   readonly #canvases = new Map<CanvasId, Running>();
+  readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
   readonly #watchers = new Set<Watcher>();
+  readonly #events = new Map<string, Promise<void>>();
   #closed = false;
 
   constructor(deps: EnginesDeps) {
@@ -169,7 +172,29 @@ export class Engines {
   }
 
   /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
-  emit(canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent): void {
+  emit(
+    canvas: CanvasId,
+    agentId: string,
+    connection: ConnectionId,
+    event: SessionEvent,
+  ): Promise<void> {
+    const key = `${canvas}\u0000${agentId}`;
+    const previous = this.#events.get(key) ?? Promise.resolve();
+    const emitted = previous.then(() => this.#emit(canvas, agentId, connection, event));
+    this.#events.set(key, emitted);
+    const forget = () => {
+      if (this.#events.get(key) === emitted) this.#events.delete(key);
+    };
+    void emitted.then(forget, forget);
+    return emitted;
+  }
+
+  async #emit(
+    canvas: CanvasId,
+    agentId: string,
+    connection: ConnectionId,
+    event: SessionEvent,
+  ): Promise<void> {
     if (event.type === 'end') {
       const result = turnResult(event);
       const catalog = this.#deps.engineCatalog;
@@ -183,22 +208,18 @@ export class Engines {
         result.reason === 'usage-limit' &&
         result.resetsAt !== undefined
       ) {
-        this.#deps.usage.exhaust(backend, result.resetsAt);
+        await this.#deps.usage.exhaust(backend, result.resetsAt);
       }
     }
-    void this.#running.get(canvas)?.then(
-      ({ listeners, delivery }) => {
-        delivery.receive(agentId, event);
-        for (const listener of listeners) listener(agentId, connection, event);
-      },
-      () => undefined,
-    );
+    const mail = await this.#mail.get(canvas);
+    mail?.notes.receive(agentId, event);
+    const running = await this.#running.get(canvas);
+    for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
   }
 
   /**
-   * Every session send, including the app's channels: carry any untold withdrawals. A canvas
-   * with a message log opens first, so its notes survive a restart before any API call opens it.
-   * A draft with no messages needs no engine merely for its user's session to send.
+   * Every session send carries untold withdrawals from its message store. The app's run stays
+   * in the renderer until B11: reading its notes never composes or journals another run.
    */
   async sending(
     canvas: CanvasId,
@@ -207,15 +228,18 @@ export class Engines {
     send: (message: UserMessage) => Promise<void>,
   ): Promise<void> {
     if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
-    if (
-      !this.#running.has(canvas) &&
-      (await this.#deps.journal.readMessages(canvas)) !== undefined
-    ) {
-      await this.open(canvas);
-    }
-    const running = await this.#running.get(canvas);
-    if (running) await running.delivery.withWithdrawals(agentId, message, send);
-    else await send(message);
+    const { notes } = await this.#mailOf(canvas);
+    await notes.send(agentId, message, send);
+  }
+
+  /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
+  async flush(): Promise<void> {
+    await Promise.all(this.#events.values());
+    const running = await Promise.all(this.#running.values());
+    await Promise.all(running.map((one) => this.#write(one)));
+    const mail = await Promise.all(this.#mail.values());
+    await Promise.all(mail.map(({ messages }) => messages.durable()));
+    await this.#deps.journal.flush();
   }
 
   /**
@@ -224,7 +248,10 @@ export class Engines {
    * run can't be journaled; then it rejects, with why each couldn't.
    */
   async close(): Promise<void> {
+    await Promise.all(this.#events.values());
     this.#closed = true;
+    const mail = await Promise.all(this.#mail.values());
+    for (const { notes } of mail) notes.close();
     const running = await Promise.allSettled(this.#running.values());
     this.#running.clear();
     this.#canvases.clear();
@@ -235,6 +262,8 @@ export class Engines {
     );
     await this.#deps.journal.flush();
     await this.#deps.sessions.closeEverything();
+    await Promise.all(this.#events.values());
+    await Promise.all(mail.map(({ messages }) => messages.durable()));
     const failed = stopped.flatMap((result): unknown[] =>
       result.status === 'rejected' ? [result.reason] : [],
     );
@@ -258,8 +287,7 @@ export class Engines {
     if (document.id !== canvas) throw new Error(ANOTHER);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
-    const messages = new MessageStore(canvas, journal, () => Date.now());
-    await messages.load();
+    const { messages } = await this.#mailOf(canvas);
     const warnings: readonly string[] = [context.warning, messages.warning].filter(
       (one) => one !== undefined,
     );
@@ -354,6 +382,22 @@ export class Engines {
     this.#canvases.set(canvas, running);
     this.#look(running);
     return running;
+  }
+
+  #mailOf(canvas: CanvasId): Promise<{ messages: MessageStore; notes: WithdrawalNotes }> {
+    let mail = this.#mail.get(canvas);
+    if (!mail) {
+      mail = (async () => {
+        const messages = new MessageStore(canvas, this.#deps.journal, () => Date.now());
+        await messages.load();
+        return {
+          messages,
+          notes: new WithdrawalNotes(messages, this.#deps.engineCatalog.shellPrefixes),
+        };
+      })();
+      this.#mail.set(canvas, mail);
+    }
+    return mail;
   }
 
   /**

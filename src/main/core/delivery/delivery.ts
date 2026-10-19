@@ -12,7 +12,7 @@ import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
 import { turnResult } from '../../../shared/session';
-import type { SessionEvent, TurnReason, TurnResult, UserMessage } from '../../../shared/session';
+import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
 import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
@@ -127,8 +127,6 @@ export class Delivery {
   readonly #recording = new Set<string>();
   /** Who asked for each message whose turn is going to be taken back, by its id. */
   readonly #withdrawing = new Map<string, TakingBack>();
-  /** The session messages carrying notes, until the CLI echoes them (or their send fails). */
-  readonly #carrying = new Map<string, { agent: string; ids: string[]; ended?: () => void }>();
   /** What each party was told, so that it is told once (kept with each notice, by its key). */
   readonly #told = new Set<string>();
   /** The agents whose sessions would not start, by id. */
@@ -182,8 +180,6 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
-    for (const carrying of this.#carrying.values()) carrying.ended?.();
-    this.#carrying.clear();
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -283,86 +279,6 @@ export class Delivery {
     const result = await this.#takeBack(message, by, true);
     if (result.reached) await this.#deps.store.durable();
     return result;
-  }
-
-  /**
-   * Sends the next CLI message with any withdrawals still untold. Done at the backend, after
-   * the session's queue, so manual and run messages, and messages already queued, carry them too.
-   */
-  async withWithdrawals(
-    agent: string,
-    message: UserMessage,
-    send: (message: UserMessage) => Promise<void>,
-  ): Promise<void> {
-    const sendOpen = (next: UserMessage) => {
-      if (this.#closed) throw new Error('The canvas closed before its message could be sent.');
-      return send(next);
-    };
-    const claimed = new Set([...this.#carrying.values()].flatMap(({ ids }) => ids));
-    const notes = this.#deps.store
-      .withdrawals(agentParty(agent))
-      .filter(({ id }) => !claimed.has(id));
-    if (notes.length === 0) return sendOpen(message);
-    const text = notes.map(({ text }) => text).join('\n');
-    const shell =
-      message.from === undefined &&
-      this.#deps.engine.catalog.shellPrefixes.some((prefix) =>
-        message.text.trimStart().startsWith(prefix),
-      );
-    const id = shell ? randomUUID() : message.id;
-    let ended: (() => void) | undefined;
-    const finished = shell
-      ? new Promise<void>((resolve) => {
-          ended = resolve;
-        })
-      : undefined;
-    this.#carrying.set(id, { agent, ids: notes.map(({ id }) => id), ...(ended ? { ended } : {}) });
-    try {
-      await this.#deps.store.durable();
-      if (shell) {
-        await sendOpen({
-          id,
-          text: `[corrallm] ${text}`,
-          from: { party: 'corrallm', name: 'corrallm' },
-        });
-        await finished;
-        await sendOpen(message);
-      } else {
-        // Keep a party's header and its note in the same frame; the original body stays last.
-        const split =
-          message.from !== undefined && message.text.startsWith('[corrallm]')
-            ? message.text.indexOf('\n')
-            : -1;
-        await sendOpen({
-          ...message,
-          text:
-            split < 0
-              ? `[corrallm] ${text}\n\n${message.text}`
-              : `${message.text.slice(0, split)}\n${text}\n\n${message.text.slice(split + 1)}`,
-        });
-      }
-    } catch (error) {
-      this.#carrying.delete(id);
-      throw error;
-    }
-  }
-
-  /** A session echoed a note's carrier, or ended before it could: only an echo tells the note. */
-  receive(agent: string, event: SessionEvent): void {
-    if (event.type === 'user') {
-      const carrying = this.#carrying.get(event.id);
-      if (carrying?.agent !== agent) return;
-      this.#deps.store.toldWithdrawals(carrying.ids);
-      if (!carrying.ended) this.#carrying.delete(event.id);
-    } else if (event.type === 'end' || event.type === 'closed') {
-      const ids = event.type === 'end' ? event.messages : [...this.#carrying.keys()];
-      for (const id of ids) {
-        const carrying = this.#carrying.get(id);
-        if (carrying?.agent !== agent) continue;
-        this.#carrying.delete(id);
-        carrying.ended?.();
-      }
-    }
   }
 
   /**

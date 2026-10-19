@@ -1,12 +1,12 @@
 /*
- * Quitting, or closing a window: first the run is saved (each renderer freezes it, main journals
- * it) and the agents' sessions are closed. If that fails, the user is asked whether to close
+ * Quitting, or closing a window: first the run is saved (each renderer freezes it, the core
+ * journals it). If that fails, the user is asked whether to close
  * anyway, losing what wasn't saved, or keep the app open and try again later; asking to close again
  * while it saves closes at once, as a way out of a save that hangs.
  */
 
 export interface ClosingDeps {
-  /** Saves the run and closes the sessions: rejects saying why it could not. */
+  /** Saves the run while keeping the core usable: rejects saying why it could not. */
   save: () => Promise<void>;
   /** Closes what it can without saving (the sessions, the stores): never rejects. */
   abandon: () => Promise<void>;

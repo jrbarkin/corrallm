@@ -7,13 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
+import type { RunContext } from '../../shared/run';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { createCore } from './core';
 import type { Core } from './core';
-import { NO_DESKTOP } from './test-registry';
+import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
 const FIXTURE = path.join(import.meta.dirname, 'test-worker.corral');
@@ -85,6 +86,41 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 }
 
 describe('the core runs each canvas’s engine', () => {
+  it('keeps the renderer’s edited checkpoint when a manual send reads an existing message log', async () => {
+    await keepCanvas();
+    await (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS);
+    await core?.close();
+    core = undefined;
+    await writeFile(path.join(profile, 'runs', CANVAS, 'messages.jsonl'), '');
+
+    const app = await start(new FakeConnector({ adapter: 'codex' }));
+    const context = (await app.channels.call(7, 'run:get', [])) as RunContext;
+    await app.channels.call(7, 'session:start', [
+      'worker',
+      { connection: 'codex.app-server', model: null, mode: null },
+    ]);
+    await app.channels.call(7, 'session:send', [
+      'worker',
+      { id: crypto.randomUUID(), text: 'Hello from the app' },
+    ]);
+    expect(app.engines.opened()).toEqual([]);
+    const checkpoint = context.checkpoint;
+    if (!checkpoint) throw new Error('No checkpoint was restored.');
+    const workflow = JSON.parse(checkpoint.workflow) as { nodes: { label: string }[] };
+    const worker = workflow.nodes[0];
+    if (!worker) throw new Error('No worker was restored.');
+    worker.label = 'Edited in renderer';
+    const edited = { ...checkpoint, workflow: JSON.stringify(workflow), updatedAt: Date.now() };
+    await app.channels.call(7, 'run:save', [context.token, edited]);
+    await app.close();
+    core = undefined;
+    const record = JSON.parse(
+      await readFile(path.join(profile, 'runs', CANVAS, 'record.json'), 'utf8'),
+    ) as { checkpoint: typeof edited };
+    expect(record.checkpoint).toEqual(edited);
+    expect(app.engines.opened()).toEqual([]);
+  });
+
   it('runs a message to a Codex agent, keeps its reply as the evidence and journals the run', async () => {
     await keepCanvas();
     const codex = new FakeConnector({ adapter: 'codex' });
@@ -182,6 +218,45 @@ describe('the core runs each canvas’s engine', () => {
     core = undefined;
     expect(closed).toBe(1);
     for (const flush of flushes) expect(flush).toHaveBeenCalled();
+  });
+
+  it('keeps a usable core when preparing to close cannot save its run', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const started = await start(codex);
+    const engine = await started.engines.open(CANVAS);
+    engine.run.start();
+    await vi.waitFor(async () => {
+      expect((await journaled()).run.agents.worker).toMatchObject({
+        outcomes: { hello: 'succeeded' },
+      });
+    });
+    await started.channels.call(7, 'run:get', []);
+    const record = path.join(profile, 'runs', CANVAS, 'record.json');
+    await rm(record);
+    await mkdir(record);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(started.flush()).rejects.toThrow();
+    } finally {
+      await rm(record, { recursive: true, force: true });
+    }
+    errors.mockRestore();
+    await started.channels.call(7, 'session:start', [
+      'worker',
+      { connection: 'codex.app-server', model: null, mode: null },
+    ]);
+    await started.channels.call(7, 'session:send', [
+      'worker',
+      { id: crypto.randomUUID(), text: 'After Keep corrallm open' },
+    ]);
+    expect(codex.sessions.flatMap(({ sent }) => sent).at(-1)?.text).toBe(
+      'After Keep corrallm open',
+    );
+    expect(await started.call('app.info', {}, CALLERS.you)).toMatchObject({
+      ok: true,
+    });
+    await expect(started.flush()).resolves.toBeUndefined();
   });
 
   it('refuses a canvas the profile keeps no project folder for, starting nothing', async () => {

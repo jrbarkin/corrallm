@@ -126,14 +126,14 @@ export class UsageReadings {
   }
 
   /** A failed turn hit the backend's hard limit: kept at once, without needing a rule. */
-  exhaust(backend: UsageBackendId, resetsAt: number): void {
+  async exhaust(backend: UsageBackendId, resetsAt: number): Promise<void> {
     if (!this.#backends.includes(backend) || !future(resetsAt, this.#now())) return;
     const last = this.#exhausted.get(backend);
-    if (last && last.resetsAt >= resetsAt) return;
+    if (last && last.resetsAt >= resetsAt) return this.#writing;
     const windows = this.#readings.get(backend)?.windows;
     const window = USAGE_WINDOWS.find((name) => windows?.[name]?.resetsAt === resetsAt);
     this.#exhausted.set(backend, { resetsAt, ...(window === undefined ? {} : { window }) });
-    this.#write();
+    await this.#write(true);
     this.#tell(backend);
   }
 
@@ -185,7 +185,7 @@ export class UsageReadings {
     if (this.#timer !== undefined) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
-      this.#write();
+      void this.#write();
     }
     return this.#writing;
   }
@@ -199,7 +199,7 @@ export class UsageReadings {
   #save(): void {
     this.#timer ??= setTimeout(() => {
       this.#timer = undefined;
-      this.#write();
+      void this.#write();
     }, this.#writeDelay);
   }
 
@@ -225,11 +225,11 @@ export class UsageReadings {
     )
       return false;
     this.#exhausted.delete(backend);
-    this.#write();
+    void this.#write();
     return true;
   }
 
-  #write(): void {
+  #write(durable = false): Promise<void> {
     const { readings, rules } = this.state();
     const exhausted = Object.fromEntries(
       [...this.#exhausted].filter(([, limit]) => limit.resetsAt > this.#now()),
@@ -237,10 +237,11 @@ export class UsageReadings {
     const text = `${JSON.stringify({ version: VERSION, readings, rules, exhausted }, null, 2)}\n`;
     // A failed write is logged, as for readings and rules.
     this.#writing = this.#writing
-      .then(() => writeWhole(this.#file, text))
+      .then(() => writeWhole(this.#file, text, { durable }))
       .catch((error: unknown) => {
         console.error('Could not remember usage readings:', error);
       });
+    return this.#writing;
   }
 }
 

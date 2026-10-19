@@ -55,6 +55,44 @@ async function stale(pid = 42, started = 1000) {
 }
 
 describe('the core’s CLI children', () => {
+  it('ends a timed-out helper’s whole group, retaining its identity until descendants have stopped', async () => {
+    const child = new Child(42);
+    children.node(child);
+    const grace = Promise.withResolvers<undefined>();
+    system.wait = () => grace.promise;
+    system.signal = vi.fn<ChildSystem['signal']>((group, signal) => {
+      live.delete(group);
+      if (signal === 'SIGTERM') child.emit('exit', null, signal);
+      else groups.delete(group);
+    });
+    const stopped = children.stop(child, 'SIGTERM');
+    let flushed = false;
+    const closing = children.flush().then(() => {
+      flushed = true;
+    });
+    expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+    expect(flushed).toBe(false);
+    grace.resolve(undefined);
+    await stopped;
+    await closing;
+    expect(system.signal).toHaveBeenNthCalledWith(1, 42, 'SIGTERM');
+    expect(system.signal).toHaveBeenNthCalledWith(2, 42, 'SIGKILL');
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  it('keeps an exited helper’s group owned while descendants still hold its pipes', async () => {
+    const child = new Child(42);
+    children.node(child, 'close');
+    live.delete(42);
+    child.emit('exit', 0);
+    expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
+    await children.stop(child, 'SIGTERM');
+    expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+    child.emit('close', 0);
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
   it('records a spawned child before returning it, and removes it on exit', async () => {
     const child = new Child(42);
     children.node(child);
@@ -97,6 +135,32 @@ describe('the core’s CLI children', () => {
       expect(await remembered()).toEqual({ version: 1, children: [] });
     },
   );
+
+  it('finishes startup cleanup as soon as SIGTERM ends the stale group', async () => {
+    await stale();
+    await children.recover();
+    expect(system.wait).not.toHaveBeenCalled();
+    expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  it('stops waiting when a stale group exits during the grace period', async () => {
+    await stale();
+    vi.useFakeTimers();
+    system.signal = vi.fn();
+    system.wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    let finished = false;
+    const recovering = children.recover().then(() => {
+      finished = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    live.delete(42);
+    groups.delete(42);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(finished).toBe(true);
+    await recovering;
+    expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+  });
 
   it('gives a surviving owned group three seconds after SIGTERM before SIGKILL', async () => {
     await stale();
@@ -221,7 +285,10 @@ describe('the core’s CLI children', () => {
   it('allows startup when the cleaned registry cannot be written', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await stale();
+    system.signal = vi.fn();
     system.wait = async () => {
+      live.delete(42);
+      groups.delete(42);
       await rm(file);
       await mkdir(file);
     };
@@ -263,6 +330,15 @@ describe('the core’s CLI children', () => {
     await mkdir(file);
     await expect(children.recover()).resolves.toBeUndefined();
     expect(warning).toHaveBeenCalledWith(expect.stringContaining(file), expect.any(Error));
+  });
+
+  it('stops a timed-out Windows helper directly, without POSIX group signals', async () => {
+    system.platform = 'win32';
+    const child = new Child(42);
+    children.node(child, 'close');
+    await children.stop(child, 'SIGTERM');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(system.signal).not.toHaveBeenCalled();
   });
 
   it('does not signal groups on Windows, but still records and removes children', async () => {

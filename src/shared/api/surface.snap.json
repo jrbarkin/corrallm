@@ -3,6 +3,8 @@
     "api.topics.subscribe",
     "api.topics.unsubscribe",
     "api.app.info",
+    "api.catalog.get",
+    "api.catalog.installed",
     "api.settings.get",
     "api.usage.get",
     "api.usage.setRule",
@@ -90,8 +92,6 @@
     "outside-write": 18
   },
   "unhosted": {
-    "catalog.get": "B8",
-    "catalog.installed": "B8",
     "agents": "B11",
     "status": "B11",
     "needs": "B11",

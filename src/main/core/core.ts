@@ -15,7 +15,6 @@ import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
 import { LinkOpener } from '../links';
 import { FileRevealer } from '../reveal';
-import { installedClis } from '../sessions/installed';
 import { Conversations } from '../sessions/sdk/conversations';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
@@ -104,7 +103,7 @@ export interface Core extends Dispatcher {
   /** The app's hand-written channels, over these same services. */
   channels: Channels;
   shown(windows: WindowId[]): WindowId[];
-  /** Ends the sessions and finishes writes after the renderer froze and saved. */
+  /** Finishes fallible writes after the renderer froze, keeping the core usable if saving fails. */
   flush(): Promise<void>;
   /** The outside tokens, kept in the profile's tokens.json. */
   tokens: TokenStore;
@@ -180,8 +179,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
-      engines.emit(canvas, agentId, connection, event);
-      channels.emit(canvas, 'session:event', agentId, connection, event);
+      void engines.emit(canvas, agentId, connection, event).then(
+        () => {
+          channels.emit(canvas, 'session:event', agentId, connection, event);
+        },
+        (error: unknown) => {
+          console.error('Could not deliver a session event:', error);
+        },
+      );
     },
     terminal: (canvas, agentId, event) => {
       channels.emit(canvas, 'terminal', agentId, event);
@@ -219,7 +224,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     projects,
     files,
     sessions,
-    clis: { installed: async () => installedClis(await environment()) },
     usage,
   });
   const topics = new Topics((name, args, caller, signal) =>
@@ -292,8 +296,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     channels,
     shown: (asked) => asked.filter((window) => windows.has(window)),
     flush: async () => {
-      await journal.flush();
-      await sessions.closeEverything();
+      await engines.flush();
+      await children.flush();
       await stores();
     },
     tokens,
@@ -311,6 +315,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         await engines.close();
       } finally {
         // What the core keeps is written out even if a canvas's run couldn't be.
+        await children.flush();
         await stores();
       }
     },

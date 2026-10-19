@@ -52,7 +52,6 @@ const api: AppApi = {
   ...ops,
   topicsOnChange: (listener) => core.onTopic(listener),
   topicsOnEpoch: (listener) => core.onEpoch(listener),
-  catalog: () => invoke(API_CHANNELS.catalog),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
   runReady: (requestId, error) => invoke(API_CHANNELS.runReady, requestId, error),
@@ -63,7 +62,6 @@ const api: AppApi = {
   chooseProject: () => invoke(API_CHANNELS.chooseProject),
   findProjectFiles: (query) => invoke(API_CHANNELS.findProjectFiles, query),
   startSession: (agentId, options) => invoke(API_CHANNELS.startSession, agentId, options),
-  installedClis: () => invoke(API_CHANNELS.installedClis),
   sendToSession: (agentId, message) => invoke(API_CHANNELS.sendToSession, agentId, message),
   answerSession: (agentId, promptId, answer) =>
     invoke(API_CHANNELS.answerSession, agentId, promptId, answer),

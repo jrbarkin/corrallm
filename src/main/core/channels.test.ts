@@ -85,11 +85,6 @@ function fakeServices() {
         .fn<ChannelServices['sessions']['projectChanged']>()
         .mockResolvedValue(undefined),
     },
-    clis: {
-      installed: vi
-        .fn<ChannelServices['clis']['installed']>()
-        .mockResolvedValue({ 'claude-code': true, codex: false }),
-    },
     usage: {
       state: vi
         .fn<ChannelServices['usage']['state']>()
@@ -114,16 +109,11 @@ beforeEach(() => {
   channels = new Channels(services);
 });
 
-describe('catalog:get handler', () => {
-  it('answers with the catalog, and takes no arguments', () => {
-    expect(invoke('catalog:get', [])).toBe(CATALOG);
-    expect(() => invoke('catalog:get', ['claude-code'])).toThrow(/no arguments/);
-  });
-});
-
 describe('the channel surface', () => {
   it.each([
     'core:connect',
+    'catalog:get',
+    'session:clis',
     'link:open',
     'link:reveal',
     'terminal:attach',
@@ -736,16 +726,6 @@ describe('session:* handlers', () => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
     expect(services.canvases.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('session:clis', () => {
-  it('says which agents the user has, by adapter, and takes no arguments', async () => {
-    await expect(invoke('session:clis', [])).resolves.toEqual({
-      'claude-code': true,
-      codex: false,
-    });
-    expect(() => invoke('session:clis', ['claude-code'])).toThrow(/no arguments/);
   });
 });
 

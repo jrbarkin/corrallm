@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ID_PATTERN, JOBS } from '../../adapter';
+import type { Catalog } from '../../adapter';
 import { MCP_CHANGES, REWIND_RESTORES } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -82,7 +83,11 @@ export const catalogOps = {
       'The catalog: every adapter corrallm runs agents with (its connections, modes and the ' +
       'actions its steps can name) and the usage backends their connections spend.',
     input: z.strictObject({}),
-    output: z.strictObject({ adapters: z.array(Adapter), usageBackends: z.array(UsageBackend) }),
+    // Optional JSON fields are absent, never present with undefined.
+    output: z.strictObject({
+      adapters: z.array(Adapter),
+      usageBackends: z.array(UsageBackend),
+    }) as z.ZodType<Catalog>,
   }),
   'catalog.installed': define('catalog.installed', {
     summary:

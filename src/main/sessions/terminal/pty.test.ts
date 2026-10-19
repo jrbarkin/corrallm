@@ -16,7 +16,7 @@ describe('owned ptys', () => {
       vi.stubGlobal('process', { ...process, platform });
       const child = { pid: 42, kill: vi.fn(), onExit: vi.fn() };
       nativeSpawn.mockReturnValue(child);
-      const owner = { node: vi.fn(), pty: vi.fn() };
+      const owner = { node: vi.fn(), pty: vi.fn(), stop: vi.fn() };
       await withProcesses(owner, () =>
         spawnPty('fake-cli', [], { cwd: '/project', env: {}, cols: 80, rows: 24 }),
       );

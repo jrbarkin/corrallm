@@ -13,7 +13,7 @@ const { spawnProcess, execProcess } = vi.hoisted(() => ({
 vi.mock('node:child_process', () => ({ spawn: spawnProcess, execFile: execProcess }));
 let child: ChildProcess;
 let kill = vi.fn();
-const owner = () => ({ node: vi.fn(), pty: vi.fn() });
+const owner = () => ({ node: vi.fn(), pty: vi.fn(), stop: vi.fn() });
 beforeEach(() => {
   kill = vi.fn();
   child = Object.assign(new EventEmitter(), {
@@ -57,7 +57,7 @@ describe('owned process spawns', () => {
     child.stdout?.emit('data', Buffer.from('1.2.3'));
     child.emit('close', 0, null);
     expect(done).toHaveBeenCalledWith(null, '1.2.3', '');
-    expect(children.node).toHaveBeenCalledExactlyOnceWith(child);
+    expect(children.node).toHaveBeenCalledExactlyOnceWith(child, 'close');
     spawn('unowned', [], {});
     expect(spawnProcess).toHaveBeenLastCalledWith('unowned', [], {});
     expect(children.node).toHaveBeenCalledTimes(1);
@@ -88,21 +88,26 @@ describe('owned process spawns', () => {
     const children = owner();
     const done = vi.fn();
     withProcesses(children, () => execFile('fake-cli', [], { maxBuffer: 3 }, done));
-    child.stdout?.emit('data', Buffer.from('abcdef'));
     child.stderr?.emit('data', Buffer.from('why'));
-    expect(kill).toHaveBeenCalledWith('SIGTERM');
-    child.emit('close', 1, null);
+    child.stdout?.emit('data', Buffer.from('abcdef'));
     expect(done).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
       'abc',
       'why',
     );
+    expect(children.stop).toHaveBeenCalledExactlyOnceWith(child, 'SIGTERM');
+    child.emit('close', 1, null);
+    expect(done).toHaveBeenCalledOnce();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
     vi.useFakeTimers();
     const timed = vi.fn();
     withProcesses(children, () => execFile('fake-cli', [], { timeout: 10 }, timed));
     await vi.advanceTimersByTimeAsync(10);
-    child.emit('close', null, 'SIGTERM');
     expect(timed).toHaveBeenCalledWith(expect.objectContaining({ killed: true }), '', '');
+    expect(children.stop).toHaveBeenLastCalledWith(child, 'SIGTERM');
+    child.emit('close', null, 'SIGTERM');
+    expect(timed).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 

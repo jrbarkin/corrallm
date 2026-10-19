@@ -24,11 +24,13 @@ let folder: string;
 let profile: string;
 let codex: string;
 let app: ElectronApplication;
-let closeApp: () => Promise<void>;
+let closeApp: (() => Promise<void>) | undefined;
 let page: Page;
 let problems: string[];
 
 test.beforeEach(async () => {
+  closeApp = undefined;
+  problems = [];
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-app-server-'));
   folder = path.join(dir, 'shop');
   profile = path.join(dir, 'profile');
@@ -53,12 +55,18 @@ async function fakeCodex(login: 'apikey' | 'chatgpt' = 'apikey') {
 }
 
 test.afterEach(async () => {
-  await closeApp();
-  await rm(dir, { recursive: true, force: true });
+  const close = closeApp;
+  closeApp = undefined;
+  try {
+    await close?.();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
   expect(problems).toEqual([]);
 });
 
 async function launch() {
+  closeApp = undefined;
   ({ app, close: closeApp } = await launchApp({ env: { CORRALLM_CODEX_PATH: codex }, profile }));
   page = await app.firstWindow();
   problems = [];
@@ -236,7 +244,7 @@ test('resumes the agent’s Codex thread after the app restarts, with its histor
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();
 
-  await closeApp();
+  await closeApp?.();
   await launch();
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
@@ -287,7 +295,7 @@ test('runs on the user’s ChatGPT plan once they allow it, and asks no more if 
   await expect(page.getByText('team.corral')).toBeVisible();
 
   // After a restart, it asks no more.
-  await closeApp();
+  await closeApp?.();
   await launch();
   await page.keyboard.press('ControlOrMeta+o');
   await page.locator('.react-flow__node').dblclick();

@@ -9,11 +9,18 @@ import type {
 
 /** A core's owner of the processes started while its work runs. No profile is global. */
 export interface ProcessOwner {
-  node(child: {
-    readonly pid?: number | undefined;
-    once(event: 'exit', listener: () => void): unknown;
-    kill(signal?: NodeJS.Signals): unknown;
-  }): void;
+  stop(
+    child: Parameters<ProcessOwner['node']>[0],
+    signal: NodeJS.Signals | number,
+  ): void | Promise<void>;
+  node(
+    child: {
+      readonly pid?: number | undefined;
+      once(event: 'exit' | 'close', listener: () => void): unknown;
+      kill(signal?: NodeJS.Signals | number): unknown;
+    },
+    until?: 'close',
+  ): void;
   pty(child: {
     readonly pid: number;
     onExit(listener: () => void): unknown;
@@ -63,35 +70,18 @@ export function execFile(
     killSignal = 'SIGTERM',
     ...spawnOptions
   } = options;
-  const child = spawn(command, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawnProcess(command, args, {
+    ...spawnOptions,
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  // Its leader can exit before descendants let go of stdout: keep owning the helper until close.
+  processes.node(child, 'close');
   const output: Buffer[] = [];
   const errors: Buffer[] = [];
   let failed: ExecFileException | null = null;
   let finished = false;
-  const timer =
-    timeout > 0
-      ? setTimeout(() => {
-          failed = Object.assign(new Error(`${command} timed out.`), { killed: true });
-          child.kill(killSignal);
-        }, timeout)
-      : undefined;
-  const collect = (into: Buffer[]) => {
-    let size = 0;
-    return (chunk: Buffer) => {
-      const room = Math.max(0, maxBuffer - size);
-      size += chunk.length;
-      if (room > 0) into.push(chunk.subarray(0, room));
-      if (size > maxBuffer && failed === null) {
-        failed = Object.assign(new Error(`${command} output exceeded maxBuffer.`), {
-          code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-          killed: true,
-        });
-        child.kill(killSignal);
-      }
-    };
-  };
-  child.stdout.on('data', collect(output));
-  child.stderr.on('data', collect(errors));
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const finish = (error: ExecFileException | null) => {
     if (finished) return;
     finished = true;
@@ -102,6 +92,38 @@ export function execFile(
       Buffer.concat(errors).toString(encoding),
     );
   };
+  const stop = (error: ExecFileException) => {
+    if (finished) return;
+    child.stdout.destroy();
+    child.stderr.destroy();
+    void Promise.resolve(processes.stop(child, killSignal)).catch((error: unknown) => {
+      console.error('Could not stop a CLI helper:', error);
+    });
+    finish(error);
+  };
+  if (timeout > 0)
+    timer = setTimeout(() => {
+      stop(Object.assign(new Error(`${command} timed out.`), { killed: true }));
+    }, timeout);
+  const collect = (into: Buffer[]) => {
+    let size = 0;
+    return (chunk: Buffer) => {
+      if (finished) return;
+      const room = Math.max(0, maxBuffer - size);
+      size += chunk.length;
+      if (room > 0) into.push(chunk.subarray(0, room));
+      if (size > maxBuffer && failed === null) {
+        stop(
+          Object.assign(new Error(`${command} output exceeded maxBuffer.`), {
+            code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+            killed: true,
+          }),
+        );
+      }
+    };
+  };
+  child.stdout.on('data', collect(output));
+  child.stderr.on('data', collect(errors));
   child.once('error', finish);
   child.once('close', (code, signal) => {
     if (failed === null && (code !== 0 || signal !== null)) {

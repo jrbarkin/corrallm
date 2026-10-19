@@ -38,6 +38,11 @@ const REAL: Registry = {
   rules: RULES,
 };
 
+it('leaves only B11 operations unhosted after B8', () => {
+  expect(Object.values(UNHOSTED)).not.toContain('B8');
+  expect(GUI_OPS).toEqual(expect.arrayContaining(['catalog.get', 'catalog.installed']));
+});
+
 const NAME = /^[a-z]+(\.[a-zA-Z]+)?$/;
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,49}$/;
 /** Argument names that hold ids, which must therefore be branded. */

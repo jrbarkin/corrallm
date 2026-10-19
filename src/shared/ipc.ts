@@ -1,10 +1,9 @@
-import type { AdapterId, Catalog, ConnectionId, UsageBackendId } from './adapter';
+import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
 import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
   FilesRewind,
-  InstalledClis,
   McpChange,
   McpServer,
   PastSession,
@@ -25,7 +24,7 @@ import type { UsageRule, UsageState, UsageWindows } from './usage';
  * exposes its fixed function on window.api over the window's port. The checked handshake,
  * core:connect, stays in main and is never exposed to the page.
  *
- * The core sends session, terminal and usage events over the port. Main still asks the renderer
+ * The core sends session events over the port; terminals and topics use gui-link.ts. Main still asks the renderer
  * to freeze/save with run:stopping. The preload strips transport details from each event and
  * returns a function that stops listening.
  *
@@ -37,8 +36,6 @@ export interface IpcContract {
    * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
    */
   'core:connect': { args: []; result: null };
-  /** What every adapter declares (src/shared/adapter.ts): the renderer loads it before it mounts. */
-  'catalog:get': { args: []; result: Catalog };
   /** Restore the current named canvas or durable draft, without starting an agent. */
   'run:get': { args: []; result: RunContext };
   /** The core selects storage; the token rejects writes from an earlier canvas generation. */
@@ -79,11 +76,6 @@ export interface IpcContract {
    * it could not start. Starting it again with the same connection does nothing.
    */
   'session:start': { args: [agentId: string, options: SessionOptions]; result: null };
-  /**
-   * Which agents the user has, by adapter, found as their connections would run them: a
-   * template's agents run in a Terminal for those by default.
-   */
-  'session:clis': { args: []; result: InstalledClis };
   /** Sends a message to an agent's running session: a turn starts, or the CLI queues it. */
   'session:send': { args: [agentId: string, message: UserMessage]; result: null };
   /** Answers a prompt (permission, question, plan) an agent's session is waiting on. */
@@ -210,7 +202,6 @@ export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
  * A method per remaining contract channel, with its arguments.
  */
 export interface InvokeApi {
-  catalog(): Promise<IpcResult<'catalog:get'>>;
   getRun(): Promise<IpcResult<'run:get'>>;
   saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
   runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
@@ -220,7 +211,6 @@ export interface InvokeApi {
   chooseProject(): Promise<IpcResult<'project:choose'>>;
   findProjectFiles(...args: IpcArgs<'project:files'>): Promise<IpcResult<'project:files'>>;
   startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
-  installedClis(): Promise<IpcResult<'session:clis'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
   interruptSession(...args: IpcArgs<'session:interrupt'>): Promise<IpcResult<'session:interrupt'>>;
@@ -258,7 +248,6 @@ export interface AppApi extends InvokeApi, EventApi, GuiBridge {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {
-  catalog: 'catalog:get',
   getRun: 'run:get',
   saveRun: 'run:save',
   runReady: 'run:ready',
@@ -268,7 +257,6 @@ export const API_CHANNELS = {
   chooseProject: 'project:choose',
   findProjectFiles: 'project:files',
   startSession: 'session:start',
-  installedClis: 'session:clis',
   sendToSession: 'session:send',
   answerSession: 'session:answer',
   interruptSession: 'session:interrupt',

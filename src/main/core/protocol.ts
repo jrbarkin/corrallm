@@ -20,7 +20,7 @@ export interface CoreSide {
     init: { args: [config: CoreInit]; result: CoreInitAnswer };
     /** Which windows have a canvas to freeze/save before closing. */
     shown: { args: [windows: WindowId[]]; result: WindowId[] };
-    /** Finishes journal writes, ends sessions and flushes the profile's stores. */
+    /** Finishes fallible writes before closing is approved, leaving the core usable on failure. */
     flush: { args: []; result: null };
     /**
      * Stops the core and writes out everything it owns before the app quits, then lets the profile

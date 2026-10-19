@@ -7,8 +7,6 @@ import type { OpName } from './surface';
  * shrink the list; B11 empties and deletes it, and the tests are strict from then on.
  */
 export const UNHOSTED = {
-  'catalog.get': 'B8',
-  'catalog.installed': 'B8',
   agents: 'B11',
   status: 'B11',
   needs: 'B11',

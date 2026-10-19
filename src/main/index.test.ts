@@ -336,3 +336,24 @@ describe('a core that crashes', () => {
     expect(forkCore).toHaveBeenCalledOnce();
   });
 });
+
+it('finishes an approved quit if teardown fails, without offering to keep a closed core open', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  request.mockImplementation((name) => {
+    if (name === 'close') return Promise.reject(new Error('The final journal write failed.'));
+    return Promise.resolve({ ok: true, value: name === 'shown' ? [] : null });
+  });
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(createWindow).toHaveBeenCalledOnce();
+  });
+  const beforeQuit = app.on.mock.calls.find(([name]) => name === 'before-quit')?.[1] as (
+    event: unknown,
+  ) => void;
+  beforeQuit({ preventDefault: vi.fn() });
+  await vi.waitFor(() => {
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+  expect(showMessageBox).not.toHaveBeenCalled();
+});

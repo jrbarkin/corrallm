@@ -24,7 +24,7 @@ const runSource: RunSource = {
 };
 
 /**
- * Canvases are opened and saved by the main process (src/main/canvas.ts), which also keeps the
+ * Canvases are opened and saved by the core process (src/main/canvas.ts), which also keeps the
  * folder their agents work in (src/main/project.ts).
  */
 const files: CanvasFiles = {
@@ -34,10 +34,10 @@ const files: CanvasFiles = {
   chooseProject: () => window.api.chooseProject(),
 };
 
-/** Connected agents' sessions run in the main process (src/main/sessions/). */
+/** Connected agents' sessions run in the core process (src/main/sessions/). */
 const sessionBackend: SessionBackend = {
   start: (agentId, options) => fromMain(window.api.startSession(agentId, options)),
-  installed: () => fromMain(window.api.installedClis()),
+  installed: () => api.catalogInstalled(),
   send: (agentId, message) => fromMain(window.api.sendToSession(agentId, message)),
   answer: (agentId, promptId, answer) =>
     fromMain(window.api.answerSession(agentId, promptId, answer)),
