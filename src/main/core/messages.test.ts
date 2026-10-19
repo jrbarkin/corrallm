@@ -2509,6 +2509,37 @@ describe('reads', () => {
     }
   });
 
+  it.each([
+    [
+      'withdraw',
+      { message: CANVAS },
+      'Invalid arguments (id): Invalid input: expected string, received undefined.',
+    ],
+    [
+      'withdraw',
+      { id: CANVAS, message: CANVAS },
+      'Invalid arguments: Unrecognized key: "message".',
+    ],
+    ['status', { canavs: CANVAS }, 'Invalid arguments: Unrecognized key: "canavs".'],
+    ['agents', { canavs: CANVAS }, 'Invalid arguments: Unrecognized key: "canavs".'],
+  ] as const)(
+    'reports %s schema errors for %j before asking a token with several canvases to choose, over MCP too',
+    async (name, args, sentence) => {
+      await keepCanvas();
+      const started = await start();
+      const both: OutsideCaller = { ...OUTSIDE, canvases: [CANVAS, OTHER_CANVAS] };
+      const expected = { ok: false, error: { code: 'invalid', sentence } };
+      expect(await started.call(name, { ...args, canvas: CANVAS }, both)).toEqual(expected);
+      const direct = await started.call(name, args, both);
+      const mcp = await callTool(started, both, name, args);
+      expect(direct).toEqual(expected);
+      expect(mcp).toMatchObject({
+        isError: true,
+        content: [{ text: sentence }, { text: JSON.stringify({ error: expected.error }) }],
+      });
+    },
+  );
+
   it('asks a token with several canvases to name the one it means, over MCP too', async () => {
     await keepCanvas();
     const started = await start();
@@ -2518,6 +2549,7 @@ describe('reads', () => {
     for (const [name, args] of [
       ['message', { to: 'builder', body: 'Say hello' }],
       ['agents', {}],
+      ['status', {}],
     ] as const) {
       expect(await started.call(name, args, both)).toEqual({
         ok: false,
@@ -2545,7 +2577,12 @@ describe('reads', () => {
       ok: true,
       value: { reached: false, interrupted: false },
     });
+    const next = await send('builder', 'Say hello over MCP', both);
+    expect(await callTool(started, both, 'withdraw', { id: next })).toMatchObject({
+      structuredContent: { reached: false, interrupted: false },
+    });
     expect(await find(id)).toMatchObject({ state: 'withdrawn' });
+    expect(await find(next)).toMatchObject({ state: 'withdrawn' });
   });
 
   it('pages a party’s messages from a cursor, and keeps those with one party', async () => {

@@ -23,11 +23,11 @@ import { Throttle } from './throttle';
  * caller's party against the op's audience (decision 2: a tool missing from a party's list is
  * refused when called anyway), admits a token's call within its limits, fills in the canvas a
  * caller left out (its only one, or the one holding a message it names), or asks a caller with
- * several to name one, parses the arguments with the op's one schema, resolves every id a token
- * names against its reach, refuses an agent aiming
- * at itself an op it may not, checks the op's rules on a token's arguments (a met rule refuses it,
- * or makes it a proposal for you), returns a repeated request's first result, and runs the op in
- * its scope. It never throws: a failure is a value, whose code survives any transport.
+ * several to name one if its arguments otherwise fit, parses them with the op's one schema,
+ * resolves every id a token names against its reach, refuses an agent aiming at itself an op it
+ * may not, checks the op's rules on a token's arguments (a met rule refuses it, or makes it a
+ * proposal for you), returns a repeated request's first result, and runs the op in its scope. It
+ * never throws: a failure is a value, whose code survives any transport.
  */
 
 /** An operation's failure, thrown by core.call's checks and by ops; it answers as a value. */
@@ -301,9 +301,9 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
  * `raw` with its canvas filled in where the op takes one, the caller left it out, and the caller
  * has exactly one: an agent's own, an outside token's only one, or the only one you have open; or,
  * for a caller with several, the one that `holds` the ids it names that are unique across canvases
- * (a message's), if one alone does. Otherwise a caller with several is asked to name one, before
- * any id it names is looked for in its reach (which, with no canvas, would find none, as if the
- * agent it named weren't there).
+ * (a message's), if one alone does. Arguments that fit no canvas go back to parse for their schema
+ * error. Otherwise a caller with several is asked to name one, before any id it names is looked
+ * for in its reach (which, with no canvas, would find none, as if the agent it named weren't there).
  */
 function withCanvas(
   def: OpDef,
@@ -326,13 +326,17 @@ function withCanvas(
   }
   const canvases = caller.kind === 'human' ? openCanvases() : canvasesOf(caller);
   if (canvases.length > 1) {
-    const holding = canvases.filter((canvas) => {
+    let valid = false;
+    const holding: CanvasId[] = [];
+    for (const canvas of canvases) {
       const parsed = def.input.safeParse({ ...given, canvas });
-      const unique = parsed.success
-        ? idsIn(def.input, parsed.data).filter((ref) => UNIQUE_BRANDS.has(ref.brand))
-        : [];
-      return unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller));
-    });
+      if (!parsed.success) continue;
+      valid = true;
+      const unique = idsIn(def.input, parsed.data).filter((ref) => UNIQUE_BRANDS.has(ref.brand));
+      if (unique.length > 0 && unique.every((ref) => holds(canvas, ref, caller)))
+        holding.push(canvas);
+    }
+    if (!valid) return { ...given, canvas: canvases[0] };
     if (holding.length === 1) return { ...given, canvas: holding[0] };
     throw new OpFailure(
       'invalid',
