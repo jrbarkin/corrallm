@@ -130,7 +130,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     projectOf: (canvas) => projects.of(canvas),
   });
   let shell: Promise<Record<string, string>> | undefined;
-  // Read once, when the first session starts.
+  // Read once, when first needed.
   const environment =
     config.sessions?.environment ??
     (() => (shell ??= loginShellEnvironment().then(agentEnvironment)));
@@ -174,6 +174,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       implementations: implementations({
         app: config.app,
         catalog: CATALOG,
+        environment,
         usage,
         engines,
         isLead,

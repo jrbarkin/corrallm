@@ -31,6 +31,8 @@ export interface OpServices {
   app: { name: string; version: string };
   /** What every adapter declares. */
   catalog: Catalog;
+  /** The agents’ environment, read from the login shell when first needed. */
+  environment: () => Promise<Readonly<Record<string, string>>>;
   usage: Pick<UsageReadings, 'state'>;
   /** The canvases the core runs. */
   engines: Engines;

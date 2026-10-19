@@ -207,6 +207,7 @@ const TARGETS = [
 export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
   'catalog.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
+  'catalog.installed': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: 1 }],

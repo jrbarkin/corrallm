@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { JOBS } from '../../adapter';
+import { ID_PATTERN, JOBS } from '../../adapter';
 import { MCP_CHANGES, REWIND_RESTORES } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -83,5 +83,11 @@ export const catalogOps = {
       'actions its steps can name) and the usage backends their connections spend.',
     input: z.strictObject({}),
     output: z.strictObject({ adapters: z.array(Adapter), usageBackends: z.array(UsageBackend) }),
+  }),
+  'catalog.installed': define('catalog.installed', {
+    summary:
+      'Which catalog adapters have their CLI installed in the agents’ environment (reads the login shell).',
+    input: z.strictObject({}),
+    output: z.record(z.string().regex(ID_PATTERN), z.boolean()),
   }),
 } satisfies Partial<Record<OpName, OpDef>>;
