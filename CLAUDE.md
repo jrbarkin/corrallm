@@ -148,7 +148,12 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 user_version and meta.min_reader in one transaction, run with foreign keys off, so
                 one may rebuild a table others refer to, and refused if it leaves a reference to
                 nothing; schema 1: canvas, conversation, run, run_workflow, message,
-                read_position, open_canvas, meta, STRICT). One a newer corrallm made that this one can't read is refused, left
+                read_position, open_canvas, meta; schema 2, B9's, min_reader 2, so a corrallm of
+                schema 1 refuses it: a canvas's document as rows, document, node, link and
+                queue_item (WITHOUT ROWID, foreign keys checked as each statement ends, never
+                deferred), its revisions and what each changed (revision, change), proposal and
+                file_review; every table STRICT, the side of every foreign key that refers indexed).
+                One a newer corrallm made that this one can't read is refused, left
                 untouched; a damaged one is set aside (core.rejected-<uuid>.db, its -wal first, then
                 -shm and -journal) and the newest snapshot passing the same checks restored, else it
                 starts empty, saying so; a profile with snapshots but no core.db (a restore cut
@@ -156,7 +161,8 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 sequence (migrations.ts' SEQUENCES: message's seq) on from the clock in ms, past
                 every place given before, those whose rows a crash cut off and those a database a
                 restore replaced gave included, so a cursor from before reads what comes next; a
-                restore, or an empty start in place of a database, then settles in the same
+                restore raises each document's revision the same way (a token's `expect` holds
+                them), and a restore, or an empty start in place of a database, then settles in the same
                 transaction what waited in the snapshot (restored.ts: a message pending there may
                 have gone since, so it is unresolved, never sent, and its sender told by a notice).
                 What opening wrote is checkpointed (TRUNCATE) before the store is used, so it is on

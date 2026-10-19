@@ -171,7 +171,8 @@ async function restore(
  * database a restore replaced gave. From the clock, in milliseconds, unless the database's places
  * are past it already; as every open does this, a profile gives far fewer than one place a
  * millisecond since the last did: only a clock set back since then could give a place again.
- * Then, in the same transaction, a restore settles what waited in the snapshot (restored.ts).
+ * Then, in the same transaction, a restore raises each document's revision the same way and
+ * settles what waited in the snapshot (restored.ts).
  */
 function numberOn(connection: Connection, now: number, restored: boolean): Connection {
   try {
@@ -185,7 +186,12 @@ function numberOn(connection: Connection, now: number, restored: boolean): Conne
           .prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, CAST(? AS INTEGER))')
           .run(table, now);
       }
-      if (restored) settleRestored(connection, now);
+      if (restored) {
+        // A document's revisions too, which a token's `expect` holds: as for places, from the
+        // clock, past every one the database a restore replaced gave.
+        connection.prepare('UPDATE document SET rev = max(rev, CAST(? AS INTEGER))').run(now);
+        settleRestored(connection, now);
+      }
     });
     return connection;
   } catch (error) {
