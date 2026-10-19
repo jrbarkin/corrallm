@@ -1013,7 +1013,9 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
 
     await server.stop();
     expect((await cliWait(['--timeout', '1'], env)).code).toBe(3);
-  });
+    // A dozen runs of the CLI, two of them waiting out a second: more than the default 5 s when
+    // the machine is busy.
+  }, 20_000);
 
   it('finds the server from api.json in the app’s profile while its process lives', async () => {
     // The app's profile, under a home of the test's own.
