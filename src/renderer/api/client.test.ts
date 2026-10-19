@@ -4,6 +4,7 @@ import { GUI_OPS } from '../../shared/api/surface';
 import { guiFunction } from '../../shared/gui-link';
 import type { AppApi } from '../../shared/ipc';
 import { api, ApiError } from './client';
+import { fakeCore, expectOneOp } from '../test-api';
 
 afterEach(() => {
   Reflect.deleteProperty(window, 'api');
@@ -14,6 +15,27 @@ function stubApi(bridge: Partial<AppApi>): void {
 }
 
 describe('the GUI client', () => {
+  it('resolves a write only after every returned topic revision has reached its mirror', async () => {
+    const core = fakeCore();
+    core.snapshot('usage', { readings: [], rules: {} }, 0);
+    core.snapshot('settings', { defaultAdapter: 'codex', consents: {} }, 0);
+    core.respond('usage.setRule', { revs: { usage: 1, settings: 2 } });
+    const resolved = vi.fn();
+    const called = core.api.usageSetRule({ backend: 'codex', rule: null }).then(resolved);
+    await vi.waitFor(() => {
+      expectOneOp(core, 'usage.setRule', { backend: 'codex', rule: null });
+    });
+    expect(resolved).not.toHaveBeenCalled();
+    core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
+    await Promise.resolve();
+    expect(resolved).not.toHaveBeenCalled();
+    core.change({ topic: 'settings', rev: 2, replace: { defaultAdapter: 'codex', consents: {} } });
+    await called;
+    expect(resolved).toHaveBeenCalledOnce();
+    expect(core.topics.snapshot('settings')).toEqual({ defaultAdapter: 'codex', consents: {} });
+    core.dispose();
+  });
+
   it('exposes only the GUI operations, one function per operation', () => {
     expect(Object.keys(api).sort()).toEqual(
       [...GUI_OPS.map(guiFunction), 'terminalOnEvent', 'topicsOnChange', 'topicsOnEpoch'].sort(),

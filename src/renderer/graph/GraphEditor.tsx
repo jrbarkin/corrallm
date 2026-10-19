@@ -299,7 +299,7 @@ function Editor({
           updatedAt: Date.now(),
         }),
         freeze: () => {
-          flushDrafts();
+          void flushDrafts();
           runStore.pause();
         },
         error: (error) => {
@@ -876,7 +876,7 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
-        flushDrafts();
+        void flushDrafts();
         if (file === 'save' || file === 'saveAs') {
           commands.save(latest.current.text, file === 'saveAs');
         } else if (!latest.current.modal) {
@@ -888,7 +888,7 @@ function Editor({
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
-      flushDrafts();
+      void flushDrafts();
       event.preventDefault();
       if (action !== 'rename') {
         apply(operation(action));
@@ -1460,7 +1460,7 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
-              flushDrafts();
+              void flushDrafts();
               runStore.start();
             }}
             onStop={() => {

@@ -5,7 +5,7 @@ import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
 import type { CoreEvent, IpcEventArgs } from './ipc';
 import type { TerminalEvent } from './terminal';
-import type { Change } from './api/topics';
+import type { Change, TopicRequest, TopicSnapshot } from './api/topics';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -73,7 +73,9 @@ export function guiFunction<N extends string>(op: N): GuiFunction<N> {
 /** What GUI operation `N` takes; the drop's paths come from files in the preload. */
 type InputOf<N extends GuiOp> = N extends 'terminal.drop'
   ? Omit<z.input<(typeof OPS)[N]['input']>, 'paths'> & { files: readonly File[] }
-  : z.input<(typeof OPS)[N]['input']>;
+  : N extends 'topics.subscribe' | 'topics.unsubscribe'
+    ? TopicRequest
+    : z.input<(typeof OPS)[N]['input']>;
 
 /** The arguments of `T` that may not be left out (an index signature's never are). */
 type RequiredKeys<T> = {
@@ -86,9 +88,11 @@ type RequiredKeys<T> = {
  */
 type GuiCalls = {
   [N in GuiOp as GuiFunction<N>]: [RequiredKeys<InputOf<N>>] extends [never]
-    ? (args?: InputOf<N>) => Promise<ResultOf<N>>
-    : (args: InputOf<N>) => Promise<ResultOf<N>>;
+    ? (args?: InputOf<N>) => Promise<GuiResult<N>>
+    : (args: InputOf<N>) => Promise<GuiResult<N>>;
 };
+
+type GuiResult<N extends GuiOp> = N extends 'topics.subscribe' ? TopicSnapshot : ResultOf<N>;
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {

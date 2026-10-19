@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { flushDrafts, useDraft } from './useDraft';
+import { fakeCore, expectOneOp } from './test-api';
 
 function Field({
   value = 'Original',
@@ -71,7 +72,7 @@ it.each(['blur', 'Enter', 'idle'] as const)(
     fireEvent.blur(field());
     act(() => {
       vi.advanceTimersByTime(1000);
-      flushDrafts();
+      void flushDrafts();
     });
     expect(commit).toHaveBeenCalledOnce();
     type('Draft');
@@ -109,7 +110,7 @@ it('Escape restores the original text and leaves nothing to commit', () => {
   fireEvent.blur(field());
   act(() => {
     vi.advanceTimersByTime(1000);
-    flushDrafts();
+    void flushDrafts();
   });
   expect(commit).not.toHaveBeenCalled();
 });
@@ -189,7 +190,7 @@ it('removes a departing field’s pending timer and draft', () => {
   view.unmount();
   act(() => {
     vi.advanceTimersByTime(1000);
-    flushDrafts();
+    void flushDrafts();
   });
   expect(commit).not.toHaveBeenCalled();
 });
@@ -206,9 +207,107 @@ it('flushes every pending field once from the window’s registry', () => {
   for (const [i, input] of screen.getAllByRole('textbox').entries())
     fireEvent.change(input, { target: { value: `Draft ${String(i)}` } });
   act(() => {
-    flushDrafts();
-    flushDrafts();
+    void flushDrafts();
+    void flushDrafts();
   });
   expect(one).toHaveBeenCalledExactlyOnceWith('Draft 0');
   expect(two).toHaveBeenCalledExactlyOnceWith('Draft 1');
+});
+
+it.each(['pending', 'already started'] as const)(
+  'awaits a %s draft commit before sending an operation',
+  async (how) => {
+    const core = fakeCore();
+    const saving = Promise.withResolvers<undefined>();
+    const commit = vi.fn(() => saving.promise);
+    render(<Field commit={commit} />);
+    type('Draft');
+    if (how === 'already started') fireEvent.blur(field());
+    const called = core.api.linkOpen({ url: 'https://example.com' });
+    expect(commit).toHaveBeenCalledExactlyOnceWith('Draft');
+    await Promise.resolve();
+    expect(core.operations).toEqual([]);
+    saving.resolve(undefined);
+    await called;
+    expectOneOp(core, 'link.open', { url: 'https://example.com' });
+    core.dispose();
+  },
+);
+
+it('lets a draft send its own operation while the following operation waits for its topic revision', async () => {
+  const core = fakeCore();
+  core.snapshot('usage', { readings: [], rules: {} }, 0);
+  core.respond('usage.setRule', { revs: { usage: 1 } });
+  render(<Field commit={() => core.api.usageSetRule({ backend: 'codex', rule: null })} />);
+  type('Draft');
+  const called = core.api.linkOpen({ url: 'https://example.com' });
+  await vi.waitFor(() => {
+    expectOneOp(core, 'usage.setRule', { backend: 'codex', rule: null });
+  });
+  core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
+  await called;
+  expect(core.operations.map(({ op }) => op)).toEqual(['usage.setRule', 'link.open']);
+  core.dispose();
+});
+
+it('waits for a draft before an operation started by a React layout effect during the flush', async () => {
+  const core = fakeCore();
+  core.snapshot('usage', { readings: [], rules: {} });
+  core.respond('usage.setRule', { revs: { usage: 1 } });
+  const calls: Promise<unknown>[] = [];
+  function Editor() {
+    const [changed, setChanged] = useState(false);
+    useLayoutEffect(() => {
+      if (changed) calls.push(core.api.linkOpen({ url: 'https://example.com' }));
+    }, [changed]);
+    return (
+      <Field
+        commit={() => {
+          setChanged(true);
+          return core.api.usageSetRule({ backend: 'codex', rule: null });
+        }}
+      />
+    );
+  }
+  render(<Editor />);
+  type('Draft');
+  act(() => {
+    calls.push(flushDrafts());
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(core.operations).not.toEqual([]);
+    });
+    expectOneOp(core, 'usage.setRule', { backend: 'codex', rule: null });
+  } finally {
+    core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
+    await Promise.all(calls);
+    core.dispose();
+  }
+});
+
+it('awaits an operation sent by a draft even when its UI callback returns void', async () => {
+  const core = fakeCore();
+  core.snapshot('usage', { readings: [], rules: {} });
+  core.respond('usage.setRule', { revs: { usage: 1 } });
+  let committed: Promise<unknown> | undefined;
+  render(
+    <Field
+      commit={() => {
+        committed = core.api.usageSetRule({ backend: 'codex', rule: null });
+      }}
+    />,
+  );
+  type('Draft');
+  const called = core.api.linkOpen({ url: 'https://example.com' });
+  try {
+    await vi.waitFor(() => {
+      expect(core.operations).not.toEqual([]);
+    });
+    expectOneOp(core, 'usage.setRule', { backend: 'codex', rule: null });
+  } finally {
+    core.change({ topic: 'usage', rev: 1, replace: { readings: [], rules: {} } });
+    await Promise.all([committed, called]);
+    core.dispose();
+  }
 });
