@@ -37,7 +37,7 @@ let memory: CanvasMemory;
 let reader: Connection;
 
 function journal(database: Database = store, said?: readonly string[]): RunJournal {
-  return new RunJournal(path.join(profile, 'runs'), {
+  return new RunJournal({
     store: database,
     memory,
     projectOf: () => '/work/project',
@@ -226,12 +226,14 @@ describe('RunJournal', () => {
     const { token } = await runs.get(canvas);
     expect(await runs.reads(canvas)).toEqual({});
     let seen: unknown;
-    await runs
-      .save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 7 })
+    await store
+      .write(() => {
+        runs.moveRead(canvas, 'outside:orchestrator', 7);
+      })
       .then(() => {
         seen = readTo(canvas);
       });
-    // On disk once the save that moved it resolves.
+    // On disk once the write that moved it resolves.
     expect(seen).toEqual([{ party: 'outside:orchestrator', seq: 7 }]);
 
     // The app journals the run with no read positions of its own: they are kept as they were, and
@@ -243,17 +245,58 @@ describe('RunJournal', () => {
     await app.save(canvas, context.token, null);
     expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 7 });
 
-    // Moved on by the next save that moves one, and never back, saves at once included.
+    // Moved on by the next write that moves one, and never back, writes at once included.
     await Promise.all([
-      runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 2 }),
-      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 9 }),
-      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 8 }),
+      runs.save(canvas, token, checkpoint),
+      store.write(() => {
+        runs.moveRead(canvas, 'outside:other', 2);
+      }),
+      store.write(() => {
+        runs.moveRead(canvas, 'outside:orchestrator', 9);
+      }),
+      store.write(() => {
+        runs.moveRead(canvas, 'outside:orchestrator', 8);
+      }),
     ]);
     await reopen();
     expect(await journal().reads(canvas)).toEqual({
       'outside:orchestrator': 9,
       'outside:other': 2,
     });
+  });
+
+  it('journals a run within another write, landing with what that write keeps, or not at all', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    let kept: () => void = () => undefined;
+    await store.write(() => {
+      kept = runs.keep(canvas, token, checkpoint);
+      runs.moveRead(canvas, 'outside:orchestrator', 3);
+    });
+    kept();
+    expect(ran(canvas)).toMatchObject({ updated_at: 123 });
+    expect(readTo(canvas)).toEqual([{ party: 'outside:orchestrator', seq: 3 }]);
+
+    // What it was written with failed: neither lands.
+    await expect(
+      store.write(() => {
+        runs.keep(canvas, token, { ...checkpoint, updatedAt: 456 });
+        runs.moveRead(canvas, 'outside:orchestrator', 4);
+        throw new Error('The message can’t be written');
+      }),
+    ).rejects.toThrow('The message can’t be written');
+    expect(ran(canvas)).toMatchObject({ updated_at: 123 });
+    expect(readTo(canvas)).toEqual([{ party: 'outside:orchestrator', seq: 3 }]);
+
+    // An earlier canvas's token writes nothing, failing the write it is in.
+    await runs.opened(canvas);
+    await expect(
+      store.write(() => {
+        runs.keep(canvas, token, { ...checkpoint, updatedAt: 789 });
+      }),
+    ).rejects.toThrow(/earlier canvas/);
+    expect(ran(canvas)).toMatchObject({ updated_at: 123 });
   });
 
   it('refuses a save of the canvas a window showed before it opened or began another', async () => {

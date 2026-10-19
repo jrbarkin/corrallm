@@ -17,7 +17,8 @@ import { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
-import { forgetRun, keepCanvases, openedLast } from './store/test-store';
+import { STORE_FILE } from './store/open';
+import { forgetRun, keepCanvases, keepMessages, openedLast, readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 /*
@@ -1194,8 +1195,11 @@ describe('telling an agent of a withdrawal after receipt', () => {
     await keepCanvas();
     await start();
     const id = await withdrawReceived();
-    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-    expect(await readFile(log, 'utf8')).toContain(withdrawalNote(id).replaceAll('"', '\\"'));
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
+      ),
+    ).toEqual({ withdrawal: JSON.stringify({ text: withdrawalNote(id) }) });
     appServer = new FakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     const next = await send('builder', 'After restarting', OTHER);
@@ -1215,29 +1219,22 @@ describe('telling an agent of a withdrawal after receipt', () => {
   it('combines several still-untold withdrawals in one frame with the next message', async () => {
     await keepCanvas();
     const ids = [crypto.randomUUID(), crypto.randomUUID()];
-    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-    await mkdir(path.dirname(log), { recursive: true });
-    await writeFile(
-      log,
-      ids
-        .map((id, i) =>
-          JSON.stringify({
-            seq: i + 1,
-            message: {
-              id,
-              canvas: CANVAS,
-              from: 'outside:orchestrator',
-              to: 'agent:builder',
-              kind: 'text',
-              body: 'Old work',
-              state: 'withdrawn',
-              by: 'outside:orchestrator',
-              at: 1000,
-            },
-            withdrawal: { text: withdrawalNote(id) },
-          }),
-        )
-        .join('\n') + '\n',
+    await keepMessages(
+      profile,
+      CANVAS,
+      ids.map((id) => ({
+        message: {
+          id,
+          from: 'outside:orchestrator',
+          to: 'agent:builder',
+          kind: 'text',
+          body: 'Old work',
+          state: 'withdrawn',
+          by: 'outside:orchestrator',
+          at: 1000,
+        },
+        withdrawal: { text: withdrawalNote(id) },
+      })),
     );
     await start();
     expect(sent(appServer)).toEqual([]);
@@ -1951,7 +1948,7 @@ describe('a restart', () => {
     expect(restarted.started).toEqual([]);
   });
 
-  it('tells whoever waited in a log set aside as broken, and a cursor from before reads on', async () => {
+  it('tells whoever waited in a database restored from a snapshot, never sending it, and a cursor from before reads on', async () => {
     await keepCanvas();
     await start();
     await ok('run.pause', { target: { agent: 'builder' } }, YOU);
@@ -1960,30 +1957,31 @@ describe('a restart', () => {
     await vi.waitFor(async () => {
       expect((await find(hello))?.state).toBe('replied');
     });
-    // Its records all come after the broken line: it still waits, for certain.
-    const later = await send('builder', 'Second');
     const { next } = await ok<{ next: string }>('status', {});
+    // The store takes a snapshot as it closes; then the database is damaged.
     await core?.close();
     core = undefined;
-    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-    const lines = (await readFile(log, 'utf8')).trimEnd().split('\n');
-    await writeFile(log, `${String(lines[0])}\nnot json\n${lines.slice(1).join('\n')}\n`);
+    await writeFile(path.join(profile, STORE_FILE), 'not a database');
 
-    await start();
+    const restarted = await start();
+    expect(restarted.engines.canvas(CANVAS)?.warnings).toEqual([
+      expect.stringMatching(/damaged.*restored from its snapshot/) as string,
+    ]);
+    // What became of it since the snapshot is unknown: it is never sent, and its sender is told,
+    // after the cursor status gave before.
     expect(await find(waited)).toMatchObject({ state: 'unresolved' });
-    // Its sender is told, after the cursor status gave before: a cursor reads on from it.
+    const body = `Your message ${waited} won’t be sent: corrallm’s database was restored from a snapshot taken while it waited, so whether it went since is unknown.`;
     const after = await ok<{ items: Message[] }>('messages', { after: next });
     expect(after.items).toEqual([
       expect.objectContaining({
         kind: 'notice',
         replyTo: waited,
-        body: 'Your message to Builder couldn’t be read back when corrallm opened the canvas, so it won’t be sent.',
-        turn: expect.objectContaining({ status: 'failed', reason: 'error' }) as unknown,
+        body,
+        turn: { status: 'failed', reason: 'error', message: body },
       }),
     ]);
-    expect(sent(appServer).filter((text) => text.endsWith('First'))).toEqual([]);
-    expect((await find(later))?.state).toBe('pending');
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    const later = await send('builder', 'Second');
     await vi.waitFor(async () => {
       expect((await find(later))?.state).toBe('replied');
     });
@@ -2067,28 +2065,26 @@ describe('a restart', () => {
 
   it('leaves a message journaled as delivering unresolved after a crash, and sends what was pending', async () => {
     await keepCanvas();
-    const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-    await mkdir(path.dirname(log), { recursive: true });
-    const message = (seq: number, id: string, state: string) =>
-      JSON.stringify({
-        seq,
-        message: {
-          id,
-          canvas: CANVAS,
-          from: 'outside:orchestrator',
-          to: 'agent:builder',
-          kind: 'text',
-          body: `Message ${String(seq)}`,
-          state,
-          at: 1,
-          ...(state === 'pending'
-            ? {}
-            : { delivery: { at: 1, as: crypto.randomUUID(), attempt: 1 } }),
-        },
-      });
+    const message = (id: string, state: 'delivering' | 'pending', seq: number) => ({
+      message: {
+        id,
+        from: 'outside:orchestrator' as const,
+        to: 'agent:builder' as const,
+        kind: 'text' as const,
+        body: `Message ${String(seq)}`,
+        state,
+        at: 1,
+        ...(state === 'pending'
+          ? {}
+          : { delivery: { at: 1, as: crypto.randomUUID(), attempt: 1 } }),
+      },
+    });
     const cut = crypto.randomUUID();
     const waiting = crypto.randomUUID();
-    await writeFile(log, `${message(1, cut, 'delivering')}\n${message(2, waiting, 'pending')}\n`);
+    await keepMessages(profile, CANVAS, [
+      message(cut, 'delivering', 1),
+      message(waiting, 'pending', 2),
+    ]);
     await start();
     expect(await find(cut)).toMatchObject({ state: 'unresolved' });
     await vi.waitFor(async () => {

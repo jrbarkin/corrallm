@@ -33,6 +33,7 @@ import { Windows } from './windows';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { Caller } from './caller';
+import { MessageTable } from './delivery/messages';
 import { Engines } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
@@ -125,8 +126,8 @@ export interface Core extends Dispatcher {
   keptCanvas(file: string): Promise<CanvasId>;
   /**
    * Opens a canvas held: nothing is delivered on it until `deliver()`. Rejects, saying why, if it
-   * can't open. What opening it found to say (its run discarded, its message log set aside, the
-   * database restored).
+   * can't open. What opening it found to say (its run discarded, its messages unread, the database
+   * restored).
    */
   openHeld(canvas: CanvasId): Promise<readonly string[]>;
   /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
@@ -160,7 +161,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const memory = new CanvasMemory(store);
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
-  const journal = new RunJournal(path.join(profile, 'runs'), {
+  const journal = new RunJournal({
     store,
     memory,
     projectOf: (canvas) => projects.of(canvas),
@@ -284,6 +285,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     projects,
     journal,
+    messages: new MessageTable(store, memory),
+    store,
     usage,
     files,
     environment,

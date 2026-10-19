@@ -1,11 +1,13 @@
 import path from 'node:path';
 
 import type { CanvasId } from '../../../shared/canvas';
+import type { Message } from '../../../shared/model/messages';
 import { parseRunCheckpoint } from '../../../shared/run';
 import type { RunCheckpoint } from '../../../shared/run';
 import { CanvasMemory } from '../../memory';
 import type { Remembered } from '../../memory';
 import { RunJournal } from '../../run-journal';
+import { MessageTable } from '../delivery/messages';
 import { mintTrustedPath as trusted } from '../host';
 import { openStore, STORE_FILE } from './open';
 import { connect } from './sqlite';
@@ -58,6 +60,46 @@ export async function keepCanvases(
 }
 
 /**
+ * A message as a test keeps it: as its row holds it, its place in the order (else the next), what
+ * it told (for a notice), and the withdrawal its recipient must still be told of.
+ */
+export interface KeptMessage {
+  seq?: number;
+  message: Omit<Message, 'canvas'>;
+  told?: string;
+  withdrawal?: { text: string; told?: boolean };
+}
+
+/**
+ * Keeps messages of a canvas the profile keeps, while no core has it open, as the core would have
+ * kept them, in this order.
+ */
+export async function keepMessages(
+  profile: string,
+  canvas: CanvasId,
+  messages: readonly KeptMessage[],
+): Promise<void> {
+  const store = await openTestStore(profile);
+  try {
+    const table = new MessageTable(store, new CanvasMemory(store));
+    await store.write(() => {
+      table.ensure(canvas);
+      for (const { seq, message, told, withdrawal } of messages) {
+        table.keep({
+          seq: seq ?? table.place(),
+          message: { ...message, canvas },
+          bytes: 0,
+          ...(told === undefined ? {} : { told }),
+          ...(withdrawal === undefined ? {} : { withdrawal }),
+        });
+      }
+    });
+  } finally {
+    await store.close();
+  }
+}
+
+/**
  * Uses the profile's run journal, while no core has the profile open, as the app would: through
  * its canvases' windows.
  */
@@ -65,9 +107,7 @@ async function withJournal(profile: string, use: (journal: RunJournal) => Promis
   const store = await openTestStore(profile);
   try {
     const memory = new CanvasMemory(store);
-    await use(
-      new RunJournal(path.join(profile, 'runs'), { store, memory, projectOf: () => undefined }),
-    );
+    await use(new RunJournal({ store, memory, projectOf: () => undefined }));
   } finally {
     await store.close();
   }

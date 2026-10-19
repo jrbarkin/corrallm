@@ -9,41 +9,35 @@ import {
   PARTY_PATTERN,
 } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
+import type { CanvasMemory } from '../../memory';
+import type { Database } from '../store/store';
 
 /*
  * A canvas's messages, as the core keeps them (API Spec §5.3, Core Server §5.9): in memory, in the
- * order they came, and journaled to runs/<id>/messages.jsonl through the run journal's one queue,
- * a line for each message each time it changes ({ seq, message, told?, withdrawal? }, the last line of a
- * message winning). Its order (`seq`) survives restarts, so a cursor into it does too. It keeps the newest
- * STORE_SETTLED_PER_PARTY settled messages of each party within STORE_BYTES, and every pending and
- * unresolved one, dropping the oldest settled first (delivery bounds how many wait: MAX_WAITING),
- * and writes its log anew once what it appended since it last did outgrows both what it kept then
- * and STORE_BYTES. It never throws: what it can't write it says on the console, except where a
- * caller asks for its record on disk (`durable`), which rejects then; and once a write fails, the
- * next writes the log anew, whole (a line a failed append tore included). A torn last line of its
- * log is left out, and written out of the log as it loads (or with the next write, if that fails);
- * a log broken before that is set aside, and written anew from the records that could be read, the
- * store's order going on past it; a message that waited with no record read after the broken line
- * is never sent. A log it can't read, or a broken one it can't set aside, is left as it is, for
- * corrallm to read when it opens the canvas again: the store starts empty and journals nothing
- * meanwhile, so `durable` rejects, and nothing is sent without its record.
+ * order they came, and in the profile's database (Core Database §5), each a row of `message`, with
+ * the key of what it tells, for a notice (`told`), and the note its recipient must still be told of
+ * a withdrawal (`withdrawal`). Their order (`seq`) is one every canvas's messages share, whose
+ * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
+ * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
+ * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
+ * bounds how many wait: MAX_WAITING).
+ *
+ * What changes is written in the database's next commit, with whatever its canvas writes with it
+ * (`writeWith`: its run, once the canvas is open), and on disk once `durable()` resolves: the commit
+ * that holds it returned. A message's row is kept as it is in memory when that write runs, so a
+ * change made since the last write is never written alone, before one made earlier. It never
+ * throws: what it can't write it says on the console, and writes again with its next write, except
+ * where a caller asks for its record on disk (`durable`), which rejects then. A store whose rows
+ * can't be read (as when the database couldn't be opened) starts empty and journals nothing:
+ * `durable` rejects once anything has changed, so nothing is sent without its record.
  */
-
-/** Where the store's log is written: the run journal's, by canvas. */
-export interface MessageLog {
-  readMessages(canvas: CanvasId): Promise<string | undefined>;
-  appendMessages(canvas: CanvasId, text: string, durable: boolean): Promise<void>;
-  /** Writes the log anew, whole: always forced to disk, its file and its folder. */
-  rewriteMessages(canvas: CanvasId, text: string): Promise<void>;
-  setAsideMessages(canvas: CanvasId): Promise<string>;
-}
 
 /** A message to add: the store gives it its id, its canvas and when it was sent. */
 export type Draft = Omit<Message, 'id' | 'canvas' | 'at'>;
 
 /**
- * A message as the store keeps it: its place in the store's order, how big its record is, and, for
- * a notice, what it told (its key: Delivery tells each thing once, across restarts too).
+ * A message as the store keeps it: its place in the order, how big its record is, and, for a
+ * notice, what it told (its key: Delivery tells each thing once, across restarts too).
  */
 interface Kept {
   seq: number;
@@ -54,122 +48,154 @@ interface Kept {
   withdrawal?: { text: string; told?: boolean };
 }
 
+/**
+ * The profile's messages, every canvas's, in the database's `message` table: a row each, in the
+ * order every canvas's messages share. The core is the table's only writer, so it gives each place
+ * in that order itself, past the last the table's sequence gave (AUTOINCREMENT, which a restore
+ * raises past every place given before it: store/open.ts), and SQLite raises that sequence with
+ * each row written.
+ */
+export class MessageTable {
+  readonly #store: Database;
+  readonly #memory: Pick<CanvasMemory, 'ensure'>;
+  /** The last place given, once read. */
+  #last: number | undefined;
+
+  constructor(store: Database, memory: Pick<CanvasMemory, 'ensure'>) {
+    this.#store = store;
+    this.#memory = memory;
+  }
+
+  /** The rows of a canvas's messages, in order. Throws if they can't be read. */
+  rows(canvas: CanvasId): Record<string, unknown>[] {
+    return this.#store
+      .prepare(
+        `SELECT seq, id, from_party, to_party, kind, body, reply_to, task, turn, state, delivery,
+           by_party, sent_at, told, withdrawal
+         FROM message WHERE canvas_id = ? ORDER BY seq`,
+      )
+      .all(canvas);
+  }
+
+  /** The last place given in the order: on disk, or since. Throws if it can't be read. */
+  last(): number {
+    this.#last ??= Number(
+      this.#store.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'message'").get()?.seq ?? 0,
+    );
+    return this.#last;
+  }
+
+  /** The next place in the order. */
+  place(): number {
+    this.#last = this.last() + 1;
+    return this.#last;
+  }
+
+  /** Queues `write` for the database's next commit: resolves once that commit has returned. */
+  write<T>(write: () => T): Promise<T> {
+    return this.#store.write(write);
+  }
+
+  /** Within a write: gives the canvas its row, if it has none, for its messages to refer to. */
+  ensure(canvas: CanvasId): void {
+    this.#memory.ensure(canvas);
+  }
+
+  /**
+   * Within a write: a message's row, as kept (each column written by name, so that what a newer
+   * corrallm keeps beside them stays).
+   */
+  keep({ seq, message, told, withdrawal }: Kept): void {
+    this.#store
+      .prepare(
+        `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, body, reply_to, task,
+           turn, state, delivery, by_party, sent_at, told, withdrawal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET
+           body = excluded.body, reply_to = excluded.reply_to, task = excluded.task,
+           turn = excluded.turn, state = excluded.state, delivery = excluded.delivery,
+           by_party = excluded.by_party, told = excluded.told, withdrawal = excluded.withdrawal`,
+      )
+      .run(
+        seq,
+        message.id,
+        message.canvas,
+        message.from,
+        message.to,
+        message.kind,
+        message.body,
+        message.replyTo ?? null,
+        json(message.task),
+        json(message.turn),
+        message.state,
+        json(message.delivery),
+        message.by ?? null,
+        message.at,
+        told ?? null,
+        json(withdrawal),
+      );
+  }
+
+  /** Within a write: deletes a message's row. */
+  forget(id: string): void {
+    this.#store.prepare('DELETE FROM message WHERE id = ?').run(id);
+  }
+}
+
 export class MessageStore {
   readonly canvas: CanvasId;
-  readonly #log: MessageLog;
+  readonly #table: MessageTable;
   readonly #now: () => number;
   /** Every message kept, by id, in the store's order. */
   #kept = new Map<string, Kept>();
   /** What hears each message added. */
   readonly #listeners = new Set<(message: Message) => void>();
-  /** The last place given in the store's order. */
-  #seq = 0;
-  /** Records changed since the log was last written to, in order. */
-  #pending: string[] = [];
+  /**
+   * The messages changed (or deleted) whose rows aren't on disk as they are yet, each with the
+   * number of its last change: a write marks a row on disk only if it has not changed since.
+   */
+  readonly #changed = new Map<string, number>();
+  #changes = 0;
   #scheduled = false;
-  /** Each write, after the one before it. */
-  #writing: Promise<void> = Promise.resolve();
-  /** How many bytes the log holds. */
-  #size = 0;
-  /** How many of them it held when it was last written whole (or read): what the store kept then. */
-  #compacted = 0;
-  /** Whether something was written to the log since it was last forced to disk. */
-  #unsynced = false;
-  /** Whether the log may lack what the store keeps, or hold a torn line: written whole next. */
-  #broken = false;
-  /** Why the store journals nothing, if it can't: its log is left as it was. */
+  /** The write queued that hasn't run yet: it writes every change made before it runs. */
+  #queued: Promise<void> | undefined;
+  /** What its canvas writes with its changes, within the same write. */
+  #alongside: (() => () => void) | undefined;
+  /** Why the store journals nothing, if it can't. */
   #unjournaled: string | undefined;
   /** Whether anything changed that wasn't journaled, as the store journals nothing. */
   #lost = false;
-  /** Why the store couldn't read all of its log as it loaded, if it couldn't. */
+  /** The last place given, while the store journals nothing. */
+  #seq = 0;
+  /** Why the store couldn't read its messages as it loaded, if it couldn't. */
   warning: string | undefined;
-  /**
-   * The messages that waited in a log set aside as broken, as the store loaded, whose last record
-   * that could be read came before a line that couldn't be: what became of each since is unknown
-   * (it may have been sent), so delivery never sends them.
-   */
-  doubtful: ReadonlySet<string> = new Set();
 
-  constructor(canvas: CanvasId, log: MessageLog, now: () => number) {
+  constructor(canvas: CanvasId, table: MessageTable, now: () => number) {
     this.canvas = canvas;
-    this.#log = log;
+    this.#table = table;
     this.#now = now;
   }
 
   /**
-   * Reads what the log keeps of the canvas's messages. A last line torn as it was written (or that
-   * lost its newline) is written out of the log before anything is appended after it, which would
-   * otherwise join it on one line. A log broken before its last line is set aside, and written
-   * anew from the records that could be read; a message that waited with no record read after the
-   * broken line is `doubtful`. Either way the store's order goes on past every place a line of the
-   * log gave. Never rejects.
+   * Reads what the database keeps of the canvas's messages: a row this code doesn't read (as one a
+   * newer corrallm wrote) is left as it is. Never rejects.
    */
-  async load(): Promise<void> {
-    let text: string | undefined;
+  load(): Promise<void> {
+    let rows: Record<string, unknown>[];
     try {
-      text = await this.#log.readMessages(this.canvas);
+      rows = this.#table.rows(this.canvas);
+      this.#table.last();
     } catch (error) {
-      this.#journalNothing(`The canvas’s messages could not be read (${reason(error)})`);
-      return;
+      this.#unjournaled = `The canvas’s messages could not be read (${reason(error)}), so none can be sent until corrallm opens the canvas again.`;
+      this.warning = this.#unjournaled;
+      return Promise.resolve();
     }
-    if (text === undefined) return;
-    const lines = text.split('\n');
-    if (lines.at(-1) === '') lines.pop();
-    const read = new Map<string, Kept>();
-    /** The line each message's last record was read from. */
-    const lastLine = new Map<string, number>();
-    let torn = text !== '' && !text.endsWith('\n');
-    /**
-     * The last line before the last that isn't a record, if one isn't: the log is broken in the
-     * middle, and a message's records after its last one read may be lost there.
-     */
-    let broken: number | undefined;
-    for (const [i, line] of lines.entries()) {
-      const kept = this.#record(line);
-      // A cursor may point at any place the log gave, read or not.
-      this.#seq = Math.max(this.#seq, kept?.seq ?? placeIn(line));
-      if (kept) {
-        read.set(kept.message.id, kept);
-        lastLine.set(kept.message.id, i);
-      } else if (i < lines.length - 1) broken = i;
-      else torn = true;
-    }
-    this.#kept = new Map([...read].sort(([, a], [, b]) => a.seq - b.seq));
-    if (broken !== undefined) {
-      try {
-        const where = await this.#log.setAsideMessages(this.canvas);
-        this.warning = `The canvas’s messages could not all be read, and were moved to ${where}.`;
-      } catch (error) {
-        this.#kept = new Map();
-        this.#journalNothing(
-          `The canvas’s messages could not be read, nor moved aside (${reason(error)})`,
-        );
-        return;
-      }
-      // A message's later records always come after its earlier ones: one whose last record read
-      // comes after the last broken line lost none there.
-      this.doubtful = new Set(
-        this.all()
-          .filter(({ id, state }) => state === 'pending' && (lastLine.get(id) ?? 0) < broken)
-          .map(({ id }) => id),
-      );
-      // The log is written anew from what was read.
-      torn = true;
+    for (const row of rows) {
+      const kept = keptOf(row, this.canvas);
+      if (kept) this.#kept.set(kept.message.id, kept);
     }
     this.#prune();
-    if (!torn) {
-      this.#size = Buffer.byteLength(text);
-      this.#compacted = [...this.#kept.values()].reduce((sum, { bytes }) => sum + bytes, 0);
-      return;
-    }
-    const whole = this.#whole();
-    try {
-      await this.#log.rewriteMessages(this.canvas, whole);
-      this.#size = this.#compacted = Buffer.byteLength(whole);
-    } catch (error) {
-      console.error('Could not write the canvas’s messages anew:', error);
-      this.#broken = true;
-    }
+    return Promise.resolve();
   }
 
   /** Every message kept, in the store's order. */
@@ -186,18 +212,21 @@ export class MessageStore {
     return this.#kept.get(id)?.seq;
   }
 
-  /** The place of the last message added: a cursor there reads only what comes later. */
+  /**
+   * The last place given in the order (in any canvas): a cursor there reads only what comes later.
+   */
   end(): number {
-    return this.#seq;
+    return this.#unjournaled === undefined ? this.#table.last() : this.#seq;
   }
 
   /**
-   * Adds a message, journaled after everything before it: as kept. `told`: for a notice, the key
-   * of what it tells, kept with it.
+   * Adds a message, written with the store's next write: as kept. `told`: for a notice, the key of
+   * what it tells, kept with it.
    */
   add(draft: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
-    this.#keep({ seq: ++this.#seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
+    const seq = this.#unjournaled === undefined ? this.#table.place() : ++this.#seq;
+    this.#keep({ seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
     for (const listener of this.#listeners) listener(message);
     return message;
   }
@@ -257,86 +286,89 @@ export class MessageStore {
     }
   }
 
-  /** Resolves once every change so far is on disk (forced there); rejects if it couldn't be. */
+  /**
+   * What its canvas writes with each write of its changes, within the same write (none: nothing):
+   * `alongside` writes it, and returns what marks it on disk once the write's commit returned.
+   */
+  writeWith(alongside: (() => () => void) | undefined): void {
+    this.#alongside = alongside;
+  }
+
+  /**
+   * Resolves once every change so far is on disk, with what its canvas writes with it; rejects if
+   * it couldn't be.
+   */
   durable(): Promise<void> {
-    return this.#write(true);
-  }
-
-  #keep(kept: Kept): void {
-    const line = lineOf(kept);
-    this.#kept.set(kept.message.id, { ...kept, bytes: Buffer.byteLength(line) });
-    this.#pending.push(line);
-    this.#prune();
-    if (!this.#scheduled) {
-      this.#scheduled = true;
-      queueMicrotask(() => {
-        this.#scheduled = false;
-        this.#write(false).catch((error: unknown) => {
-          console.error('Could not journal the canvas’s messages:', error);
-        });
-      });
+    if (this.#unjournaled !== undefined) {
+      return this.#lost ? Promise.reject(new Error(this.#unjournaled)) : Promise.resolve();
     }
-  }
-
-  /** Writes out what changed, once every write before it is done. */
-  #write(durable: boolean): Promise<void> {
-    const write = this.#writing.then(() => this.#flush(durable));
-    this.#writing = write.catch(() => undefined);
+    if (this.#changed.size === 0) return Promise.resolve();
+    if (this.#queued) return this.#queued;
+    let written: () => void = () => undefined;
+    const write = this.#table
+      .write(() => {
+        if (this.#queued === write) this.#queued = undefined;
+        const others = this.#alongside?.();
+        const mine = this.changes();
+        written = () => {
+          others?.();
+          mine();
+        };
+      })
+      .then(() => {
+        written();
+      });
+    this.#queued = write;
+    write.catch(() => {
+      if (this.#queued === write) this.#queued = undefined;
+    });
     return write;
   }
 
   /**
-   * Writes out what changed: appended to the log (forced to disk if `durable`), or, once a write
-   * before failed or what was appended since the log was last written whole outgrows both what the
-   * store kept then and its byte budget, the log written anew, whole (so that a store keeping more
-   * than its budget, all of it waiting, still appends between its rewrites). A store that journals
-   * nothing writes nothing, and rejects `durable` once anything has changed.
+   * Within a write: writes every change whose row isn't on disk as it is now; returns what marks
+   * them on disk once the write's commit returned. Throws if the store journals nothing but
+   * something changed.
    */
-  async #flush(durable: boolean): Promise<void> {
-    const text = this.#pending.join('');
-    this.#pending = [];
+  changes(): () => void {
     if (this.#unjournaled !== undefined) {
-      this.#lost ||= text !== '';
-      if (durable && this.#lost) throw new Error(this.#unjournaled);
-      return;
+      if (this.#lost) throw new Error(this.#unjournaled);
+      return () => undefined;
     }
-    if (!this.#broken && text === '' && (!durable || !this.#unsynced)) return;
-    const bytes = Buffer.byteLength(text);
-    try {
-      const appended = this.#size + bytes - this.#compacted;
-      if (!this.#broken && appended <= Math.max(this.#compacted, STORE_BYTES)) {
-        await this.#log.appendMessages(this.canvas, text, durable);
-        this.#size += bytes;
-        this.#unsynced = !durable;
-      } else {
-        // Written anew, the log is on disk, its folder too, before anything is appended to it.
-        const whole = this.#whole();
-        await this.#log.rewriteMessages(this.canvas, whole);
-        this.#size = this.#compacted = Buffer.byteLength(whole);
-        this.#broken = false;
-        this.#unsynced = false;
+    const written = new Map(this.#changed);
+    if (written.size > 0) this.#table.ensure(this.canvas);
+    for (const id of written.keys()) {
+      const kept = this.#kept.get(id);
+      if (kept) this.#table.keep(kept);
+      else this.#table.forget(id);
+    }
+    return () => {
+      for (const [id, change] of written) {
+        if (this.#changed.get(id) === change) this.#changed.delete(id);
       }
-    } catch (error) {
-      // The log may lack what this was to write, or hold a line it tore: written whole next.
-      this.#broken = true;
-      throw error;
-    }
+    };
   }
 
-  /** The store journals nothing, saying why (`what`), and leaves its log as it is. */
-  #journalNothing(what: string): void {
-    this.#unjournaled = `${what}, so none can be sent until corrallm opens the canvas again.`;
-    this.warning = this.#unjournaled;
-  }
-
-  /** The log as the store keeps it now: a line for each message. */
-  #whole(): string {
-    return [...this.#kept.values()].map(lineOf).join('');
+  #keep(kept: Kept): void {
+    const { message } = kept;
+    this.#kept.set(message.id, { ...kept, bytes: sizeOf(kept) });
+    if (this.#unjournaled === undefined) this.#changed.set(message.id, ++this.#changes);
+    else this.#lost = true;
+    this.#prune();
+    if (this.#scheduled || this.#unjournaled !== undefined) return;
+    this.#scheduled = true;
+    queueMicrotask(() => {
+      this.#scheduled = false;
+      this.durable().catch((error: unknown) => {
+        console.error('Could not journal the canvas’s messages:', error);
+      });
+    });
   }
 
   /**
    * Keeps the newest settled messages of each party (a message counts for its sender and its
-   * recipient) within the byte budget, and every message that isn't settled.
+   * recipient) within the byte budget, and every message that isn't settled; the rows of those it
+   * drops are deleted with the next write.
    */
   #prune(): void {
     const kept = [...this.#kept.values()];
@@ -360,48 +392,10 @@ export class MessageStore {
       dropped.add(message.id);
       bytes -= size;
     }
-    for (const id of dropped) this.#kept.delete(id);
-  }
-
-  /** A line of the log, read: undefined if it isn't one of this canvas's records. */
-  #record(line: string): Kept | undefined {
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
-      return undefined;
+    for (const id of dropped) {
+      this.#kept.delete(id);
+      if (this.#unjournaled === undefined) this.#changed.set(id, ++this.#changes);
     }
-    if (!isRecord(value) || !Number.isSafeInteger(value.seq) || !isRecord(value.message)) {
-      return undefined;
-    }
-    const message = value.message;
-    const party = (v: unknown) => typeof v === 'string' && PARTY_PATTERN.test(v);
-    if (
-      typeof message.id !== 'string' ||
-      message.canvas !== this.canvas ||
-      !party(message.from) ||
-      !party(message.to) ||
-      !(MESSAGE_KINDS as readonly unknown[]).includes(message.kind) ||
-      !(MESSAGE_STATES as readonly unknown[]).includes(message.state) ||
-      typeof message.body !== 'string' ||
-      typeof message.at !== 'number'
-    ) {
-      return undefined;
-    }
-    return {
-      seq: value.seq as number,
-      message: message as unknown as Message,
-      bytes: Buffer.byteLength(line) + 1,
-      ...(typeof value.told === 'string' ? { told: value.told } : {}),
-      ...(isRecord(value.withdrawal) && typeof value.withdrawal.text === 'string'
-        ? {
-            withdrawal: {
-              text: value.withdrawal.text,
-              ...(value.withdrawal.told === true ? { told: true } : {}),
-            },
-          }
-        : {}),
-    };
   }
 }
 
@@ -442,19 +436,79 @@ export function readCursor(
   }
 }
 
-/** A message's line in the store's log. */
-function lineOf({ seq, message, told, withdrawal }: Kept): string {
-  return `${JSON.stringify({ seq, message, ...(told === undefined ? {} : { told }), ...(withdrawal === undefined ? {} : { withdrawal }) })}\n`;
+/** How big a message's record is: what its byte budget counts. */
+function sizeOf({ seq, message, told, withdrawal }: Kept): number {
+  return Buffer.byteLength(JSON.stringify({ seq, message, told, withdrawal }));
 }
 
-/** The place in the store's order a line of its log gives, though it isn't a record it reads. */
-function placeIn(line: string): number {
-  try {
-    const value: unknown = JSON.parse(line);
-    return isRecord(value) && Number.isSafeInteger(value.seq) ? (value.seq as number) : 0;
-  } catch {
-    return 0;
+/** A row of `message`, read: undefined if it isn't one of the canvas's messages this code reads. */
+function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefined {
+  const party = (v: unknown): v is PartyId => typeof v === 'string' && PARTY_PATTERN.test(v);
+  const { seq, id, from_party: from, to_party: to, kind, body, state, sent_at: at } = row;
+  if (
+    typeof seq !== 'number' ||
+    typeof id !== 'string' ||
+    !party(from) ||
+    !party(to) ||
+    !(MESSAGE_KINDS as readonly unknown[]).includes(kind) ||
+    !(MESSAGE_STATES as readonly unknown[]).includes(state) ||
+    typeof body !== 'string' ||
+    typeof at !== 'number'
+  ) {
+    return undefined;
   }
+  const replyTo = row.reply_to;
+  const by = row.by_party;
+  const task = parsed(row.task);
+  const turn = parsed(row.turn);
+  const delivery = parsed(row.delivery);
+  const withdrawal = parsed(row.withdrawal);
+  const message = {
+    id,
+    canvas,
+    from,
+    to,
+    kind,
+    body,
+    ...(typeof replyTo === 'string' ? { replyTo } : {}),
+    ...(task === undefined ? {} : { task }),
+    ...(turn === undefined ? {} : { turn }),
+    state,
+    ...(delivery === undefined ? {} : { delivery }),
+    ...(party(by) ? { by } : {}),
+    at,
+  } as unknown as Message;
+  const kept: Kept = {
+    seq,
+    message,
+    bytes: 0,
+    ...(typeof row.told === 'string' ? { told: row.told } : {}),
+    ...(withdrawal !== undefined && typeof withdrawal.text === 'string'
+      ? {
+          withdrawal: {
+            text: withdrawal.text,
+            ...(withdrawal.told === true ? { told: true } : {}),
+          },
+        }
+      : {}),
+  };
+  return { ...kept, bytes: sizeOf(kept) };
+}
+
+/** A JSON column's object, if it holds one. */
+function parsed(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const object: unknown = JSON.parse(value);
+    return isRecord(object) ? object : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A value as a JSON column holds it: none for none. */
+function json(value: object | undefined): string | null {
+  return value === undefined ? null : JSON.stringify(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -428,39 +428,32 @@ describe('wait', () => {
     expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
   });
 
-  it.each([false, true])(
-    'returns only the canvases whose read positions landed, losing none (with cursor: %s)',
-    async (withCursor) => {
-      await keep(true);
-      await start([M1, WORKER]);
-      const { caller } = await token('orchestrator', [M1, WORKER]);
-      const first = await exchange(caller, 'One', M1);
-      const second = await exchange(caller, 'Two', WORKER);
-      const before = cursorOf('wait', { [M1]: 0, [WORKER]: 0 });
-      // Where it has read to on the worker canvas can't be written meanwhile.
-      const allow = refuseWrites(profile, 'read_position', 'The disk is full', WORKER);
-      let waited: Waited;
-      try {
-        waited = await wait(caller, withCursor ? { after: before } : {});
-        expect(waited.messages.map(({ replyTo }) => replyTo)).toEqual([first]);
-        const next = readCursor(waited.next, ['wait']);
-        expect(next).toEqual({
-          [M1]: current()
-            .engines.canvas(M1)
-            ?.messages.seqOf(waited.messages[0]?.id ?? ''),
-          [WORKER]: 0,
-        });
-        expect(keptReads(M1)).toEqual({ 'outside:orchestrator': next?.[M1] });
-        expect(keptReads(WORKER)).toEqual({});
-        expect(current().engines.canvas(WORKER)?.reads.of('outside:orchestrator')).toBe(0);
-      } finally {
-        allow();
-      }
-      const following = await wait(caller, withCursor ? { after: waited.next } : {});
-      expect(following.messages.map(({ replyTo }) => replyTo)).toEqual([second]);
-      expect((await wait(caller)).messages).toEqual([]);
-    },
-  );
+  it('moves every read position a wait across canvases moves in one write, or none, losing nothing', async () => {
+    await keep(true);
+    await start([M1, WORKER]);
+    const { caller } = await token('orchestrator', [M1, WORKER]);
+    const first = await exchange(caller, 'One', M1);
+    const second = await exchange(caller, 'Two', WORKER);
+    // Where it has read to on the worker canvas can't be written meanwhile: nor on m1.
+    const allow = refuseWrites(profile, 'read_position', 'The disk is full', WORKER);
+    try {
+      expect(await current().call('wait', { timeoutSeconds: 0 }, caller)).toEqual({
+        ok: false,
+        error: { code: 'unavailable', sentence: 'The disk is full' },
+      });
+      expect(keptReads(M1)).toEqual({});
+      expect(keptReads(WORKER)).toEqual({});
+      expect(current().engines.canvas(M1)?.reads.of('outside:orchestrator')).toBe(0);
+    } finally {
+      allow();
+    }
+    const waited = await wait(caller);
+    expect(waited.messages.map(({ replyTo }) => replyTo)).toEqual([first, second]);
+    const next = readCursor(waited.next, ['wait']);
+    expect(keptReads(M1)).toEqual({ 'outside:orchestrator': next?.[M1] });
+    expect(keptReads(WORKER)).toEqual({ 'outside:orchestrator': next?.[WORKER] });
+    expect((await wait(caller)).messages).toEqual([]);
+  });
 
   it('wakes only one of two waits at once with what comes, when neither names a cursor', async () => {
     await keep();

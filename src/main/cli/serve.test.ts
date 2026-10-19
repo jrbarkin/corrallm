@@ -380,9 +380,9 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     // It said what it serves, by name and id, and how `corrallm wait` finds it on this profile.
     expect(server.stderr()).toContain(`serving m1.corral (${CANVAS}) at ${server.url}`);
     expect(server.stderr()).toContain(`export CORRALLM_URL=${server.url}`);
-    // Only you may read where it listens.
+    // Only you may read where it listens, and what it keeps.
     expect((await stat(path.join(profile, 'api.json'))).mode & 0o777).toBe(0o600);
-    expect((await stat(path.join(profile, 'runs', CANVAS))).mode & 0o777).toBe(0o700);
+    expect((await stat(path.join(profile, 'core.db'))).mode & 0o777).toBe(0o600);
   });
 
   it('says nothing it is given as it came: no control character from a canvas or a prompt reaches its terminal', async () => {
