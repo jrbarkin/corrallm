@@ -178,6 +178,11 @@ export const SURFACE = {
   'link.open': { access: Y, kind: 'command', scope: 'none' },
   'link.reveal': { access: Y, kind: 'command', scope: 'none' },
   'window.get': { access: Y, kind: 'read', scope: 'none' },
+  'terminal.attach': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.detach': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.input': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.resize': { access: Y, kind: 'command', scope: 'none' },
+  'terminal.drop': { access: Y, kind: 'command', scope: 'none' },
   wait: { access: T, kind: 'read', scope: 'none', waits: true, varies: ['messages', 'next'] },
 } as const satisfies Record<string, Surface>;
 

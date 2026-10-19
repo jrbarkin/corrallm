@@ -4,8 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
-import type { CoreChannel, CoreEvent, IpcArgs, IpcEventArgs, IpcResult } from '../../shared/ipc';
+import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../../shared/gui-link';
+import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import type { CoreLink } from '../../shared/link';
 import type { TerminalEvent } from '../../shared/terminal';
 import { FakeConnector } from '../sessions/fake';
@@ -75,7 +75,7 @@ async function channel<C extends CoreChannel>(
 }
 
 function events(window: WindowLink) {
-  const heard: [CoreEvent, IpcEventArgs<CoreEvent>][] = [];
+  const heard: [GuiEvent, GuiEventArgs<GuiEvent>][] = [];
   window.on('event', (name, args) => {
     heard.push([name, args]);
   });
@@ -171,10 +171,13 @@ describe('the app’s core and window channels', () => {
     });
     const a = events(seven);
     const b = events(eight);
-    await channel(seven, 'terminal:attach', 'a');
+    await expect(seven.request('call', 'terminal.attach', { agent: 'a' })).resolves.toEqual({
+      ok: true,
+      value: { ok: true, value: {} },
+    });
     await vi.waitFor(() => {
       expect(a).toEqual([
-        ['terminal:event', ['a', { type: 'screen', data: 'hello', cols: 80, rows: 24 }]],
+        ['terminal', ['a', { type: 'screen', data: 'hello', cols: 80, rows: 24 }]],
       ]);
     });
     await channel(eight, 'usage:get');

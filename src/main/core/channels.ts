@@ -1,7 +1,8 @@
+import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
 import type { Catalog } from '../../shared/adapter';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
-import type { CoreChannel, CoreEvent, IpcArgs, IpcEventArgs, IpcResult } from '../../shared/ipc';
+import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
 import { MAX_FILE_MATCHES } from '../../shared/session';
@@ -28,9 +29,6 @@ import {
   parseSendArgs,
   parseStartArgs,
   parseStopTaskArgs,
-  parseTerminalDropArgs,
-  parseTerminalInputArgs,
-  parseTerminalResizeArgs,
 } from '../sessions/args';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
@@ -80,11 +78,6 @@ export interface ChannelServices {
     | 'previewRewind'
     | 'rewind'
     | 'projectChanged'
-    | 'attachTerminal'
-    | 'detachTerminal'
-    | 'inputTerminal'
-    | 'resizeTerminal'
-    | 'dropOnTerminal'
   >;
   /** Which agents the user has, by adapter (sessions/installed.ts). */
   clis: { installed: () => Promise<InstalledClis> };
@@ -338,41 +331,6 @@ function createHandlers({
       handler: async ({ window }, agentId, server, change) =>
         sessions.changeMcpServer(await of(window), agentId, server, change),
     },
-    'terminal:attach': {
-      parseArgs: parseAgentArgs,
-      handler: async ({ window }, agentId) => {
-        sessions.attachTerminal(await of(window), agentId);
-        return null;
-      },
-    },
-    'terminal:detach': {
-      parseArgs: parseAgentArgs,
-      handler: async ({ window }, agentId) => {
-        sessions.detachTerminal(await of(window), agentId);
-        return null;
-      },
-    },
-    'terminal:input': {
-      parseArgs: parseTerminalInputArgs,
-      handler: async ({ window }, agentId, data) => {
-        await sessions.inputTerminal(await of(window), agentId, data);
-        return null;
-      },
-    },
-    'terminal:resize': {
-      parseArgs: parseTerminalResizeArgs,
-      handler: async ({ window }, agentId, cols, rows) => {
-        await sessions.resizeTerminal(await of(window), agentId, cols, rows);
-        return null;
-      },
-    },
-    'terminal:drop': {
-      parseArgs: parseTerminalDropArgs,
-      handler: async ({ window }, agentId, paths) => {
-        await sessions.dropOnTerminal(await of(window), agentId, paths);
-        return null;
-      },
-    },
     'usage:get': { parseArgs: noArgs, handler: () => usage.state() },
     'usage:rule': {
       parseArgs: (args) => parseUsageRuleArgs(args, catalog),
@@ -391,8 +349,8 @@ function createHandlers({
   };
 }
 
-/** A hand-written event for one window, with no transport details. */
-export type EventListener = (name: CoreEvent, args: IpcEventArgs<CoreEvent>) => void;
+/** An event for one window, with no transport details. */
+export type EventListener = (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => void;
 
 /** The hand-written channels, with their parsers, over the core's own services. */
 export class Channels {
@@ -434,7 +392,7 @@ export class Channels {
   }
 
   /** A canvas's sessions speak only to its windows; usage speaks to every window. */
-  emit<E extends CoreEvent>(canvas: CanvasId | null, name: E, ...args: IpcEventArgs<E>): void {
+  emit<E extends GuiEvent>(canvas: CanvasId | null, name: E, ...args: GuiEventArgs<E>): void {
     const windows =
       canvas === null ? this.#listeners.keys() : this.#services.windows.showing(canvas);
     for (const window of windows) {

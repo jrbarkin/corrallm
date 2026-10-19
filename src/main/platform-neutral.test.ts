@@ -102,7 +102,6 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/model/session.ts': 9,
   'src/shared/model/words.ts': 5,
   'src/shared/session.ts': 43,
-  'src/shared/terminal.ts': 1,
   'src/shared/usage.ts': 2,
 };
 

@@ -313,7 +313,7 @@ export class SessionManager {
   }
 
   /**
-   * Shows an agent's terminal in its canvas's view (terminal:event): the screen of the session
+   * Shows an agent's terminal in its canvas's view (the port’s terminal event): the screen of the session
    * that runs, if any, and of each one that starts until the view is detached.
    */
   attachTerminal(canvas: CanvasId, agentId: string): void {

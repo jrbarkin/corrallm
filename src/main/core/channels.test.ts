@@ -10,7 +10,6 @@ import {
   MAX_ID_LENGTH,
   MAX_MESSAGE_LENGTH,
 } from '../../shared/session';
-import { MAX_DROPPED_FILES, MAX_DROPPED_PATH, MAX_TERMINAL_INPUT } from '../../shared/terminal';
 import { mintTrustedPath } from './host';
 import { Channels } from './channels';
 import type { ChannelServices } from './channels';
@@ -85,17 +84,6 @@ function fakeServices() {
       projectChanged: vi
         .fn<ChannelServices['sessions']['projectChanged']>()
         .mockResolvedValue(undefined),
-      attachTerminal: vi.fn<ChannelServices['sessions']['attachTerminal']>(),
-      detachTerminal: vi.fn<ChannelServices['sessions']['detachTerminal']>(),
-      inputTerminal: vi
-        .fn<ChannelServices['sessions']['inputTerminal']>()
-        .mockResolvedValue(undefined),
-      resizeTerminal: vi
-        .fn<ChannelServices['sessions']['resizeTerminal']>()
-        .mockResolvedValue(undefined),
-      dropOnTerminal: vi
-        .fn<ChannelServices['sessions']['dropOnTerminal']>()
-        .mockResolvedValue(undefined),
     },
     clis: {
       installed: vi
@@ -134,13 +122,22 @@ describe('catalog:get handler', () => {
 });
 
 describe('the channel surface', () => {
-  it.each(['core:connect', 'link:open', 'link:reveal', 'toString', '__proto__', 'unknown'])(
-    'refuses %s',
-    (name) => {
-      expect(() => invoke(name, [])).toThrow(/no channel/);
-      expect(services.canvases.open).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    'core:connect',
+    'link:open',
+    'link:reveal',
+    'terminal:attach',
+    'terminal:detach',
+    'terminal:input',
+    'terminal:resize',
+    'terminal:drop',
+    'toString',
+    '__proto__',
+    'unknown',
+  ])('refuses %s', (name) => {
+    expect(() => invoke(name, [])).toThrow(/no channel/);
+    expect(services.canvases.open).not.toHaveBeenCalled();
+  });
 
   it('refuses arguments that are not a tuple before running a parser or handler', () => {
     expect(() => channels.call(7, 'canvas:open', null as never)).toThrow(/arguments/);
@@ -734,66 +731,6 @@ describe('session:* handlers', () => {
       'an effort that is not a word',
       ['a', { connection: 'codex.app-server', model: null, mode: 'auto', effort: '--yolo' }],
       /reasoning effort/,
-    ],
-  ])('%s rejects %s', (channel, _label, args, message) => {
-    expect(() => invoke(channel, args)).toThrow(message);
-    expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.canvases.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('terminal:* handlers', () => {
-  it('pass checked arguments on, for the renderer that sent them', async () => {
-    const sender = 7;
-    await invoke('terminal:attach', ['a'], sender);
-    expect(services.sessions.attachTerminal).toHaveBeenCalledWith(CANVAS, 'a');
-    // Keystrokes are keys: control characters included.
-    await invoke('terminal:input', ['a', '\x1b[Z\x03'], sender);
-    expect(services.sessions.inputTerminal).toHaveBeenCalledWith(CANVAS, 'a', '\x1b[Z\x03');
-    await invoke('terminal:resize', ['a', 120, 40], sender);
-    expect(services.sessions.resizeTerminal).toHaveBeenCalledWith(CANVAS, 'a', 120, 40);
-    await invoke('terminal:detach', ['a'], sender);
-    expect(services.sessions.detachTerminal).toHaveBeenCalledWith(CANVAS, 'a');
-    // The paths of files dropped (as the preload read them), checked: main sees if they are there.
-    await invoke('terminal:drop', ['a', ['/Users/me/Screen Shot.png']], sender);
-    expect(services.sessions.dropOnTerminal).toHaveBeenCalledWith(CANVAS, 'a', [
-      '/Users/me/Screen Shot.png',
-    ]);
-  });
-
-  it.each([
-    ['terminal:attach', 'no agent', [], /an agent/],
-    ['terminal:attach', 'an agent id that is not text', [{}], /agent's id/],
-    ['terminal:input', 'nothing typed', ['a', ''], /what was typed/],
-    ['terminal:input', 'keys that are not text', ['a', [13]], /what was typed/],
-    [
-      'terminal:input',
-      'too much at once',
-      ['a', 'x'.repeat(MAX_TERMINAL_INPUT + 1)],
-      /what was typed/,
-    ],
-    ['terminal:resize', 'no size', ['a'], /an agent and a size/],
-    ['terminal:resize', 'a fractional size', ['a', 80.5, 24], /terminal size/],
-    ['terminal:resize', 'no rows', ['a', 80, 0], /terminal size/],
-    ['terminal:resize', 'a size too large', ['a', 100_000, 24], /terminal size/],
-    ['terminal:resize', 'a size that is not a number', ['a', '80', 24], /terminal size/],
-    ['terminal:detach', 'an extra argument', ['a', 'b'], /an agent/],
-    ['terminal:drop', 'no files', ['a', []], /files dropped/],
-    ['terminal:drop', 'a path that is not a list', ['a', '/Users/me/a.png'], /files dropped/],
-    [
-      'terminal:drop',
-      'too many files',
-      ['a', Array.from({ length: MAX_DROPPED_FILES + 1 }, (_, i) => `/f${String(i)}`)],
-      /files dropped/,
-    ],
-    ['terminal:drop', 'a relative path', ['a', ['shot.png']], /path of a file/],
-    ['terminal:drop', 'a path with a line break', ['a', ['/a\n/b.png']], /path of a file/],
-    ['terminal:drop', 'a path that is not text', ['a', [42]], /path of a file/],
-    [
-      'terminal:drop',
-      'a path too long',
-      ['a', [`/${'x'.repeat(MAX_DROPPED_PATH)}`]],
-      /path of a file/,
     ],
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);

@@ -367,6 +367,28 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [{}],
     invalid: [{ window: 8 }, { c: CANVAS }],
   },
+  'terminal.attach': {
+    valid: [{ agent: 'shell', request: request(95) }],
+    invalid: [{}, { agent: 1 }, { agent: 'shell', canvas: CANVAS }],
+  },
+  'terminal.detach': {
+    valid: [{ agent: 'shell', request: request(96) }],
+    invalid: [{}, { agent: 'shell', extra: true }],
+  },
+  'terminal.input': {
+    valid: [{ agent: 'shell', data: '\x1b[Z\x03', request: request(97) }],
+    invalid: [{}, { agent: 'shell', data: '' }, { agent: 'shell', data: 1 }],
+  },
+  'terminal.resize': {
+    valid: [{ agent: 'shell', cols: 120, rows: 40, request: request(98) }],
+    invalid: [{}, { agent: 'shell', cols: 80.5, rows: 24 }, { agent: 'shell', cols: 80, rows: 0 }],
+  },
+  'terminal.drop': {
+    valid: [
+      { agent: 'shell', paths: [path.join(tmpdir(), 'not-a-dropped-file')], request: request(99) },
+    ],
+    invalid: [{}, { agent: 'shell', paths: [] }, { agent: 'shell', paths: ['relative.png'] }],
+  },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],
     by: {

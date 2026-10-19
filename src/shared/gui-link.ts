@@ -4,6 +4,7 @@ import type { OpResult } from './api/errors';
 import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
 import type { CoreEvent, IpcEventArgs } from './ipc';
+import type { TerminalEvent } from './terminal';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -20,6 +21,14 @@ export interface CorePort {
   epoch: number;
 }
 
+/** Events on the window's port: the remaining channels, and its terminal stream. */
+export type GuiEvent = CoreEvent | 'terminal';
+export type GuiEventArgs<E extends GuiEvent> = E extends 'terminal'
+  ? [agentId: string, event: TerminalEvent]
+  : E extends CoreEvent
+    ? IpcEventArgs<E>
+    : never;
+
 /** What the core answers a window, over its port. */
 export interface CoreGuiSide {
   requests: {
@@ -35,8 +44,8 @@ export interface CoreGuiSide {
     channel: { args: [name: string, args: unknown[]]; result: unknown };
   };
   events: {
-    /** Hand-written session, terminal and usage events, until their topics replace them. */
-    event: [name: CoreEvent, args: IpcEventArgs<CoreEvent>];
+    /** The terminal stream and remaining hand-written events, with no Electron event objects. */
+    event: [name: GuiEvent, args: GuiEventArgs<GuiEvent>];
   };
 }
 
@@ -56,8 +65,10 @@ export function guiFunction<N extends string>(op: N): GuiFunction<N> {
   return op.replace(/\.(.)/, (_dot, first: string) => first.toUpperCase()) as GuiFunction<N>;
 }
 
-/** What GUI operation `N` takes, as its caller writes it. */
-type InputOf<N extends GuiOp> = z.input<(typeof OPS)[N]['input']>;
+/** What GUI operation `N` takes; the drop's paths come from files in the preload. */
+type InputOf<N extends GuiOp> = N extends 'terminal.drop'
+  ? Omit<z.input<(typeof OPS)[N]['input']>, 'paths'> & { files: readonly File[] }
+  : z.input<(typeof OPS)[N]['input']>;
 
 /** The arguments of `T` that may not be left out (an index signature's never are). */
 type RequiredKeys<T> = {
@@ -68,15 +79,22 @@ type RequiredKeys<T> = {
  * A function per GUI operation (GUI_OPS), as the renderer's client calls them: each resolves with
  * its value, or rejects with an error carrying the operation's code and sentence.
  */
-export type GuiApi = {
+type GuiCalls = {
   [N in GuiOp as GuiFunction<N>]: [RequiredKeys<InputOf<N>>] extends [never]
     ? (args?: InputOf<N>) => Promise<ResultOf<N>>
     : (args: InputOf<N>) => Promise<ResultOf<N>>;
 };
 
+/** A view's event listener, over the same port as its operations. */
+export interface GuiEventApi {
+  terminalOnEvent(listener: (...args: GuiEventArgs<'terminal'>) => void): () => void;
+}
+
+export type GuiApi = GuiCalls & GuiEventApi;
+
 /** Plain operation results cross contextBridge; the renderer's client unwraps them there. */
 export type GuiBridge = {
-  [K in keyof GuiApi]: (
-    ...args: Parameters<GuiApi[K]>
-  ) => Promise<OpResult<Awaited<ReturnType<GuiApi[K]>>>>;
-};
+  [K in keyof GuiCalls]: (
+    ...args: Parameters<GuiCalls[K]>
+  ) => Promise<OpResult<Awaited<ReturnType<GuiCalls[K]>>>>;
+} & GuiEventApi;

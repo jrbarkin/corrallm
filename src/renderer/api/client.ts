@@ -17,17 +17,20 @@ export class ApiError extends Error implements OpError {
 }
 
 /** The GUI operations, one function each: the preload keeps their port and returns plain results. */
-export const api = Object.fromEntries(
-  GUI_OPS.map((op) => {
-    const name = guiFunction(op);
-    return [
-      name,
-      async (args?: unknown) => {
-        const call = window.api[name] as (args?: unknown) => Promise<OpResult<unknown>>;
-        const result = await call(args);
-        if (!result.ok) throw new ApiError(result.error);
-        return result.value;
-      },
-    ];
-  }),
-) as GuiApi;
+export const api = {
+  ...Object.fromEntries(
+    GUI_OPS.map((op) => {
+      const name = guiFunction(op);
+      return [
+        name,
+        async (args?: unknown) => {
+          const call = window.api[name] as (args?: unknown) => Promise<OpResult<unknown>>;
+          const result = await call(args);
+          if (!result.ok) throw new ApiError(result.error);
+          return result.value;
+        },
+      ];
+    }),
+  ),
+  terminalOnEvent: (listener) => window.api.terminalOnEvent(listener),
+} as GuiApi;

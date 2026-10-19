@@ -123,6 +123,7 @@ describe('the window’s port to the core', () => {
         ...Object.keys(API_CHANNELS),
         ...Object.keys(API_EVENTS),
         ...GUI_OPS.map((op) => guiFunction(op)),
+        'terminalOnEvent',
       ].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
@@ -365,18 +366,32 @@ describe('preload', () => {
     expect(heard).toHaveBeenCalledOnce();
   });
 
-  it('calls the terminal channels with their arguments', async () => {
+  it('calls the generated terminal operations over the port, passing their whole results', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue(null);
-    await api.attachTerminal('a');
-    expect(channel).toHaveBeenLastCalledWith('terminal:attach', 'a');
-    await api.writeTerminal('a', 'ls\r');
-    expect(channel).toHaveBeenLastCalledWith('terminal:input', 'a', 'ls\r');
-    await api.resizeTerminal('a', 120, 40);
-    expect(channel).toHaveBeenLastCalledWith('terminal:resize', 'a', 120, 40);
-    await api.detachTerminal('a');
-    expect(channel).toHaveBeenLastCalledWith('terminal:detach', 'a');
+    const heard = postPort(answerInfo);
+    await expect(api.terminalAttach({ agent: 'a' })).resolves.toEqual(answerInfo());
+    await expect(api.terminalInput({ agent: 'a', data: 'ls\r' })).resolves.toEqual(answerInfo());
+    await expect(api.terminalResize({ agent: 'a', cols: 120, rows: 40 })).resolves.toEqual(
+      answerInfo(),
+    );
+    await expect(api.terminalDetach({ agent: 'a' })).resolves.toEqual(answerInfo());
+    expect(heard).toEqual([
+      ['terminal.attach', { agent: 'a' }],
+      ['terminal.input', { agent: 'a', data: 'ls\r' }],
+      ['terminal.resize', { agent: 'a', cols: 120, rows: 40 }],
+      ['terminal.detach', { agent: 'a' }],
+    ]);
+    expect(channel).not.toHaveBeenCalled();
+    for (const old of [
+      'attachTerminal',
+      'writeTerminal',
+      'resizeTerminal',
+      'detachTerminal',
+      'dropOnTerminal',
+      'onTerminalEvent',
+    ]) {
+      expect(api).not.toHaveProperty(old);
+    }
   });
 
   it('calls link.open and link.reveal over the generated operation bridge, with only the URL', async () => {
@@ -405,35 +420,43 @@ describe('preload', () => {
     expect(channel).not.toHaveBeenCalled();
   });
 
-  it('sends the paths of files dropped on a terminal, as the files say, never the page', async () => {
+  it('reads paths with webUtils for terminal.drop, while the page supplies only files', async () => {
     const api = await exposed();
-    postPort(answerInfo);
-    channel.mockResolvedValue(null);
+    const heard = postPort(() => ({ ok: true, value: {} }));
+    const request = '2c3d4e5f-6071-4829-9bac-1d2e3f4a5b99';
     const shot = new File(['png'], 'Screen Shot.png');
     const made = new File(['made by the page'], 'made.txt');
     getPathForFile.mockImplementation((file) => (file === shot ? '/Users/me/Screen Shot.png' : ''));
-    await api.dropOnTerminal('a', [shot, made]);
-    expect(channel).toHaveBeenLastCalledWith('terminal:drop', 'a', ['/Users/me/Screen Shot.png']);
-    // Files that are not on disk (made by the page) name no path: nothing is sent.
-    channel.mockClear();
-    await expect(api.dropOnTerminal('a', [made])).resolves.toBeNull();
+    await expect(api.terminalDrop({ agent: 'a', files: [shot, made], request })).resolves.toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(heard).toEqual([
+      ['terminal.drop', { agent: 'a', paths: ['/Users/me/Screen Shot.png'], request }],
+    ]);
+    heard.length = 0;
+    await expect(api.terminalDrop({ agent: 'a', files: [made] })).resolves.toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(heard).toEqual([]);
     expect(channel).not.toHaveBeenCalled();
   });
 
   it('passes terminal events on without Electron’s event object, until told to stop', async () => {
     const api = await exposed();
     postPort(answerInfo);
-    const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();
-    const stop = api.onTerminalEvent(heard);
+    const heard = vi.fn<Parameters<AppApi['terminalOnEvent']>[0]>();
+    const stop = api.terminalOnEvent(heard);
 
-    remote.emit('event', 'terminal:event', ['a', { type: 'output', data: 'hi' }]);
+    remote.emit('event', 'terminal', ['a', { type: 'output', data: 'hi' }]);
     await vi.waitFor(() => {
       expect(heard).toHaveBeenCalledOnce();
     });
     expect(heard).toHaveBeenCalledWith('a', { type: 'output', data: 'hi' });
 
     stop();
-    remote.emit('event', 'terminal:event', ['a', { type: 'output', data: 'hi' }]);
+    remote.emit('event', 'terminal', ['a', { type: 'output', data: 'hi' }]);
     await api.getUsage();
     expect(heard).toHaveBeenCalledOnce();
   });

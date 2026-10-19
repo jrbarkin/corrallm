@@ -30,6 +30,11 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'link.open': 'os-action',
   'link.reveal': 'os-action',
   'window.get': 'view',
+  'terminal.attach': 'view',
+  'terminal.detach': 'view',
+  'terminal.input': 'acts-as-you',
+  'terminal.resize': 'view',
+  'terminal.drop': 'os-action',
   // The GUI's half, topics, comes with B8.
   wait: 'transport',
 };

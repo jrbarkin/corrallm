@@ -9,6 +9,7 @@ import { linkOps } from './ops/link';
 import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
+import { terminalOps } from './ops/terminal';
 import { usageOps } from './ops/usage';
 import { windowOps } from './ops/window';
 import type { OpName, Party, Surface } from './surface';
@@ -29,6 +30,7 @@ export const OPS = {
   ...usageOps,
   ...linkOps,
   ...windowOps,
+  ...terminalOps,
 } satisfies Record<OpName, OpDef>;
 
 /** What op `N` takes, once parsed. */

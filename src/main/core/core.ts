@@ -176,7 +176,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       channels.emit(canvas, 'session:event', agentId, connection, event);
     },
     terminal: (canvas, agentId, event) => {
-      channels.emit(canvas, 'terminal:event', agentId, event);
+      channels.emit(canvas, 'terminal', agentId, event);
     },
   });
   const windows = new Windows({
@@ -242,6 +242,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         links,
         reveal,
         windows,
+        sessions,
         environment,
         usage,
         engines,

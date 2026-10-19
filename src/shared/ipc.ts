@@ -17,7 +17,6 @@ import type {
   SettingsOptions,
   UserMessage,
 } from './session';
-import type { TerminalEvent } from './terminal';
 import type { UsageRule, UsageState, UsageWindows } from './usage';
 
 /**
@@ -149,24 +148,6 @@ export interface IpcContract {
     args: [agentId: string, server: string, change: McpChange];
     result: McpServer[];
   };
-  /**
-   * Shows an agent's terminal (a Terminal session's) in the renderer's view: the core sends
-   * 'terminal:event's, starting with its screen, now if its session runs, or once it starts, and
-   * again for each session after, until the view detaches.
-   */
-  'terminal:attach': { args: [agentId: string]; result: null };
-  /** The view no longer shows the agent's terminal. */
-  'terminal:detach': { args: [agentId: string]; result: null };
-  /** Keystrokes typed in an agent's terminal view, for its CLI (dropped if none runs). */
-  'terminal:input': { args: [agentId: string, data: string]; result: null };
-  /** An agent's terminal view's size, in columns and rows: its terminal takes it. */
-  'terminal:resize': { args: [agentId: string, cols: number, rows: number]; result: null };
-  /**
-   * Files dropped on an agent's terminal view, by their paths (which the preload reads from the
-   * dropped files: window.api takes the files, never paths): the core pastes those that exist into its
-   * terminal, quoted, as a terminal does.
-   */
-  'terminal:drop': { args: [agentId: string, paths: string[]]; result: null };
   /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
   'usage:get': { args: []; result: UsageState };
   /** Sets a backend's usage rule, or (null) takes it off. Every renderer hears 'usage:changed'. */
@@ -187,8 +168,6 @@ export interface IpcEvents {
   'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
-  /** What an agent's terminal shows, for the view attached to it (terminal:attach). */
-  'terminal:event': [agentId: string, event: TerminalEvent];
   /**
    * Usage readings or rules changed (a reading came, or a rule was set): every renderer hears it,
    * since usage belongs to the backend's account, not to one canvas.
@@ -233,8 +212,7 @@ export type IpcEvent = keyof IpcEvents;
 export type IpcEventArgs<E extends IpcEvent> = IpcEvents[E];
 
 /**
- * A method per contract channel: what `window.api` invokes, with the channel's arguments (but
- * dropOnTerminal, which takes the dropped files).
+ * A method per remaining contract channel, with its arguments.
  */
 export interface InvokeApi {
   catalog(): Promise<IpcResult<'catalog:get'>>;
@@ -266,12 +244,6 @@ export interface InvokeApi {
   settingsOptions(...args: IpcArgs<'session:options'>): Promise<IpcResult<'session:options'>>;
   mcpServers(...args: IpcArgs<'session:mcp'>): Promise<IpcResult<'session:mcp'>>;
   changeMcpServer(...args: IpcArgs<'session:mcp-change'>): Promise<IpcResult<'session:mcp-change'>>;
-  attachTerminal(...args: IpcArgs<'terminal:attach'>): Promise<IpcResult<'terminal:attach'>>;
-  detachTerminal(...args: IpcArgs<'terminal:detach'>): Promise<IpcResult<'terminal:detach'>>;
-  writeTerminal(...args: IpcArgs<'terminal:input'>): Promise<IpcResult<'terminal:input'>>;
-  resizeTerminal(...args: IpcArgs<'terminal:resize'>): Promise<IpcResult<'terminal:resize'>>;
-  /** Takes the dropped files themselves: their paths are read in the preload, not by the page. */
-  dropOnTerminal(agentId: string, files: readonly File[]): Promise<IpcResult<'terminal:drop'>>;
   getUsage(): Promise<IpcResult<'usage:get'>>;
   setUsageRule(...args: IpcArgs<'usage:rule'>): Promise<IpcResult<'usage:rule'>>;
   simulateUsage(...args: IpcArgs<'usage:simulate'>): Promise<IpcResult<'usage:simulate'>>;
@@ -281,7 +253,6 @@ export interface InvokeApi {
 export interface EventApi {
   onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
-  onTerminalEvent(listener: (...args: IpcEventArgs<'terminal:event'>) => void): () => void;
   onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
 }
 
@@ -320,11 +291,6 @@ export const API_CHANNELS = {
   settingsOptions: 'session:options',
   mcpServers: 'session:mcp',
   changeMcpServer: 'session:mcp-change',
-  attachTerminal: 'terminal:attach',
-  detachTerminal: 'terminal:detach',
-  writeTerminal: 'terminal:input',
-  resizeTerminal: 'terminal:resize',
-  dropOnTerminal: 'terminal:drop',
   getUsage: 'usage:get',
   setUsageRule: 'usage:rule',
   simulateUsage: 'usage:simulate',
@@ -334,7 +300,6 @@ export const API_CHANNELS = {
 export const API_EVENTS = {
   onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
-  onTerminalEvent: 'terminal:event',
   onUsageChanged: 'usage:changed',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 

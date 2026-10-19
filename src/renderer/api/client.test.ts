@@ -15,7 +15,9 @@ function stubApi(bridge: Partial<AppApi>): void {
 
 describe('the GUI client', () => {
   it('exposes only the GUI operations, one function per operation', () => {
-    expect(Object.keys(api).sort()).toEqual(GUI_OPS.map(guiFunction).sort());
+    expect(Object.keys(api).sort()).toEqual(
+      [...GUI_OPS.map(guiFunction), 'terminalOnEvent'].sort(),
+    );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
   });
 
@@ -30,6 +32,19 @@ describe('the GUI client', () => {
     const args = { backend: 'codex', rule: null };
     await expect(api.usageSetRule(args)).resolves.toEqual({});
     expect(usageSetRule).toHaveBeenCalledExactlyOnceWith(args);
+  });
+
+  it('passes File objects to the drop bridge, and subscribes to terminal events without unwrapping them as results', async () => {
+    const terminalDrop = vi.fn<AppApi['terminalDrop']>().mockResolvedValue({ ok: true, value: {} });
+    const stop = vi.fn();
+    const terminalOnEvent = vi.fn<AppApi['terminalOnEvent']>().mockReturnValue(stop);
+    stubApi({ terminalDrop, terminalOnEvent });
+    const files = [new File(['png'], 'shot.png')];
+    await expect(api.terminalDrop({ agent: 'a', files })).resolves.toEqual({});
+    expect(terminalDrop).toHaveBeenCalledExactlyOnceWith({ agent: 'a', files });
+    const listener = vi.fn();
+    expect(api.terminalOnEvent(listener)).toBe(stop);
+    expect(terminalOnEvent).toHaveBeenCalledExactlyOnceWith(listener);
   });
 
   it('throws a renderer error whose code, sentence and message survive the bridge', async () => {

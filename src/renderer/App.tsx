@@ -60,14 +60,15 @@ const sessionBackend: SessionBackend = {
   onEvent: (listener) => window.api.onSessionEvent(listener),
 };
 
-/** Terminal agents' terminals run in the main process (src/main/sessions/terminal/). */
+/** Terminal agents' terminals run in the core process (src/main/sessions/terminal/). */
+const done = (call: Promise<unknown>) => call.then(() => null);
 const terminalBackend: TerminalBackend = {
-  attach: (agentId) => window.api.attachTerminal(agentId),
-  detach: (agentId) => window.api.detachTerminal(agentId),
-  write: (agentId, data) => window.api.writeTerminal(agentId, data),
-  resize: (agentId, cols, rows) => window.api.resizeTerminal(agentId, cols, rows),
-  drop: (agentId, files) => window.api.dropOnTerminal(agentId, files),
-  onEvent: (listener) => window.api.onTerminalEvent(listener),
+  attach: (agentId) => done(api.terminalAttach({ agent: agentId })),
+  detach: (agentId) => done(api.terminalDetach({ agent: agentId })),
+  write: (agentId, data) => done(api.terminalInput({ agent: agentId, data })),
+  resize: (agentId, cols, rows) => done(api.terminalResize({ agent: agentId, cols, rows })),
+  drop: (agentId, files) => done(api.terminalDrop({ agent: agentId, files })),
+  onEvent: (listener) => api.terminalOnEvent(listener),
 };
 
 /**

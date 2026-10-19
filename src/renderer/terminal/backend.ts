@@ -1,6 +1,6 @@
 import type { TerminalEvent } from '../../shared/terminal';
 
-/** What an agent's terminal view asks of the main process: window.api's terminal functions. */
+/** What an agent's terminal view asks of the core through the typed GUI client. */
 export interface TerminalBackend {
   /** Starts showing the agent's terminal: its events follow (see TerminalEvent). */
   attach(agentId: string): Promise<null>;
@@ -8,7 +8,7 @@ export interface TerminalBackend {
   /** Keystrokes for the agent's CLI. */
   write(agentId: string, data: string): Promise<null>;
   resize(agentId: string, cols: number, rows: number): Promise<null>;
-  /** Files dropped on the agent's terminal: their paths are pasted into it (main reads them). */
+  /** Files dropped on the agent's terminal: their paths are pasted into it (the preload reads their paths). */
   drop(agentId: string, files: readonly File[]): Promise<null>;
   /** Listens for what terminals show; returns a function that stops listening. */
   onEvent(listener: (agentId: string, event: TerminalEvent) => void): () => void;

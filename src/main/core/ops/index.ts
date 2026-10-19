@@ -6,6 +6,7 @@ import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
+import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { OpContext } from '../call';
 import type { Engines } from '../engines';
@@ -18,6 +19,7 @@ import { linkOps } from './link';
 import { runOps } from './run';
 import { sessionOps } from './session';
 import { settingsOps } from './settings';
+import { terminalOps } from './terminal';
 import { usageOps } from './usage';
 import { waitOps } from './wait';
 import { windowOps } from './window';
@@ -47,6 +49,10 @@ export interface OpServices {
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
   windows: Pick<Windows, 'canvasOf'>;
+  sessions: Pick<
+    SessionManager,
+    'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'
+  >;
   /** The canvases the core runs. */
   engines: Engines;
   /** Whether an agent is a lead now, as kept on this machine. */
@@ -71,5 +77,6 @@ export function implementations(services: OpServices): Implementations {
     ...waitOps(services),
     ...linkOps(services),
     ...windowOps(services),
+    ...terminalOps(services),
   };
 }

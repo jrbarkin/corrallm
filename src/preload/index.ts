@@ -42,8 +42,11 @@ const core = connectCore();
 
 /** A function per GUI operation, by its camel-cased name (app.info → appInfo). */
 const ops = Object.fromEntries(
-  GUI_OPS.map((op) => [guiFunction(op), (args?: unknown) => core.call(op, args)]),
-) as GuiBridge;
+  GUI_OPS.filter((op) => op !== 'terminal.drop').map((op) => [
+    guiFunction(op),
+    (args?: unknown) => core.call(op, args),
+  ]),
+) as Omit<GuiBridge, 'terminalDrop' | 'terminalOnEvent'>;
 
 const api: AppApi = {
   ...ops,
@@ -78,25 +81,25 @@ const api: AppApi = {
   mcpServers: (agentId) => invoke(API_CHANNELS.mcpServers, agentId),
   changeMcpServer: (agentId, server, change) =>
     invoke(API_CHANNELS.changeMcpServer, agentId, server, change),
-  attachTerminal: (agentId) => invoke(API_CHANNELS.attachTerminal, agentId),
-  detachTerminal: (agentId) => invoke(API_CHANNELS.detachTerminal, agentId),
-  writeTerminal: (agentId, data) => invoke(API_CHANNELS.writeTerminal, agentId, data),
-  resizeTerminal: (agentId, cols, rows) => invoke(API_CHANNELS.resizeTerminal, agentId, cols, rows),
   // The paths of the files dropped, as the files say (a file the page made has none): the page
   // never names a path, and the core checks these again.
-  dropOnTerminal: (agentId, files) => {
+  terminalDrop: ({ agent, files, request }) => {
     const paths = Array.from(files, (file) => webUtils.getPathForFile(file)).filter(
       (file) => file !== '',
     );
     return paths.length === 0
-      ? Promise.resolve(null)
-      : invoke(API_CHANNELS.dropOnTerminal, agentId, paths);
+      ? Promise.resolve({ ok: true, value: {} } as const)
+      : (core.call('terminal.drop', {
+          agent,
+          paths,
+          ...(request === undefined ? {} : { request }),
+        }) as ReturnType<GuiBridge['terminalDrop']>);
   },
   getUsage: () => invoke(API_CHANNELS.getUsage),
   setUsageRule: (backend, rule) => invoke(API_CHANNELS.setUsageRule, backend, rule),
   simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
   onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
-  onTerminalEvent: (listener) => core.listen(API_EVENTS.onTerminalEvent, listener),
+  terminalOnEvent: (listener) => core.listen('terminal', listener),
   onUsageChanged: (listener) => core.listen(API_EVENTS.onUsageChanged, listener),
 };
 

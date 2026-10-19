@@ -2,15 +2,8 @@ import { ipcRenderer } from 'electron';
 
 import type { OpResult } from '../shared/api/errors';
 import { CORE_PORT } from '../shared/gui-link';
-import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
-import type {
-  CoreChannel,
-  CoreEvent,
-  IpcArgs,
-  IpcEventArgs,
-  IpcResult,
-  IpcChannel,
-} from '../shared/ipc';
+import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../shared/gui-link';
+import type { CoreChannel, IpcArgs, IpcResult, IpcChannel } from '../shared/ipc';
 import { CoreLink } from '../shared/link';
 
 /*
@@ -29,7 +22,7 @@ export interface CoreConnection {
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
   channel<C extends CoreChannel>(name: C, args: IpcArgs<C>): Promise<IpcResult<C>>;
-  listen<E extends CoreEvent>(name: E, listener: (...args: IpcEventArgs<E>) => void): () => void;
+  listen<E extends GuiEvent>(name: E, listener: (...args: GuiEventArgs<E>) => void): () => void;
 }
 
 interface Linked {
@@ -42,7 +35,7 @@ interface Linked {
 function linkOver(
   port: MessagePort,
   closed: () => void,
-  receive: (name: CoreEvent, args: IpcEventArgs<CoreEvent>) => void,
+  receive: (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => void,
 ): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
@@ -78,8 +71,8 @@ export function connectCore(): CoreConnection {
   let linked: Linked | undefined;
   /** Why main gave no port, if it refused. */
   let refused: Error | undefined;
-  const listeners = new Map<CoreEvent, Set<(...args: unknown[]) => void>>();
-  const receive = (name: CoreEvent, args: IpcEventArgs<CoreEvent>) => {
+  const listeners = new Map<GuiEvent, Set<(...args: unknown[]) => void>>();
+  const receive = (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => {
     for (const listener of listeners.get(name) ?? []) listener(...args);
   };
   const waiting = new Set<{ resolve: (linked: Linked) => void; reject: (error: Error) => void }>();
