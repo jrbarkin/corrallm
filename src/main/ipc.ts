@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import type { WebContents } from 'electron';
 
 import type { Catalog } from '../shared/adapter';
@@ -139,11 +139,6 @@ export function noArgs(args: unknown[]): [] {
   return [];
 }
 
-export function getVersionString(): string {
-  const { electron, chrome, node } = process.versions;
-  return `${app.getName()} ${app.getVersion()} (Electron ${electron}, Chromium ${chrome}, Node ${node})`;
-}
-
 /**
  * One entry per channel in the contract. The mapped type makes a missing channel a compile
  * error, and ties each channel's parser and handler to its contract types.
@@ -221,7 +216,6 @@ function createHandlers({
         return null;
       },
     },
-    'app:ping': { parseArgs: noArgs, handler: getVersionString },
     'catalog:get': { parseArgs: noArgs, handler: () => catalog },
     'run:get': { parseArgs: noArgs, handler: async ({ contents }) => runs.get(await of(contents)) },
     'run:save': {

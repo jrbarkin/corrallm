@@ -1,6 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MessageChannel } from 'node:worker_threads';
+import type { MessagePort } from 'node:worker_threads';
 
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { OpResult } from '../shared/api/errors';
+import { GUI_OPS } from '../shared/api/surface';
+import { guiFunction } from '../shared/gui-link';
+import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
+import { API_CHANNELS, API_EVENTS } from '../shared/ipc';
 import type { AppApi } from '../shared/ipc';
+import { CoreLink } from '../shared/link';
 import type { SessionEvent } from '../shared/session';
 
 type Listener = (event: unknown, ...args: unknown[]) => void;
@@ -20,7 +29,54 @@ vi.mock('electron', () => ({
 // Each test loads the preload afresh: Vitest clears mock calls between tests.
 beforeEach(() => {
   vi.resetModules();
+  invoke.mockReset();
+  invoke.mockResolvedValue(null);
 });
+
+const ports: MessagePort[] = [];
+afterEach(() => {
+  for (const port of ports.splice(0)) port.close();
+});
+
+/** The listener the preload added for `channel`. */
+function listenerOn(channel: string): Listener {
+  const listener = on.mock.calls.find(([name]) => name === channel)?.[1];
+  if (!listener) throw new Error(`not listening for ${channel}`);
+  return listener;
+}
+
+/**
+ * Main posts the preload a port to a core answering each call with `answer` (as core/gui.ts does):
+ * the calls it heard.
+ */
+function postPort(answer: (op: string, args: unknown) => OpResult<unknown> | Promise<never>) {
+  const { port1, port2 } = new MessageChannel();
+  ports.push(port1, port2);
+  const heard: [op: string, args: unknown][] = [];
+  new CoreLink<CoreGuiSide, GuiSide>(
+    {
+      post: (message) => {
+        port2.postMessage(message);
+      },
+      start: (receive) => {
+        port2.on('message', receive);
+      },
+    },
+    {
+      call: (op, args) => {
+        heard.push([op, args]);
+        return answer(op, args);
+      },
+      channel: () => null,
+    },
+  );
+  listenerOn('core:port')({ ports: [port1], sender: 'the ipcRenderer' }, { epoch: 1 });
+  return heard;
+}
+
+/** What every GUI op answers in these tests: corrallm's name and version. */
+const INFO = { name: 'corrallm', version: '0.1.0' };
+const answerInfo = () => ({ ok: true, value: INFO }) as const;
 
 /** The api the preload exposed. */
 async function exposed(): Promise<AppApi> {
@@ -31,13 +87,80 @@ async function exposed(): Promise<AppApi> {
   return api as AppApi;
 }
 
-describe('preload', () => {
-  it('exposes window.api, whose ping() invokes app:ping', async () => {
+describe('the window’s port to the core', () => {
+  it('is asked of main as the preload loads, and kept from the page', async () => {
     const api = await exposed();
 
-    invoke.mockResolvedValue('corrallm 0.1.0');
-    await expect(api.ping()).resolves.toBe('corrallm 0.1.0');
-    expect(invoke).toHaveBeenCalledWith('app:ping');
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
+    listenerOn('core:port');
+    // Only functions: a function per channel and event, and one per GUI operation, never the
+    // port, ipcRenderer, a function that takes a channel or an operation, or an event object.
+    expect(Object.keys(api).sort()).toEqual(
+      [
+        ...Object.keys(API_CHANNELS),
+        ...Object.keys(API_EVENTS),
+        ...GUI_OPS.map((op) => guiFunction(op)),
+      ].sort(),
+    );
+    expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
+    expect(api).toHaveProperty('appInfo');
+  });
+
+  it('calls each GUI operation over the port, resolving with its value', async () => {
+    const api = await exposed();
+    const heard = postPort(answerInfo);
+
+    await expect(api.appInfo()).resolves.toEqual(INFO);
+    await expect(api.appInfo({})).resolves.toEqual(INFO);
+
+    expect(heard).toEqual([
+      ['app.info', undefined],
+      ['app.info', {}],
+    ]);
+  });
+
+  it('holds calls made before the port comes until it does', async () => {
+    const api = await exposed();
+
+    const info = api.appInfo();
+    postPort(answerInfo);
+
+    await expect(info).resolves.toEqual(INFO);
+  });
+
+  it('rejects with the operation’s sentence when it fails', async () => {
+    const api = await exposed();
+    postPort(() => ({
+      ok: false,
+      error: { code: 'unavailable', sentence: 'corrallm’s core can’t answer now.' },
+    }));
+
+    await expect(api.appInfo()).rejects.toThrow('corrallm’s core can’t answer now.');
+  });
+
+  it('takes a new port in place of the one before, failing what waited on the old one', async () => {
+    const api = await exposed();
+    postPort(() => new Promise<never>(() => undefined));
+    const stranded = api.appInfo();
+
+    const heard = postPort(answerInfo);
+
+    await expect(stranded).rejects.toThrow('corrallm’s core restarted.');
+    await expect(api.appInfo()).resolves.toEqual(INFO);
+    expect(heard).toHaveLength(1);
+  });
+
+  it('rejects every call once main refuses the port', async () => {
+    invoke.mockRejectedValue(new Error('Rejected core:connect: untrusted sender'));
+    const api = await exposed();
+
+    await expect(api.appInfo()).rejects.toThrow('untrusted sender');
+  });
+});
+
+describe('preload', () => {
+  it('invokes the catalog and canvas channels with their arguments', async () => {
+    const api = await exposed();
 
     // The catalog, which the renderer loads before it mounts.
     const catalog = { adapters: [], usageBackends: [] };
@@ -116,9 +239,7 @@ describe('preload', () => {
     const api = await exposed();
     const heard = vi.fn<Parameters<AppApi['onSessionEvent']>[0]>();
     const stop = api.onSessionEvent(heard);
-    const [channel, receive] = on.mock.calls[0] ?? [];
-    expect(channel).toBe('session:event');
-    if (!receive) throw new Error('not listening');
+    const receive = listenerOn('session:event');
 
     const event: SessionEvent = { type: 'status', status: 'working' };
     receive({ sender: 'the ipcRenderer event' }, 'a', 'claude-code.sdk', event);
@@ -173,9 +294,7 @@ describe('preload', () => {
     const api = await exposed();
     const heard = vi.fn<Parameters<AppApi['onTerminalEvent']>[0]>();
     const stop = api.onTerminalEvent(heard);
-    const [channel, receive] = on.mock.calls[0] ?? [];
-    expect(channel).toBe('terminal:event');
-    if (!receive) throw new Error('not listening');
+    const receive = listenerOn('terminal:event');
 
     receive({ sender: 'the ipcRenderer event' }, 'a', { type: 'output', data: 'hi' });
     expect(heard).toHaveBeenCalledWith('a', { type: 'output', data: 'hi' });
@@ -208,9 +327,7 @@ describe('preload', () => {
     const api = await exposed();
     const heard = vi.fn<Parameters<AppApi['onUsageChanged']>[0]>();
     const stop = api.onUsageChanged(heard);
-    const [channel, receive] = on.mock.calls[0] ?? [];
-    expect(channel).toBe('usage:changed');
-    if (!receive) throw new Error('not listening');
+    const receive = listenerOn('usage:changed');
 
     const state = { readings: [], rules: {} };
     receive({ sender: 'the ipcRenderer event' }, state);

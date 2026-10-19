@@ -5,10 +5,7 @@ const { handle } = vi.hoisted(() => ({
   handle:
     vi.fn<(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void>(),
 }));
-vi.mock('electron', () => ({
-  app: { getName: () => 'corrallm', getVersion: () => '0.1.0' },
-  ipcMain: { handle },
-}));
+vi.mock('electron', () => ({ ipcMain: { handle } }));
 
 import { newCanvasId } from '../shared/canvas';
 import { API_CHANNELS, MAX_CANVAS_BYTES, MAX_LINK_LENGTH } from '../shared/ipc';
@@ -137,8 +134,6 @@ function invoke(name: string, args: unknown[], sender: unknown = { id: 7 }) {
   return listenerFor(name)({ senderFrame: frame(TRUSTED_ORIGIN), sender }, ...args);
 }
 
-const pingListener = () => listenerFor('app:ping');
-
 beforeEach(() => {
   handle.mockReset();
   services = fakeServices();
@@ -172,31 +167,6 @@ describe('catalog:get handler', () => {
   it('answers with the catalog, and takes no arguments', () => {
     expect(invoke('catalog:get', [])).toBe(CATALOG);
     expect(() => invoke('catalog:get', ['claude-code'])).toThrow(/no arguments/);
-  });
-});
-
-describe('app:ping handler', () => {
-  it('returns the version string to the trusted renderer', () => {
-    const listener = pingListener();
-    const result = listener({ senderFrame: frame(TRUSTED_ORIGIN) });
-    expect(result).toMatch(/^corrallm 0\.1\.0 \(Electron .*, Chromium .*, Node .*\)$/);
-  });
-
-  it.each([
-    ['a null sender frame', null],
-    ['another origin', frame('https://evil.example')],
-    ['a subframe', frame(TRUSTED_ORIGIN, { parent: {} })],
-    ['a detached frame', frame(TRUSTED_ORIGIN, { detached: true })],
-  ])('rejects %s', (_label, senderFrame) => {
-    const listener = pingListener();
-    expect(() => listener({ senderFrame })).toThrow(/untrusted sender/);
-  });
-
-  it('rejects unexpected arguments', () => {
-    const listener = pingListener();
-    expect(() => listener({ senderFrame: frame(TRUSTED_ORIGIN) }, 'extra')).toThrow(
-      /Expected no arguments/,
-    );
   });
 });
 

@@ -89,9 +89,10 @@ src/main/core/  The core: corrallm's one server, which will own the canvas, the 
                 one holding a message it names (`withdraw` takes none), and asked of one with
                 several otherwise, schema, reach, self, rules, repeated requests, scopes; failures
                 as values); caller.ts its callers (you, an agent's session, an outside token) and
-                their parties (no token is ever you; only gui.ts makes you); scopes.ts the order ops run in (one at a
-                time per scope; a preempting op aborts what runs beneath it first, never another
-                preempting op, and those that overlap run in turn, ahead of the queue);
+                their parties (no token is ever you; only gui.ts makes you); scopes.ts the order
+                ops run in (one at a time per scope; a preempting op aborts what runs beneath it
+                first, never another preempting op, and those that overlap run in turn, ahead of
+                the queue);
                 throttle.ts the limits per token (calls in flight and writes a second; a long
                 poll, `waits`, counts against the waits in flight instead of the calls);
                 requests.ts the repeated requests (each caller's own; a result kept only when its
@@ -217,7 +218,10 @@ src/main/cli/   The `corrallm` Node CLI (index.ts), the core's code under plain 
                 command lines (never a project folder, never a token), serve.ts is `corrallm
                 serve`, wait.ts `corrallm wait`, api-file.ts the profile's api.json; with
                 CORRALLM_NATIVE_SELFTEST=1 it runs the native self-test. It mints no TrustedPath.
-src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api.
+src/preload/    Preload script (sandboxed; may import only 'electron' and src/shared). Exposes window.api:
+                a function per hand-written channel and event, and one per GUI operation (GUI_OPS,
+                camel-cased: app.info → appInfo), each a call over the window's port to the core,
+                which core.ts asks main for as it loads (core:connect) and keeps in a CoreLink.
 src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.api; open-link.ts
                 is where clicked links go (main's link:open, or link:reveal for a file:// link;
                 provided by App.tsx). catalog.ts holds the catalog main gives (catalog:get), which
@@ -364,8 +368,11 @@ src/shared/     Types shared by all processes, including the IPC contract (ipc.t
                 canvas's id (canvas.ts: CanvasId, and canvasIdOf, the .corral format and version
                 check main and model/file.ts share), and CoreLink (link.ts: typed requests, answers
                 as values, a result or an error, and events over a port, which checks that only
-                plain data crosses; main, the core process and the preload speak it). No Node,
-                Electron or DOM imports here.
+                plain data crosses; main, the core process and the preload speak it), and a
+                window's link to the core over it (gui-link.ts: CoreGuiSide, what the core answers
+                a window, `call` and, until the hand-written channels move, `channel`; 'core:port';
+                GuiApi, window.api's function per GUI operation). No Node, Electron or DOM imports
+                here.
 src/shared/model/  The canvas as the model keeps it, read wherever the engine runs: canvas.ts (AgentNode,
                 FrameNode, Link, CanvasDocument: by what they mean, with no React Flow, selection
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
@@ -503,7 +510,7 @@ Forge's Vite plugin builds `src/main/index.ts` to `.vite/build/main.cjs`, `src/m
 ## Security rules (do not regress)
 
 - Never enable `nodeIntegration`, and never disable `contextIsolation`, `sandbox` or `webSecurity`. No `<webview>`.
-- The preload exposes one typed function per IPC channel through `contextBridge`. Never expose `ipcRenderer`, a generic `invoke`/`send`, or Electron event objects to the renderer.
+- The preload exposes one typed function per IPC channel through `contextBridge`, and one per registry operation in `GUI_OPS`, generated from that fixed list in `src/shared/api/surface.ts`, each posting its own operation over the window's port to the core. Never expose `ipcRenderer`, the port, a generic `invoke`/`send` or a function that takes an operation or channel name, or Electron event objects to the renderer.
 - All IPC goes through the contract in `src/shared/ipc.ts` and the `handle()` wrapper in `src/main/ipc.ts`, which validates the sender frame (top-level frame of our own origin) and parses arguments. Never call `ipcMain.handle`/`ipcMain.on` directly. One of its channels, `core:connect`, is the preload's own, never exposed to the page: through it main hands a trusted window a `MessagePort` to the core (`host/ports.ts`), tagged with that window, which the preload keeps inside a CoreLink. The core makes every call on it yours, at that window (`core/gui.ts`), and validates it with the op's schema in `core.call`; identity comes from the port, never from a message.
 - Production renderer is served from `app://main_window/` by `src/main/app-protocol.ts` (not `file://`, not `loadFile`). The CSP is a response header from `src/main/csp.ts`: never add `'unsafe-inline'` or `'unsafe-eval'` to `PROD_CSP`. Dev-only relaxations go in `DEV_CSP`. The only inline styles allowed are the two exact ones xterm.js writes for its scrollbar, by hash (`TERMINAL_STYLES`); xterm.js draws only with its WebGL renderer, loaded before the terminal opens (its DOM renderer's inline styles are blocked).
 - Dev vs production is decided by `MAIN_WINDOW_VITE_DEV_SERVER_URL` (defined only under `pnpm dev`), not `app.isPackaged`. e2e runs the production build unpackaged.

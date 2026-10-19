@@ -1,4 +1,8 @@
+import type { z } from 'zod';
+
 import type { OpResult } from './api/errors';
+import type { OPS, ResultOf } from './api/registry';
+import type { GuiOp } from './api/surface';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -37,3 +41,32 @@ export interface GuiSide {
   requests: Record<string, never>;
   events: Record<string, never>;
 }
+
+/** The name of a GUI operation's function on `window.api`: its name camel-cased (app.info → appInfo). */
+export type GuiFunction<N extends string> = N extends `${infer Area}.${infer Verb}`
+  ? `${Area}${Capitalize<Verb>}`
+  : N;
+
+/** The name of GUI operation `op`'s function on `window.api` (GuiFunction). */
+export function guiFunction<N extends string>(op: N): GuiFunction<N> {
+  return op.replace(/\.(.)/, (_dot, first: string) => first.toUpperCase()) as GuiFunction<N>;
+}
+
+/** What GUI operation `N` takes, as its caller writes it. */
+type InputOf<N extends GuiOp> = z.input<(typeof OPS)[N]['input']>;
+
+/** The arguments of `T` that may not be left out (an index signature's never are). */
+type RequiredKeys<T> = {
+  [K in keyof T]-?: string extends K ? never : Pick<T, K> extends Required<Pick<T, K>> ? K : never;
+}[keyof T];
+
+/**
+ * A function per GUI operation (GUI_OPS), as the preload exposes them on `window.api`: each calls
+ * its own operation over the window's port, resolving with its result, or rejecting with the
+ * sentence saying why it failed.
+ */
+export type GuiApi = {
+  [N in GuiOp as GuiFunction<N>]: [RequiredKeys<InputOf<N>>] extends [never]
+    ? (args?: InputOf<N>) => Promise<ResultOf<N>>
+    : (args: InputOf<N>) => Promise<ResultOf<N>>;
+};
