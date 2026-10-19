@@ -12,78 +12,78 @@ const reading = (usedPercent: number): UsageState => ({
   rules: {},
 });
 
-/** Main's usage, faked: `emit` plays a 'usage:changed' event. */
+/** A usage topic mirror and the operations that change its source in the core. */
 function fakeSource(initial: UsageState) {
-  let listener: ((state: UsageState) => void) | undefined;
-  let resolve: (state: UsageState) => void = () => undefined;
+  let listener: (() => void) | undefined;
+  let state: UsageState | undefined;
   const source = {
-    get: vi.fn<UsageSource['get']>(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    ),
-    setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue(null),
-    simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue(null),
-    onChanged: vi.fn<UsageSource['onChanged']>((given) => {
-      listener = given;
-      return () => {
-        listener = undefined;
-      };
-    }),
+    topics: {
+      snapshot: vi.fn(() => state),
+      subscribe: vi.fn((_topic: 'usage', given: () => void) => {
+        listener = given;
+        return () => {
+          listener = undefined;
+        };
+      }),
+    },
+    setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue({}),
+    simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue({}),
   };
   return {
     source,
     answer: () => {
-      resolve(initial);
+      state = initial;
+      listener?.();
     },
-    emit: (state: UsageState) => listener?.(state),
+    emit: (next: UsageState) => {
+      state = next;
+      listener?.();
+    },
     listening: () => listener !== undefined,
   };
 }
 
 describe('UsageStore', () => {
-  it('starts from main’s readings, then follows each change main tells', async () => {
-    const main = fakeSource(reading(10));
-    const store = new UsageStore(main.source);
+  it('starts from the usage topic, then follows its mirror', async () => {
+    const core = fakeSource(reading(10));
+    const store = new UsageStore(core.source);
     const heard = vi.fn<() => void>();
     store.subscribe(heard);
     expect(store.snapshot()).toEqual({ readings: [], rules: {} });
-    main.answer();
+    core.answer();
     await vi.waitFor(() => {
       expect(store.snapshot()).toEqual(reading(10));
     });
-    main.emit(reading(20));
+    core.emit(reading(20));
     expect(store.snapshot()).toEqual(reading(20));
     expect(heard).toHaveBeenCalledTimes(2);
     store.dispose();
-    expect(main.listening()).toBe(false);
+    expect(core.listening()).toBe(false);
   });
 
-  it('keeps a change main told over the readings it asked for before', async () => {
-    const main = fakeSource(reading(10));
-    const store = new UsageStore(main.source);
-    main.emit(reading(30));
-    main.answer();
+  it('starts from a snapshot the topic mirror already has', async () => {
+    const core = fakeSource(reading(10));
+    core.emit(reading(30));
+    const store = new UsageStore(core.source);
     await Promise.resolve();
     await Promise.resolve();
     expect(store.snapshot()).toEqual(reading(30));
   });
 
-  it('asks main to set rules and simulate readings, and hears the change back', () => {
-    const main = fakeSource(reading(10));
-    const store = new UsageStore(main.source);
+  it('asks the core to set rules and simulate readings, and hears the change back', () => {
+    const core = fakeSource(reading(10));
+    const store = new UsageStore(core.source);
     store.setRule('claude-code', RULE);
-    expect(main.source.setRule).toHaveBeenCalledWith('claude-code', RULE);
+    expect(core.source.setRule).toHaveBeenCalledWith('claude-code', RULE);
     store.simulate('claude-code', { weekly: { usedPercent: 91, resetsAt: null } });
-    expect(main.source.simulate).toHaveBeenCalledWith('claude-code', {
+    expect(core.source.simulate).toHaveBeenCalledWith('claude-code', {
       weekly: { usedPercent: 91, resetsAt: null },
     });
-    // Main's word is what counts.
+    // The topic's state is what counts.
     expect(store.snapshot()).toEqual({ readings: [], rules: {} });
   });
 
-  it('keeps rules and simulated readings itself without main (as in tests)', () => {
+  it('keeps rules and simulated readings itself without a source (as in tests)', () => {
     const store = new UsageStore(undefined, () => 5_000);
     store.setRule('claude-code', RULE);
     store.simulate('claude-code', { weekly: { usedPercent: 91, resetsAt: null } });

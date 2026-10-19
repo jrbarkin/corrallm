@@ -187,16 +187,23 @@ describe('GraphEditor', () => {
 
   it('hears usage changes and applies their rules after StrictMode cleanup', async () => {
     const changed = new Set<(state: UsageState) => void>();
+    let usage: UsageState = { readings: [], rules: {} };
     const usageSource: UsageSource = {
-      get: vi.fn<UsageSource['get']>().mockResolvedValue({ readings: [], rules: {} }),
-      setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue(null),
-      simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue(null),
-      onChanged: (listener) => {
-        changed.add(listener);
-        return () => {
-          changed.delete(listener);
-        };
+      topics: {
+        snapshot: () => usage,
+        subscribe: (_topic, listener) => {
+          const receive = (state: UsageState) => {
+            usage = state;
+            listener();
+          };
+          changed.add(receive);
+          return () => {
+            changed.delete(receive);
+          };
+        },
       },
+      setRule: vi.fn<UsageSource['setRule']>().mockResolvedValue({}),
+      simulate: vi.fn<UsageSource['simulate']>().mockResolvedValue({}),
     };
     const sessions = fakeBackend();
     const { unmount } = render(

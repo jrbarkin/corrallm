@@ -8,8 +8,8 @@ import type { Page } from '@playwright/test';
 import { launchApp } from './launch';
 
 /*
- * Usage readings and rules through the real app: they are main's (src/main/usage.ts), set over the
- * usage:* channels, heard back as usage:changed, and remembered across a restart with their time.
+ * Usage readings and rules through the real app: they are the core's (src/main/usage.ts), set over the
+ * generated usage operations, heard back through the usage topic, and remembered across a restart with their time.
  */
 
 /** Opens a template with Claude agents, so the canvas shows Claude's usage gauge. */

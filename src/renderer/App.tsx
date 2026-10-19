@@ -9,6 +9,7 @@ import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
+import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
 
@@ -77,12 +78,11 @@ const terminalBackend: TerminalBackend = {
  */
 const openLink: OpenLink = openLinkWith(() => api);
 
-/** Usage readings and rules are main's (src/main/usage.ts): one per backend, for every canvas. */
+/** Usage readings and rules are the core's (src/main/usage.ts): one per backend, for every canvas. */
 const usageSource: UsageSource = {
-  get: () => window.api.getUsage(),
-  setRule: (backend, rule) => window.api.setUsageRule(backend, rule),
-  simulate: (backend, windows) => window.api.simulateUsage(backend, windows),
-  onChanged: (listener) => window.api.onUsageChanged(listener),
+  topics,
+  setRule: (backend, rule) => api.usageSetRule({ backend, rule }),
+  simulate: (backend, windows) => api.usageSimulate({ backend, windows }),
 };
 
 /** Which corrallm this is, as its core says (app.info), once it has. */

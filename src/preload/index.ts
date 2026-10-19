@@ -46,10 +46,12 @@ const ops = Object.fromEntries(
     guiFunction(op),
     (args?: unknown) => core.call(op, args),
   ]),
-) as Omit<GuiBridge, 'terminalDrop' | 'terminalOnEvent'>;
+) as Omit<GuiBridge, 'terminalDrop' | 'terminalOnEvent' | 'topicsOnChange' | 'topicsOnEpoch'>;
 
 const api: AppApi = {
   ...ops,
+  topicsOnChange: (listener) => core.onTopic(listener),
+  topicsOnEpoch: (listener) => core.onEpoch(listener),
   catalog: () => invoke(API_CHANNELS.catalog),
   getRun: () => invoke(API_CHANNELS.getRun),
   saveRun: (token, checkpoint) => invoke(API_CHANNELS.saveRun, token, checkpoint),
@@ -100,7 +102,6 @@ const api: AppApi = {
   simulateUsage: (backend, windows) => invoke(API_CHANNELS.simulateUsage, backend, windows),
   onSessionEvent: (listener) => core.listen(API_EVENTS.onSessionEvent, listener),
   terminalOnEvent: (listener) => core.listen('terminal', listener),
-  onUsageChanged: (listener) => core.listen(API_EVENTS.onUsageChanged, listener),
 };
 
 contextBridge.exposeInMainWorld('api', api);

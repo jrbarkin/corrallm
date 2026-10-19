@@ -54,7 +54,7 @@ export class UsageReadings {
   readonly #readings = new Map<UsageBackendId, UsageReading>();
   readonly #exhausted = new Map<UsageBackendId, Exhausted>();
   #rules: Partial<Record<UsageBackendId, UsageRule>> = {};
-  readonly #listeners = new Set<(state: UsageState) => void>();
+  readonly #listeners = new Set<(state: UsageState, by: 'cli' | 'you') => void>();
   /** When listeners last heard each backend's reading. */
   readonly #told = new Map<UsageBackendId, number>();
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -118,7 +118,7 @@ export class UsageReadings {
   }
 
   /** Hears every change; returns a function that stops it. */
-  subscribe(listener: (state: UsageState) => void): () => void {
+  subscribe(listener: (state: UsageState, by: 'cli' | 'you') => void): () => void {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
@@ -169,7 +169,7 @@ export class UsageReadings {
     else this.#readings.set(backend, { backend, windows, at: this.#now(), simulated: true });
     if (windows !== null) this.#release(backend, windows, true);
     this.#save();
-    this.#tell(backend);
+    this.#tell(backend, 'you');
   }
 
   /** Sets a backend's rule (`null` takes it off). */
@@ -177,7 +177,7 @@ export class UsageReadings {
     if (rule === null) Reflect.deleteProperty(this.#rules, backend);
     else this.#rules = { ...this.#rules, [backend]: rule };
     this.#save();
-    this.#tell();
+    this.#tell(undefined, 'you');
   }
 
   /** Resolves once everything so far is written: before the app quits. */
@@ -190,10 +190,10 @@ export class UsageReadings {
     return this.#writing;
   }
 
-  #tell(backend?: UsageBackendId): void {
+  #tell(backend?: UsageBackendId, by: 'cli' | 'you' = 'cli'): void {
     if (backend !== undefined) this.#told.set(backend, this.#now());
     const state = this.state();
-    for (const listener of this.#listeners) listener(state);
+    for (const listener of this.#listeners) listener(state, by);
   }
 
   #save(): void {

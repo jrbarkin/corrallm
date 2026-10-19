@@ -21,8 +21,18 @@ function stubApi(api: Partial<AppApi>) {
     saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
-    getUsage: vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} }),
-    onUsageChanged: vi.fn<AppApi['onUsageChanged']>(() => () => undefined),
+    topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
+      ok: true,
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+    }),
+    topicsUnsubscribe: vi
+      .fn<AppApi['topicsUnsubscribe']>()
+      .mockResolvedValue({ ok: true, value: {} }),
+    topicsOnChange: vi.fn<AppApi['topicsOnChange']>(() => () => undefined),
+    topicsOnEpoch: vi.fn<AppApi['topicsOnEpoch']>((listener) => {
+      listener('one');
+      return () => undefined;
+    }),
   };
   Object.defineProperty(window, 'api', { value: { ...usage, ...api }, configurable: true });
 }
@@ -48,23 +58,26 @@ describe('App', () => {
     expect(appInfo).toHaveBeenCalled();
   });
 
-  it('reads the usage readings and rules main keeps, and hears their changes', async () => {
-    const getUsage = vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} });
-    const onUsageChanged = vi.fn<AppApi['onUsageChanged']>(() => () => undefined);
+  it('subscribes to the core’s usage topic and its changes', async () => {
+    const topicsSubscribe = vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
+      ok: true,
+      value: { epoch: 'one', rev: 0, state: { readings: [], rules: {} } },
+    });
+    const topicsOnChange = vi.fn<AppApi['topicsOnChange']>(() => () => undefined);
     stubApi({
       appInfo: vi
         .fn<AppApi['appInfo']>()
         .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
-      getUsage,
-      onUsageChanged,
+      topicsSubscribe,
+      topicsOnChange,
     });
 
     render(<App />);
 
     await waitFor(() => {
-      expect(getUsage).toHaveBeenCalled();
+      expect(topicsSubscribe).toHaveBeenCalledWith({ topic: 'usage' });
     });
-    expect(onUsageChanged).toHaveBeenCalled();
+    expect(topicsOnChange).toHaveBeenCalled();
   });
 
   it('learns the canvas id from window.get when it restores run progress', async () => {

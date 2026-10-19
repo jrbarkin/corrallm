@@ -4,6 +4,7 @@ import type { MessagePort } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OpResult } from '../shared/api/errors';
+import type { Change } from '../shared/api/topics';
 import { GUI_OPS } from '../shared/api/surface';
 import { guiFunction } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
@@ -110,6 +111,48 @@ async function exposed(): Promise<AppApi> {
   return api as AppApi;
 }
 
+describe('topic events', () => {
+  it('passes batches whole without Electron objects and remembers the core epoch for a late listener', async () => {
+    await import('./index');
+    const api = exposeInMainWorld.mock.calls[0]?.[1] as AppApi;
+    postPort(() => ({ ok: true, value: {} }));
+    remote.emit('epoch', 'one');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const epoch = vi.fn();
+    const stopEpoch = api.topicsOnEpoch(epoch);
+    expect(epoch).toHaveBeenCalledExactlyOnceWith('one');
+    const changed = vi.fn();
+    const stop = api.topicsOnChange(changed);
+    const batch: Change[] = [
+      {
+        topic: 'usage',
+        epoch: 'one',
+        rev: 1,
+        seq: 1,
+        by: 'you',
+        at: 1,
+        replace: { readings: [], rules: {} },
+      },
+    ];
+    remote.emit('topic', [...batch]);
+    await vi.waitFor(() => {
+      expect(changed).toHaveBeenCalledExactlyOnceWith(batch);
+    });
+    postPort(() => ({ ok: true, value: {} }));
+    remote.emit('epoch', 'two');
+    await vi.waitFor(() => {
+      expect(epoch).toHaveBeenLastCalledWith('two');
+    });
+    stop();
+    stopEpoch();
+    remote.emit('topic', [...batch]);
+    remote.emit('epoch', 'three');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(epoch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('the window’s port to the core', () => {
   it('is asked of main as the preload loads, and kept from the page', async () => {
     const api = await exposed();
@@ -124,6 +167,8 @@ describe('the window’s port to the core', () => {
         ...Object.keys(API_EVENTS),
         ...GUI_OPS.map((op) => guiFunction(op)),
         'terminalOnEvent',
+        'topicsOnChange',
+        'topicsOnEpoch',
       ].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
@@ -482,25 +527,6 @@ describe('preload', () => {
     await api.simulateUsage('claude-code', windows);
     expect(channel).toHaveBeenLastCalledWith('usage:simulate', 'claude-code', windows);
   });
-
-  it('passes usage changes on without Electron’s event object, until told to stop', async () => {
-    const api = await exposed();
-    postPort(answerInfo);
-    const heard = vi.fn<Parameters<AppApi['onUsageChanged']>[0]>();
-    const stop = api.onUsageChanged(heard);
-
-    const state = { readings: [], rules: {} };
-    remote.emit('event', 'usage:changed', [state]);
-    await vi.waitFor(() => {
-      expect(heard).toHaveBeenCalledOnce();
-    });
-    expect(heard).toHaveBeenCalledWith(state);
-
-    stop();
-    remote.emit('event', 'usage:changed', [state]);
-    await api.getUsage();
-    expect(heard).toHaveBeenCalledOnce();
-  });
 });
 
 describe('run persistence preload', () => {
@@ -557,15 +583,35 @@ describe('channels waiting for the core', () => {
   it('keeps event subscriptions across replacement ports', async () => {
     const api = await exposed();
     const heard = vi.fn();
-    const stop = api.onUsageChanged(heard);
+    const stop = api.topicsOnChange(heard);
     postPort(answerInfo);
-    remote.emit('event', 'usage:changed', [{ readings: [], rules: {} }]);
+    remote.emit('topic', [
+      {
+        topic: 'usage',
+        epoch: 'one',
+        rev: 1,
+        seq: 1,
+        by: 'you',
+        at: 1,
+        replace: { readings: [], rules: {} },
+      },
+    ]);
     await vi.waitFor(() => {
       expect(heard).toHaveBeenCalledOnce();
     });
     await closePort();
     postPort(answerInfo);
-    remote.emit('event', 'usage:changed', [{ readings: [], rules: {} }]);
+    remote.emit('topic', [
+      {
+        topic: 'usage',
+        epoch: 'one',
+        rev: 1,
+        seq: 1,
+        by: 'you',
+        at: 1,
+        replace: { readings: [], rules: {} },
+      },
+    ]);
     await vi.waitFor(() => {
       expect(heard).toHaveBeenCalledTimes(2);
     });

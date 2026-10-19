@@ -150,11 +150,11 @@ export interface IpcContract {
   };
   /** Every backend's latest usage reading (as remembered across restarts), and the usage rules. */
   'usage:get': { args: []; result: UsageState };
-  /** Sets a backend's usage rule, or (null) takes it off. Every renderer hears 'usage:changed'. */
+  /** Sets a backend's usage rule, or (null) takes it off. Subscribed windows hear the usage topic. */
   'usage:rule': { args: [backend: UsageBackendId, rule: UsageRule | null]; result: null };
   /**
    * Simulates a backend's usage (to try rules without spending real usage), or (null) forgets
-   * its reading. A real reading replaces a simulated one. Every renderer hears 'usage:changed'.
+   * its reading. A real reading replaces a simulated one. Subscribed windows hear the usage topic.
    */
   'usage:simulate': {
     args: [backend: UsageBackendId, windows: UsageWindows | null];
@@ -168,11 +168,6 @@ export interface IpcEvents {
   'run:stopping': [requestId: string];
   /** What an agent's connected session did. Only the renderer that started it hears. */
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
-  /**
-   * Usage readings or rules changed (a reading came, or a rule was set): every renderer hears it,
-   * since usage belongs to the backend's account, not to one canvas.
-   */
-  'usage:changed': [state: UsageState];
 }
 
 /**
@@ -253,7 +248,6 @@ export interface InvokeApi {
 export interface EventApi {
   onRunStopping(listener: (...args: IpcEventArgs<'run:stopping'>) => void): () => void;
   onSessionEvent(listener: (...args: IpcEventArgs<'session:event'>) => void): () => void;
-  onUsageChanged(listener: (...args: IpcEventArgs<'usage:changed'>) => void): () => void;
 }
 
 /**
@@ -300,7 +294,6 @@ export const API_CHANNELS = {
 export const API_EVENTS = {
   onRunStopping: 'run:stopping',
   onSessionEvent: 'session:event',
-  onUsageChanged: 'usage:changed',
 } as const satisfies Record<keyof EventApi, IpcEvent>;
 
 type AssertNever<T extends never> = T;

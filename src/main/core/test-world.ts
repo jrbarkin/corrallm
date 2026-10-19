@@ -305,6 +305,21 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     // The lead's pause is yours.
     meetsRule: { sticky: { canvas: CANVAS, target: { agent: 'lead' }, request: request(70) } },
   },
+  'topics.subscribe': {
+    valid: [
+      { topic: 'usage', request: request(75) },
+      { topic: 'settings', request: request(76) },
+    ],
+    invalid: [{}, { topic: 'missing' }, { topic: 'usage', window: 2 }],
+    fresh: ['epoch'],
+  },
+  'topics.unsubscribe': {
+    valid: [
+      { topic: 'usage', request: request(77) },
+      { topic: 'settings', request: request(78) },
+    ],
+    invalid: [{}, { topic: 'missing' }],
+  },
   'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
   'usage.setRule': {
     valid: [

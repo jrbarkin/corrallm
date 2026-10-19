@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron';
 
 import type { OpResult } from '../shared/api/errors';
+import type { Change } from '../shared/api/topics';
 import { CORE_PORT } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide, GuiEvent, GuiEventArgs } from '../shared/gui-link';
 import type { CoreChannel, IpcArgs, IpcResult, IpcChannel } from '../shared/ipc';
@@ -19,6 +20,8 @@ const WAIT_MS = 10_000;
 const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
 
 export interface CoreConnection {
+  onTopic(listener: (changes: Change[]) => void): () => void;
+  onEpoch(listener: (epoch: string) => void): () => void;
   /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
   call(op: string, args: unknown): Promise<OpResult<unknown>>;
   channel<C extends CoreChannel>(name: C, args: IpcArgs<C>): Promise<IpcResult<C>>;
@@ -36,6 +39,8 @@ function linkOver(
   port: MessagePort,
   closed: () => void,
   receive: (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => void,
+  topic: (changes: Change[]) => void,
+  epoch: (epoch: string) => void,
 ): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
@@ -58,6 +63,8 @@ function linkOver(
     {},
   );
   link.on('event', receive);
+  link.on('topic', topic);
+  link.on('epoch', epoch);
   return {
     link,
     close: (why) => {
@@ -71,6 +78,9 @@ export function connectCore(): CoreConnection {
   let linked: Linked | undefined;
   /** Why main gave no port, if it refused. */
   let refused: Error | undefined;
+  let epoch: string | undefined;
+  const epochs = new Set<(epoch: string) => void>();
+  const topics = new Set<(changes: Change[]) => void>();
   const listeners = new Map<GuiEvent, Set<(...args: unknown[]) => void>>();
   const receive = (name: GuiEvent, args: GuiEventArgs<GuiEvent>) => {
     for (const listener of listeners.get(name) ?? []) listener(...args);
@@ -87,6 +97,15 @@ export function connectCore(): CoreConnection {
         if (linked === next) linked = undefined;
       },
       receive,
+      (changes) => {
+        if (linked !== next) return;
+        for (const listener of topics) listener(changes);
+      },
+      (nextEpoch) => {
+        if (linked !== next) return;
+        epoch = nextEpoch;
+        for (const listener of epochs) listener(nextEpoch);
+      },
     );
     linked = next;
     refused = undefined;
@@ -121,6 +140,19 @@ export function connectCore(): CoreConnection {
   };
 
   return {
+    onTopic: (listener) => {
+      topics.add(listener);
+      return () => {
+        topics.delete(listener);
+      };
+    },
+    onEpoch: (listener) => {
+      epochs.add(listener);
+      if (epoch !== undefined) listener(epoch);
+      return () => {
+        epochs.delete(listener);
+      };
+    },
     channel: async (name, args) => {
       const answer = await (await ready()).link.request('channel', name, args);
       if (!answer.ok) throw new Error(answer.error.message);

@@ -105,6 +105,8 @@ const M = { you: 'all', lead: 'linked', worker: 'linked', 'outside-write': 'canv
 const T = { 'outside-read': 'canvas', 'outside-write': 'canvas' } as const;
 
 export const SURFACE = {
+  'topics.subscribe': { access: Y, kind: 'command', scope: 'none' },
+  'topics.unsubscribe': { access: Y, kind: 'command', scope: 'none' },
   'app.info': { access: A, kind: 'read', scope: 'none' },
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },

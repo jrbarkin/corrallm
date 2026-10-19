@@ -7,6 +7,7 @@ import type { Dispatcher } from './call';
 import type { Channels } from './channels';
 import type { HumanCaller } from './caller';
 import type { WindowId } from './host';
+import type { Topics } from './topics';
 
 /*
  * Windows' ports, the core's side (B8 Design §4, Core Server §6.1): the one place a human caller is
@@ -38,7 +39,10 @@ interface Served {
 }
 
 /** A dispatcher, and the app’s hand-written channels when it hosts windows. */
-type GuiCore = Pick<Dispatcher, 'call'> & { channels?: Pick<Channels, 'call' | 'listen' | 'gone'> };
+type GuiCore = Pick<Dispatcher, 'call'> & {
+  channels?: Pick<Channels, 'call' | 'listen' | 'gone'>;
+  topics?: Pick<Topics, 'epoch' | 'listen'>;
+};
 
 /** Every window's port the core serves, by window. */
 export class WindowPorts {
@@ -89,9 +93,17 @@ export class WindowPorts {
       },
       this.#options,
     );
-    served.stop = this.#core.channels?.listen(window, (name, args) => {
+    const stopEvents = this.#core.channels?.listen(window, (name, args) => {
       link.emit('event', name, args);
     });
+    const stopTopics = this.#core.topics?.listen(window, (changes) => {
+      link.emit('topic', changes);
+    });
+    served.stop = () => {
+      stopEvents?.();
+      stopTopics?.();
+    };
+    if (this.#core.topics) link.emit('epoch', this.#core.topics.epoch);
   }
 
   /** The window closed, crashed or reloaded: its port closes, and its calls going are cancelled. */

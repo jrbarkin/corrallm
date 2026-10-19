@@ -83,12 +83,10 @@ function events(window: WindowLink) {
 }
 
 describe('the app’s core and window channels', () => {
-  it('shares usage between operations and channels, broadcasting changes to every window', async () => {
+  it('shares usage between operations and the remaining channels', async () => {
     const { core, connect } = await app();
     const seven = connect(7);
     const eight = connect(8);
-    const a = events(seven);
-    const b = events(eight);
     const rule = { window: 'weekly', percent: 80, action: 'ask' };
 
     await expect(
@@ -99,10 +97,6 @@ describe('the app’s core and window channels', () => {
     });
     const state = { readings: [], rules: { codex: rule } };
     expect(await channel(eight, 'usage:get')).toEqual(state);
-    await vi.waitFor(() => {
-      expect(a).toEqual([['usage:changed', [state]]]);
-      expect(b).toEqual(a);
-    });
     await channel(eight, 'usage:rule', 'codex', null);
     await expect(core.call('usage.get', {}, CALLERS.you)).resolves.toEqual({
       ok: true,

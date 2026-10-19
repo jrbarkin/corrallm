@@ -16,7 +16,7 @@ function stubApi(bridge: Partial<AppApi>): void {
 describe('the GUI client', () => {
   it('exposes only the GUI operations, one function per operation', () => {
     expect(Object.keys(api).sort()).toEqual(
-      [...GUI_OPS.map(guiFunction), 'terminalOnEvent'].sort(),
+      [...GUI_OPS.map(guiFunction), 'terminalOnEvent', 'topicsOnChange', 'topicsOnEpoch'].sort(),
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
   });

@@ -40,6 +40,7 @@ import { implementations } from './ops';
 import { holder, resolvers } from './reach';
 import { ruleChecks } from './rules';
 import { TokenStore } from './tokens';
+import { Topics } from './topics';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -87,6 +88,7 @@ export interface CoreConfig {
 }
 
 export interface Core extends Dispatcher {
+  topics: Topics;
   call<N extends OpName>(
     name: N,
     raw: unknown,
@@ -213,8 +215,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     clis: { installed: async () => installedClis(await environment()) },
     usage,
   });
-  usage.subscribe((state) => {
-    channels.emit(null, 'usage:changed', state);
+  const topics = new Topics((name, args, caller, signal) =>
+    dispatcher.call(name, args, caller, signal),
+  );
+  usage.subscribe((_state, by) => {
+    topics.changed('usage', by);
+  });
+  settings.subscribe(() => {
+    topics.changed('settings', 'you');
   });
   const stores = () =>
     Promise.all([memory.flush(), settings.flush(), usage.flush(), tokens.flush(), links.flush()]);
@@ -235,6 +243,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       surface: SURFACE,
       ops: OPS,
       implementations: implementations({
+        topics,
         app: config.app,
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
@@ -269,6 +278,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) =>
       dispatcher.call(name, raw, caller, signal) as Promise<OpResult<ResultOf<N>>>,
     engines,
+    topics,
     channels,
     shown: (asked) => asked.filter((window) => windows.has(window)),
     flush: async () => {
@@ -286,6 +296,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     deliver: () => engines.deliver(),
     watch: (watcher) => engines.watch(watcher),
     close: async () => {
+      topics.close();
       try {
         await engines.close();
       } finally {

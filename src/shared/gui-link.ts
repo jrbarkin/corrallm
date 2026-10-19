@@ -5,6 +5,7 @@ import type { OPS, ResultOf } from './api/registry';
 import type { GuiOp } from './api/surface';
 import type { CoreEvent, IpcEventArgs } from './ipc';
 import type { TerminalEvent } from './terminal';
+import type { Change } from './api/topics';
 
 /*
  * A window's link to the core (B8 Design §3, §4): CoreLink over the MessagePort main hands each
@@ -44,6 +45,10 @@ export interface CoreGuiSide {
     channel: { args: [name: string, args: unknown[]]; result: unknown };
   };
   events: {
+    /** The core's topic epoch, announced on each new port before topic changes. */
+    epoch: [epoch: string];
+    /** Changes in order, batched per window every 16 ms. */
+    topic: [changes: Change[]];
     /** The terminal stream and remaining hand-written events, with no Electron event objects. */
     event: [name: GuiEvent, args: GuiEventArgs<GuiEvent>];
   };
@@ -87,6 +92,8 @@ type GuiCalls = {
 
 /** A view's event listener, over the same port as its operations. */
 export interface GuiEventApi {
+  topicsOnChange(listener: (changes: Change[]) => void): () => void;
+  topicsOnEpoch(listener: (epoch: string) => void): () => void;
   terminalOnEvent(listener: (...args: GuiEventArgs<'terminal'>) => void): () => void;
 }
 

@@ -10,6 +10,7 @@ import { runOps } from './ops/run';
 import { sessionOps } from './ops/session';
 import { settingsOps } from './ops/settings';
 import { terminalOps } from './ops/terminal';
+import { topicsOps } from './ops/topics';
 import { usageOps } from './ops/usage';
 import { windowOps } from './ops/window';
 import type { OpName, Party, Surface } from './surface';
@@ -21,6 +22,7 @@ import type { OpName, Party, Surface } from './surface';
  */
 
 export const OPS = {
+  ...topicsOps,
   ...appOps,
   ...catalogOps,
   ...conversationOps,

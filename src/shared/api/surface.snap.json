@@ -1,6 +1,10 @@
 {
   "gui": [
+    "api.topics.subscribe",
+    "api.topics.unsubscribe",
     "api.app.info",
+    "api.settings.get",
+    "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
     "api.link.open",
@@ -88,7 +92,6 @@
   "unhosted": {
     "catalog.get": "B8",
     "catalog.installed": "B8",
-    "settings.get": "B8",
     "agents": "B11",
     "status": "B11",
     "needs": "B11",
@@ -100,10 +103,11 @@
     "session.interrupt": "B11",
     "run.pause": "B11",
     "run.kill": "B11",
-    "run.unpause": "B11",
-    "usage.get": "B8"
+    "run.unpause": "B11"
   },
   "deviations": {
+    "topics.subscribe": "transport",
+    "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
     "usage.simulate": "spending-guard",
     "link.open": "os-action",
@@ -117,6 +121,14 @@
     "wait": "transport"
   },
   "schemas": {
+    "topics.subscribe": {
+      "input": "eb59d888d198bdf1",
+      "output": "ba803cbcde9ca0e3"
+    },
+    "topics.unsubscribe": {
+      "input": "eb59d888d198bdf1",
+      "output": "e5fa5cc18e054cdd"
+    },
     "app.info": {
       "input": "e5fa5cc18e054cdd",
       "output": "fb1ca6c18e59cdb2"

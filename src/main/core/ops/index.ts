@@ -8,6 +8,7 @@ import type { LinkOpener } from '../../links';
 import type { FileRevealer } from '../../reveal';
 import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
+import type { Topics } from '../topics';
 import type { OpContext } from '../call';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
@@ -20,6 +21,7 @@ import { runOps } from './run';
 import { sessionOps } from './session';
 import { settingsOps } from './settings';
 import { terminalOps } from './terminal';
+import { topicsOps } from './topics';
 import { usageOps } from './usage';
 import { waitOps } from './wait';
 import { windowOps } from './window';
@@ -36,6 +38,7 @@ export type Implementations = {
 
 /** What the operations act on: the services the core composes (createCore). */
 export interface OpServices {
+  topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
   /** What every adapter declares. */
@@ -67,6 +70,7 @@ export interface OpServices {
 
 export function implementations(services: OpServices): Implementations {
   return {
+    ...topicsOps(services),
     ...appOps(services),
     ...catalogOps(services),
     ...conversationOps(services),

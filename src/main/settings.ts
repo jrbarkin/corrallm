@@ -37,6 +37,7 @@ export class Settings {
   readonly #file: string;
   #settings: Promise<AppSettings> | undefined;
   #writing: Promise<void> = Promise.resolve();
+  readonly #listeners = new Set<() => void>();
 
   constructor(file: string) {
     this.#file = file;
@@ -45,6 +46,14 @@ export class Settings {
   async get(): Promise<AppSettings> {
     await this.#writing;
     return this.#load();
+  }
+
+  /** Hears each update to the settings kept for this run. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
   /** The consent `adapter` asks the user for by `key`, as these settings keep it. */
@@ -84,9 +93,14 @@ export class Settings {
       await writeWhole(this.#file, `${JSON.stringify({ version: VERSION, ...next }, null, 2)}\n`);
     };
     // A failed write is logged: the setting holds for this run.
-    this.#writing = this.#writing.then(run).catch((error: unknown) => {
-      console.error('Could not keep the settings:', error);
-    });
+    this.#writing = this.#writing
+      .then(run)
+      .catch((error: unknown) => {
+        console.error('Could not keep the settings:', error);
+      })
+      .then(() => {
+        for (const listener of this.#listeners) listener();
+      });
     return this.#writing;
   }
 

@@ -33,4 +33,6 @@ export const api = {
     }),
   ),
   terminalOnEvent: (listener) => window.api.terminalOnEvent(listener),
+  topicsOnChange: (listener) => window.api.topicsOnChange(listener),
+  topicsOnEpoch: (listener) => window.api.topicsOnEpoch(listener),
 } as GuiApi;
