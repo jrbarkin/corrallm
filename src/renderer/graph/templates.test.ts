@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { catalog } from '../catalog';
-import { defaultConnection, equivalentAction } from './agents';
+import { defaultConnection } from './agents';
 import type { Graph } from './graph';
 import { fillTemplate, placeholdersOf } from '../../shared/templates';
 import { withAgents, withConnections } from './templates';
@@ -169,21 +168,6 @@ describe('withAgents', () => {
     const [tester] = withAgents(pinned, { tester: undefined }).nodes;
     expect(tester?.data.adapter).toBeUndefined();
     expect(tester?.data.queue?.[0]).toEqual({ id: 'run', action: 'Bash', expect: 'fails' });
-  });
-
-  it('translates each action to the one doing the same job, as the catalog declares jobs', () => {
-    const { adapters } = catalog();
-    for (const from of adapters) {
-      for (const to of adapters) {
-        for (const action of from.actions) {
-          const same =
-            from.id === to.id
-              ? action.name
-              : action.job && to.actions.find((one) => one.job === action.job)?.name;
-          expect(equivalentAction(action.name, from.id, to.id)).toBe(same);
-        }
-      }
-    }
   });
 });
 

@@ -1,11 +1,17 @@
 import type { UsageBackendId } from '../adapter';
 import type { MessageImage, TurnResult } from '../session';
 import type { UsageWindow } from '../usage';
+import type { PartyId } from './messages';
 
 /*
  * An agent's queue: the work it is given, item by item, as the canvas keeps it (an agent node's
  * `queue`: canvas.ts) and its file saves it. Plain data, read wherever the run runs.
  */
+
+/** Who wrote an item's text; absent on items from files made before authorship was kept. */
+interface Authored {
+  by?: PartyId;
+}
 
 /**
  * A step: an action, named as its agent names it, done to the node `target` (an id), or without
@@ -16,7 +22,7 @@ import type { UsageWindow } from '../usage';
  * failing is its success, passing its failure, so what reads how it went (an If, a repeat, a
  * wait) reads whether it went as expected. What the agent is asked does not change.
  */
-export interface QueueStep {
+export interface QueueStep extends Authored {
   id: string;
   action: string;
   target?: string;
@@ -28,7 +34,7 @@ export interface QueueStep {
  * A message: text the user passes an agent as part of the queue. It goes to the queue's own agent,
  * or (`target`, an id) to another one, such as the head of a group.
  */
-export interface QueueMessage {
+export interface QueueMessage extends Authored {
   id: string;
   message: string;
   target?: string;
@@ -77,7 +83,7 @@ export interface UsageAbove {
 }
 
 /** Runs its steps (`then`: actions and messages) only when its condition (`if`) holds. */
-export interface QueueIf {
+export interface QueueIf extends Authored {
   id: string;
   if: Condition;
   then: (QueueStep | QueueMessage)[];
@@ -136,7 +142,7 @@ export const MAX_SECONDS = 7 * 24 * 60 * 60;
  * or in a repeat (where a wait for a step in another repeat waits for that round of it), not in an
  * if-then.
  */
-export interface QueueWait {
+export interface QueueWait extends Authored {
   id: string;
   waitFor: WaitTarget[];
   /**
@@ -150,7 +156,7 @@ export interface QueueWait {
  * A delay: the queue stops here until its time has come, then goes on. Delays sit in the queue
  * itself, or in a repeat (counted afresh each round), not in an if-then.
  */
-export interface QueueDelay {
+export interface QueueDelay extends Authored {
   id: string;
   delay: Time;
 }
@@ -161,7 +167,7 @@ export interface QueueDelay {
  * and the queue goes on; ask for changes (a note the queue's own agent gets, after which it asks
  * again); or stop the queue here. OKs sit in the queue itself, not in an if-then or a repeat.
  */
-export interface QueueApproval {
+export interface QueueApproval extends Authored {
   id: string;
   approve: string;
 }
@@ -193,7 +199,7 @@ export const MAX_ROUNDS = 20;
  * `otherwise` are kept, but unused. Repeats sit in the queue itself, not in an if-then or another
  * repeat.
  */
-export interface QueueRepeat {
+export interface QueueRepeat extends Authored {
   id: string;
   repeat: RepeatedItem[];
   until: Until;
@@ -203,6 +209,38 @@ export interface QueueRepeat {
 
 export type QueueItem =
   QueueStep | QueueMessage | QueueIf | QueueWait | QueueDelay | QueueApproval | QueueRepeat;
+
+/** An item before add mints its id and records its author. */
+export type QueueEntry =
+  | Omit<QueueStep, 'id' | 'by'>
+  | Omit<QueueMessage, 'id' | 'by' | 'submission'>
+  | (Omit<QueueIf, 'id' | 'by' | 'then'> & {
+      then: (Omit<QueueStep, 'id' | 'by'> | Omit<QueueMessage, 'id' | 'by' | 'submission'>)[];
+    })
+  | Omit<QueueWait, 'id' | 'by'>
+  | Omit<QueueDelay, 'id' | 'by'>
+  | Omit<QueueApproval, 'id' | 'by'>
+  | (Omit<QueueRepeat, 'id' | 'by' | 'repeat'> & {
+      repeat: (
+        | Omit<QueueStep, 'id' | 'by'>
+        | Omit<QueueMessage, 'id' | 'by' | 'submission'>
+        | Omit<QueueWait, 'id' | 'by'>
+        | Omit<QueueDelay, 'id' | 'by'>
+      )[];
+    });
+
+/** A single queue field change, checked against the kind of item being edited. */
+export type QueueChange =
+  | { kind: 'message'; message: string }
+  | { kind: 'action'; action: string }
+  | { kind: 'instruction'; instruction: string | null }
+  | { kind: 'expect'; expect: QueueStep['expect'] | null }
+  | { kind: 'target'; target: string | null }
+  | { kind: 'condition'; condition: Condition }
+  | { kind: 'waitFor'; waitFor: WaitTarget[] }
+  | { kind: 'time'; time: Time | null }
+  | { kind: 'approve'; approve: string }
+  | ({ kind: 'repeat' } & Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>);
 
 export function isIf(item: QueueItem): item is QueueIf {
   return 'if' in item;

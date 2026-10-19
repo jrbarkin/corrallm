@@ -13,7 +13,6 @@ import {
   connectionsOf,
   DEFAULT_AGENT,
   defaultConnection,
-  translateActions,
 } from './agents';
 import { fromFile, toFile } from '../../shared/model/file';
 import { addAgent, documentOf, EMPTY_GRAPH, graphOf, setAgent, spawnAgent } from './graph';
@@ -131,8 +130,6 @@ describe('native agent defaults', () => {
         { id: 'run', action: 'Bash' },
         { id: 'look', action: 'Read' },
       ];
-      expect(translateActions(steps, adapter, 'codex')).toEqual(steps);
-      expect(translateActions(steps, 'claude-code', adapter)).toEqual(steps);
       const claude = addAgent(EMPTY_GRAPH, 'a', { x: 0, y: 0 });
       const moved = setAgent(
         {

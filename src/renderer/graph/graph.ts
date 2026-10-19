@@ -1,38 +1,27 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 
-import { isStartMode } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
 import { size as modelSize } from '../../shared/model/geometry';
 import { autosize, size } from './geometry';
 import * as Structure from '../../shared/model/structure';
-import { parseRole } from '../../shared/role';
-import { mergeAgentSettings } from '../../shared/session';
 import type { AgentSettingsChange } from '../../shared/session';
 import { catalog } from '../catalog';
-import { connectionsOf, DEFAULT_AGENT, defaultConnection, translateActions } from './agents';
+import { DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
-import {
-  isApproval,
-  isDelay,
-  isIf,
-  isMessage,
-  isRepeat,
-  isWait,
-  MAX_ROUNDS,
-  sameTarget,
-} from '../../shared/model/queue';
+import { isIf, isRepeat } from '../../shared/model/queue';
 import type {
   Condition,
-  QueueItem,
-  QueueMessage,
+  QueueChange,
+  QueueEntry,
   QueueRepeat,
   QueueStep,
   Time,
   WaitTarget,
 } from '../../shared/model/queue';
-import { sameTime } from '../../shared/model/time';
+import * as QueueOps from '../../shared/model/queue-ops';
+import * as AgentOps from '../../shared/model/agent-ops';
 
 /**
  * `item`: a labelled node with a target handle (top) and a source handle (bottom). While it has
@@ -150,335 +139,145 @@ export function renameNode(graph: Graph, id: string, label: string): Graph {
   return structureEdit(graph, (doc) => Structure.rename(doc, { id, label }), { fit: false });
 }
 
-/**
- * Sets the agent a node runs (its adapter), translating steps and dropping a connection its new
- * adapter does not offer, and a saved mode the connection it now runs does not start in. Groups
- * (frames) have none.
- */
-export function setAgent(graph: Graph, id: string, adapter: AdapterId): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (node?.type !== 'agent' || node.data.adapter === adapter) return graph;
-  const { connection, settings, ...data } = node.data;
-  const kept = connection !== undefined && connectionsOf(adapter).includes(connection);
-  const queue = data.queue && translateActions(data.queue, data.adapter ?? DEFAULT_AGENT, adapter);
-  const runs = kept ? connection : defaultConnection(adapter);
-  return replace(graph, node, {
-    ...data,
-    adapter,
-    ...(queue ? { queue } : {}),
-    ...(kept ? { connection } : {}),
-    ...fitted(settings, adapter, runs),
-  });
+export function setAgent(graph: Graph, agent: string, adapter: AdapterId): Graph {
+  return structureEdit(
+    graph,
+    (doc) =>
+      AgentOps.setType(
+        doc,
+        { agent, adapter },
+        { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+      ),
+    { fit: false },
+  );
 }
-
-/**
- * `settings`, without the mode saved for `adapter` if the connection it runs (`runs`) doesn't start
- * in it: what a file keeps of an agent's settings always reads back (src/shared/model/file.ts).
- */
-function fitted(
-  settings: GraphNode['data']['settings'],
-  adapter: AdapterId,
-  runs: AgentConnection,
-): Pick<GraphNode['data'], 'settings'> {
-  if (settings === undefined) return {};
-  const mode = settings[adapter]?.mode;
-  if (mode === undefined || runs === 'unavailable') return { settings };
-  if (isStartMode(catalog(), adapter, runs, mode)) return { settings };
-  const kept = mergeAgentSettings(settings, adapter, { mode: null });
-  return kept === undefined ? {} : { settings: kept };
+export function setConnection(graph: Graph, agent: string, connection: AgentConnection): Graph {
+  return structureEdit(
+    graph,
+    (doc) =>
+      AgentOps.setConnection(
+        doc,
+        { agent, connection },
+        { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+      ),
+    { fit: false },
+  );
 }
-
-/** `graph` with `node`'s data replaced by `data`. */
-function replace(graph: Graph, node: GraphNode, data: GraphNode['data']): Graph {
-  return { ...graph, nodes: graph.nodes.map((n) => (n === node ? { ...n, data } : n)) };
-}
-
-/**
- * Merges what an agent is set to run with by `adapter`: omitted fields stay, null unsets them.
- * Nothing set by any adapter leaves it no settings at all.
- */
 export function setSettings(
   graph: Graph,
-  id: string,
+  agent: string,
   adapter: AdapterId,
   change: AgentSettingsChange,
 ): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (node?.type !== 'agent') return graph;
-  const { settings: before, ...data } = node.data;
-  const kept = mergeAgentSettings(before, adapter, change);
-  return replace(graph, node, kept === undefined ? data : { ...data, settings: kept });
-}
-
-/** Sets the authored role without changing the agent's per-adapter settings or active session. */
-export function setRole(graph: Graph, id: string, role: string | undefined): Graph {
-  const node = graph.nodes.find((node) => node.id === id);
-  if (node?.type !== 'agent') return graph;
-  const parsed = parseRole(role);
-  if (node.data.role === parsed) return graph;
-  const data = { ...node.data };
-  if (parsed === undefined) delete data.role;
-  else data.role = parsed;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((entry) => (entry === node ? { ...entry, data } : entry)),
-  };
-}
-
-/**
- * Sets the native connection, if its adapter offers it, dropping a saved mode that connection
- * doesn't start in.
- */
-export function setConnection(graph: Graph, id: string, connection: AgentConnection): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  const adapter = node?.data.adapter ?? DEFAULT_AGENT;
-  if (
-    node?.type !== 'agent' ||
-    connection === 'unavailable' ||
-    !connectionsOf(adapter).includes(connection) ||
-    node.data.connection === connection
-  ) {
-    return graph;
-  }
-  const { settings, ...data } = node.data;
-  return replace(graph, node, { ...data, connection, ...fitted(settings, adapter, connection) });
-}
-
-/**
- * Appends an item to a node's queue, or with `into` (the id of an if-then or a repeat in it) to
- * what that holds: an if-then holds steps and messages; a repeat, waits and delays too. Neither
- * holds if-thens, repeats or OKs.
- */
-export function addToQueue(graph: Graph, id: string, item: QueueItem, into?: string): Graph {
-  return updateQueue(graph, id, (queue) => {
-    if (into === undefined) return [...queue, item];
-    if (isIf(item) || isRepeat(item) || isApproval(item)) return queue;
-    return queue.map((q) => {
-      if (q.id !== into) return q;
-      if (isRepeat(q)) return { ...q, repeat: [...q.repeat, item] };
-      return isIf(q) && !isWait(item) && !isDelay(item) ? { ...q, then: [...q.then, item] } : q;
-    });
+  return structureEdit(graph, (doc) => AgentOps.setSettings(doc, { agent, adapter, change }), {
+    fit: false,
   });
 }
-
-/** Removes one item from a node's queue, or from an if-then or a repeat in it. */
-export function removeFromQueue(graph: Graph, id: string, itemId: string): Graph {
-  const keep = (q: QueueItem) => q.id !== itemId;
-  return updateQueue(graph, id, (queue) =>
-    queue
-      .filter(keep)
-      .map((q) =>
-        isIf(q)
-          ? withList(q, 'then', q.then.filter(keep))
-          : isRepeat(q)
-            ? withList(q, 'repeat', q.repeat.filter(keep))
-            : q,
-      ),
-  );
+export function setRole(graph: Graph, agent: string, role: string | undefined): Graph {
+  return structureEdit(graph, (doc) => AgentOps.setRole(doc, { agent, role }), { fit: false });
 }
 
-/**
- * Moves an item to `index` in its list (the queue, an if-then's steps, or what a repeat holds),
- * clamped to its ends.
- */
-export function moveInQueue(graph: Graph, id: string, itemId: string, index: number): Graph {
-  return updateQueue(graph, id, (queue) =>
-    queue.some((q) => q.id === itemId)
-      ? moveTo(queue, itemId, index)
-      : queue.map((q) =>
-          isIf(q)
-            ? withList(q, 'then', moveTo(q.then, itemId, index))
-            : isRepeat(q)
-              ? withList(q, 'repeat', moveTo(q.repeat, itemId, index))
-              : q,
-        ),
+export function addToQueue(
+  graph: Graph,
+  agent: string,
+  entry: QueueEntry,
+  newId: () => string,
+  into?: string,
+): Graph {
+  return structureEdit(
+    graph,
+    (doc) =>
+      QueueOps.add(doc, { agent, entry, ...(into === undefined ? {} : { into }) }, 'you', newId),
+    { fit: false },
   );
 }
+export function removeFromQueue(graph: Graph, agent: string, item: string): Graph {
+  return structureEdit(graph, (doc) => QueueOps.remove(doc, { agent, item }), { fit: false });
+}
 
-/**
- * Sets which node a step acts on, or a message goes to; `undefined` makes it the node whose queue it
- * is in.
- */
+/** The view still supplies a drop index; the model moves by a sibling's id. */
+export function moveInQueue(graph: Graph, agent: string, item: string, index: number): Graph {
+  const queue = graph.nodes.find((node) => node.id === agent)?.data.queue ?? [];
+  const container = queue.find((one) =>
+    isIf(one)
+      ? one.then.some((inner) => inner.id === item)
+      : isRepeat(one) && one.repeat.some((inner) => inner.id === item),
+  );
+  const siblings = queue.some((one) => one.id === item)
+    ? queue
+    : container && isIf(container)
+      ? container.then
+      : container && isRepeat(container)
+        ? container.repeat
+        : [];
+  const rest = siblings.filter((one) => one.id !== item);
+  const before = rest[Math.max(0, index)]?.id ?? null;
+  return structureEdit(graph, (doc) => QueueOps.move(doc, { agent, item, before }), { fit: false });
+}
+function queueChange(graph: Graph, agent: string, item: string, change: QueueChange): Graph {
+  return structureEdit(graph, (doc) => QueueOps.update(doc, { agent, item, change }, 'you'), {
+    fit: false,
+  });
+}
 export function retarget(
   graph: Graph,
-  id: string,
-  itemId: string,
+  agent: string,
+  item: string,
   target: string | undefined,
 ): Graph {
-  return mapItems(graph, id, itemId, (q) => {
-    if (!isStep(q) || q.target === target) return q;
-    const next = { ...q };
-    if (target === undefined) delete next.target;
-    else next.target = target;
-    return next;
-  });
+  return queueChange(graph, agent, item, { kind: 'target', target: target ?? null });
 }
-
-/** Sets what a wait waits for (see WaitTarget). A wait waits for something: an empty list is ignored. */
-export function setWaitFor(graph: Graph, id: string, waitId: string, targets: WaitTarget[]): Graph {
-  if (targets.length === 0) return graph;
-  const same = (waitFor: WaitTarget[]) =>
-    waitFor.length === targets.length &&
-    waitFor.every((target, i) => {
-      const other = targets[i];
-      return other !== undefined && sameTarget(target, other);
-    });
-  return mapItems(graph, id, waitId, (q) =>
-    isWait(q) && !same(q.waitFor) ? { ...q, waitFor: targets } : q,
-  );
+export function editMessage(graph: Graph, agent: string, item: string, message: string): Graph {
+  return queueChange(graph, agent, item, { kind: 'message', message });
 }
-
-/**
- * Sets a delay's time, or a wait's time limit (`undefined` takes the limit off). A delay always has
- * a time: `undefined` leaves it as it is.
- */
-export function setTime(graph: Graph, id: string, itemId: string, time: Time | undefined): Graph {
-  return mapItems(graph, id, itemId, (q) => {
-    if (isDelay(q))
-      return time === undefined || sameTime(q.delay, time) ? q : { ...q, delay: time };
-    if (!isWait(q)) return q;
-    if (time !== undefined)
-      return q.timeout && sameTime(q.timeout, time) ? q : { ...q, timeout: time };
-    if (q.timeout === undefined) return q;
-    const untimed = { ...q };
-    delete untimed.timeout;
-    return untimed;
-  });
+export function setAction(graph: Graph, agent: string, item: string, action: string): Graph {
+  return queueChange(graph, agent, item, { kind: 'action', action });
 }
-
-/** Sets what an OK is on, in the user's words ('' for the work before it). */
-export function setApproval(graph: Graph, id: string, okId: string, approve: string): Graph {
-  return mapItems(graph, id, okId, (q) =>
-    isApproval(q) && q.approve !== approve ? { ...q, approve } : q,
-  );
-}
-
-/**
- * Changes a repeat: when it stops, how many rounds it runs at most (a whole number from 1 to
- * MAX_ROUNDS; others are rounded and clamped), or what it does after the last.
- */
-export function setRepeat(
-  graph: Graph,
-  id: string,
-  repeatId: string,
-  change: Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>,
-): Graph {
-  return mapItems(graph, id, repeatId, (q) => {
-    if (!isRepeat(q)) return q;
-    const next = {
-      ...q,
-      ...change,
-      rounds: Math.min(Math.max(Math.round(change.rounds ?? q.rounds), 1), MAX_ROUNDS),
-    };
-    const same =
-      next.rounds === q.rounds &&
-      next.otherwise === q.otherwise &&
-      JSON.stringify(next.until) === JSON.stringify(q.until);
-    return same ? q : next;
-  });
-}
-
-/** Changes the text of a message in the queue (or in an if-then or a repeat in it). */
-export function editMessage(graph: Graph, id: string, itemId: string, message: string): Graph {
-  return mapItems(graph, id, itemId, (q) =>
-    isMessage(q) && q.message !== message ? { ...q, message } : q,
-  );
-}
-
-/** Says what a step is to do, in the user's words ('' takes it off). */
 export function setInstruction(
   graph: Graph,
-  id: string,
-  itemId: string,
+  agent: string,
+  item: string,
   instruction: string,
 ): Graph {
-  return mapItems(graph, id, itemId, (q) => {
-    if (!('action' in q) || (q.instruction ?? '') === instruction) return q;
-    const step: QueueStep = { ...q, instruction };
-    if (instruction === '') delete step.instruction;
-    return step;
-  });
+  return queueChange(graph, agent, item, { kind: 'instruction', instruction });
 }
-
-/** Expects a step to fail ('fails'), or (undefined) to succeed, as steps do. */
 export function setExpect(
   graph: Graph,
-  id: string,
-  itemId: string,
+  agent: string,
+  item: string,
   expect: QueueStep['expect'],
 ): Graph {
-  return mapItems(graph, id, itemId, (q) => {
-    if (!('action' in q) || q.expect === expect) return q;
-    const step: QueueStep = { ...q };
-    if (expect === undefined) delete step.expect;
-    else step.expect = expect;
-    return step;
-  });
+  return queueChange(graph, agent, item, { kind: 'expect', expect: expect ?? null });
 }
-
-/** Sets what an if-then checks. */
-export function setCondition(graph: Graph, id: string, ifId: string, condition: Condition): Graph {
-  return mapItems(graph, id, ifId, (q) =>
-    isIf(q) && JSON.stringify(q.if) !== JSON.stringify(condition) ? { ...q, if: condition } : q,
-  );
-}
-
-/** `list` with the item `itemId` moved to `index` (clamped); `list` itself if that changes nothing. */
-function moveTo<T extends { id: string }>(list: T[], itemId: string, index: number): T[] {
-  const item = list.find((q) => q.id === itemId);
-  if (!item) return list;
-  const rest = list.filter((q) => q !== item);
-  const at = Math.max(0, Math.min(index, rest.length));
-  return rest[at - 1] === list[at - 1] && list[at] === item
-    ? list
-    : [...rest.slice(0, at), item, ...rest.slice(at)];
-}
-
-/** An if-then or a repeat holding `list` (its `key`): itself when that is what it holds. */
-function withList<T extends QueueItem, K extends keyof T>(q: T, key: K, list: T[K] & unknown[]): T {
-  const before = q[key] as unknown[];
-  return list.length === before.length && list.every((item, i) => item === before[i])
-    ? q
-    : { ...q, [key]: list };
-}
-
-/** Whether an item is a step or a message: what acts on, or goes to, an agent. */
-function isStep(item: QueueItem): item is QueueStep | QueueMessage {
-  return !isIf(item) && !isWait(item) && !isDelay(item) && !isApproval(item) && !isRepeat(item);
-}
-
-/**
- * Changes the item `itemId` of a node's queue, wherever it is (at the top, in an if-then or in a
- * repeat), by `change`: an item of the same kind, or the item itself to change nothing.
- */
-function mapItems(
+export function setCondition(
   graph: Graph,
-  id: string,
-  itemId: string,
-  change: (item: QueueItem) => QueueItem,
+  agent: string,
+  item: string,
+  condition: Condition,
 ): Graph {
-  const one = <T extends QueueItem>(q: T): T => (q.id === itemId ? (change(q) as T) : q);
-  return updateQueue(graph, id, (queue) =>
-    queue.map((q) => {
-      const changed = one(q);
-      if (changed !== q) return changed;
-      if (isIf(q)) return withList(q, 'then', q.then.map(one));
-      if (isRepeat(q)) return withList(q, 'repeat', q.repeat.map(one));
-      return q;
-    }),
-  );
+  return queueChange(graph, agent, item, { kind: 'condition', condition });
 }
-
-function updateQueue(graph: Graph, id: string, update: (queue: QueueItem[]) => QueueItem[]): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (!node) return graph;
-  const before = node.data.queue ?? [];
-  const queue = update(before);
-  if (queue.length === before.length && queue.every((item, i) => item === before[i])) return graph;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, queue } } : n)),
-  };
+export function setWaitFor(
+  graph: Graph,
+  agent: string,
+  item: string,
+  waitFor: WaitTarget[],
+): Graph {
+  return queueChange(graph, agent, item, { kind: 'waitFor', waitFor });
+}
+export function setTime(graph: Graph, agent: string, item: string, time: Time | undefined): Graph {
+  return queueChange(graph, agent, item, { kind: 'time', time: time ?? null });
+}
+export function setApproval(graph: Graph, agent: string, item: string, approve: string): Graph {
+  return queueChange(graph, agent, item, { kind: 'approve', approve });
+}
+export function setRepeat(
+  graph: Graph,
+  agent: string,
+  item: string,
+  change: Partial<Pick<QueueRepeat, 'until' | 'rounds' | 'otherwise'>>,
+): Graph {
+  return queueChange(graph, agent, item, { kind: 'repeat', ...change });
 }
 
 /** Makes node `id` the only selected element. Returns the same graph when it already is. */

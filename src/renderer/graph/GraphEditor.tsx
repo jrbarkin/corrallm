@@ -615,8 +615,21 @@ function Editor({
   const edits = useMemo<QueueEdits>(
     () => ({
       add: (owner, entry, into) => {
-        const item = { id: crypto.randomUUID(), ...entry };
-        setGraph((g) => addToQueue(g, owner, item, into));
+        const id = entry.id ?? crypto.randomUUID();
+        setGraph((g) => {
+          let first = true;
+          return addToQueue(
+            g,
+            owner,
+            entry,
+            () => {
+              const next = first ? id : crypto.randomUUID();
+              first = false;
+              return next;
+            },
+            into,
+          );
+        });
       },
       remove: (owner, itemId) => {
         setGraph((g) => removeFromQueue(g, owner, itemId));

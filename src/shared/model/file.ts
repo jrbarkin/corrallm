@@ -9,6 +9,8 @@ import { MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
 import { GROUP_COLORS } from './geometry';
 import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
+import { PARTY_PATTERN } from './messages';
+import type { PartyId } from './messages';
 import type {
   Condition,
   QueueDelay,
@@ -375,17 +377,30 @@ function readItem(value: unknown, where: string): QueueItem {
   if ('waitFor' in item) return readWait(item, where);
   if ('delay' in item) return readDelay(item, where);
   if ('approve' in item) {
-    return { id: name(item.id, `${where}.id`), approve: text(item.approve, `${where}.approve`) };
+    return {
+      id: name(item.id, `${where}.id`),
+      ...author(item, where),
+      approve: text(item.approve, `${where}.approve`),
+    };
   }
   if ('repeat' in item) return readRepeat(item, where);
   if ('if' in item) {
     return {
       id: name(item.id, `${where}.id`),
+      ...author(item, where),
       if: readCondition(item.if, `${where}.if`),
       then: items(item.then, `${where}.then`, readStep),
     };
   }
   return readStep(value, where);
+}
+
+/** Queue text keeps its author when the canvas is saved and opened again. */
+function author(item: Record<string, unknown>, where: string): { by?: PartyId } {
+  if (item.by === undefined) return {};
+  if (typeof item.by !== 'string' || !PARTY_PATTERN.test(item.by))
+    throw new Error(`${where}.by must be a party id`);
+  return { by: item.by as PartyId };
 }
 
 /** A step or a message: what an if-then holds. */
@@ -399,7 +414,13 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   const id = name(item.id, `${where}.id`);
   const target = optional(item.target, `${where}.target`, name);
   const aimed = target === undefined ? {} : { target };
-  if ('message' in item) return { id, message: text(item.message, `${where}.message`), ...aimed };
+  if ('message' in item)
+    return {
+      id,
+      ...author(item, where),
+      message: text(item.message, `${where}.message`),
+      ...aimed,
+    };
   const instruction = optional(item.instruction, `${where}.instruction`, text);
   const expect = optional(item.expect, `${where}.expect`, (v, at): 'fails' => {
     if (v !== 'fails') throw new Error(`${at} must be "fails"`);
@@ -407,6 +428,7 @@ function readStep(value: unknown, where: string): QueueStep | QueueMessage {
   });
   return {
     id,
+    ...author(item, where),
     action: name(item.action, `${where}.action`),
     ...aimed,
     ...(instruction === undefined || instruction === '' ? {} : { instruction }),
@@ -430,7 +452,7 @@ function readRepeat(item: Record<string, unknown>, where: string): QueueRepeat {
   if (otherwise !== 'ask' && otherwise !== 'goOn') {
     throw new Error(`${where}.otherwise must be "ask" or "goOn"`);
   }
-  return { id, repeat, until, rounds, otherwise };
+  return { id, ...author(item, where), repeat, until, rounds, otherwise };
 }
 
 /** What a repeat holds: a step, a message, a wait or a delay. */
@@ -450,13 +472,18 @@ function readWait(item: Record<string, unknown>, where: string): QueueWait {
   const timeout = optional(item.timeout, `${where}.timeout`, readTime);
   return {
     id: name(item.id, `${where}.id`),
+    ...author(item, where),
     waitFor: waitFor.filter((target, i) => waitFor.findIndex((t) => sameTarget(t, target)) === i),
     ...(timeout === undefined ? {} : { timeout }),
   };
 }
 
 function readDelay(item: Record<string, unknown>, where: string): QueueDelay {
-  return { id: name(item.id, `${where}.id`), delay: readTime(item.delay, `${where}.delay`) };
+  return {
+    id: name(item.id, `${where}.id`),
+    ...author(item, where),
+    delay: readTime(item.delay, `${where}.delay`),
+  };
 }
 
 /**

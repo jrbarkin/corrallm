@@ -264,8 +264,8 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      (QueueRepeat: steps, messages, waits and delays run in rounds until a
                      condition holds, at most `rounds`, then ask or go on; or, `until` a
                      RepeatEnds, going round with another agent's repeat) is one item holding
-                     others: findItem (model/queue.ts) finds an item at any depth, and graph.ts's
-                     operations reach inside through mapItems;
+                     others: findItem (model/queue.ts) finds an item at any depth, and queue-ops.ts's
+                     edits reach its list by id; graph.ts calls those shared edits;
                      automatic layout (dagre) in layout.ts. Geometry comes from src/shared/model/geometry.ts;
                      graph/geometry.ts adapts its sizes and pinned corners to React Flow measurements
                      and drag state, preserving node identity when nothing changes. Stored edges are links (agents that can
@@ -281,7 +281,7 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      each one valid and written exactly as toFile writes it. A template may leave
                      blanks ({{key}}, filled from its `fields`; src/shared/templates.ts) and leave agents' types
                      open (no `adapter`: the default, or chosen when it is used; withAgents translates
-                     steps between types via EQUIVALENT_ACTIONS in agents.ts). The gallery's form
+                     steps between types by their catalog jobs through model/agent-ops.ts). The gallery's form
                      also chooses how each agent runs (withConnections): by default in a Terminal
                      by native default (`defaultConnection`); missing installed CLIs are labelled
                      without falling back to fake work. A template's tool steps say what
@@ -397,14 +397,17 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
                 references.ts (clears surviving queues when agents are deleted, returning what
-                changed in words; used by structure.ts's delete),
+                changed in words; used by structure.ts's remove),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
                 members, links, an agent's name, its manager, its team and what it is nested
                 in), geometry.ts (fixed CARD_SIZE, group colours, autosize, bounds, hit testing and
                 absolute positions over model nodes, with no DOM sizes; a view may provide its box
                 reader and writer), structure.ts (pure structure edits over CanvasDocument, with
                 explicit ids, caller-supplied new ids and default adapter, selection hints and
-                unchanged objects kept by reference), work.ts (the work arrows derived from agents' queues), file.ts (the .corral
+                unchanged objects kept by reference), queue-ops.ts (add, remove, move by neighbour,
+                and a field change union, preserving text authorship), agent-ops.ts (adapter,
+                connection, settings and role edits, translating steps by catalog jobs), work.ts
+                (the work arrows derived from agents' queues), file.ts (the .corral
                 format: a CanvasDocument read against the catalog, an agent naming no adapter
                 running the default it is given, and written back), words.ts (how the queue's
                 items, times and usage holds read, in what the run says and wherever they are
@@ -612,7 +615,7 @@ What every adapter declares about the agent it runs is plain data, the catalog (
 
 - The ids: adapters `claude-code` and `codex`; connections `<adapter>.<name>`, in their adapter's order, the first its default (`claude-code.terminal`, `claude-code.sdk`; `codex.terminal`, `codex.app-server`); usage backends `claude-code` (Claude Code's Terminal spends it) and `codex` (both of Codex's), each with the windows `fiveHour` and `weekly`. They name everything stored (`.corral` files, `canvases.json`'s conversations, `settings.json`'s consents, `usage.json`, run checkpoints) and every IPC argument.
 - Each adapter's contract test (`<its folder>/adapter.test.ts`) pins its descriptor: its ids and connection order, each mode's `asks` and `rank`, each connection's `startModes`, `shellPrefix` and `usage`, its `logo` and `registerMcp`, and that each connection's `live` and `panels` match the methods of the LiveSession its connector starts. `adapters.test.ts` checks what holds for every adapter (unique ids of the right shape, start modes that ask, declared backends, a connector and an options reader for each) and keeps the renderer tests' copy (see Testing).
-- The core reads it in args.ts (a connection, an adapter, a mode a connection starts in, a usage backend), the manager (a connection's adapter and its modes) and usage.ts (the backends it keeps, in the app and in `createCore`; `usage.get`'s schema takes a backend by `ID_PATTERN`'s shape, since the registry names no adapter). The renderer gets it through `api.catalogGet()` (`catalog.get`) before it mounts (boot.ts) and reads it in usage.ts and catalog.ts's lookups, and reads files against it (`src/shared/model/file.ts`, as the core does); the engine (the run and the sessions) reads it through the `EngineCatalog` it is given (`src/shared/engine/catalog.ts`: an agent's adapter and connection, the adapter an agent naming none runs, its actions, the usage backend it spends, whether a connection starts in a mode, whether a mode never asks, a connection's label and a usage backend's name; `runCatalog` in agents.ts makes the renderer's, which its views also pass to the words they share with the run; the core makes its own, its default adapter the registry's `DEFAULT_ADAPTER`), never a table of its own nor the loaded catalog. The renderer's own tables (agents.ts: connections' words, actions, equivalent actions; agent/modes.ts: modes) remain until the UI reads the catalog throughout, kept equal to it by agents.test.ts (connections' words, actions), templates.test.ts (equivalent actions, by the actions' `job`s) and agent/modes.test.ts (modes, and the modes Shift+Tab cycles: those that ask); agents.ts' names (an agent's, its CLI's) are the UI's own words, not the catalog's `name`.
+- The core reads it in args.ts (a connection, an adapter, a mode a connection starts in, a usage backend), the manager (a connection's adapter and its modes) and usage.ts (the backends it keeps, in the app and in `createCore`; `usage.get`'s schema takes a backend by `ID_PATTERN`'s shape, since the registry names no adapter). The renderer gets it through `api.catalogGet()` (`catalog.get`) before it mounts (boot.ts) and reads it in usage.ts and catalog.ts's lookups, and reads files against it (`src/shared/model/file.ts`, as the core does); the engine (the run and the sessions) reads it through the `EngineCatalog` it is given (`src/shared/engine/catalog.ts`: an agent's adapter and connection, the adapter an agent naming none runs, its actions, the usage backend it spends, whether a connection starts in a mode, whether a mode never asks, a connection's label and a usage backend's name; `runCatalog` in agents.ts makes the renderer's, which its views also pass to the words they share with the run; the core makes its own, its default adapter the registry's `DEFAULT_ADAPTER`), never a table of its own nor the loaded catalog. The renderer's own tables (agents.ts: connections' words and actions; agent/modes.ts: modes) remain until the UI reads the catalog throughout, kept equal to it by agents.test.ts (connections' words, actions), model/agent-ops.test.ts (translation by the actions' `job`s) and agent/modes.test.ts (modes, and the modes Shift+Tab cycles: those that ask); agents.ts' names (an agent's, its CLI's) are the UI's own words, not the catalog's `name`.
 - Declared for what comes next: `logo` (an SVG document of the adapter's, drawn only as an `<img>` from a `data:` URL; today the UI guide's stand-in marks), `accent`, `words`, `registerMcp`, `continueIn`, `keys`, `images`, `panels`, `role`, `resume`, `list`, and actions' `job`s.
 
 ## Connected sessions

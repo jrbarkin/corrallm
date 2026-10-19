@@ -52,6 +52,7 @@ import type {
   Condition,
   QueueApproval,
   QueueDelay,
+  QueueEntry as ModelQueueEntry,
   QueueIf,
   QueueItem,
   QueueMessage,
@@ -71,16 +72,8 @@ import '../run/run.css';
 
 const EMPTY: readonly QueueItem[] = [];
 
-/** A queue item, before it is added: its id is made then, unless it brings one. */
-export type QueueEntry = (
-  | Omit<QueueStep, 'id'>
-  | Omit<QueueMessage, 'id'>
-  | Omit<QueueIf, 'id'>
-  | Omit<QueueWait, 'id'>
-  | Omit<QueueDelay, 'id'>
-  | Omit<QueueApproval, 'id'>
-  | Omit<QueueRepeat, 'id'>
-) & { id?: string };
+/** The wait chooser supplies its id until queue.add returns it through the operation. */
+export type QueueEntry = ModelQueueEntry & { id?: string };
 
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
 export interface StepChoice {

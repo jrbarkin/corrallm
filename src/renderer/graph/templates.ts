@@ -1,12 +1,14 @@
 import type { AdapterId } from '../../shared/adapter';
-import { connectionsOf, DEFAULT_AGENT, translateActions } from './agents';
+import { connectionsOf, DEFAULT_AGENT } from './agents';
+import { translateActions } from '../../shared/model/agent-ops';
+import { catalog } from '../catalog';
 import type { AgentConnection } from './agents';
 import type { Graph } from './graph';
 
 /**
  * A template's agents given their types (`types`, by agent id; undefined leaves an agent open, to
  * be the default agent). A step whose action the new type lacks becomes the action that does the
- * same job in it, if there is one (agents.ts); otherwise it stays, for the user to change. Agents
+ * same job in it, if the catalog declares one; otherwise it stays, for the user to change. Agents
  * not in `types` keep theirs.
  */
 export function withAgents(
@@ -20,7 +22,7 @@ export function withAgents(
       const was = node.data.adapter ?? DEFAULT_AGENT;
       const type = types[node.id];
       const now = type ?? DEFAULT_AGENT;
-      const queue = node.data.queue && translateActions(node.data.queue, was, now);
+      const queue = node.data.queue && translateActions(node.data.queue, was, now, catalog());
       const data = { ...node.data, ...(queue ? { queue } : {}) };
       if (type === undefined) delete data.adapter;
       else data.adapter = type;
