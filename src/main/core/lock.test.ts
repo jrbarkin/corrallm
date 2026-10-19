@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -81,6 +81,25 @@ describe('lockProfile', () => {
     const lock = await lockProfile(profile, 'app');
     expect(await held()).toMatchObject({ owner: 'app', pid: process.pid });
     lock.release();
+  });
+
+  it('lets only one of several taking over a lock left behind at once have it', async () => {
+    const pid = await deadPid();
+    for (let round = 0; round < 20; round++) {
+      await writeFile(lockFile, JSON.stringify({ owner: 'serve', pid, started: STARTED }));
+      const tries = await Promise.allSettled(
+        Array.from({ length: 8 }, (_, i) => lockProfile(profile, i % 2 === 0 ? 'app' : 'serve')),
+      );
+      const took = tries.flatMap((one) => (one.status === 'fulfilled' ? [one.value] : []));
+      expect(took, `round ${String(round)}`).toHaveLength(1);
+      for (const one of tries) {
+        if (one.status === 'rejected') expect(one.reason).toBeInstanceOf(ProfileLocked);
+      }
+      // The one that has it holds the lock file, and nothing else is left beside it.
+      expect(await held()).toMatchObject({ pid: process.pid });
+      expect((await readdir(profile)).sort()).toEqual(['core.lock']);
+      took[0]?.release();
+    }
   });
 
   it.skipIf(process.platform === 'win32')(

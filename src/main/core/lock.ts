@@ -10,7 +10,9 @@ import path from 'node:path';
  * one profile, but `serve` is plain Node: without this, the two could write one profile's stores
  * (canvases.json, the run journal, tokens.json) at once. A lock whose process is gone, or whose pid
  * another process has since been given (it started after the lock's did), is taken over, and so is
- * one left half written long enough ago.
+ * one left half written long enough ago: by one process at a time, holding core.lock.taking (opened
+ * O_EXCL too) while it checks that the lock is still the one left behind, removes it and takes the
+ * profile, so that of several taking one over at once, only one has it.
  */
 
 export type LockOwner = 'app' | 'serve';
@@ -65,31 +67,58 @@ export async function lockProfile(profile: string, owner: LockOwner): Promise<Pr
     pid: process.pid,
     started: Math.round(Date.now() - process.uptime() * 1000),
   };
-  // Once to take it, and once more after taking over a lock left behind.
-  for (let tries = 0; tries < 2; tries++) {
-    try {
-      const handle = await open(file, 'wx');
-      try {
-        await handle.writeFile(JSON.stringify(mine));
-        await handle.sync();
-      } finally {
-        await handle.close();
+  const taking = `${file}.taking`;
+  // Once to take it, and again after a lock left behind was removed, or went meanwhile.
+  for (let tries = 0; tries < 3; tries++) {
+    if (await create(file, mine)) return held(file, mine);
+    const found = await lockIn(file);
+    if (found === 'gone') continue;
+    if (!(await leftBehind(file, found))) throw new ProfileLocked(found.holder);
+    if (!(await create(taking, mine))) {
+      const other = await lockIn(taking);
+      if (other !== 'gone' && !(await leftBehind(taking, other))) {
+        throw new ProfileLocked(undefined);
       }
-      return held(file, mine);
-    } catch (error) {
-      if (!isCode(error, 'EEXIST')) throw error;
+      // A process taking the lock over ended before it was done: its claim goes, and it tries again.
+      await rm(taking, { force: true });
+      continue;
     }
-    const holder = await holderOf(file);
-    if (holder === 'gone') continue;
-    if (holder === undefined) {
-      if (await beingWritten(file)) throw new ProfileLocked(undefined);
-    } else if (alive(holder)) {
-      throw new ProfileLocked(holder);
+    try {
+      // Still the lock it found left behind: no other process took the profile meanwhile.
+      const now = await lockIn(file);
+      if (now !== 'gone' && now.text === found.text) await rm(file, { force: true });
+    } finally {
+      await rm(taking, { force: true });
     }
-    await rm(file, { force: true });
   }
-  const holder = await holderOf(file);
-  throw new ProfileLocked(holder === 'gone' ? undefined : holder);
+  const found = await lockIn(file);
+  throw new ProfileLocked(found === 'gone' ? undefined : found.holder);
+}
+
+/** Creates `file` holding `holder`, forced to disk: false if it is there already. */
+async function create(file: string, holder: LockHolder): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(file, 'wx');
+  } catch (error) {
+    if (isCode(error, 'EEXIST')) return false;
+    throw error;
+  }
+  try {
+    await handle.writeFile(JSON.stringify(holder));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return true;
+}
+
+/**
+ * Whether a lock is left behind: its process is gone, or it can't be read and was last written
+ * long enough ago that no one is writing it.
+ */
+async function leftBehind(file: string, { holder }: { holder?: LockHolder }): Promise<boolean> {
+  return holder === undefined ? !(await beingWritten(file)) : !alive(holder);
 }
 
 /** The lock this process holds in `file`, as `mine`. */
@@ -106,10 +135,15 @@ function held(file: string, mine: LockHolder): ProfileLock {
   };
 }
 
-/** Who a lock file says holds the profile; undefined if it can't be read; 'gone' if it isn't there. */
-async function holderOf(file: string): Promise<LockHolder | undefined | 'gone'> {
+/**
+ * A lock file's text, and who it says holds the profile (none if it can't be read); 'gone' if it
+ * isn't there.
+ */
+async function lockIn(file: string): Promise<{ text: string; holder?: LockHolder } | 'gone'> {
   try {
-    return read(await readFile(file, 'utf8'));
+    const text = await readFile(file, 'utf8');
+    const holder = read(text);
+    return holder === undefined ? { text } : { text, holder };
   } catch (error) {
     if (isCode(error, 'ENOENT')) return 'gone';
     throw error;
