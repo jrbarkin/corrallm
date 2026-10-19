@@ -2,6 +2,7 @@ import { closeSync, openSync } from 'node:fs';
 import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { faults } from './faults';
 import { backup, connect } from './sqlite';
 
 /*
@@ -10,7 +11,8 @@ import { backup, connect } from './sqlite';
  * of its files, which would miss its log or tear), each a file of its own (no log beside it),
  * named for when it was taken. The profile keeps the newest SNAPSHOTS_KEPT. A snapshot is taken
  * beside its name and moved there once whole, so one cut short never passes for the latest; what
- * it left is removed as the next is taken.
+ * it left is removed as the next is taken. One that SQLite's quick check finds a fault in is never
+ * kept: the database it copied looks damaged, and the older snapshots stay to restore.
  *
  * The backup reads through a connection of its own, in one step: SQLite refuses a step while its
  * source connection is writing (SQLITE_LOCKED, which node:sqlite reports as "not an error"), and
@@ -84,6 +86,12 @@ export async function takeSnapshot(source: string, profile: string, at: number):
     const copy = connect(partial);
     try {
       copy.exec('PRAGMA journal_mode = DELETE');
+      const found = faults(copy);
+      if (found !== undefined) {
+        throw new Error(
+          `The core’s database looks damaged (SQLite’s check of a snapshot of it found: ${found}), so the snapshot was not kept.`,
+        );
+      }
     } finally {
       copy.close();
     }

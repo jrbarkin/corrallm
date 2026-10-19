@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -354,6 +354,37 @@ describe('snapshots', () => {
       'core-2026-10-19T03-00-00-000Z.db',
       'core-2026-10-19T04-00-00-000Z.db',
     ]);
+  });
+
+  it('keeps no snapshot of a database that looks damaged, nor forgets an older one for it', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await store.write(() => {
+      for (let i = 0; i < 300; i++) add('x'.repeat(200));
+    });
+    store.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    await store.snapshot();
+    // The disk damages pages of the open database (as a failing drive may), unnoticed by the core.
+    const pages = (await stat(store.file)).size / 4096;
+    const handle = await open(store.file, 'r+');
+    for (const page of [pages - 6, pages - 4, pages - 2]) {
+      await handle.write(Buffer.alloc(512, 0x5a), 0, 512, (page - 1) * 4096 + 100);
+    }
+    await handle.close();
+
+    for (const hour of [16, 20, 24, 28]) {
+      now = Date.UTC(2026, 9, 19, hour);
+      await expect(store.snapshot()).rejects.toThrow(
+        /^The core’s database looks damaged \(SQLite’s check of a snapshot of it found: .+\), so the snapshot was not kept\.$/,
+      );
+    }
+
+    expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
+    await store.close();
+    expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
+    expect(errors).toHaveBeenCalledWith(
+      'Could not take a snapshot of the core’s database as it closed:',
+      expect.objectContaining({ message: expect.stringMatching(/looks damaged/) }),
+    );
   });
 
   it('removes what a snapshot cut short left behind', async () => {
