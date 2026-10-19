@@ -4,7 +4,8 @@ import path from 'node:path';
 import { migrate, minReaderOf, SCHEMA, schemaOf } from './migrations';
 import { connect } from './sqlite';
 import type { Connection } from './sqlite';
-import { Store } from './store';
+import { Store, SYSTEM_DEPS } from './store';
+import type { StoreDeps } from './store';
 
 /*
  * Opening the profile's database (Core Database §5): <profile>/core.db, made 0600 before SQLite
@@ -47,10 +48,10 @@ export interface Opened {
 }
 
 /** Opens the profile's database, as the core opens it once it holds core.lock. Never rejects. */
-export function openStore(profile: string): Promise<Opened> {
+export function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
   const file = path.join(profile, STORE_FILE);
   try {
-    return Promise.resolve({ store: new Store(openConnection(file), file), said: [] });
+    return Promise.resolve({ store: new Store(openConnection(file), file, deps), said: [] });
   } catch (error) {
     if (error instanceof Refusal)
       return Promise.resolve({ store: undefined, said: [error.message] });

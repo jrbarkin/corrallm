@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,22 +7,54 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import type { Connection } from './sqlite';
-import type { Store } from './store';
+import type { Store, StoreDeps } from './store';
 
 /*
  * The core's database, open (Core Database §4): one write lane, whose writes queued within one
  * turn of the loop share one transaction (group commit), each resolving only once the commit that
- * holds it has returned: what "on disk before it is sent" means now.
+ * holds it has returned: what "on disk before it is sent" means now. Its log is checkpointed when
+ * it is idle, and truncated as it closes.
  */
+
+/** A timer the store set, and whether it ran or was cancelled since. */
+interface Timer {
+  run: () => void;
+  ms: number;
+  done: boolean;
+}
 
 let profile: string;
 let store: Store;
 /** A second connection, which only reads: what another process would see on disk. */
 let reader: Connection;
+/** The store's clock, and the timers it set, by the test's hand. */
+let now: number;
+let timers: Timer[];
+const deps: StoreDeps = {
+  later: (run, ms) => {
+    const timer = { run, ms, done: false };
+    timers.push(timer);
+    return () => {
+      timer.done = true;
+    };
+  },
+  now: () => now,
+};
+/** The timers the store has set that neither ran nor were cancelled. */
+const pending = () => timers.filter(({ done }) => !done);
+/** Runs the one timer pending. */
+function fire(): void {
+  const [timer, ...others] = pending();
+  if (timer === undefined || others.length > 0) throw new Error('Not one timer pending');
+  timer.done = true;
+  timer.run();
+}
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-store-'));
-  const opened = await openStore(profile);
+  now = Date.UTC(2026, 9, 19, 12);
+  timers = [];
+  const opened = await openStore(profile, deps);
   if (opened.store === undefined) throw new Error(opened.said.join(' '));
   store = opened.store;
   store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
@@ -30,7 +62,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  reader.close();
+  if (reader.isOpen) reader.close();
   await store.close();
   await rm(profile, { recursive: true, force: true });
 });
@@ -171,5 +203,52 @@ describe('tx', () => {
   it('commits at once what its function did, and returns what it returned', () => {
     expect(store.tx(() => add('now').changes)).toBe(1);
     expect(notes()).toEqual(['now']);
+  });
+});
+
+describe('checkpoints', () => {
+  it('checkpoints the log into the database once writes stop for a second', async () => {
+    const size = async () => (await stat(store.file)).size;
+    await store.write(() => {
+      for (let i = 0; i < 200; i++) add(`note ${String(i)}`);
+    });
+    const before = await size();
+    expect(pending()).toEqual([expect.objectContaining({ ms: 1000 })]);
+
+    fire();
+
+    expect(await size()).toBeGreaterThan(before);
+    expect(pending()).toEqual([]);
+  });
+
+  it('waits for a pause after each commit, but never more than 30 seconds in all', async () => {
+    await store.write(() => add('first'));
+    for (let i = 0; i < 59; i++) {
+      now += 500;
+      store.tx(() => add('another'));
+    }
+    // 29.5 s after the first commit: its checkpoint is due in half a second, whatever comes.
+    expect(pending().map(({ ms }) => ms)).toEqual([500]);
+    now += 500;
+    store.tx(() => add('one more'));
+    expect(pending().map(({ ms }) => ms)).toEqual([0]);
+    fire();
+    store.tx(() => add('after the checkpoint'));
+    expect(pending().map(({ ms }) => ms)).toEqual([1000]);
+  });
+
+  it('truncates its log as it closes, keeping everything in the database', async () => {
+    await store.write(() => add('kept'));
+    reader.close();
+    await store.close();
+    await store.close();
+    await expect(stat(`${store.file}-wal`)).rejects.toThrow(/ENOENT/);
+    expect(pending()).toEqual([]);
+    const reopened = connect(store.file, { readOnly: true });
+    try {
+      expect(reopened.prepare('SELECT text FROM note').all()).toEqual([{ text: 'kept' }]);
+    } finally {
+      reopened.close();
+    }
   });
 });

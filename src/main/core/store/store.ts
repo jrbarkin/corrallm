@@ -12,7 +12,41 @@ import { rollback, savepoint, transaction } from './transaction';
  * record on disk before it is sent" means. A commit that fails rejects every write it held, and
  * the writes after it are a batch of their own. Commits block the loop (node:sqlite is
  * synchronous), so batching them amortizes the one sync each costs among every write it holds.
+ *
+ * SQLite checkpoints nothing by itself (wal_autocheckpoint is off: its checkpoints would land in
+ * the middle of a commit): the store checkpoints its log into the database once it is idle
+ * (PASSIVE: never waiting for a reader), and truncates the log as it closes.
  */
+
+/**
+ * What the store's timers run on: in tests, by the test's hand.
+ */
+export interface StoreDeps {
+  /** Runs `run` after `ms`; returns what cancels it. */
+  later: (run: () => void, ms: number) => () => void;
+  /** The time, in epoch ms. */
+  now: () => number;
+}
+
+/** The real clock. A checkpoint's timer keeps no process running: the log is on disk already. */
+export const SYSTEM_DEPS: StoreDeps = {
+  later: (run, ms) => {
+    const timer = setTimeout(run, ms).unref();
+    return () => {
+      clearTimeout(timer);
+    };
+  },
+  now: () => Date.now(),
+};
+
+/**
+ * How long the store waits after a commit for no other before it checkpoints its log into the
+ * database: a second, so a checkpoint (milliseconds of the loop, more for a long log) falls
+ * between bursts of work, not in their middle.
+ */
+const CHECKPOINT_IDLE_MS = 1000;
+/** The longest a store that never pauses goes without checkpointing, so its log stays short. */
+const CHECKPOINT_AT_MOST_MS = 30_000;
 
 /** A write waiting in the lane. */
 interface Queued {
@@ -25,16 +59,22 @@ export class Store {
   /** The database's file. */
   readonly file: string;
   readonly #connection: Connection;
+  readonly #deps: StoreDeps;
   /** Each statement prepared, by its SQL. */
   readonly #statements = new Map<string, Statement>();
   /** The writes waiting for the lane's next commit, in order. */
   #queue: Queued[] = [];
   #scheduled = false;
+  /** Cancels the checkpoint due, if one is. */
+  #cancelCheckpoint: (() => void) | undefined;
+  /** When the first commit the log holds unchecked came, if one did. */
+  #uncheckpointedSince: number | undefined;
   #closing: Promise<void> | undefined;
 
-  constructor(connection: Connection, file: string) {
+  constructor(connection: Connection, file: string, deps: StoreDeps) {
     this.#connection = connection;
     this.file = file;
+    this.#deps = deps;
   }
 
   /**
@@ -60,7 +100,10 @@ export class Store {
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns.
    */
   tx<T>(run: () => T): T {
-    return transaction(this.#connection, run);
+    const outermost = !this.#connection.isTransaction;
+    const value = transaction(this.#connection, run);
+    if (outermost) this.#committed();
+    return value;
   }
 
   /**
@@ -95,6 +138,7 @@ export class Store {
   async #close(): Promise<void> {
     await Promise.resolve();
     this.#flush();
+    this.#cancelCheckpoint?.();
     try {
       this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     } catch (error) {
@@ -140,6 +184,31 @@ export class Store {
       return [];
     }
     for (const [write, value] of done) write.resolve(value);
+    this.#committed();
     return [];
+  }
+
+  /** Sets the checkpoint due once the store is idle, or at most so long after the first commit. */
+  #committed(): void {
+    this.#cancelCheckpoint?.();
+    const now = this.#deps.now();
+    this.#uncheckpointedSince ??= now;
+    const due = this.#uncheckpointedSince + CHECKPOINT_AT_MOST_MS - now;
+    this.#cancelCheckpoint = this.#deps.later(
+      () => {
+        this.#checkpoint();
+      },
+      Math.max(0, Math.min(CHECKPOINT_IDLE_MS, due)),
+    );
+  }
+
+  #checkpoint(): void {
+    this.#cancelCheckpoint = undefined;
+    this.#uncheckpointedSince = undefined;
+    try {
+      this.#connection.prepare('PRAGMA wal_checkpoint(PASSIVE)').get();
+    } catch (error) {
+      console.error('Could not checkpoint the core’s database:', error);
+    }
   }
 }
