@@ -1,0 +1,729 @@
+import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+
+import type { AdapterId, Catalog } from '../../../shared/adapter';
+import type { CanvasId } from '../../../shared/canvas';
+import { MAX_CANVAS_BYTES } from '../../../shared/ipc';
+import type { CanvasDocument } from '../../../shared/model/canvas';
+import { fromFile, toFile } from '../../../shared/model/file';
+import type { PartyId } from '../../../shared/model/messages';
+import {
+  diffRows,
+  entityOf,
+  fromRows,
+  itemKey,
+  linkKey,
+  META,
+  nodeKey,
+  toRows,
+} from '../../../shared/model/rows';
+import type {
+  EntityKey,
+  ItemRow,
+  LinkRow,
+  MetaRow,
+  NodeRow,
+  Row,
+  Rows,
+} from '../../../shared/model/rows';
+import type { CanvasMemory } from '../../memory';
+import { writeWhole } from '../../whole-file';
+import type { TrustedPath } from '../host';
+import type { Database } from '../store/store';
+
+/*
+ * Each canvas's document as the core keeps it (B9 Design §2, §5): in its database's rows
+ * (document, node, link, queue_item: src/shared/model/rows.ts), read once as the canvas loads, and
+ * in memory from then on, the live document every reader reads. A canvas with no rows yet is read
+ * from the file canvas memory keeps for it (`file.open`, by you), and kept in rows from then on: so
+ * its edits since it was saved survive a restart, and a file changed on disk is never read over
+ * them (B9's file reviews will say so). A draft is kept once it holds something.
+ *
+ * A change commits write-through: what it changed, entity by entity (diffRows), is written in one
+ * write of the database's lane with the revision it takes (the document's next) and what it was,
+ * and the live document is the changed one only once that write is on disk, so a commit that fails
+ * leaves it as it was. Commits on a canvas go one at a time, each against what the one before
+ * left. Each entity changed is stamped with the revision and the party; a row whose place alone
+ * was numbered anew keeps its own. Revisions past the last REVISIONS_KEPT are trimmed every
+ * TRIM_EVERY commits, with what each changed.
+ *
+ * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
+ * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
+ * hash committed as the file's (file_hash) and as what was saved (saved_hash), with the file canvas
+ * memory keeps for the canvas. A save cut short is settled as the canvas next loads: its file's
+ * bytes hashing to writing_hash were saved; any others were not. Whether a document is edited is
+ * whether its text's hash is saved_hash (a draft never saved: whether it holds anything).
+ */
+
+/** How many of a canvas's revisions are kept (what they changed with them), the latest. */
+const REVISIONS_KEPT = 1000;
+/** How often the revisions past those are trimmed: every this many commits. */
+const TRIM_EVERY = 100;
+const ANOTHER = 'This canvas’s text is another canvas’s.';
+const NOT_LOADED = 'This canvas’s document isn’t loaded in the core.';
+
+export interface DocumentsDeps {
+  /** The profile's database, which keeps the documents. */
+  store: Database;
+  /** What the core remembers of each canvas: its file. */
+  memory: CanvasMemory;
+  /** What files are read against. */
+  catalog: Catalog;
+  /** The adapter an agent naming none runs. */
+  defaultAdapter: AdapterId;
+  now?: () => number;
+}
+
+/** What made a revision: the op, the party that called it, and the request it carried. */
+export interface Revision {
+  op: string;
+  by: PartyId;
+  /** The party that proposed it, when you allowed its proposal. */
+  proposedBy?: PartyId;
+  request?: string;
+}
+
+/** A canvas's document as the core has it now. */
+export interface LiveDocument {
+  readonly document: CanvasDocument;
+  /** Its revision: the last given. */
+  readonly rev: number;
+  /** Its rows, as written. */
+  readonly rows: Rows;
+  /** The revision each entity took last, as far as it is known. */
+  readonly revs: ReadonlyMap<EntityKey, number>;
+  /** Whether it is kept: in rows, or read from a file. Not a draft that never held anything. */
+  readonly kept: boolean;
+}
+
+interface Live extends LiveDocument {
+  document: CanvasDocument;
+  rev: number;
+  rows: Record<EntityKey, Row>;
+  revs: Map<EntityKey, number>;
+  kept: boolean;
+  /** The SHA-256 of its text as last saved or read. */
+  savedHash: string | undefined;
+  /** Of its file's bytes as last read or written. */
+  fileHash: string | undefined;
+  /** Of the text a save is writing, until its file is written. */
+  writingHash: string | undefined;
+}
+
+export class Documents {
+  readonly #deps: DocumentsDeps;
+  readonly #now: () => number;
+  readonly #lives = new Map<CanvasId, Live>();
+  /** What each canvas's document is doing: its loads, commits and saves, one at a time. */
+  readonly #busy = new Map<CanvasId, Promise<void>>();
+  /** Each document's text, and its hash, as toFile writes it. */
+  readonly #texts = new WeakMap<CanvasDocument, { text: string; hash: string }>();
+
+  constructor(deps: DocumentsDeps) {
+    this.#deps = deps;
+    this.#now = deps.now ?? (() => Date.now());
+  }
+
+  /**
+   * The canvas's document: from its rows, else read from the file canvas memory keeps for it (a
+   * draft's is empty). Rejects, saying why, if its file isn't a canvas this corrallm reads.
+   */
+  load(canvas: CanvasId): Promise<LiveDocument> {
+    return this.#queue(canvas, () => this.#load(canvas));
+  }
+
+  /**
+   * The canvas whose file holds `text` was opened: its document, from its rows if it has them,
+   * else read from `text` under the canvas's id (a copy's own). Rejects, saying why, if `text`
+   * isn't a canvas this corrallm reads, keeping nothing of it.
+   */
+  async open(canvas: CanvasId, text: string): Promise<LiveDocument> {
+    const document = this.read(text);
+    return this.#queue(canvas, () => this.#load(canvas, { text, document }));
+  }
+
+  /** The canvas's document, loaded. Throws if it isn't. */
+  live(canvas: CanvasId): LiveDocument {
+    const live = this.#lives.get(canvas);
+    if (live === undefined) throw new Error(NOT_LOADED);
+    return live;
+  }
+
+  /** The canvas's document as its file's text: none for a draft that never held anything. */
+  async textOf(canvas: CanvasId): Promise<string | undefined> {
+    const live = (await this.load(canvas)) as Live;
+    return live.kept ? this.#text(live.document).text : undefined;
+  }
+
+  /** Whether the canvas's document differs from its text as last saved or read. */
+  edited(canvas: CanvasId): boolean {
+    const live = this.#lives.get(canvas);
+    if (live === undefined) return false;
+    if (live.savedHash === undefined) return live.document.nodes.length > 0;
+    return this.#text(live.document).hash !== live.savedHash;
+  }
+
+  /** A canvas file's text as a document, read against the catalog. Throws, saying why. */
+  read(text: string): CanvasDocument {
+    return fromFile(text, this.#deps.catalog, this.#deps.defaultAdapter);
+  }
+
+  /**
+   * Commits `next` as the canvas's document. Resolves with its revision once it is on disk (the
+   * one it had, if `next` changes nothing); rejects, leaving it as it was, if it couldn't be.
+   */
+  commit(canvas: CanvasId, next: CanvasDocument, revision: Revision): Promise<number> {
+    return this.#queue(canvas, async () => this.#commit(await this.#load(canvas), next, revision));
+  }
+
+  /**
+   * Commits the canvas's document as `text` (its file's text) holds it, by you: the renderer's
+   * edits, until its gestures are operations of their own. Rejects for text that isn't a canvas,
+   * or is another canvas's.
+   */
+  edit(canvas: CanvasId, text: string): Promise<number> {
+    return this.#queue(canvas, async () => {
+      const live = await this.#load(canvas);
+      if (live.kept && this.#text(live.document).text === text) return live.rev;
+      const next = this.read(text);
+      if (next.id !== canvas) throw new Error(ANOTHER);
+      return this.#commit(live, next, { op: 'canvas.edit', by: 'you' });
+    });
+  }
+
+  /**
+   * Saves the canvas's document to `file`, which becomes its file (canvas memory's), in order: the
+   * hash of its text committed as being written, the file written whole and on disk, then its hash
+   * committed as the file's and as saved. Rejects if it couldn't be.
+   */
+  save(canvas: CanvasId, file: TrustedPath): Promise<void> {
+    return this.#queue(canvas, async () => {
+      const live = await this.#load(canvas);
+      const { text, hash } = this.#text(live.document);
+      const { store, memory } = this.#deps;
+      await store.write(() => {
+        this.#ensure(live, 'you');
+        store.prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?').run(hash, canvas);
+      });
+      live.kept = true;
+      live.writingHash = hash;
+      await writeWhole(file, text, { durable: true });
+      // One commit, the lane's for writes asked for in one turn.
+      await Promise.all([
+        memory.setFile(canvas, file),
+        store.write(() => {
+          store
+            .prepare(
+              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL
+               WHERE canvas_id = ?`,
+            )
+            .run(hash, hash, canvas);
+        }),
+      ]);
+      live.savedHash = hash;
+      live.fileHash = hash;
+      live.writingHash = undefined;
+    });
+  }
+
+  /** Runs `task` once what the canvas's document was doing is done, failed or not. */
+  #queue<T>(canvas: CanvasId, task: () => Promise<T>): Promise<T> {
+    const before = this.#busy.get(canvas) ?? Promise.resolve();
+    const run = before.then(task);
+    const done = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#busy.set(canvas, done);
+    void done.then(() => {
+      if (this.#busy.get(canvas) === done) this.#busy.delete(canvas);
+    });
+    return run;
+  }
+
+  /**
+   * The canvas's document, loaded once: from its rows (a save cut short settled by its file's
+   * bytes, those `opened` holds if it was just opened), else from `opened`'s text or its file's,
+   * read under its id and kept in rows, else a draft's, empty.
+   */
+  async #load(
+    canvas: CanvasId,
+    opened?: { text: string; document: CanvasDocument },
+  ): Promise<Live> {
+    const loaded = this.#lives.get(canvas);
+    if (loaded !== undefined) return loaded;
+    const kept = this.#read(canvas);
+    if (kept !== undefined) {
+      this.#lives.set(canvas, kept);
+      if (kept.writingHash !== undefined) await this.#settle(canvas, kept, opened?.text);
+      return kept;
+    }
+    let text = opened?.text;
+    let document = opened?.document;
+    if (text === undefined) {
+      const file = await this.#file(canvas);
+      text = file?.text;
+      if (file !== undefined) document = this.#readFile(file);
+    }
+    const live: Live = {
+      document: { id: canvas, arrange: false, nodes: [], links: [] },
+      rev: 0,
+      rows: { [META]: { arrange: false } },
+      revs: new Map(),
+      kept: false,
+      savedHash: undefined,
+      fileHash: undefined,
+      writingHash: undefined,
+    };
+    if (text === undefined || document === undefined) {
+      this.#lives.set(canvas, live);
+      return live;
+    }
+    // Read from its file: kept in rows from now on, under its own id, its hashes with them.
+    const read = { ...document, id: canvas };
+    const hashes = { saved: this.#text(read).hash, file: sha256(text) };
+    await this.#commit(live, read, { op: 'file.open', by: 'you' }, hashes);
+    this.#lives.set(canvas, live);
+    return live;
+  }
+
+  /** The canvas's document as its rows keep it, if they do. */
+  #read(canvas: CanvasId): Live | undefined {
+    const { store } = this.#deps;
+    const head = store
+      .prepare(
+        `SELECT rev, arrange, saved_hash, file_hash, writing_hash FROM document
+         WHERE canvas_id = ?`,
+      )
+      .get(canvas);
+    if (head === undefined) return undefined;
+    const rows: Record<EntityKey, Row> = { [META]: { arrange: head.arrange === 1 } };
+    const revs = new Map<EntityKey, number>();
+    const keep = (key: EntityKey, row: Row, rev: unknown) => {
+      rows[key] = row;
+      revs.set(key, Number(rev));
+    };
+    for (const node of store
+      .prepare(
+        `SELECT id, kind, parent_id, place, label, x, y, color, adapter, connection, settings, role,
+           rev FROM node WHERE canvas_id = ? ORDER BY place`,
+      )
+      .all(canvas)) {
+      const id = String(node.id);
+      const row = present({
+        id,
+        kind: node.kind,
+        parent: node.parent_id,
+        place: node.place,
+        label: node.label,
+        x: node.x,
+        y: node.y,
+        color: node.color,
+        adapter: node.adapter,
+        connection: node.connection,
+        settings: parsed(node.settings),
+        role: node.role,
+      }) as NodeRow;
+      keep(nodeKey(id), row, node.rev);
+    }
+    for (const link of store
+      .prepare('SELECT a, b, source, dots, place, rev FROM link WHERE canvas_id = ? ORDER BY place')
+      .all(canvas)) {
+      const row = present({
+        a: link.a,
+        b: link.b,
+        source: link.source,
+        dots: parsed(link.dots),
+        place: link.place,
+      }) as LinkRow;
+      keep(linkKey(row.a, row.b), row, link.rev);
+    }
+    for (const item of store
+      .prepare(
+        `SELECT agent_id, id, container, place, kind, body, rev FROM queue_item
+         WHERE canvas_id = ? ORDER BY place`,
+      )
+      .all(canvas)) {
+      const row = present({
+        agent: item.agent_id,
+        id: item.id,
+        container: item.container,
+        place: item.place,
+        kind: item.kind,
+        body: parsed(item.body),
+      }) as ItemRow;
+      keep(itemKey(row.agent, row.id), row, item.rev);
+    }
+    const document = fromRows(canvas, rows);
+    return {
+      document,
+      rev: Number(head.rev),
+      // In the document's order, each in its place.
+      rows: toRows(document, rows),
+      revs,
+      kept: true,
+      savedHash: text(head.saved_hash),
+      fileHash: text(head.file_hash),
+      writingHash: text(head.writing_hash),
+    };
+  }
+
+  /**
+   * Settles a save cut short: its file's bytes (those just read, else read now) hashing to the
+   * text it was writing were saved; any others were not, and the file is as it was.
+   */
+  async #settle(canvas: CanvasId, live: Live, read: string | undefined): Promise<void> {
+    const bytes = read ?? (await this.#file(canvas))?.text;
+    const written = bytes !== undefined && sha256(bytes) === live.writingHash;
+    const { store } = this.#deps;
+    await store.write(() => {
+      if (written) {
+        store
+          .prepare(
+            `UPDATE document SET saved_hash = writing_hash, file_hash = writing_hash,
+               writing_hash = NULL WHERE canvas_id = ?`,
+          )
+          .run(canvas);
+      } else {
+        store.prepare('UPDATE document SET writing_hash = NULL WHERE canvas_id = ?').run(canvas);
+      }
+    });
+    if (written) {
+      live.savedHash = live.writingHash;
+      live.fileHash = live.writingHash;
+    }
+    live.writingHash = undefined;
+  }
+
+  /**
+   * Commits `next` over `live`: what changed, in one write, at the next revision; `live` is `next`
+   * once it is on disk. With `hashes`, its text's and its file's as read from it.
+   */
+  async #commit(
+    live: Live,
+    next: CanvasDocument,
+    revision: Revision,
+    hashes?: { saved: string; file: string },
+  ): Promise<number> {
+    if (next.id !== live.document.id) throw new Error(ANOTHER);
+    const { rows, changed, renumbered } = diffRows(live.rows, next);
+    if (changed.length === 0 && hashes === undefined) return live.rev;
+    const rev = live.rev + 1;
+    const at = this.#now();
+    await this.#deps.store.write(() => {
+      this.#write(live, { rows, changed, renumbered, rev, at, revision });
+      if (hashes !== undefined) {
+        this.#deps.store
+          .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
+          .run(hashes.saved, hashes.file, next.id);
+      }
+    });
+    live.document = next;
+    live.rows = rows;
+    for (const key of changed) {
+      if (Object.hasOwn(rows, key)) live.revs.set(key, rev);
+      else live.revs.delete(key);
+    }
+    live.rev = rev;
+    live.kept = true;
+    if (hashes !== undefined) {
+      live.savedHash = hashes.saved;
+      live.fileHash = hashes.file;
+    }
+    return rev;
+  }
+
+  /**
+   * Within a write: the document's change. What stays or comes is written in its order (a node
+   * after what holds it, an item after the if-then or repeat holding it), what goes in the reverse
+   * of its order before (an item before what holds it, a node before its parent), so every
+   * reference holds as each statement ends.
+   */
+  #write(
+    live: Live,
+    change: {
+      rows: Record<EntityKey, Row>;
+      changed: readonly EntityKey[];
+      renumbered: readonly EntityKey[];
+      rev: number;
+      at: number;
+      revision: Revision;
+    },
+  ): void {
+    const { store } = this.#deps;
+    const canvas = live.document.id;
+    const { rows, rev, at, revision } = change;
+    const by = revision.by;
+    this.#ensure(live, by);
+    store
+      .prepare(
+        `INSERT INTO document (canvas_id, rev, arrange, by_party, changed_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (canvas_id) DO UPDATE SET rev = excluded.rev, arrange = excluded.arrange,
+           by_party = excluded.by_party, changed_at = excluded.changed_at`,
+      )
+      .run(canvas, rev, (rows[META] as MetaRow).arrange ? 1 : 0, by, at);
+    store
+      .prepare(
+        `INSERT INTO revision (canvas_id, rev, op, by_party, proposed_by, request, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(canvas, rev, revision.op, by, revision.proposedBy ?? null, revision.request ?? null, at);
+    const changed = new Set(change.changed);
+    const renumbered = new Set(change.renumbered);
+    for (const [key, row] of Object.entries(rows)) {
+      if (changed.has(key)) this.#upsert(canvas, key, row, rev, by);
+      else if (renumbered.has(key)) this.#replace(canvas, key, row);
+    }
+    for (const key of Object.keys(live.rows).reverse()) {
+      const row = live.rows[key];
+      if (!Object.hasOwn(rows, key) && row !== undefined) this.#remove(canvas, key, row);
+    }
+    const record = store.prepare(
+      `INSERT INTO change (canvas_id, rev, entity, rev_before, before_data, after_data)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const key of change.changed) {
+      const before = live.rows[key];
+      const after = rows[key];
+      record.run(
+        canvas,
+        rev,
+        key,
+        live.revs.get(key) ?? null,
+        before === undefined ? null : JSON.stringify(before),
+        after === undefined ? null : JSON.stringify(after),
+      );
+    }
+    if (rev % TRIM_EVERY === 0) {
+      store
+        .prepare('DELETE FROM revision WHERE canvas_id = ? AND rev <= ?')
+        .run(canvas, rev - REVISIONS_KEPT);
+    }
+  }
+
+  /** Within a write: the entity's row as `row` is, at revision `rev`, by `by`. */
+  #upsert(canvas: CanvasId, key: EntityKey, row: Row, rev: number, by: PartyId): void {
+    const { store } = this.#deps;
+    switch (entityOf(key)) {
+      case 'meta':
+        return;
+      case 'node': {
+        const node = row as NodeRow;
+        store
+          .prepare(
+            `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, color, adapter,
+               connection, settings, role, rev, by_party)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (canvas_id, id) DO UPDATE SET kind = excluded.kind,
+               parent_id = excluded.parent_id, place = excluded.place, label = excluded.label,
+               x = excluded.x, y = excluded.y, color = excluded.color, adapter = excluded.adapter,
+               connection = excluded.connection, settings = excluded.settings,
+               role = excluded.role, rev = excluded.rev, by_party = excluded.by_party`,
+          )
+          .run(
+            canvas,
+            node.id,
+            node.kind,
+            node.parent ?? null,
+            node.place,
+            node.label,
+            node.x,
+            node.y,
+            node.color ?? null,
+            node.adapter ?? null,
+            node.connection ?? null,
+            node.settings === undefined ? null : JSON.stringify(node.settings),
+            node.role ?? null,
+            rev,
+            by,
+          );
+        return;
+      }
+      case 'link': {
+        const link = row as LinkRow;
+        store
+          .prepare(
+            `INSERT INTO link (canvas_id, a, b, source, dots, place, rev, by_party)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (canvas_id, a, b) DO UPDATE SET source = excluded.source,
+               dots = excluded.dots, place = excluded.place, rev = excluded.rev,
+               by_party = excluded.by_party`,
+          )
+          .run(
+            canvas,
+            link.a,
+            link.b,
+            link.source,
+            link.dots === undefined ? null : JSON.stringify(link.dots),
+            link.place,
+            rev,
+            by,
+          );
+        return;
+      }
+      case 'item': {
+        const item = row as ItemRow;
+        store
+          .prepare(
+            `INSERT INTO queue_item (canvas_id, agent_id, id, container, place, kind, body, rev,
+               by_party)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (canvas_id, agent_id, id) DO UPDATE SET container = excluded.container,
+               place = excluded.place, kind = excluded.kind, body = excluded.body,
+               rev = excluded.rev, by_party = excluded.by_party`,
+          )
+          .run(
+            canvas,
+            item.agent,
+            item.id,
+            item.container ?? null,
+            item.place,
+            item.kind,
+            JSON.stringify(item.body),
+            rev,
+            by,
+          );
+      }
+    }
+  }
+
+  /** Within a write: the row's place as `row`'s, the entity unchanged. */
+  #replace(canvas: CanvasId, key: EntityKey, row: Row): void {
+    const { store } = this.#deps;
+    const entity = entityOf(key);
+    if (entity === 'node') {
+      const { id, place } = row as NodeRow;
+      store
+        .prepare('UPDATE node SET place = ? WHERE canvas_id = ? AND id = ?')
+        .run(place, canvas, id);
+    } else if (entity === 'link') {
+      const { a, b, place } = row as LinkRow;
+      store
+        .prepare('UPDATE link SET place = ? WHERE canvas_id = ? AND a = ? AND b = ?')
+        .run(place, canvas, a, b);
+    } else if (entity === 'item') {
+      const { agent, id, place } = row as ItemRow;
+      store
+        .prepare('UPDATE queue_item SET place = ? WHERE canvas_id = ? AND agent_id = ? AND id = ?')
+        .run(place, canvas, agent, id);
+    }
+  }
+
+  /** Within a write: the entity's row gone. */
+  #remove(canvas: CanvasId, key: EntityKey, row: Row): void {
+    const { store } = this.#deps;
+    const entity = entityOf(key);
+    if (entity === 'node') {
+      store
+        .prepare('DELETE FROM node WHERE canvas_id = ? AND id = ?')
+        .run(canvas, (row as NodeRow).id);
+    } else if (entity === 'link') {
+      const { a, b } = row as LinkRow;
+      store.prepare('DELETE FROM link WHERE canvas_id = ? AND a = ? AND b = ?').run(canvas, a, b);
+    } else if (entity === 'item') {
+      const { agent, id } = row as ItemRow;
+      store
+        .prepare('DELETE FROM queue_item WHERE canvas_id = ? AND agent_id = ? AND id = ?')
+        .run(canvas, agent, id);
+    }
+  }
+
+  /**
+   * Within a write: the canvas's row, and its document's as the live document has it, if it has
+   * none (a draft's first, or one canvas memory forgot with its canvas while it was loaded: then
+   * every row it has is written again, as corrallm, at the revision it had), so what is on disk is
+   * what the live document's rows say before a change is written over them.
+   */
+  #ensure(live: Live, by: PartyId): void {
+    const { store, memory } = this.#deps;
+    const canvas = live.document.id;
+    memory.ensure(canvas);
+    if (store.prepare('SELECT 1 FROM document WHERE canvas_id = ?').get(canvas) !== undefined) {
+      return;
+    }
+    store
+      .prepare(
+        `INSERT INTO document (canvas_id, rev, arrange, saved_hash, file_hash, by_party, changed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        canvas,
+        live.rev,
+        live.document.arrange ? 1 : 0,
+        live.savedHash ?? null,
+        live.fileHash ?? null,
+        by,
+        this.#now(),
+      );
+    for (const [key, row] of Object.entries(live.rows)) {
+      this.#upsert(canvas, key, row, live.revs.get(key) ?? live.rev, 'corrallm');
+    }
+  }
+
+  /**
+   * The file canvas memory keeps for the canvas, its name and text: none if it has none, or it's
+   * gone.
+   */
+  async #file(canvas: CanvasId): Promise<{ name: string; text: string } | undefined> {
+    const file = (await this.#deps.memory.get(canvas)).file;
+    if (file === undefined) return undefined;
+    const name = path.basename(file);
+    try {
+      if ((await stat(file)).size > MAX_CANVAS_BYTES) {
+        throw new Error(`${name} is too large to be a canvas`);
+      }
+      return { name, text: await readFile(file, 'utf8') };
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /** The canvas a file holds, read against the catalog. Throws, naming the file and saying why. */
+  #readFile({ name, text }: { name: string; text: string }): CanvasDocument {
+    try {
+      return this.read(text);
+    } catch (error) {
+      throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`, {
+        cause: error,
+      });
+    }
+  }
+
+  /** A document's text, as toFile writes it, and its hash: once for each document. */
+  #text(document: CanvasDocument): { text: string; hash: string } {
+    let known = this.#texts.get(document);
+    if (known === undefined) {
+      const text = toFile(document);
+      known = { text, hash: sha256(text) };
+      this.#texts.set(document, known);
+    }
+    return known;
+  }
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * A row's columns that aren't NULL: a row of the document's, as its columns name what it holds
+ * (rows.ts), which leaves out what it lacks.
+ */
+function present(columns: Readonly<Record<string, unknown>>): object {
+  return Object.fromEntries(Object.entries(columns).filter(([, value]) => value !== null));
+}
+
+/** A JSON column's value: NULL as NULL. */
+function parsed(value: unknown): unknown {
+  return typeof value === 'string' ? JSON.parse(value) : null;
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isMissing(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
