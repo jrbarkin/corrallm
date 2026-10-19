@@ -25,9 +25,10 @@ import { Throttle } from './throttle';
  * caller left out (its only one, or the one holding a message it names), or asks a caller with
  * several to name one if its arguments otherwise fit, parses them with the op's one schema,
  * resolves every id a token names against its reach, refuses an agent aiming at itself an op it
- * may not, checks the op's rules on a token's arguments (a met rule refuses it, or makes it a
- * proposal for you), returns a repeated request's first result, and runs the op in its scope. It
- * never throws: a failure is a value, whose code survives any transport.
+ * may not, returns a repeated request's first result, and runs the op in its scope, checking the
+ * op's rules on a token's arguments there first (a met rule refuses it, or makes it a proposal for
+ * you), since they read what the ops before it in its scope left. It never throws: a failure is a
+ * value, whose code survives any transport.
  */
 
 /** An operation's failure, thrown by core.call's checks and by ops; it answers as a value. */
@@ -55,18 +56,22 @@ export type Implementation = (args: never, ctx: OpContext) => unknown;
 /** What a rule makes of a token's call: refused (saying why), a proposal for you, or nothing. */
 export type RuleOutcome = { refuse: string } | { propose: NeedId } | undefined;
 
-/** Checks a rule on a token's arguments, before the op runs. */
+/** Checks a rule on a token's arguments, in the op's scope, before the op runs. */
 export type RuleCheck = (
   args: never,
   call: { caller: TokenCaller; party: Party },
 ) => RuleOutcome | Promise<RuleOutcome>;
 
-/** What a dispatcher serves: each op's surface, schemas and implementation, and the rules' checks. */
+/**
+ * What a dispatcher serves: each op's surface, schemas and implementation, and each rule checked on
+ * arguments, its check on each op that carries it. A rule with none (checked only on the change an
+ * op commits) isn't checked here.
+ */
 export interface Registry {
   readonly surface: Readonly<Record<string, Surface>>;
   readonly ops: Readonly<Record<string, OpDef>>;
   readonly implementations: Readonly<Record<string, Implementation>>;
-  readonly rules: Readonly<Partial<Record<Rule, RuleCheck>>>;
+  readonly rules: Readonly<Partial<Record<Rule, Readonly<Partial<Record<string, RuleCheck>>>>>>;
 }
 
 export interface DispatchOptions {
@@ -169,11 +174,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
   }
 
   /**
-   * Checks a token's rules, then runs the op in its scope: its result, kept for a repeat of its
-   * request unless the op failed for being cancelled (its caller left, a preempting op stopped it)
-   * or with what nobody expected, which applied nothing a retry can count on.
+   * Runs the op in its scope, once a token's rules are checked there (they read what the ops before
+   * it in its scope left): its result, kept for a repeat of its request unless the op failed for
+   * being cancelled (its caller left, a preempting op stopped it) or with what nobody expected,
+   * which applied nothing a retry can count on.
    */
   async function apply(
+    name: string,
     [surface, def, implementation]: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
@@ -183,26 +190,27 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     /** The signal the op ran with, once it runs: aborted if it was superseded or its caller left. */
     let ran: AbortSignal | undefined;
     try {
-      if (caller.kind !== 'human') {
-        for (const rule of surface.rules ?? []) {
-          const checkRule = registry.rules[rule];
-          if (!checkRule) throw new OpFailure('refused', `No check is kept for the rule ${rule}.`);
-          const outcome = await checkRule(args as never, { caller, party });
-          if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
-          if (outcome) {
-            return { result: { ok: true, value: { proposed: outcome.propose } }, kept: true };
-          }
-        }
-      }
       const value = await scopes.run(
         scopeOf(surface, args),
         surface.preempt === true,
         signal,
-        (opSignal) => {
+        async (opSignal) => {
           ran = opSignal;
-          return Promise.resolve(
-            implementation(args as never, { caller, party, signal: opSignal }),
-          );
+          if (caller.kind !== 'human') {
+            for (const rule of surface.rules ?? []) {
+              const checks = registry.rules[rule];
+              // A rule with no checks is checked on the change an op commits, if anywhere.
+              if (checks === undefined) continue;
+              const checkRule = Object.hasOwn(checks, name) ? checks[name] : undefined;
+              if (!checkRule) {
+                throw new OpFailure('refused', `No check is kept for the rule ${rule} on ${name}.`);
+              }
+              const outcome = await checkRule(args as never, { caller, party });
+              if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
+              if (outcome) return { proposed: outcome.propose };
+            }
+          }
+          return implementation(args as never, { caller, party, signal: opSignal });
         },
       );
       if (check) checkResult(def, value);
@@ -252,7 +260,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
         }
       }
-      const run = () => apply(op, args, caller, party, signal);
+      const run = () => apply(name, op, args, caller, party, signal);
       const { request } = args as { request?: unknown };
       return typeof request === 'string'
         ? await requests.remembered(callerKey(caller), `${name}|${request}`, run)

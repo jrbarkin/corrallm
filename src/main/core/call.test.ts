@@ -306,6 +306,65 @@ describe('core.call', () => {
     });
   });
 
+  it('checks a token’s rules in the op’s scope, once what runs there before it is done', async () => {
+    const registry = testRegistry();
+    const checked: string[] = [];
+    const core = createDispatcher(
+      {
+        ...registry,
+        rules: {
+          'shell-text': {
+            'test.message': ({ body }: { body: string }) => {
+              checked.push(body);
+              return undefined;
+            },
+          },
+        },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const peer = { canvas: CANVAS, agent: 'peer' };
+    const holding = core.call('test.hold', peer, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    const sending = core.call('test.message', message(), CALLERS['outside-write']);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(checked).toEqual([]);
+    await core.call('test.stop', peer, CALLERS.you);
+    await holding;
+    expect(await sending).toEqual({ ok: true, value: { sent: 'peer' } });
+    expect(checked).toEqual(['hello']);
+  });
+
+  it('keeps a rule’s check by the op carrying it, refusing an op whose check isn’t kept', async () => {
+    const registry = testRegistry();
+    const core = createDispatcher(
+      {
+        ...registry,
+        // The shell-text rule is checked on test.message alone; the proposing rule on no op (as a
+        // rule only checked on the change at commit).
+        rules: { 'shell-text': { 'test.agent': () => undefined } },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    expect(await core.call('test.message', message(), CALLERS.worker)).toEqual({
+      ok: false,
+      error: {
+        code: 'refused',
+        sentence: 'No check is kept for the rule shell-text on test.message.',
+      },
+    });
+    expect(registry.calls['test.message']).toEqual([]);
+    expect(
+      await core.call(
+        'test.delete',
+        { canvas: CANVAS, agent: 'stranger' },
+        CALLERS['outside-write'],
+      ),
+    ).toEqual({ ok: true, value: { deleted: 'stranger' } });
+  });
+
   it('returns a repeated request’s first result, once per caller', async () => {
     const { core, calls } = setup();
     const first = await core.call('test.message', message({ request: REQUEST }), CALLERS.worker);

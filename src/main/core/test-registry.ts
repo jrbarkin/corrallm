@@ -217,10 +217,14 @@ export function testRegistry(): Registry & {
     ),
     'test.stop': heard('test.stop', () => ({ stopped: true })),
   };
-  const rules: Partial<Record<Rule, RuleCheck>> = {
-    'shell-text': ({ body }: { body: string }) =>
-      body.startsWith('!') ? { refuse: 'Only what you typed may run a shell command.' } : undefined,
-    discard: () => ({ propose: PROPOSAL }),
+  const rules: Partial<Record<Rule, Record<string, RuleCheck>>> = {
+    'shell-text': {
+      'test.message': ({ body }: { body: string }) =>
+        body.startsWith('!')
+          ? { refuse: 'Only what you typed may run a shell command.' }
+          : undefined,
+    },
+    discard: { 'test.delete': () => ({ propose: PROPOSAL }) },
   };
   return { surface: SURFACES, ops: OPS, implementations, rules, calls, released };
 }
