@@ -4,16 +4,9 @@ import { isStartMode } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
-import {
-  absolutePosition,
-  CARD_SIZE,
-  nextGroupColor,
-  PADDING,
-  topInset,
-} from '../../shared/model/geometry';
-import { autosize, bounds, containerAt, size } from './geometry';
-import { areLinked } from '../../shared/model/queries';
-import { clearDeletedReferences } from '../../shared/model/references';
+import { size as modelSize } from '../../shared/model/geometry';
+import { autosize, size } from './geometry';
+import * as Structure from '../../shared/model/structure';
 import { parseRole } from '../../shared/role';
 import { mergeAgentSettings } from '../../shared/session';
 import type { AgentSettingsChange } from '../../shared/session';
@@ -122,159 +115,39 @@ export function documentOf(graph: Graph, id: CanvasId): CanvasDocument {
 }
 
 export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
-/** Space between neighbouring nodes in a row, and between rows, as the canvas lays them out. */
-export const NODE_GAP = 40;
-export const RANK_GAP = 60;
-/** How far "Add node" moves a new node that would land on another node's top-left corner. */
-const NUDGE = 24;
+export { NODE_GAP, RANK_GAP } from '../../shared/model/structure';
 
 export function edgeId(source: string, target: string): string {
   return `${source}->${target}`;
 }
 
-/** `Node N` or `Group N`, one more than the largest N already used with that prefix. */
 export function nextLabel(nodes: readonly GraphNode[], prefix: 'Agent' | 'Group'): string {
-  const pattern = new RegExp(`^${prefix} (\\d+)$`);
-  let max = 0;
-  for (const node of nodes) {
-    const n = pattern.exec(node.data.label)?.[1];
-    if (n !== undefined) max = Math.max(max, Number(n));
-  }
-  return `${prefix} ${String(max + 1)}`;
+  return Structure.nextLabel(canvasNodes(nodes), prefix);
 }
 
-/**
- * Adds an item centred on `center` (flow coordinates) and makes it the only selected element. If
- * the point is inside a container, the item becomes a child of the innermost one, which grows to
- * fit it. A new item that would land exactly on another node is nudged down and right.
- */
 export function addAgent(graph: Graph, id: string, center: XYPosition): Graph {
-  const { nodes } = graph;
-  const byId = indexById(nodes);
-  let topLeft = {
-    x: Math.round(center.x - CARD_SIZE.width / 2),
-    y: Math.round(center.y - CARD_SIZE.height / 2),
-  };
-  const corners = nodes.map((n) => absolutePosition(n, byId));
-  for (let i = 0; i < 50 && corners.some((c) => near(c, topLeft)); i++) {
-    topLeft = { x: topLeft.x + NUDGE, y: topLeft.y + NUDGE };
-  }
-  const container = containerAt(nodes, {
-    x: topLeft.x + CARD_SIZE.width / 2,
-    y: topLeft.y + CARD_SIZE.height / 2,
-  });
-  const origin = container ? absolutePosition(container, byId) : { x: 0, y: 0 };
-  const node = withParent(
-    {
-      id,
-      type: 'agent',
-      position: { x: topLeft.x - origin.x, y: topLeft.y - origin.y },
-      data: { label: nextLabel(nodes, 'Agent'), ...newAgent(id) },
-      selected: true,
-    },
-    container?.id,
+  return structureEdit(
+    graph,
+    (doc, context) => Structure.addAgent(doc, { at: center, adapter: DEFAULT_AGENT }, context),
+    { newId: nodeIds(id) },
   );
-  return {
-    ...graph,
-    nodes: autosize([...nodes.map((n) => select(n, false)), node]),
-    edges: graph.edges.map((e) => select(e, false)),
-  };
 }
 
-/**
- * Adds an agent spawned from agent `from` in its agent view: of the same type, connection,
- * settings and role, in the same group, and the only selected element. A `peer` goes beside it, in its row (the same top edge), to its
- * right. A `linked` one is linked to it, as drawing from its bottom dot lets two agents talk, and
- * goes below it, where the canvas's top-to-bottom layout puts what an agent links to (layout.ts),
- * in a row that starts under its left edge. Along its row it steps right past every card and group
- * in the way, so agents spawned one after another line up left to right. Its group grows to fit it.
- */
 export function spawnAgent(
   graph: Graph,
   from: string,
   id: string,
   relation: 'peer' | 'linked',
 ): Graph {
-  const source = graph.nodes.find((n) => n.id === from);
-  if (source?.type !== 'agent') return graph;
-  const { nodes } = graph;
-  const byId = indexById(nodes);
-  const parentIds = new Set(nodes.map((n) => n.parentId));
-  /** A node's box on the canvas, with the half of a parent node's card that sits above its box. */
-  const footprint = (n: GraphNode) => {
-    const { x, y } = absolutePosition(n, byId);
-    const { width, height } = size(n);
-    const card = n.type === 'agent' && parentIds.has(n.id) ? CARD_SIZE.height / 2 : 0;
-    return { x, y: y - card, width, height: height + card };
-  };
-  const ancestors = new Set<string>();
-  for (let p = parentOf(source, byId); p; p = parentOf(p, byId)) ancestors.add(p.id);
-  // Its own groups hold it; every other card and group is in the way if the new card would come
-  // within a gap of it along the row, or within PADDING of it across.
-  const others = nodes.filter((n) => !ancestors.has(n.id)).map(footprint);
-  const inTheWay = (x: number, y: number) =>
-    others.find(
-      (o) =>
-        x < o.x + o.width + NODE_GAP &&
-        o.x < x + CARD_SIZE.width + NODE_GAP &&
-        y < o.y + o.height + PADDING &&
-        o.y < y + CARD_SIZE.height + PADDING,
-    );
-  const at = footprint(source);
-  const spot =
-    relation === 'peer'
-      ? { x: at.x + at.width + NODE_GAP, y: at.y }
-      : { x: at.x, y: at.y + at.height + RANK_GAP };
-  // Each step passes one of them for good, so this ends.
-  for (let o = inTheWay(spot.x, spot.y); o; o = inTheWay(spot.x, spot.y)) {
-    spot.x = o.x + o.width + NODE_GAP;
-  }
-  const group = parentOf(source, byId);
-  const origin = group ? absolutePosition(group, byId) : { x: 0, y: 0 };
-  const node = withParent(
-    {
-      id,
-      type: 'agent',
-      position: { x: spot.x - origin.x, y: spot.y - origin.y },
-      data: {
-        label: nextLabel(nodes, 'Agent'),
-        ...newAgent(id, source.data.adapter),
-        ...(source.data.connection === undefined ? {} : { connection: source.data.connection }),
-        ...(source.data.settings === undefined ? {} : { settings: source.data.settings }),
-        ...(source.data.role === undefined ? {} : { role: source.data.role }),
-      },
-      selected: true,
-    },
-    group?.id,
+  return structureEdit(
+    graph,
+    (doc, context) => Structure.spawnAgent(doc, { from, relation }, context),
+    { newId: nodeIds(id) },
   );
-  const spawned = {
-    nodes: autosize([...nodes.map((n) => select(n, false)), node]),
-    edges: graph.edges.map((e) => select(e, false)),
-  };
-  return relation === 'linked'
-    ? connect(spawned, { source: from, target: id, sourceHandle: 'bottom', targetHandle: 'top' })
-    : spawned;
 }
 
-/**
- * What a new agent (node `id`) starts with besides its label: its adapter (the default agent's
- * unless given), and a queue that starts with a message to write, telling the agent what to do.
- */
-function newAgent(
-  id: string,
-  adapter: AdapterId = DEFAULT_AGENT,
-): Pick<GraphNode['data'], 'adapter' | 'queue'> {
-  return { adapter, queue: [{ id: `${id}/message`, message: '' }] };
-}
-
-/** Sets a node's label. Any string is accepted, including an empty one. */
 export function renameNode(graph: Graph, id: string, label: string): Graph {
-  const node = graph.nodes.find((n) => n.id === id);
-  if (!node || node.data.label === label) return graph;
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n === node ? { ...n, data: { ...n.data, label } } : n)),
-  };
+  return structureEdit(graph, (doc) => Structure.rename(doc, { id, label }), { fit: false });
 }
 
 /**
@@ -617,22 +490,10 @@ export function selectOnly(graph: Graph, id: string): Graph {
   return unchanged ? graph : { nodes, edges };
 }
 
-/**
- * Whether an edge may be drawn from `source` to `target`: both are agents, and distinct. Drawing one
- * between agents already linked is allowed (it can queue work instead, see work.ts).
- */
 export function canConnect(graph: Graph, connection: { source: string; target: string }): boolean {
-  const { source, target } = connection;
-  const isAgent = (id: string) => graph.nodes.some((n) => n.id === id && n.type === 'agent');
-  return source !== target && isAgent(source) && isAgent(target);
+  return Structure.canLink({ nodes: canvasNodes(graph.nodes) }, connection);
 }
 
-/**
- * Links two agents so they can talk to each other: an edge with no direction (and no arrowhead),
- * between the dots it was drawn between. The graph's stored edges are these links; the work queues
- * give other agents is drawn from the queues (work.ts). Invalid connections, and agents already
- * linked either way round, are ignored.
- */
 export function connect(
   graph: Graph,
   connection: {
@@ -643,211 +504,200 @@ export function connect(
   },
 ): Graph {
   const { source, target, sourceHandle, targetHandle } = connection;
-  if (!canConnect(graph, connection) || areLinked(graph.edges, source, target)) return graph;
-  const edge: Edge = { id: edgeId(source, target), source, target };
-  if (sourceHandle) edge.sourceHandle = sourceHandle;
-  if (targetHandle) edge.targetHandle = targetHandle;
-  return { ...graph, edges: [...graph.edges, edge] };
+  const next = structureEdit(
+    graph,
+    (doc) =>
+      Structure.link(doc, {
+        source,
+        target,
+        ...(sourceHandle && targetHandle ? { dots: [sourceHandle, targetHandle] } : {}),
+      }),
+    { fit: false },
+  );
+  if (next === graph || (sourceHandle && targetHandle)) return next;
+  return {
+    ...next,
+    edges: next.edges.map((edge) =>
+      edge.id === edgeId(source, target)
+        ? {
+            ...edge,
+            ...(sourceHandle ? { sourceHandle } : {}),
+            ...(targetHandle ? { targetHandle } : {}),
+          }
+        : edge,
+    ),
+  };
 }
 
-/** Deletes one edge. */
 export function deleteEdge(graph: Graph, id: string): Graph {
-  const edges = graph.edges.filter((e) => e.id !== id);
-  return edges.length === graph.edges.length ? graph : { ...graph, edges };
+  const edge = graph.edges.find((edge) => edge.id === id);
+  return edge ? structureEdit(graph, (doc) => Structure.unlink(doc, edge), { fit: false }) : graph;
 }
 
-/**
- * Deletes the selected agents and edges, and every edge attached to a deleted agent. Children of a
- * deleted container are kept: they move to the nearest surviving ancestor (or the top level)
- * without moving on screen. Containers then shrink to fit what is left.
- */
 export function deleteSelection(graph: Graph): Graph {
-  const removed = new Set(graph.nodes.filter((n) => n.selected).map((n) => n.id));
-  const edgesBefore = graph.edges.length;
-  const edges = graph.edges.filter(
-    (e) => !e.selected && !removed.has(e.source) && !removed.has(e.target),
-  );
-  if (removed.size === 0 && edges.length === edgesBefore) return graph;
-  const byId = indexById(graph.nodes);
-  const cleared = clearDeletedReferences(graph.nodes, removed);
-  const nodes = cleared.nodes.flatMap((n): GraphNode[] => {
-    if (removed.has(n.id)) return [];
-    if (n.parentId === undefined || !removed.has(n.parentId)) return [n];
-    let ancestor = parentOf(n, byId);
-    while (ancestor && removed.has(ancestor.id)) ancestor = parentOf(ancestor, byId);
-    const abs = absolutePosition(n, byId);
-    const origin = ancestor ? absolutePosition(ancestor, byId) : { x: 0, y: 0 };
-    return [
-      withParent({ ...n, position: { x: abs.x - origin.x, y: abs.y - origin.y } }, ancestor?.id),
-    ];
-  });
-  return { ...graph, nodes: autosize(nodes), edges };
-}
-
-/**
- * The nodes that grouping would move into a new container: the selected agents that have no
- * selected ancestor (descendants move with their ancestor). Empty when they do not all share the
- * same parent.
- */
-export function groupMembers(nodes: readonly GraphNode[]): GraphNode[] {
-  const roots = selectionRoots(nodes);
-  const [first] = roots;
-  return first && roots.every((n) => n.parentId === first.parentId) ? roots : [];
-}
-
-/**
- * Moves the group members into a new container of the given kind, sized to fit them, and makes
- * the container the only selected element. The container is created where the members were (top
- * level or inside their shared parent, which grows if needed). Nothing moves on screen.
- */
-export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph {
-  const members = groupMembers(graph.nodes);
-  if (members.length === 0) return graph;
-  const parentId = members[0]?.parentId;
-  const { x1, y1 } = bounds(members);
-  const position = { x: x1 - PADDING, y: y1 - topInset(kind) };
-  const container = withParent(
-    {
-      id,
-      type: kind,
-      position,
-      data: {
-        label: nextLabel(graph.nodes, kind === 'frame' ? 'Group' : 'Agent'),
-        color: nextGroupColor(graph.nodes),
-        ...(kind === 'agent' ? newAgent(id) : {}),
+  return structureEdit(graph, (doc, context) =>
+    Structure.remove(
+      doc,
+      {
+        nodes: graph.nodes.filter((node) => node.selected).map((node) => node.id),
+        links: graph.edges
+          .filter((edge) => edge.selected)
+          .map(({ source, target }) => ({ source, target })),
       },
-      selected: true,
-    },
-    parentId,
+      context,
+    ),
   );
-  const memberIds = new Set(members.map((n) => n.id));
-  const rest = graph.nodes.map((n) =>
-    memberIds.has(n.id)
-      ? withParent(
-          {
-            ...n,
-            position: { x: n.position.x - position.x, y: n.position.y - position.y },
-            selected: false,
-          },
-          id,
-        )
-      : select(n, false),
-  );
-  // Behind its siblings: first among the top-level nodes, or right after its parent.
-  const at = parentId === undefined ? 0 : rest.findIndex((n) => n.id === parentId) + 1;
-  return {
-    ...graph,
-    nodes: autosize([...rest.slice(0, at), container, ...rest.slice(at)]),
-    edges: graph.edges.map((e) => select(e, false)),
-  };
 }
 
-/**
- * Gives a frame a parent node: the frame becomes an item over the same children, its card centred
- * on the group's top border, and the only selected element. Nothing else moves on screen.
- */
+export function groupMembers(nodes: readonly GraphNode[]): GraphNode[] {
+  const members = new Set(
+    Structure.groupMembers(canvasNodes(nodes), selectedNodeIds(nodes)).map((node) => node.id),
+  );
+  return nodes.filter((node) => members.has(node.id));
+}
+
+export function groupSelection(graph: Graph, kind: NodeKind, id: string): Graph {
+  return structureEdit(
+    graph,
+    (doc, context) => Structure.group(doc, { nodes: selectedNodeIds(graph.nodes), kind }, context),
+    { newId: nodeIds(id) },
+  );
+}
+
 export function addParent(graph: Graph, id: string): Graph {
-  const frame = graph.nodes.find((n) => n.id === id);
-  if (frame?.type !== 'frame') return graph;
-  const label = nextLabel(graph.nodes, 'Agent');
-  const nodes = graph.nodes.map((n) =>
-    n === frame
-      ? {
-          ...n,
-          type: 'agent' as const,
-          data: { ...n.data, label, ...newAgent(n.id) },
-          selected: true,
-        }
-      : select(n, false),
-  );
-  return { ...graph, nodes: autosize(nodes), edges: graph.edges.map((e) => select(e, false)) };
-}
-
-/** Whether `ungroupSelection` would change anything. */
-export function canUngroup(nodes: readonly GraphNode[]): boolean {
-  const parentIds = new Set(nodes.map((n) => n.parentId));
-  return selectionRoots(nodes).some(
-    (n) => n.type === 'frame' || parentIds.has(n.id) || n.parentId !== undefined,
-  );
-}
-
-/**
- * For each selected node without a selected ancestor, in array order:
- * - a frame is removed and its children move up one level;
- * - an item with children keeps its edges, its children move up one level, and it goes back to
- *   being a plain node where its card was;
- * - any other node inside a container moves out of it, up one level.
- * Nothing else moves on screen. The nodes that moved become the selection.
- */
-export function ungroupSelection(graph: Graph): Graph {
-  const parentIds = new Set(graph.nodes.map((n) => n.parentId));
-  const roots = selectionRoots(graph.nodes).filter(
-    (n) => n.type === 'frame' || parentIds.has(n.id) || n.parentId !== undefined,
-  );
-  if (roots.length === 0) return graph;
-  let nodes = graph.nodes.map((n) => select(n, false));
-  for (const root of roots) {
-    const byId = indexById(nodes);
-    const current = byId.get(root.id);
-    if (!current) continue;
-    if (current.type === 'frame' || parentIds.has(current.id)) {
-      nodes = nodes.flatMap((n): GraphNode[] => {
-        if (n.parentId === current.id) return [moveUp(n, current)];
-        if (n.id !== current.id) return [n];
-        return current.type === 'frame' ? [] : [n];
-      });
-    } else {
-      const parent = parentOf(current, byId);
-      if (parent) nodes = nodes.map((n) => (n.id === current.id ? moveUp(n, parent) : n));
-    }
-  }
-  return {
-    ...graph,
-    nodes: autosize(nodes),
-    edges: graph.edges.map((e) => select(e, false)),
-  };
-}
-
-/** Selected nodes that have no selected ancestor, in array order. */
-export function selectionRoots(nodes: readonly GraphNode[]): GraphNode[] {
-  const byId = indexById(nodes);
-  return nodes.filter((n) => {
-    if (!n.selected) return false;
-    for (let p = parentOf(n, byId); p; p = parentOf(p, byId)) {
-      if (p.selected) return false;
-    }
-    return true;
+  return structureEdit(graph, (doc, context) => Structure.addParent(doc, { id }, context), {
+    newId: () => `${id}/message`,
   });
 }
 
-/** Moves `node` out of `parent` into the parent's own parent, keeping it in place on screen. */
-function moveUp(node: GraphNode, parent: GraphNode): GraphNode {
-  const position = {
-    x: node.position.x + parent.position.x,
-    y: node.position.y + parent.position.y,
-  };
-  return withParent({ ...node, position, selected: true }, parent.parentId);
+export function canUngroup(nodes: readonly GraphNode[]): boolean {
+  return Structure.canUngroup(canvasNodes(nodes), selectedNodeIds(nodes));
 }
 
-function withParent<T extends GraphNode>(node: T, parentId: string | undefined): T {
-  const next = { ...node };
-  if (parentId === undefined) delete next.parentId;
-  else next.parentId = parentId;
-  return next;
+export function ungroupSelection(graph: Graph): Graph {
+  return structureEdit(graph, (doc, context) =>
+    Structure.ungroup(doc, { nodes: selectedNodeIds(graph.nodes) }, context),
+  );
+}
+
+export function selectionRoots(nodes: readonly GraphNode[]): GraphNode[] {
+  const roots = new Set(
+    Structure.roots(canvasNodes(nodes), selectedNodeIds(nodes)).map((node) => node.id),
+  );
+  return nodes.filter((node) => roots.has(node.id));
+}
+
+function selectedNodeIds(nodes: readonly GraphNode[]): string[] {
+  return nodes.filter((node) => node.selected).map((node) => node.id);
 }
 
 function select<T extends { selected?: boolean }>(element: T, selected: boolean): T {
   return (element.selected ?? false) === selected ? element : { ...element, selected };
 }
 
-function indexById(nodes: readonly GraphNode[]): Map<string, GraphNode> {
-  return new Map(nodes.map((n) => [n.id, n]));
+/** Runs a model edit while preserving React Flow's view state and existing box measurements. */
+function structureEdit<R>(
+  graph: Graph,
+  build: (doc: CanvasDocument, context: Structure.StructureContext) => Structure.Built<R>,
+  options: { newId?: () => string; fit?: boolean } = {},
+): Graph {
+  const projected = canvasNodes(graph.nodes).map((node, i): CanvasNode => {
+    const view = graph.nodes[i];
+    return {
+      ...node,
+      position: view?.position ?? node.position,
+      ...(view?.width === undefined ? {} : { width: view.width }),
+      ...(view?.height === undefined ? {} : { height: view.height }),
+    };
+  });
+  const links = graph.edges.map(({ source, target, sourceHandle, targetHandle }) => ({
+    source,
+    target,
+    ...(sourceHandle && targetHandle
+      ? { dots: [sourceHandle, targetHandle] as [string, string] }
+      : {}),
+  }));
+  // These edits never read identity; the window keeps its canvas id until the generated ops take over.
+  const doc: CanvasDocument = {
+    id: '00000000-0000-0000-0000-000000000000' as CanvasId,
+    arrange: graph.arrange ?? false,
+    nodes: projected,
+    links,
+  };
+  const dimensions = new Map(graph.nodes.map((node) => [node.id, size(node)]));
+  const changed = build(doc, {
+    newId:
+      options.newId ??
+      (() => {
+        throw new Error('This edit creates no ids.');
+      }),
+    defaultAdapter: DEFAULT_AGENT,
+    sizing: {
+      size: (node) => dimensions.get(node.id) ?? modelSize(node),
+      resize: (node, box) => {
+        dimensions.set(node.id, box);
+        return { ...node, ...box };
+      },
+    },
+  });
+  if (changed.next === doc) return graph;
+  const result = changed.result as { select?: readonly string[] };
+  const selection = result.select === undefined ? undefined : new Set(result.select);
+  const before = new Map(projected.map((node, i) => [node.id, { node, view: graph.nodes[i] }]));
+  const nodes = changed.next.nodes.map((node): GraphNode => {
+    const old = before.get(node.id);
+    let next: GraphNode;
+    if (old?.node === node && old.view) next = old.view;
+    else {
+      next = {
+        ...old?.view,
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: node.data,
+      };
+      if (options.fit !== false) {
+        delete next.width;
+        delete next.height;
+      }
+      if (node.parentId === undefined) delete next.parentId;
+      else next.parentId = node.parentId;
+    }
+    return selection === undefined ? next : select(next, selection.has(node.id));
+  });
+  const edges = changed.next.links.map((link): Edge => {
+    const index = links.indexOf(link);
+    const old = graph.edges[index];
+    const next = old ?? {
+      id: edgeId(link.source, link.target),
+      source: link.source,
+      target: link.target,
+      ...(link.dots ? { sourceHandle: link.dots[0], targetHandle: link.dots[1] } : {}),
+    };
+    return selection === undefined ? next : select(next, false);
+  });
+  const fitted = options.fit === false ? nodes : autosize(nodes);
+  return {
+    ...graph,
+    nodes:
+      fitted.length === graph.nodes.length && fitted.every((node, i) => node === graph.nodes[i])
+        ? graph.nodes
+        : fitted,
+    edges:
+      edges.length === graph.edges.length && edges.every((edge, i) => edge === graph.edges[i])
+        ? graph.edges
+        : edges,
+  };
 }
 
-function parentOf(node: GraphNode, byId: ReadonlyMap<string, GraphNode>): GraphNode | undefined {
-  return node.parentId === undefined ? undefined : byId.get(node.parentId);
-}
-
-function near(a: XYPosition, b: XYPosition): boolean {
-  return Math.abs(a.x - b.x) <= 4 && Math.abs(a.y - b.y) <= 4;
+/** The renderer already chose a node id; the model also asks for its initial message's id. */
+function nodeIds(id: string): () => string {
+  let first = true;
+  return () => {
+    if (first) {
+      first = false;
+      return id;
+    }
+    return `${id}/message`;
+  };
 }

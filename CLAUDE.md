@@ -243,7 +243,9 @@ src/renderer/   React UI. index.html is the Vite root; global.d.ts types window.
                 once (catalog(), and its lookups: an adapter's connection, its view, what it
                 continues in; never the engine, which is given its own: src/shared/engine/catalog.ts).
 src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are agents (type 'agent');
-                     groups are type 'frame'. Pure graph operations in graph.ts, whose GraphNode
+                     groups are type 'frame'. Structure operations live in src/shared/model/structure.ts;
+                     graph.ts projects its GraphNode into model nodes and carries the results and selection
+                     hints back, preserving React Flow's measurements and view state. Its GraphNode
                      wraps the model's agent data (src/shared/model/canvas.ts): canvasNodes gives
                      the engine the model's nodes, graphOf draws a model canvas (what a file holds,
                      its groups sized to fit) and documentOf keeps a graph's (what a file saves);
@@ -395,12 +397,14 @@ src/shared/model/  The canvas as the model keeps it, read wherever the engine ru
                 or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
                 references.ts (clears surviving queues when agents are deleted, returning what
-                changed in words; used by the renderer's deleteSelection),
+                changed in words; used by structure.ts's delete),
                 time.ts (times read from what is typed, and when each comes), queries.ts (groups'
                 members, links, an agent's name, its manager, its team and what it is nested
                 in), geometry.ts (fixed CARD_SIZE, group colours, autosize, bounds, hit testing and
                 absolute positions over model nodes, with no DOM sizes; a view may provide its box
-                reader and writer), work.ts (the work arrows derived from agents' queues), file.ts (the .corral
+                reader and writer), structure.ts (pure structure edits over CanvasDocument, with
+                explicit ids, caller-supplied new ids and default adapter, selection hints and
+                unchanged objects kept by reference), work.ts (the work arrows derived from agents' queues), file.ts (the .corral
                 format: a CanvasDocument read against the catalog, an agent naming no adapter
                 running the default it is given, and written back), words.ts (how the queue's
                 items, times and usage holds read, in what the run says and wherever they are
