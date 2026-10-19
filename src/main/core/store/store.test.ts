@@ -383,7 +383,7 @@ describe('snapshots', () => {
     expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
     expect(errors).toHaveBeenCalledWith(
       'Could not take a snapshot of the core’s database as it closed:',
-      expect.objectContaining({ message: expect.stringMatching(/looks damaged/) }),
+      expect.objectContaining({ message: expect.stringMatching(/looks damaged/) as unknown }),
     );
   });
 
