@@ -21,9 +21,10 @@ import type { OutsideCaller } from './caller';
  *       "access", "expires", "lastUsed"? } } }
  *
  * A token made with the name of another replaces it at once: the party is the name's, so its
- * messages, its `wait` read position and the holds it set carry over. Its `id` names it among
- * the store's tokens (a caller's limits and repeated requests are kept by it), never its value. A
- * file of another version, or an entry that isn't one it writes, reads as no token.
+ * messages, its `wait` read position and the holds it set carry over. Its `id`, a random UUID,
+ * names it among the store's tokens without its hash or its value: a caller's limits and repeated
+ * requests are kept by it, and a call still going ends on it once its token is replaced or
+ * expires. A file of another version, or an entry that isn't one it writes, reads as no token.
  */
 
 /** What a person makes a token for. */
@@ -149,6 +150,11 @@ export class TokenStore {
     return kept !== undefined && this.#now() >= kept.expires;
   }
 
+  /** When the token `id` names expires, in epoch ms: undefined for one this store doesn't keep. */
+  expiresOf(id: string): number | undefined {
+    return [...this.#tokens.values()].find((token) => token.id === id)?.expires;
+  }
+
   /** Hears each token replaced, by id, as it is. */
   onRevoke(listener: (id: string) => void): () => void {
     this.#listeners.add(listener);
@@ -187,7 +193,7 @@ export class TokenStore {
       writeWhole(
         this.#file,
         `${JSON.stringify({ version: VERSION, tokens: Object.fromEntries(this.#tokens) }, null, 2)}\n`,
-        0o600,
+        { mode: 0o600 },
       ),
     );
     this.#writing = write.catch(() => undefined);

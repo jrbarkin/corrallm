@@ -1,4 +1,5 @@
-import type { Message } from '../../../shared/model/messages';
+import { TOKEN_REPLACED } from '../../../shared/api/errors';
+import type { Message, PartyId } from '../../../shared/model/messages';
 import { OpFailure } from '../call';
 import { canvasesOf, isTokenCaller, partyIdOf } from '../caller';
 import type { TokenCaller } from '../caller';
@@ -13,16 +14,32 @@ import type { Implementations, OpServices } from '.';
  * starting point (a cursor's place in that canvas's store; without one, the party's read position;
  * 0, before everything kept, where a cursor names no place) and returns the messages addressed to
  * the caller's party since, oldest first, a page at most; with none, it waits for the next, until
- * its time limit, its caller gives up, or its token is replaced. It never consumes: a message keeps
- * its state, and a cursor reads it again. A wait without `for` moves the party's read position
- * forward to where it ended, journaled before it returns.
+ * its time limit, its caller gives up, or its token is replaced or expires. It never consumes: a
+ * message keeps its state, and a cursor reads it again. A wait without `for` moves the party's read
+ * position forward to where it ended, journaled before it returns. Waits that read on from the read
+ * position (no `after`, no `for`) take turns, each reading it afresh, so one message wakes only one
+ * of them with it.
  */
 
-const REPLACED =
-  'This token was replaced or expired: call with the token its maker has now (corrallm serve --new-token).';
+const NOT_A_CURSOR = 'That cursor isn’t one wait or status gave.';
+const PAST_END =
+  'That cursor is past the last message a canvas holds, so corrallm didn’t give it: leave out `after` to read on from where you last waited.';
 
 export function waitOps(services: OpServices): Pick<Implementations, 'wait'> {
   const { engines, tokens } = services;
+  /** Each party's waits that read on from its read position, in turn: the last one's end. */
+  const turns = new Map<PartyId, Promise<unknown>>();
+
+  /** Runs `read` once every wait of `party` before it has had its turn. */
+  const inTurn = <T>(party: PartyId, read: () => Promise<T>): Promise<T> => {
+    const mine = (turns.get(party) ?? Promise.resolve()).then(read);
+    const done = mine.catch(() => undefined);
+    turns.set(party, done);
+    void done.then(() => {
+      if (turns.get(party) === done) turns.delete(party);
+    });
+    return mine;
+  };
 
   return {
     wait: async ({ after, for: about, timeoutSeconds }, ctx) => {
@@ -30,47 +47,64 @@ export function waitOps(services: OpServices): Pick<Implementations, 'wait'> {
       // Only a token's caller is in its audience.
       if (!isTokenCaller(caller)) throw new OpFailure('forbidden', 'You can’t call wait.');
       const party = partyIdOf(caller);
-      const cursor = after === undefined ? undefined : readCursor(after);
-      if (after !== undefined && cursor === undefined) {
-        throw new OpFailure('invalid', 'That cursor isn’t one corrallm gave.');
-      }
+      const cursor = after === undefined ? undefined : readCursor(after, ['wait']);
+      if (after !== undefined && cursor === undefined) throw new OpFailure('invalid', NOT_A_CURSOR);
       const reached = canvasesOf(caller);
       const open = reached.flatMap((canvas) => engines.canvas(canvas) ?? []);
+      for (const { document, messages } of open) {
+        if ((cursor?.[document.id] ?? 0) > messages.end()) {
+          throw new OpFailure('invalid', PAST_END);
+        }
+      }
       /** Where reading starts in each canvas: the cursor's places, else the party's. */
-      const start: Record<string, number> = Object.fromEntries(
-        reached.flatMap((canvas) => {
-          const at = cursor?.[canvas];
-          if (at !== undefined) return [[canvas, at]];
-          const running = engines.canvas(canvas);
-          if (!running) return [];
-          return [[canvas, cursor === undefined ? running.reads.of(party) : 0]];
-        }),
-      );
+      const startOf = (): Record<string, number> =>
+        Object.fromEntries(
+          open.map(({ document, reads }) => {
+            const at = cursor?.[document.id];
+            return [document.id, at ?? (cursor === undefined ? reads.of(party) : 0)];
+          }),
+        );
       const concerns = (message: Message) =>
         message.to === party &&
         (about === undefined || message.id === about || message.replyTo === about);
-      const read = () => unread(open, start, concerns);
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      const readsOn = after === undefined && about === undefined;
+      // A wait with a cursor or `for` reads from where it began, whatever another returned since.
+      const fixed = readsOn ? undefined : startOf();
 
-      let found = read();
-      if (found.length === 0 && timeoutSeconds > 0) {
-        await arrival(open, concerns, timeoutSeconds, ctx.signal, caller, tokens);
-        found = read();
+      /** What came, as the call returns it; undefined while nothing has and time is left. */
+      const look = async () => {
+        if (caller.kind === 'outside' && tokens.revoked(caller.token)) {
+          throw new OpFailure('refused', TOKEN_REPLACED);
+        }
+        const start = fixed ?? startOf();
+        const found = unread(open, start, concerns);
+        if (found.length === 0 && Date.now() < deadline) return undefined;
+        const page = pageOf(found);
+        const next = { ...start };
+        for (const { message, seq } of page) next[message.canvas] = seq;
+        if (about === undefined) {
+          await Promise.all(
+            open.flatMap((running) => {
+              const at = next[running.document.id];
+              return at === undefined ? [] : [running.reads.advance(party, at)];
+            }),
+          );
+        }
+        return { messages: page.map(({ message }) => message), next: cursorOf('wait', next) };
+      };
+
+      for (;;) {
+        // Listening before it looks, so nothing added meanwhile is missed.
+        const woken = arrival(open, concerns, deadline, ctx.signal, caller, tokens);
+        try {
+          const result = await (readsOn ? inTurn(party, look) : look());
+          if (result) return result;
+          await woken.promise;
+        } finally {
+          woken.stop();
+        }
       }
-      if (caller.kind === 'outside' && tokens.revoked(caller.token)) {
-        throw new OpFailure('refused', REPLACED);
-      }
-      const page = pageOf(found);
-      const next = { ...start };
-      for (const { message, seq } of found.slice(0, page.length)) next[message.canvas] = seq;
-      if (about === undefined) {
-        await Promise.all(
-          open.flatMap((running) => {
-            const at = next[running.document.id];
-            return at === undefined ? [] : [running.reads.advance(party, at)];
-          }),
-        );
-      }
-      return { messages: page.map(({ message }) => message), next: cursorOf(next) };
     },
   };
 }
@@ -112,26 +146,34 @@ function unread(
 }
 
 /**
- * Resolves once a message `concerns` picks is added to one of the canvases, `seconds` pass, or the
- * caller's token is replaced; rejects once its caller gives up.
+ * Listens, from now, for a message `concerns` picks added to one of the canvases, the `deadline`,
+ * or the caller's token replaced or expiring: its promise resolves on the first, and rejects once
+ * its caller gives up; `stop` stops listening.
  */
 function arrival(
   open: readonly OpenCanvas[],
   concerns: (message: Message) => boolean,
-  seconds: number,
+  deadline: number,
   signal: AbortSignal,
   caller: TokenCaller,
   tokens: OpServices['tokens'],
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const stops: (() => void)[] = [];
+): { promise: Promise<void>; stop: () => void } {
+  const stops: (() => void)[] = [];
+  const stop = () => {
+    for (const one of stops.splice(0)) one();
+  };
+  const promise = new Promise<void>((resolve, reject) => {
     const done = (settle: () => void) => {
-      for (const stop of stops) stop();
+      stop();
       settle();
     };
-    const timer = setTimeout(() => {
-      done(resolve);
-    }, seconds * 1000);
+    const expires = caller.kind === 'outside' ? tokens.expiresOf(caller.token) : undefined;
+    const timer = setTimeout(
+      () => {
+        done(resolve);
+      },
+      Math.max(0, Math.min(deadline, expires ?? deadline) - Date.now()),
+    );
     stops.push(() => {
       clearTimeout(timer);
     });
@@ -165,4 +207,7 @@ function arrival(
       signal.removeEventListener('abort', abort);
     });
   });
+  // Its caller may stop listening before it settles: what it was waiting for is then no one's.
+  promise.catch(() => undefined);
+  return { promise, stop };
 }

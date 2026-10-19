@@ -36,8 +36,8 @@ export const SEEDED = {
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
 
-/** A cursor at the start of the canvas's messages. */
-const START = cursorOf({ [CANVAS]: 0 });
+/** A `wait` cursor at the start of the canvas's messages. */
+const START = cursorOf('wait', { [CANVAS]: 0 });
 
 /** Who sent each seeded message: yours is from another outside party, which you may take back. */
 const SENDERS = {

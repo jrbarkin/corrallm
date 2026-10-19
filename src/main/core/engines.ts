@@ -15,7 +15,7 @@ import { MAX_FILE_MATCHES } from '../../shared/session';
 import type { SessionEvent } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
-import type { RunJournal } from '../run-journal';
+import type { MovedRead, RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
@@ -207,7 +207,9 @@ export class Engines {
       needs: new Set(),
       looking: false,
     } as Running;
-    running.reads = new ReadPositions(await journal.reads(canvas), () => this.#write(running));
+    running.reads = new ReadPositions(await journal.reads(canvas), (moved) =>
+      this.#write(running, moved),
+    );
     const engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -315,8 +317,11 @@ export class Engines {
     }
   }
 
-  /** Journals a canvas's run as it is now, the coalesced write it replaces cancelled. */
-  #write(running: Running): Promise<void> {
+  /**
+   * Journals a canvas's run as it is now, the coalesced write it replaces cancelled: with a party's
+   * read position `moved` forward, forced to disk.
+   */
+  #write(running: Running, moved?: MovedRead): Promise<void> {
     clearTimeout(running.timer);
     running.timer = undefined;
     const checkpoint: RunCheckpoint = {
@@ -325,12 +330,7 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    return this.#deps.journal.save(
-      running.document.id,
-      running.token,
-      checkpoint,
-      running.reads.all(),
-    );
+    return this.#deps.journal.save(running.document.id, running.token, checkpoint, moved);
   }
 
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */

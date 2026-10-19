@@ -363,19 +363,36 @@ export class MessageStore {
 }
 
 /**
- * A cursor into canvases' stores: where a reader is in each, by canvas (the place of the last
- * message it read), opaque to it.
+ * What gave a cursor: `wait` (whose cursors `status` gives too, naming every canvas its caller
+ * reaches), or `messages` (naming the one canvas it paged). `wait` takes only its own, since a
+ * canvas its cursor doesn't name it reads from the start; `messages` reads its canvas's place in
+ * either.
  */
-export function cursorOf(positions: Readonly<Record<string, number>>): string {
-  return Buffer.from(JSON.stringify(positions)).toString('base64url');
+export type CursorKind = 'wait' | 'messages';
+
+/**
+ * A cursor into canvases' stores, for `kind`: where a reader is in each, by canvas (the place of
+ * the last message it read), opaque to it.
+ */
+export function cursorOf(kind: CursorKind, positions: Readonly<Record<string, number>>): string {
+  return Buffer.from(JSON.stringify({ [kind]: positions })).toString('base64url');
 }
 
-/** Where a cursor says a reader is in each canvas's store: undefined if it isn't one. */
-export function readCursor(cursor: string): Readonly<Record<string, number>> | undefined {
+/**
+ * Where a cursor of one of `kinds` says a reader is in each canvas's store: undefined if it isn't
+ * one, or another op gave it.
+ */
+export function readCursor(
+  cursor: string,
+  kinds: readonly CursorKind[],
+): Readonly<Record<string, number>> | undefined {
   try {
     const value: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    return isRecord(value) && Object.values(value).every((seq) => Number.isSafeInteger(seq))
-      ? (value as Record<string, number>)
+    const kind = isRecord(value) ? kinds.find((one) => one in value) : undefined;
+    const positions = isRecord(value) && kind !== undefined ? value[kind] : undefined;
+    return isRecord(positions) &&
+      Object.values(positions).every((seq) => Number.isSafeInteger(seq) && (seq as number) >= 0)
+      ? (positions as Record<string, number>)
       : undefined;
   } catch {
     return undefined;

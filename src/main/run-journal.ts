@@ -6,6 +6,7 @@ import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { PARTY_PATTERN } from '../shared/model/messages';
+import type { PartyId } from '../shared/model/messages';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { mintTrustedPath } from './core/host';
@@ -19,17 +20,22 @@ interface Entry {
   warning?: string;
 }
 /**
- * Where each party has read to in a canvas's message store, by party: the place of the last message
- * its `wait` returned (API Spec §7.7).
+ * Where each party has read to in a canvas's message store, as its record keeps them, by party: the
+ * place of the last message its `wait` returned (API Spec §7.7).
  */
-export type ReadPositions = Readonly<Record<string, number>>;
+export type KeptReads = Readonly<Record<string, number>>;
+/** A party's read position moved forward to `seq`, as a `wait` moves it. */
+export interface MovedRead {
+  party: PartyId;
+  seq: number;
+}
 /** A canvas's run record, as written (runs/<id>/record.json). */
 interface RecordFile {
   checkpoint: RunCheckpoint;
   /** The canvas's file, and what memory has of it besides: recovered if memory lost it. */
   file?: TrustedPath;
   remembered?: Remembered;
-  reads?: ReadPositions;
+  reads?: KeptReads;
 }
 interface JournalDeps {
   memory: CanvasMemory;
@@ -37,6 +43,8 @@ interface JournalDeps {
 }
 
 const VERSION = 2;
+/** How the journal makes its folders: only the user may list or enter them. */
+const PRIVATE = { recursive: true, mode: 0o700 } as const;
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
 
 /**
@@ -52,17 +60,19 @@ const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved
  * disk) is on disk before anything journaled after it.
  *
  * A record names the canvas's file and keeps a copy of what memory has of it, which comes back if
- * canvas memory lost it, and where each party's `wait` has read to in its messages, which a save
- * that doesn't say (the app's, which never waits) keeps as they were. A window's renderer saves with the token of the canvas it showed: a save
- * meant for a canvas it has since replaced (or opened again) is refused. A record that can't be
- * read as one is set aside, saying where; a last canvas of another version reads as none.
+ * canvas memory lost it, and where each party's `wait` has read to in its messages: every save keeps
+ * them as they were (the app's never moves one), but the save that moves one forward, which is
+ * forced to disk. A window's renderer saves with the token of the canvas it showed: a save meant
+ * for a canvas it has since replaced (or opened again) is refused. A record that can't be read as
+ * one is set aside, saying where; a last canvas of another version reads as none. The folders it
+ * makes are the user's alone.
  */
 export class RunJournal {
   readonly #directory: string;
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
   /** Each canvas's read positions, as its record last had them, once read or written. */
-  readonly #reads = new Map<CanvasId, ReadPositions>();
+  readonly #reads = new Map<CanvasId, KeptReads>();
   #writing: Promise<void> = Promise.resolve();
 
   constructor(directory: string, deps: JournalDeps) {
@@ -125,20 +135,21 @@ export class RunJournal {
   }
 
   /** Where each party's `wait` has read to in the canvas's messages, as its record keeps it. */
-  async reads(canvas: CanvasId): Promise<ReadPositions> {
+  async reads(canvas: CanvasId): Promise<KeptReads> {
     await this.flush();
     return this.#reads.get(canvas) ?? (await this.#read(canvas, this.#entry(canvas)))?.reads ?? {};
   }
 
   /**
    * Journals a canvas's run (null: none), for the renderer whose token is its canvas's, with where
-   * each party's `wait` has read to (kept as they were, if not given).
+   * each party's `wait` has read to as the record kept them; with `moved`, that party's moved
+   * forward (never back), and the record forced to disk before it resolves.
    */
   async save(
     canvas: CanvasId,
     token: string,
     checkpoint: RunCheckpoint | null,
-    reads?: ReadPositions,
+    moved?: MovedRead,
   ): Promise<void> {
     const entry = this.#entry(canvas);
     if (entry.token !== token) throw new Error('This run belongs to an earlier canvas');
@@ -153,7 +164,7 @@ export class RunJournal {
         throw new Error('This run belongs to an earlier canvas');
       }
       if (checkpoint === null) await rm(this.#recordFile(canvas), { force: true });
-      else await this.#write(canvas, checkpoint, reads);
+      else await this.#write(canvas, checkpoint, moved);
       await this.#last(canvas);
     });
   }
@@ -179,7 +190,7 @@ export class RunJournal {
   async saved(canvas: CanvasId): Promise<void> {
     const record = await this.#read(canvas, this.#entry(canvas));
     await this.#serialize(async () => {
-      if (record !== undefined) await this.#write(canvas, record.checkpoint, record.reads);
+      if (record !== undefined) await this.#write(canvas, record.checkpoint);
       await this.#last(canvas);
     });
   }
@@ -206,7 +217,7 @@ export class RunJournal {
   appendMessages(canvas: CanvasId, text: string, durable: boolean): Promise<void> {
     return this.#serialize(async () => {
       const file = this.#messagesFile(canvas);
-      await mkdir(path.dirname(file), { recursive: true });
+      await mkdir(path.dirname(file), PRIVATE);
       const handle = await open(file, 'a');
       try {
         if (text !== '') await handle.appendFile(text, 'utf8');
@@ -221,7 +232,7 @@ export class RunJournal {
   rewriteMessages(canvas: CanvasId, text: string): Promise<void> {
     return this.#serialize(async () => {
       const file = this.#messagesFile(canvas);
-      await mkdir(path.dirname(file), { recursive: true });
+      await mkdir(path.dirname(file), PRIVATE);
       await writeWhole(file, text);
     });
   }
@@ -291,11 +302,18 @@ export class RunJournal {
     }
   }
 
-  /** Writes a canvas's record: with `reads`, else the read positions it had. */
-  async #write(canvas: CanvasId, checkpoint: RunCheckpoint, given?: ReadPositions): Promise<void> {
+  /**
+   * Writes a canvas's record, with the read positions it had: `moved` moved forward, and then
+   * forced to disk.
+   */
+  async #write(canvas: CanvasId, checkpoint: RunCheckpoint, moved?: MovedRead): Promise<void> {
     const { file, ...remembered } = await this.#deps.memory.get(canvas);
-    const reads = given ?? this.#reads.get(canvas) ?? (await this.#keptReads(canvas));
-    await mkdir(path.dirname(this.#recordFile(canvas)), { recursive: true });
+    const kept = this.#reads.get(canvas) ?? (await this.#keptReads(canvas));
+    const reads =
+      moved === undefined || moved.seq <= (kept[moved.party] ?? 0)
+        ? kept
+        : { ...kept, [moved.party]: moved.seq };
+    await mkdir(path.dirname(this.#recordFile(canvas)), PRIVATE);
     await writeWhole(
       this.#recordFile(canvas),
       JSON.stringify({
@@ -306,12 +324,13 @@ export class RunJournal {
         remembered,
         ...(Object.keys(reads).length === 0 ? {} : { reads }),
       }),
+      { durable: moved !== undefined },
     );
     this.#reads.set(canvas, reads);
   }
 
   /** The read positions a canvas's record has on disk, read leniently: none if it has none. */
-  async #keptReads(canvas: CanvasId): Promise<ReadPositions> {
+  async #keptReads(canvas: CanvasId): Promise<KeptReads> {
     try {
       const value: unknown = JSON.parse(await readFile(this.#recordFile(canvas), 'utf8'));
       return isRecord(value) ? readPositions(value.reads) : {};
@@ -321,7 +340,7 @@ export class RunJournal {
   }
 
   async #last(canvas: CanvasId): Promise<void> {
-    await mkdir(this.#directory, { recursive: true });
+    await mkdir(this.#directory, PRIVATE);
     let rejected = false;
     try {
       JSON.parse(await readFile(this.#lastFile(), 'utf8'));
@@ -349,14 +368,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 /** Read positions as written: each a party's place in the store, the others left out. */
-function readPositions(value: unknown): ReadPositions {
+function readPositions(value: unknown): KeptReads {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
     Object.entries(value).filter(
       ([party, seq]) =>
         PARTY_PATTERN.test(party) && Number.isSafeInteger(seq) && (seq as number) >= 0,
     ),
-  ) as ReadPositions;
+  ) as KeptReads;
 }
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);

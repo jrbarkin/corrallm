@@ -233,9 +233,16 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           ? new OpFailure('human-only', `Only you can call ${name}, in corrallm’s window.`)
           : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
       }
-      if (caller.kind !== 'human' && surface.waits !== true) {
-        release = throttle.admit(callerKey(caller), surface.kind !== 'read');
-        if (!release) throw new OpFailure('refused', 'Too many calls; slow down.');
+      if (caller.kind !== 'human') {
+        const admitted = throttle.admit(callerKey(caller), {
+          write: surface.kind !== 'read',
+          waits: surface.waits === true,
+        });
+        if (admitted === 'calls') throw new OpFailure('refused', 'Too many calls; slow down.');
+        if (admitted === 'waits') {
+          throw new OpFailure('refused', 'Too many waits at once; let one end first.');
+        }
+        release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
       if (caller.kind !== 'human') {

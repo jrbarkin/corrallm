@@ -70,5 +70,11 @@ export const MAX_TOKEN_HOURS = 12;
  * limited.
  */
 export const TOKEN_IN_FLIGHT = 8;
+/**
+ * At most this many `wait`s in flight per token, apart from its other calls: each holds a
+ * connection, for up to MAX_WAIT_SECONDS, so an orchestrator may wait on each of its workers at
+ * once, but waits a client left behind can't pile up.
+ */
+export const TOKEN_WAITS = 16;
 /** At most this many writes a second per token. */
 export const TOKEN_WRITES_PER_SECOND = 30;

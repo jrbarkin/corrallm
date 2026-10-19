@@ -84,6 +84,7 @@ export function conversationOps(
         waitingForYou: waiting(open, ctx, reach).map(withoutChoices),
         // At the end of every canvas the caller has, so a `wait` from it reads only what comes.
         next: cursorOf(
+          'wait',
           Object.fromEntries(
             (isTokenCaller(ctx.caller) ? canvasesOf(ctx.caller) : engines.opened()).flatMap(
               (id) => {
@@ -102,7 +103,7 @@ export function conversationOps(
     messages: ({ canvas, with: other, after, limit = DEFAULT_PAGE }, ctx) => {
       const open = openCanvas(engines, canvas);
       const id = open.document.id;
-      const from = after === undefined ? 0 : readCursor(after)?.[id];
+      const from = after === undefined ? 0 : readCursor(after, ['messages', 'wait'])?.[id];
       if (after !== undefined && from === undefined) {
         throw new OpFailure('invalid', 'That cursor isn’t one this canvas gave.');
       }
@@ -120,7 +121,7 @@ export function conversationOps(
       );
       const last = items.at(-1);
       const next = last === undefined ? (from ?? 0) : (open.messages.seqOf(last.id) ?? 0);
-      return { items, next: cursorOf({ [id]: next }) };
+      return { items, next: cursorOf('messages', { [id]: next }) };
     },
     message: async ({ canvas, to, body, replyTo }, ctx) => {
       const open = openCanvas(engines, canvas);

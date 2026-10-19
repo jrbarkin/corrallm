@@ -251,6 +251,9 @@ function problems(registry: Registry): string[] {
     } else if (worst > MAX_REQUEST_BYTES) {
       found.push(`${name}: its input may take ${String(worst)} bytes, over MAX_REQUEST_BYTES`);
     }
+    if (surface.waits && (surface.kind !== 'read' || deviation !== 'transport')) {
+      found.push(`${name}: waits, but isn't a read on MCP alone (the transport deviation)`);
+    }
     const fields = resultFields(def.output);
     for (const field of surface.varies ?? []) {
       if (!fields.includes(field)) found.push(`${name}: varies by ${field}, not in its result`);
@@ -494,6 +497,19 @@ describe('T1: the surface’s rules', () => {
         ),
       }),
       'test.big: its input may take 60000043 bytes, over MAX_REQUEST_BYTES',
+    ],
+    [
+      'a long poll that writes',
+      registry(
+        { 'test.poll': op({ access: tokens, kind: 'command', scope: 'none', waits: true }) },
+        { deviations: { 'test.poll': 'transport' } },
+      ),
+      "test.poll: waits, but isn't a read on MCP alone (the transport deviation)",
+    ],
+    [
+      'a long poll on both surfaces',
+      registry({ 'test.poll': op({ access: both, kind: 'read', scope: 'none', waits: true }) }),
+      "test.poll: waits, but isn't a read on MCP alone (the transport deviation)",
     ],
     [
       'a varies field not in the result',

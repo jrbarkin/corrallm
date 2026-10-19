@@ -201,7 +201,7 @@ describe('RunJournal', () => {
     const runs = journal();
     const { token } = await runs.get(canvas);
     expect(await runs.reads(canvas)).toEqual({});
-    await runs.save(canvas, token, checkpoint, { 'outside:orchestrator': 7 });
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 7 });
     expect(JSON.parse(await readFile(record(canvas), 'utf8'))).toMatchObject({
       reads: { 'outside:orchestrator': 7 },
     });
@@ -213,11 +213,32 @@ describe('RunJournal', () => {
     await app.saved(canvas);
     expect(await journal().reads(canvas)).toEqual({ 'outside:orchestrator': 7 });
 
-    // And moved on by the next save that names them.
-    await runs.save(canvas, token, checkpoint, { 'outside:orchestrator': 9, 'outside:other': 2 });
+    // Moved on by the next save that moves one, and never back.
+    await runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 2 });
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 9 });
+    await runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 8 });
     expect(await journal().reads(canvas)).toEqual({
       'outside:orchestrator': 9,
       'outside:other': 2,
+    });
+  });
+
+  it('forces a save that moves a read position to disk, and keeps what saves at once moved', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const { token } = await runs.get(canvas);
+    const writes = vi.spyOn(canvasMemory, 'writeWhole');
+    // Two parties' positions moved at once, and a save of the run between them.
+    await Promise.all([
+      runs.save(canvas, token, checkpoint, { party: 'outside:orchestrator', seq: 3 }),
+      runs.save(canvas, token, checkpoint),
+      runs.save(canvas, token, checkpoint, { party: 'outside:other', seq: 5 }),
+    ]);
+    const records = writes.mock.calls.filter(([file]) => file === record(canvas));
+    expect(records.map(([, , options]) => options?.durable === true)).toEqual([true, false, true]);
+    expect(await journal().reads(canvas)).toEqual({
+      'outside:orchestrator': 3,
+      'outside:other': 5,
     });
   });
 

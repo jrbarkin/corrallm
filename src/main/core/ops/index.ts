@@ -40,8 +40,8 @@ export interface OpServices {
   locale?: string;
   /** Whatever needs the desktop. */
   host: HostServices;
-  /** The outside tokens: whether one was replaced, as a call it made still goes on. */
-  tokens: Pick<TokenStore, 'revoked' | 'onRevoke'>;
+  /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
+  tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
 }
 
 export function implementations(services: OpServices): Implementations {

@@ -1,19 +1,24 @@
 import type { PartyId } from '../../../shared/model/messages';
+import type { KeptReads, MovedRead } from '../../run-journal';
 
 /*
  * Where each party has read to in a canvas's messages: its `wait` read position (API Spec §7.7,
  * Core Server §5.9), the place in the store's order of the last message a `wait` without `for`
  * returned it. It is the party's, never its token's, so a token renewed by name reads on from it;
- * it only moves forward, and is journaled in the canvas's record (runs/<id>/record.json, `reads`)
- * before the `wait` that moved it returns, so a restart never returns what one already did.
+ * it only moves forward, and only once the canvas's record holding it (runs/<id>/record.json,
+ * `reads`) is forced to disk, before the `wait` that moved it returns: a restart never returns
+ * what one already did, and a `wait` whose record couldn't be written moves nothing.
  */
 
 export class ReadPositions {
   readonly #positions: Map<string, number>;
-  readonly #journal: () => Promise<void>;
+  readonly #journal: (moved: MovedRead) => Promise<void>;
 
-  /** `kept`: the positions the canvas's record had; `journal`: writes the record, positions too. */
-  constructor(kept: Readonly<Record<string, number>>, journal: () => Promise<void>) {
+  /**
+   * `kept`: the positions the canvas's record had; `journal`: writes the record with a party's
+   * position moved, forced to disk.
+   */
+  constructor(kept: KeptReads, journal: (moved: MovedRead) => Promise<void>) {
     this.#positions = new Map(Object.entries(kept));
     this.#journal = journal;
   }
@@ -23,18 +28,13 @@ export class ReadPositions {
     return this.#positions.get(party) ?? 0;
   }
 
-  /** Every party's position, as the canvas's record keeps them. */
-  all(): Record<string, number> {
-    return Object.fromEntries(this.#positions);
-  }
-
   /**
-   * Moves `party`'s position forward to `seq` (never back): resolves once the record holding it is
-   * journaled, if it moved. Rejects if it couldn't be.
+   * Moves `party`'s position forward to `seq` (never back), once the record holding it is
+   * journaled: resolves then, if it moved. Rejects, moving nothing, if it couldn't be.
    */
   async advance(party: PartyId, seq: number): Promise<void> {
     if (seq <= this.of(party)) return;
-    this.#positions.set(party, seq);
-    await this.#journal();
+    await this.#journal({ party, seq });
+    if (seq > this.of(party)) this.#positions.set(party, seq);
   }
 }

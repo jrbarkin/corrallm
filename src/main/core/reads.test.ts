@@ -7,9 +7,8 @@ import type { OutsideCaller } from './caller';
 import { partyIdOf } from './caller';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
-import { CALLERS, CANVAS } from './test-registry';
+import { CALLERS, CANVAS, validFor } from './test-registry';
 import { REAL_FIXTURES, startWorld } from './test-world';
-import { validFor } from './test-registry';
 
 /*
  * T3c (Core Server §3.7), its `wait` half: after each fixture's writes, an outside party's `wait`
@@ -31,7 +30,9 @@ const OUTSIDERS = [
   CALLERS['outside-read'] as OutsideCaller,
   OTHER,
 ];
-const START = cursorOf({ [CANVAS]: 0 });
+/** Cursors at the start of the canvas's messages, for `messages` and for `wait`. */
+const PAGED = cursorOf('messages', { [CANVAS]: 0 });
+const WAITED = cursorOf('wait', { [CANVAS]: 0 });
 
 describe('T3c: wait', () => {
   let world: { core: Core; close(): Promise<void> };
@@ -47,7 +48,7 @@ describe('T3c: wait', () => {
   /** What `caller` was sent since the start, as `messages` lists it. */
   async function sentTo(caller: OutsideCaller): Promise<Message[]> {
     const items: Message[] = [];
-    let after = START;
+    let after = PAGED;
     for (;;) {
       const page = await world.core.call('messages', { canvas: CANVAS, after }, caller);
       if (!page.ok) throw new Error(page.error.sentence);
@@ -61,7 +62,7 @@ describe('T3c: wait', () => {
   /** What `caller` waits through since the start, page by page. */
   async function waited(caller: OutsideCaller): Promise<Message[]> {
     const items: Message[] = [];
-    let after = START;
+    let after = WAITED;
     for (;;) {
       const page = await world.core.call('wait', { after, timeoutSeconds: 0 }, caller);
       if (!page.ok) throw new Error(page.error.sentence);
@@ -77,7 +78,7 @@ describe('T3c: wait', () => {
     async (name, fixture) => {
       const surface = world.core.surface[name];
       for (const party of PARTIES) {
-        if (surface?.kind === 'read' || !surface?.access[party === 'you' ? 'you' : party]) continue;
+        if (surface?.kind === 'read' || !surface?.access[party]) continue;
         for (const args of validFor(fixture, party)) {
           await world.core.call(name as OpName, args, CALLERS[party]);
         }

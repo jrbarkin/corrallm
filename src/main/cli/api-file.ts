@@ -19,7 +19,7 @@ export interface ApiFile {
 const API_FILE = 'api.json';
 
 export function writeApiFile(profile: string, api: ApiFile): Promise<void> {
-  return writeWhole(path.join(profile, API_FILE), `${JSON.stringify(api)}\n`, 0o600);
+  return writeWhole(path.join(profile, API_FILE), `${JSON.stringify(api)}\n`, { mode: 0o600 });
 }
 
 /** Removes the profile's api.json. Synchronous: it runs as a process exits. */

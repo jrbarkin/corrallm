@@ -1,9 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TOKEN_REPLACED } from '../../shared/api/errors';
+import { MAX_MESSAGE_BYTES, TOKEN_WAITS } from '../../shared/api/limits';
 import type { CanvasId } from '../../shared/canvas';
 import type { Message } from '../../shared/model/messages';
 import { callTool } from '../api/mcp';
@@ -11,6 +14,7 @@ import { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
+import { cursorOf } from './delivery/messages';
 import { NO_DESKTOP } from './test-registry';
 
 /*
@@ -140,12 +144,31 @@ async function call<T>(
 const wait = (caller: OutsideCaller, args: Record<string, unknown> = {}) =>
   call<Waited>('wait', { timeoutSeconds: 0, ...args }, caller);
 
+/** A call's error, as `{ code, sentence }`: the test fails if it worked. */
+async function failure(
+  name: string,
+  args: Record<string, unknown>,
+  caller: OutsideCaller,
+): Promise<{ code: string; sentence: string }> {
+  const result = await current().call(name as never, args, caller);
+  if (result.ok) throw new Error(`${name} worked`);
+  return result.error;
+}
+
+/** Where the canvas's record says each party's `wait` has read to. */
+async function keptReads(canvas: CanvasId = M1): Promise<Record<string, number> | undefined> {
+  const record = JSON.parse(
+    await readFile(path.join(profile, 'runs', canvas, 'record.json'), 'utf8'),
+  ) as { reads?: Record<string, number> };
+  return record.reads;
+}
+
 /** Sends Builder a message on `canvas` and waits for its reply to come back: the message's id. */
 async function exchange(caller: OutsideCaller, body: string, canvas = M1): Promise<string> {
   const { id } = await call<{ id: string }>('message', { canvas, to: 'builder', body }, caller);
-  await vi.waitFor(async () => {
-    const { items } = await call<{ items: Message[] }>('messages', { canvas }, caller);
-    expect(items.some((message) => message.replyTo === id && message.kind === 'text')).toBe(true);
+  await vi.waitFor(() => {
+    const kept = current().engines.canvas(canvas)?.messages.all() ?? [];
+    expect(kept.some((message) => message.replyTo === id && message.kind === 'text')).toBe(true);
   });
   return id;
 }
@@ -243,7 +266,8 @@ describe('wait', () => {
   });
 
   it('is the party’s: a token renewed by name mid-turn revokes the old at once, and the new one gets the reply', async () => {
-    connector = new FakeConnector({ adapter: 'codex', pause: 100 });
+    // A turn far longer than it takes the old token's wait to end.
+    connector = new FakeConnector({ adapter: 'codex', pause: 1000 });
     await keep();
     await start();
     const old = await token();
@@ -253,14 +277,27 @@ describe('wait', () => {
       old.caller,
     );
     // The old token waits for the reply meanwhile.
-    const oldWait = current().call('wait', { timeoutSeconds: 30 }, old.caller);
+    let settled = false;
+    const oldWait = current()
+      .call('wait', { timeoutSeconds: 30 }, old.caller)
+      .finally(() => {
+        settled = true;
+      });
     await vi.waitFor(() => {
       expect(connector.sessions[0]?.sent).toHaveLength(1);
     });
 
     const renewed = await token();
     expect(current().tokens.clientOf(old.token)).toBeUndefined();
-    // Its wait ends refused, returning nothing and moving nothing.
+    // Its wait ends at once, refused, returning nothing and moving nothing, while the turn goes on.
+    await vi.waitFor(
+      () => {
+        expect(settled).toBe(true);
+      },
+      { timeout: 500 },
+    );
+    const { items } = await call<{ items: Message[] }>('messages', { canvas: M1 }, renewed.caller);
+    expect(items.filter((message) => message.replyTo === id)).toEqual([]);
     const ended = await oldWait;
     expect(ended.ok).toBe(false);
     if (!ended.ok) {
@@ -274,22 +311,205 @@ describe('wait', () => {
     );
   });
 
+  it('ends refused as its token expires, though nothing came', async () => {
+    await keep();
+    // A token kept with a second and a half to go, as tokens.json would hold one made an hour ago.
+    const made = 'a-token-about-to-expire-0123456789abcdef';
+    await writeFile(
+      path.join(profile, 'tokens.json'),
+      JSON.stringify({
+        version: 2,
+        tokens: {
+          [createHash('sha256').update(made).digest('hex')]: {
+            id: 'expiring',
+            name: 'orchestrator',
+            canvases: [M1],
+            access: 'write',
+            expires: Date.now() + 1500,
+          },
+        },
+      }),
+    );
+    await start();
+    const caller = callerOf(made);
+    const before = Date.now();
+    const ended = await failure('wait', { timeoutSeconds: 30 }, caller);
+    expect(Date.now() - before).toBeLessThan(5000);
+    expect(ended).toEqual({ code: 'refused', sentence: TOKEN_REPLACED });
+  });
+
   it('reads every canvas the party reaches, oldest first, with a cursor naming each', async () => {
     await keep(true);
     await start([M1, WORKER]);
     const { caller } = await token('orchestrator', [M1, WORKER]);
+    const earlier = await exchange(caller, 'Before the status', M1);
     const status = await call<{ next: string }>('status', { canvas: WORKER }, caller);
     const onM1 = await exchange(caller, 'On m1', M1);
     const onWorker = await exchange(caller, 'On the worker', WORKER);
 
     const waited = await wait(caller);
     expect(waited.messages.map(({ canvas, replyTo }) => [canvas, replyTo])).toEqual([
+      [M1, earlier],
       [M1, onM1],
       [WORKER, onWorker],
     ]);
-    // status's cursor is at the end of every canvas the caller reaches.
-    expect(await wait(caller, { after: status.next })).toEqual(waited);
+    // status's cursor, though it was asked of the worker, is at the end of every canvas the caller
+    // reaches: a wait from it reads only what came on each since, m1's earlier reply left out.
+    expect(
+      (await wait(caller, { after: status.next })).messages.map(({ canvas, replyTo }) => [
+        canvas,
+        replyTo,
+      ]),
+    ).toEqual([
+      [M1, onM1],
+      [WORKER, onWorker],
+    ]);
     expect((await wait(caller, { after: waited.next })).messages).toEqual([]);
+  });
+
+  it('reads a canvas a cursor doesn’t name from its start: a token renewed to reach more', async () => {
+    await keep(true);
+    await start([M1, WORKER]);
+    // The party reached the worker first, and read what came there; then m1 alone, whose cursor
+    // names m1 alone.
+    const first = await token('orchestrator', [WORKER]);
+    const older = await exchange(first.caller, 'On the worker, long ago', WORKER);
+    expect((await wait(first.caller)).messages.map(({ replyTo }) => replyTo)).toEqual([older]);
+    const second = await token('orchestrator', [M1]);
+    const onM1 = await exchange(second.caller, 'On m1', M1);
+    const { next } = await wait(second.caller);
+    // Renewed to reach both: from that cursor, the worker's older reply comes back (at least once,
+    // though the party's read position there is past it), and m1's doesn't.
+    const both = await token('orchestrator', [M1, WORKER]);
+    const waited = await wait(both.caller, { after: next });
+    expect(waited.messages.map(({ canvas, replyTo }) => [canvas, replyTo])).toEqual([
+      [WORKER, older],
+    ]);
+    expect(onM1).not.toBe(older);
+  });
+
+  it('returns a page at a time, its next where that page ends, and never moves the read position back', async () => {
+    await keep();
+    await start();
+    const { caller } = await token();
+    const status = await call<{ next: string }>('status', { canvas: M1 }, caller);
+    // Four replies of 15 KB or so, more than one page holds.
+    const big = 'x'.repeat(MAX_MESSAGE_BYTES - 1024);
+    const sent: string[] = [];
+    for (let i = 0; i < 4; i++) sent.push(await exchange(caller, `${String(i)} ${big}`));
+
+    const first = await wait(caller);
+    expect(first.messages.length).toBeGreaterThan(0);
+    expect(first.messages.length).toBeLessThan(sent.length);
+    const returned = first.messages.length;
+    // The read position is just past the last it returned: the next wait without a cursor returns
+    // the rest, none skipped and none twice.
+    const second = await wait(caller);
+    expect(second.messages.map(({ replyTo }) => replyTo)).toEqual(sent.slice(returned));
+    // And so is its next: from it, the rest again.
+    expect(await wait(caller, { after: first.next })).toEqual(second);
+    const kept = await keptReads();
+
+    // A wait from before them all returns the first page again, and leaves the read position
+    // where it was.
+    const again = await wait(caller, { after: status.next });
+    expect(again.messages.map(({ replyTo }) => replyTo)).toEqual(sent.slice(0, returned));
+    expect(await keptReads()).toEqual(kept);
+    expect((await wait(caller)).messages).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'moves no read position it couldn’t journal: that wait fails, and the next returns what it didn’t',
+    async () => {
+      await keep();
+      await start();
+      const { caller } = await token();
+      const id = await exchange(caller, 'One');
+      // The canvas's record can't be written meanwhile.
+      const runs = path.join(profile, 'runs', M1);
+      await chmod(runs, 0o500);
+      try {
+        expect((await current().call('wait', { timeoutSeconds: 0 }, caller)).ok).toBe(false);
+      } finally {
+        await chmod(runs, 0o700);
+      }
+      expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
+    },
+  );
+
+  it('wakes only one of two waits at once with what comes, when neither names a cursor', async () => {
+    await keep();
+    await start();
+    const { caller } = await token();
+    const one = wait(caller, { timeoutSeconds: 2 });
+    const two = wait(caller, { timeoutSeconds: 2 });
+    const { id } = await call<{ id: string }>(
+      'message',
+      { canvas: M1, to: 'builder', body: 'Wake one' },
+      caller,
+    );
+    const both = await Promise.all([one, two]);
+    expect(both.flatMap(({ messages }) => messages.map(({ replyTo }) => replyTo))).toEqual([id]);
+  });
+
+  it('takes only its own cursors: not one of messages’, nor one past what the store holds', async () => {
+    await keep(true);
+    await start([M1, WORKER]);
+    const { caller } = await token('orchestrator', [M1, WORKER]);
+    await exchange(caller, 'On the worker', WORKER);
+    const onM1 = await exchange(caller, 'On m1', M1);
+    const { messages } = await wait(caller);
+    expect(messages).toHaveLength(2);
+    const kept = await keptReads(M1);
+
+    // messages' cursor names the one canvas it paged: as wait's, it would read the worker anew.
+    const paged = await call<{ next: string }>('messages', { canvas: M1 }, caller);
+    expect(await failure('wait', { timeoutSeconds: 0, after: paged.next }, caller)).toMatchObject({
+      code: 'invalid',
+    });
+    // A place past m1's last message is no place corrallm gave: it moves nothing.
+    const past = cursorOf('wait', { [M1]: 1_000_000, [WORKER]: 0 });
+    expect(await failure('wait', { timeoutSeconds: 0, after: past }, caller)).toMatchObject({
+      code: 'invalid',
+    });
+    expect(await keptReads(M1)).toEqual(kept);
+    const later = await exchange(caller, 'Later', M1);
+    expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([later]);
+    expect(onM1).not.toBe(later);
+  });
+
+  it('keeps a token’s waits out of its limit on calls in flight, within a limit of their own', async () => {
+    await keep();
+    await start();
+    const { caller } = await token();
+    const controllers = Array.from({ length: TOKEN_WAITS }, () => new AbortController());
+    const waiting = controllers.map((controller) =>
+      current().call('wait', { timeoutSeconds: 30 }, caller, controller.signal),
+    );
+    try {
+      // Every wait holds its place, and the token's other calls are answered meanwhile.
+      await vi.waitFor(async () => {
+        expect(await failure('wait', { timeoutSeconds: 30 }, caller)).toEqual({
+          code: 'refused',
+          sentence: 'Too many waits at once; let one end first.',
+        });
+      });
+      expect((await current().call('agents', { canvas: M1 }, caller)).ok).toBe(true);
+      expect(
+        (
+          await current().call(
+            'message',
+            { canvas: M1, to: 'builder', body: 'Still heard' },
+            caller,
+          )
+        ).ok,
+      ).toBe(true);
+    } finally {
+      for (const controller of controllers) controller.abort(new Error('done'));
+      await Promise.all(waiting);
+    }
+    // Once they end, a wait is taken again.
+    expect((await current().call('wait', { timeoutSeconds: 0 }, caller)).ok).toBe(true);
   });
 
   it('returns nothing addressed to another party, and refuses a cursor it didn’t give', async () => {

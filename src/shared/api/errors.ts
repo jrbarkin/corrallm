@@ -29,3 +29,11 @@ export interface OpError {
 
 /** What an operation answers: its result, or why it failed. */
 export type OpResult<T> = { ok: true; value: T } | { ok: false; error: OpError };
+
+/**
+ * What a call still going says when its outside token is replaced or expires meanwhile (`refused`):
+ * the one refusal that means the token itself, as a request that brings no token, or a wrong one,
+ * is answered 401 before any op runs. `corrallm wait` tells it apart by these words.
+ */
+export const TOKEN_REPLACED =
+  'This token was replaced or expired: call with the token its maker has now (corrallm serve --new-token).';
