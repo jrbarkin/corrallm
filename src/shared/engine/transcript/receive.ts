@@ -305,8 +305,16 @@ export class ConnectedDriver implements SessionDriver {
         // The CLI has it: a message sent from here, now on its way, or one it told of itself.
         const known = find(event.id);
         if (!known) {
+          // A native note can arrive while the backend still holds our outgoing shell command.
+          const before = io
+            .session()
+            .entries.find(
+              (entry) =>
+                entry.kind === 'user' && entry.reached !== true && this.#turns.has(entry.id),
+            )?.id;
           io.dispatch({
             type: 'start',
+            ...(before === undefined ? {} : { before }),
             entry: {
               id: event.id,
               kind: 'user',
@@ -315,12 +323,8 @@ export class ConnectedDriver implements SessionDriver {
               conversation: this.#catalog.adapterOf(this.connection),
             },
           });
-        } else if (known.kind === 'user' && known.reached !== true) {
-          io.dispatch({
-            type: 'update',
-            id: event.id,
-            update: (entry) => (entry.kind === 'user' ? { ...entry, reached: true } : entry),
-          });
+        } else if (known.kind === 'user' && (known.reached !== true || known.text !== event.text)) {
+          io.dispatch({ type: 'received', id: event.id, text: event.text });
         }
         return;
       }

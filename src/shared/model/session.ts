@@ -74,7 +74,8 @@ export interface SessionQuestion extends AskedQuestion {
  */
 export type Entry =
   /**
-   * The user's message, with the images pasted into it. `reached`: a connected session's CLI has
+   * The user's message, with the images pasted into it; once echoed, its text as sent to the CLI,
+   * including any core-added framing or withdrawal notes. `reached`: a connected session's CLI has
    * it (main said so, by its id, or it is from the session's history): what a rewind can go back
    * to. `conversation`: the one it was sent in.
    */

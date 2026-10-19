@@ -228,6 +228,12 @@ describe('a connected session', () => {
     expect(store.of('a').status).toBe('working');
     expect(backend.send).toHaveBeenCalledTimes(1);
     expect(done).not.toHaveBeenCalled();
+    expect(
+      store
+        .of('a')
+        .entries.filter((entry) => entry.kind === 'user')
+        .map(({ text }) => text),
+    ).toEqual(['[corrallm] An earlier instruction was withdrawn.', 'The user’s command']);
     emit('a', 'claude-code.sdk', { type: 'user', id, text: 'The user’s command' }, end([id]));
     await settle();
     expect(backend.send).toHaveBeenLastCalledWith(
@@ -235,6 +241,16 @@ describe('a connected session', () => {
       expect.objectContaining({ text: 'After the command' }),
     );
     expect(done).toHaveBeenCalledOnce();
+  });
+
+  it('shows the echoed text, with backend additions, while keeping the message’s images', async () => {
+    const { store, emit, sent } = connected();
+    const images = [{ mediaType: 'image/png' as const, data: 'aGVsbG8=' }];
+    store.send('a', 'claude-code', 'New work', undefined, images);
+    await settle();
+    const text = '[corrallm] An earlier instruction was withdrawn.\n\nNew work';
+    emit('a', 'claude-code.sdk', { type: 'user', id: sent(), text });
+    expect(store.of('a').entries[0]).toMatchObject({ kind: 'user', text, images, reached: true });
   });
 
   it('tells whoever sent a message what the agent replied in its turn, not its subagents', async () => {
