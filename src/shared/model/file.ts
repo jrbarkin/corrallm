@@ -8,7 +8,7 @@ import { USAGE_WINDOWS } from '../usage';
 import { MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
 import { GROUP_COLORS } from './geometry';
-import { isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
+import { isIf, isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
 import type {
   Condition,
   QueueDelay,
@@ -60,9 +60,10 @@ import type {
  * repeat is { "id", "repeat", "until", "rounds", "otherwise" }: the steps, messages, waits and
  * delays it runs each round; when it stops (a condition, as an if-then has one, but not timedOut,
  * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
- * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items in
- * its repeats included, since waits name them. A link's dots are the ones it was drawn between
- * ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never saved.
+ * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items its
+ * if-thens and repeats hold included, since waits name them. A link's dots are the ones it was drawn
+ * between ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never
+ * saved.
  */
 const FORMAT = 'corrallm';
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
@@ -350,22 +351,25 @@ function readSettings(
 }
 
 /**
- * A queue: its items, with ids unique across it, the items in its repeats included (waits name
- * them).
+ * A queue: its items, with ids unique across the whole of it, the items its if-thens and repeats
+ * hold included (waits name them, and the core keeps each item by its agent and its id).
  */
 function readQueue(value: unknown, where: string): QueueItem[] {
   const queue = items(value, where, readItem);
-  const ids = new Set(queue.map((item) => item.id));
+  const ids = new Set<string>();
+  const unique = (id: string, at: string) => {
+    if (ids.has(id)) throw new Error(`${at}.id: "${id}" is used twice in this queue`);
+    ids.add(id);
+  };
   for (const [i, item] of queue.entries()) {
-    if (!isRepeat(item)) continue;
-    for (const [j, inner] of item.repeat.entries()) {
-      if (ids.has(inner.id)) {
-        throw new Error(
-          `${where}[${String(i)}].repeat[${String(j)}].id: "${inner.id}" is used twice in this queue`,
-        );
-      }
-      ids.add(inner.id);
-    }
+    const at = `${where}[${String(i)}]`;
+    unique(item.id, at);
+    const [key, inner] = isRepeat(item)
+      ? ['repeat', item.repeat]
+      : isIf(item)
+        ? ['then', item.then]
+        : ['', []];
+    for (const [j, one] of inner.entries()) unique(one.id, `${at}.${key}[${String(j)}]`);
   }
   return queue;
 }

@@ -841,6 +841,64 @@ describe('fromFile', () => {
       /^nodes\[1\]\.queue\[1\]\.repeat\[0\]\.id: "x" is used twice in this queue$/,
     ],
     [
+      'an id inside an if-then that its queue already uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'x', action: 'Read' },
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', message: 'Again' }] },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.then\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id inside an if-then that another if-then uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            { id: 'j', if: { kind: 'succeeded' }, then: [{ id: 'x', message: 'Again' }] },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.then\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id inside a repeat that an if-then before it uses',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            {
+              id: 'r',
+              repeat: [{ id: 'x', message: 'Again' }],
+              until: { kind: 'succeeded' },
+              rounds: 3,
+              otherwise: 'ask',
+            },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.repeat\[0\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an id of the queue inside an if-then before it',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [
+            { id: 'i', if: { kind: 'failed' }, then: [{ id: 'x', action: 'Read' }] },
+            { id: 'x', message: 'Again' },
+          ],
+        }),
+      /^nodes\[1\]\.queue\[1\]\.id: "x" is used twice in this queue$/,
+    ],
+    [
+      'an if-then holding a step of its own id',
+      (f) =>
+        Object.assign(f.nodes[1] ?? {}, {
+          queue: [{ id: 'i', if: { kind: 'failed' }, then: [{ id: 'i', action: 'Read' }] }],
+        }),
+      /^nodes\[1\]\.queue\[0\]\.then\[0\]\.id: "i" is used twice in this queue$/,
+    ],
+    [
       'a link to a missing agent',
       (f) => Object.assign(f, { links: [{ agents: ['a', 'X'] }] }),
       /links\[0\]\.agents/,
