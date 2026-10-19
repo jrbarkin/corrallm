@@ -13,9 +13,9 @@ import { hostServices } from './host/services';
  * process (an Electron utility process, where the core runs). Triggered by
  * CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md. The checks are core/selftest.ts's: node-pty, a
  * terminal screen, an Agent SDK query against a fake `claude` of its own (run with `node`, which
- * must be on the PATH), a file-backed SQLite transaction, loopback HTTP, spawning, and, packaged,
- * that child_process.fork is refused. Exits 0 once every check passed in both, 2 if one failed
- * (saying which) or the core process failed, 3 on a timeout, 4 on an uncaught error.
+ * must be on the PATH), the core's database (Node's SQLite), loopback HTTP, spawning, and,
+ * packaged, that child_process.fork is refused. Exits 0 once every check passed in both, 2 if one
+ * failed (saying which) or the core process failed, 3 on a timeout, 4 on an uncaught error.
  */
 export async function runNativeSelfTest(): Promise<void> {
   // Log and exit instead of Electron's default handler, which shows a modal error dialog that

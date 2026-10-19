@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { spawn } from '../sessions/process';
 import { createCore } from './core';
 import type { Core } from './core';
+import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 const { spawned } = vi.hoisted(() => ({ spawned: vi.fn() }));
@@ -83,13 +84,7 @@ it.each(['operation', 'channel', 'engine'] as const)(
       const file = path.join(profile, 'canvas.corral');
       await mkdir(project);
       await copyFile(path.join(import.meta.dirname, 'test-worker.corral'), file);
-      await writeFile(
-        path.join(profile, 'canvases.json'),
-        JSON.stringify({
-          version: 2,
-          canvases: { [canvas]: { file, project, conversations: {} } },
-        }),
-      );
+      await keepCanvases(profile, { [canvas]: { file, project } });
     }
     core = await createCore(
       {

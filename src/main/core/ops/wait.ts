@@ -16,11 +16,10 @@ import type { Implementations, OpServices } from '.';
  * the caller's party since, oldest first, a page at most; with none, it waits for the next, until
  * its time limit, its caller gives up, or its token is replaced or expires. It never consumes: a
  * message keeps its state, and a cursor reads it again. A wait without `for` moves the party's read
- * position forward to where it ended, journaled before it returns: in each canvas apart, so one
- * whose record couldn't be written returns none of its messages, its place in the cursor kept,
- * and none is ever skipped (if none could, the wait fails). Waits that read on from the read
- * position (no `after`, no `for`) take turns, each reading it afresh, so one message wakes only one
- * of them with it.
+ * position forward to where it ended in every canvas, journaled in one write before it returns
+ * (Engines.advance): one whose positions couldn't be written moves none, and fails, so none is
+ * ever skipped. Waits that read on from the read position (no `after`, no `for`) take turns, each
+ * reading it afresh, so one message wakes only one of them with it.
  */
 
 const NOT_A_CURSOR = 'That cursor isn’t one wait or status gave.';
@@ -82,29 +81,11 @@ export function waitOps(services: OpServices): Pick<Implementations, 'wait'> {
         const start = fixed ?? startOf();
         const found = unread(open, start, concerns);
         if (found.length === 0 && Date.now() < deadline) return undefined;
-        let page = pageOf(found);
+        const page = pageOf(found);
         const next = { ...start };
         for (const { message, seq } of page) next[message.canvas] = seq;
-        if (about === undefined) {
-          // Each canvas's position moves, or not, on its own: one that didn't returns nothing.
-          const writes = await Promise.allSettled(
-            open.map((running) => running.reads.advance(party, next[running.document.id] ?? 0)),
-          );
-          const failed = new Set<string>();
-          for (const [i, write] of writes.entries()) {
-            const canvas = open[i]?.document.id;
-            if (write.status !== 'rejected' || canvas === undefined) continue;
-            failed.add(canvas);
-            next[canvas] = start[canvas] ?? 0;
-          }
-          const returned = page.filter(({ message }) => !failed.has(message.canvas));
-          // Nothing it found could be returned, or nothing moved: an empty page would read as none.
-          if ((page.length > 0 && returned.length === 0) || failed.size === open.length) {
-            const failure = writes.find((write) => write.status === 'rejected');
-            if (failure?.status === 'rejected') throw failure.reason;
-          }
-          page = returned;
-        }
+        // Every canvas's position moves, or none: a wait that couldn't move them fails.
+        if (about === undefined) await engines.advance(party, next);
         return { messages: page.map(({ message }) => message), next: cursorOf('wait', next) };
       };
 

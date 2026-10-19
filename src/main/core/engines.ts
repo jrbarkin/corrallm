@@ -9,37 +9,41 @@ import type { NeedsInput } from '../../shared/engine/needs';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { fromFile, toFile } from '../../shared/model/file';
-import type { Message } from '../../shared/model/messages';
+import type { Message, PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
 import type { SessionEvent, UserMessage } from '../../shared/session';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
-import type { MovedRead, RunJournal } from '../run-journal';
+import type { RunJournal } from '../run-journal';
 import { installedClis } from '../sessions/installed';
 import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import { Delivery } from './delivery/delivery';
 import { MessageStore } from './delivery/messages';
+import type { MessageTable } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
+import type { Database } from './store/store';
 
 /*
  * The canvases the core runs, each with its engine (src/shared/engine/engine.ts): the run and the
- * sessions it sends to, the sessions run by the core's own SessionManager, in the same process;
- * and its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts).
- * A canvas opens by its id, from what the profile keeps of it: its file and its project folder,
- * which the user picked in the app (canvases.json), and its run as the journal last kept it
- * (runs/<id>/record.json), restored paused. A draft, which has no file, never opens, nor does a
- * canvas whose file holds another canvas. One opened held delivers nothing until `deliver()`, so a
- * host that may still refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is
- * journaled again: at most one write per COALESCE_MS, and one before every message the run sends,
- * so a sent message's record is always on disk first; its messages are journaled beside its run,
- * each one delivering forced to disk before it is sent, and so is where each party's `wait` has
- * read to in them, before the `wait` that moved it returns. Whoever watches hears each message
- * added to a canvas's store, closing it included, and each thing newly waiting for an answer on it
- * (`corrallm serve` logs them).
+ * sessions it sends to, the sessions run by the core's own SessionManager, in the same process; and
+ * its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts). A
+ * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
+ * the user picked in the app (canvas memory), and its run as the journal last kept it, restored
+ * paused. A draft, which has no file, never opens, nor does a canvas whose file holds another
+ * canvas. One opened held delivers nothing until `deliver()`, so a host that may still refuse to
+ * start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
+ * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
+ * always on disk first. Its run and its messages are one record: each write of either holds every
+ * change to the other not on disk yet (a run's only if it changed since it last was), so what
+ * changes together lands together, or not at all (a kill's hold and its withdrawals, a turn's reply
+ * and what its end changed in the run); and a `wait` moves every read position it moves in one
+ * write with them, or none, before it returns. Each message delivering is on disk before it is
+ * sent. Whoever watches hears each message added to a canvas's store, closing it included, and each
+ * thing newly waiting for an answer on it (`corrallm serve` logs them).
  */
 
 const COALESCE_MS = 250;
@@ -59,6 +63,10 @@ export interface EnginesDeps {
   sessions: SessionManager;
   projects: ProjectFolders;
   journal: RunJournal;
+  /** Every canvas's messages, in the profile's database. */
+  messages: MessageTable;
+  /** The profile's database, whose commits hold what changes together. */
+  store: Pick<Database, 'write'>;
   usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
   files: ProjectFiles;
   /** The environment agents run in (environment.ts). */
@@ -75,9 +83,15 @@ export interface OpenCanvas {
   delivery: Delivery;
   /** Where each party's `wait` has read to in its messages. */
   reads: ReadPositions;
-  /** Forces the run as it is now to disk, replacing its coalesced write. */
+  /**
+   * Commits the run as it is now, replacing its coalesced write, with every change to its messages
+   * not on disk yet.
+   */
   journal(): Promise<void>;
-  /** What opening it found to say: its run record, or its message log, set aside. */
+  /**
+   * What opening it found to say: its run discarded, its messages unread, the database it is kept
+   * in restored.
+   */
   warnings: readonly string[];
 }
 
@@ -102,6 +116,9 @@ interface Running extends OpenCanvas {
   listeners: Set<(agentId: string, connection: ConnectionId, event: SessionEvent) => void>;
   /** The coalesced write waiting, if any. */
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** How many times its run has changed, and how many of those the journal has on disk. */
+  changes: number;
+  saved: number;
   /** What stops it hearing its engine change, and usage readings. */
   stop: () => void;
   /** What stops watchers hearing its messages: once what closing it said is said too. */
@@ -158,6 +175,28 @@ export class Engines {
   /** Starts delivering on every canvas opened held: what waits on each goes once it can. */
   async deliver(): Promise<void> {
     await Promise.all([...this.#canvases.values()].map(({ delivery }) => delivery.start()));
+  }
+
+  /**
+   * Moves `party`'s read position forward to its place in each canvas `places` names (never back):
+   * all in one write, with what each canvas has to journal, or none. Resolves once it is on disk;
+   * rejects, moving none, if it couldn't be.
+   */
+  async advance(party: PartyId, places: Readonly<Record<string, number>>): Promise<void> {
+    const moving = Object.entries(places).flatMap(([canvas, seq]) => {
+      const running = this.#canvases.get(canvas as CanvasId);
+      return running && seq > running.reads.of(party) ? [{ running, seq }] : [];
+    });
+    if (moving.length === 0) return;
+    const done: (() => void)[] = [];
+    await this.#deps.store.write(() => {
+      for (const { running, seq } of moving) {
+        done.push(this.#journalWithin(running, false));
+        this.#deps.journal.moveRead(running.document.id, party, seq);
+      }
+    });
+    for (const one of done) one();
+    for (const { running, seq } of moving) running.reads.moved(party, seq);
   }
 
   /**
@@ -281,7 +320,7 @@ export class Engines {
     const { projects, journal } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
-    // Only a canvas saved in the file canvases.json names for it, while that file still holds it:
+    // Only a canvas saved in the file canvas memory names for it, while that file still holds it:
     // never a draft, though the journal keeps one's run.
     if (context.savedText === undefined) throw new Error(NO_FILE);
     if (canvasIdOf(context.savedText) !== canvas) throw new Error(ANOTHER);
@@ -309,13 +348,15 @@ export class Engines {
       token: context.token,
       listeners,
       timer: undefined,
+      changes: 0,
+      saved: 0,
       needs: new Set(),
       looking: false,
     } as Running;
-    running.reads = new ReadPositions(await journal.reads(canvas), (moved) =>
-      this.#write(running, moved),
-    );
+    running.reads = new ReadPositions(await journal.reads(canvas));
     running.journal = () => this.#write(running);
+    // What its messages write, they write with its run, if that changed since it was last on disk.
+    messages.writeWith(() => this.#runWithin(running, false));
     const engine = new Engine({
       catalog: this.#deps.engineCatalog,
       backend: this.#backend(canvas, listeners),
@@ -358,8 +399,11 @@ export class Engines {
     running.delivery = delivery;
     if (!held) await delivery.start();
     const changed = () => {
+      running.changes += 1;
       running.timer ??= setTimeout(() => {
         running.timer = undefined;
+        // Written with its messages meanwhile, it has nothing more to journal.
+        if (running.changes <= running.saved) return;
         void this.#write(running).catch((error: unknown) => {
           console.error('Could not journal the run:', error);
         });
@@ -396,7 +440,7 @@ export class Engines {
     let mail = this.#mail.get(canvas);
     if (!mail) {
       mail = (async () => {
-        const messages = new MessageStore(canvas, this.#deps.journal, () => Date.now());
+        const messages = new MessageStore(canvas, this.#deps.messages, () => Date.now());
         await messages.load();
         return {
           messages,
@@ -445,19 +489,48 @@ export class Engines {
   }
 
   /**
-   * Journals a canvas's run as it is now, the coalesced write it replaces cancelled: with a party's
-   * read position `moved` forward, forced to disk.
+   * Journals a canvas's run as it is now, the coalesced write it replaces cancelled, with every
+   * change to its messages not on disk yet: in one write, on disk once it resolves.
    */
-  #write(running: Running, moved?: MovedRead): Promise<void> {
+  async #write(running: Running): Promise<void> {
     clearTimeout(running.timer);
     running.timer = undefined;
+    let done: () => void = () => undefined;
+    await this.#deps.store.write(() => {
+      done = this.#journalWithin(running, true);
+    });
+    done();
+  }
+
+  /**
+   * Within a write: what a canvas has to journal, its run (if `run`, or if it changed since the
+   * journal last had it on disk) and every change to its messages not on disk yet; returns what
+   * marks them on disk once the write's commit returned.
+   */
+  #journalWithin(running: Running, run: boolean): () => void {
+    const done = [this.#runWithin(running, run), running.messages.changes()];
+    return () => {
+      for (const one of done) one();
+    };
+  }
+
+  /**
+   * Within a write: the canvas's run as it is now, if `force`, or if it changed since the journal
+   * last had it on disk; returns what marks it on disk once the write's commit returned.
+   */
+  #runWithin(running: Running, force: boolean): () => void {
+    const covered = running.changes;
+    if (!force && covered <= running.saved) return () => undefined;
     const checkpoint: RunCheckpoint = {
       version: 2,
       workflow: toFile(running.document),
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    return this.#deps.journal.save(running.document.id, running.token, checkpoint, moved);
+    this.#deps.journal.keep(running.document.id, running.token, checkpoint);
+    return () => {
+      running.saved = Math.max(running.saved, covered);
+    };
   }
 
   /** Where a canvas's agents' sessions run: the core's SessionManager, in this process. */

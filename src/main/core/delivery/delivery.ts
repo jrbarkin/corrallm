@@ -19,18 +19,19 @@ import type { MessageStore } from './messages';
 
 /*
  * Delivering a canvas's messages (API Spec §5.5 to §5.7, Core Server §5.9). A message to an agent
- * waits until the agent is idle (no turn going, nothing asked, nothing queued in its session) and
- * nothing holds it: its own or its group's pause (a kill too), a session that would not start (it
- * stays first in line), a session running in a mode that never asks (which no party's text drives),
- * or its backend's usage rule. Then it is journaled as delivering, with the id it will be sent
- * under, forced to disk, and only then sent, whether or not a run is going: a whole-run Stop, and
- * the paused state a run restores in, hold only the run's own sends. What you send goes past those
- * holds into the session's queue, as you typed it; anything else reaches the agent behind a first
- * line saying whom it is from, so the agent's CLI never takes it for its user's. When a message's turn ends, what the agent replied is a message to its sender, with how
- * the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never answered
- * by another reply. corrallm tells a sender once when its message waits on something (a pause, a
- * session that won't start, a mode that never asks, a usage window) or its turn waits for you, and
- * when it ends withdrawn or unresolved.
+ * waits until the agent is idle (no turn going, nothing asked, nothing queued in its session, nor
+ * on its way there from the run) and nothing holds it: its own or its group's pause (a kill too), a
+ * session that would not start (it stays first in line), a session running in a mode that never
+ * asks (which no party's text drives), or its backend's usage rule. Then it is journaled as
+ * delivering, with the id it will be sent under, committed, and only then sent, whether or not a
+ * run is going: a whole-run Stop, and the paused state a run restores in, hold only the run's own
+ * sends. What you send goes past those holds into the session's queue, as you typed it; anything
+ * else reaches the agent behind a first line saying whom it is from, so the agent's CLI never takes
+ * it for its user's. When a message's turn ends, what the agent replied is a message to its sender,
+ * with how the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never
+ * answered by another reply. corrallm tells a sender once when its message waits on something (a
+ * pause, a session that won't start, a mode that never asks, a usage window) or its turn waits for
+ * you, and when it ends withdrawn or unresolved.
  */
 
 export interface DeliveryDeps {
@@ -113,7 +114,7 @@ const TITLE = 120;
 const REASON = 1000;
 /** How a reply cut to the most a message holds is marked. */
 const CUT = '\n\n[corrallm: cut here; the whole reply is in its transcript]';
-/** How long after a delivering record couldn't be forced to disk delivery tries again. */
+/** How long after a delivering record couldn't be committed delivery tries again. */
 const RECORD_RETRY = 1000;
 
 export class Delivery {
@@ -133,7 +134,7 @@ export class Delivery {
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
-   * While a delivering record couldn't be forced to disk: what tries again (RECORD_RETRY later).
+   * While a delivering record couldn't be committed: what tries again (RECORD_RETRY later).
    * Nothing is delivered meanwhile.
    */
   #unrecordable: (() => void) | undefined;
@@ -153,11 +154,9 @@ export class Delivery {
 
   /**
    * Starts delivering, as the canvas opens (or once its host says, Engines.deliver): a message
-   * that was being delivered, or delivered with
-   * no turn end, when the core last stopped is unresolved (its sender told so), and never sent
-   * again, and so is one that waited in a log the store set aside as broken with no record read
-   * after the broken line (it may have gone); what was waiting, or was sent before it started,
-   * goes once it can. Once only.
+   * that was being delivered, or delivered with no turn end, when the core last stopped is
+   * unresolved (its sender told so), and never sent again; what was waiting, or was sent before it
+   * started, goes once it can. Once only.
    */
   async start(): Promise<void> {
     if (this.#started) return;
@@ -167,7 +166,6 @@ export class Delivery {
     for (const key of store.told()) this.#told.add(key);
     for (const message of store.all()) {
       if (this.#inFlight(message)) this.#cutOff(message);
-      else if (message.state === 'pending' && store.doubtful.has(message.id)) this.#unread(message);
     }
     await this.#deps.store.durable();
     this.schedule();
@@ -506,11 +504,13 @@ export class Delivery {
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
     if (this.#unasking(node)) return { kind: 'unasking' };
+    // The run's own message on its way to it goes first, as one in its session's queue would.
     const session = engine.sessions.of(node.id);
     if (
       session.status !== 'idle' ||
       session.queued.length > 0 ||
-      (session.asking?.length ?? 0) > 0
+      (session.asking?.length ?? 0) > 0 ||
+      engine.run.sending(node.id)
     ) {
       return { kind: 'busy' };
     }
@@ -607,7 +607,7 @@ export class Delivery {
   }
 
   /**
-   * Delivers a message: journaled as delivering, with the id it will be sent under, forced to disk,
+   * Delivers a message: journaled as delivering, with the id it will be sent under, committed,
    * then sent to its agent's session. If that record can't reach the disk, it was never sent, and
    * its pending record is there: it waits again, first in line, and nothing is delivered on the
    * canvas until delivery tries again, RECORD_RETRY later, so a passing disk error costs a delay,
@@ -778,14 +778,6 @@ export class Delivery {
         TAKEN_BACK,
       );
     }
-  }
-
-  /** A message that waited in a log set aside as broken: unresolved, never sent, its sender told. */
-  #unread(message: Message): void {
-    const text = `Your message to ${this.#nameOf(message.to)} couldn’t be read back when corrallm opened the canvas, so it won’t be sent.`;
-    const turn: TurnResult = { status: 'failed', reason: 'error', message: text };
-    this.#deps.store.update(message.id, { state: 'unresolved', turn });
-    this.#notice(message, text, turn);
   }
 
   /** A message cut off as the core stopped: unresolved, never sent again, its sender told. */

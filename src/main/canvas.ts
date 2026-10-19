@@ -6,7 +6,7 @@ import type { CanvasId } from '../shared/canvas';
 import { CANVAS_EXTENSION, MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { HostServices, TrustedPath, WindowId } from './core/host';
 import type { CanvasMemory } from './memory';
-import { writeWhole } from './memory';
+import { writeWhole } from './whole-file';
 
 /*
  * Canvas files on disk, for the canvas:* channels. The renderer never names a path: it gets a

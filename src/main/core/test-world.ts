@@ -12,6 +12,7 @@ import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
+import { keepCanvases, keepMessages } from './store/test-store';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 import type { OpFixture, OutOfReach } from './test-registry';
 
@@ -103,43 +104,31 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
       links: LINKS.map((agents) => ({ agents })),
     }),
   );
-  await writeFile(
-    path.join(profile, 'canvases.json'),
-    JSON.stringify({ version: 2, canvases: { [CANVAS]: { file, project, conversations: {} } } }),
-  );
-  const log = path.join(profile, 'runs', CANVAS, 'messages.jsonl');
-  await mkdir(path.dirname(log), { recursive: true });
-  const notice = {
-    id: NOTICE,
-    canvas: CANVAS,
-    from: 'corrallm',
-    to: 'outside:watcher',
-    kind: 'notice',
-    body: 'Noted',
-    state: 'delivered',
-    at: 1,
-  };
-  await writeFile(
-    log,
-    [
-      ...Object.entries(SEEDED).map(([party, id], i) =>
-        JSON.stringify({
-          seq: i + 1,
-          message: {
-            id,
-            canvas: CANVAS,
-            from: SENDERS[party as keyof typeof SENDERS],
-            to: 'agent:peer',
-            kind: 'text',
-            body: 'Waiting',
-            state: 'pending',
-            at: 1,
-          },
-        }),
-      ),
-      JSON.stringify({ seq: Object.keys(SEEDED).length + 1, message: notice }),
-    ].join('\n'),
-  );
+  await keepCanvases(profile, { [CANVAS]: { file, project } });
+  await keepMessages(profile, CANVAS, [
+    ...Object.entries(SEEDED).map(([party, id]) => ({
+      message: {
+        id,
+        from: SENDERS[party as keyof typeof SENDERS],
+        to: 'agent:peer' as const,
+        kind: 'text' as const,
+        body: 'Waiting',
+        state: 'pending' as const,
+        at: 1,
+      },
+    })),
+    {
+      message: {
+        id: NOTICE,
+        from: 'corrallm' as const,
+        to: 'outside:watcher' as const,
+        kind: 'notice' as const,
+        body: 'Noted',
+        state: 'delivered' as const,
+        at: 1,
+      },
+    },
+  ]);
   let clock = 0;
   const core = await createCore(
     {

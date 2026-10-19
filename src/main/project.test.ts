@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
 import type { HostServices } from './core/host';
+import type { Store } from './core/store/store';
+import { openTestStore } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 import { ProjectFolders } from './project';
 
@@ -14,18 +16,25 @@ const WINDOW = 7;
 const THREAD = '0199a3f0-1234-7000-8000-123456789abc';
 
 let dir: string;
+/** The profile, beside `dir`: what the core keeps is never among the canvas files. */
+let profile: string;
+let store: Store;
 let memory: CanvasMemory;
 let pickFolder: ReturnType<typeof vi.fn<HostServices['pickFolder']>>;
 let projects: ProjectFolders;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-project-'));
-  memory = new CanvasMemory(path.join(dir, 'canvases.json'));
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-profile-'));
+  store = await openTestStore(profile);
+  memory = new CanvasMemory(store);
   pickFolder = vi.fn<HostServices['pickFolder']>();
   projects = new ProjectFolders({ host: { pickFolder }, memory });
 });
 afterEach(async () => {
   await memory.flush();
+  await store.close();
   await rm(dir, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true });
 });
 
 /** Answers the next folder dialog with `folder` (undefined: cancelled). */
@@ -79,8 +88,8 @@ describe('project folders', () => {
     pick(app);
     await projects.choose(WINDOW, canvas);
 
-    // Check the saved file too: the thread must survive an app restart.
-    expect(await new CanvasMemory(path.join(dir, 'canvases.json')).get(canvas)).toEqual({
+    // Read again: the thread must survive an app restart.
+    expect(await new CanvasMemory(store).get(canvas)).toEqual({
       file,
       project: app,
       conversations: { codex: { coder: { id: THREAD } } },

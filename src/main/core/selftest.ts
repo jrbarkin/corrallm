@@ -1,5 +1,5 @@
 import { fork, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -9,6 +9,10 @@ import { ADAPTERS } from '../sessions/adapters';
 import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
+import { JOURNAL_SIZE_LIMIT } from './store/checkpointer';
+import { APPLICATION_ID, openStore } from './store/open';
+import { connect } from './store/sqlite';
+import type { Store } from './store/store';
 
 /*
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
@@ -130,48 +134,104 @@ export async function checkTerminalScreen(): Promise<string> {
   }
 }
 
-/** A file-backed WAL transaction through Node's SQLite, reopened read-only after committing. */
+/**
+ * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
+ * SQLite: each of its pragmas as set, a write through its lane (its log flushed on Node's thread
+ * pool) read back by another connection, a checkpoint on its checkpointer's worker thread, which
+ * begins the log anew there (its header's salts change), a snapshot of it (SQLite's backup,
+ * Node's one call on its thread pool) read back, and its file, log and index the user's alone
+ * (not on Windows, whose files have no such modes).
+ */
 export async function checkSqlite(folder = tmpdir()): Promise<string> {
   try {
-    // Imported here only: the CLI's bundle requires what is imported at the top as it loads, before
-    // it checks the Node it runs on (cli/index.ts), and an older Node lacks this one.
-    const { DatabaseSync } = await import('node:sqlite');
-    const dir = await mkdtemp(path.join(folder, 'corrallm-selftest-sqlite-'));
+    const profile = await mkdtemp(path.join(folder, 'corrallm-selftest-store-'));
     try {
-      const file = path.join(dir, 'selftest.sqlite');
-      const database = new DatabaseSync(file);
-      let version: string;
+      const { store, said } = await openStore(profile);
+      if (store === undefined) throw new Error(said.join(' '));
       try {
-        const sqlite = database.prepare('SELECT sqlite_version() AS version').get()?.version;
-        if (typeof sqlite !== 'string') throw new Error('SQLite did not report its version');
-        version = sqlite;
-        const mode = database.prepare('PRAGMA journal_mode=WAL').get()?.journal_mode;
-        if (mode !== 'wal') throw new Error(`journal_mode was ${String(mode)}, not WAL`);
-        database.exec('PRAGMA synchronous=FULL');
-        if (database.prepare('PRAGMA synchronous').get()?.synchronous !== 2) {
-          throw new Error('synchronous was not FULL');
-        }
-        database.exec('CREATE TABLE selftest (value TEXT NOT NULL); BEGIN IMMEDIATE');
-        database.prepare('INSERT INTO selftest (value) VALUES (?)').run('committed');
-        database.exec('COMMIT');
+        return await checkStore(store);
       } finally {
-        database.close();
-      }
-      const reader = new DatabaseSync(file, { readOnly: true });
-      try {
-        if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'committed') {
-          throw new Error('the reopened database did not read back the committed row');
-        }
-        return `SQLite ${version}, WAL, a transaction read back`;
-      } finally {
-        reader.close();
+        await store.close();
       }
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     }
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
-    throw new Error(`SQLite transaction check failed: ${why}`, { cause: error });
+    throw new Error(`The core’s database check failed: ${why}`, { cause: error });
+  }
+}
+
+/** Each pragma openStore sets, as it reads back (Core Database §5). */
+function storePragmas(): Record<string, unknown> {
+  return {
+    journal_mode: 'wal',
+    // NORMAL: the store flushes the log itself, after each commit, off the loop
+    synchronous: 1,
+    ...(process.platform === 'darwin' ? { fullfsync: 1, checkpoint_fullfsync: 1 } : {}),
+    foreign_keys: 1,
+    trusted_schema: 0,
+    // INCREMENTAL
+    auto_vacuum: 2,
+    journal_size_limit: JOURNAL_SIZE_LIMIT,
+    wal_autocheckpoint: 0,
+    application_id: APPLICATION_ID,
+  };
+}
+
+/** Checks the core's database, opened: rejects naming the first thing that isn't as it must be. */
+export async function checkStore(store: Store): Promise<string> {
+  const pragma = (name: string): unknown => store.prepare(`PRAGMA ${name}`).get()?.[name];
+  const version = store.prepare('SELECT sqlite_version() AS version').get()?.version;
+  if (typeof version !== 'string') throw new Error('SQLite did not report its version');
+  for (const [name, value] of Object.entries(storePragmas())) {
+    const read = pragma(name);
+    if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
+  }
+  const seen = [`SQLite ${version}`, 'WAL', 'synchronous NORMAL'];
+  if (process.platform === 'darwin') seen.push('fullfsync');
+  seen.push('its other pragmas as set');
+  await store.write(() => {
+    store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
+    store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
+  });
+  readBack(store.file, 'core.db, read by another connection,');
+  seen.push('a write through the lane flushed and read back');
+  const header = async () => (await readFile(`${store.file}-wal`)).subarray(12, 24).toString('hex');
+  const before = await header();
+  await store.checkpoint();
+  if ((await header()) === before) throw new Error('its checkpointer didn’t begin its log anew');
+  seen.push('a checkpoint off the loop, its log begun anew there');
+  readBack(await store.snapshot(), 'its snapshot');
+  seen.push('a snapshot read back');
+  if (process.platform !== 'win32') {
+    for (const suffix of ['', '-wal', '-shm']) {
+      const mode = (await stat(`${store.file}${suffix}`)).mode & 0o777;
+      if (mode !== 0o600) throw new Error(`core.db${suffix} is ${mode.toString(8)}, not 600`);
+    }
+    seen.push('core.db, -wal and -shm 0600');
+  }
+  return seen.join(', ');
+}
+
+/**
+ * Reads the database in `file` (`what`, in what it says) through a connection of its own that
+ * only reads: it must be sound, corrallm's, and hold what the check wrote.
+ */
+function readBack(file: string, what: string): void {
+  const reader = connect(file, { readOnly: true });
+  try {
+    if (reader.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') {
+      throw new Error(`${what} isn’t sound`);
+    }
+    if (reader.prepare('PRAGMA application_id').get()?.application_id !== APPLICATION_ID) {
+      throw new Error(`${what} isn’t corrallm’s`);
+    }
+    if (reader.prepare('SELECT value FROM selftest').get()?.value !== 'written') {
+      throw new Error(`${what} doesn’t hold what the lane wrote`);
+    }
+  } finally {
+    reader.close();
   }
 }
 

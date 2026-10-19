@@ -32,16 +32,13 @@ export const mainDefine = {
 /** Native modules stay external: they load .node binaries relative to their own files. */
 export const NATIVE_EXTERNALS = ['node-pty'];
 
-/** Prefix-only built-ins must keep `node:` in every bundle's require. */
-export const PREFIX_ONLY_BUILTINS = ['node:sqlite'];
-
 // Merged by Forge with its defaults (CJS output in .vite/build, Node builtins and electron
 // external). Native modules ship in node_modules instead (see NATIVE_MODULES in forge.config.mts).
 export default defineConfig(({ command }) => ({
   define: mainDefine,
   build: {
     rollupOptions: {
-      external: [...NATIVE_EXTERNALS, ...PREFIX_ONLY_BUILTINS],
+      external: NATIVE_EXTERNALS,
     },
     // Source maps for debugging under `electron-forge start` only; never shipped.
     sourcemap: command === 'serve',
