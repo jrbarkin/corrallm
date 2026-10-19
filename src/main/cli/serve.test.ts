@@ -882,6 +882,28 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     );
   });
 
+  it('sets a damaged database aside and serves on from its snapshot, saying so', async () => {
+    const first = await serve();
+    const client = await connect(first.url);
+    const { id } = await call<{ id: string }>(client, 'message', { to: 'builder', body: 'Before' });
+    await waitFor(client, (message) => message.replyTo === id);
+    await client.close();
+    await first.stop();
+    // Its file overwritten, as a failing drive or another program might.
+    await writeFile(path.join(profile, 'core.db'), 'This is not a database. '.repeat(500));
+
+    const server = await serve();
+    expect(server.stderr()).toMatch(
+      /\[m1\.corral\] The core’s database was damaged \(file is not a database\), and was moved to .+core\.rejected-[0-9a-f-]{36}\.db\. It was restored from its snapshot of .+: what changed since then is lost\./,
+    );
+    const again = await connect(server.url);
+    // What it kept is there, and it goes on.
+    const { items } = await call<{ items: Message[] }>(again, 'messages');
+    expect(items.map(({ id: kept }) => kept)).toContain(id);
+    const next = await call<{ id: string }>(again, 'message', { to: 'builder', body: 'After' });
+    await waitFor(again, (message) => message.replyTo === next.id);
+  });
+
   /** Adds Ghost to the canvas: on a connection this build lacks, so what is sent it waits for you. */
   async function withGhost(): Promise<void> {
     const document = JSON.parse(await readFile(file, 'utf8')) as { nodes: unknown[] };
