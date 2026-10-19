@@ -1,5 +1,6 @@
 import { ipcRenderer } from 'electron';
 
+import type { OpResult } from '../shared/api/errors';
 import { CORE_PORT } from '../shared/gui-link';
 import type { CoreGuiSide, GuiSide } from '../shared/gui-link';
 import type { IpcChannel } from '../shared/ipc';
@@ -9,13 +10,17 @@ import { CoreLink } from '../shared/link';
  * The window's link to the core (B8 Design §3): the preload asks main for its port as it loads
  * (core:connect, through main's sender check) and keeps the port main posts back (core:port)
  * inside a CoreLink, in the preload's isolated world: the page never gets the port, only the
- * functions window.api makes of it. A call made before the port comes waits for it; a new port (a
- * core that restarted) takes the old one's place, and what still waited on the old one fails.
+ * functions window.api makes of it. A call made before the port comes waits up to 10 seconds for
+ * it; a new port (a core that restarted) takes the old one's place, and what still waited on the
+ * old one fails. Results cross contextBridge whole, so an error's code and sentence survive.
  */
 
+const WAIT_MS = 10_000;
+const NOT_ANSWERING = 'corrallm’s core isn’t answering yet.';
+
 export interface CoreConnection {
-  /** Calls a GUI operation as you: its result, or a rejection with the sentence saying why. */
-  call(op: string, args: unknown): Promise<unknown>;
+  /** Calls a GUI operation as you: its whole result, with transport failures unavailable. */
+  call(op: string, args: unknown): Promise<OpResult<unknown>>;
 }
 
 interface Linked {
@@ -25,7 +30,7 @@ interface Linked {
 }
 
 /** A link over the port main posted. */
-function linkOver(port: MessagePort): Linked {
+function linkOver(port: MessagePort, closed: () => void): Linked {
   let end: ((why: string) => void) | undefined;
   const link = new CoreLink<GuiSide, CoreGuiSide>(
     {
@@ -36,6 +41,10 @@ function linkOver(port: MessagePort): Linked {
         end = gone;
         port.addEventListener('message', (event) => {
           receive(event.data);
+        });
+        port.addEventListener('close', () => {
+          gone('corrallm’s core connection closed.');
+          closed();
         });
         port.start();
       },
@@ -55,34 +64,62 @@ export function connectCore(): CoreConnection {
   let linked: Linked | undefined;
   /** Why main gave no port, if it refused. */
   let refused: Error | undefined;
-  const waiting: { resolve: (linked: Linked) => void; reject: (error: Error) => void }[] = [];
+  const waiting = new Set<{ resolve: (linked: Linked) => void; reject: (error: Error) => void }>();
 
   ipcRenderer.on(CORE_PORT, (event) => {
     const [port] = event.ports;
     if (port === undefined) return;
     linked?.close('corrallm’s core restarted.');
-    linked = linkOver(port);
-    for (const { resolve } of waiting.splice(0)) resolve(linked);
+    const next: Linked = linkOver(port, () => {
+      if (linked === next) linked = undefined;
+    });
+    linked = next;
+    refused = undefined;
+    for (const pending of waiting) pending.resolve(next);
   });
   ipcRenderer.invoke('core:connect' satisfies IpcChannel).catch((error: unknown) => {
     refused = error instanceof Error ? error : new Error(String(error));
-    for (const { reject } of waiting.splice(0)) reject(refused);
+    for (const pending of waiting) pending.reject(refused);
   });
 
   const ready = (): Promise<Linked> => {
     if (linked) return Promise.resolve(linked);
     if (refused) return Promise.reject(refused);
     return new Promise((resolve, reject) => {
-      waiting.push({ resolve, reject });
+      const pending = {
+        resolve: (connection: Linked) => {
+          clearTimeout(timer);
+          waiting.delete(pending);
+          resolve(connection);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          waiting.delete(pending);
+          reject(error);
+        },
+      };
+      const timer = setTimeout(() => {
+        pending.reject(new Error(NOT_ANSWERING));
+      }, WAIT_MS);
+      waiting.add(pending);
     });
   };
 
   return {
     call: async (op, args) => {
-      const answer = await (await ready()).link.request('call', op, args);
-      if (!answer.ok) throw new Error(answer.error.message);
-      if (!answer.value.ok) throw new Error(answer.value.error.sentence);
-      return answer.value.value;
+      try {
+        const answer = await (await ready()).link.request('call', op, args);
+        if (!answer.ok) throw new Error(answer.error.message);
+        return answer.value;
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: 'unavailable',
+            sentence: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
     },
   };
 }

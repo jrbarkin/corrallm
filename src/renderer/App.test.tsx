@@ -33,7 +33,7 @@ describe('App', () => {
   it('shows which corrallm this is, as the core says (app.info)', async () => {
     const appInfo = vi
       .fn<AppApi['appInfo']>()
-      .mockResolvedValue({ name: 'corrallm', version: '0.1.0' });
+      .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } });
     stubApi({ appInfo });
 
     render(<App />);
@@ -50,7 +50,9 @@ describe('App', () => {
     const getUsage = vi.fn<AppApi['getUsage']>().mockResolvedValue({ readings: [], rules: {} });
     const onUsageChanged = vi.fn<AppApi['onUsageChanged']>(() => () => undefined);
     stubApi({
-      appInfo: vi.fn<AppApi['appInfo']>().mockResolvedValue({ name: 'corrallm', version: '0.1.0' }),
+      appInfo: vi
+        .fn<AppApi['appInfo']>()
+        .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
       getUsage,
       onUsageChanged,
     });
@@ -64,7 +66,11 @@ describe('App', () => {
   });
 
   it('says so when the core can’t say', async () => {
-    stubApi({ appInfo: vi.fn<AppApi['appInfo']>().mockRejectedValue(new Error('boom')) });
+    stubApi({
+      appInfo: vi
+        .fn<AppApi['appInfo']>()
+        .mockResolvedValue({ ok: false, error: { code: 'unavailable', sentence: 'boom' } }),
+    });
 
     render(<App />);
 

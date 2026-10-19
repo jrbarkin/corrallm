@@ -1,6 +1,6 @@
 import type { AdapterId, Catalog, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
-import type { GuiApi } from './gui-link';
+import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunContext } from './run';
 import type {
   FilesRewind,
@@ -301,7 +301,7 @@ export interface EventApi {
  * The API the preload script exposes to the renderer as `window.api`: a function per channel and
  * per event, and one per GUI operation, over the window's port to the core.
  */
-export interface AppApi extends InvokeApi, EventApi, GuiApi {}
+export interface AppApi extends InvokeApi, EventApi, GuiBridge {}
 
 /** Which channel each `InvokeApi` method invokes. */
 export const API_CHANNELS = {

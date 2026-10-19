@@ -19,8 +19,11 @@ test('launches, renders the window and reads app.info through its port to the co
     await expect(info).toHaveAttribute('data-status', 'ok');
     await expect(info).toHaveText(/^corrallm \d+\.\d+\.\d+$/);
     expect(await page.evaluate(() => window.api.appInfo())).toEqual({
-      name: 'corrallm',
-      version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
+      ok: true,
+      value: {
+        name: 'corrallm',
+        version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
+      },
     });
 
     // Context isolation + sandbox: no Node globals leak into the renderer.

@@ -36,6 +36,7 @@ beforeEach(() => {
 const ports: MessagePort[] = [];
 afterEach(() => {
   for (const port of ports.splice(0)) port.close();
+  vi.useRealTimers();
 });
 
 /** The listener the preload added for `channel`. */
@@ -49,7 +50,9 @@ function listenerOn(channel: string): Listener {
  * Main posts the preload a port to a core answering each call with `answer` (as core/gui.ts does):
  * the calls it heard.
  */
-function postPort(answer: (op: string, args: unknown) => OpResult<unknown> | Promise<never>) {
+function postPort(
+  answer: (op: string, args: unknown) => OpResult<unknown> | Promise<OpResult<unknown>>,
+) {
   const { port1, port2 } = new MessageChannel();
   ports.push(port1, port2);
   const heard: [op: string, args: unknown][] = [];
@@ -74,9 +77,23 @@ function postPort(answer: (op: string, args: unknown) => OpResult<unknown> | Pro
   return heard;
 }
 
+/** The core's end closes, as it does when the core stops before its replacement is ready. */
+async function closePort(): Promise<void> {
+  const local = ports.at(-2);
+  const remote = ports.at(-1);
+  if (!local || !remote) throw new Error('no port to close');
+  const closed = new Promise<void>((resolve) => local.once('close', resolve));
+  remote.close();
+  await closed;
+}
+
 /** What every GUI op answers in these tests: corrallm's name and version. */
 const INFO = { name: 'corrallm', version: '0.1.0' };
 const answerInfo = () => ({ ok: true, value: INFO }) as const;
+const UNAVAILABLE = {
+  ok: false,
+  error: { code: 'unavailable', sentence: 'corrallm’s core isn’t answering yet.' },
+};
 
 /** The api the preload exposed. */
 async function exposed(): Promise<AppApi> {
@@ -106,12 +123,12 @@ describe('the window’s port to the core', () => {
     expect(api).toHaveProperty('appInfo');
   });
 
-  it('calls each GUI operation over the port, resolving with its value', async () => {
+  it('calls each GUI operation over the port, passing its whole result through the bridge', async () => {
     const api = await exposed();
     const heard = postPort(answerInfo);
 
-    await expect(api.appInfo()).resolves.toEqual(INFO);
-    await expect(api.appInfo({})).resolves.toEqual(INFO);
+    await expect(api.appInfo()).resolves.toEqual(answerInfo());
+    await expect(api.appInfo({})).resolves.toEqual(answerInfo());
 
     expect(heard).toEqual([
       ['app.info', undefined],
@@ -121,21 +138,97 @@ describe('the window’s port to the core', () => {
 
   it('holds calls made before the port comes until it does', async () => {
     const api = await exposed();
+    vi.useFakeTimers();
 
     const info = api.appInfo();
+    await vi.advanceTimersByTimeAsync(9999);
     postPort(answerInfo);
 
-    await expect(info).resolves.toEqual(INFO);
+    await expect(info).resolves.toEqual(answerInfo());
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('rejects with the operation’s sentence when it fails', async () => {
+  it('passes an operation’s error code and sentence through the bridge as plain data', async () => {
     const api = await exposed();
     postPort(() => ({
       ok: false,
-      error: { code: 'unavailable', sentence: 'corrallm’s core can’t answer now.' },
+      error: { code: 'refused', sentence: 'This operation was refused.' },
     }));
 
-    await expect(api.appInfo()).rejects.toThrow('corrallm’s core can’t answer now.');
+    await expect(api.appInfo()).resolves.toEqual({
+      ok: false,
+      error: { code: 'refused', sentence: 'This operation was refused.' },
+    });
+  });
+
+  it('times out a queued write after 10 seconds and never sends it on a late port', async () => {
+    const api = await exposed();
+    vi.useFakeTimers();
+    const settled = vi.fn();
+    void api.usageSetRule({ backend: 'codex', rule: null }).then(settled);
+
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(UNAVAILABLE);
+
+    const heard = postPort(answerInfo);
+    await expect(api.appInfo()).resolves.toEqual(answerInfo());
+    expect(heard).toEqual([['app.info', undefined]]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives each queued call its own 10 seconds to get a port', async () => {
+    const api = await exposed();
+    vi.useFakeTimers();
+    const first = vi.fn();
+    void api.appInfo().then(first);
+    await vi.advanceTimersByTimeAsync(5000);
+    const second = api.appInfo();
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(first).toHaveBeenCalledExactlyOnceWith(UNAVAILABLE);
+    const heard = postPort(answerInfo);
+    await expect(second).resolves.toEqual(answerInfo());
+    expect(heard).toHaveLength(1);
+  });
+
+  it('holds calls while the core restarts, then takes the replacement port', async () => {
+    const api = await exposed();
+    postPort(answerInfo);
+    await expect(api.appInfo()).resolves.toEqual(answerInfo());
+    await closePort();
+    vi.useFakeTimers();
+
+    const pending = api.appInfo();
+    await vi.advanceTimersByTimeAsync(9999);
+    const heard = postPort(answerInfo);
+    await expect(pending).resolves.toEqual(answerInfo());
+    expect(heard).toEqual([['app.info', undefined]]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('times out after 10 seconds when no replacement port arrives', async () => {
+    const api = await exposed();
+    postPort(answerInfo);
+    await closePort();
+    vi.useFakeTimers();
+    const settled = vi.fn();
+    void api.appInfo().then(settled);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(UNAVAILABLE);
+  });
+
+  it('passes a link handler’s failure through as an unavailable result', async () => {
+    const api = await exposed();
+    postPort(() => {
+      throw new Error('The core could not handle the call.');
+    });
+    await expect(api.appInfo()).resolves.toEqual({
+      ok: false,
+      error: { code: 'unavailable', sentence: 'The core could not handle the call.' },
+    });
   });
 
   it('takes a new port in place of the one before, failing what waited on the old one', async () => {
@@ -145,16 +238,22 @@ describe('the window’s port to the core', () => {
 
     const heard = postPort(answerInfo);
 
-    await expect(stranded).rejects.toThrow('corrallm’s core restarted.');
-    await expect(api.appInfo()).resolves.toEqual(INFO);
+    await expect(stranded).resolves.toEqual({
+      ok: false,
+      error: { code: 'unavailable', sentence: 'corrallm’s core restarted.' },
+    });
+    await expect(api.appInfo()).resolves.toEqual(answerInfo());
     expect(heard).toHaveLength(1);
   });
 
-  it('rejects every call once main refuses the port', async () => {
+  it('passes main’s refusal of the port through as an unavailable result', async () => {
     invoke.mockRejectedValue(new Error('Rejected core:connect: untrusted sender'));
     const api = await exposed();
 
-    await expect(api.appInfo()).rejects.toThrow('untrusted sender');
+    await expect(api.appInfo()).resolves.toEqual({
+      ok: false,
+      error: { code: 'unavailable', sentence: 'Rejected core:connect: untrusted sender' },
+    });
   });
 });
 

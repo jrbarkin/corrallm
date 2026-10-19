@@ -61,12 +61,18 @@ type RequiredKeys<T> = {
 }[keyof T];
 
 /**
- * A function per GUI operation (GUI_OPS), as the preload exposes them on `window.api`: each calls
- * its own operation over the window's port, resolving with its result, or rejecting with the
- * sentence saying why it failed.
+ * A function per GUI operation (GUI_OPS), as the renderer's client calls them: each resolves with
+ * its value, or rejects with an error carrying the operation's code and sentence.
  */
 export type GuiApi = {
   [N in GuiOp as GuiFunction<N>]: [RequiredKeys<InputOf<N>>] extends [never]
     ? (args?: InputOf<N>) => Promise<ResultOf<N>>
     : (args: InputOf<N>) => Promise<ResultOf<N>>;
+};
+
+/** Plain operation results cross contextBridge; the renderer's client unwraps them there. */
+export type GuiBridge = {
+  [K in keyof GuiApi]: (
+    ...args: Parameters<GuiApi[K]>
+  ) => Promise<OpResult<Awaited<ReturnType<GuiApi[K]>>>>;
 };

@@ -8,7 +8,7 @@ import type { IpcRendererEvent } from 'electron';
 
 import { GUI_OPS } from '../shared/api/surface';
 import { guiFunction } from '../shared/gui-link';
-import type { GuiApi } from '../shared/gui-link';
+import type { GuiBridge } from '../shared/gui-link';
 import {
   API_CHANNELS,
   API_EVENTS,
@@ -44,7 +44,7 @@ const core = connectCore();
 /** A function per GUI operation, by its camel-cased name (app.info → appInfo). */
 const ops = Object.fromEntries(
   GUI_OPS.map((op) => [guiFunction(op), (args?: unknown) => core.call(op, args)]),
-) as GuiApi;
+) as GuiBridge;
 
 const api: AppApi = {
   ...ops,

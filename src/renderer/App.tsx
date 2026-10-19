@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import type { SessionBackend } from '../shared/engine/transcript/receive';
+import { api } from './api/client';
 import { GraphEditor } from './graph/GraphEditor';
 import type { CanvasFiles } from './graph/GraphEditor';
 import { fromMain } from './ipc-error';
@@ -90,7 +91,7 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    window.api.appInfo().then(
+    api.appInfo().then(
       ({ name, version }) => {
         if (!cancelled) setInfo({ status: 'ok', name, version });
       },
