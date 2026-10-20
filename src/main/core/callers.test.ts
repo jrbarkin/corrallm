@@ -44,6 +44,8 @@ const TOKEN_PARTIES = PARTIES.filter((party) => party !== 'you');
 
 interface Setup {
   core: Dispatcher;
+  /** Readies it for a call meeting `rule`: what undoes that. */
+  meeting?(rule: Rule): () => void;
   close(): Promise<void>;
 }
 
@@ -263,18 +265,24 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
         const meeting = TOKEN_PARTIES.filter(
           (p) => inAudience(name, p) && (rule !== 'self' || CALLERS[p].kind === 'agent'),
         );
-        for (const party of meeting) {
-          const theirs = await setup.core.call(name, args, CALLERS[party]);
-          if (PROPOSING_RULES.includes(rule as Rule)) {
-            expect(theirs.ok && 'proposed' in (theirs.value as object), `${rule}: ${party}`).toBe(
-              true,
-            );
-          } else {
-            expect(theirs, `${rule}: ${party}`).toMatchObject({
-              ok: false,
-              error: { code: 'refused' },
-            });
+        // What the world must be for a call to meet it (R11: a party at its cap), only meanwhile.
+        const met = setup.meeting?.(rule as Rule);
+        try {
+          for (const party of meeting) {
+            const theirs = await setup.core.call(name, args, CALLERS[party]);
+            if (PROPOSING_RULES.includes(rule as Rule)) {
+              expect(theirs.ok && 'proposed' in (theirs.value as object), `${rule}: ${party}`).toBe(
+                true,
+              );
+            } else {
+              expect(theirs, `${rule}: ${party}`).toMatchObject({
+                ok: false,
+                error: { code: 'refused' },
+              });
+            }
           }
+        } finally {
+          met?.();
         }
         const yours = await setup.core.call(name, args, CALLERS.you);
         expect(yours.ok && !('proposed' in (yours.value as object)), rule).toBe(true);

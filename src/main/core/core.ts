@@ -6,6 +6,7 @@ import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapt
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
+import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
@@ -89,6 +90,11 @@ export interface CoreConfig {
    * many calls as one token at once.
    */
   limitsClock?: () => number;
+  /**
+   * The most live agents a token's party may have created (R11), read at each of its commits:
+   * MAX_CREATED_AGENTS, but in tests that meet the cap without making that many.
+   */
+  maxCreatedAgents?: () => number;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
@@ -350,6 +356,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           catalog: CATALOG,
           defaultAdapter: DEFAULT_ADAPTER,
           held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
+          created: (party, canvas) => documents.created(party, canvas),
+          maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
         }),
         committed: (canvas) => {
           engines.changed(canvas);

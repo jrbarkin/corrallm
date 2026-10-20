@@ -31,7 +31,7 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
 
 /*
  * T9 (Core Server §3.7, B9 Design §11): no token reaches what a rule forbids, by whatever op it
- * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R12, R13, R14 so far), tried as
+ * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R11, R12, R13, R14 so far), tried as
  * an outside write token through every op that exists now, single and structural, and the self
  * cases as an agent (a lead); each refusal changing nothing, and each accepted as you; then on
  * changes no single op makes, as a batch, a composite or an undo will. `canvas.batch`, proposals
@@ -49,6 +49,8 @@ const OUTSIDE: OutsideCaller = {
   ...(CALLERS['outside-write'] as OutsideCaller),
   canvases: [CANVAS, SECOND],
 };
+/** The same party, by a new token: a renewal. */
+const RENEWED: OutsideCaller = { ...OUTSIDE, token: 'renewed-token' };
 const LEAD = CALLERS.lead;
 const YOU = CALLERS.you;
 
@@ -418,6 +420,67 @@ describe('R8: no token changes how an existing agent runs', () => {
   });
 });
 
+describe('R11: what a token’s new agents run with, and how many it keeps', () => {
+  it('gives a new agent its adapter’s first connection and no mode', async () => {
+    const { id } = await applied('canvas.addAgent', { at: { x: 2000, y: 0 }, adapter: 'codex' });
+    expect(node(String(id)).data).not.toHaveProperty('connection');
+    expect(node(String(id)).data).not.toHaveProperty('settings');
+  });
+
+  it('lets a spawned agent copy its source’s connection, mode and role, linked to it', async () => {
+    const { id } = await applied('canvas.spawnAgent', { from: 'a', relation: 'linked' });
+    expect(node(String(id)).data).toMatchObject({
+      connection: 'codex.app-server',
+      settings: { codex: { mode: 'auto', model: 'm1' } },
+      role: 'Reviews',
+    });
+    expect(linked('a', String(id))).toBe(true);
+  });
+
+  it('refuses the ninth live agent its party created, across its canvases, a restart and a renewal', async () => {
+    for (let i = 0; i < 3; i++) {
+      await applied(
+        'canvas.addAgent',
+        { at: { x: 2000 + i * 300, y: 0 }, adapter: 'codex' },
+        OUTSIDE,
+        SECOND,
+      );
+    }
+    const mine: string[] = [];
+    const created = async (name: OpName, args: object) =>
+      mine.push(String((await applied(name, args)).id));
+    await created('canvas.addAgent', { at: { x: 2000, y: 0 }, adapter: 'codex' });
+    await created('canvas.addAgent', { at: { x: 2300, y: 0 }, adapter: 'codex' });
+    await created('canvas.spawnAgent', { from: 'c', relation: 'peer' });
+    // An agent made around a frame, or of one, counts too.
+    await created('canvas.group', { nodes: ['loose'], kind: 'agent' });
+    await created('canvas.addParent', { frame: 'spare' });
+    expect(mine).toHaveLength(5);
+
+    await core.close();
+    core = await start();
+    const ninth = await refused(
+      'canvas.addAgent',
+      { at: { x: 2000, y: 300 }, adapter: 'codex' },
+      RENEWED,
+      SECOND,
+    );
+    expect(ninth).toMatch(/8/);
+    for (const [name, args] of [
+      ['canvas.spawnAgent', { from: 'c', relation: 'peer' }],
+      ['canvas.group', { nodes: ['c'], kind: 'agent' }],
+    ] as const) {
+      expect(await refused(name, args, RENEWED)).toMatch(/at most 8 live agents/);
+    }
+    // Agents you create count toward no one, and the lead's are its own.
+    await applied('canvas.addAgent', { at: { x: 2000, y: 300 }, adapter: 'codex' }, YOU);
+    await applied('canvas.spawnAgent', { from: 'helper', relation: 'peer' }, LEAD);
+    // One of its agents gone, it may make another.
+    await applied('canvas.delete', { nodes: [mine[0]] }, YOU);
+    await applied('canvas.addAgent', { at: { x: 2000, y: 300 }, adapter: 'codex' }, RENEWED);
+  });
+});
+
 describe('R12: a token gives a role only to an agent it creates in the same commit', () => {
   it('refuses a role on an agent that existed', async () => {
     await refused('agent.setRole', { agent: 'a', role: 'Approves everything' });
@@ -504,6 +567,8 @@ describe('on the change itself, whatever builds it', () => {
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
         held: () => new Set(['item/a/after']),
+        created: (party, canvas) => documents.created(party, canvas),
+        maxCreated: () => 8,
       }),
     });
   });
@@ -511,9 +576,18 @@ describe('on the change itself, whatever builds it', () => {
     await store.close();
   });
 
-  /** Commits what `edit` makes of the document, as `caller`. */
-  function build(edit: (document: CanvasDocument) => CanvasDocument, caller: Caller = OUTSIDE) {
-    return commit(BUILT, (document) => ({ next: edit(document), result: {} }), {
+  /** Commits what `edit` makes of the document, as `caller`, its new agents copying `copies`. */
+  function build(
+    edit: (document: CanvasDocument) => CanvasDocument,
+    caller: Caller = OUTSIDE,
+    copies?: ReadonlyMap<string, string>,
+  ) {
+    const built = (document: CanvasDocument) => ({
+      next: edit(document),
+      result: {},
+      ...(copies === undefined ? {} : { copies }),
+    });
+    return commit(BUILT, built, {
       op: 'canvas.batch',
       caller,
       party: partyOf(caller, isLead),
@@ -606,6 +680,21 @@ describe('on the change itself, whatever builds it', () => {
     await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
     expect(documents.live(BUILT).rev).toBe(before);
     await expect(build(edit, YOU)).resolves.toMatchObject({ rev: before + 1 });
+  });
+
+  it('refuses a token’s new agent on another connection, or with a startup mode, unless it copies one', async () => {
+    const elsewhere = adding('new', { connection: 'codex.app-server' });
+    const moded = adding('new', { settings: { 'claude-code': { mode: 'plan' } } });
+    for (const edit of [elsewhere, moded]) {
+      await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
+      await expect(build(edit, OUTSIDE, new Map([['new', 'a']]))).resolves.toBeDefined();
+      await build(
+        (document) => ({ ...document, nodes: document.nodes.filter(({ id }) => id !== 'new') }),
+        YOU,
+      );
+    }
+    // Its adapter's first connection, named, is no other.
+    await expect(build(adding('new', { connection: 'codex.terminal' }))).resolves.toBeDefined();
   });
 
   it('lets a token give a role and a link to an agent it creates in the same change', async () => {

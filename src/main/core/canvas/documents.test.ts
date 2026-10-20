@@ -641,3 +641,83 @@ describe('a canvas’s document', () => {
     expect(count('message', canvas)).toBe(1);
   });
 });
+
+describe('the agents a party created', () => {
+  /** `document` with a new agent `id`. */
+  const withAgent = (document: CanvasDocument, id: string): CanvasDocument => ({
+    ...document,
+    nodes: [
+      ...document.nodes,
+      { id, type: 'agent', position: { x: 900, y: 0 }, data: { label: id } },
+    ],
+  });
+  const creators = (canvas: CanvasId) =>
+    disk
+      .prepare(`SELECT id, created_by FROM node WHERE canvas_id = ? AND kind = 'agent' ORDER BY id`)
+      .all(canvas);
+  const ORCHESTRATOR = 'outside:orchestrator' as const;
+
+  it('keeps who created each agent: the party whose change made it one, none read from a file, after a restart too', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    await commit(canvas, withAgent(document, 'scout'), { op: 'canvas.addAgent', by: ORCHESTRATOR });
+    // A frame made an agent, by whoever made it one.
+    const team = documents.live(canvas).document;
+    await commit(
+      canvas,
+      {
+        ...team,
+        nodes: team.nodes.map((node) =>
+          node.id === 'team' ? { ...node, type: 'agent', data: { label: 'Team' } } : node,
+        ),
+      },
+      { op: 'canvas.addParent', by: 'agent:lead' },
+    );
+    const kept = [
+      { id: 'lead', created_by: null },
+      { id: 'scout', created_by: ORCHESTRATOR },
+      { id: 'team', created_by: 'agent:lead' },
+      { id: 'worker', created_by: null },
+    ];
+    expect(creators(canvas)).toEqual(kept);
+    // Forgotten with its canvas while it was loaded, written whole again: with who created each.
+    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Head'));
+    await restart();
+    await documents.load(canvas);
+    await commit(canvas, renamed(documents.live(canvas).document, 'scout', 'Scout'));
+    expect(creators(canvas)).toEqual(kept);
+  });
+
+  it('counts a party’s live agents on every canvas, or on one, from when a change passed its checks', async () => {
+    const [one, two] = [newCanvasId(), newCanvasId()];
+    for (const canvas of [one, two]) await documents.edit(canvas, toFile(canvasOf(canvas)));
+    await commit(one, withAgent(documents.live(one).document, 'first'), {
+      op: 'canvas.addAgent',
+      by: ORCHESTRATOR,
+    });
+    // On its way to disk, it counts already: another canvas's change checked meanwhile sees it.
+    const counted: number[] = [];
+    await documents.change(two, {
+      revision: { op: 'canvas.addAgent', by: ORCHESTRATOR },
+      build: (document) => ({ next: withAgent(document, 'second'), result: undefined }),
+      check: () => undefined,
+      committing: () => {
+        counted.push(documents.created(ORCHESTRATOR));
+      },
+    });
+    expect(counted).toEqual([2]);
+    expect([
+      documents.created(ORCHESTRATOR),
+      documents.created(ORCHESTRATOR, one),
+      documents.created(ORCHESTRATOR, two),
+      // What your edits made.
+      documents.created('you'),
+    ]).toEqual([2, 1, 1, 4]);
+    // Gone, or no longer an agent: not live.
+    const { document } = documents.live(one);
+    await commit(one, { ...document, nodes: document.nodes.filter(({ id }) => id !== 'first') });
+    expect(documents.created(ORCHESTRATOR)).toBe(1);
+  });
+});

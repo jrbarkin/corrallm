@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
-import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_OP_NODES } from '../../shared/api/limits';
-import type { OpName, Reach } from '../../shared/api/surface';
+import {
+  MAX_CREATED_AGENTS,
+  MAX_LABEL,
+  MAX_MESSAGE_BYTES,
+  MAX_OP_NODES,
+} from '../../shared/api/limits';
+import type { OpName, Reach, Rule } from '../../shared/api/surface';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
@@ -28,8 +33,9 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * take one back, and a notice corrallm sent the read-only token's party; and the lead is paused,
  * by you. The lead's team also holds what calls meeting the change rules change, as you apply them
  * once every token was refused: `deputy` (linked to the lead and the helper) with `aide` nested
- * inside it, the frame `frame-team` holding `member`, `gate`, whose queue holds an OK, and OKs at
- * the end of the helper's queue.
+ * inside it, the frame `frame-team` holding `member`, `gate`, whose queue holds an OK, OKs at the
+ * end of the helper's queue, and empty frames. While a call meets R11 (`meeting`), every token's
+ * party is at its cap.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -111,6 +117,11 @@ export async function startWorld(): Promise<{
   core: Core;
   /** The profile folder it keeps its stores in. */
   profile: string;
+  /**
+   * Readies the world for a call meeting `rule`, before it is made: what undoes that, after. R11's
+   * cap is then none, so that a call meets it whatever its party created before.
+   */
+  meeting(rule: Rule): () => void;
   close(): Promise<void>;
 }> {
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
@@ -142,7 +153,7 @@ export async function startWorld(): Promise<{
         })),
         // Separate empty frames let each party add a parent once. Their ids stay in reach after
         // conversion, so transport retries can still resolve them before request deduplication.
-        ...['you', 'lead', 'outside-write', 'delete', 'team'].map((party, i) => ({
+        ...['you', 'lead', 'outside-write', 'delete', 'team', 'cap', 'spare'].map((party, i) => ({
           id: `frame-${party}`,
           kind: 'group',
           label: 'Frame',
@@ -179,6 +190,7 @@ export async function startWorld(): Promise<{
     },
   ]);
   let clock = 0;
+  let cap = MAX_CREATED_AGENTS;
   const core = await createCore(
     {
       profile,
@@ -188,6 +200,7 @@ export async function startWorld(): Promise<{
       leads: isLead,
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
+      maxCreatedAgents: () => cap,
       sessions: {
         connectors: {
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
@@ -228,6 +241,13 @@ export async function startWorld(): Promise<{
   return {
     core,
     profile,
+    meeting: (rule) => {
+      if (rule !== 'new-agent') return () => undefined;
+      cap = 0;
+      return () => {
+        cap = MAX_CREATED_AGENTS;
+      };
+    },
     close: async () => {
       await core.close();
       await rm(profile, { recursive: true, force: true });
@@ -310,6 +330,14 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { at: { x: 0, y: 0 }, adapter: '' },
       { at: { x: 0, y: 0 }, adapter: 'codex', extra: true },
     ],
+    meetsRule: {
+      'new-agent': {
+        canvas: CANVAS,
+        at: { x: 3000, y: 0 },
+        adapter: 'codex',
+        request: request(27),
+      },
+    },
   },
   'canvas.spawnAgent': {
     valid: [
@@ -322,6 +350,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { from: '', relation: 'peer' },
       { from: 'helper', relation: 'child' },
     ],
+    meetsRule: {
+      'new-agent': { canvas: CANVAS, from: 'helper', relation: 'peer', request: request(28) },
+    },
   },
   'canvas.link': {
     valid: [
@@ -392,9 +423,11 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { nodes: ['helper'], kind: 'group' },
       { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper'), kind: 'frame' },
     ],
-    // An agent made around the aide gives it another manager.
     meetsRule: {
+      // An agent made around the aide gives it another manager.
       managers: { canvas: CANVAS, nodes: ['aide'], kind: 'agent', request: request(6) },
+      // One made around an empty frame changes no manager.
+      'new-agent': { canvas: CANVAS, nodes: ['frame-cap'], kind: 'agent', request: request(29) },
     },
   },
   'canvas.ungroup': {
@@ -421,8 +454,11 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ),
     fresh: ['revs'],
     invalid: [{}, { frame: '' }, { frame: 'frame-you', extra: true }],
-    // The frame holding the member becomes its manager.
-    meetsRule: { managers: { canvas: CANVAS, frame: 'frame-team', request: request(8) } },
+    meetsRule: {
+      // The frame holding the member becomes its manager.
+      managers: { canvas: CANVAS, frame: 'frame-team', request: request(8) },
+      'new-agent': { canvas: CANVAS, frame: 'frame-spare', request: request(33) },
+    },
   },
   'canvas.move': {
     valid: [

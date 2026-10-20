@@ -1,3 +1,4 @@
+import { MAX_CREATED_AGENTS } from './limits';
 import type { Rule } from './surface';
 
 /*
@@ -46,6 +47,11 @@ export const RULES = {
   connection: {
     kind: 'change',
     sentence: 'Only you change the adapter or the connection of an agent that exists.',
+  },
+  // R11: a party's cap counts the live agents it created, whichever token it called with.
+  'new-agent': {
+    kind: 'change',
+    sentence: `A token’s new agent runs on its adapter’s first connection with no startup mode, unless it copies the agent it was spawned from; and a token’s party keeps at most ${String(MAX_CREATED_AGENTS)} live agents it created.`,
   },
   // R12.
   role: {

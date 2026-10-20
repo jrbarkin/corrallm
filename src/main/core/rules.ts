@@ -5,6 +5,7 @@ import type { RULES } from '../../shared/api/rules';
 import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Run } from '../../shared/engine/run/runner';
+import type { PartyId } from '../../shared/model/messages';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
@@ -18,7 +19,7 @@ import type { ChangeRule } from './canvas/commit';
 import { partyIdOf } from './caller';
 import type { TokenCaller } from './caller';
 import type { Engines } from './engines';
-import { nameOf, pausesText, RELEASES } from './parties';
+import { nameOf, partyText, pausesText, RELEASES } from './parties';
 
 /*
  * How the core checks the rules that narrow what a token may do (Core Server §3.6): each rule an
@@ -144,6 +145,10 @@ export interface ChangeCheckDeps {
   defaultAdapter: AdapterId;
   /** The items a canvas's run holds for you now, by their keys (heldBy). */
   held: (canvas: CanvasId) => ReadonlySet<EntityKey>;
+  /** How many live agents `party` created: on `canvas`, or on every canvas the core keeps. */
+  created: (party: PartyId, canvas?: CanvasId) => number;
+  /** The most live agents a token's party may have created (R11): MAX_CREATED_AGENTS. */
+  maxCreated: () => number;
 }
 
 /**
@@ -165,8 +170,14 @@ export function heldBy(run: Run | undefined): Set<EntityKey> {
  * agents it kept, that existed before it, unless a rule says otherwise. The first that refuses says
  * why, naming what it would change.
  */
-export function changeChecks({ catalog, defaultAdapter, held }: ChangeCheckDeps): ChangeChecks {
-  /** The adapter and the connection a node row runs: its adapter's first, if it names none. */
+export function changeChecks({
+  catalog,
+  defaultAdapter,
+  held,
+  created,
+  maxCreated,
+}: ChangeCheckDeps): ChangeChecks {
+  /** The adapter and the connection an agent runs: its adapter's first, if it names none. */
   const runs = (row: NodeRow): [AdapterId, string | undefined] => {
     const adapter = row.adapter ?? defaultAdapter;
     return [adapter, row.connection ?? adapterIn(catalog, adapter)?.connections[0]?.id];
@@ -267,6 +278,38 @@ export function changeChecks({ catalog, defaultAdapter, held }: ChangeCheckDeps)
         };
       }
       return undefined;
+    },
+    // R11: a new agent runs as its adapter's first connection does, in its user's own default
+    // mode, unless it copies the agent it was spawned from; and its party keeps at most
+    // maxCreated() live agents it created: an outside party across every canvas, an agent on its
+    // own (B9 Design §12). Copies count; agents you create count toward no one.
+    'new-agent': (change, { caller }) => {
+      for (const id of change.created) {
+        const node = change.after.nodes.find((one) => one.id === id);
+        if (node?.type !== 'agent' || change.copies.has(id)) continue;
+        const name = nameOf(change.after.nodes, id);
+        const adapter = node.data.adapter ?? defaultAdapter;
+        const first = adapterIn(catalog, adapter)?.connections[0]?.id;
+        if (node.data.connection !== undefined && node.data.connection !== first) {
+          return {
+            refuse: `A token’s new agent runs on its adapter’s first connection, ${first ?? adapter}: only the user runs ${name} on ${node.data.connection}.`,
+          };
+        }
+        const moded = Object.entries(node.data.settings ?? {}).find(([, one]) => one?.mode);
+        if (moded) {
+          return {
+            refuse: `A token’s new agent starts in its user’s own default mode: only the user starts ${name} in ${String(moded[1]?.mode)}.`,
+          };
+        }
+      }
+      if (change.created.size === 0) return undefined;
+      const most = maxCreated();
+      const everywhere = caller.kind === 'outside';
+      const live = created(change.by, everywhere ? undefined : change.canvas);
+      if (live + change.created.size <= most) return undefined;
+      return {
+        refuse: `${partyText(change.before.nodes, change.by)} keeps at most ${String(most)} live agents it created ${everywhere ? 'across its canvases' : 'on its canvas'}, and has ${String(live)}: only the user adds more, unless one of them is deleted.`,
+      };
     },
     // R12: the role of an agent that existed. One created in the same change may be given one.
     role: (change) => {

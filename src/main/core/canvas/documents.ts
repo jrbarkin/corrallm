@@ -58,7 +58,9 @@ import type { ChangeSet } from './change';
  * Commits on a canvas go one at a time, each built against what the one before left. Each entity
  * changed is stamped with the revision and the party; a row whose place alone was numbered anew
  * keeps its own. Revisions past the last REVISIONS_KEPT are trimmed every TRIM_EVERY commits, with
- * what each changed.
+ * what each changed. Each agent keeps the party whose change made it one (none for one read from
+ * a file), which counts a party's live agents (`created`, R11): from when its change passed its
+ * checks, so that changes on two canvases checked one after the other never both pass a cap.
  *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
  * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
@@ -139,6 +141,13 @@ export class CommitFailed extends Error {
   }
 }
 
+/** A change's new agents on their way to disk: its party's, on its canvas, how many. */
+interface Creating {
+  by: PartyId;
+  canvas: CanvasId;
+  count: number;
+}
+
 /** A canvas's document as the core has it now. */
 export interface LiveDocument {
   readonly document: CanvasDocument;
@@ -158,6 +167,8 @@ interface Live extends LiveDocument {
   rows: Record<EntityKey, Row>;
   revs: Map<EntityKey, number>;
   kept: boolean;
+  /** The party that created each agent, by its id: none for one read from a file. */
+  creators: Map<string, PartyId>;
   /** The SHA-256 of its text as last saved or read. */
   savedHash: string | undefined;
   /** Of its file's bytes as last read or written. */
@@ -174,6 +185,8 @@ export class Documents {
   readonly #busy = new Map<CanvasId, Promise<void>>();
   /** Each document's text, and its hash, as toFile writes it. */
   readonly #texts = new WeakMap<CanvasDocument, { text: string; hash: string }>();
+  /** The new agents of changes past their checks whose rows don't hold them yet. */
+  readonly #creating = new Set<Creating>();
 
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
@@ -219,6 +232,30 @@ export class Documents {
     return this.#text(live.document).hash !== live.savedHash;
   }
 
+  /**
+   * How many live agents `party` created (R11): on `canvas`, or on every canvas the core keeps,
+   * those of changes past their checks on their way to disk included.
+   */
+  created(party: PartyId, canvas?: CanvasId): number {
+    const { store } = this.#deps;
+    const kept =
+      canvas === undefined
+        ? store
+            .prepare(`SELECT count(*) AS n FROM node WHERE created_by = ? AND kind = 'agent'`)
+            .get(party)
+        : store
+            .prepare(
+              `SELECT count(*) AS n FROM node
+               WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`,
+            )
+            .get(party, canvas);
+    let count = Number(kept?.n ?? 0);
+    for (const one of this.#creating) {
+      if (one.by === party && (canvas === undefined || one.canvas === canvas)) count += one.count;
+    }
+    return count;
+  }
+
   /** A canvas file's text as a document, read against the catalog. Throws, saying why. */
   read(text: string): CanvasDocument {
     return fromFile(text, this.#deps.catalog, this.#deps.defaultAdapter);
@@ -243,9 +280,18 @@ export class Documents {
         throw new OpFailure('invalid', `That change can’t be kept: ${fault}.`);
       const set = changeSetOf(live, next, rows, change.revision, copies);
       change.check(set, live);
-      change.committing();
-      const rev = await this.#commit(live, next, rows, change.revision);
-      return { result, committed: { rev, change: set } };
+      const creating = { by: change.revision.by, canvas, count: set.created.size };
+      this.#creating.add(creating);
+      try {
+        change.committing();
+        const rev = await this.#commit(live, next, rows, change.revision, {
+          creator: change.revision.by,
+          creating,
+        });
+        return { result, committed: { rev, change: set } };
+      } finally {
+        this.#creating.delete(creating);
+      }
     });
   }
 
@@ -260,7 +306,13 @@ export class Documents {
       if (live.kept && this.#text(live.document).text === text) return live.rev;
       const next = this.read(text);
       if (next.id !== canvas) throw new Error(ANOTHER);
-      return this.#commit(live, next, diffRows(live.rows, next), { op: 'canvas.edit', by: 'you' });
+      return this.#commit(
+        live,
+        next,
+        diffRows(live.rows, next),
+        { op: 'canvas.edit', by: 'you' },
+        { creator: 'you' },
+      );
     });
   }
 
@@ -344,6 +396,7 @@ export class Documents {
       rows: { [META]: { arrange: false } },
       revs: new Map(),
       kept: false,
+      creators: new Map(),
       savedHash: undefined,
       fileHash: undefined,
       writingHash: undefined,
@@ -360,7 +413,7 @@ export class Documents {
       read,
       diffRows(live.rows, read),
       { op: 'file.open', by: 'you' },
-      hashes,
+      { hashes },
     );
     this.#lives.set(canvas, live);
     return live;
@@ -378,6 +431,7 @@ export class Documents {
     if (head === undefined) return undefined;
     const rows: Record<EntityKey, Row> = { [META]: { arrange: head.arrange === 1 } };
     const revs = new Map<EntityKey, number>();
+    const creators = new Map<string, PartyId>();
     const keep = (key: EntityKey, row: Row, rev: unknown) => {
       rows[key] = row;
       revs.set(key, Number(rev));
@@ -385,10 +439,11 @@ export class Documents {
     for (const node of store
       .prepare(
         `SELECT id, kind, parent_id, place, label, x, y, color, adapter, connection, settings, role,
-           rev FROM node WHERE canvas_id = ? ORDER BY place`,
+           created_by, rev FROM node WHERE canvas_id = ? ORDER BY place`,
       )
       .all(canvas)) {
       const id = String(node.id);
+      if (typeof node.created_by === 'string') creators.set(id, node.created_by as PartyId);
       const row = present({
         id,
         kind: node.kind,
@@ -441,6 +496,7 @@ export class Documents {
       rows: toRows(document, rows),
       revs,
       kept: true,
+      creators,
       savedHash: text(head.saved_hash),
       fileHash: text(head.file_hash),
       writingHash: text(head.writing_hash),
@@ -477,21 +533,30 @@ export class Documents {
   /**
    * Commits `next` over `live`, by what it changes of it (`change`): in one write, at the next
    * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
-   * from it. Throws CommitFailed, leaving `live` as it was, if the write failed.
+   * from it; with `creator`, the party that created the agents it makes (none: they are read from
+   * a file), whose count `creating` holds until their rows do. Throws CommitFailed, leaving `live`
+   * as it was, if the write failed.
    */
   async #commit(
     live: Live,
     next: CanvasDocument,
     { rows, changed, renumbered }: RowsChange,
     revision: Revision,
-    hashes?: { saved: string; file: string },
+    {
+      hashes,
+      creator,
+      creating,
+    }: { hashes?: { saved: string; file: string }; creator?: PartyId; creating?: Creating } = {},
   ): Promise<number> {
     if (changed.length === 0 && hashes === undefined) return live.rev;
     const rev = live.rev + 1;
     const at = this.#now();
+    const creators = creatorsAfter(live, rows, changed, creator);
     try {
       await this.#deps.store.write(() => {
-        this.#write(live, { rows, changed, renumbered, rev, at, revision });
+        this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
+        // Its rows hold them now: counted there.
+        if (creating !== undefined) this.#creating.delete(creating);
         if (hashes !== undefined) {
           this.#deps.store
             .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
@@ -509,6 +574,7 @@ export class Documents {
     }
     live.rev = rev;
     live.kept = true;
+    live.creators = creators;
     if (hashes !== undefined) {
       live.savedHash = hashes.saved;
       live.fileHash = hashes.file;
@@ -531,11 +597,12 @@ export class Documents {
       rev: number;
       at: number;
       revision: Revision;
+      creators: ReadonlyMap<string, PartyId>;
     },
   ): void {
     const { store } = this.#deps;
     const canvas = live.document.id;
-    const { rows, rev, at, revision } = change;
+    const { rows, rev, at, revision, creators } = change;
     const by = revision.by;
     this.#ensure(live, by);
     store
@@ -554,7 +621,7 @@ export class Documents {
     const changed = new Set(change.changed);
     const renumbered = new Set(change.renumbered);
     for (const [key, row] of Object.entries(rows)) {
-      if (changed.has(key)) this.#upsert(canvas, key, row, rev, by);
+      if (changed.has(key)) this.#upsert(canvas, key, row, rev, by, creators);
       else if (renumbered.has(key)) this.#replace(canvas, key, row);
     }
     for (const key of Object.keys(live.rows).reverse()) {
@@ -584,8 +651,18 @@ export class Documents {
     }
   }
 
-  /** Within a write: the entity's row as `row` is, at revision `rev`, by `by`. */
-  #upsert(canvas: CanvasId, key: EntityKey, row: Row, rev: number, by: PartyId): void {
+  /**
+   * Within a write: the entity's row as `row` is, at revision `rev`, by `by`; a node's with the
+   * party that created it, as `creators` says.
+   */
+  #upsert(
+    canvas: CanvasId,
+    key: EntityKey,
+    row: Row,
+    rev: number,
+    by: PartyId,
+    creators: ReadonlyMap<string, PartyId>,
+  ): void {
     const { store } = this.#deps;
     switch (entityOf(key)) {
       case 'meta':
@@ -595,13 +672,14 @@ export class Documents {
         store
           .prepare(
             `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, color, adapter,
-               connection, settings, role, rev, by_party)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               connection, settings, role, created_by, rev, by_party)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (canvas_id, id) DO UPDATE SET kind = excluded.kind,
                parent_id = excluded.parent_id, place = excluded.place, label = excluded.label,
                x = excluded.x, y = excluded.y, color = excluded.color, adapter = excluded.adapter,
                connection = excluded.connection, settings = excluded.settings,
-               role = excluded.role, rev = excluded.rev, by_party = excluded.by_party`,
+               role = excluded.role, created_by = excluded.created_by, rev = excluded.rev,
+               by_party = excluded.by_party`,
           )
           .run(
             canvas,
@@ -617,6 +695,7 @@ export class Documents {
             node.connection ?? null,
             node.settings === undefined ? null : JSON.stringify(node.settings),
             node.role ?? null,
+            creators.get(node.id) ?? null,
             rev,
             by,
           );
@@ -739,7 +818,7 @@ export class Documents {
         this.#now(),
       );
     for (const [key, row] of Object.entries(live.rows)) {
-      this.#upsert(canvas, key, row, live.revs.get(key) ?? live.rev, 'corrallm');
+      this.#upsert(canvas, key, row, live.revs.get(key) ?? live.rev, 'corrallm', live.creators);
     }
   }
 
@@ -783,6 +862,31 @@ export class Documents {
     }
     return known;
   }
+}
+
+/**
+ * Who created each agent once `rows` replace `live`'s, by what `changed`: a node that becomes an
+ * agent, by `creator` (none: read from a file); one gone, or no longer an agent, by none.
+ */
+function creatorsAfter(
+  live: Live,
+  rows: Readonly<Record<EntityKey, Row>>,
+  changed: readonly EntityKey[],
+  creator: PartyId | undefined,
+): Map<string, PartyId> {
+  const creators = new Map(live.creators);
+  for (const key of changed) {
+    if (entityOf(key) !== 'node') continue;
+    const was = live.rows[key] as NodeRow | undefined;
+    const is = rows[key] as NodeRow | undefined;
+    if (is?.kind !== 'agent') {
+      if (was !== undefined) creators.delete(was.id);
+    } else if (was?.kind !== 'agent') {
+      if (creator === undefined) creators.delete(is.id);
+      else creators.set(is.id, creator);
+    }
+  }
+  return creators;
 }
 
 function sha256(text: string): string {
