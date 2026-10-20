@@ -20,7 +20,7 @@ import type { Implementations, OpServices } from '.';
 export function conversationOps(
   services: OpServices,
 ): Pick<Implementations, 'agents' | 'status' | 'needs' | 'messages' | 'message' | 'withdraw'> {
-  const { engines, isLead, locale } = services;
+  const { engines, states, isLead, locale } = services;
   const lead = (canvas: CanvasId, { caller }: OpContext) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
 
@@ -97,6 +97,10 @@ export function conversationOps(
       };
     },
     needs: ({ canvas }, ctx) => {
+      // A canvas the core keeps but doesn't run (the app's, until B11): what waits on it in the
+      // core, which is nothing until proposals and file reviews (B9 Design §7).
+      const id = canvas as string | undefined as CanvasId | undefined;
+      if (id !== undefined && !engines.canvas(id) && states.keeps(id)) return { items: [] };
       const open = openCanvas(engines, canvas);
       return { items: waiting(open, ctx, reached(open, 'needs', ctx)) };
     },

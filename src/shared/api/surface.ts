@@ -140,6 +140,15 @@ export const SURFACE = {
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
   'project.files': { access: R, kind: 'read', scope: 'none' },
+  // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
+  'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
+  'canvas.get': {
+    access: R,
+    kind: 'read',
+    scope: 'none',
+    reads: 'canvas',
+    varies: ['nodes', 'links', 'entities'],
+  },
   'canvas.rename': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
   'canvas.addAgent': { access: L, kind: 'doc', scope: 'canvas', rules: ['new-agent'] },
   'canvas.spawnAgent': {

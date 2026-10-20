@@ -291,6 +291,14 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: 'nope', query: '' },
     ],
   },
+  'canvas.list': {
+    valid: [{}, undefined],
+    invalid: [{ canvas: CANVAS }, { extra: true }, 'text', null],
+  },
+  'canvas.get': {
+    valid: [{ canvas: CANVAS }, {}],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: true }, { node: 'helper' }],
+  },
   'canvas.rename': {
     // The first call renames the helper; each after it names it as it is then, changing nothing,
     // so expecting its revision before is no conflict.
@@ -819,16 +827,28 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [
       { topic: 'usage', request: request(75) },
       { topic: 'settings', request: request(76) },
+      { topic: 'canvases', request: request(71) },
+      { topic: 'canvas', canvas: CANVAS, request: request(72) },
+      // The canvas filled in: yours, the only one open.
+      { topic: 'needs', request: request(73) },
     ],
-    invalid: [{}, { topic: 'missing' }, { topic: 'usage', window: 2 }],
+    invalid: [
+      {},
+      { topic: 'missing' },
+      { topic: 'usage', window: 2 },
+      { topic: 'canvas', canvas: 'nope' },
+    ],
     fresh: ['epoch'],
   },
   'topics.unsubscribe': {
     valid: [
       { topic: 'usage', request: request(77) },
       { topic: 'settings', request: request(78) },
+      { topic: 'canvases', request: request(79) },
+      { topic: 'canvas', canvas: CANVAS, request: request(74) },
+      { topic: 'needs', canvas: CANVAS, request: request(82) },
     ],
-    invalid: [{}, { topic: 'missing' }],
+    invalid: [{}, { topic: 'missing' }, { topic: 'needs', canvas: 'nope' }],
   },
   'usage.get': { valid: [{}, undefined], invalid: [{ backend: 'any' }, [], null] },
   'usage.setRule': {

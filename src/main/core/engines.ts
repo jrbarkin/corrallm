@@ -109,6 +109,10 @@ export interface Watcher {
   message?(message: Message): void;
   /** Something newly waiting for an answer on a canvas: a hold of the run, a session's prompt. */
   need?(canvas: CanvasId, item: NeedsItem): void;
+  /** What waits for an answer on a canvas may have changed (the `needs` op says what it is now). */
+  needs?(canvas: CanvasId): void;
+  /** A canvas opened. */
+  opened?(canvas: CanvasId): void;
 }
 
 /** A canvas the core runs, with its sessions' listeners and its journal. */
@@ -159,6 +163,8 @@ export class Engines {
     if (!running) return;
     running.engine.update(running.document.nodes);
     running.delivery.schedule();
+    // What waits there is worded from the document too.
+    this.#look(running);
   }
 
   /** The canvases the core has open, in the order they opened. */
@@ -447,6 +453,7 @@ export class Engines {
     };
     this.#canvases.set(canvas, running);
     this.#look(running);
+    for (const watcher of this.#watchers) watcher.opened?.(canvas);
     return running;
   }
 
@@ -471,13 +478,19 @@ export class Engines {
    * however often asked before then.
    */
   #look(running: Running): void {
-    if (running.looking || ![...this.#watchers].some((watcher) => watcher.need !== undefined)) {
+    const watchers = [...this.#watchers];
+    if (
+      running.looking ||
+      !watchers.some((watcher) => watcher.need !== undefined || watcher.needs !== undefined)
+    ) {
       return;
     }
     running.looking = true;
     queueMicrotask(() => {
       running.looking = false;
       if (this.#canvases.get(running.document.id) !== running) return;
+      for (const watcher of this.#watchers) watcher.needs?.(running.document.id);
+      if (![...this.#watchers].some((watcher) => watcher.need !== undefined)) return;
       const items = needs(needsInput(running, this.#deps.locale));
       for (const item of items) {
         if (running.needs.has(item.id)) continue;

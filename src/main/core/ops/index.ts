@@ -12,6 +12,7 @@ import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
 import type { OpContext } from '../call';
+import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import type { TokenStore } from '../tokens';
@@ -19,6 +20,7 @@ import { agentOps } from './agent';
 import { queueOps } from './queue';
 import { appOps } from './app';
 import { canvasOps } from './canvas';
+import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
@@ -67,6 +69,8 @@ export interface OpServices {
   >;
   /** The canvases the core runs. */
   engines: Engines;
+  /** What the core says of each canvas it keeps: its entities, and the list of them. */
+  states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** Whether an agent is a lead now, as kept on this machine. */
   isLead: (canvas: CanvasId, agent: string) => boolean;
   /** The locale what the core says tells times of day in: the runtime's own, when none. */
@@ -84,6 +88,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
+    ...canvasesOps(services),
     ...canvasOps(services),
     ...agentOps(services),
     ...queueOps(),

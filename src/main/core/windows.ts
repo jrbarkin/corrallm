@@ -22,6 +22,8 @@ export class Windows {
   readonly #shown = new Map<WindowId, CanvasId>();
   /** A reloading window's canvas's sessions, closing: its page restores it once they have. */
   readonly #reloading = new Map<WindowId, Promise<void>>();
+  /** What hears which canvas a window shows change. */
+  readonly #listeners = new Set<() => void>();
 
   constructor(deps: WindowsDeps) {
     this.#deps = deps;
@@ -42,7 +44,9 @@ export class Windows {
       this.#canvases.set(window, restoring);
       restoring.then(
         (id) => {
-          if (this.#canvases.get(window) === restoring) this.#shown.set(window, id);
+          if (this.#canvases.get(window) !== restoring) return;
+          this.#shown.set(window, id);
+          this.#tell();
         },
         () => {
           if (this.#canvases.get(window) === restoring) this.#canvases.delete(window);
@@ -57,7 +61,16 @@ export class Windows {
     const before = this.#shown.get(window);
     this.#canvases.set(window, Promise.resolve(canvas));
     this.#shown.set(window, canvas);
+    this.#tell();
     if (before !== undefined) await this.#deps.left(before);
+  }
+
+  /** Hears which canvas a window shows change. Returns what stops it hearing that. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
   }
 
   /** Whether the window shows a canvas. */
@@ -88,8 +101,18 @@ export class Windows {
     }
     if (closed) {
       this.#canvases.delete(window);
-      this.#shown.delete(window);
+      if (this.#shown.delete(window)) this.#tell();
     }
     await leaving;
+  }
+
+  #tell(): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error('Could not tell which canvas a window shows:', error);
+      }
+    }
   }
 }

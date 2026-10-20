@@ -60,6 +60,8 @@ export class RunJournal {
   #said: string | undefined;
   /** Every write asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
+  /** What hears a canvas's run journaled, or which canvases are open change. */
+  readonly #listeners = new Set<(canvas: CanvasId) => void>();
 
   constructor(deps: JournalDeps) {
     this.#deps = deps;
@@ -157,6 +159,17 @@ export class RunJournal {
     return Object.fromEntries(rows.map(({ party, seq }) => [String(party), Number(seq)]));
   }
 
+  /**
+   * Hears a canvas's run journaled, or the canvas the profile has open change: as the write holding
+   * it is made. Returns what stops it hearing them.
+   */
+  subscribe(listener: (canvas: CanvasId) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
   /** Throws unless `token` is the canvas's generation's: a renderer's of the canvas it shows. */
   check(canvas: CanvasId, token: string): void {
     if (this.#entry(canvas).token !== token) throw new Error(EARLIER);
@@ -202,6 +215,7 @@ export class RunJournal {
         `{"version":${String(version)},"state":${state},"messages":${messages}}`,
         updatedAt,
       );
+    this.#tell(canvas);
   }
 
   /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
@@ -275,6 +289,18 @@ export class RunJournal {
          ON CONFLICT (canvas_id) DO UPDATE SET opened_at = excluded.opened_at`,
       )
       .run(canvas, Date.now());
+    this.#tell(canvas);
+  }
+
+  /** Tells what hears it of `canvas`. */
+  #tell(canvas: CanvasId): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener(canvas);
+      } catch (error) {
+        console.error('Could not tell of a journaled run:', error);
+      }
+    }
   }
 }
 

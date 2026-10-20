@@ -8,6 +8,8 @@
     "api.templates.list",
     "api.settings.get",
     "api.project.files",
+    "api.canvas.list",
+    "api.canvas.get",
     "api.canvas.rename",
     "api.canvas.addAgent",
     "api.canvas.spawnAgent",
@@ -47,8 +49,10 @@
       "canvas_addAgent",
       "canvas_addParent",
       "canvas_delete",
+      "canvas_get",
       "canvas_group",
       "canvas_link",
+      "canvas_list",
       "canvas_move",
       "canvas_rename",
       "canvas_spawnAgent",
@@ -91,6 +95,8 @@
     "outside-read": [
       "agents",
       "app_info",
+      "canvas_get",
+      "canvas_list",
       "catalog_get",
       "catalog_installed",
       "messages",
@@ -112,8 +118,10 @@
       "canvas_addAgent",
       "canvas_addParent",
       "canvas_delete",
+      "canvas_get",
       "canvas_group",
       "canvas_link",
+      "canvas_list",
       "canvas_move",
       "canvas_rename",
       "canvas_spawnAgent",
@@ -144,10 +152,10 @@
     ]
   },
   "counts": {
-    "lead": 35,
+    "lead": 37,
     "worker": 10,
-    "outside-read": 14,
-    "outside-write": 36
+    "outside-read": 16,
+    "outside-write": 38
   },
   "unhosted": {
     "agents": "B11",
@@ -182,11 +190,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "eb59d888d198bdf1",
-      "output": "8d9fcdb5b045d77e"
+      "input": "10579f0d8cce3ace",
+      "output": "46b6cfcf7645af6b"
     },
     "topics.unsubscribe": {
-      "input": "eb59d888d198bdf1",
+      "input": "10579f0d8cce3ace",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -208,6 +216,14 @@
     "project.files": {
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
+    },
+    "canvas.list": {
+      "input": "e5fa5cc18e054cdd",
+      "output": "a31906654477cc03"
+    },
+    "canvas.get": {
+      "input": "41356bc15da6df1b",
+      "output": "2aaaf63df95362d3"
     },
     "canvas.rename": {
       "input": "7e50fe59d461bed7",

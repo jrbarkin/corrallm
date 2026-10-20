@@ -10,7 +10,7 @@ import { MAX_CREATED_AGENTS } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
-import type { OpName } from '../../shared/api/surface';
+import type { OpName, Party, Reach } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
@@ -31,6 +31,8 @@ import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { committer } from './canvas/commit';
 import { Documents } from './canvas/documents';
+import { CanvasStates } from './canvas/states';
+import { seesAll, viewOf } from './canvas/view';
 import { Channels } from './channels';
 import { Windows } from './windows';
 import { createDispatcher } from './call';
@@ -287,9 +289,53 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sessions,
     usage,
   });
-  const topics = new Topics((name, args, caller, signal) =>
-    dispatcher.call(name, args, caller, signal),
-  );
+  const isLead = config.leads ?? (() => false);
+  // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the
+  // list of them, which changes as canvas memory, the journal and the windows do.
+  const states = new CanvasStates({
+    documents,
+    memory,
+    store,
+    shownIn: (canvas) => windows.showing(canvas),
+    running: () => engines.opened(),
+  });
+  const topics = new Topics({
+    read: (name, args, caller, signal) => dispatcher.call(name, args, caller, signal),
+    // A canvas's entities as a subscriber sees them: as canvas.get gives them to it.
+    view: (canvas, caller) => {
+      const { rev, entities, document } = states.now(canvas);
+      const party = dispatcher.partyOf(caller);
+      const access = SURFACE['canvas.get'].access as Readonly<Partial<Record<Party, Reach>>>;
+      const reach = party === 'you' ? 'all' : (access[party] ?? 'own');
+      const lead = caller.kind === 'agent' && isLead(canvas, caller.agent);
+      return {
+        rev,
+        entities: viewOf(document, entities, caller, reach, lead),
+        all: seesAll(caller, reach),
+      };
+    },
+  });
+  states.listen({
+    canvas: (canvas, change) => {
+      topics.publish(canvas, change);
+    },
+    list: () => {
+      topics.changed('canvases', 'corrallm');
+    },
+  });
+  memory.subscribe((canvas) => {
+    if (canvas === undefined) states.listChanged();
+    else
+      void states.refresh(canvas).catch((error: unknown) => {
+        console.error('Could not say what changed of the canvas:', error);
+      });
+  });
+  journal.subscribe(() => {
+    states.listChanged();
+  });
+  windows.subscribe(() => {
+    states.listChanged();
+  });
   usage.subscribe((_state, by) => {
     topics.changed('usage', by);
   });
@@ -319,7 +365,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
   });
-  const isLead = config.leads ?? (() => false);
+  engines.watch({
+    needs: (canvas) => {
+      topics.changed(`needs:${canvas}`, 'corrallm');
+    },
+    opened: () => {
+      states.listChanged();
+    },
+  });
   const dispatcher = createDispatcher(
     {
       surface: SURFACE,
@@ -339,6 +392,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         environment,
         usage,
         engines,
+        states,
         isLead,
         host,
         tokens,
@@ -398,6 +452,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     watch: (watcher) => engines.watch(watcher),
     close: async () => {
       probe.stop();
+      states.close();
       topics.close();
       try {
         await engines.close();

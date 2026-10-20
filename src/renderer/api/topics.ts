@@ -215,7 +215,7 @@ export class TopicMirror {
         if (state === previous) state = { ...previous };
         Reflect.deleteProperty(state, key);
       }
-      entry.state = state;
+      entry.state = state as TopicSnapshot['state'];
     }
     entry.rev = change.rev;
     this.#tell(entry);

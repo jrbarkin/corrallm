@@ -159,8 +159,24 @@ export interface LiveDocument {
   readonly rows: Rows;
   /** The revision each entity took last, as far as it is known. */
   readonly revs: ReadonlyMap<EntityKey, number>;
+  /** The party that wrote each entity last, as far as it is known. */
+  readonly bys: ReadonlyMap<EntityKey, PartyId>;
   /** Whether it is kept: in rows, or read from a file. Not a draft that never held anything. */
   readonly kept: boolean;
+}
+
+/**
+ * A commit, as those who hear it are told once it is on disk and the live document is the changed
+ * one: the revision it took, the party that made it, the entities it changed (added, removed,
+ * moved, or changed in more than their place) and those whose place alone was numbered anew.
+ */
+export interface Commit {
+  canvas: CanvasId;
+  rev: number;
+  by: PartyId;
+  changed: readonly EntityKey[];
+  renumbered: readonly EntityKey[];
+  live: LiveDocument;
 }
 
 interface Live extends LiveDocument {
@@ -168,6 +184,7 @@ interface Live extends LiveDocument {
   rev: number;
   rows: Record<EntityKey, Row>;
   revs: Map<EntityKey, number>;
+  bys: Map<EntityKey, PartyId>;
   kept: boolean;
   /** The party that created each agent, by its id: none for one read from a file. */
   creators: Map<string, PartyId>;
@@ -189,6 +206,8 @@ export class Documents {
   readonly #texts = new WeakMap<CanvasDocument, { text: string; hash: string }>();
   /** The new agents of changes past their checks whose rows don't hold them yet. */
   readonly #creating = new Set<Creating>();
+  /** What hears each commit. */
+  readonly #listeners = new Set<(commit: Commit) => void>();
 
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
@@ -218,6 +237,51 @@ export class Documents {
     const live = this.#lives.get(canvas);
     if (live === undefined) throw new Error(NOT_LOADED);
     return live;
+  }
+
+  /** The canvas's document, if it is loaded. */
+  loaded(canvas: CanvasId): LiveDocument | undefined {
+    return this.#lives.get(canvas);
+  }
+
+  /** Whether the canvas's document is kept in rows. */
+  hasRows(canvas: CanvasId): boolean {
+    return (
+      this.#deps.store.prepare('SELECT 1 AS kept FROM document WHERE canvas_id = ?').get(canvas) !==
+      undefined
+    );
+  }
+
+  /**
+   * Hears each commit, once it is on disk and the live document is the changed one (B9 Design §3:
+   * the topics publish from the commit path): synchronously, before anything else reads it. Returns
+   * what stops it hearing them.
+   */
+  subscribe(listener: (commit: Commit) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Runs `task` between the canvas's commits: once what its document was doing (loads, commits,
+   * saves) is done, before what is asked of it after. Resolves with what it returned.
+   */
+  between<T>(canvas: CanvasId, task: () => T): Promise<T> {
+    return this.#queue(canvas, () => Promise.resolve(task()));
+  }
+
+  /**
+   * The canvas's next revision, given to a change that isn't the document's (B9 Design §7: its meta,
+   * a folder chosen or `edited` flipping) in memory only: the next commit takes the one after it.
+   * Only between its commits (`between`), so that no commit going on takes it too.
+   */
+  bump(canvas: CanvasId): number {
+    const live = this.#lives.get(canvas);
+    if (live === undefined) throw new Error(NOT_LOADED);
+    live.rev += 1;
+    return live.rev;
   }
 
   /** The canvas's document as its file's text: none for a draft that never held anything. */
@@ -400,6 +464,7 @@ export class Documents {
       rev: 0,
       rows: { [META]: { arrange: false } },
       revs: new Map(),
+      bys: new Map(),
       kept: false,
       creators: new Map(),
       savedHash: undefined,
@@ -436,15 +501,17 @@ export class Documents {
     if (head === undefined) return undefined;
     const rows: Record<EntityKey, Row> = { [META]: { arrange: head.arrange === 1 } };
     const revs = new Map<EntityKey, number>();
+    const bys = new Map<EntityKey, PartyId>();
     const creators = new Map<string, PartyId>();
-    const keep = (key: EntityKey, row: Row, rev: unknown) => {
+    const keep = (key: EntityKey, row: Row, rev: unknown, by: unknown) => {
       rows[key] = row;
       revs.set(key, Number(rev));
+      if (typeof by === 'string') bys.set(key, by as PartyId);
     };
     for (const node of store
       .prepare(
         `SELECT id, kind, parent_id, place, label, x, y, color, adapter, connection, settings, role,
-           created_by, rev FROM node WHERE canvas_id = ? ORDER BY place`,
+           created_by, rev, by_party FROM node WHERE canvas_id = ? ORDER BY place`,
       )
       .all(canvas)) {
       const id = String(node.id);
@@ -463,10 +530,12 @@ export class Documents {
         settings: parsed(node.settings),
         role: node.role,
       }) as NodeRow;
-      keep(nodeKey(id), row, node.rev);
+      keep(nodeKey(id), row, node.rev, node.by_party);
     }
     for (const link of store
-      .prepare('SELECT a, b, source, dots, place, rev FROM link WHERE canvas_id = ? ORDER BY place')
+      .prepare(
+        'SELECT a, b, source, dots, place, rev, by_party FROM link WHERE canvas_id = ? ORDER BY place',
+      )
       .all(canvas)) {
       const row = present({
         a: link.a,
@@ -475,11 +544,11 @@ export class Documents {
         dots: parsed(link.dots),
         place: link.place,
       }) as LinkRow;
-      keep(linkKey(row.a, row.b), row, link.rev);
+      keep(linkKey(row.a, row.b), row, link.rev, link.by_party);
     }
     for (const item of store
       .prepare(
-        `SELECT agent_id, id, container, place, kind, body, rev FROM queue_item
+        `SELECT agent_id, id, container, place, kind, body, rev, by_party FROM queue_item
          WHERE canvas_id = ? ORDER BY place`,
       )
       .all(canvas)) {
@@ -491,7 +560,7 @@ export class Documents {
         kind: item.kind,
         body: parsed(item.body),
       }) as ItemRow;
-      keep(itemKey(row.agent, row.id), row, item.rev);
+      keep(itemKey(row.agent, row.id), row, item.rev, item.by_party);
     }
     const document = fromRows(canvas, rows);
     return {
@@ -500,6 +569,7 @@ export class Documents {
       // In the document's order, each in its place.
       rows: toRows(document, rows),
       revs,
+      bys,
       kept: true,
       creators,
       savedHash: text(head.saved_hash),
@@ -574,8 +644,13 @@ export class Documents {
     live.document = next;
     live.rows = rows;
     for (const key of changed) {
-      if (Object.hasOwn(rows, key)) live.revs.set(key, rev);
-      else live.revs.delete(key);
+      if (Object.hasOwn(rows, key)) {
+        live.revs.set(key, rev);
+        live.bys.set(key, revision.by);
+      } else {
+        live.revs.delete(key);
+        live.bys.delete(key);
+      }
     }
     live.rev = rev;
     live.kept = true;
@@ -583,6 +658,15 @@ export class Documents {
     if (hashes !== undefined) {
       live.savedHash = hashes.saved;
       live.fileHash = hashes.file;
+    }
+    const commit = { canvas: next.id, rev, by: revision.by, changed, renumbered, live };
+    for (const listener of this.#listeners) {
+      try {
+        listener(commit);
+      } catch (error) {
+        // What hears a commit never undoes it.
+        console.error('Could not tell of a commit:', error);
+      }
     }
     return rev;
   }

@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GUI_OPS } from '../../shared/api/surface';
+import type { CanvasId } from '../../shared/canvas';
 import { guiFunction } from '../../shared/gui-link';
 import type { AppApi } from '../../shared/ipc';
+import { canvasStateOf } from '../../shared/model/state';
+import type { Entities, MetaEntity, NodeEntity } from '../../shared/model/state';
 import { api, ApiError } from './client';
 import { fakeCore, expectOneOp } from '../test-api';
 
@@ -33,6 +36,61 @@ describe('the GUI client', () => {
     await called;
     expect(resolved).toHaveBeenCalledOnce();
     expect(core.topics.snapshot('settings')).toEqual({ defaultAdapter: 'codex', consents: {} });
+    core.dispose();
+  });
+
+  it('resolves a document op only once its canvas’s copy reached the revision it committed', async () => {
+    const core = fakeCore();
+    const canvas = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b' as CanvasId;
+    const topic = `canvas:${canvas}` as const;
+    const meta: MetaEntity = {
+      arrange: false,
+      name: 'work.corral',
+      edited: false,
+      project: null,
+      rev: 0,
+      by: 'you',
+    };
+    const lead: NodeEntity = {
+      id: 'lead',
+      kind: 'agent',
+      place: 0,
+      label: 'Lead',
+      x: 0,
+      y: 0,
+      rev: 1,
+      by: 'you',
+    };
+    const entities: Entities = { meta, 'node/lead': lead };
+    core.snapshot(topic, entities, 1);
+    core.respond('canvas.rename', { revs: { [topic]: 2 } });
+    const resolved = vi.fn();
+    const renaming = core.api.canvasRename({ canvas, node: 'lead', label: 'Boss' }).then(resolved);
+    await vi.waitFor(() => {
+      expectOneOp(core, 'canvas.rename', { canvas, node: 'lead', label: 'Boss' });
+    });
+    // The mirror subscribed to the canvas for it, and has its snapshot, but not the commit yet.
+    await vi.waitFor(() => {
+      expect(core.topics.snapshot(topic)).toBeDefined();
+    });
+    await Promise.resolve();
+    expect(resolved).not.toHaveBeenCalled();
+    core.change({
+      topic,
+      rev: 2,
+      set: {
+        'node/lead': { ...lead, label: 'Boss', rev: 2 },
+        meta: { ...meta, edited: true, rev: 2 },
+      },
+    });
+    await renaming;
+    expect(resolved).toHaveBeenCalledExactlyOnceWith({ revs: { [topic]: 2 } });
+    const state = canvasStateOf(canvas, 2, core.topics.snapshot(topic) ?? {});
+    expect(state.nodes).toEqual([
+      { id: 'lead', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Boss' } },
+    ]);
+    expect(state).toMatchObject({ name: 'work.corral', edited: true, rev: 2 });
+    expect(state.entities['node/lead']).toEqual({ rev: 2, by: 'you' });
     core.dispose();
   });
 
