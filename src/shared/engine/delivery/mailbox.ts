@@ -185,6 +185,12 @@ export class SessionStore {
     this.#driver(agentId).open();
   }
 
+  /** Starts without sending: delivery must inspect the native permissions before its first send. */
+  async ready(agentId: string): Promise<void> {
+    await this.#freshening.get(agentId);
+    await this.#driver(agentId).ready?.();
+  }
+
   /** Holds waiting messages after the current turn; releasing sends them in their original order. */
   holdQueue(agentId: string, held: boolean): void {
     if (held) this.#heldQueues.add(agentId);

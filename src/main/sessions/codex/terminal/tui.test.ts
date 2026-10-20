@@ -177,6 +177,25 @@ async function replayed(): Promise<(ProgramStatus | TerminalSignal<CodexMode> | 
 }
 
 describe('following Codex', () => {
+  it('reports terminal permission switches on the next hook, leaving unknown modes unread', async () => {
+    const tui = await prepared();
+    const stop = { hook_event_name: 'Stop', last_assistant_message: 'Done' };
+    expect(tui.hook({ ...stop, permission_mode: 'bypassPermissions' })).toContainEqual({
+      kind: 'mode',
+      mode: 'full-access',
+    });
+    expect(tui.hook({ ...stop, permission_mode: 'default' })).toContainEqual({
+      kind: 'mode',
+      mode: 'auto',
+    });
+    expect(tui.hook({ ...stop, permission_mode: 'future' })).not.toContainEqual(
+      expect.objectContaining({ kind: 'mode' }),
+    );
+    expect(tui.hook({ ...stop, permission_mode: 'bypassPermissions', agent_id: 'child' })).toEqual(
+      [],
+    );
+  });
+
   it('remembers only UUIDs from untrusted hooks while still hearing the event', async () => {
     const tui = await prepared();
     const event = { hook_event_name: 'UserPromptSubmit', prompt: 'hello' };
@@ -200,6 +219,7 @@ describe('following Codex', () => {
       // Its SessionStart hook (the recording had it), then UserPromptSubmit.
       { kind: 'session', id: RECORDED_SESSION },
       { kind: 'model', model: 'gpt-6-luna' },
+      { kind: 'mode', mode: 'auto' },
       { kind: 'session', id: RECORDED_SESSION },
       { kind: 'prompt', text: 'Say hi in one word.' },
       { state: 'working' },

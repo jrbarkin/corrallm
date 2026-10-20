@@ -195,7 +195,17 @@ export const MAX_ROLE_LENGTH = 16_000;
  */
 export interface SettingsOptions {
   models: ModelChoice[];
-  defaults: { model: string | null; effort: string | null; mode: SessionMode | null };
+  defaults: {
+    model: string | null;
+    effort: string | null;
+    mode: SessionMode | null;
+    /**
+     * Whether the user's own default (what a session given no mode starts in) asks before it
+     * acts: false where it never does. Left out where that can't be told (settings the CLI's
+     * reader doesn't know, or couldn't read).
+     */
+    asks?: boolean;
+  };
 }
 
 /**
@@ -442,6 +452,12 @@ export type SessionEvent =
       models: ModelChoice[];
       effort?: string | null;
       modes?: SessionMode[];
+      /**
+       * Whether what it runs with asks before it acts, where its mode doesn't say (null: settings
+       * of the user's own that are none of its modes): false where it never asks. Left out where
+       * it can't tell, or its mode says.
+       */
+      asks?: boolean;
     }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }

@@ -151,7 +151,11 @@ export const codex: Adapter = {
   },
   readOptions: async ({ env, cwd }) => codexOptions({ codex: await requireCodex(env), cwd, env }),
   fake: (pause) => new FakeConnector({ pause, adapter: 'codex' }),
-  fakeOptions: { models: FAKE_CODEX_MODELS, defaults: { model: null, effort: null, mode: null } },
+  fakeOptions: {
+    models: FAKE_CODEX_MODELS,
+    // The fake's own default, Codex's Default, asks.
+    defaults: { model: null, effort: null, mode: null, asks: true },
+  },
   usageBackends: [
     {
       id: CODEX_USAGE,

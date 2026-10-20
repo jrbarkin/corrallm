@@ -65,7 +65,12 @@ export async function snapshots(profile: string): Promise<string[]> {
  * Takes a snapshot of the database in `source`, taken `at`, into the profile's backups, then
  * forgets all but the newest SNAPSHOTS_KEPT. Resolves with its file.
  */
-export async function takeSnapshot(source: string, profile: string, at: number): Promise<string> {
+export async function takeSnapshot(
+  source: string,
+  profile: string,
+  at: number,
+  publishing?: (file: string) => void,
+): Promise<string> {
   const folder = path.join(profile, SNAPSHOT_FOLDER);
   await mkdir(folder, { recursive: true, mode: 0o700 });
   // What a snapshot cut short left behind (one is taken at a time, so none is being taken now).
@@ -96,6 +101,8 @@ export async function takeSnapshot(source: string, profile: string, at: number):
     } finally {
       copy.close();
     }
+    // The final name can exist even when place rejects (its directory fsync), or pruning fails.
+    publishing?.(file);
     await place(partial, file);
   } catch (error) {
     await remove(partial);
@@ -148,7 +155,23 @@ function isPartial(name: string): boolean {
   return snapshot !== undefined && snapshotTime(snapshot) !== undefined;
 }
 
-/** Removes a database's file and those SQLite kept beside it. */
-async function remove(file: string): Promise<void> {
+/** Removes a database's file and those SQLite kept beside it: a snapshot too. */
+export async function remove(file: string): Promise<void> {
   for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
+}
+
+/** Removes snapshots that may hold rejected writes, including their directory entries on disk. */
+export async function discardSnapshots(profile: string, unsafe: readonly string[]): Promise<void> {
+  for (const snapshot of unsafe) await remove(snapshot);
+  if (process.platform === 'win32') return;
+  const folder = await open(path.join(profile, SNAPSHOT_FOLDER), 'r').catch((error: unknown) => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (folder === undefined) return;
+  try {
+    await folder.sync();
+  } finally {
+    await folder.close();
+  }
 }

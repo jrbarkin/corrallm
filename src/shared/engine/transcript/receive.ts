@@ -167,6 +167,10 @@ export class ConnectedDriver implements SessionDriver {
     );
   }
 
+  ready(): Promise<void> {
+    return this.#run();
+  }
+
   start(turn: Turn, done: DriverDone): void {
     this.#lastError = undefined;
     const sent: SentTurn = { done, sent: false, started: this.#io.now() };
@@ -282,6 +286,7 @@ export class ConnectedDriver implements SessionDriver {
           mode: event.mode,
           ...(event.modes === undefined ? {} : { modes: event.modes }),
           ...(event.effort === undefined ? {} : { effort: event.effort }),
+          ...(event.asks === undefined ? {} : { asks: event.asks }),
         });
         return;
       case 'commands':

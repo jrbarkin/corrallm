@@ -404,6 +404,10 @@ export class Engines {
       changed: () => {
         this.#look(running);
       },
+      defaultAsks: (adapter) =>
+        this.#deps.processes
+          .run(() => this.#deps.sessions.settingsOptions(canvas, adapter))
+          .then(({ defaults }) => defaults.asks),
       ...(this.#deps.locale === undefined ? {} : { locale: this.#deps.locale }),
     });
     running.delivery = delivery;

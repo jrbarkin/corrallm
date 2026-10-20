@@ -66,7 +66,8 @@ export type SessionAction =
   | { type: 'running'; settings: AgentStartSettings | undefined }
   /**
    * A connected session started: the models (and modes, if not all) it offers, its model and mode,
-   * and its effort (where its model offers a choice).
+   * its effort (where its model offers a choice), and whether what it runs with asks before it
+   * acts, where its mode doesn't say.
    */
   | {
       type: 'connected';
@@ -75,6 +76,7 @@ export type SessionAction =
       mode: Mode | null;
       modes?: readonly Mode[];
       effort?: string | null;
+      asks?: boolean;
     }
   | { type: 'usage'; usage: SessionUsage }
   | { type: 'commands'; commands: readonly SlashCommand[] }
@@ -255,11 +257,13 @@ export function reduce(session: Session, action: SessionAction): Session {
       return action.settings === undefined ? next : { ...next, running: action.settings };
     }
     case 'connected': {
-      const { models, model, mode, modes, effort } = action;
+      const { models, model, mode, modes, effort, asks } = action;
       // A session that starts runs nothing in the background yet, and asks nothing.
       const next: Session = { ...session, models, model, mode, tasks: [] };
       if (modes === undefined) delete next.modes;
       else next.modes = modes;
+      if (asks === undefined) delete next.asks;
+      else next.asks = asks;
       if (effort !== undefined) next.effort = effort;
       delete next.asking;
       // One that can't hear its CLI says so after it starts.

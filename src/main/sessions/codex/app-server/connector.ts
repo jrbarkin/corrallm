@@ -244,6 +244,7 @@ export class AppServerConnector implements Connector<CodexMode> {
         mode: session.mode,
         models: choices(models, thread.model),
         effort: session.effort,
+        ...(session.asks === undefined ? {} : { asks: session.asks }),
       });
       host.emit({ type: 'commands', commands: slashCommands(skills) });
       if (history.length > 0) host.emit({ type: 'history', events: history });

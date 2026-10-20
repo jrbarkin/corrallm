@@ -104,6 +104,8 @@ export class CodexTui implements TerminalCli<CodexMode> {
   #interrupted = false;
   /** The model its hooks last said. */
   #model: string | undefined;
+  /** Permissions last heard from a hook; terminal changes are visible only at the next hook. */
+  #mode: CodexMode | undefined;
 
   constructor({
     trust,
@@ -213,6 +215,19 @@ export class CodexTui implements TerminalCli<CodexMode> {
     if (model !== undefined && model !== this.#model && MODEL_PATTERN.test(model)) {
       this.#model = model;
       signals.push({ kind: 'model', model });
+    }
+    const permission = text('permission_mode');
+    const mode =
+      permission === 'bypassPermissions' || permission === 'dontAsk'
+        ? 'full-access'
+        : permission === 'plan'
+          ? 'plan'
+          : permission === 'default' || permission === 'acceptEdits'
+            ? 'auto'
+            : undefined;
+    if (mode !== undefined && mode !== this.#mode) {
+      this.#mode = mode;
+      signals.push({ kind: 'mode', mode });
     }
     switch (text('hook_event_name')) {
       case 'UserPromptSubmit':

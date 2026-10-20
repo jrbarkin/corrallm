@@ -11,13 +11,15 @@ import type { Entry } from '../../shared/model/session';
 import { withoutChoices } from '../../shared/engine/needs';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { CanvasId } from '../../shared/canvas';
-import type { SessionEvent, SessionMode } from '../../shared/session';
+import type { AdapterId } from '../../shared/adapter';
+import type { SessionEvent, SessionMode, SettingsOptions } from '../../shared/session';
 import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { CanvasMemory } from '../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
+import { CodexTui } from '../sessions/codex/terminal/tui';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
 import { createCore } from './core';
@@ -101,6 +103,8 @@ let appServer: FakeConnector;
 let terminal: FakeConnector;
 /** What reads a held backend's usage, by backend, instead of its adapter's reader: none unless set. */
 let readUsage: Partial<Record<string, () => Promise<UsageWindows | undefined>>> | undefined;
+/** What reads each adapter's user's own defaults instead of its CLI's settings: the fakes' unless set. */
+let options: Partial<Record<AdapterId, () => Promise<SettingsOptions>>> | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
@@ -109,6 +113,7 @@ beforeEach(async () => {
   appServer = new FakeConnector({ adapter: 'codex' });
   terminal = new FakeConnector({ adapter: 'codex' });
   readUsage = undefined;
+  options = undefined;
 });
 
 afterEach(async () => {
@@ -201,6 +206,7 @@ async function start(
         },
         environment: () => Promise.resolve({}),
         ...(readUsage === undefined ? {} : { readUsage }),
+        ...(options === undefined ? {} : { options }),
       },
     },
     NO_DESKTOP,
@@ -626,7 +632,7 @@ describe('delivery', () => {
         id: 'unasking/builder',
         kind: 'hold',
         title: 'Builder runs without asking, so messages from other parties wait',
-        detail: 'They go once it runs in a mode that asks again, or its session ends.',
+        detail: 'They go once it runs in a mode that asks again.',
         choices: [],
       }),
     ]);
@@ -911,6 +917,300 @@ describe('delivery', () => {
     ).toMatchObject({ turn: { status: 'cancelled', reason: 'interrupted' } });
     expect((await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items).toEqual([]);
     expect((await inbox()).filter((message) => message.kind === 'notice')).toHaveLength(1);
+  });
+});
+
+/**
+ * Codex's own default, as its settings say it (what a session given no mode starts in): whether it
+ * asks (undefined: corrallm can't tell), or a failure to read it. Counts its reads.
+ */
+function codexDefault(asks: boolean | undefined | Error): { reads: () => number } {
+  let reads = 0;
+  // Read through the reader the core was given, whenever it was started.
+  codexRead = () => {
+    reads += 1;
+    if (asks instanceof Error) return Promise.reject(asks);
+    return Promise.resolve({
+      models: [],
+      defaults: { model: null, effort: null, mode: null, ...(asks === undefined ? {} : { asks }) },
+    });
+  };
+  options = { codex: () => codexRead() };
+  return { reads: () => reads };
+}
+let codexRead: () => Promise<SettingsOptions>;
+
+/** What you are told waits on a hold, by its id. */
+async function needsOf(): Promise<NeedsItem[]> {
+  return (await ok<{ items: NeedsItem[] }>('needs', {}, YOU)).items;
+}
+
+describe('a mode that never asks', () => {
+  const DEFAULT_WAITS =
+    'Builder’s CLI defaults to a mode that never asks before it acts, so your message waits until Builder runs in one that asks, which only the user can set.';
+  const UNKNOWN_WAITS =
+    'corrallm can’t tell whether Builder’s CLI defaults to a mode that asks before it acts, so your message waits until Builder runs in one that asks, which only the user can set.';
+
+  it.each([false, undefined])(
+    'checks the first party message against the started session (asks: %s), while yours still go',
+    async (asks) => {
+      await keepCanvas();
+      codexDefault(true);
+      appServer = new FakeConnector({
+        adapter: 'codex',
+        mode: null,
+        ...(asks === undefined ? {} : { asks }),
+      });
+      const engine = await (await start()).engines.open(CANVAS);
+      const first = await send('builder', 'Wait for permission');
+      await vi.waitFor(() => {
+        expect(appServer.started).toHaveLength(1);
+      });
+      await vi.waitFor(async () => {
+        expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/builder' })]);
+      });
+      expect(sent(appServer)).toEqual([]);
+      expect((await find(first))?.state).toBe('pending');
+      const yours = await send('builder', 'My message', YOU);
+      await vi.waitFor(async () => {
+        expect((await find(yours, YOU))?.state).toBe('replied');
+      });
+      expect(sent(appServer)).toEqual(['My message']);
+      engine.sessions.setMode('builder', 'auto');
+      await vi.waitFor(async () => {
+        expect((await find(first))?.state).toBe('replied');
+      });
+    },
+  );
+
+  it('holds an unknown native startup report even when a startup mode was requested', async () => {
+    await keepCanvas();
+    await start({
+      appServer: {
+        start: (spec, host) =>
+          appServer.start(spec, {
+            ...host,
+            emit: (event) => {
+              host.emit(event.type === 'started' ? { ...event, mode: null } : event);
+            },
+          }),
+      },
+    });
+    const id = await send('checker', 'Wait for native permissions');
+    await vi.waitFor(async () => {
+      expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/checker' })]);
+    });
+    expect((await find(id))?.state).toBe('pending');
+    expect(sent(appServer)).toEqual([]);
+  });
+
+  it('holds a party’s message for an agent yet to start whose CLI defaults to a mode that never asks; yours start it', async () => {
+    await keepCanvas();
+    const codex = codexDefault(false);
+    appServer = new FakeConnector({ adapter: 'codex', mode: 'full-access' });
+    await start();
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toEqual([
+        expect.objectContaining({ replyTo: first, body: DEFAULT_WAITS }),
+      ]);
+    });
+    expect(appServer.started).toEqual([]);
+    expect(await needsOf()).toEqual([
+      expect.objectContaining({
+        id: 'unasking/builder',
+        kind: 'hold',
+        title:
+          'Builder’s CLI defaults to a mode that never asks, so messages from other parties wait',
+        detail: 'They go once it runs in a mode that asks: set it to start in one.',
+        choices: [],
+      }),
+    ]);
+    // Checker is set to start in Read only, which asks: whatever its CLI's default, it gets them.
+    const checked = await send('checker', 'Check');
+    await vi.waitFor(() => {
+      expect(sent(appServer)).toEqual([`${FRAME(checked)}Check`]);
+    });
+    // Yours go, as typed, starting Builder in its CLI's default.
+    const yours = await send('builder', 'From you', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(yours, YOU))?.state).toBe('replied');
+    });
+    expect((await find(first))?.state).toBe('pending');
+    // Read once for Builder, never for Checker.
+    expect(codex.reads()).toBe(1);
+  });
+
+  it('delivers to Builder with no saved mode on Codex Default, reading that once a session', async () => {
+    await keepCanvas();
+    const codex = codexDefault(true);
+    let host: SessionHost | undefined;
+    await start({
+      appServer: {
+        start: (spec, given) => {
+          host = given;
+          return appServer.start(spec, given);
+        },
+      },
+    });
+    // Builder, no mode of its own, with Codex's Default (workspace-write, on-request).
+    const first = await send('builder', 'First');
+    const second = await send('builder', 'Second');
+    await vi.waitFor(async () => {
+      expect((await find(second))?.state).toBe('replied');
+    });
+    expect((await find(first))?.state).toBe('replied');
+    expect(appServer.started[0]?.mode).toBeNull();
+    expect(codex.reads()).toBe(1);
+    // Its session ends: its next is read for again.
+    host?.emit({ type: 'closed' });
+    const third = await send('builder', 'Third');
+    await vi.waitFor(async () => {
+      expect((await find(third))?.state).toBe('replied');
+    });
+    expect(codex.reads()).toBe(2);
+    expect(await notices()).toEqual([]);
+  });
+
+  it('holds and releases Terminal messages when a hook reports Full access and then an asking mode', async () => {
+    await keepCanvas();
+    const tui = new CodexTui({
+      trust: () => Promise.reject(new Error('No hook setup in this test')),
+    });
+    let host: SessionHost | undefined;
+    await start({
+      terminal: {
+        start: (spec, given) => {
+          host = given;
+          return terminal.start(spec, given);
+        },
+      },
+    });
+    const first = await send('shell', 'Start');
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    const hook = (permission_mode: string) => {
+      for (const signal of tui.hook({ hook_event_name: 'Stop', permission_mode })) {
+        if (signal.kind === 'mode') host?.emit({ type: 'mode', mode: signal.mode });
+      }
+    };
+    hook('bypassPermissions');
+    const held = await send('shell', 'Wait for permission');
+    await vi.waitFor(async () => {
+      expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/shell' })]);
+    });
+    expect((await find(held))?.state).toBe('pending');
+    expect(sent(terminal)).toHaveLength(1);
+    hook('default');
+    await vi.waitFor(async () => {
+      expect((await find(held))?.state).toBe('replied');
+    });
+  });
+
+  it('holds a party’s message when corrallm can’t tell what an agent’s CLI defaults to, and reads it again a minute on', async () => {
+    await keepCanvas();
+    codexDefault(new Error('Codex could not list its models: no codex'));
+    await start();
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toEqual([
+        expect.objectContaining({ replyTo: first, body: UNKNOWN_WAITS }),
+      ]);
+    });
+    expect(appServer.started).toEqual([]);
+    expect(await needsOf()).toEqual([
+      expect.objectContaining({
+        id: 'unasking/builder',
+        title:
+          'corrallm can’t tell whether Builder’s CLI defaults to a mode that asks, so messages from other parties wait',
+        detail: 'They go once it runs in a mode that asks: set it to start in one.',
+      }),
+    ]);
+    // Settings it can't tell either: held the same.
+    const unknown = codexDefault(undefined);
+    ahead(60 * 1000);
+    const second = await send('builder', 'Second');
+    await vi.waitFor(() => {
+      expect(unknown.reads()).toBe(1);
+    });
+    expect((await find(second))?.state).toBe('pending');
+    // A minute on, a message reads it again: now one that asks, so both go, in order.
+    const asks = codexDefault(true);
+    ahead(2 * 60 * 1000);
+    const third = await send('builder', 'Third');
+    await vi.waitFor(async () => {
+      expect((await find(third))?.state).toBe('replied');
+    });
+    expect(asks.reads()).toBe(1);
+    expect(sent(appServer)).toEqual([
+      `${FRAME(first)}First`,
+      `${FRAME(second)}Second`,
+      `${FRAME(third)}Third`,
+    ]);
+  });
+
+  it('holds a party’s message while a session runs on settings of its user’s that never ask, though they are none of its modes', async () => {
+    await keepCanvas();
+    // Codex's settings say its default asks; the thread says otherwise (no sandbox, on-failure).
+    codexDefault(true);
+    appServer = new FakeConnector({ adapter: 'codex', mode: null, asks: false });
+    const engine = await (await start()).engines.open(CANVAS);
+    const started = await send('builder', 'Start', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(started, YOU))?.state).toBe('replied');
+    });
+    expect(engine.sessions.of('builder').mode).toBeNull();
+    const first = await send('builder', 'First');
+    await vi.waitFor(async () => {
+      expect(await notices()).toEqual([
+        expect.objectContaining({
+          replyTo: first,
+          body: 'Builder runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.',
+        }),
+      ]);
+    });
+    expect((await needsOf()).map(({ id }) => id)).toEqual(['unasking/builder']);
+  });
+
+  it('holds a party’s message when the running session cannot report its permissions', async () => {
+    await keepCanvas();
+    // Shell's terminal has not reported its permissions; its earlier default cannot vouch for it.
+    const codex = codexDefault(false);
+    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    const engine = await (await start()).engines.open(CANVAS);
+    const started = await send('shell', 'Start', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(started, YOU))?.state).toBe('replied');
+    });
+    expect(engine.sessions.of('shell').running).toBeDefined();
+    const first = await send('shell', 'First');
+    await vi.waitFor(async () => {
+      expect((await notices()).map(({ replyTo, body }) => [replyTo, body])).toEqual([
+        [first, UNKNOWN_WAITS.replaceAll('Builder', 'Shell')],
+      ]);
+    });
+    expect(codex.reads()).toBe(0);
+  });
+
+  it('delivers to a session that never says its mode when it is set to start in one that asks', async () => {
+    await keepCanvas([
+      ...AGENTS.filter(({ id }) => id !== 'shell'),
+      {
+        id: 'shell',
+        label: 'Shell',
+        connection: 'codex.terminal',
+        settings: { codex: { mode: 'read-only' } },
+      },
+    ]);
+    const codex = codexDefault(false);
+    terminal = new FakeConnector({ adapter: 'codex', mode: null });
+    await start();
+    const first = await send('shell', 'First');
+    await vi.waitFor(() => {
+      expect(sent(terminal)).toEqual([`${FRAME(first)}First`]);
+    });
+    expect(codex.reads()).toBe(0);
   });
 });
 

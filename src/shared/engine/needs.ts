@@ -38,17 +38,27 @@ export interface NeedsInput {
    * would let them (a sentence).
    */
   stuck?: readonly { agent: string; text: string; clears: string }[];
-  /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
-  unasking?: readonly string[];
+  /**
+   * The agents that would act on parties' messages without asking while those wait, and why: their
+   * sessions run in a mode that never asks, their CLIs default to one, or corrallm can't tell.
+   */
+  unasking?: readonly { agent: string; why: UnaskingWhy }[];
   /** Agents spending a backend whose hard limit was hit, until its reset. */
   limited?: readonly { agent: string; backend: string; until: number }[];
 }
+
+/**
+ * Why an agent would act on a party's message without asking: its session runs in a mode (or on
+ * settings) that never asks; it would run in its CLI's own default, which never asks; or corrallm
+ * can't tell what that default does.
+ */
+export type UnaskingWhy = 'mode' | 'default' | 'unknown';
 
 /** Something that waits for you, as derived: whose it is, and what it is. */
 export type Need =
   | { kind: 'hold'; agent: AgentNode; ask: HeldAsk }
   | { kind: 'stuck'; agent: AgentNode; text: string; clears: string }
-  | { kind: 'unasking'; agent: AgentNode }
+  | { kind: 'unasking'; agent: AgentNode; why: UnaskingWhy }
   | { kind: 'limited'; agent: AgentNode; backend: string; until: number }
   | { kind: 'prompt'; agent: AgentNode; prompt: Prompt }
   | { kind: 'ask'; agent: AgentNode; ask: TerminalAsk };
@@ -90,9 +100,9 @@ export function needsOf({
       const found = agent(id);
       return found ? [{ kind: 'stuck', agent: found, text, clears }] : [];
     }),
-    ...unasking.flatMap((id): Need[] => {
+    ...unasking.flatMap(({ agent: id, why }): Need[] => {
       const found = agent(id);
-      return found ? [{ kind: 'unasking', agent: found }] : [];
+      return found ? [{ kind: 'unasking', agent: found, why }] : [];
     }),
     ...limited.flatMap(({ agent: id, backend, until }): Need[] => {
       const found = agent(id);
@@ -155,16 +165,26 @@ export function needsItem(
         choices: [],
         answerIn: 'api',
       };
-    case 'unasking':
+    case 'unasking': {
+      const name = agentName(nodes, need.agent.id);
       return {
         id: idOf('unasking', need.agent.id),
         ...yours,
         kind: 'hold',
-        title: `${agentName(nodes, need.agent.id)} runs without asking, so messages from other parties wait`,
-        detail: 'They go once it runs in a mode that asks again, or its session ends.',
+        title:
+          need.why === 'mode'
+            ? `${name} runs without asking, so messages from other parties wait`
+            : need.why === 'default'
+              ? `${name}’s CLI defaults to a mode that never asks, so messages from other parties wait`
+              : `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks, so messages from other parties wait`,
+        detail:
+          need.why === 'mode'
+            ? 'They go once it runs in a mode that asks again.'
+            : 'They go once it runs in a mode that asks: set it to start in one.',
         choices: [],
         answerIn: 'api',
       };
+    }
     case 'limited':
       return {
         id: idOf('limited', need.agent.id),
