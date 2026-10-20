@@ -3,8 +3,10 @@ import { newCanvasId } from '../../shared/canvas';
 import { toRows } from '../../shared/model/rows';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Entities, Entity } from '../../shared/model/state';
+import { absolutePosition } from '../../shared/model/geometry';
+import { group } from '../../shared/model/structure';
 import { CanvasFlow, nodeView } from './flow';
-import type { GraphNode } from './flow';
+import type { Graph, GraphNode } from './flow';
 import { EMPTY_SELECTION, projectSelection, selectOnly } from './selection';
 import { projectOverlay } from './overlay';
 
@@ -149,4 +151,54 @@ it('fits a dragged child’s containers in the overlay while leaving model and o
   expect(shown.nodes[0]?.position).toEqual({ x: 0, y: 0 });
   expect(shown.nodes[2]).toBe(graph.nodes[2]);
   expect(graph.nodes[0]?.width).toBe(340);
+});
+
+it('projects grouped frames in parent-relative coordinates without moving their cards', () => {
+  const id = newCanvasId();
+  let doc: CanvasDocument = {
+    id,
+    arrange: false,
+    links: [],
+    nodes: [
+      { id: 'a', type: 'agent', position: { x: 225, y: 183 }, data: { label: 'A' } },
+      { id: 'b', type: 'agent', position: { x: 225, y: 303 }, data: { label: 'B' } },
+      { id: 'c', type: 'agent', position: { x: 625, y: 183 }, data: { label: 'C' } },
+      { id: 'd', type: 'agent', position: { x: 625, y: 303 }, data: { label: 'D' } },
+    ],
+  };
+  const flow = new CanvasFlow();
+  let rev = 0;
+  const read = () =>
+    flow.read(
+      id,
+      ++rev,
+      Object.fromEntries(
+        Object.entries(toRows(doc)).map(([key, row]) => [key, { ...row, rev, by: 'you' }]),
+      ) as Entities,
+    ).graph;
+  const nodeOf = (graph: Graph, name: string) => {
+    const node = graph.nodes.find((n) => n.id === name);
+    if (!node) throw new Error(`No node ${name}`);
+    return node;
+  };
+  const position = (graph: Graph, name: string) =>
+    absolutePosition(nodeOf(graph, name), new Map(graph.nodes.map((n) => [n.id, n])));
+  const before = position(read(), 'a');
+  const context = (id: string) => ({ newId: () => id, defaultAdapter: 'claude-code' });
+  doc = group(doc, { nodes: ['a', 'b'], kind: 'frame' }, context('first')).next;
+  read();
+  doc = group(doc, { nodes: ['c', 'd'], kind: 'frame' }, context('second')).next;
+  read();
+  doc = group(doc, { nodes: ['first', 'second'], kind: 'frame' }, context('outer')).next;
+  const shown = read();
+  expect(position(shown, 'a')).toEqual(before);
+  const outer = nodeOf(shown, 'outer');
+  for (const name of ['first', 'second']) {
+    const inner = nodeOf(shown, name);
+    expect(inner.parentId).toBe('outer');
+    expect(position(shown, name).x).toBeGreaterThan(outer.position.x);
+    expect(position(shown, name).x + (inner.width ?? 0)).toBeLessThan(
+      outer.position.x + (outer.width ?? 0),
+    );
+  }
 });

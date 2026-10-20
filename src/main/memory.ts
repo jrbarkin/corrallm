@@ -98,6 +98,11 @@ export class CanvasMemory {
     this.#spare = spare;
   }
 
+  /** Its file association now, including changes in the write currently being applied. */
+  fileOf(canvas: CanvasId): TrustedPath | undefined {
+    return this.#current(canvas).file;
+  }
+
   /** What it remembers of a canvas, with every change asked for so far. */
   async get(canvas: CanvasId): Promise<Remembered> {
     await this.#writing;

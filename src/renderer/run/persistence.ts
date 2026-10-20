@@ -1,3 +1,4 @@
+import { refreshOnConflict } from '../api/conflicts';
 import type { RunCheckpoint, RunContext } from '../../shared/run';
 
 /**
@@ -21,6 +22,7 @@ interface Owner {
   /** The canvas as the renderer has it: its file's text. */
   document: () => string;
   revision: () => number;
+  refresh: () => Promise<void>;
   beforeSave?: () => Promise<void>;
   restore: (context: RunContext) => void | Promise<void>;
   freeze: () => void | Promise<void>;
@@ -155,7 +157,6 @@ export class RunPersistence {
     const token = this.#token;
     const checkpoint = this.#owner.capture();
     const document = this.#owner.document();
-    const revision = this.#owner.revision();
     const key = JSON.stringify([token, document, checkpoint.state, checkpoint.messages]);
     if (key === this.#last) {
       await this.#writes;
@@ -165,7 +166,11 @@ export class RunPersistence {
     const write = this.#writes
       .catch(() => undefined)
       .then(async () => {
-        await this.#source.save(token, checkpoint, document, revision);
+        await refreshOnConflict(
+          () =>
+            this.#source.save(token, checkpoint, this.#owner.document(), this.#owner.revision()),
+          this.#owner.refresh,
+        );
       })
       .catch((error: unknown) => {
         if (this.#last === key) this.#last = '';

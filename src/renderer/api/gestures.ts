@@ -13,8 +13,6 @@ export const NO_GESTURE = {
   'queue.update': 'B9 task 11 moves this renderer edit onto the core operation.',
 
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
-  'canvas.create':
-    'B9 task 12 moves New and a template’s New from the canvas:forget channel onto this operation.',
   'canvas.open': 'B9 task 12 moves Open from the canvas:open channel onto this operation.',
   'canvas.save': 'B9 task 12 moves Save from the canvas:save channel onto this operation.',
   'canvas.saveAs': 'B9 task 12 moves Save As from the canvas:save channel onto this operation.',

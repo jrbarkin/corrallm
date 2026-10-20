@@ -13,14 +13,30 @@ import { toFile } from '../../shared/model/file';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { GraphEditor } from './GraphEditor';
+import type { CanvasFiles } from './GraphEditor';
+import { ApiError } from '../api/bridge';
 
 const seen = vi.hoisted(() => ({
   props: undefined as ComponentProps<typeof ReactFlow> | undefined,
+  fits: [] as unknown[],
 }));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof XYFlow>();
+  const { useCallback } = await import('react');
   return {
     ...actual,
+    useReactFlow: () => {
+      const flow = actual.useReactFlow();
+      const originalFit = flow.fitView;
+      const fitView = useCallback(
+        (options: Parameters<typeof originalFit>[0]) => {
+          seen.fits.push(options);
+          return originalFit(options);
+        },
+        [originalFit],
+      );
+      return { ...flow, fitView };
+    },
     ReactFlow: (props: ComponentProps<typeof ReactFlow>) => {
       seen.props = props;
       return <actual.ReactFlow {...props} />;
@@ -36,6 +52,7 @@ afterEach(() => {
     stop();
   });
   vi.restoreAllMocks();
+  seen.fits = [];
 });
 function setup({
   arrange = false,
@@ -44,44 +61,70 @@ function setup({
   selected = ['a', 'b'],
   approval = false,
   files = false,
+  empty = false,
+  restored = false,
+  project = false,
 } = {}) {
   const doc: CanvasDocument = {
     id: newCanvasId(),
     arrange,
-    nodes: [
-      ...(group
-        ? [{ id: 'F', type: 'frame' as const, position: { x: 0, y: 0 }, data: { label: 'Group' } }]
-        : []),
-      ...['a', 'b'].map((id, i) => ({
-        id,
-        type: 'agent' as const,
-        position: { x: i * 220 + 20, y: 52 },
-        ...(group ? { parentId: 'F' } : {}),
-        data: {
-          label: id,
-          ...(approval && id === 'a' ? { queue: [{ id: 'ok', approve: 'Review' }] } : {}),
-        },
-      })),
-    ],
+    nodes: empty
+      ? []
+      : [
+          ...(group
+            ? [
+                {
+                  id: 'F',
+                  type: 'frame' as const,
+                  position: { x: 0, y: 0 },
+                  data: { label: 'Group' },
+                },
+              ]
+            : []),
+          ...['a', 'b'].map((id, i) => ({
+            id,
+            type: 'agent' as const,
+            position: { x: i * 220 + 20, y: 52 },
+            ...(group ? { parentId: 'F' } : {}),
+            data: {
+              label: id,
+              ...(approval && id === 'a' ? { queue: [{ id: 'ok', approve: 'Review' }] } : {}),
+            },
+          })),
+        ],
     links: linked ? [{ source: 'a', target: 'b' }] : [],
   };
   const canvas = fakeCanvas(doc);
+  if (project) canvas.meta({ project: { name: 'Old project', path: '/old/project' } });
   cleanups.push(() => {
     canvas.core.dispose();
   });
-  const save = vi.fn(() => Promise.resolve(null));
+  const save = vi.fn<CanvasFiles['save']>(() => Promise.resolve(null));
   const view = render(
     <GraphEditor
       canvas={doc.id}
       client={canvas.core.api}
       mirror={canvas.core.topics}
       initialSelection={{ nodes: new Set(selected), edges: new Set() }}
+      {...(restored
+        ? {
+            runSource: {
+              get: () =>
+                Promise.resolve({ id: doc.id, token: 'test', checkpoint: null, name: null }),
+              save: (_token: string, _checkpoint: unknown, text: string, rev: number) =>
+                canvas.edit(text, rev),
+              ready: () => Promise.resolve(null),
+              onStopping: () => () => undefined,
+            },
+          }
+        : {})}
       {...(files
         ? {
             files: {
               open: () => Promise.resolve(null),
               save,
               forget: () => Promise.resolve(newCanvasId()),
+              chooseProject: () => Promise.resolve(null),
             },
           }
         : {})}
@@ -422,4 +465,174 @@ it('waits for a label operation and its mirror before saving from the file butto
   });
   expect(view.save).toHaveBeenCalledWith(toFile(view.document), false, view.rev);
   expect(view.document.nodes[0]?.data.label).toBe('After');
+});
+
+it('does not leave a viewport fit queued for the first node of an empty restored canvas', async () => {
+  const view = setup({ empty: true, selected: [], restored: true });
+  await act(() => Promise.resolve());
+  expect(seen.fits).toEqual([]);
+  const pane = view.container.querySelector('.react-flow__pane');
+  if (!pane) throw new Error('No pane');
+  fireEvent.doubleClick(pane, { clientX: 300, clientY: 200 });
+  await called(view.core);
+  expect(view.document.nodes[0]?.position).toEqual({ x: 225, y: 183 });
+  expect(seen.fits).toEqual([]);
+  fireEvent.doubleClick(pane, { clientX: 650, clientY: 380 });
+  await waitFor(() => {
+    expect(view.document.nodes).toHaveLength(2);
+  });
+  expect(view.core.operations.map(({ op }) => op)).toEqual(['canvas.addAgent', 'canvas.addAgent']);
+});
+
+it('keeps nested group cards inside the new frame through a reparenting operation', async () => {
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains('react-flow') ? new DOMRect(0, 0, 1000, 800) : bounds.call(this);
+  });
+  const doc: CanvasDocument = { id: newCanvasId(), arrange: false, links: [], nodes: [] };
+  const canvas = fakeCanvas(doc);
+  cleanups.push(() => {
+    canvas.core.dispose();
+  });
+  const view = render(
+    <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
+  );
+  const pane = view.container.querySelector('.react-flow__pane');
+  if (!pane) throw new Error('No pane');
+  const pointer = (type: string, x: number, y: number) => {
+    const event = new MouseEvent(type, {
+      bubbles: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === 'pointerup' ? 0 : 1,
+    });
+    Object.defineProperties(event, {
+      isPrimary: { value: true },
+      pointerId: { value: 1 },
+      pointerType: { value: 'mouse' },
+    });
+    fireEvent(pane, event);
+  };
+  const group = async (ids: string[]) => {
+    const boxes = ids.map((id) => {
+      const element = view.container.querySelector<HTMLElement>(
+        `.react-flow__node[data-id="${id}"]`,
+      );
+      if (!element) throw new Error(`No ${id}`);
+      const match = /translate\(([-.\d]+)px,\s*([-.\d]+)px\)/.exec(element.style.transform);
+      if (!match) throw new Error(element.style.transform);
+      return {
+        x: Number(match[1]),
+        y: Number(match[2]),
+        width: element.offsetWidth,
+        height: element.offsetHeight,
+      };
+    });
+    pointer(
+      'pointerdown',
+      Math.min(...boxes.map((b) => b.x)) - 30,
+      Math.min(...boxes.map((b) => b.y)) - 30,
+    );
+    pointer(
+      'pointermove',
+      Math.max(...boxes.map((b) => b.x + b.width)) + 30,
+      Math.max(...boxes.map((b) => b.y + b.height)) + 30,
+    );
+    pointer(
+      'pointerup',
+      Math.max(...boxes.map((b) => b.x + b.width)) + 30,
+      Math.max(...boxes.map((b) => b.y + b.height)) + 30,
+    );
+    expect(seen.props?.nodes?.filter((n) => n.selected).map((n) => n.id)).toEqual(
+      expect.arrayContaining(ids),
+    );
+    const prior = new Set(canvas.document.nodes.map((n) => n.id));
+    const count = canvas.core.operations.length;
+    fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true });
+    await waitFor(() => {
+      expect(canvas.core.operations.length).toBeGreaterThan(count);
+    });
+    await act(() => Promise.resolve());
+    const made = canvas.document.nodes.find((n) => n.type === 'frame' && !prior.has(n.id));
+    if (!made) throw new Error('Grouping made no frame');
+    return made.id;
+  };
+  const add = async (x: number, y: number) => {
+    const before = canvas.document.nodes.length;
+    fireEvent.doubleClick(pane, { clientX: x, clientY: y });
+    await waitFor(() => {
+      expect(canvas.document.nodes).toHaveLength(before + 1);
+    });
+    await act(() => Promise.resolve());
+    const node = canvas.document.nodes.at(-1);
+    if (!node) throw new Error('No added agent');
+    return node.id;
+  };
+  const a = await add(300, 200);
+  const b = await add(300, 320);
+  const first = await group([a, b]);
+  const c = await add(700, 200);
+  const d = await add(700, 320);
+  const second = await group([c, d]);
+  const outer = await group([first, second]);
+  const box = (id: string) => {
+    const node = view.container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+    if (!node) throw new Error(`No ${id}`);
+    const match = /translate\(([-.\d]+)px,\s*([-.\d]+)px\)/.exec(node.style.transform);
+    if (!match) throw new Error(node.style.transform);
+    return { x: Number(match[1]), y: Number(match[2]) };
+  };
+  for (const inner of [first, second]) {
+    expect(seen.props?.nodes?.find((n) => n.id === inner)?.parentId).toBe(outer);
+    expect(box(inner).x).toBeGreaterThan(box(outer).x);
+    expect(box(inner).y).toBeGreaterThan(box(outer).y);
+  }
+});
+
+it('creates a template as the new canvas, retaining its node ids and choosing a fresh project', async () => {
+  const example = EXAMPLES[0];
+  if (!example) throw new Error('No template');
+  const template = templateInfo(example, catalog(), 'claude-code');
+  vi.spyOn(api, 'templatesList').mockResolvedValue({ items: [template] });
+  const view = setup({ files: true, project: true });
+  expect(button('Project folder: Old project')).toBeDefined();
+  fireEvent.click(button('Templates…'));
+  const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+  fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
+  fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
+  await called(view.core);
+  expect(view.core.operations[0]?.op).toBe('canvas.create');
+  await waitFor(() => {
+    expect(view.document.id).not.toBe(view.canvas);
+  });
+  expect(view.document.nodes.every((node) => node.type === 'agent')).toBe(true);
+  expect(view.document.nodes.map((node) => node.id)).toEqual(
+    template.agents.map((agent) => agent.id),
+  );
+  expect(button('Choose a project folder')).toBeDefined();
+});
+
+it('refreshes and retries a file save from the mirror after a concurrent core edit', async () => {
+  const view = setup({ files: true });
+  view.save.mockImplementationOnce(async () => {
+    await view.edit(
+      toFile({
+        ...view.document,
+        nodes: view.document.nodes.map((node) =>
+          node.id === 'a' ? { ...node, data: { ...node.data, label: 'Core edit' } } : node,
+        ),
+      }),
+      view.rev,
+    );
+    throw new ApiError({ code: 'conflict', sentence: 'Changed before save' });
+  });
+  fireEvent.click(button('Save'));
+  await waitFor(() => {
+    expect(view.save).toHaveBeenCalledTimes(2);
+  });
+  expect(view.save).toHaveBeenLastCalledWith(toFile(view.document), false, view.rev);
+  expect(view.document.nodes[0]?.data.label).toBe('Core edit');
 });

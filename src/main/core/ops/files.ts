@@ -65,6 +65,11 @@ export function filesOps({
         throw new OpFailure('invalid', 'values, agents and connections come with a template.');
       }
       if (replace !== undefined) lifecycle.kept(replace.canvas as string as CanvasId);
+      if (replace !== undefined)
+        await lifecycle.validateClose(
+          replace.canvas as string as CanvasId,
+          replace.discard === true && ctx.caller.kind === 'human',
+        );
       const canvas = newCanvasId();
       // Built before anything is made: a template there isn't makes nothing.
       const document =
@@ -89,12 +94,22 @@ export function filesOps({
         await documents.drop(canvas);
         throw error;
       }
-      await lifecycle.made(canvas, windowIn(ctx));
-      if (replace !== undefined) {
-        await lifecycle.close(replace.canvas as string as CanvasId, {
-          discard: replace.discard === true && ctx.caller.kind === 'human',
-          by: ctx.by,
-        });
+      try {
+        // Open the new canvas first so a closed window can use it as its replacement, but show it
+        // only after closing the old canvas has succeeded.
+        await lifecycle.made(canvas, undefined);
+        if (replace !== undefined) {
+          await lifecycle.close(replace.canvas as string as CanvasId, {
+            discard: replace.discard === true && ctx.caller.kind === 'human',
+            by: ctx.by,
+            ...(ctx.after === undefined ? {} : { after: ctx.after }),
+          });
+        }
+        const window = windowIn(ctx);
+        if (window !== undefined) await lifecycle.show(window, canvas);
+      } catch (error) {
+        await documents.forget(canvas);
+        throw error;
       }
       return { canvas };
     },
@@ -126,6 +141,7 @@ export function filesOps({
       await lifecycle.close(canvas, {
         discard: args.discard === true && ctx.caller.kind === 'human',
         by: ctx.by,
+        ...(ctx.after === undefined ? {} : { after: ctx.after }),
       });
       return {};
     },

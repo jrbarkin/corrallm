@@ -89,12 +89,19 @@ export function replyOps({
         }
       }
       const settlement = await proposals.settlement(proposal, 'allowed', ctx.by);
+      const cleanups: (() => Promise<void>)[] = [];
       try {
         await ctx.call(proposal.op, proposal.args, {
           proposedBy: proposal.by,
           expect,
           ...(proposal.before === undefined ? {} : { unchanged: proposal.before }),
-          within: () => settlement.within(),
+          ...(command
+            ? {
+                after: (cleanup: () => Promise<void>) => {
+                  cleanups.push(cleanup);
+                },
+              }
+            : { within: () => settlement.within() }),
         });
       } catch (error) {
         if (!(error instanceof OpFailure) || !STALE.has(error.code)) throw error;
@@ -104,7 +111,11 @@ export function replyOps({
       if (record === undefined) {
         // A command (a close, a save) applied with no change of a document's to settle it with: it
         // is settled in a write of its own.
-        if (command) return settled('allowed');
+        if (command) {
+          const result = await settled('allowed');
+          for (const cleanup of cleanups) await cleanup();
+          return result;
+        }
         // It committed nothing: what it would change is no longer there to change.
         return settled('stale', 'it would change nothing now');
       }

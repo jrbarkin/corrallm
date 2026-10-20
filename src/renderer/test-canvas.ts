@@ -52,12 +52,12 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.change({ topic: `canvas:${document.id}`, rev, set, remove });
     return rev;
   };
-  const open = (next: CanvasDocument) => {
+  const open = (next: CanvasDocument, creating = false) => {
     const prior = core.state(`canvas:${next.id}`);
     document = next;
     rev = prior ? prior.rev + 1 : 1;
-    saved = toFile(next);
-    meta.edited = false;
+    saved = creating ? '' : toFile(next);
+    meta.edited = creating && next.nodes.length > 0;
     rows = diffRows({}, next).rows;
     entities = Object.fromEntries(
       Object.entries(rows).map(([key, row]) => [key, { ...row, rev, by: 'you' }]),
@@ -68,6 +68,27 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.respond('window.get', { canvas: next.id });
   };
   open(initial);
+  core.reply('canvas.create', (raw) => {
+    const args = OPS['canvas.create'].input.parse(raw);
+    const example = args.template === undefined ? undefined : exampleOf(args.template);
+    if (!example) throw new Error('No test template');
+    const part = withConnections(
+      withAgents(
+        fillTemplate(fromFile(example.text, catalog(), DEFAULT_AGENT), args.values ?? {}),
+        args.agents ?? {},
+        { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+      ),
+      args.connections ?? {},
+      { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+    );
+    meta.name = null;
+    meta.project = null;
+    open({ ...part, id: newCanvasId() }, true);
+    return Promise.resolve({
+      ok: true,
+      value: { canvas: document.id, revs: { [`canvas:${document.id}`]: rev } },
+    });
+  });
   const ops: GuiOp[] = [
     'canvas.addAgent',
     'canvas.spawnAgent',

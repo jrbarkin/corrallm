@@ -206,24 +206,46 @@ export class Lifecycle {
     return chosen;
   }
 
+  /** Checks a discard's file before any canvas is changed or made for its replacement. */
+  async validateClose(canvas: CanvasId, discard: boolean): Promise<void> {
+    if (!discard || !(await this.edited(canvas))) return;
+    const { file } = await this.#deps.memory.get(canvas);
+    if (file === undefined) return;
+    const text = await this.#fileText(canvas);
+    if (text === undefined) throw new Error('The canvas file to revert to is missing.');
+    this.#deps.documents.read(text);
+  }
+
   /**
    * Closes `canvas` (B9 Design §2, §5): its run the core runs held and journaled, its sessions
    * ended, each window showing it shown another canvas (the one open used last, else a new draft),
    * and it is no longer open. What the core keeps of it stays, unless `discard`: then its edits not
-   * saved are reverted to its file first, by `by`, as one change (rejecting, closing nothing, if
-   * its file can't be read), or, for a canvas never saved, it is forgotten once closed.
+   * saved are reverted to its file, by `by`, as one change (rejecting before closing if
+   * its file can't be read), or, for a canvas never saved, it is forgotten once closed (after its proposal settles).
    */
-  async close(canvas: CanvasId, { discard, by }: { discard: boolean; by: PartyId }): Promise<void> {
+  async close(
+    canvas: CanvasId,
+    {
+      discard,
+      by,
+      after,
+    }: { discard: boolean; by: PartyId; after?: (cleanup: () => Promise<void>) => void },
+  ): Promise<void> {
     const { documents, memory, journal, windows, sessions, engines } = this.#deps;
     const { file } = await memory.get(canvas);
+    await this.validateClose(canvas, discard);
+    await engines.closeCanvas(canvas);
     if (discard && file !== undefined && (await this.edited(canvas))) {
       await documents.revert(canvas, { op: 'canvas.close', by });
     }
-    await engines.closeCanvas(canvas);
     await journal.close(canvas);
     for (const window of windows.showing(canvas)) await windows.show(window, await journal.last());
     await sessions.closeCanvas(canvas);
-    if (discard && file === undefined) await documents.forget(canvas);
+    if (discard && file === undefined) {
+      const forget = () => documents.forget(canvas);
+      if (after) after(forget);
+      else await forget();
+    }
   }
 
   /**

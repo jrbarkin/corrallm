@@ -714,7 +714,7 @@ describe('a canvas’s document', () => {
   });
 });
 
-it('refuses a stale renderer document inside the canvas turn, including an unchanged stale copy', async () => {
+it('refuses stale changes inside the canvas turn but accepts equal text at an older revision', async () => {
   const canvas = newCanvasId();
   await documents.edit(canvas, toFile(canvasOf(canvas)));
   const before = documents.live(canvas);
@@ -726,9 +726,9 @@ it('refuses a stale renderer document inside the canvas turn, including an uncha
     code: 'conflict',
     current: { 'node/lead': { value: expect.objectContaining({ label: 'Newer' }) as unknown } },
   });
-  await expect(documents.edit(canvas, toFile(newer), rev)).rejects.toMatchObject({
-    code: 'conflict',
-  });
+  await expect(documents.edit(canvas, toFile(newer), rev)).resolves.toBe(
+    documents.live(canvas).rev,
+  );
   expect(documents.live(canvas).document).toBe(newer);
   const current = documents.live(canvas).rev;
   await documents.edit(canvas, toFile(renamed(newer, 'worker', 'Edited')), current);
@@ -952,4 +952,40 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
     expect(memory.keeps(draft)).toBe(false);
     expect(documents.unsaved(draft)).toBe(false);
   });
+});
+
+it('accepts a whole-document edit across meta-only bumps, but refuses one before a document change', async () => {
+  const canvas = newCanvasId();
+  await documents.edit(canvas, toFile(canvasOf(canvas)));
+  const seen = documents.live(canvas).rev;
+  await documents.between(canvas, () => documents.bump(canvas));
+  await expect(
+    documents.edit(
+      canvas,
+      toFile(renamed(documents.live(canvas).document, 'lead', 'After meta')),
+      seen,
+    ),
+  ).resolves.toBeGreaterThan(seen);
+  const prior = documents.live(canvas).rev;
+  const stale = toFile(documents.live(canvas).document);
+  await documents.edit(canvas, toFile({ id: canvas, arrange: false, nodes: [], links: [] }));
+  await expect(documents.edit(canvas, stale, prior)).rejects.toMatchObject({ code: 'conflict' });
+});
+
+it('keeps the only copy of a canvas after Save As displaces its file, across eviction and restart', async () => {
+  memory = new CanvasMemory(store, 1, (canvas) => documents.unsaved(canvas));
+  documents = documentsOf();
+  const a = newCanvasId(),
+    b = newCanvasId(),
+    c = newCanvasId();
+  const file = await filed(canvasOf(a));
+  await documents.load(a);
+  await documents.edit(b, toFile(renamed(canvasOf(b), 'lead', 'Other canvas')));
+  await documents.save(b, mintTrustedPath(file));
+  expect(documents.edited(a)).toBe(true);
+  expect(documents.unsaved(a)).toBe(true);
+  await documents.edit(c, toFile(canvasOf(c)));
+  await restart();
+  expect((await documents.load(a)).document.nodes).toHaveLength(3);
+  expect(documents.unsaved(a)).toBe(true);
 });

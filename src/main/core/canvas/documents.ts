@@ -203,6 +203,8 @@ export interface Commit {
 interface Live extends LiveDocument {
   document: CanvasDocument;
   rev: number;
+  /** Last document commit; topic-only meta bumps do not change this. */
+  documentRev: number;
   rows: Record<EntityKey, Row>;
   revs: Map<EntityKey, number>;
   bys: Map<EntityKey, PartyId>;
@@ -335,6 +337,14 @@ export class Documents {
   unsaved(canvas: CanvasId): boolean {
     const live = this.#lives.get(canvas);
     if (live !== undefined) return this.#edited(live);
+    // Losing a file invalidates a cached clean result even when this document is not loaded.
+    if (this.#deps.memory.fileOf(canvas) === undefined) {
+      try {
+        return (this.#read(canvas)?.document.nodes.length ?? 0) > 0;
+      } catch {
+        return true;
+      }
+    }
     let known = this.#unsaved.get(canvas);
     if (known === undefined) {
       try {
@@ -521,8 +531,10 @@ export class Documents {
   edit(canvas: CanvasId, text: string, expected?: number): Promise<number> {
     return this.#queue(canvas, async () => {
       const live = await this.#load(canvas);
-      // Whole-document renderer edits must never overwrite a newer operation, even if queued.
-      if (expected !== undefined && expected !== live.rev) {
+      // An equal document overwrites nothing, whatever topic revision the renderer saw.
+      if (this.#text(live.document).text === text) return live.rev;
+      // Topic-only meta changes occupy revisions too; only a newer document can be overwritten.
+      if (expected !== undefined && (expected < live.documentRev || expected > live.rev)) {
         throw new OpFailure(
           'conflict',
           'The canvas changed before this edit could be saved.',
@@ -534,7 +546,6 @@ export class Documents {
           ),
         );
       }
-      if (live.kept && this.#text(live.document).text === text) return live.rev;
       const next = this.read(text);
       if (next.id !== canvas) throw new Error(ANOTHER);
       return this.#commit(
@@ -720,6 +731,7 @@ export class Documents {
     return {
       document,
       rev: Number(head.rev),
+      documentRev: Number(head.rev),
       // In the document's order, each in its place.
       rows: toRows(document, rows),
       revs,
@@ -819,6 +831,7 @@ export class Documents {
       }
     }
     live.rev = rev;
+    live.documentRev = rev;
     live.kept = true;
     live.creators = creators;
     if (hashes !== undefined) {
@@ -1113,6 +1126,12 @@ export class Documents {
   /** Whether a document differs from its text as last saved or read (a draft: holds anything). */
   #edited(live: Live): boolean {
     if (live.savedHash === undefined) return live.document.nodes.length > 0;
+    try {
+      if (this.#deps.memory.fileOf(live.document.id) === undefined)
+        return live.document.nodes.length > 0;
+    } catch {
+      // A failed-closed store changed no confirmed baseline: keep comparing the last saved hash.
+    }
     return this.#text(live.document).hash !== live.savedHash;
   }
 
@@ -1133,6 +1152,7 @@ function emptyLive(canvas: CanvasId): Live {
   return {
     document: { id: canvas, arrange: false, nodes: [], links: [] },
     rev: 0,
+    documentRev: 0,
     rows: { [META]: { arrange: false } },
     revs: new Map(),
     bys: new Map(),

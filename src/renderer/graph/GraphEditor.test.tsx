@@ -1973,8 +1973,8 @@ describe('GraphEditor', () => {
       await events.click(await gallery.findByRole('button', { name: /^Team lead/ }));
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
-      // A new canvas, with main's new draft's id.
-      expect(files.forget).toHaveBeenCalled();
+      // The template is the canvas, created by the core operation.
+      expect(files.forget).not.toHaveBeenCalled();
       await waitFor(() => {
         expect(nodes().map((n) => n.textContent)).toContain('Lead');
       });
@@ -2035,12 +2035,7 @@ describe('GraphEditor', () => {
       await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => {
-        expect(nodes().map((n) => n.textContent)).toEqual([
-          'TDD relay',
-          'Tester',
-          'Implementer',
-          'Refactorer',
-        ]);
+        expect(nodes().map((n) => n.textContent)).toEqual(['Tester', 'Implementer', 'Refactorer']);
       });
       await act(async () => {
         const tester = nodes('.react-flow__node-agent').find(

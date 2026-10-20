@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OpResult } from '../../../shared/api/errors';
 import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
@@ -611,4 +611,72 @@ describe('project.choose', () => {
       });
     }
   });
+});
+
+describe('command proposal completion', () => {
+  it.each(['canvas.close', 'canvas.create'] as const)(
+    'allows %s discarding a draft before its proposal is forgotten',
+    async (op) => {
+      const { canvas } = (await applied('canvas.create', {}, TOKEN)) as { canvas: CanvasId };
+      const creator = { ...TOKEN, canvases: [...TOKEN.canvases, canvas] };
+      await applied('canvas.addAgent', { canvas, at: { x: 0, y: 0 }, adapter: 'codex' }, creator);
+      const args =
+        op === 'canvas.close' ? { canvas, discard: true } : { replace: { canvas, discard: true } };
+      const { proposed } = await applied(op, args, creator);
+      expect(
+        await call('reply', { canvas, to: proposed, answer: { choice: 'allow' } }),
+      ).toMatchObject({ ok: true, value: { outcome: 'allowed' } });
+      expect((await listed())[canvas]).toBeUndefined();
+    },
+  );
+  it('keeps a failed template replacement unapplied and its proposal pending', async () => {
+    await edit(OTHER, 'solo', 'Unsaved');
+    const { proposed } = await applied(
+      'canvas.create',
+      { template: TEMPLATE, replace: { canvas: OTHER, discard: true } },
+      TOKEN,
+    );
+    await writeFile(files.other, 'not a canvas');
+    const before = await listed();
+    expect(
+      await call('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
+    ).toMatchObject({ ok: false });
+    expect(Object.keys(await listed())).toEqual(Object.keys(before));
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk
+          .prepare('SELECT outcome FROM proposal WHERE id = ?')
+          .get(String(proposed).slice('proposal/'.length)),
+      ),
+    ).toEqual({ outcome: null });
+  });
+});
+
+it('rolls back a new template canvas when closing its replacement fails after preflight', async () => {
+  await edit(OTHER, 'solo', 'Unsaved');
+  const { proposed } = await applied(
+    'canvas.create',
+    { template: TEMPLATE, replace: { canvas: OTHER, discard: true } },
+    TOKEN,
+  );
+  const before = await listed();
+  const fail = vi
+    .spyOn(core.engines, 'closeCanvas')
+    .mockRejectedValueOnce(new Error('Could not journal the old run'));
+  try {
+    expect(
+      await call('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
+    ).toMatchObject({ ok: false });
+    expect(await listed()).toEqual(before);
+    expect(labelsOf(await documentOf(OTHER))).toEqual(['Unsaved']);
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk
+          .prepare('SELECT outcome FROM proposal WHERE id = ?')
+          .get(String(proposed).slice('proposal/'.length)),
+      ),
+    ).toEqual({ outcome: null });
+  } finally {
+    fail.mockRestore();
+  }
 });

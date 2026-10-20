@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
 import type { RunCheckpoint, RunContext } from '../../shared/run';
 import { RunPersistence } from './persistence';
+import { ApiError } from '../api/bridge';
 import type { RunSource } from './persistence';
 
 function setup() {
@@ -40,6 +41,7 @@ function setup() {
       snapshot = 'paused';
     }),
     error: vi.fn(),
+    refresh: vi.fn(() => Promise.resolve()),
   };
   const persistence = new RunPersistence(source, owner);
   return {
@@ -420,4 +422,48 @@ describe('run persistence coordinator', () => {
     });
     expect(source.save).not.toHaveBeenCalled();
   });
+});
+
+it('refreshes and rebuilds a queued checkpoint write when the canvas changed before it reached the core', async () => {
+  const { persistence, source, owner, edit } = setup();
+  await persistence.initialize();
+  vi.mocked(source.save)
+    .mockImplementationOnce(() => {
+      edit('{"canvas":"newer core edit"}');
+      vi.spyOn(owner, 'revision').mockReturnValue(8);
+      return Promise.reject(new ApiError({ code: 'conflict', sentence: 'Changed' }));
+    })
+    .mockResolvedValue(8);
+  await persistence.flush();
+  expect(owner.refresh).toHaveBeenCalledOnce();
+  expect(source.save).toHaveBeenLastCalledWith(
+    'original',
+    expect.any(Object),
+    '{"canvas":"newer core edit"}',
+    8,
+  );
+});
+
+it('reads the document and its revision when a queued checkpoint write begins', async () => {
+  const { persistence, source, owner, edit, change } = setup();
+  const held = Promise.withResolvers<number>();
+  vi.mocked(source.save).mockImplementationOnce(() => held.promise);
+  await persistence.initialize();
+  const first = persistence.flush();
+  await vi.waitFor(() => {
+    expect(source.save).toHaveBeenCalledOnce();
+  });
+  change('second checkpoint');
+  const second = persistence.flush();
+  await Promise.resolve();
+  edit('{"canvas":"edit while queued"}');
+  vi.spyOn(owner, 'revision').mockReturnValue(8);
+  held.resolve(7);
+  await Promise.all([first, second]);
+  expect(source.save).toHaveBeenLastCalledWith(
+    'original',
+    expect.objectContaining({ state: JSON.stringify({ snapshot: 'second checkpoint' }) }),
+    '{"canvas":"edit while queued"}',
+    8,
+  );
 });

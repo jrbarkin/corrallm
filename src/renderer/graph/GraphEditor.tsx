@@ -18,6 +18,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { absolutePosition, groupColors } from '../../shared/model/geometry';
 import { nodeView } from './flow';
+import { refreshOnConflict } from '../api/conflicts';
 import { CanvasSource } from './source';
 import { CanvasEdits } from './legacy-edits';
 import {
@@ -309,6 +310,7 @@ function Editor({
         }),
         document: () => toFile(binding.required().document),
         revision: () => binding.required().rev,
+        refresh: () => binding.refresh(),
         beforeSave: () => legacy.flush(),
         freeze: async () => {
           await flushDrafts();
@@ -324,7 +326,7 @@ function Editor({
           binding.bind(context.id);
           await binding.ready();
           engine.reset();
-          setLoads((n) => n + 1);
+          if (binding.required().document.nodes.length > 0) setLoads((n) => n + 1);
           engine.update(binding.required().document.nodes);
           if (checkpoint) engine.restore(checkpoint);
           if (context.warning) setProblem(context.warning);
@@ -773,7 +775,15 @@ function Editor({
       clearSelection();
       setOverlays(new Map());
 
-      setLoads((n) => n + 1);
+      void binding.ready().then(
+        () => {
+          if (binding.canvas === id && binding.required().document.nodes.length > 0)
+            setLoads((n) => n + 1);
+        },
+        (error: unknown) => {
+          setProblem(ipcErrorMessage(error));
+        },
+      );
 
       runStore.reset();
       // Another canvas: main has ended the old one's connected sessions.
@@ -870,46 +880,30 @@ function Editor({
       /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */
       example: (template: string, choices: TemplateChoices, edited: boolean) => {
         unless(edited, () => {
+          const create = async () => {
+            const result = await api.canvasCreate({
+              template,
+              values: choices.values,
+              agents: Object.fromEntries(
+                Object.entries(choices.agents).flatMap(([key, value]) =>
+                  value === undefined ? [] : [[key, value]],
+                ),
+              ),
+              connections: choices.connections,
+              replace: { canvas: binding.canvas, discard: true },
+            });
+            if ('canvas' in result) load(result.canvas as CanvasId);
+          };
           if (persistence) {
             runStore.pause();
             void persistence
               .prepareForReplacement()
-              .then(() =>
-                persistence.transition(async () => {
-                  const id = await files.forget();
-                  load(id);
-                  await api.canvasInsertTemplate({
-                    canvas: id,
-                    template: template,
-                    values: choices.values,
-                    agents: Object.fromEntries(
-                      Object.entries(choices.agents).map(([key, value]) => [key, value ?? null]),
-                    ),
-                    connections: choices.connections,
-                  });
-                }, false),
-              )
+              .then(() => persistence.transition(create, true))
               .then(() => {
                 setRestoreFailed(false);
                 persistence.changed();
               }, failed('open the template'));
-            return;
-          }
-
-          files.forget().then((id) => {
-            load(id);
-            perform(
-              api.canvasInsertTemplate({
-                canvas: id,
-                template: template,
-                values: choices.values,
-                agents: Object.fromEntries(
-                  Object.entries(choices.agents).map(([key, value]) => [key, value ?? null]),
-                ),
-                connections: choices.connections,
-              }),
-            );
-          }, failed('open the template'));
+          } else void create().catch(failed('open the template'));
         });
       },
       /** Asks for the folder the canvas's agents work in. */
@@ -930,17 +924,23 @@ function Editor({
             if (persistence) {
               await persistence.flush();
               await persistence.transition(async () => {
-                await files.save(toFile(legacy.document()), choose, binding.required().rev);
+                await refreshOnConflict(
+                  () => files.save(toFile(legacy.document()), choose, binding.required().rev),
+                  () => binding.refresh(),
+                );
               }, false);
               persistence.changed();
             } else {
-              await files.save(toFile(legacy.document()), choose, binding.required().rev);
+              await refreshOnConflict(
+                () => files.save(toFile(legacy.document()), choose, binding.required().rev),
+                () => binding.refresh(),
+              );
             }
           })
           .catch(failed('save the canvas'));
       },
     };
-  }, [files, load, persistence, runStore, api, binding, legacy, perform]);
+  }, [files, load, persistence, runStore, api, binding, legacy]);
   useEffect(() => {
     if (files) document.title = `${name ?? 'Untitled'}${edited ? ' (edited)' : ''} — corrallm`;
   }, [files, name, edited]);
@@ -1219,6 +1219,13 @@ function Editor({
           nodeTypes={nodeTypes}
           nodesDraggable={!arranging}
           edgeTypes={edgeTypes}
+          onSelectionStart={() => {
+            // The pane resets controlled selection before computing its first rectangle, but
+            // leaves its internal selected flags set. Clear those too, so a previously selected
+            // node inside the rectangle is included in the new selection changes.
+            const flow = store.getState();
+            flow.unselectNodesAndEdges({ nodes: [...flow.nodeLookup.values()] });
+          }}
           onNodesChange={(changes) => {
             setSelection((current) => {
               const nodes = new Set(current.nodes);

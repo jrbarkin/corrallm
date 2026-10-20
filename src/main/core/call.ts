@@ -71,6 +71,8 @@ export interface CommitOptions {
   expect?: Readonly<Record<string, number>>;
   unchanged?: Readonly<Record<string, number>>;
   within?: () => Staged;
+  /** A command's destructive cleanup runs after its proposal has settled. */
+  after?: (cleanup: () => Promise<void>) => void;
 }
 
 /**
@@ -85,6 +87,8 @@ export interface OpContext {
   readonly by: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
+  /** Defers a command's final cleanup until its successful proposal settlement. */
+  readonly after?: (cleanup: () => Promise<void>) => void;
   /**
    * Commits to canvas `canvas`'s document (the canvas the op names) what `build` makes of it,
    * purely, from the live one (B9 Design §3): checked against the revisions the call expects and,
@@ -387,6 +391,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       },
       by,
       signal: turn.signal,
+      ...(options.after === undefined ? {} : { after: options.after }),
       commit: async (canvas, build) => {
         if (commit === undefined) {
           throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');

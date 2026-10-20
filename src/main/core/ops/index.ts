@@ -80,7 +80,7 @@ export interface OpServices {
   /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */
   lifecycle: Lifecycle;
   /** Each canvas's document: a canvas made, kept or dropped (canvas.create). */
-  documents: Pick<Documents, 'create' | 'keep' | 'drop'>;
+  documents: Pick<Documents, 'create' | 'keep' | 'drop' | 'forget'>;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** The proposals waiting for you on each canvas. */
