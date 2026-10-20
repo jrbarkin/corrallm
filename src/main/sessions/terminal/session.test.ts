@@ -865,8 +865,12 @@ describe('a Terminal session', () => {
       'notice:error:Limit reached',
       'end:failed',
     ]);
-    expect(last('end')).toMatchObject({
-      result: { status: 'failed', reason: 'usage-limit', message: 'Limit reached' },
+    // Its StopFailure hook says nothing of when the limit lifts: the core takes that from the
+    // backend's latest reading (core/engines.ts).
+    expect(last('end')?.result).toEqual({
+      status: 'failed',
+      reason: 'usage-limit',
+      message: 'Limit reached',
     });
   });
 

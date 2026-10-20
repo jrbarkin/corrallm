@@ -36,6 +36,9 @@ import { ENTER } from './typing';
  * lasts until the CLI has taken every message corrallm sent in it and stopped working. corrallm
  * types a message only once the prompt is ready: the CLI idle (or done), and nothing the user
  * typed in the prompt; meanwhile, a session kept from it by a dialog or by the user's draft is waiting on the user.
+ * A turn the CLI ends with an error fails, saying why where its hooks did (a usage limit, a login,
+ * the API). Where they didn't, a CLI that reads its account's usage apart from its terminal has it
+ * read before the turn ends: a limit used up then failed it, until its reset.
  *
  * What the CLI asks the user in its terminal is listed outside it ('asking'), never answered: its
  * hooks may tell what it is about to ask (what a permission prompt is for, its questions and a
@@ -113,6 +116,8 @@ const TAIL = 40;
 type State = ProgramStatus['state'];
 /** The CLI at work on a turn, or waiting on the user in one. */
 const busy = (state: State | undefined) => state === 'working' || state === 'blocked';
+/** How a turn ends that failed for a reason corrallm can't tell. */
+const FAILED: TurnResult = { status: 'failed', reason: 'error' };
 
 /** A turn going on, as corrallm sees it. */
 interface Turn {
@@ -646,18 +651,43 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#notified = undefined;
     this.#list();
     const interrupted = turn.interrupted || (turn.ran && this.#state === 'idle');
-    const failed = !interrupted && (turn.failed || (turn.ran && this.#state === 'error'));
-    this.#host.emit({
-      type: 'end',
-      messages: turn.messages,
-      seconds: Math.max(1, Math.round((Date.now() - turn.started) / 1000)),
-      result: interrupted
+    // Its CLI ended it with an error (rather than leaving corrallm's message unsent).
+    const erred = !interrupted && turn.ran && this.#state === 'error';
+    const failed = !interrupted && (turn.failed || erred);
+    const seconds = Math.max(1, Math.round((Date.now() - turn.started) / 1000));
+    const end = (result: TurnResult) => {
+      this.#host.emit({ type: 'end', messages: turn.messages, seconds, result });
+    };
+    if (erred && !turn.failed && turn.result === undefined && this.#cli.readUsage) {
+      void this.#endFailed(end);
+      return;
+    }
+    end(
+      interrupted
         ? { status: 'cancelled', reason: 'interrupted' }
         : failed
-          ? (turn.result ?? { status: 'failed', reason: 'error' })
+          ? (turn.result ?? FAILED)
           : { status: 'completed', reason: 'completed' },
-    });
+    );
     this.#readUsage();
+  }
+
+  /**
+   * Ends a turn its CLI ended with an error without saying why, once its account's usage is read
+   * (apart from its terminal, its reading going to main's as after any turn): failed on its limit,
+   * until the reset, where the reading says the account is used up; else for a reason corrallm
+   * can't tell. A session gone meanwhile ends it no more: its CLI's exit did ('closed'), or
+   * corrallm closed it.
+   */
+  async #endFailed(end: (result: TurnResult) => void): Promise<void> {
+    const usage = await this.#cli.readUsage?.().catch(() => undefined);
+    if (this.#exited || this.#closing) return;
+    if (usage) this.#deps.usage?.(usage.windows);
+    end(
+      usage?.usedUp === undefined
+        ? FAILED
+        : { status: 'failed', reason: 'usage-limit', resetsAt: usage.usedUp },
+    );
   }
 
   /** Whether a message can be typed now: the CLI's prompt is ready, and empty. */
@@ -1011,8 +1041,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const usage = this.#deps.usage;
     if (!usage || !this.#cli.readUsage) return;
     void this.#cli.readUsage().then(
-      (windows) => {
-        if (windows && !this.#closing) usage(windows);
+      (read) => {
+        if (read && !this.#closing) usage(read.windows);
       },
       () => undefined,
     );

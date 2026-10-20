@@ -17,7 +17,13 @@ import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { TerminalConnector } from '../sessions/claude-code/connector';
+import { FakeClaude } from '../sessions/claude-code/fake-claude';
+import { CodexTerminalConnector } from '../sessions/codex/terminal/connector';
+import { Replay } from '../sessions/codex/terminal/replay';
+import { HookTruster } from '../sessions/codex/terminal/trust';
 import { CodexTui } from '../sessions/codex/terminal/tui';
+import { UsageReader } from '../sessions/codex/terminal/usage';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -53,6 +59,8 @@ const SHELL: AgentCaller = {
 interface AgentSpec {
   id: string;
   label: string;
+  /** Codex, unless it says. */
+  adapter?: string;
   connection: string;
   settings?: Record<string, unknown>;
   queue?: unknown[];
@@ -138,12 +146,12 @@ async function keepCanvas(
       id: CANVAS,
       nodes: [
         ...groups.map(({ id, label }) => ({ id, kind: 'group', label, position: { x: 0, y: 0 } })),
-        ...agents.map(({ id, label, connection, settings, queue, parent }, i) => ({
+        ...agents.map(({ id, label, adapter, connection, settings, queue, parent }, i) => ({
           id,
           kind: 'agent',
           label,
           position: { x: 0, y: i * 100 },
-          adapter: 'codex',
+          adapter: adapter ?? 'codex',
           connection,
           ...(settings ? { settings } : {}),
           ...(queue ? { queue } : {}),
@@ -156,9 +164,16 @@ async function keepCanvas(
   await keepCanvases(profile, { [CANVAS]: { file, project } });
 }
 
-/** Starts the core over the profile, its App Server and Terminal agents on the given connectors. */
+/**
+ * Starts the core over the profile, its App Server and Terminal agents on the given connectors
+ * (and its Claude Code Terminal agents, if one is given).
+ */
 async function start(
-  connectors: { appServer?: Connector<SessionMode>; terminal?: Connector<SessionMode> } = {},
+  connectors: {
+    appServer?: Connector<SessionMode>;
+    terminal?: Connector<SessionMode>;
+    claude?: Connector<SessionMode>;
+  } = {},
   open = true,
 ): Promise<Core> {
   core = await createCore(
@@ -172,6 +187,7 @@ async function start(
         connectors: {
           'codex.app-server': connectors.appServer ?? appServer,
           'codex.terminal': connectors.terminal ?? terminal,
+          ...(connectors.claude === undefined ? {} : { 'claude-code.terminal': connectors.claude }),
         },
         environment: () => Promise.resolve({}),
         ...(readUsage === undefined ? {} : { readUsage }),
@@ -2030,6 +2046,196 @@ describe('exhausted usage', () => {
       await vi.advanceTimersByTimeAsync(60 * MINUTE);
       expect(claude).not.toHaveBeenCalled();
       expect(await state('builder')).toBe('limited');
+    });
+  });
+
+  describe('hit by a Terminal agent', () => {
+    const HOUR = 60 * 60_000;
+    /** How long a Terminal session's steps take, at test speed. */
+    const TIMING = {
+      key: 0,
+      enter: 20,
+      echo: 300,
+      confirm: 400,
+      settle: 5,
+      startup: 2000,
+      batch: 1,
+      kill: 200,
+    };
+    /** Writer, on Claude Code's Terminal. */
+    const WRITER: AgentSpec = {
+      id: 'writer',
+      label: 'Writer',
+      adapter: 'claude-code',
+      connection: 'claude-code.terminal',
+    };
+
+    /** Claude Code's Terminal connection, running the fake CLI (fake-claude.ts) in a fake pty. */
+    function claudeTerminal(): Connector<SessionMode> {
+      const connector: Connector<SessionMode> = new TerminalConnector({
+        spawn: (file, args, options) => Promise.resolve(new FakeClaude(file, args, options, {})),
+        findClaude: () => Promise.resolve('/home/me/.local/bin/claude'),
+        flags: () => Promise.resolve(new Set<string>()),
+        tmp: profile,
+        timing: TIMING,
+      });
+      // The user's settings it reads are the test's own (none).
+      return { start: (spec, host) => connector.start({ ...spec, env: { HOME: profile } }, host) };
+    }
+
+    /**
+     * Codex's Terminal connection, its pseudo-terminal playing what the real Codex did (its first
+     * turn as recorded, but for its Stop hook, which Codex runs for no turn that errs), its usage
+     * read from an app server of its own that answers with `rateLimits`.
+     */
+    function codexTerminal(rateLimits: unknown): Connector<SessionMode> {
+      let left = false;
+      return new CodexTerminalConnector({
+        findCodex: () => Promise.resolve('/bin/codex'),
+        version: () => Promise.resolve('0.160.1'),
+        truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
+        spawn: (_file, args, options) =>
+          Promise.resolve(
+            new Replay('prompts', args, options, (record) => {
+              if (left || record.kind !== 'hook' || record.data.ev.hook_event_name !== 'Stop')
+                return false;
+              left = true;
+              return true;
+            }),
+          ),
+        reader: new UsageReader({
+          start: () =>
+            Promise.resolve({
+              userAgent: 'corrallm/0.160.1',
+              version: '0.160.1',
+              codexHome: path.join(profile, '.codex'),
+              request: () => Promise.resolve({ rateLimits }),
+              notify: () => undefined,
+              close: () => Promise.resolve(),
+              exited: new Promise(() => undefined),
+            }),
+        }),
+        readInstructions: () => Promise.resolve(undefined),
+        tmp: profile,
+        timing: TIMING,
+      });
+    }
+
+    /** The turn of what you sent, as its reply says it ended. */
+    async function turnOf(id: string): Promise<Message['turn']> {
+      let turn: Message['turn'];
+      await vi.waitFor(
+        async () => {
+          turn = (await inbox(YOU)).find(({ replyTo }) => replyTo === id)?.turn;
+          expect(turn).toBeDefined();
+        },
+        { timeout: 5000 },
+      );
+      return turn;
+    }
+
+    /** Releases a backend with a reading that shows room, and waits for `id` to be answered. */
+    async function released(backend: string, id: string): Promise<void> {
+      const result = await core?.call(
+        'usage.simulate',
+        { backend, windows: { fiveHour: { usedPercent: 10, resetsAt: Date.now() + HOUR } } },
+        YOU,
+      );
+      expect(result?.ok).toBe(true);
+      await vi.waitFor(
+        async () => {
+          expect((await find(id))?.state).toBe('replied');
+        },
+        { timeout: 5000 },
+      );
+    }
+
+    /** Claude Code's latest reading, as the core keeps it from its status line. */
+    async function claudeReading(fiveHour: number, resetsAt: number): Promise<void> {
+      await writeFile(
+        path.join(profile, 'usage.json'),
+        JSON.stringify({
+          version: 2,
+          readings: [
+            {
+              backend: 'claude-code',
+              windows: {
+                fiveHour: { usedPercent: fiveHour, resetsAt },
+                weekly: { usedPercent: 40, resetsAt: resetsAt + 50 * HOUR },
+              },
+              at: Date.now(),
+            },
+          ],
+        }),
+      );
+    }
+
+    it('holds Claude Code’s usage until the reset its latest reading shows, released by one with room', async () => {
+      const resetsAt = Date.now() + HOUR;
+      await keepCanvas([...AGENTS, WRITER]);
+      await claudeReading(100, resetsAt);
+      await start({ claude: claudeTerminal() });
+      // Its StopFailure hook says rate_limit, and nothing of when it resets.
+      const yours = await send('writer', 'fail please', YOU);
+      expect(await turnOf(yours)).toEqual({
+        status: 'failed',
+        reason: 'usage-limit',
+        message: 'Limit reached',
+        resetsAt,
+      });
+      const id = await send('writer', 'After the reset');
+      expect((await find(id))?.state).toBe('pending');
+      expect(await needsOf()).toContainEqual(
+        expect.objectContaining({ id: 'limited/writer', until: resetsAt }),
+      );
+      await released('claude-code', id);
+    });
+
+    it('holds nothing where Claude Code’s latest reading doesn’t show its plan used up', async () => {
+      await keepCanvas([...AGENTS, WRITER]);
+      await claudeReading(97, Date.now() + HOUR);
+      await start({ claude: claudeTerminal() });
+      const yours = await send('writer', 'fail please', YOU);
+      expect(await turnOf(yours)).toEqual({
+        status: 'failed',
+        reason: 'usage-limit',
+        message: 'Limit reached',
+      });
+      const id = await send('writer', 'Go on');
+      await vi.waitFor(
+        async () => {
+          expect((await find(id))?.state).toBe('replied');
+        },
+        { timeout: 5000 },
+      );
+    });
+
+    it('holds Codex’s usage until its used-up window resets, released by a reading with room', async () => {
+      const resets = Math.floor(Date.now() / 1000) + 3600;
+      await keepCanvas();
+      // What the real app server answers (account/rateLimits/read), its 5-hour window used up.
+      await start({
+        terminal: codexTerminal({
+          limitId: 'codex',
+          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: resets },
+          secondary: { usedPercent: 30, windowDurationMins: 10_080, resetsAt: resets + 86_400 },
+          credits: { hasCredits: false, unlimited: false, balance: '0' },
+        }),
+      });
+      const yours = await send('shell', 'Say hi in one word.', YOU);
+      expect(await turnOf(yours)).toEqual({
+        status: 'failed',
+        reason: 'usage-limit',
+        message: 'Codex stopped before it finished: its terminal says why.',
+        resetsAt: resets * 1000,
+      });
+      // Every agent on Codex is held: Builder, on its App Server, too.
+      const id = await send('builder', 'After the reset');
+      expect((await find(id))?.state).toBe('pending');
+      expect(await needsOf()).toContainEqual(
+        expect.objectContaining({ id: 'limited/builder', until: resets * 1000 }),
+      );
+      await released('codex', id);
     });
   });
 

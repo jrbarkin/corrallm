@@ -60,6 +60,18 @@ export type TerminalSignal<M extends SessionMode> =
   /** It needs the user, as its notification says (what it says). */
   | { kind: 'needs'; text: string };
 
+/** Its account's usage, as its CLI reads it apart from its terminal (`readUsage`). */
+export interface TerminalUsage {
+  /** Its usage limits' windows, for main's readings. */
+  windows: UsageWindows;
+  /**
+   * Until when (epoch ms) its account can't be used, where the reading says so: a limit used up,
+   * and nothing (as credits) that lets the CLI go on past it. A turn the CLI ended with an error
+   * without saying why failed on that limit.
+   */
+  usedUp?: number;
+}
+
 /** What the session tells the user, in the CLI's own words. */
 export interface TerminalWords {
   /** Answers to prompts, modes and models are refused: they belong to its terminal. */
@@ -136,10 +148,11 @@ export interface TerminalCli<M extends SessionMode> {
    */
   statusLine?(input: HookEvent): UsageWindows | undefined;
   /**
-   * Reads its account's usage limits apart from its terminal, when
-   * the session starts and after each turn ends; undefined if it cannot say. Never prompts the CLI.
+   * Reads its account's usage limits apart from its terminal, when the session starts and after
+   * each turn ends (before it ends one the CLI ended with an error without saying why, to tell
+   * whether its limit did); undefined if it cannot say. Never prompts the CLI.
    */
-  readUsage?(): Promise<UsageWindows | undefined>;
+  readUsage?(): Promise<TerminalUsage | undefined>;
   /** `text`, as its hooks will say it was submitted (to tell corrallm's own prompts from the user's). */
   submitted(text: string): string;
 }

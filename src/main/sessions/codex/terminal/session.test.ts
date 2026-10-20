@@ -9,6 +9,7 @@ import type { UsageBackendId } from '../../../../shared/adapter';
 import type { UsageWindows } from '../../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../../connector';
 import { TIMING } from '../../terminal/session';
+import { property } from '../../transcript';
 import { recordedResult } from '../app-server/recorded';
 import type { AppServerOptions } from '../rpc';
 import { CodexTerminalConnector } from './connector';
@@ -16,7 +17,7 @@ import type { CodexTerminalConnectorOptions } from './connector';
 import { computedTrust } from './hooks';
 import { HookTruster } from './trust';
 import { RECORDED_SESSION, RECORDED_TURNS_SESSION } from './recorded';
-import type { TerminalFixture } from './recorded';
+import type { TerminalFixture, TerminalRecord } from './recorded';
 import { Replay } from './replay';
 import { PASTE_END, PASTE_START } from './tui';
 import { UsageReader } from './usage';
@@ -32,6 +33,8 @@ let events: SessionEvent[];
 let remembered: string[];
 let runs: Replay[];
 let sessions: LiveSession<CodexMode>[];
+/** What of its recordings the pseudo-terminals leave out. */
+let without: (record: TerminalRecord) => boolean;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
@@ -39,6 +42,7 @@ beforeEach(async () => {
   remembered = [];
   runs = [];
   sessions = [];
+  without = () => false;
 });
 afterEach(async () => {
   await Promise.all(sessions.map((session) => session.close()));
@@ -66,7 +70,7 @@ async function start(
     // Codex is not asked: the computed trust.
     truster: new HookTruster({ start: () => Promise.reject(new Error('not here')) }),
     spawn: (_file, args, options) => {
-      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options);
+      const run = new Replay(recordings[runs.length] ?? 'prompts', args, options, without);
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -316,6 +320,95 @@ describe('Codex in a terminal, as the real one ran', () => {
       expect(ends()).toBe(1);
     });
     expect(remembered.at(-1)).toBe(RECORDED_SESSION);
+  });
+});
+
+describe('a turn Codex ends without its Stop hook, as at a usage limit', () => {
+  /** When the recording was made (its windows reset later). */
+  const RECORDED_AT = 1_791_880_000_000;
+  const FIVE_HOUR_RESET = 1_791_896_263_000;
+
+  /** Its first turn as recorded, but for its Stop hook: Codex runs none for a turn that errs. */
+  function erring(): void {
+    let left = false;
+    without = (record) => {
+      if (left || record.kind !== 'hook' || record.data.ev.hook_event_name !== 'Stop') return false;
+      left = true;
+      return true;
+    };
+  }
+
+  /**
+   * Reads Codex's usage from an app server of its own that answers as the real one did, but with
+   * its 5-hour window `used` (and its `credits`, if given).
+   */
+  function reader(used: number, credits?: unknown): UsageReader {
+    const answer = recordedResult('handshake', 'account/rateLimits/read');
+    const snapshot = property(answer, 'rateLimits') as Record<string, unknown>;
+    const primary = property(snapshot, 'primary') as Record<string, unknown>;
+    const rateLimits = {
+      ...snapshot,
+      primary: { ...primary, usedPercent: used },
+      ...(credits === undefined ? {} : { credits }),
+    };
+    return new UsageReader({
+      start: () =>
+        Promise.resolve({
+          userAgent: 'corrallm/0.160.1',
+          version: '0.160.1',
+          codexHome: '/home/user/.codex',
+          request: () => Promise.resolve({ ...(answer as Record<string, unknown>), rateLimits }),
+          notify: () => undefined,
+          close: () => Promise.resolve(),
+          exited: new Promise(() => undefined),
+        }),
+      now: () => RECORDED_AT,
+    });
+  }
+
+  /** Sends its first message, as recorded, and its turn's end, once it came. */
+  async function failedTurn(options: Partial<CodexTerminalConnectorOptions>) {
+    erring();
+    const session = await start(['prompts'], {}, options);
+    await session.send({ id: 'm1', text: 'Say hi in one word.' });
+    await until(() => {
+      expect(ends()).toBe(1);
+    });
+    return events.find((event) => event.type === 'end');
+  }
+
+  it('failed on its plan’s usage limit, until it resets, where its usage read then is used up', async () => {
+    const readings: [UsageBackendId, UsageWindows][] = [];
+    const end = await failedTurn({
+      reader: reader(100),
+      usage: (...reading) => readings.push(reading),
+    });
+    expect(end).toMatchObject({
+      messages: ['m1'],
+      result: { status: 'failed', reason: 'usage-limit', resetsAt: FIVE_HOUR_RESET },
+    });
+    // What it went by is the backend's reading too: read as it started, and once as the turn ended.
+    expect(readings).toHaveLength(2);
+    expect(readings[1]).toEqual([
+      'codex',
+      {
+        fiveHour: { usedPercent: 100, resetsAt: FIVE_HOUR_RESET },
+        weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },
+      },
+    ]);
+  });
+
+  it('failed for a reason corrallm can’t tell, where its usage has room or credits to go on', async () => {
+    expect(await failedTurn({ reader: reader(40) })).toMatchObject({
+      result: { status: 'failed', reason: 'error' },
+    });
+    events = [];
+    expect(
+      await failedTurn({
+        reader: reader(100, { hasCredits: true, unlimited: false, balance: '25' }),
+      }),
+    ).toMatchObject({ result: { status: 'failed', reason: 'error' } });
+    expect(events.find((event) => event.type === 'end')).not.toHaveProperty('result.resetsAt');
   });
 });
 

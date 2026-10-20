@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { property } from '../transcript';
 import { recordedNotifications, recordedResult } from './app-server/recorded';
-import { codexLimits, usageWindows } from './limits';
+import { codexLimits, codexUsedUp, usageWindows } from './limits';
 
 /** When the recordings were made (their weekly window resets six days later). */
 const NOW = 1_791_880_000_000;
@@ -71,5 +71,44 @@ describe('Codex’s usage limits', () => {
     // Codex's own, with no window that says how much is used: none.
     expect(codexLimits({ limitId: 'codex', primary: null, secondary: null })).toEqual([]);
     expect(windowsOf({ limitId: 'codex', primary: { usedPercent: '12' } })).toBeUndefined();
+  });
+});
+
+describe('Codex’s plan used up', () => {
+  /** What the real app server answered on a ChatGPT (Plus) login, its 5-hour window `used`. */
+  const read = (used: number, credits?: unknown): unknown => {
+    const snapshot = property(recordedResult('handshake', 'account/rateLimits/read'), 'rateLimits');
+    const primary = property(snapshot, 'primary') as Record<string, unknown>;
+    return {
+      ...(snapshot as Record<string, unknown>),
+      primary: { ...primary, usedPercent: used },
+      ...(credits === undefined ? {} : { credits }),
+    };
+  };
+
+  it('says until when, where a window is used up and Codex has no credits to go on with', () => {
+    // As recorded: no credits, none unlimited.
+    expect(codexUsedUp(read(100), NOW)).toBe(1_791_896_263_000);
+    // The weekly one used up too: until it resets.
+    const both = read(100) as Record<string, unknown>;
+    const secondary = property(both, 'secondary') as Record<string, unknown>;
+    expect(codexUsedUp({ ...both, secondary: { ...secondary, usedPercent: 100 } }, NOW)).toBe(
+      1_792_483_063_000,
+    );
+  });
+
+  it('says nothing where no window is used up, or credits may let Codex go on past it', () => {
+    expect(codexUsedUp(read(99), NOW)).toBeUndefined();
+    expect(
+      codexUsedUp(read(100, { hasCredits: true, unlimited: false, balance: '20' }), NOW),
+    ).toBeUndefined();
+    expect(
+      codexUsedUp(read(100, { hasCredits: false, unlimited: true, balance: null }), NOW),
+    ).toBeUndefined();
+    // A snapshot that doesn't say what credits there are can't say Codex can't go on.
+    expect(codexUsedUp(read(100, null), NOW)).toBeUndefined();
+    // Its window reset since: room again.
+    expect(codexUsedUp(read(100), 1_791_896_263_000)).toBeUndefined();
+    expect(codexUsedUp(null, NOW)).toBeUndefined();
   });
 });

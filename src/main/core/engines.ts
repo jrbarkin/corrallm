@@ -14,6 +14,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
 import type { SessionEvent, UserMessage } from '../../shared/session';
+import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
 import type { ProjectFolders } from '../project';
 import type { RunJournal } from '../run-journal';
@@ -136,7 +137,7 @@ export class Engines {
   readonly #canvases = new Map<CanvasId, Running>();
   readonly #mail = new Map<CanvasId, Promise<{ messages: MessageStore; notes: WithdrawalNotes }>>();
   readonly #watchers = new Set<Watcher>();
-  readonly #events = new Map<string, Promise<void>>();
+  readonly #events = new Map<string, Promise<SessionEvent>>();
   #closed = false;
 
   constructor(deps: EnginesDeps) {
@@ -211,13 +212,17 @@ export class Engines {
     };
   }
 
-  /** What a session of one of the canvas's agents did (SessionManager's `emit`). */
+  /**
+   * What a session of one of the canvas's agents did (SessionManager's `emit`): resolves with the
+   * event as the core took it, for its windows (a turn's end that hit a usage limit saying when it
+   * lifts, where its connection couldn't: `#ended`).
+   */
   emit(
     canvas: CanvasId,
     agentId: string,
     connection: ConnectionId,
     event: SessionEvent,
-  ): Promise<void> {
+  ): Promise<SessionEvent> {
     const key = `${canvas}\u0000${agentId}`;
     const previous = this.#events.get(key) ?? Promise.resolve();
     const emitted = previous.then(() => this.#emit(canvas, agentId, connection, event));
@@ -233,34 +238,45 @@ export class Engines {
     canvas: CanvasId,
     agentId: string,
     connection: ConnectionId,
-    event: SessionEvent,
-  ): Promise<void> {
-    if (event.type === 'end') {
-      const result = event.result;
-      const catalog = this.#deps.engineCatalog;
-      const backend = catalog.usageBackendOf({
-        adapter: catalog.adapterOf(connection),
-        connection,
-      });
-      if (
-        backend !== undefined &&
-        result.status === 'failed' &&
-        result.reason === 'usage-limit' &&
-        result.resetsAt !== undefined
-      ) {
-        // A hold it can't keep holds all the same, until the core stops: the turn's end goes on.
-        await this.#deps.usage.exhaust(backend, result.resetsAt).catch((error: unknown) => {
-          console.error(
-            `Could not keep ${catalog.backendName(backend)}’s usage limit: it holds only until corrallm stops.`,
-            error,
-          );
-        });
-      }
-    }
+    given: SessionEvent,
+  ): Promise<SessionEvent> {
+    const event = given.type === 'end' ? await this.#ended(connection, given) : given;
     const mail = await this.#mail.get(canvas);
     mail?.notes.receive(agentId, event);
     const running = await this.#running.get(canvas);
     for (const listener of running?.listeners ?? []) listener(agentId, connection, event);
+    return event;
+  }
+
+  /**
+   * A turn's end. One that failed on its usage backend's limit holds the backend until the limit
+   * lifts, for every agent that spends it (UsageReadings.exhaust, on disk first). Its connection
+   * says when, where its CLI did; otherwise the backend's latest reading does, where it shows the
+   * backend used up (usedUpUntil), and the end goes on saying so. Where nothing says when, nothing
+   * holds (a hold ends at a reset corrallm knows): a turn sent meanwhile fails at once, spending
+   * nothing.
+   */
+  async #ended(
+    connection: ConnectionId,
+    event: Extract<SessionEvent, { type: 'end' }>,
+  ): Promise<SessionEvent> {
+    const { result } = event;
+    const catalog = this.#deps.engineCatalog;
+    const backend = catalog.usageBackendOf({ adapter: catalog.adapterOf(connection), connection });
+    if (backend === undefined || result.status !== 'failed' || result.reason !== 'usage-limit') {
+      return event;
+    }
+    const reading = this.#deps.usage.state().readings.find((one) => one.backend === backend);
+    const resetsAt = result.resetsAt ?? (reading && usedUpUntil(reading.windows, Date.now()));
+    if (resetsAt === undefined) return event;
+    // A hold it can't keep holds all the same, until the core stops: the turn's end goes on.
+    await this.#deps.usage.exhaust(backend, resetsAt).catch((error: unknown) => {
+      console.error(
+        `Could not keep ${catalog.backendName(backend)}’s usage limit: it holds only until corrallm stops.`,
+        error,
+      );
+    });
+    return result.resetsAt === undefined ? { ...event, result: { ...result, resetsAt } } : event;
   }
 
   /**

@@ -7,7 +7,10 @@ import { PASTE_END, PASTE_START } from './tui';
 /** How much faster than recorded a recording plays. */
 const SPEED = 50;
 
-/** A pseudo-terminal that plays a recording of Codex's TUI. */
+/**
+ * A pseudo-terminal that plays a recording of Codex's TUI, but for what `without` leaves out (as a
+ * hook Codex runs for no turn that errs).
+ */
 export class Replay implements Pty {
   readonly pid = 4242;
   readonly written: string[] = [];
@@ -22,8 +25,13 @@ export class Replay implements Pty {
   exited = false;
   exitOnCtrlC = false;
 
-  constructor(name: TerminalFixture, args: readonly string[], options: PtyOptions) {
-    this.#records = recordedTerminal(name);
+  constructor(
+    name: TerminalFixture,
+    args: readonly string[],
+    options: PtyOptions,
+    without: (record: TerminalRecord) => boolean = () => false,
+  ) {
+    this.#records = recordedTerminal(name).filter((record) => !without(record));
     this.args = args;
     this.options = options;
     void this.#play();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { property } from '../../transcript';
 import { recordedResult } from '../app-server/recorded';
 import type { AppServer, AppServerOptions } from '../rpc';
 import { UsageReader } from './usage';
@@ -40,8 +41,10 @@ describe('reading Codex’s usage for a Terminal session', () => {
     const { start, calls } = fakeStart(READ);
     const reader = new UsageReader({ start, now: () => NOW });
     expect(await reader.read(CONTEXT)).toEqual({
-      fiveHour: { usedPercent: 0, resetsAt: 1_791_896_263_000 },
-      weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },
+      windows: {
+        fiveHour: { usedPercent: 0, resetsAt: 1_791_896_263_000 },
+        weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },
+      },
     });
     // The user's own `codex`, in the project folder, with the agents' environment; nothing else.
     expect(calls.starts).toEqual([
@@ -75,6 +78,21 @@ describe('reading Codex’s usage for a Terminal session', () => {
     expect(await second).toEqual(await third);
     expect(calls.starts).toHaveLength(2);
     expect(calls.closed).toBe(2);
+  });
+
+  it('says until when its plan is used up, where a window is and no credits let Codex go on', async () => {
+    const snapshot = property(await READ(), 'rateLimits') as Record<string, unknown>;
+    const primary = property(snapshot, 'primary') as Record<string, unknown>;
+    const { start } = fakeStart(() =>
+      Promise.resolve({ rateLimits: { ...snapshot, primary: { ...primary, usedPercent: 100 } } }),
+    );
+    expect(await new UsageReader({ start, now: () => NOW }).read(CONTEXT)).toEqual({
+      windows: {
+        fiveHour: { usedPercent: 100, resetsAt: 1_791_896_263_000 },
+        weekly: { usedPercent: 0, resetsAt: 1_792_483_063_000 },
+      },
+      usedUp: 1_791_896_263_000,
+    });
   });
 
   it('says nothing when Codex cannot say (another login, no app server, too slow)', async () => {

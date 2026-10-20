@@ -1,8 +1,7 @@
 import { MODEL_PATTERN } from '../../../../shared/session';
 import type { CodexMode } from '../../../../shared/session';
-import type { UsageWindows } from '../../../../shared/usage';
 import { isSessionId } from '../../id';
-import type { Launch, TerminalCli, TerminalSignal } from '../../terminal/cli';
+import type { Launch, TerminalCli, TerminalSignal, TerminalUsage } from '../../terminal/cli';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import type { Screen } from '../../terminal/screen';
 import type { ProgramStatus } from '../../terminal/status';
@@ -26,7 +25,8 @@ import type { HookTrust } from './trust';
  *   "Waiting", "Starting" (while its MCP servers start), "[ ! ] Action Required" (an approval, a
  *   question, a dialog that needs the user). Ready says a turn ended, and how: its Stop hook came
  *   (done), its Interrupt hook (interrupted), or neither after its UserPromptSubmit hook (it
- *   failed: Stop does not run for a turn that errs, as at a usage limit).
+ *   failed: Stop does not run for a turn that errs, as at a usage limit). It says nothing of why:
+ *   its usage, read before the session ends the turn, says whether its plan was used up then.
  * - A message is pasted in (bracketed paste: its line breaks stay, nothing in it is taken as a
  *   key), then sent with Enter. It is typed only into its composer, as drawn (composer.ts): the
  *   title says nothing of its pickers and startup screens. Unlike Claude Code's, its Enter is not
@@ -34,7 +34,7 @@ import type { HookTrust } from './trust';
  *   with the paste, as keys that piled up while it was busy are, still sends it (probed with the
  *   paste and Enter in one write as its title first said Ready, its MCP servers starting).
  * - Its usage limits are read apart from its terminal (`readUsage`: a private app server, usage.ts),
- *   never by typing /status into it.
+ *   never by typing /status into it. A window used up, with no credits to go on, is `usedUp`.
  */
 
 /** Bracketed paste: what a terminal sends around pasted text. */
@@ -66,7 +66,7 @@ export interface CodexTuiOptions {
   developerInstructions?: string;
   platform?: NodeJS.Platform;
   /** Reads its account's usage limits (usage.ts: a private app server). */
-  usage?: () => Promise<UsageWindows | undefined>;
+  usage?: () => Promise<TerminalUsage | undefined>;
 }
 
 export class CodexTui implements TerminalCli<CodexMode> {
@@ -89,7 +89,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   readonly #effort: string | null;
   readonly #developerInstructions: string | undefined;
   readonly #platform: NodeJS.Platform;
-  readonly #usage: (() => Promise<UsageWindows | undefined>) | undefined;
+  readonly #usage: (() => Promise<TerminalUsage | undefined>) | undefined;
   /** The overrides that add its hooks and trust them, once prepared. */
   #hooks: string[] = [];
 
@@ -159,7 +159,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     return /No saved session found/i.test(screen);
   }
 
-  readUsage(): Promise<UsageWindows | undefined> {
+  readUsage(): Promise<TerminalUsage | undefined> {
     return this.#usage?.() ?? Promise.resolve(undefined);
   }
 

@@ -156,6 +156,24 @@ export function usageOver(
 }
 
 /**
+ * Until when a reading says its backend is used up: the latest reset of its windows at their limit
+ * (all used, with a reset to come), since it can't be used until each of them has reset. Undefined
+ * if none is.
+ */
+export function usedUpUntil(windows: UsageWindows, now: number): number | undefined {
+  const resets = USAGE_WINDOWS.flatMap((window) => {
+    const usage = windows[window];
+    return usage !== undefined &&
+      usage.usedPercent >= 100 &&
+      usage.resetsAt !== null &&
+      usage.resetsAt > now
+      ? [usage.resetsAt]
+      : [];
+  });
+  return resets.length === 0 ? undefined : Math.max(...resets);
+}
+
+/**
  * Where a usage rule holds an agent, before its next task (engine/run/runner.ts AgentRun.usage): whose
  * usage, which window, the rule's share, how much was used then and when the window resets.
  */
