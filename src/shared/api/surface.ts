@@ -72,9 +72,11 @@ export interface Surface {
   /** It runs ahead of its scope's queue, aborting what it supersedes (an interrupt, a stop). */
   readonly preempt?: true;
   /**
-   * It removes or replaces what owns scopes beneath its canvas's (B9 Design §3): as it comes, it
-   * aborts and waits for what runs on the whole canvas ('canvas': closing or replacing it), or on
-   * the agents its arguments remove or switch ('agents'), then takes its turn as usual.
+   * It removes or replaces what owns scopes beneath its own (B9 Design §3): from when it comes
+   * until it ends, it holds the whole canvas ('canvas': closing it, or, in the app's scope,
+   * replacing the canvas its `replace` names, if it names one), or the agents its arguments remove
+   * or switch ('agents'), aborting what runs there, then takes its turn as usual. Only in the app's
+   * scope or a canvas's.
    */
   readonly drains?: 'canvas' | 'agents';
   /**

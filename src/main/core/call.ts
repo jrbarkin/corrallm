@@ -368,20 +368,26 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
 }
 
 /**
- * The scopes an op drains as it comes, from its arguments: every scope beneath its canvas's, or
- * those of the agents it removes or switches (`agent`, `nodes`).
+ * The scopes an op drains as it comes, from its arguments: every scope beneath its canvas's (in the
+ * app's scope, the canvas it replaces, `replace`, if it replaces one), or those of the agents it
+ * removes or switches (`agent`, `nodes`).
  */
-export function drainsOf(surface: Pick<Surface, 'drains'>, args: unknown): string[][] {
+export function drainsOf(surface: Pick<Surface, 'scope' | 'drains'>, args: unknown): string[][] {
   const {
     canvas,
+    replace,
     agent,
     nodes = [],
   } = args as {
-    canvas?: unknown;
+    canvas?: string;
+    replace?: { canvas?: string };
     agent?: string;
     nodes?: readonly string[];
   };
-  if (surface.drains === 'canvas') return [['app', String(canvas)]];
+  if (surface.drains === 'canvas') {
+    const drained = surface.scope === 'app' ? replace?.canvas : canvas;
+    return drained === undefined ? [] : [['app', drained]];
+  }
   if (surface.drains === undefined) return [];
   return [...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
     'app',

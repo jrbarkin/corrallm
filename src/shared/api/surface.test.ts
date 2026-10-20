@@ -260,8 +260,8 @@ function problems(registry: Registry): string[] {
     if (surface.kind === 'doc' && surface.scope !== 'canvas') {
       found.push(`${name}: changes a document, but doesn’t run in a canvas’s scope`);
     }
-    if (surface.drains !== undefined && surface.scope !== 'canvas') {
-      found.push(`${name}: drains, but doesn’t run in a canvas’s scope`);
+    if (surface.drains !== undefined && surface.scope !== 'app' && surface.scope !== 'canvas') {
+      found.push(`${name}: drains, but runs in neither the app’s scope nor a canvas’s`);
     }
     if (surface.waits && (surface.kind !== 'read' || deviation !== 'transport')) {
       found.push(`${name}: waits, but isn't a read on MCP alone (the transport deviation)`);
@@ -549,11 +549,18 @@ describe('T1: the surface’s rules', () => {
       'test.doc: changes a document, but doesn’t run in a canvas’s scope',
     ],
     [
-      'an op that drains, outside a canvas’s scope',
+      'an op that drains, in an agent’s scope',
       registry({
-        'test.close': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
+        'test.close': op({ access: both, kind: 'command', scope: 'agent', drains: 'canvas' }),
       }),
-      'test.close: drains, but doesn’t run in a canvas’s scope',
+      'test.close: drains, but runs in neither the app’s scope nor a canvas’s',
+    ],
+    [
+      'an op that drains, in no scope',
+      registry({
+        'test.close': op({ access: both, kind: 'command', scope: 'none', drains: 'agents' }),
+      }),
+      'test.close: drains, but runs in neither the app’s scope nor a canvas’s',
     ],
     [
       'a varies field not in the result',
@@ -594,8 +601,10 @@ describe('T1: the surface’s rules', () => {
               { access: both, kind: 'doc', scope: 'canvas', self: 'allowed' },
               z.strictObject({ agent: Agent }),
             ),
+            // An op in the app's scope may drain the canvas it replaces.
+            'test.create': op({ access: both, kind: 'command', scope: 'app', drains: 'canvas' }),
           },
-          { unhosted: { 'test.agent': 'B11', 'test.doc': 'B11' } },
+          { unhosted: { 'test.agent': 'B11', 'test.doc': 'B11', 'test.create': 'B11' } },
         ),
       ),
     ).toEqual([]);

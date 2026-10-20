@@ -76,19 +76,30 @@ describe('scopeOf', () => {
 
 describe('drainsOf', () => {
   it('drains every scope beneath a canvas’s, or those of the agents an op removes or switches', () => {
-    expect(drainsOf({ drains: 'canvas' }, { canvas: CANVAS, discard: true })).toEqual([
-      ['app', CANVAS],
-    ]);
-    expect(drainsOf({ drains: 'agents' }, { canvas: CANVAS, agent: 'helper' })).toEqual([
-      ['app', CANVAS, 'helper'],
-    ]);
     expect(
-      drainsOf({ drains: 'agents' }, { canvas: CANVAS, nodes: ['helper', 'team'], links: [] }),
+      drainsOf({ scope: 'canvas', drains: 'canvas' }, { canvas: CANVAS, discard: true }),
+    ).toEqual([['app', CANVAS]]);
+    expect(
+      drainsOf({ scope: 'canvas', drains: 'agents' }, { canvas: CANVAS, agent: 'helper' }),
+    ).toEqual([['app', CANVAS, 'helper']]);
+    expect(
+      drainsOf(
+        { scope: 'canvas', drains: 'agents' },
+        { canvas: CANVAS, nodes: ['helper', 'team'], links: [] },
+      ),
     ).toEqual([
       ['app', CANVAS, 'helper'],
       ['app', CANVAS, 'team'],
     ]);
-    expect(drainsOf({}, { canvas: CANVAS, agent: 'helper' })).toEqual([]);
+    expect(drainsOf({ scope: 'canvas' }, { canvas: CANVAS, agent: 'helper' })).toEqual([]);
+  });
+
+  it('drains, for an op in the app’s scope, the canvas it replaces, and none when it replaces none', () => {
+    const create = { scope: 'app', drains: 'canvas' } as const;
+    expect(drainsOf(create, { replace: { canvas: CANVAS, discard: true } })).toEqual([
+      ['app', CANVAS],
+    ]);
+    expect(drainsOf(create, { template: { id: 'review-loop' } })).toEqual([]);
   });
 });
 
@@ -125,6 +136,42 @@ describe('core.call', () => {
       ok: true,
       value: { closed: true, revs: {} },
     });
+    expect(await holding).toEqual({ ok: true, value: { stopped: true } });
+  });
+
+  it('lets an op in the app’s scope drain the canvas it replaces, and none when it replaces none', async () => {
+    const registry = testRegistry();
+    const surface = {
+      access: { you: 'all' },
+      kind: 'command',
+      scope: 'app',
+      drains: 'canvas',
+    } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.create': surface },
+        ops: {
+          ...registry.ops,
+          'test.create': withEnvelope(surface, {
+            summary: 'Creates a canvas, maybe in place of another.',
+            input: z.strictObject({ replace: z.strictObject({ canvas: z.uuid() }).optional() }),
+            output: z.strictObject({ created: z.boolean() }),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.create': () => ({ created: true }) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const holding = core.call('test.hold', { canvas: CANVAS, agent: 'peer' }, CALLERS.you);
+    await vi.waitFor(() => {
+      expect(registry.calls['test.hold']).toHaveLength(1);
+    });
+    expect(await core.call('test.create', {}, CALLERS.you)).toMatchObject({ ok: true });
+    expect(registry.released).toEqual([]);
+    expect(
+      await core.call('test.create', { replace: { canvas: CANVAS } }, CALLERS.you),
+    ).toMatchObject({ ok: true });
     expect(await holding).toEqual({ ok: true, value: { stopped: true } });
   });
 
