@@ -121,6 +121,31 @@ export class Scopes {
     for (const [key, lane] of this.#lanes) if (holds(drain, lane.path)) this.#next(key, lane);
   }
 
+  /**
+   * An op already in its scope runs another there (Allow's replay): hold and drain the inner
+   * op's lanes without entering the owner's scope again, which would wait on itself forever. The
+   * owner (the op whose signal is `signal`) may run in a lane the inner op drains (a replace of the
+   * canvas it is on): it is neither aborted nor waited for, though what waits behind it is
+   * superseded, as for any drain.
+   */
+  async draining<T>(
+    path: readonly string[] | null,
+    paths: readonly (readonly string[])[],
+    signal: AbortSignal,
+    op: () => Promise<T>,
+  ): Promise<T> {
+    if (paths.length === 0) return op();
+    const drain: Drain = { paths, depth: (path?.length ?? 0) + 1 };
+    this.#drains.add(drain);
+    try {
+      await this.#drain(drain, signal);
+      signal.throwIfAborted();
+      return await op();
+    } finally {
+      this.#release(drain);
+    }
+  }
+
   #lane(key: string, path: readonly string[]): Lane {
     let lane = this.#lanes.get(key);
     if (!lane) {
@@ -139,14 +164,15 @@ export class Scopes {
 
   /**
    * Drains the scopes `drain` holds, as a draining op comes: supersedes what waits there, but for
-   * preempting ops, and aborts what runs there. Resolves once what ran there has ended.
+   * preempting ops, and aborts what runs there, but the op draining from within (whose signal is
+   * `own`). Resolves once what ran there has ended.
    */
-  #drain(drain: Drain): Promise<void> {
+  #drain(drain: Drain, own?: AbortSignal): Promise<void> {
     const running: Running[] = [];
     for (const lane of this.#lanes.values()) {
       if (!holds(drain, lane.path)) continue;
       for (const waiting of lane.queue.splice(0)) waiting.supersede();
-      if (lane.running) running.push(lane.running);
+      if (lane.running && lane.running.controller.signal !== own) running.push(lane.running);
     }
     return this.#stop(running);
   }

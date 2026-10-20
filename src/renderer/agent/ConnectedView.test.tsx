@@ -1097,7 +1097,7 @@ describe('a connected agent', () => {
       value: { items: ['src/main/', 'src/main/ipc.ts'] },
     });
     vi.stubGlobal('api', {
-      windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
+      windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
       projectFiles,
     } satisfies Partial<AppApi>);
     const { backend, composer, view } = await open({ connection: 'claude-code.sdk' });

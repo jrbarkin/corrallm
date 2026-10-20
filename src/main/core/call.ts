@@ -36,12 +36,13 @@ import { Throttle } from './throttle';
  * op's reach again there, then its rules on a token's arguments (a met rule refuses it, or makes it
  * a proposal for you), since they read what the ops before it in its scope left; its reach is
  * checked once more as each of its commits builds, in the canvas's turn, and so is each inner op's
- * of a batch, since what a token reaches may change while it waits. It never throws: a failure is a
- * value, whose code survives any transport. An op may run another as part of itself, in its own
- * turn (`ctx.call`, `ctx.prepare`): checked as a call of its caller's own would be (its audience,
- * arguments, reach, self and argument rules), never throttled, deduped or scoped apart. A commit
- * that a change rule makes a proposal for you (R4) applies nothing: the op's result is
- * `{ proposed }`.
+ * of a batch, recomputing its party each time, since its authority and reach may change while it
+ * waits. It never throws: a failure is a value, whose code survives any transport. An op may run
+ * another as part of itself, in its own turn (`ctx.call`, `ctx.prepare`): checked as a call of its
+ * caller's own would be (its audience,
+ * arguments, reach, self and argument rules), never throttled, deduped or scoped apart; `ctx.call`
+ * still drains and holds the inner op's lanes until it ends. A commit that a change rule makes a
+ * proposal for you (R4) applies nothing: the op's result is `{ proposed }`.
  */
 
 /**
@@ -62,12 +63,13 @@ export class OpFailure extends Error {
 
 /**
  * How a commit is made beyond what the call itself says (Allow's, B9 Design §5): recording the
- * party whose proposal you allowed, expecting the revisions its change touched, and holding what
- * else its write must (the proposal's settlement and its record).
+ * party whose proposal you allowed, expecting the revisions its change touched and every entity
+ * its replay now changes, and holding what else its write must (the settlement and its record).
  */
 export interface CommitOptions {
   proposedBy?: PartyId;
   expect?: Readonly<Record<string, number>>;
+  unchanged?: Readonly<Record<string, number>>;
   within?: () => Staged;
 }
 
@@ -77,6 +79,7 @@ export interface CommitOptions {
  */
 export interface OpContext {
   readonly caller: Caller;
+  /** The caller's party now, including authority changed since this call began. */
   readonly party: Party;
   /** The party the caller is: what each change it commits is stamped with. */
   readonly by: PartyId;
@@ -97,7 +100,8 @@ export interface OpContext {
    * Runs op `name` with `args` as part of this one, in its turn, as the caller: checked as a call
    * of the caller's own would be (its audience, its arguments, the ids it names in reach, an agent
    * not aiming at itself what it may not, its argument rules), its commits made as `options` say.
-   * Its result, or `{ proposed }`; rejects as that call would fail.
+   * Drains and holds the inner op's lanes until it ends. Its result, or `{ proposed }`; rejects as
+   * that call would fail.
    */
   call(name: string, args: unknown, options?: CommitOptions): Promise<unknown>;
   /**
@@ -284,19 +288,30 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     def: OpDef,
     args: unknown,
     caller: Caller,
-    party: Party,
-  ): void {
-    if (caller.kind === 'human') return;
-    const reach = party === 'you' ? surface.access.you : surface.access[party];
-    if (reach === undefined) {
+  ): Party {
+    const party = audience(name, surface, caller);
+    if (caller.kind === 'human') return party;
+    const reach = surface.access[party];
+    if (reach === undefined)
       throw new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
-    }
     const ids = idsIn(def.input, args);
     const missing = outOfReach(ids, caller, reach, resolvers);
     if (missing) throw new OpFailure('not-found', missing);
     if (surface.self === 'refused' && aimsAtItself(ids, caller)) {
       throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
     }
+    return party;
+  }
+
+  /** The caller's party and audience now, including calls that waited in a scope or a build. */
+  function audience(name: string, surface: Surface, caller: Caller): Party {
+    const party = partyOf(caller, isLead);
+    if (surface.access[party] === undefined) {
+      throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
+        ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
+        : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
+    }
+    return party;
   }
 
   /**
@@ -334,16 +349,10 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     [surface, def]: [Surface, OpDef, Implementation],
     raw: unknown,
     caller: Caller,
-    party: Party,
   ): unknown {
-    const reach = party === 'you' ? surface.access.you : surface.access[party];
-    if (reach === undefined) {
-      throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
-        ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
-        : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
-    }
+    audience(name, surface, caller);
     const args = parse(def, raw);
-    checkReach(name, surface, def, args, caller, party);
+    checkReach(name, surface, def, args, caller);
     return args;
   }
 
@@ -356,12 +365,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     [surface, def, implementation]: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
-    party: Party,
     turn: Turn,
     options: CommitOptions = {},
   ): Promise<unknown> {
+    const party = checkReach(name, surface, def, args, caller);
     if (caller.kind !== 'human') {
       const proposed = await checkRules(name, surface, args, caller, party);
+      checkReach(name, surface, def, args, caller);
       if (proposed !== undefined) return { proposed };
     }
     const by = partyIdOf(caller);
@@ -372,7 +382,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) === true;
     const ctx: OpContext = {
       caller,
-      party,
+      get party() {
+        return partyOf(caller, isLead);
+      },
       by,
       signal: turn.signal,
       commit: async (canvas, build) => {
@@ -386,16 +398,19 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           canvas as CanvasId,
           (document) => {
             // In the canvas's turn: what the caller reaches may have changed while it waited.
-            checkReach(name, surface, def, args, caller, party);
+            checkReach(name, surface, def, args, caller);
             return build(document);
           },
           {
             op: name,
             caller,
-            party,
+            get party() {
+              return partyOf(caller, isLead);
+            },
             by,
             ...(request === undefined ? {} : { request }),
             ...(expect === undefined ? {} : { expect }),
+            ...(options.unchanged === undefined ? {} : { unchanged: options.unchanged }),
             signal: turn.signal,
             noReturn: () => {
               turn.noReturn();
@@ -412,7 +427,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       },
       call: (sub, raw, more) => {
         const op = opOf(sub);
-        return run(sub, op, admit(sub, op, raw, caller, party), caller, party, turn, more);
+        const parsed = admit(sub, op, raw, caller);
+        return scopes.draining(
+          scopeOf(op[0], parsed),
+          drainsOf(op[0], parsed, registry.surface),
+          turn.signal,
+          () => run(sub, op, parsed, caller, turn, more),
+        );
       },
       prepare: async (sub, raw) => {
         const op = opOf(sub);
@@ -420,13 +441,19 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         if (inner.kind !== 'doc') {
           throw new OpFailure('invalid', `${sub} isn’t an edit of a canvas’s document.`);
         }
-        const parsed = admit(sub, op, raw, caller, party);
-        if (caller.kind !== 'human' && (await checkRules(sub, inner, parsed, caller, party))) {
-          throw new OpFailure('refused', `${sub} can’t come to the user as a proposal here.`);
+        const parsed = admit(sub, op, raw, caller);
+        if (caller.kind !== 'human') {
+          const proposed = await checkRules(sub, inner, parsed, caller, partyOf(caller, isLead));
+          checkReach(sub, inner, innerDef, parsed, caller);
+          if (proposed)
+            throw new OpFailure('refused', `${sub} can’t come to the user as a proposal here.`);
         }
         let captured: ((document: CanvasDocument) => Built<unknown>) | undefined;
         const capture: OpContext = {
           ...ctx,
+          get party() {
+            return partyOf(caller, isLead);
+          },
           commit: (_canvas, made) => {
             if (captured !== undefined) throw new Error(`${sub} commits more than once.`);
             captured = made;
@@ -445,7 +472,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         const made = captured;
         // Built in the commit's turn of the op that prepared it: what the caller reaches then.
         return (document) => {
-          checkReach(sub, inner, innerDef, parsed, caller, party);
+          checkReach(sub, inner, innerDef, parsed, caller);
           return made(document);
         };
       },
@@ -469,7 +496,6 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     op: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
-    party: Party,
     signal: AbortSignal | undefined,
   ): Promise<Attempt> {
     const [surface, def] = op;
@@ -485,11 +511,10 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         signal,
         async (opSignal, noReturn) => {
           ran = opSignal;
-          // In its scope: what the caller reaches may have changed while it waited its turn.
-          checkReach(name, surface, def, args, caller, party);
           /** The revision of each topic the op reached. */
           const revs: Record<string, number> = {};
-          const result = await run(name, op, args, caller, party, {
+          // run checks reach and the caller's current party here, once its scope is entered.
+          const result = await run(name, op, args, caller, {
             signal: opSignal,
             noReturn,
             revs,
@@ -521,14 +546,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     try {
       const op = opOf(name);
       const [surface, def] = op;
-      const party = partyOf(caller, isLead);
-      // The audience, on every call (decision 2).
-      const reach = party === 'you' ? surface.access.you : surface.access[party];
-      if (reach === undefined) {
-        throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
-          ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
-          : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
-      }
+      audience(name, surface, caller);
       if (caller.kind !== 'human') {
         const admitted = throttle.admit(callerKey(caller), {
           write: surface.kind !== 'read',
@@ -539,8 +557,8 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
-      checkReach(name, surface, def, args, caller, party);
-      const run = () => apply(name, op, args, caller, party, signal);
+      checkReach(name, surface, def, args, caller);
+      const run = () => apply(name, op, args, caller, signal);
       const { request } = args as { request?: unknown };
       return typeof request === 'string'
         ? await requests.remembered(callerKey(caller), `${name}|${request}`, run)

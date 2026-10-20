@@ -367,6 +367,9 @@ export async function startWorld(): Promise<{
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
+const INSERT_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b00';
+const ARRANGE_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
+const SHOW_REQUEST = '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b02';
 
 /** A request id for each fixture of a canvas's lifetime that writes. */
 const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
@@ -432,6 +435,51 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, node: 'helper', label: 'x'.repeat(MAX_LABEL + 1) },
       { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { meta: 1 } },
       { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { 'node/helper': -1 } },
+    ],
+  },
+  'canvas.insertTemplate': {
+    valid: [
+      {
+        canvas: CANVAS,
+        template: TEMPLATE,
+        values: { feature: 'Export invoices' },
+        parent: 'lead',
+        expect: NO_ITEM,
+        request: INSERT_REQUEST,
+      },
+    ],
+    fresh: ['group', 'agents', 'revs'],
+    invalid: [
+      { template: 'missing' },
+      { template: TEMPLATE, values: { feature: 1 } },
+      { template: TEMPLATE, values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES + 1) } },
+      { template: TEMPLATE, parent: '' },
+      { template: TEMPLATE, extra: true },
+      { template: TEMPLATE, agents: { planner: 1 } },
+      { template: TEMPLATE, connections: { planner: '' } },
+      {
+        template: TEMPLATE,
+        values: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [String(i), 'x'])),
+      },
+    ],
+    meetsRule: {
+      'new-agent': {
+        canvas: CANVAS,
+        template: TEMPLATE,
+        values: {},
+        parent: 'lead',
+        request: '3c3d4e5f-6071-4829-9bac-1d2e3f4a5b03',
+      },
+    },
+  },
+  'canvas.setArrange': {
+    valid: [{ canvas: CANVAS, on: true, expect: NO_ITEM, request: ARRANGE_REQUEST }],
+    fresh: ['revs'],
+    invalid: [
+      { on: 1 },
+      { canvas: CANVAS },
+      { canvas: 'missing', on: true },
+      { on: true, extra: true },
     ],
   },
   'canvas.addAgent': {
@@ -1140,6 +1188,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'window.get': {
     valid: [{}],
     invalid: [{ window: 8 }, { c: CANVAS }],
+  },
+  'window.show': {
+    valid: [{ canvas: CANVAS, request: SHOW_REQUEST }],
+    invalid: [{ canvas: 5 }, { canvas: 'missing' }, { canvas: CANVAS, window: 8 }],
   },
   'terminal.attach': {
     valid: [{ agent: 'shell', request: request(95) }],

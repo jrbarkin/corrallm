@@ -90,16 +90,19 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 one holding a message it names (`withdraw` takes none), and asked of one with
                 several otherwise, schema, reach, self, repeated requests, scopes, reach and self
                 again in the scope, rules in the scope, and reach and self once more as each commit
-                builds, in the canvas's turn, so a call that waited can't reach what left its reach
+                builds, in the canvas's turn, recomputing its caller's party each time, so a call
+                that waited can't keep a lead's revoked authority or reach what left its reach
                 meanwhile (nor a stale `expect` show it in `current`); failures as values; an op
                 runs another as part of itself in its own turn,
                 `ctx.call` (Allow) and `ctx.prepare` (a batch's ops: the build a doc op's
                 implementation hands ctx.commit at once, rechecking that op's own reach and self as
                 the batch's commit builds it), each checked as a call of the caller's
                 own would be, its audience, schema, reach, self and argument rules, never
-                throttled, deduped or scoped apart; a commit a change rule makes a proposal for you
-                is the op's `{ proposed }`, ProposedInstead); caller.ts its callers (you, an agent's session, an
-                outside token) and their parties (no token is ever you; only gui.ts makes you);
+                throttled, deduped or scoped apart, but `ctx.call` drains the inner op's lanes and
+                holds them until it ends, without entering its owner's scope again; a commit a
+                change rule makes a proposal for you is the op's `{ proposed }`, ProposedInstead);
+                caller.ts its callers (you, an agent's session, an outside token) and their parties
+                (no token is ever you; only gui.ts makes you);
                 scopes.ts the order ops run in (one at a time per scope; a preempting op aborts
                 what runs beneath it first, never another preempting op, and those that overlap
                 run in turn, ahead of the queue; a draining op, `drains`, holds its canvas's
@@ -145,7 +148,14 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 same list (before or after; null means the end). An initial If or repeat has at most
                 16 children to fit the request bound, with further children added through into;
                 canvas.addAgent takes the new agent's `role` (a token gives one only as it creates
-                an agent: R12); batch.ts: `canvas.batch`, each inner op prepared as the caller's own
+                an agent: R12); canvas-tools.ts: `canvas.insertTemplate` fills a shipped template's
+                fields, chooses its adapters by job and its connections (each adapter's first when
+                omitted), and inserts it as a new group, returning `{ group, agents }`. It records
+                `ctx.by` only on queue text changed by the fill (your text has no `by`), defaults a
+                lead's parent to its own agent, and checks R11 on the whole insertion.
+                `canvas.setArrange` saves the preference, laying out once when enabled. Both call
+                `ctx.commit` at once so a batch can capture their pure builds;
+                batch.ts: `canvas.batch`, each inner op prepared as the caller's own
                 call, then built in order over what the one before left and committed as one change
                 at one revision, a failure naming its op (`ops[i]`), drained as its inner ops
                 drain; reply.ts: `reply`, a proposal's Allow or Refuse (holds and prompts until
@@ -164,6 +174,11 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 a token's close of a canvas a window shows, its discard of edits not saved, its
                 create replacing such a canvas, its save removing agents the file has, each a
                 proposal; refusals of a replacing create's template checked ahead, `refusalOf`);
+                window.ts: `window.get` returns `{ canvas }` for the calling window; `window.show`
+                (D4, yours alone) shows a kept canvas there (`Lifecycle.show`), open from then until
+                it is closed, restoring its project and ending the previous canvas's sessions
+                (unless the core runs it), which stays open. Showing the same canvas leaves its
+                sessions alone;
                 wait.ts: `wait`, see
                 Headless); core.ts is createCore, the
                 operations composed over the
@@ -227,12 +242,21 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 Design §5): each a `proposal/<uuid>` Needs item for you, Allow and Refuse both
                 `humanOnly`, worded with what it would lose ("…asks to delete Reviewer: 3 queued
                 tasks and its conversation"), with the op, its arguments and every entity its
-                change touched with its revision. Allow (`reply`) runs the op again as you through
-                ctx.call, recording `revision.proposed_by`, expecting those revisions: its change,
+                change touched with its revision, and the revisions of the whole canvas then
+                (version 2 of the `proposal.touched` JSON, no schema change). Allow (`reply`) runs
+                the op again as you through ctx.call, recording `revision.proposed_by`, expecting
+                those touched revisions and checking every entity its replay now changes against
+                the earlier canvas, including new queue items, OKs and links: its change,
                 the settlement and the proposer's record in one write (`within`, `stageWithin`);
                 one touched entity changed, or the op no longer applying, settles it `stale`,
-                changing nothing. Refuse settles it. The proposer's record is a `settled` message
-                from corrallm, which its `wait` returns; proposals survive restarts, in `needs`
+                changing nothing; unrelated edits do not make it stale. An older proposal of a
+                change without that canvas snapshot settles stale on Allow; Refuse still settles
+                it. A proposal of a close, a replace or a save (R4's argument half) has no snapshot:
+                its document's and file's fingerprints (`document:<c>`, `file:<c>`) guard it, and
+                its replay drains as the op does (`Scopes.draining`: a replace of the canvas the
+                reply is on drains it around the reply, never waiting for the reply). The proposer's
+                record is a `settled` message from corrallm, which its `wait` returns; proposals
+                survive restarts, in `needs`
                 and `needs:<c>` (in the app, the core's items before B11) and serve's log. Each commit is told synchronously to `Documents.subscribe`'s
                 listeners (its revision, party, entities changed and renumbered), which
                 canvas/states.ts turns into the `canvas:<c>` topic's change (B9 Design §7):
@@ -242,8 +266,10 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 (`EDITED_EVERY`) and says a change to the meta alone (edited flipping, a folder
                 chosen, a save) at the canvas's next revision taken in memory between commits
                 (`Documents.between`, `bump`), never written; and lists the canvases the core keeps
-                (`list`, `canvas.list`). canvas/view.ts is what of a canvas a caller sees: all of
-                it, but for an agent (a lead) the agents it reaches, the frames around them, the
+                (`list`, `canvas.list`), invalidating its cached running state on every journal
+                notification, even saves sharing a timestamp. canvas/view.ts is what of a canvas a
+                caller sees: all of it, but for an agent (a lead) the agents it reaches, the frames
+                around them, the
                 links between them, a node inside one it doesn't see placed in the nearest it does.
                 delivery/messages.ts is
                 the message store (MessageStore, a canvas's, over MessageTable, every canvas's rows

@@ -46,8 +46,8 @@ export interface LifecycleDeps {
     | 'keep'
   >;
   memory: Pick<CanvasMemory, 'get' | 'keeps'>;
-  journal: Pick<RunJournal, 'opened' | 'close' | 'last' | 'saved'>;
-  windows: Pick<Windows, 'show' | 'showing'>;
+  journal: Pick<RunJournal, 'opened' | 'open' | 'close' | 'last' | 'saved'>;
+  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing'>;
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   sessions: Pick<SessionManager, 'closeCanvas' | 'projectChanged'>;
   engines: Pick<Engines, 'closeCanvas'>;
@@ -155,6 +155,19 @@ export class Lifecycle {
     await this.#deps.windows.show(window, id);
     await this.#deps.projects.restore(id);
     return id;
+  }
+
+  /**
+   * Shows `canvas` in `window` (window.show), its folder restored: open from now until it is
+   * closed, as a canvas opened is, the one the profile used last. The canvas the window showed
+   * stays open.
+   */
+  async show(window: WindowId, canvas: CanvasId): Promise<void> {
+    const { journal, windows, projects } = this.#deps;
+    await journal.open(canvas);
+    if ((await windows.canvasOf(window)) === canvas) return;
+    await projects.restore(canvas);
+    await windows.show(window, canvas);
   }
 
   /**

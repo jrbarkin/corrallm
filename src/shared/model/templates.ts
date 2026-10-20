@@ -2,6 +2,7 @@ import { adapterIn } from '../adapter';
 import type { AdapterId, ConnectionId } from '../adapter';
 import { parseRole } from '../role';
 import type { AgentData } from './canvas';
+import type { PartyId } from './messages';
 import { translateActions } from './agent-ops';
 import type { AgentContext } from './agent-ops';
 import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from './queue';
@@ -45,11 +46,19 @@ export function placeholdersOf(canvas: TemplateCanvas): string[] {
   return [...new Set(keys.filter((key) => key !== undefined))];
 }
 
-/** A canvas with its blanks filled; those without a value stay as they are. */
+/** A canvas with its blanks filled; only text changed by a named caller takes that author. */
 export function fillTemplate<C extends TemplateCanvas>(
   canvas: C,
   values: Readonly<Record<string, string>>,
+  by?: PartyId,
 ): C {
+  const authored = <T extends QueueItem>(item: T): T => {
+    if (by === undefined) return item;
+    const next = { ...item };
+    if (by === 'you') delete next.by;
+    else next.by = by;
+    return next;
+  };
   const fill = (text: string) =>
     text.replace(PLACEHOLDER, (whole, key: string) => values[key] ?? whole);
   const condition = <T extends Condition | Until>(value: T): T => {
@@ -60,11 +69,11 @@ export function fillTemplate<C extends TemplateCanvas>(
   const step = <T extends RepeatedItem>(value: T): T => {
     if (isMessage(value)) {
       const message = fill(value.message);
-      return message === value.message ? value : { ...value, message };
+      return message === value.message ? value : authored({ ...value, message });
     }
     if ('action' in value && value.instruction !== undefined) {
       const instruction = fill(value.instruction);
-      return instruction === value.instruction ? value : { ...value, instruction };
+      return instruction === value.instruction ? value : authored({ ...value, instruction });
     }
     return value;
   };
@@ -72,21 +81,25 @@ export function fillTemplate<C extends TemplateCanvas>(
     if (isWait(value) || isDelay(value)) return value;
     if (isApproval(value)) {
       const approve = fill(value.approve);
-      return approve === value.approve ? value : { ...value, approve };
+      return approve === value.approve ? value : authored({ ...value, approve });
     }
     if (isIf(value)) {
       const checked = condition(value.if);
       const then = value.then.map(step);
       return checked === value.if && same(value.then, then)
         ? value
-        : { ...value, if: checked, then };
+        : checked === value.if
+          ? { ...value, then }
+          : authored({ ...value, if: checked, then });
     }
     if (isRepeat(value)) {
       const until = condition(value.until);
       const repeat = value.repeat.map(step);
       return until === value.until && same(value.repeat, repeat)
         ? value
-        : { ...value, until, repeat };
+        : until === value.until
+          ? { ...value, repeat }
+          : authored({ ...value, until, repeat });
     }
     return step(value);
   };

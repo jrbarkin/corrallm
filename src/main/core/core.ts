@@ -349,8 +349,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         console.error('Could not say what changed of the canvas:', error);
       });
   });
-  journal.subscribe(() => {
-    states.listChanged();
+  journal.subscribe((canvas) => {
+    states.runChanged(canvas);
   });
   windows.subscribe(() => {
     states.listChanged();
@@ -489,8 +489,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           engines.changed(canvas);
         },
         // A token's change only you may make waits for you (R4).
-        propose: (canvas, change, call) =>
-          proposals.raise(canvas, { op: call.op, args: call.args ?? {}, by: call.by, change }),
+        propose: (canvas, change, call, before) =>
+          proposals.raise(canvas, {
+            op: call.op,
+            args: call.args ?? {},
+            by: call.by,
+            change,
+            before,
+          }),
       }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),

@@ -16,9 +16,10 @@ import type { ChangeSet } from './change';
  * refuses but R4 reserves to you (it deletes an agent, alone or in a batch) applies nothing: the
  * core keeps it, in the profile's database (`proposal`), as a Needs item for you
  * (`proposal/<uuid>`), worded with what it would lose ("…asks to delete Reviewer: 3 queued tasks
- * and its conversation"), with the op and its arguments and the revision of every entity its
- * change touched. You answer it with `reply` (ops/reply.ts): Allow runs the op again, as you, only
- * if none of those entities changed since (else it is settled stale, changing nothing); Refuse
+ * and its conversation"), with the op, its arguments and the revisions of the canvas then. You
+ * answer it with `reply` (ops/reply.ts): Allow runs the op again, as you, only if neither its
+ * original touched entities nor anything the replay now changes has changed since, including
+ * work added after the proposal (else it is settled stale, changing nothing); Refuse
  * settles it. Either way its proposer gets a record: a `settled` message from corrallm, written in
  * the same write as the settlement (and Allow's change), which its `wait` returns. Proposals
  * survive restarts; headless, they wait for the app, whose Needs you shows them.
@@ -46,6 +47,13 @@ export interface Proposal {
   by: PartyId;
   /** Each entity its change touched, by key, with the revision it had then (0: none). */
   touched: Readonly<Record<string, number>>;
+  /**
+   * The canvas when proposed, for a change of a document's: a replay may touch rows the original
+   * build did not. None for a close, a replace or a save (R4's argument half, guarded by `touched`'s
+   * document and file), and for a change proposed before it was kept (legacy: Allow settles it
+   * stale).
+   */
+  before?: Readonly<Record<string, number>>;
   /** What it would do and lose, worded as it was raised. */
   lost: Lost;
   /** When it was raised, in epoch ms. */
@@ -132,9 +140,11 @@ export class Proposals {
 
   /**
    * Raises a proposal for you of `op` with `args`, proposed by `by`, whose change is `change`: kept
-   * on disk before it resolves with its id; rejects, keeping nothing, if it couldn't be. One that
-   * is no change of a document's (R4's argument half: a close, a replace, a save) says what it
-   * touches and what it would do and lose itself (`touched`, `lost`).
+   * on disk before it resolves with its id; rejects, keeping nothing, if it couldn't be. A change
+   * of a document's carries the canvas's revisions as it was proposed (`before`), which Allow's
+   * replay checks. One that is no change of a document's (R4's argument half: a close, a replace,
+   * a save) has none: it says what it touches, its canvas's document and file, and what it would
+   * do and lose itself (`touched`, `lost`).
    */
   async raise(
     canvas: CanvasId,
@@ -145,6 +155,7 @@ export class Proposals {
       change,
       touched: given,
       lost: said,
+      before,
     }: {
       op: string;
       args: Readonly<Record<string, unknown>>;
@@ -152,6 +163,7 @@ export class Proposals {
       change?: ChangeSet;
       touched?: Readonly<Record<string, number>>;
       lost?: Lost;
+      before?: Readonly<Record<string, number>>;
     },
   ): Promise<NeedId> {
     const open = this.#read(canvas);
@@ -177,6 +189,7 @@ export class Proposals {
       args,
       by,
       touched,
+      ...(before === undefined ? {} : { before }),
       lost,
       at: this.#now(),
     };
@@ -192,7 +205,7 @@ export class Proposals {
           op,
           JSON.stringify(args),
           by,
-          JSON.stringify(touched),
+          JSON.stringify({ version: 2, touched, before }),
           JSON.stringify(lost),
           proposal.at,
         );
@@ -387,7 +400,9 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
   try {
     const { id, op, by_party: by, raised_at: at } = row;
     const args: unknown = JSON.parse(String(row.args));
-    const touched: unknown = JSON.parse(String(row.touched));
+    const clock: unknown = JSON.parse(String(row.touched));
+    const touched = isRecord(clock) && clock.version === 2 ? clock.touched : clock;
+    const before = isRecord(clock) && clock.version === 2 ? clock.before : undefined;
     const lost: unknown = JSON.parse(String(row.lost));
     if (
       typeof id !== 'string' ||
@@ -395,7 +410,7 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       typeof by !== 'string' ||
       typeof at !== 'number' ||
       !isRecord(args) ||
-      !isRecord(touched) ||
+      !revisions(touched) ||
       !isRecord(lost) ||
       typeof lost.what !== 'string' ||
       typeof lost.title !== 'string'
@@ -408,7 +423,8 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       op,
       args,
       by: by as PartyId,
-      touched: touched as Record<string, number>,
+      touched,
+      ...(revisions(before) ? { before } : {}),
       lost: lost as unknown as Lost,
       at,
     };
@@ -419,4 +435,13 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function revisions(value: unknown): value is Record<string, number> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (at) => typeof at === 'number' && Number.isSafeInteger(at) && at >= 0,
+    )
+  );
 }

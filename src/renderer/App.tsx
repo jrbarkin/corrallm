@@ -16,8 +16,8 @@ import type { RunSource } from './run/persistence';
 
 const runSource: RunSource = {
   get: async () => {
-    const [context, { c }] = await Promise.all([window.api.getRun(), api.windowGet()]);
-    return { ...context, id: c as CanvasId };
+    const [context, { canvas }] = await Promise.all([window.api.getRun(), api.windowGet()]);
+    return { ...context, id: canvas as CanvasId };
   },
   save: (token, checkpoint, document) => window.api.saveRun(token, checkpoint, document),
   ready: (request, error) => window.api.runReady(request, error),

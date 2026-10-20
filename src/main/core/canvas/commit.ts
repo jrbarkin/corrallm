@@ -51,6 +51,8 @@ export interface CommitCall {
   request?: string;
   /** The revisions its caller expects of entities of the document, by their keys. */
   expect?: Readonly<Record<string, number>>;
+  /** A proposal's original canvas: every entity the replay now changes must still match it. */
+  unchanged?: Readonly<Record<string, number>>;
   /** Aborts when the call is superseded or its caller gives up: before its point of no return. */
   signal: AbortSignal;
   /** Says the call is past its point of no return: nothing aborts it then. */
@@ -84,22 +86,29 @@ export interface CommitterDeps {
    * Raises a proposal for you of a token's change only you may make, made in `call`: its id, once
    * it is kept. Without it, such a change is refused.
    */
-  propose?: (canvas: CanvasId, change: ChangeSet, call: CommitCall) => Promise<NeedId>;
+  propose?: (
+    canvas: CanvasId,
+    change: ChangeSet,
+    call: CommitCall,
+    before: Readonly<Record<string, number>>,
+  ) => Promise<NeedId>;
 }
 
 /** Thrown in a change's check when it is yours to decide: it carries the change to propose. */
 class Proposing extends Error {
   readonly change: ChangeSet;
-  constructor(change: ChangeSet, why: string) {
+  readonly before: Readonly<Record<string, number>>;
+  constructor(change: ChangeSet, why: string, before: Readonly<Record<string, number>>) {
     super(why);
     this.name = 'Proposing';
     this.change = change;
+    this.before = before;
   }
 }
 
 export function committer({ documents, rules, committed, propose }: CommitterDeps): Committer {
   return async (canvas, build, call) => {
-    const { caller, party, signal } = call;
+    const { caller, signal } = call;
     let changed;
     try {
       changed = await documents.change(canvas, {
@@ -115,11 +124,18 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
         },
         check: (change, live) => {
           checkExpect(call.expect, live);
+          const before = call.unchanged;
+          if (before !== undefined) {
+            checkExpect(
+              Object.fromEntries([...change.entities.keys()].map((key) => [key, before[key] ?? 0])),
+              live,
+            );
+          }
           if (caller.kind === 'human') return;
           // Every refusal first: a proposal is only ever of what no rule refuses.
           let proposal: string | undefined;
           for (const rule of Object.values(rules)) {
-            const outcome = rule(change, { caller, party });
+            const outcome = rule(change, { caller, party: call.party });
             if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
             proposal ??= outcome?.propose;
           }
@@ -130,7 +146,11 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
               `${proposal}, and ${call.op} can’t come to them as a proposal: ask with canvas.delete or canvas.batch, which can.`,
             );
           }
-          throw new Proposing(change, proposal);
+          throw new Proposing(
+            change,
+            proposal,
+            Object.fromEntries(Object.keys(live.rows).map((key) => [key, live.revs.get(key) ?? 0])),
+          );
         },
         committing: () => {
           call.noReturn();
@@ -140,7 +160,7 @@ export function committer({ documents, rules, committed, propose }: CommitterDep
     } catch (error) {
       if (!(error instanceof Proposing) || propose === undefined) throw error;
       // Nothing of it applied: it waits for you.
-      return { proposed: await propose(canvas, error.change, call) };
+      return { proposed: await propose(canvas, error.change, call, error.before) };
     }
     if (changed.committed === undefined) return { result: changed.result };
     committed?.(canvas, changed.committed.change);

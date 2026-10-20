@@ -440,6 +440,17 @@ describe('canvas.close', () => {
   });
 });
 
+describe('window.show', () => {
+  it('opens a canvas it shows that isn’t open: open until it is closed, whatever the window shows next', async () => {
+    expect((await listed())[OTHER]).toMatchObject({ open: false, shownIn: [] });
+    await applied('window.show', { canvas: OTHER });
+    expect((await listed())[OTHER]).toMatchObject({ open: true, shownIn: [1] });
+    // The window shows another canvas: this one stays open, as any canvas open does.
+    await applied('canvas.create', {});
+    expect((await listed())[OTHER]).toMatchObject({ open: true, shownIn: [] });
+  });
+});
+
 describe('R4: what a token may not discard comes to you as a proposal', () => {
   it('proposes a token’s close of a canvas a window shows; Allow closes it', async () => {
     answers.open.push(files.other);

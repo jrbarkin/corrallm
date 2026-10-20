@@ -36,6 +36,59 @@ function controlled(log: string[], name: string, { past = false } = {}) {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('Scopes', () => {
+  it('releases an inner drain after a cancelled owner without aborting work past its commit point', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const active = controlled(log, 'active', { past: true });
+    const first = scopes.run(['app', 'c', 'a'], {}, undefined, active.op);
+    const signal = await active.started;
+    const owner = new AbortController();
+    let ran = false;
+    const draining = scopes.draining(['app', 'c'], [['app', 'c', 'a']], owner.signal, () => {
+      ran = true;
+      return Promise.resolve();
+    });
+    const cancelled = expect(draining).rejects.toThrow('left');
+    const later = controlled(log, 'later');
+    const next = scopes.run(['app', 'c', 'a'], {}, undefined, later.op);
+    owner.abort(new Error('left'));
+    expect(signal.aborted).toBe(false);
+    active.release();
+    await first;
+    await cancelled;
+    await later.started;
+    later.release();
+    await next;
+    expect(ran).toBe(false);
+    expect(log).toEqual(['active started', 'active done', 'later started', 'later done']);
+  });
+  it('drains, for an op in its scope, the lane it runs in without aborting or waiting for it', async () => {
+    // Allow's replay of a replace of the canvas its reply is on: the inner op drains the canvas.
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const agent = controlled(log, 'agent');
+    const onAgent = scopes.run(['app', 'c', 'a'], {}, undefined, agent.op);
+    await agent.started;
+    const gate = Promise.withResolvers<undefined>();
+    const owner = scopes.run(['app', 'c'], {}, undefined, async (signal) => {
+      await gate.promise;
+      await scopes.draining(['app'], [['app', 'c']], signal, () => {
+        log.push('inner ran');
+        return Promise.resolve();
+      });
+      return signal.aborted ? 'owner aborted' : 'owner done';
+    });
+    const behind = scopes.run(['app', 'c'], {}, undefined, () => {
+      log.push('behind ran');
+      return Promise.resolve();
+    });
+    const superseded = expect(behind).rejects.toBeInstanceOf(Superseded);
+    gate.resolve(undefined);
+    expect(await owner).toBe('owner done');
+    await superseded;
+    expect(await onAgent).toBe('agent');
+    expect(log).toEqual(['agent started', 'agent aborted', 'inner ran']);
+  });
   it('runs the ops of one scope one at a time, in the order they came', async () => {
     const scopes = new Scopes();
     const log: string[] = [];

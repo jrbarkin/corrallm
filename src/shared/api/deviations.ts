@@ -37,6 +37,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'link.open': 'os-action',
   'link.reveal': 'os-action',
   'window.get': 'view',
+  'window.show': 'view',
   'terminal.attach': 'view',
   'terminal.detach': 'view',
   'terminal.input': 'acts-as-you',

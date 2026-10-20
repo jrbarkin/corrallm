@@ -4,7 +4,8 @@ import { ID_PATTERN } from '../../adapter';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, NodeId, OpCanvas } from '../ids';
-import { MAX_LABEL, MAX_OP_NODES, MAX_POSITION } from '../limits';
+import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_OP_NODES, MAX_POSITION } from '../limits';
+import { MAX_NODE_ID } from '../../model/canvas';
 import type { OpName } from '../surface';
 import { Role } from './agent';
 
@@ -12,6 +13,31 @@ const Coordinate = z.number().min(-MAX_POSITION).max(MAX_POSITION);
 const Position = z.strictObject({ x: Coordinate, y: Coordinate });
 const Ends = z.strictObject({ a: AgentId, b: AgentId });
 const Nodes = z.array(NodeId).max(MAX_OP_NODES);
+const CatalogId = z.string().min(1).max(32).regex(ID_PATTERN);
+/** These keys name roles in the shipped template, not agents on the destination canvas. */
+const TemplateRole = z.string().min(1).max(MAX_NODE_ID);
+const Value = z
+  .string()
+  .max(MAX_MESSAGE_BYTES)
+  .refine(
+    (text) => new TextEncoder().encode(text).length <= MAX_MESSAGE_BYTES,
+    `At most ${String(MAX_MESSAGE_BYTES)} bytes of UTF-8`,
+  );
+const Values = z
+  .record(z.string().min(1).max(128), Value)
+  .refine((values) => Object.keys(values).length <= 128, 'At most 128 template fields')
+  .meta({ maxProperties: 128 });
+const Agents = z
+  .record(TemplateRole, CatalogId.nullable())
+  .refine((agents) => Object.keys(agents).length <= MAX_OP_NODES, 'Too many template roles')
+  .meta({ maxProperties: MAX_OP_NODES });
+const Connections = z
+  .record(TemplateRole, CatalogId)
+  .refine(
+    (connections) => Object.keys(connections).length <= MAX_OP_NODES,
+    'Too many template roles',
+  )
+  .meta({ maxProperties: MAX_OP_NODES });
 
 /** A canvas's project folder, which every caller may read (Core Server §3.4); none: not chosen. */
 const Project = z.strictObject({ name: z.string(), path: z.string() }).nullable();
@@ -85,6 +111,28 @@ export const canvasOps = {
       node: NodeId,
       label: z.string().max(MAX_LABEL).regex(/\S/, 'A label must not be blank'),
     }),
+    output: z.strictObject({}),
+  }),
+  'canvas.insertTemplate': define('canvas.insertTemplate', {
+    summary:
+      'Inserts a shipped template as a new group, returning its group and agent ids. ' +
+      'Name a template from templates.list; values fill its fields, agents chooses adapters by ' +
+      'template role id (null: the default adapter), and connections chooses their connections. ' +
+      'Missing connections use each adapter’s first. Filled queue text records its author. ' +
+      'A lead inserts inside its own agent unless parent names another node in its team.',
+    input: z.strictObject({
+      canvas: OpCanvas,
+      template: z.uuid(),
+      values: Values.default({}),
+      agents: Agents.default({}),
+      connections: Connections.default({}),
+      parent: NodeId.optional(),
+    }),
+    output: z.strictObject({ group: NodeId, agents: z.array(AgentId).max(MAX_OP_NODES) }),
+  }),
+  'canvas.setArrange': define('canvas.setArrange', {
+    summary: 'Turns automatic canvas layout on or off. Turning it on lays out the canvas once now.',
+    input: z.strictObject({ canvas: OpCanvas, on: z.boolean() }),
     output: z.strictObject({}),
   }),
   'canvas.addAgent': define('canvas.addAgent', {

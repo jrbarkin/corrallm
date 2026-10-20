@@ -26,6 +26,7 @@ import { appOps } from './app';
 import { batchOps } from './batch';
 import { replyOps } from './reply';
 import { canvasOps } from './canvas';
+import { canvasToolsOps } from './canvas-tools';
 import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
 import { filesOps } from './files';
@@ -106,6 +107,7 @@ export function implementations(services: OpServices): Implementations {
     ...filesOps(services),
     ...canvasesOps(services),
     ...canvasOps(services),
+    ...canvasToolsOps(services),
     ...batchOps(),
     ...agentOps(services),
     ...queueOps(),

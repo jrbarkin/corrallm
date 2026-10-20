@@ -180,6 +180,14 @@ export const SURFACE = {
     varies: ['nodes', 'links', 'entities'],
   },
   'canvas.rename': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  'canvas.insertTemplate': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    self: 'allowed',
+    rules: ['new-agent'],
+  },
+  'canvas.setArrange': { access: W, kind: 'doc', scope: 'canvas' },
   'canvas.addAgent': { access: L, kind: 'doc', scope: 'canvas', rules: ['new-agent'] },
   'canvas.spawnAgent': {
     access: L,
@@ -367,6 +375,7 @@ export const SURFACE = {
   'link.open': { access: Y, kind: 'command', scope: 'none' },
   'link.reveal': { access: Y, kind: 'command', scope: 'none' },
   'window.get': { access: Y, kind: 'read', scope: 'none' },
+  'window.show': { access: Y, kind: 'command', scope: 'none' },
   'terminal.attach': { access: Y, kind: 'command', scope: 'none' },
   'terminal.detach': { access: Y, kind: 'command', scope: 'none' },
   'terminal.input': { access: Y, kind: 'command', scope: 'none' },

@@ -1,6 +1,7 @@
 import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
+import type { Lifecycle } from '../canvas/lifecycle';
 import { itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
 import { partyText } from '../parties';
@@ -12,13 +13,15 @@ import type { Implementations, OpServices } from '.';
  * arrives: rules.ts), choosing Allow or Refuse; a hold of the run and a session's prompt are
  * answered in corrallm's window until B11 moves them into the core, and file reviews come with B9's
  * task 12. Refuse settles the proposal. Allow runs its op again, as you, recording who proposed it,
- * in this call's turn (ctx.call): its change, the settlement and the proposer's record in one write,
- * only if no entity its change touched has another revision now; if one has, or the op no longer
- * applies (what it named is gone, or it would change nothing), it is settled stale, changing
+ * in this call's turn (ctx.call), draining its lanes: its change, the settlement and the proposer's
+ * record in one write, only if neither its original touched entities nor anything its replay now
+ * changes has another revision than the canvas had when it was proposed; if one has, or the op no
+ * longer applies (what it named is gone, or it would change nothing), it is settled stale, changing
  * nothing. A proposal of a close, a replace or a save (R4's argument half) touched a canvas's
- * document and file, not its entities: it goes stale if either changed since; Allow of one, a
- * command with no change of a document's to carry its settlement, settles it in a write of its own
- * once it applied. Either way the proposer gets a record, whose id this returns.
+ * document and file, not its entities: it goes stale if either changed since (its document's
+ * fingerprint covers work added since); Allow of one, a command with no change of a document's to
+ * carry its settlement, settles it in a write of its own once it applied. Either way the proposer
+ * gets a record, whose id this returns.
  */
 
 /** The failures of Allow's run that mean the canvas moved on under the proposal: it went stale. */
@@ -30,7 +33,9 @@ export function replyOps({
   proposals,
   needOf,
   lifecycle,
-}: Pick<OpServices, 'proposals' | 'needOf' | 'lifecycle'>): Pick<Implementations, 'reply'> {
+}: Pick<OpServices, 'proposals' | 'needOf'> & {
+  lifecycle: Pick<Lifecycle, 'touched'>;
+}): Pick<Implementations, 'reply'> {
   return {
     reply: async ({ canvas, to, answer }, ctx) => {
       const id = canvas as string | undefined as CanvasId | undefined;
@@ -67,6 +72,11 @@ export function replyOps({
         return { id: record.id, outcome };
       };
       if (answer.choice === 'refuse') return settled('refused');
+      const command = !isDocOp(proposal.op);
+      // A change of a document's raised before proposals kept the canvas as it was (`before`) can't
+      // guard work added since: it went stale. A command's (R4's argument half) never has one.
+      if (!command && proposal.before === undefined)
+        return settled('stale', 'its earlier canvas snapshot cannot be checked safely');
       // What it touched beyond the document's entities (a canvas's document, its file: R4's
       // argument half, canvas/lifecycle.ts) must be as it was, or it went stale.
       const expect: Record<string, number> = {};
@@ -86,6 +96,7 @@ export function replyOps({
         await ctx.call(proposal.op, proposal.args, {
           proposedBy: proposal.by,
           expect,
+          ...(proposal.before === undefined ? {} : { unchanged: proposal.before }),
           within: () => settlement.within(),
         });
       } catch (error) {
@@ -96,7 +107,7 @@ export function replyOps({
       if (record === undefined) {
         // A command (a close, a save) applied with no change of a document's to settle it with: it
         // is settled in a write of its own.
-        if (!isDocOp(proposal.op)) return settled('allowed');
+        if (command) return settled('allowed');
         // It committed nothing: what it would change is no longer there to change.
         return settled('stale', 'it would change nothing now');
       }
