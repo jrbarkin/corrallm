@@ -1,18 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import type {
-  DiffLine,
-  EffortChoice,
-  SessionEvent,
-  ToolDetail,
-  UsageLimit,
-} from '../../shared/session';
+import type { DiffLine, SessionEvent, ToolDetail, UsageLimit } from '../../shared/session';
 
 /*
  * How what an agent does reads in corrallm's transcript, whichever CLI and connection it comes
- * from (the Agent SDK's sdk/tools.ts and sdk/translate.ts; Codex's app server): paths as the
- * project folder sees them, output and diffs cut to what the renderer is sent, diffs from unified
+ * from: paths as the project folder sees them, output and diffs cut to what the renderer is sent,
+ * diffs from unified
  * patches, when a usage limit resets, notices. What CLIs send is JSON, so its fields are read as
  * `unknown` and checked (`property`, `text`).
  */
@@ -103,7 +97,7 @@ export function replacement(before: string, after: string): ToolDetail {
 }
 
 /**
- * A unified diff (as `git diff` and Codex write them): its hunks' lines, with "…" between hunks.
+ * A unified diff (as `git diff` writes it): its hunks' lines, with "…" between hunks.
  * File headers (diff --git, index, ---, +++) and "\ No newline at end of file" are left out.
  */
 export function unifiedDiff(patch: string): ToolDetail {
@@ -170,24 +164,6 @@ function windowName(minutes: number | null): string {
   if (minutes === 24 * 60) return 'daily';
   if (minutes % 60 === 0) return `${String(minutes / 60)}h`;
   return `${String(minutes)}m`;
-}
-
-/** How the effort picker names reasoning efforts, as the CLIs do (Claude Code's /effort, Codex's). */
-const EFFORT_NAMES: Readonly<Record<string, string>> = {
-  none: 'None',
-  minimal: 'Minimal',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'Extra high',
-  max: 'Max',
-  ultra: 'Ultra',
-};
-
-/** A reasoning effort as the picker shows it. */
-export function effortChoice(value: string, description?: string): EffortChoice {
-  const label = EFFORT_NAMES[value] ?? value.charAt(0).toUpperCase() + value.slice(1);
-  return { value, label, ...(description === undefined ? {} : { description }) };
 }
 
 /** Something to tell the user, as a session event. */

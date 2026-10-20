@@ -984,3 +984,13 @@ describe('fromFile', () => {
     expect(() => read(JSON.stringify(file))).toThrow(message);
   });
 });
+
+it('keeps queue text authors through a file round trip and rejects an invalid party', () => {
+  const authored = withQueue([{ id: 'text', message: 'Keep its author', by: 'outside:writer' }]);
+  expect(read(toFile(authored))).toEqual(authored);
+  // Its author is written after its id, as it is read: wherever the field was set.
+  expect(toFile(authored)).toMatch(/"id": "text",\s*"by": "outside:writer",\s*"message"/);
+  expect(() => read(toFile(authored).replace('outside:writer', 'not-a-party'))).toThrow(
+    /\.by.*party/,
+  );
+});

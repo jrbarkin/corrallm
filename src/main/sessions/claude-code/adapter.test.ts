@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { SdkSession } from '../sdk/session';
+import { SdkSession } from './sdk/session';
 import { TerminalSession } from '../terminal/session';
 import { claudeCode } from './adapter';
 

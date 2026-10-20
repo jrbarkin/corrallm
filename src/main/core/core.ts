@@ -16,7 +16,6 @@ import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
 import { LinkOpener } from '../links';
 import { FileRevealer } from '../reveal';
-import { Conversations } from '../sessions/sdk/conversations';
 import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
@@ -201,6 +200,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     backends: CATALOG.usageBackends.map((backend) => backend.id),
     readerOf,
   });
+  const conversations = ADAPTERS.find(
+    (adapter) => adapter.conversations !== undefined,
+  )?.conversations;
   const sessions = new SessionManager({
     catalog: CATALOG,
     connectors:
@@ -216,7 +218,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       }),
     environment,
     options: createOptions({ fake }),
-    conversations: new Conversations(),
+    ...(conversations === undefined ? {} : { conversations }),
     projectOf: (canvas) => projects.of(canvas),
     memory,
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),

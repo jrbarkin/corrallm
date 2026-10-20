@@ -18,6 +18,8 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
+import { absolutePosition, groupColors } from '../../shared/model/geometry';
+import { autosize } from './geometry';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasDocument } from '../../shared/model/canvas';
@@ -58,11 +60,9 @@ import { GraphActionsContext } from './actions';
 import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
 import type { GraphActions } from './actions';
 import {
-  absolutePosition,
   addAgent,
   addParent,
   addToQueue,
-  autosize,
   canConnect,
   canvasNodes,
   connect,
@@ -72,7 +72,6 @@ import {
   editMessage,
   EMPTY_GRAPH,
   graphOf,
-  groupColors,
   groupMembers,
   groupSelection,
   moveInQueue,
@@ -102,7 +101,7 @@ import { exampleOf } from '../../shared/examples';
 import type { Example } from '../../shared/examples';
 import { FileBar } from './FileBar';
 import { fromFile, toFile } from '../../shared/model/file';
-import { fillTemplate } from '../../shared/templates';
+import { fillTemplate } from '../../shared/model/templates';
 import { withAgents, withConnections } from './templates';
 import { insertGraph } from './insert';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
@@ -114,7 +113,7 @@ import { AgentNodeView, GroupNodeView, LinkView, WorkEdgeView } from './nodes';
 import { AgentContextMenu } from './AgentContextMenu';
 import type { WorkFlowEdge } from './nodes';
 import { QuestionsSidebar } from './Questions';
-import { workEdges } from './work';
+import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
 import type { QueueEdits } from './edits';
 import './GraphEditor.css';
@@ -306,7 +305,7 @@ function Editor({
         }),
         document: () => documentState.read(),
         freeze: () => {
-          flushDrafts();
+          void flushDrafts();
           runStore.pause();
         },
         error: (error) => {
@@ -623,8 +622,21 @@ function Editor({
   const edits = useMemo<QueueEdits>(
     () => ({
       add: (owner, entry, into) => {
-        const item = { id: crypto.randomUUID(), ...entry };
-        setGraph((g) => addToQueue(g, owner, item, into));
+        const id = entry.id ?? crypto.randomUUID();
+        setGraph((g) => {
+          let first = true;
+          return addToQueue(
+            g,
+            owner,
+            entry,
+            () => {
+              const next = first ? id : crypto.randomUUID();
+              first = false;
+              return next;
+            },
+            into,
+          );
+        });
       },
       remove: (owner, itemId) => {
         setGraph((g) => removeFromQueue(g, owner, itemId));
@@ -868,7 +880,7 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
-        flushDrafts();
+        void flushDrafts();
         if (file === 'save' || file === 'saveAs') {
           commands.save(latest.current.text, file === 'saveAs');
         } else if (!latest.current.modal) {
@@ -880,7 +892,7 @@ function Editor({
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
-      flushDrafts();
+      void flushDrafts();
       event.preventDefault();
       if (action !== 'rename') {
         apply(operation(action));
@@ -1452,7 +1464,7 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
-              flushDrafts();
+              void flushDrafts();
               runStore.start();
             }}
             onStop={() => {

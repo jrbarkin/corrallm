@@ -10,7 +10,7 @@ import { launchApp } from './launch';
 
 // The real renderer, IPC and Agent SDK, against a protocol-speaking CLI fake. Its prompt log
 // proves a held task does not resend work or release dependent queues before the user decides.
-const FAKE_CLAUDE = path.resolve('src/main/sessions/sdk/fake-claude.mjs');
+const FAKE_CLAUDE = path.resolve('src/main/sessions/claude-code/sdk/fake-claude.mjs');
 
 interface Prompt {
   sessionId: string;

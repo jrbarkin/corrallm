@@ -6,7 +6,6 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  checkAgentSdk,
   checkForkRefused,
   checkLoopbackHttp,
   checkSpawn,
@@ -81,14 +80,6 @@ describe('the native self-test', () => {
 
   it('finds a copy of a terminal screen working', async () => {
     await expect(checkTerminalScreen()).resolves.toBe('@xterm/headless ok (40×5)');
-  });
-
-  it('starts an Agent SDK query on its own fake claude, and hears its result', async () => {
-    await expect(checkAgentSdk()).resolves.toBe('Agent SDK ok (the fake claude said “ok”)');
-  });
-
-  it('fails when the fake claude cannot run', async () => {
-    await expect(checkAgentSdk({ PATH: '/nowhere' })).rejects.toThrow();
   });
 
   it('serves HTTP on 127.0.0.1 and calls it, as the hook and MCP servers are called', async () => {

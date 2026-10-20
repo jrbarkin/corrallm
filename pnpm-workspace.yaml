@@ -18,6 +18,6 @@ allowBuilds:
   node-pty: false # ships Node-API prebuilds for every platform; its install script isn't needed
 
 # The Agent SDK's per-platform copies of the `claude` CLI (about 250 MB each): corrallm points the
-# SDK at the user's own `claude` instead (src/main/sessions/claude.ts), so they are never needed.
+# SDK at the user's own `claude` instead (src/main/sessions/claude-code/claude.ts), so they are never needed.
 ignoredOptionalDependencies:
   - '@anthropic-ai/claude-agent-sdk-*'

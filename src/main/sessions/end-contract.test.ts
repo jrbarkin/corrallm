@@ -17,11 +17,11 @@ import { historyEvents as codexHistory } from './codex/app-server/translate';
 import { CodexTerminalConnector } from './codex/terminal/connector';
 import { Replay } from './codex/terminal/replay';
 import { HookTruster } from './codex/terminal/trust';
-import { SdkConnector } from './sdk/connector';
-import { historyEvents } from './sdk/history';
-import { RECORDED_PLACES, recordedHistory } from './sdk/recorded';
-import { TerminalConnector } from './terminal/connector';
-import { FakeClaude } from './terminal/fake-claude';
+import { SdkConnector } from './claude-code/sdk/connector';
+import { historyEvents } from './claude-code/sdk/history';
+import { RECORDED_PLACES, recordedHistory } from './claude-code/sdk/recorded';
+import { TerminalConnector } from './claude-code/connector';
+import { FakeClaude } from './claude-code/fake-claude';
 
 let folder: string;
 let sessions: LiveSession<SessionMode>[];
@@ -59,7 +59,8 @@ const fixtures: Record<string, () => Connector<SessionMode>> = {
     process.env.CLAUDE_CONFIG_DIR = folder;
     return new SdkConnector({
       clientApp: 'corrallm/test',
-      findClaude: () => Promise.resolve(path.join(import.meta.dirname, 'sdk/fake-claude.mjs')),
+      findClaude: () =>
+        Promise.resolve(path.join(import.meta.dirname, 'claude-code/sdk/fake-claude.mjs')),
     });
   },
   'codex.app-server': () =>
@@ -86,6 +87,14 @@ const fixtures: Record<string, () => Connector<SessionMode>> = {
 };
 
 function check(events: readonly SessionEvent[], expected: string[]) {
+  for (const event of events)
+    if (event.type === 'started') {
+      for (const model of event.models)
+        for (const effort of model.efforts ?? []) {
+          expect(typeof effort.label).toBe('string');
+          expect(effort.label.trim()).not.toBe('');
+        }
+    }
   const ends = events.filter((event) => event.type === 'end');
   expect(ends.map((event) => event.result.status)).toEqual(expected);
   for (const end of ends) {

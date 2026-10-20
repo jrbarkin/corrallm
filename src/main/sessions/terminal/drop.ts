@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 
 /*
  * Files dropped on a Terminal agent's terminal: their paths are pasted into it, quoted for a shell,
- * as a terminal pastes them (Claude Code takes an image's path as the image). The paths come from
+ * as a terminal pastes them. The paths come from
  * the preload, which reads them from the files dropped (the page never names a path), and the IPC
  * handler checks them (args.ts: absolute, not too long, no control characters); here, only files
  * that are there are pasted.

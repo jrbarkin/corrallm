@@ -1,19 +1,14 @@
 import { fork, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-
-import { Inbox } from '../sessions/sdk/inbox';
+import { ADAPTERS } from '../sessions/adapters';
 import { spawnPty } from '../sessions/terminal/pty';
 import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
-import fakeClaude from './selftest-claude.mjs?raw';
 import { JOURNAL_SIZE_LIMIT } from './store/checkpointer';
 import { APPLICATION_ID, openStore } from './store/open';
 import { connect } from './store/sqlite';
@@ -23,7 +18,7 @@ import type { Store } from './store/store';
  * The native self-test (CORRALLM_NATIVE_SELFTEST=1; see CLAUDE.md), diagnostic only: that what
  * the core needs loads and runs as bundled (CommonJS; packaged, fused), wherever it runs: the app's
  * main process (native-selftest.ts), its core process (entry.ts) and the CLI bundle under plain
- * Node (cli/main.ts). No real `claude`, no login. Electron-free: what differs between those hosts
+ * Node (cli/main.ts). No real agent CLI, no login. Electron-free: what differs between those hosts
  * (whether the app is packaged) is passed in. Each check resolves with what it saw, or rejects
  * saying what failed.
  */
@@ -51,7 +46,7 @@ export function selfTestChecks({ packaged }: { packaged: boolean }): Check[] {
   return [
     { name: 'node-pty', run: checkPty },
     { name: 'terminal screen', run: checkTerminalScreen },
-    { name: 'Agent SDK', run: () => checkAgentSdk() },
+    ...ADAPTERS.flatMap((adapter) => adapter.selfTests ?? []),
     { name: 'node:sqlite', run: () => checkSqlite() },
     { name: 'loopback HTTP', run: checkLoopbackHttp },
     { name: 'spawn', run: checkSpawn },
@@ -114,7 +109,7 @@ async function checkPty(): Promise<string> {
 
 /**
  * A copy of a terminal's screen (@xterm/headless, with its addons), as main keeps one: it answers
- * Claude Code's status probe, reads a status report, and takes a snapshot.
+ * the Program Status probe, reads a status report, and takes a snapshot.
  */
 export async function checkTerminalScreen(): Promise<string> {
   const replies: string[] = [];
@@ -127,58 +122,15 @@ export async function checkTerminalScreen(): Promise<string> {
     answersQueries: () => true,
   });
   try {
-    screen.write('\x1b]7501;?\x07\x1b]7501;state=working:app=claude-code\x07✻ self-test\r\n');
+    screen.write('\x1b]7501;?\x07\x1b]7501;state=working:app=agent\x07✻ self-test\r\n');
     const snapshot = await screen.snapshot();
     if (replies.length === 0 || reports[0]?.state !== 'working') {
-      throw new Error('the screen did not answer or read Claude Code’s status');
+      throw new Error('the screen did not answer or read Program Status');
     }
     if (!snapshot.data.includes('self-test')) throw new Error('the snapshot lost the screen');
     return `@xterm/headless ok (${String(snapshot.cols)}×${String(snapshot.rows)})`;
   } finally {
     screen.dispose();
-  }
-}
-
-/**
- * The Agent SDK as bundled (its own file found through `import.meta.url`, as vite.main.config.mts
- * defines it) starts a query as the Agent SDK connection does (streaming input, the CLI's path
- * given) against a tiny fake `claude` (selftest-claude.mjs, written to a temporary folder and run
- * with `node`, as the SDK runs a .mjs), and hears one turn's result.
- */
-export async function checkAgentSdk(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-selftest-'));
-  const claude = path.join(dir, 'claude.mjs');
-  await writeFile(claude, fakeClaude);
-  const inbox = new Inbox<SDKUserMessage>();
-  const run = query({
-    prompt: inbox,
-    options: {
-      pathToClaudeCodeExecutable: claude,
-      cwd: dir,
-      env: definedEnv(env),
-      settingSources: [],
-    },
-  });
-  try {
-    await run.initializationResult();
-    inbox.push({
-      type: 'user',
-      message: { role: 'user', content: 'Say ok.' },
-      parent_tool_use_id: null,
-      uuid: randomUUID(),
-    });
-    for await (const message of run) {
-      if (message.type !== 'result') continue;
-      if (message.subtype !== 'success') throw new Error(`the query failed (${message.subtype})`);
-      return `Agent SDK ok (the fake claude said “${message.result}”)`;
-    }
-    throw new Error('the query ended without a result');
-  } finally {
-    inbox.end();
-    run.close();
-    await rm(dir, { recursive: true, force: true });
   }
 }
 

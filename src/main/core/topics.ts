@@ -35,7 +35,11 @@ export class Topics {
     this.#read = read;
   }
 
-  subscribe(window: WindowId, topic: TopicKey, ctx: OpContext): Promise<TopicSnapshot> {
+  subscribe<K extends TopicKey>(
+    window: WindowId,
+    topic: K,
+    ctx: OpContext,
+  ): Promise<TopicSnapshot<K>> {
     return this.#serialize(async () => {
       const state = await this.#state(topic, ctx.caller);
       ctx.signal.throwIfAborted();
@@ -47,9 +51,11 @@ export class Topics {
       if (ctx.caller.kind !== 'human')
         throw new OpFailure('human-only', 'Only the user may subscribe to topics.');
       topics.set(topic, { caller: ctx.caller });
-      return (
-        this.#states.get(topic) ?? { epoch: this.epoch, rev: this.#revs.get(topic) ?? 0, state }
-      );
+      return (this.#states.get(topic) ?? {
+        epoch: this.epoch,
+        rev: this.#revs.get(topic) ?? 0,
+        state,
+      }) as TopicSnapshot<K>;
     });
   }
 

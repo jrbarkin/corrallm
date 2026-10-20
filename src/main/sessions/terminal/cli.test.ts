@@ -39,7 +39,6 @@ class TitledCli implements TerminalCli<CodexMode> {
       none: 'It needs you: see its terminal.',
     },
   };
-  readonly defaultMode = 'auto';
   /** Its prompt shows only when drawn: its title does not cover its pickers. */
   readonly waitsForPrompt = true;
   /** Where its hooks post, once prepared. */

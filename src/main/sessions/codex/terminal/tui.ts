@@ -84,8 +84,6 @@ export class CodexTui implements TerminalCli<CodexMode> {
       none: 'Codex needs you: see its terminal.',
     },
   };
-  /** Codex's Default, which leaves the user's own approval and sandbox settings be. */
-  readonly defaultMode = 'auto';
   readonly waitsForPrompt = true;
   readonly #trust: (hooks: readonly SessionHook[]) => Promise<HookTrust>;
   readonly #effort: string | null;

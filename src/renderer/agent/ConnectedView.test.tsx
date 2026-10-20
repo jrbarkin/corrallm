@@ -235,7 +235,37 @@ describe('a Codex agent’s reasoning', () => {
   });
 });
 
+it.each(['claude-code', 'codex'])(
+  'shows %s’s mode as the user’s default until the session reports it',
+  async (adapter) => {
+    const connection = adapter === 'codex' ? 'codex.app-server' : 'claude-code.sdk';
+    const { view, emit } = await open({ adapter, connection });
+    expect(view.getByRole('button', { name: 'Mode: Your default' })).toBeTruthy();
+    emit({ type: 'started', model: null, mode: 'plan', models: [] });
+    expect(view.getByRole('button', { name: 'Mode: Plan' })).toBeTruthy();
+  },
+);
+
 describe('a Codex agent’s reasoning effort', () => {
+  it('shows the adapter’s own label, including for an effort whose id the platform knows', async () => {
+    const { view, emit } = await open({ adapter: 'codex', connection: 'codex.app-server' });
+    emit({
+      type: 'started',
+      model: 'test-model',
+      mode: 'auto',
+      models: [
+        {
+          value: 'test-model',
+          label: 'Test model',
+          efforts: [{ value: 'high', label: 'Careful work' }],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    const effort = view.getByRole('button', { name: 'Effort: Careful work' });
+    fireEvent.click(effort);
+    expect(view.getByRole('menuitemradio', { name: 'Careful work' })).toBeTruthy();
+  });
   it('is chosen beside its model, from the efforts the model offers', async () => {
     const { backend, view, emit, send, sent } = await open({
       adapter: 'codex',

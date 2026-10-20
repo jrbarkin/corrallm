@@ -1,6 +1,4 @@
 import type { AdapterId, ConnectionId } from '../../shared/adapter';
-import { isApproval, isDelay, isIf, isMessage, isRepeat, isWait } from '../../shared/model/queue';
-import type { QueueItem, RepeatedItem } from '../../shared/model/queue';
 import { catalog } from '../catalog';
 import { engineCatalog } from '../../shared/engine/catalog';
 import type { EngineCatalog } from '../../shared/engine/catalog';
@@ -220,55 +218,4 @@ const AGENT_ACTIONS: Readonly<Record<AdapterId, readonly AgentAction[]>> = {
 /** What an adapter's agents can be asked to do: nothing, for an adapter this build doesn't have. */
 export function actionsOf(adapter: AdapterId): readonly AgentAction[] {
   return own(AGENT_ACTIONS, adapter) ?? [];
-}
-
-/**
- * Actions that do the same job in each adapter that has one (running commands, editing,
- * searching the web, reviewing, working in a worktree, handing work to a subagent, …), so that a
- * step keeps its meaning when its agent's adapter changes, as when a template's role is given
- * another agent (templates.ts).
- */
-const EQUIVALENT_ACTIONS: readonly Readonly<Record<AdapterId, string>>[] = [
-  { 'claude-code': 'Bash', codex: 'exec_command' },
-  { 'claude-code': 'Edit', codex: 'apply_patch' },
-  { 'claude-code': 'WebSearch', codex: 'web_search' },
-  { 'claude-code': '/code-review', codex: '/review' },
-  { 'claude-code': 'EnterWorktree', codex: '/worktree' },
-  { 'claude-code': 'Agent', codex: 'spawn_agent' },
-  { 'claude-code': '/plan', codex: '/plan' },
-  { 'claude-code': '/init', codex: '/init' },
-  { 'claude-code': '/goal', codex: '/goal' },
-];
-
-/** What adapter `to` calls the action `from` calls `action`, if it has one for the same job. */
-export function equivalentAction(
-  action: string,
-  from: AdapterId,
-  to: AdapterId,
-): string | undefined {
-  if (from === to) return action;
-  const job = EQUIVALENT_ACTIONS.find((one) => own(one, from) === action);
-  return job === undefined ? undefined : own(job, to);
-}
-
-/** Steps keep their job when an agent changes adapter, including those inside Ifs and repeats. */
-export function translateActions(
-  queue: readonly QueueItem[],
-  from: AdapterId,
-  to: AdapterId,
-): QueueItem[] {
-  const has = new Set(actionsOf(to).map((a) => a.name));
-  const translate = <T extends RepeatedItem>(step: T): T =>
-    isWait(step) || isDelay(step) || isMessage(step) || has.has(step.action)
-      ? step
-      : { ...step, action: equivalentAction(step.action, from, to) ?? step.action };
-  return queue.map((item): QueueItem =>
-    isApproval(item)
-      ? item
-      : isIf(item)
-        ? { ...item, then: item.then.map(translate) }
-        : isRepeat(item)
-          ? { ...item, repeat: item.repeat.map(translate) }
-          : translate(item),
-  );
 }

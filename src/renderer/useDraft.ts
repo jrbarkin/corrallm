@@ -2,23 +2,50 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { flushSync } from 'react-dom';
 
+import { ipcErrorMessage } from './ipc-error';
+
 const IDLE_MS = 600;
 const pending = new Set<() => void>();
+const saving = new Set<Promise<unknown>>();
 let flushing = false;
+let committing = false;
 let fields = 0;
 
+function remember(promise: Promise<unknown>): void {
+  if (saving.has(promise)) return;
+  saving.add(promise);
+  void promise.then(
+    () => saving.delete(promise),
+    (error: unknown) => {
+      saving.delete(promise);
+      draftFailed(error);
+    },
+  );
+}
+
+/** A void UI callback still owns the operations it sends while committing a draft. */
+export function draftCall<T>(call: () => Promise<T>): Promise<T> {
+  const promise = call();
+  if (committing) remember(promise);
+  return promise;
+}
+
 /** Commits the window's pending text before another gesture reads the graph or starts work. */
-export function flushDrafts(): void {
-  if (flushing || pending.size === 0) return;
-  flushing = true;
-  try {
-    // The graph and its engine must see the commits before the gesture continues.
-    flushSync(() => {
-      for (const commit of [...pending]) commit();
-    });
-  } finally {
-    flushing = false;
+export function flushDrafts(): Promise<void> {
+  // An op sent by the commit itself must not await that same commit.
+  if (committing) return Promise.resolve();
+  if (!flushing && pending.size > 0) {
+    flushing = true;
+    try {
+      // The graph and its engine must see the commits before the gesture continues.
+      flushSync(() => {
+        for (const commit of [...pending]) commit();
+      });
+    } finally {
+      flushing = false;
+    }
   }
+  return saving.size === 0 ? Promise.resolve() : Promise.all([...saving]).then(() => flushDrafts());
 }
 
 /** Pointer actions, drags and keyboard shortcuts flush before their handlers run, portals too. */
@@ -27,13 +54,17 @@ function beforeGesture(event: Event): void {
   if (event instanceof globalThis.KeyboardEvent) {
     if (event.isComposing || target?.closest('input, textarea, [contenteditable]')) return;
   } else if (target?.closest('[data-draft]') === document.activeElement) return;
-  flushDrafts();
+  void flushDrafts().catch(draftFailed);
+}
+
+function draftFailed(error: unknown): void {
+  console.error('Could not commit the draft:', ipcErrorMessage(error));
 }
 
 /** A field's local text: leave, single-line Enter or a pause commits; Escape drops the draft. */
 export function useDraft(
   value: string,
-  onCommit: (text: string) => void,
+  onCommit: (text: string) => unknown,
   { multiline = false }: { multiline?: boolean } = {},
 ) {
   const [text, setText] = useState(value);
@@ -62,7 +93,15 @@ export function useDraft(
     draft.dirty = false;
     const changed = draft.text !== draft.original && draft.text !== latest.current.value;
     draft.original = draft.text;
-    if (changed) latest.current.onCommit(draft.text);
+    if (changed) {
+      committing = true;
+      try {
+        const result = latest.current.onCommit(draft.text);
+        if (result instanceof Promise) remember(result);
+      } finally {
+        committing = false;
+      }
+    }
   }, []);
 
   useEffect(() => {

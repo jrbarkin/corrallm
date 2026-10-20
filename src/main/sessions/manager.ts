@@ -21,7 +21,7 @@ import type { TerminalEvent } from '../../shared/terminal';
 import type { CanvasMemory, Conversation } from '../memory';
 import { roleFingerprint } from '../memory';
 import type { Connector, LiveSession, SessionHost } from './connector';
-import type { KeptConversation } from './sdk/conversations';
+import type { Conversations } from './adapter';
 import { droppedPaste } from './terminal/drop';
 
 const NO_PROJECT =
@@ -48,14 +48,10 @@ export interface SessionManagerDeps {
   /** The environment agents run in: the user's login shell's, cleaned (environment.ts). */
   environment: () => Promise<Readonly<Record<string, string>>>;
   /**
-   * The conversations Claude Code kept for a folder (sdk/conversations.ts): listed for /resume,
+   * The conversations kept for a folder (adapter.ts): listed for /resume,
    * forked to rewind one (`before`: where; `fork`: the copy's id).
    */
-  conversations?: {
-    list(folder: string): Promise<KeptConversation[]>;
-    before(folder: string, sessionId: string, messageId: string): Promise<string | null>;
-    fork(folder: string, sessionId: string, upTo: string): Promise<string>;
-  };
+  conversations?: Conversations;
   /** The folder a canvas's agents work in, if one was chosen (project.ts). */
   projectOf: (canvas: CanvasId) => string | undefined;
   /** Where each canvas's agents' conversations are remembered. */
@@ -69,7 +65,7 @@ export interface SessionManagerDeps {
   ) => Promise<void>;
   /**
    * What an agent of each adapter can be set to run with, read in a folder for the agents'
-   * environment (claude-settings.ts, codex/options.ts): without a session, or a prompt.
+   * environment: without a session, or a prompt.
    */
   options?: Readonly<
     Partial<

@@ -11,10 +11,10 @@ import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageBackendId } from '../../../shared/adapter';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionSpec } from '../connector';
-import { helpFlags } from '../claude';
-import { TerminalConnector } from './connector';
-import { FakeClaude } from './fake-claude';
-import type { FakeClaudeOptions } from './fake-claude';
+import { helpFlags } from '../claude-code/claude';
+import { TerminalConnector } from '../claude-code/connector';
+import { FakeClaude } from '../claude-code/fake-claude';
+import type { FakeClaudeOptions } from '../claude-code/fake-claude';
 import { HOOK_TOKEN } from './hooks';
 
 /*
@@ -132,7 +132,7 @@ const seen = (skip = 0) =>
       case 'end':
         return `end:${event.result.status === 'cancelled' ? 'interrupted' : event.result.status === 'failed' ? 'failed' : 'done'}`;
       case 'mode':
-        return `mode:${event.mode}`;
+        return `mode:${event.mode ?? 'unknown'}`;
       case 'closed':
         return `closed${event.error === undefined ? '' : `:${event.error}`}`;
       case 'asking':
@@ -257,7 +257,7 @@ describe('a Terminal session', () => {
     // The user's own default mode applies, and the CLI's default model.
     expect(run.args).not.toContain('--permission-mode');
     expect(run.args).not.toContain('--model');
-    expect(events[0]).toEqual({ type: 'started', model: null, mode: 'manual', models: [] });
+    expect(events[0]).toEqual({ type: 'started', model: null, mode: null, models: [] });
 
     const { env } = run.options;
     expect(env).toMatchObject({ PATH: '/usr/bin', TERM: 'xterm-256color', COLORTERM: 'truecolor' });
@@ -404,6 +404,7 @@ describe('a Terminal session', () => {
     expect(seen(1)).toEqual([
       'user:Fix the bug',
       'status:working',
+      'mode:manual',
       'text:Done: Fix the bug',
       'end:done',
     ]);
@@ -437,7 +438,13 @@ describe('a Terminal session', () => {
     });
     // Its hook may tell the prompt before or after Claude Code says it works on it.
     expect(seen(1).sort()).toEqual(
-      ['status:working', 'user:hello there', 'text:Done: hello there', 'end:done'].sort(),
+      [
+        'status:working',
+        'mode:manual',
+        'user:hello there',
+        'text:Done: hello there',
+        'end:done',
+      ].sort(),
     );
     expect(seen().at(-1)).toBe('end:done');
     const typedId = events.find((event) => event.type === 'user');
@@ -458,6 +465,7 @@ describe('a Terminal session', () => {
     expect(seen(1)).toEqual([
       'user:ask to run the tests',
       'status:working',
+      'mode:manual',
       'asking:permission',
       'status:waiting',
       'asking:',
@@ -741,6 +749,7 @@ describe('a Terminal session', () => {
       'status:waiting',
       'asking:',
       'status:working',
+      'mode:manual',
       'text:Done: Hello',
       'end:done',
     ]);
@@ -852,6 +861,7 @@ describe('a Terminal session', () => {
     expect(seen(1)).toEqual([
       'user:fail please',
       'status:working',
+      'mode:manual',
       'notice:error:Limit reached',
       'end:failed',
     ]);
@@ -867,7 +877,13 @@ describe('a Terminal session', () => {
     await until(() => {
       expect(last('end')).toBeDefined();
     });
-    expect(seen(1)).toEqual(['user:Hello', 'status:working', 'text:Done: Hello', 'end:done']);
+    expect(seen(1)).toEqual([
+      'user:Hello',
+      'status:working',
+      'mode:manual',
+      'text:Done: Hello',
+      'end:done',
+    ]);
   });
 
   it('follows the session id and the permission mode its hooks tell', async () => {

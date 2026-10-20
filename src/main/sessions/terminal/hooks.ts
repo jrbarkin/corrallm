@@ -6,80 +6,23 @@ import type { AddressInfo } from 'node:net';
 import { foreignRequest } from '../../loopback';
 
 /*
- * Claude Code's hooks, reporting to corrallm. A Terminal session's CLI is started with settings
- * (`hookSettings`) that add HTTP hooks to the user's own: on the events corrallm follows, Claude
- * Code posts the event (JSON) to a server main runs on 127.0.0.1, with a bearer token only that
- * session's process has (in its environment, HOOK_TOKEN). The hooks tell what the screen does not:
- * the session's id (which changes with /clear), the prompts typed into the terminal, the last
- * reply, why a turn failed, the permission mode and the model, and what Claude Code asks the user
- * in its terminal (a permission, its questions, a plan to approve, what its notifications say).
- * corrallm only listens: it answers every hook with no decision, so the CLI behaves as it would
- * without them, and the user answers in the terminal. Like the MCP server, the server refuses a
- * foreign Host or any Origin before it reads the token (loopback.ts); it checks no media type until
+ * The local server terminal CLIs' hooks report to: JSON events, routed by the session's bearer
+ * token (HOOK_TOKEN in its environment). It only listens, answering with no decision. A foreign
+ * Host or any Origin is refused before the token (loopback.ts); no media type is checked until
  * a recording says what the CLIs' HTTP hooks send (Build Plan Q26).
  */
 
 /** The variable in a session's environment that holds its hooks' token. */
 export const HOOK_TOKEN = 'CORRALLM_HOOK_TOKEN';
-/** The events corrallm hears. (HTTP hooks cannot run on SessionStart.) */
-export const HOOK_EVENTS = [
-  'UserPromptSubmit',
-  'Stop',
-  'StopFailure',
-  'SessionEnd',
-  'PostModelSwitch',
-  'PermissionRequest',
-  'Notification',
-  'PreToolUse',
-] as const;
-/**
- * Which calls an event is heard for, where not all: before a tool runs, only the tools that ask the
- * user something (AskUserQuestion's questions, ExitPlanMode's plan), which no permission hook tells.
- */
-const MATCHERS: Partial<Record<(typeof HOOK_EVENTS)[number], string>> = {
-  PreToolUse: 'AskUserQuestion|ExitPlanMode',
-};
 /** The largest hook event read, in bytes: a prompt or a reply can be long. */
 const MAX_BODY = 4 * 1024 * 1024;
-/** How long Claude Code waits for corrallm's answer, in seconds; it answers at once. */
-const TIMEOUT_S = 5;
-
-/** A hook event, as Claude Code posts it: JSON, untrusted (never act on it beyond reading). */
+/** A hook event, as a CLI posts it: JSON, untrusted (never act on it beyond reading). */
 export type HookEvent = Readonly<Record<string, unknown>>;
-
-/**
- * The settings (for `claude --settings <file>`) that add corrallm's hooks: each event posted to
- * `url`, with the token from the session's environment. Claude Code merges them with the user's
- * and the project's hooks.
- */
-export function hookSettings(url: string): { hooks: Record<string, HookGroup[]> } {
-  const hook = {
-    type: 'http',
-    url,
-    headers: { Authorization: `Bearer $${HOOK_TOKEN}` },
-    allowedEnvVars: [HOOK_TOKEN],
-    timeout: TIMEOUT_S,
-  };
-  return {
-    hooks: Object.fromEntries(
-      HOOK_EVENTS.map((name) => {
-        const matcher = MATCHERS[name];
-        return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
-      }),
-    ),
-  };
-}
-
-/** Hooks for an event in Claude Code's settings: for the calls `matcher` names (or all). */
-export interface HookGroup {
-  matcher?: string;
-  hooks: Record<string, unknown>[];
-}
 
 /** A session's place on the server: where its hooks post, and with what token. */
 export interface HookRegistration {
   url: string;
-  /** Where its status line posts its input (statusline.ts), with the same token. */
+  /** Where its status line posts its input, with the same token. */
   statusUrl: string;
   token: string;
   /** Stops hearing its hooks. */
@@ -98,7 +41,7 @@ export class HookServer {
 
   /**
    * Starts hearing a session's hooks: `listener` hears each event its CLI posts, and `status` (if
-   * given) each status line input its CLI's status line posts (statusline.ts).
+   * given) each status line input its CLI's status line posts.
    */
   async register(
     listener: (event: HookEvent) => void,
@@ -193,7 +136,7 @@ export class HookServer {
     });
     request.on('end', () => {
       if (size > MAX_BODY) return;
-      // Answered first: Claude Code waits for the answer before it goes on.
+      // Answered first: a CLI may wait for the answer before it goes on.
       reply(200);
       let event: unknown;
       try {

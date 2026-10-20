@@ -12,8 +12,8 @@ import { readWhole, unknownFields, writeWhole } from './whole-file';
 /*
  * Every backend's latest usage reading, and its usage rule (src/shared/usage.ts). A reading comes
  * from whichever of the backend's agents reports it: `take` is the one way in, so a backend's
- * connection plugs in with one small adapter that turns what its CLI reports into windows (Claude
- * Code's status line: sessions/terminal/statusline.ts; Codex's account/rateLimits). It keeps only
+ * connection plugs in with one small adapter that turns what its CLI reports into windows. It
+ * keeps only
  * the backends the catalog lists (each adapter declares those its connections spend). Readings
  * and rules are remembered across restarts, in a JSON file in the app's user data:
  *

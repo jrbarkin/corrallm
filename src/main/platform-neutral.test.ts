@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 /*
  * The platform names no CLI: what is particular to one belongs in its adapter's folder
- * (src/main/sessions/claude-code/, src/main/sessions/sdk/, src/main/sessions/codex/), which the
+ * (src/main/sessions/claude-code/, src/main/sessions/codex/), which the
  * registry alone imports (src/main/sessions/adapters.ts). This scans the platform's code, strings
  * and comments (src/shared, src/preload, src/main outside the adapters' folders and the registry,
  * the terminal toolkit included, and src/renderer with its templates; never tests) for a CLI's
@@ -18,8 +18,9 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const SCANNED = ['src/shared', 'src/preload', 'src/main', 'src/renderer'];
 const ADAPTERS = [
   'src/main/sessions/claude-code',
-  'src/main/sessions/sdk',
   'src/main/sessions/codex',
+  'src/main/sessions/acp',
+  'src/main/sessions/muse',
 ];
 /** The registry: the one platform file that imports the adapters' folders, by their names. */
 const REGISTRY = 'src/main/sessions/adapters.ts';
@@ -28,37 +29,13 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
-  'src/main/core/selftest-claude.mjs': 2,
-  'src/main/core/selftest.ts': 21,
+  'src/main/core/selftest.ts': 2,
   'src/main/files.ts': 1,
-  'src/main/forge-env.d.ts': 2,
   'src/main/native-selftest.ts': 2,
   'src/main/sessions/args.ts': 4,
-  'src/main/sessions/claude-errors.ts': 6,
-  'src/main/sessions/claude-settings.ts': 27,
-  'src/main/sessions/claude.ts': 27,
   'src/main/sessions/connector.ts': 8,
-  'src/main/sessions/connectors.ts': 58,
-  'src/main/sessions/environment.ts': 15,
-  'src/main/sessions/executables.ts': 3,
-  'src/main/sessions/fake.ts': 13,
-  'src/main/sessions/installed.ts': 18,
-  'src/main/sessions/manager.ts': 13,
-  'src/main/sessions/terminal/claude-code.ts': 24,
-  'src/main/sessions/terminal/cli.ts': 13,
-  'src/main/sessions/terminal/connector.ts': 40,
-  'src/main/sessions/terminal/drop.ts': 1,
-  'src/main/sessions/terminal/fake-claude.ts': 11,
-  'src/main/sessions/terminal/first-run.ts': 1,
-  'src/main/sessions/terminal/hooks-off.ts': 14,
-  'src/main/sessions/terminal/hooks.ts': 9,
-  'src/main/sessions/terminal/screen.ts': 6,
-  'src/main/sessions/terminal/session.ts': 17,
-  'src/main/sessions/terminal/status.ts': 3,
-  'src/main/sessions/terminal/statusline.ts': 18,
-  'src/main/sessions/terminal/typing.ts': 3,
-  'src/main/sessions/transcript.ts': 4,
-  'src/main/usage.ts': 2,
+  'src/main/sessions/fake.ts': 12,
+  'src/main/sessions/manager.ts': 10,
   'src/renderer/agent/AgentChip.tsx': 2,
   'src/renderer/agent/AgentView.css': 1,
   'src/renderer/agent/AgentView.tsx': 27,
@@ -74,7 +51,7 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/renderer/agent/tools.ts': 1,
   'src/renderer/graph/GraphEditor.css': 4,
   'src/renderer/graph/Questions.tsx': 3,
-  'src/renderer/graph/agents.ts': 57,
+  'src/renderer/graph/agents.ts': 39,
   'src/shared/examples.ts': 7,
   'src/shared/examples/cross-check.corral': 2,
   'src/shared/examples/fan-out.corral': 4,
@@ -99,9 +76,9 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/engine/transcript/receive.ts': 5,
   'src/shared/engine/transcript/unavailable.ts': 2,
   'src/shared/ipc.ts': 4,
-  'src/shared/model/session.ts': 9,
+  'src/shared/model/session.ts': 7,
   'src/shared/model/words.ts': 5,
-  'src/shared/session.ts': 43,
+  'src/shared/session.ts': 5,
   'src/shared/usage.ts': 2,
 };
 

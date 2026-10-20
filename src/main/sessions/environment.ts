@@ -1,8 +1,9 @@
 import { spawn } from './process';
+import { ADAPTERS } from './adapters';
 
 /*
  * The environment agents run in. An app opened from the Finder or the Dock gets a bare PATH, so
- * an agent would miss what the user installed (Homebrew, nvm, `claude` itself) and so would its
+ * an agent would miss what the user installed (Homebrew, nvm, their CLI itself) and so would its
  * shell commands, hooks and MCP servers. Agents get the environment the user's login shell sets
  * up instead, without what belongs to whatever started corrallm.
  */
@@ -13,24 +14,12 @@ const MARK = '__CORRALLM_ENV__';
 const SHELL_MS = 10_000;
 
 /**
- * Variables that belong to what started corrallm, not to the user: a Claude Code session (when
+ * Variables that belong to what started corrallm, not to the user: a parent CLI session (when
  * corrallm runs from one, as under `pnpm dev`), a terminal or IDE, or Electron. An agent started
  * with them would take itself for part of that.
  */
 const INHERITED = new Set([
-  'CLAUDECODE',
-  'CLAUDE_PID',
-  'CLAUDE_EFFORT',
-  'CLAUDE_CODE_SESSION_ID',
-  'CLAUDE_CODE_CHILD_SESSION',
-  'CLAUDE_CODE_BRIDGE_SESSION_ID',
-  'CLAUDE_CODE_MESSAGING_SOCKET',
-  'CLAUDE_CODE_MESSAGING_TOKEN',
-  'CLAUDE_CODE_ENTRYPOINT',
-  'CLAUDE_CODE_EXECPATH',
-  'CLAUDE_CODE_SESSION_ATTENDED',
-  'CLAUDE_CODE_SSE_PORT',
-  'CLAUDE_AGENT_SDK_VERSION',
+  ...ADAPTERS.flatMap((adapter) => adapter.inheritedEnv ?? []),
   'TERM_SESSION_ID',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
