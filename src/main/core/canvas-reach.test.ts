@@ -1,3 +1,4 @@
+import { asHuman } from './gui';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -145,8 +146,15 @@ describe('reach when a batch’s commit builds', () => {
         node.id === 'helper' || parentId === undefined ? node : { ...node, parentId },
       ),
     });
+    const snapshot = await w.core.call('canvas.get', { canvas: CANVAS }, asHuman(7));
+    if (!snapshot.ok) throw new Error(snapshot.error.sentence);
     const gate = w.hold();
-    const edited = w.core.channels.call(7, 'run:save', [token, null, ungrouped]);
+    const edited = w.core.channels.call(7, 'run:save', [
+      token,
+      null,
+      ungrouped,
+      snapshot.value.rev,
+    ]);
     await gate.entered;
     // The batch takes its scope and passes its inner op's checks there, the edit not live yet,
     // then waits for the canvas's turn behind it.

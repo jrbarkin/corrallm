@@ -8,13 +8,14 @@ import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import type { AgentConnection } from '../graph/agents';
 import { setAgent, setConnection, setRole } from '../graph/graph';
-import type { GraphNode } from '../graph/graph';
+import type { CanvasId } from '../../shared/canvas';
+import type { AgentNode } from '../../shared/model/canvas';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
 import { SettingsMenu } from './Settings';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { Session } from '../../shared/model/session';
 
-const agent = (data: Partial<GraphNode['data']> = {}): GraphNode => ({
+const agent = (data: Partial<AgentNode['data']> = {}): AgentNode => ({
   id: 'a',
   type: 'agent',
   position: { x: 0, y: 0 },
@@ -35,29 +36,33 @@ function Editor({
   onFresh = () => undefined,
   onClose = () => undefined,
 }: {
-  initial?: GraphNode;
+  initial?: AgentNode;
   session?: Session;
   onRole?: (role: string | undefined) => void;
   onRestart?: () => void;
   onFresh?: () => void;
   onClose?: () => void;
 }) {
+  const asDoc = (node: AgentNode) => ({
+    id: '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId,
+    arrange: false,
+    nodes: [node],
+    links: [],
+  });
   const [node, setNode] = useState(initial);
   const [open, setOpen] = useState(false);
   const changeRole = (role: string | undefined) => {
     onRole(role);
     setNode(
-      (current) => setRole({ nodes: [current], edges: [] }, current.id, role).nodes[0] ?? current,
+      (current) =>
+        (setRole(asDoc(current), current.id, role).nodes[0] as AgentNode | undefined) ?? current,
     );
   };
   const changeAgent = (next: AdapterId, connection: AgentConnection) => {
     setNode(
       (current) =>
-        setConnection(
-          setAgent({ nodes: [current], edges: [] }, current.id, next),
-          current.id,
-          connection,
-        ).nodes[0] ?? current,
+        (setConnection(setAgent(asDoc(current), current.id, next), current.id, connection)
+          .nodes[0] as AgentNode | undefined) ?? current,
     );
   };
   const changeSettings = (cli: AdapterId, settings: AgentSettings) => {

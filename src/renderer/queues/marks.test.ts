@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { runCatalog } from '../graph/agents';
 import type { AgentRun } from '../../shared/engine/run/runner';
@@ -10,7 +10,7 @@ import { queueMarks } from './marks';
 /** What names a usage backend: the catalog main declares, as the run reads it. */
 const engine = runCatalog();
 
-const agent = (id: string, queue: QueueItem[]): GraphNode => ({
+const agent = (id: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },

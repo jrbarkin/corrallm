@@ -22,7 +22,7 @@ import { snapshots } from './store/snapshots';
 import { connect } from './store/sqlite';
 import { journaledRun, openTestStore, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
-import { WindowPorts } from './gui';
+import { asHuman, WindowPorts } from './gui';
 import { openWindow } from './test-window';
 
 const READING = {
@@ -311,7 +311,14 @@ describe('the core’s database', () => {
     // A window's canvas, a draft, its run journaled.
     const run = (await started.channels.call(7, 'run:get', [])) as RunContext;
     const empty = toFile({ id: run.id, arrange: false, nodes: [], links: [] });
-    await started.channels.call(7, 'run:save', [run.token, CHECKPOINT, empty]);
+    const beforeSave = await started.call('canvas.get', { canvas: run.id }, asHuman(7));
+    if (!beforeSave.ok) throw new Error(beforeSave.error.sentence);
+    await started.channels.call(7, 'run:save', [
+      run.token,
+      CHECKPOINT,
+      empty,
+      beforeSave.value.rev,
+    ]);
     expect(journaledRun(profile, run.id)).toEqual(CHECKPOINT);
     await started.close();
     core = undefined;

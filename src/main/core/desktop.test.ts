@@ -168,6 +168,61 @@ describe.each(['link.open', 'link.reveal'] as const)('%s arguments', (op) => {
 });
 
 describe('window.get', () => {
+  it('returns a conflict with current rows when a stale run save would undo a core operation', async () => {
+    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
+    const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    if (!first.ok) throw new Error(first.error.sentence);
+    const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
+    const added = await core.call(
+      'canvas.addAgent',
+      { canvas: context.id, adapter: 'codex', at: { x: 0, y: 0 } },
+      SEVEN,
+    );
+    if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
+    const result = await core.channels.call(7, 'run:save', [
+      context.token,
+      null,
+      stale,
+      first.value.rev,
+    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'conflict',
+        current: {
+          [`node/${added.value.id}`]: {
+            value: expect.objectContaining({ adapter: 'codex' }) as unknown,
+          },
+        },
+      },
+    });
+    const current = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    expect(current).toMatchObject({
+      ok: true,
+      value: { nodes: [expect.objectContaining({ id: added.value.id })] },
+    });
+  });
+  it('refuses a stale canvas:save before any file is chosen, keeping the core’s newer commit', async () => {
+    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
+    const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    if (!first.ok) throw new Error(first.error.sentence);
+    const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
+    const added = await core.call(
+      'canvas.addAgent',
+      { canvas: context.id, adapter: 'codex', at: { x: 0, y: 0 } },
+      SEVEN,
+    );
+    if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
+    const pick = vi.spyOn(host, 'pickCanvasToSave');
+    expect(
+      await core.channels.call(7, 'canvas:save', [stale, true, first.value.rev]),
+    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    expect(pick).not.toHaveBeenCalled();
+    expect(await core.call('canvas.get', { canvas: context.id }, SEVEN)).toMatchObject({
+      ok: true,
+      value: { nodes: [expect.objectContaining({ id: added.value.id })] },
+    });
+  });
   it('lists the current running state when two journal saves have the same timestamp', async () => {
     const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
     for (const running of [true, false, true]) {
@@ -180,6 +235,12 @@ describe('window.get', () => {
           updatedAt: 1234,
         },
         toFile({ id: context.id, arrange: false, nodes: [], links: [] }),
+        (
+          (await core.call('canvas.get', { canvas: context.id }, SEVEN)) as {
+            ok: true;
+            value: { rev: number };
+          }
+        ).value.rev,
       ]);
       const listed = await core.call('canvas.list', {}, SEVEN);
       expect(listed.ok).toBe(true);

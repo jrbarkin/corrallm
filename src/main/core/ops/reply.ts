@@ -1,8 +1,7 @@
-import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
 import type { Lifecycle } from '../canvas/lifecycle';
-import { itemOf } from '../canvas/proposals';
+import { isDocOp, itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
 import { partyText } from '../parties';
 import type { Implementations, OpServices } from '.';
@@ -72,11 +71,9 @@ export function replyOps({
         return { id: record.id, outcome };
       };
       if (answer.choice === 'refuse') return settled('refused');
+      // A command (R4's argument half: a close, a replace, a save) has no `before`: its guard is
+      // what it touched, its canvas's document and file, checked here.
       const command = !isDocOp(proposal.op);
-      // A change of a document's raised before proposals kept the canvas as it was (`before`) can't
-      // guard work added since: it went stale. A command's (R4's argument half) never has one.
-      if (!command && proposal.before === undefined)
-        return settled('stale', 'its earlier canvas snapshot cannot be checked safely');
       // What it touched beyond the document's entities (a canvas's document, its file: R4's
       // argument half, canvas/lifecycle.ts) must be as it was, or it went stale.
       const expect: Record<string, number> = {};
@@ -114,11 +111,6 @@ export function replyOps({
       return { id: record.id, outcome: 'allowed' as const };
     },
   };
-}
-
-/** Whether `op` is an edit of a canvas's document, which Allow's change carries its settlement. */
-function isDocOp(op: string): boolean {
-  return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }
 
 /** A sentence as a clause, to follow "but": its first letter small, its stop gone. */

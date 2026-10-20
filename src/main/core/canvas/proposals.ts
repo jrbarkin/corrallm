@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { NeedId } from '../../../shared/api/ids';
+import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasNode } from '../../../shared/model/canvas';
 import type { Message, PartyId } from '../../../shared/model/messages';
@@ -48,10 +49,10 @@ export interface Proposal {
   /** Each entity its change touched, by key, with the revision it had then (0: none). */
   touched: Readonly<Record<string, number>>;
   /**
-   * The canvas when proposed, for a change of a document's: a replay may touch rows the original
-   * build did not. None for a close, a replace or a save (R4's argument half, guarded by `touched`'s
-   * document and file), and for a change proposed before it was kept (legacy: Allow settles it
-   * stale).
+   * The canvas when proposed, for a change of a document's (always: Allow's replay may touch rows
+   * the original build did not). None for a command, R4's argument half (a close, a replace, a
+   * save), which no change of a document's carries: `touched` names its canvas's document and file,
+   * whose fingerprints Allow checks instead.
    */
   before?: Readonly<Record<string, number>>;
   /** What it would do and lose, worded as it was raised. */
@@ -148,39 +149,30 @@ export class Proposals {
    */
   async raise(
     canvas: CanvasId,
-    {
-      op,
-      args,
-      by,
-      change,
-      touched: given,
-      lost: said,
-      before,
-    }: {
+    raised: {
       op: string;
       args: Readonly<Record<string, unknown>>;
       by: PartyId;
-      change?: ChangeSet;
-      touched?: Readonly<Record<string, number>>;
-      lost?: Lost;
-      before?: Readonly<Record<string, number>>;
-    },
+    } & (
+      | { change: ChangeSet; before: Readonly<Record<string, number>> }
+      | { touched: Readonly<Record<string, number>>; lost: Lost }
+    ),
   ): Promise<NeedId> {
+    const { op, args, by } = raised;
     const open = this.#read(canvas);
     if (open === undefined) throw new Error('The canvas’s proposals can’t be read.');
     const uuid = this.#newId();
     let touched: Readonly<Record<string, number>>;
     let lost: Lost;
-    if (change === undefined) {
-      if (given === undefined || said === undefined) {
-        throw new Error('A proposal says what it touches and what it would lose.');
-      }
-      [touched, lost] = [given, said];
-    } else {
-      touched =
-        given ?? Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
+    let before: Readonly<Record<string, number>> | undefined;
+    if ('change' in raised) {
+      const { change } = raised;
+      touched = Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
       const inner = Array.isArray(args.ops) ? args.ops.length : undefined;
-      lost = said ?? wordsOf(change, await this.#deps.conversations(canvas), inner);
+      lost = wordsOf(change, await this.#deps.conversations(canvas), inner);
+      before = raised.before;
+    } else {
+      ({ touched, lost } = raised);
     }
     const proposal: Proposal = {
       id: `proposal/${uuid}` as NeedId,
@@ -205,7 +197,7 @@ export class Proposals {
           op,
           JSON.stringify(args),
           by,
-          JSON.stringify({ version: 2, touched, before }),
+          JSON.stringify({ touched, before }),
           JSON.stringify(lost),
           proposal.at,
         );
@@ -310,6 +302,15 @@ export class Proposals {
   }
 }
 
+/**
+ * Whether `op` is a change of a canvas's document (a `doc` op's, or a test registry's op), which
+ * carries the canvas as it was proposed and, on Allow, its settlement; else it is a command (R4's
+ * argument half: canvas.close, canvas.create, canvas.save).
+ */
+export function isDocOp(op: string): boolean {
+  return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
+}
+
 /** A proposal's Needs item, for you: Allow and Refuse, both yours alone. */
 export function itemOf(proposal: Proposal): NeedsItem {
   const { lost } = proposal;
@@ -401,8 +402,8 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
     const { id, op, by_party: by, raised_at: at } = row;
     const args: unknown = JSON.parse(String(row.args));
     const clock: unknown = JSON.parse(String(row.touched));
-    const touched = isRecord(clock) && clock.version === 2 ? clock.touched : clock;
-    const before = isRecord(clock) && clock.version === 2 ? clock.before : undefined;
+    if (!isRecord(clock)) return undefined;
+    const { touched, before } = clock;
     const lost: unknown = JSON.parse(String(row.lost));
     if (
       typeof id !== 'string' ||
@@ -411,6 +412,8 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       typeof at !== 'number' ||
       !isRecord(args) ||
       !revisions(touched) ||
+      // A change of a document's is read only with the canvas as it was proposed; a command has none.
+      (isDocOp(op) ? !revisions(before) : before !== undefined) ||
       !isRecord(lost) ||
       typeof lost.what !== 'string' ||
       typeof lost.title !== 'string'

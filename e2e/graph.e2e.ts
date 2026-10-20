@@ -15,7 +15,7 @@ interface Point {
   y: number;
 }
 
-/** Height of a frame's title bar and a container's padding (src/renderer/graph/graph.ts). */
+/** Height of a frame's title bar and a container's padding (shared/model/geometry.ts). */
 const HEADER = 32;
 const PADDING = 20;
 
@@ -1160,7 +1160,13 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
   await createTemplate();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   const view = page.getByRole('dialog', { name: 'All queues' });
-  const task = (lane: string, item: string) => view.locator(`[data-at='["${lane}","${item}"]']`);
+  // Template insertion mints ids in the core; locate the displayed tasks by their role.
+  const taskEnd = async (row: Locator): Promise<string> => {
+    const at = await row.getAttribute('data-at');
+    if (!at) throw new Error('The task has no row identity.');
+    const [agent, item] = JSON.parse(at) as [string, string];
+    return `${agent}:${item}`;
+  };
 
   // Each competitor's repeat goes round with the judge's: the two sit side by side, level.
   const follows = (lane: string) =>
@@ -1175,20 +1181,25 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
 
   // The judge's wait inside its repeat comes after each build inside theirs, a ribbon joining
   // them from the side of one repeat to the side of the other, level with each.
-  const build = await box(task('codex', 'build'));
-  const built = await box(task('judge', 'built'));
+  const buildTask = follows('Codex').locator('.graph-queue-message');
+  const builtTask = judging.locator('.graph-queue-wait');
+  const build = await box(buildTask);
+  const built = await box(builtTask);
+  const builtEnd = await taskEnd(builtTask);
+  const buildEnd = await taskEnd(buildTask);
   expect(built.y).toBeGreaterThanOrEqual(build.y + build.height);
-  const ribbon = await box(view.locator('g[data-link="judge:built>codex:build"] .queues-ribbon'));
+  const ribbon = await box(view.locator(`g[data-link="${builtEnd}>${buildEnd}"] .queues-ribbon`));
   expect(Math.abs(ribbon.x - (codex.x + codex.width))).toBeLessThanOrEqual(1);
   expect(Math.abs(ribbon.x + ribbon.width - (await box(judging)).x)).toBeLessThanOrEqual(1);
   expect(ribbon.y).toBeGreaterThanOrEqual(build.y);
   expect(ribbon.y).toBeLessThan(build.y + build.height);
   expect(ribbon.y + ribbon.height).toBeGreaterThan(built.y);
   expect(ribbon.y + ribbon.height).toBeLessThanOrEqual(built.y + built.height);
-  await expect(view.locator('g[data-link="judge:built>claude:build"]')).toHaveCount(2);
+  const claudeBuildEnd = await taskEnd(follows('Claude').locator('.graph-queue-message'));
+  await expect(view.locator(`g[data-link="${builtEnd}>${claudeBuildEnd}"]`)).toHaveCount(2);
   // Rows run through the repeats: Codex's wait inside its repeat is level with the judge's merge.
-  const scored = await box(task('codex', 'scored'));
-  const merge = await box(task('judge', 'merge'));
+  const scored = await box(follows('Codex').locator('.graph-queue-wait'));
+  const merge = await box(view.getByRole('group', { name: /^Judge: Message/ }));
   expect(Math.abs(scored.y - merge.y)).toBeLessThanOrEqual(1);
   // Nothing waits in a loop.
   await expect(view.locator('[data-at][data-mark="stuck"], g[data-mark="stuck"]')).toHaveCount(0);

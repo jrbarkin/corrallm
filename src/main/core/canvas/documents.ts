@@ -518,9 +518,22 @@ export class Documents {
    * edits, until its gestures are operations of their own. Rejects for text that isn't a canvas,
    * or is another canvas's.
    */
-  edit(canvas: CanvasId, text: string): Promise<number> {
+  edit(canvas: CanvasId, text: string, expected?: number): Promise<number> {
     return this.#queue(canvas, async () => {
       const live = await this.#load(canvas);
+      // Whole-document renderer edits must never overwrite a newer operation, even if queued.
+      if (expected !== undefined && expected !== live.rev) {
+        throw new OpFailure(
+          'conflict',
+          'The canvas changed before this edit could be saved.',
+          Object.fromEntries(
+            Object.entries(live.rows).map(([key, value]) => [
+              key,
+              { rev: live.revs.get(key) ?? 0, value },
+            ]),
+          ),
+        );
+      }
       if (live.kept && this.#text(live.document).text === text) return live.rev;
       const next = this.read(text);
       if (next.id !== canvas) throw new Error(ANOTHER);

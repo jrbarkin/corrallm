@@ -59,6 +59,20 @@ export class TopicMirror {
     return this.#topics.get(topic)?.state as TopicStates[K] | undefined;
   }
 
+  /** The revision accompanies a renderer's remaining whole-document edits. */
+  revision(topic: TopicKey): number | undefined {
+    return this.#topics.get(topic)?.rev;
+  }
+
+  /** Re-read after a guarded legacy write conflicts, then rebuild its edit from these rows. */
+  async refresh(topic: TopicKey): Promise<void> {
+    const entry = this.#entry(topic);
+    this.#activate(entry);
+    delete entry.rev;
+    this.#read(entry, true);
+    await this.whenAt(topic, 0);
+  }
+
   subscribe(topic: TopicKey, listener: () => void): () => void {
     const entry = this.#entry(topic);
     entry.listeners.add(listener);

@@ -1,3 +1,4 @@
+import type { RunCheckpoint } from '../../shared/run';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -80,11 +81,39 @@ async function app(sessions?: CoreConfig['sessions']) {
 async function channel<C extends CoreChannel>(
   window: WindowLink,
   name: C,
-  ...args: IpcArgs<C>
-): Promise<IpcResult<C>> {
+  ...args: C extends 'run:save'
+    ? [string, RunCheckpoint | null, string]
+    : C extends 'canvas:save'
+      ? [string, boolean]
+      : IpcArgs<C>
+): Promise<C extends 'canvas:save' ? string | null : C extends 'run:save' ? null : IpcResult<C>> {
+  if (name === 'run:save' || name === 'canvas:save') {
+    const own = await window.request('call', 'window.get', {});
+    if (!own.ok || !own.value.ok) throw new Error('No window canvas');
+    const state = await window.request('call', 'canvas.get', {
+      canvas: (own.value.value as { canvas: string }).canvas,
+    });
+    if (!state.ok || !state.value.ok) throw new Error('No canvas');
+    (args as unknown[]).push((state.value.value as { rev: number }).rev);
+  }
   const answer = await window.request('channel', name, args);
   if (!answer.ok) throw new Error(answer.error.message);
-  return answer.value as IpcResult<C>;
+  if (name === 'run:save' || name === 'canvas:save') {
+    const result = answer.value as
+      | { ok: true; value: { name?: string | null; rev: number } }
+      | { ok: false; error: { sentence: string } };
+    if (!result.ok) throw new Error(result.error.sentence);
+    return (name === 'canvas:save' ? (result.value.name ?? null) : null) as C extends 'canvas:save'
+      ? string | null
+      : C extends 'run:save'
+        ? null
+        : IpcResult<C>;
+  }
+  return answer.value as C extends 'canvas:save'
+    ? string | null
+    : C extends 'run:save'
+      ? null
+      : IpcResult<C>;
 }
 
 function events(window: WindowLink) {
@@ -271,7 +300,7 @@ describe('the app’s core and window channels', () => {
     await channel(eight, 'canvas:forget');
     const other = await channel(eight, 'run:get');
     const empty = toFile({ id, arrange: false, nodes: [], links: [] });
-    expect(await seven.request('channel', 'run:save', [other.token, null, empty])).toEqual({
+    expect(await seven.request('channel', 'run:save', [other.token, null, empty, 0])).toEqual({
       ok: false,
       error: { message: 'This run belongs to an earlier canvas' },
     });

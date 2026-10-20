@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { canvasIdOf } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
@@ -10,16 +11,24 @@ import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
+import { ApiError } from './api/bridge';
 import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
 
 const runSource: RunSource = {
   get: async () => {
-    const [context, { canvas }] = await Promise.all([window.api.getRun(), api.windowGet()]);
+    const { canvas } = await api.windowGet();
+    await topics.whenAt(`canvas:${canvas as CanvasId}`, 0);
+    const context = await window.api.getRun();
     return { ...context, id: canvas as CanvasId };
   },
-  save: (token, checkpoint, document) => window.api.saveRun(token, checkpoint, document),
+  save: async (token, checkpoint, document, rev) => {
+    const result = await window.api.saveRun(token, checkpoint, document, rev);
+    if (!result.ok) throw new ApiError(result.error);
+    await topics.whenAt(`canvas:${canvasIdOf(document)}`, result.value.rev);
+    return result.value.rev;
+  },
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),
 };
@@ -30,7 +39,11 @@ const runSource: RunSource = {
  */
 const files: CanvasFiles = {
   open: () => window.api.openCanvas(),
-  save: (text, choose) => window.api.saveCanvas(text, choose),
+  save: async (text, choose, rev) => {
+    const result = await window.api.saveCanvas(text, choose, rev);
+    if (!result.ok) throw new ApiError(result.error);
+    return result.value.name;
+  },
   forget: () => window.api.forgetCanvas(),
   chooseProject: () => window.api.chooseProject(),
 };

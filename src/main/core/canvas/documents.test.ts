@@ -714,6 +714,29 @@ describe('a canvas’s document', () => {
   });
 });
 
+it('refuses a stale renderer document inside the canvas turn, including an unchanged stale copy', async () => {
+  const canvas = newCanvasId();
+  await documents.edit(canvas, toFile(canvasOf(canvas)));
+  const before = documents.live(canvas);
+  const rev = before.rev;
+  const text = toFile(before.document);
+  await commit(canvas, renamed(before.document, 'lead', 'Newer'));
+  const newer = documents.live(canvas).document;
+  await expect(documents.edit(canvas, text, rev)).rejects.toMatchObject({
+    code: 'conflict',
+    current: { 'node/lead': { value: expect.objectContaining({ label: 'Newer' }) as unknown } },
+  });
+  await expect(documents.edit(canvas, toFile(newer), rev)).rejects.toMatchObject({
+    code: 'conflict',
+  });
+  expect(documents.live(canvas).document).toBe(newer);
+  const current = documents.live(canvas).rev;
+  await documents.edit(canvas, toFile(renamed(newer, 'worker', 'Edited')), current);
+  expect(documents.live(canvas).document.nodes.find((node) => node.id === 'lead')?.data.label).toBe(
+    'Newer',
+  );
+});
+
 describe('the agents a party created', () => {
   /** `document` with a new agent `id`. */
   const withAgent = (document: CanvasDocument, id: string): CanvasDocument => ({

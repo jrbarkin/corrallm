@@ -503,6 +503,19 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
     });
   });
 
+  it('keeps a token’s close across a restart, with no canvas snapshot: Allow still closes it', async () => {
+    await edit(OTHER, 'solo', 'Edited');
+    const { proposed } = await applied('canvas.close', { canvas: OTHER, discard: true }, TOKEN);
+    await core.close();
+    core = await start();
+    expect(await proposals(OTHER)).toEqual([expect.objectContaining({ id: proposed })]);
+    expect(
+      await applied('reply', { canvas: OTHER, to: proposed, answer: { choice: 'allow' } }),
+    ).toMatchObject({ outcome: 'allowed' });
+    expect(labelsOf(await documentOf(OTHER))).toEqual(['Solo']);
+    expect((await listed())[OTHER]).toMatchObject({ open: false });
+  });
+
   it('proposes a token’s replace of a canvas it may not close; refusals still win', async () => {
     await edit(OTHER, 'solo', 'Edited');
     const { proposed } = await applied(

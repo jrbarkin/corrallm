@@ -1,8 +1,8 @@
-import { render } from '@testing-library/react';
+import { renderReady } from '../test-render';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { CARD_SIZE } from '../../shared/model/geometry';
-import { GraphEditor } from './GraphEditor';
+import { GraphEditor } from '../test-graph';
 import css from './GraphEditor.css?raw';
 
 vi.mock('../terminal/screen', async () => {
@@ -24,9 +24,9 @@ function cardRules() {
   document.head.append(rules);
 }
 
-it('keeps the fixed card dimensions equal to the model’s CARD_SIZE', () => {
+it('keeps the fixed card dimensions equal to the model’s CARD_SIZE', async () => {
   cardRules();
-  const { container } = render(<GraphEditor />);
+  const { container } = await renderReady(<GraphEditor />);
   const card = document.createElement('div');
   card.className = 'graph-card';
   container.append(card);
@@ -36,10 +36,10 @@ it('keeps the fixed card dimensions equal to the model’s CARD_SIZE', () => {
   expect(style.boxSizing).toBe('border-box');
 });
 
-it('constrains a long name and full queue to the same card, clipping the label with an ellipsis', () => {
+it('constrains a long name and full queue to the same card, clipping the label with an ellipsis', async () => {
   cardRules();
   const name = 'A very long agent name '.repeat(30);
-  const { container } = render(
+  const { container } = await renderReady(
     <GraphEditor
       initialGraph={{
         nodes: [

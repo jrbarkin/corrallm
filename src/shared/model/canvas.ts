@@ -7,8 +7,8 @@ import type { QueueItem } from './queue';
  * A canvas as the model keeps it: its agents, the frames that group them and the links between
  * agents, by what they mean, with nothing of how a view draws them (no selection, no sizes: a
  * group fits what it holds). The run reads only these; the renderer's graph wraps each agent's data
- * in a React Flow node (src/renderer/graph/graph.ts GraphNode) and gives the run the model's
- * nodes (canvasNodes there).
+ * in a React Flow node (src/renderer/graph/flow.ts GraphNode) and gives the run the model's
+ * nodes directly.
  *
  * Plain data, free of Node, Electron, the DOM and React Flow: it is compiled into every process.
  */

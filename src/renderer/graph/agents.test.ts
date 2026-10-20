@@ -1,3 +1,4 @@
+import * as Structure from '../../shared/model/structure';
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
@@ -15,7 +16,8 @@ import {
   defaultConnection,
 } from './agents';
 import { fromFile, toFile } from '../../shared/model/file';
-import { addAgent, documentOf, EMPTY_GRAPH, graphOf, setAgent, spawnAgent } from './graph';
+import { documentOf, EMPTY_GRAPH, graphOf } from '../test-graph-data';
+import { setType } from '../../shared/model/agent-ops';
 
 const ID = '7d0c2b9e-4f1a-4c3d-9e8b-2a1f0e6d5c4b' as CanvasId;
 
@@ -37,6 +39,41 @@ const canvas = (fields: Record<string, unknown>) =>
     ],
     links: [],
   });
+
+function setAgent(graph: typeof EMPTY_GRAPH, agent: string, adapter: string) {
+  return graphOf(
+    setType(
+      documentOf(graph, ID),
+      { agent, adapter },
+      { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+    ).next,
+  );
+}
+function addAgent(graph: typeof EMPTY_GRAPH, id: string, at: { x: number; y: number }) {
+  let n = 0;
+  return graphOf(
+    Structure.addAgent(
+      documentOf(graph, ID),
+      { adapter: DEFAULT_AGENT, at },
+      { defaultAdapter: DEFAULT_AGENT, newId: () => (n++ === 0 ? id : `${id}/message`) },
+    ).next,
+  );
+}
+function spawnAgent(
+  graph: typeof EMPTY_GRAPH,
+  from: string,
+  id: string,
+  relation: 'peer' | 'linked',
+) {
+  let n = 0;
+  return graphOf(
+    Structure.spawnAgent(
+      documentOf(graph, ID),
+      { from, relation },
+      { defaultAdapter: DEFAULT_AGENT, newId: () => (n++ === 0 ? id : `${id}/message`) },
+    ).next,
+  );
+}
 
 describe('native agent defaults', () => {
   it('creates and spawns real Terminal agents without waiting for CLI detection', () => {

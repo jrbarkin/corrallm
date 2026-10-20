@@ -10,7 +10,7 @@ import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import { catalog, continuesIn } from '../catalog';
 import { adapterName, connectionInfo, connectionOf, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from '../../shared/model/session';
@@ -24,7 +24,7 @@ export function AgentSettingsSummary({
   options,
   onOpen,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   options: Options;
   onOpen: () => void;
 }) {
@@ -77,7 +77,7 @@ export function AgentSettingsPanel({
   onFresh,
   onClose,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   session: Session;
   options: Options;
   onRename: (name: string) => void;

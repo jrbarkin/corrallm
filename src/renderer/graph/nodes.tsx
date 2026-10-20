@@ -17,7 +17,7 @@ import { useGraphActions } from './actions';
 import { pointOnBezier } from './curve';
 import { agentLabel, connectionInfo, connectionOf, DEFAULT_AGENT } from './agents';
 import type { AgentConnection } from './agents';
-import type { GraphNode } from './graph';
+import type { GraphNode } from './flow';
 import { SHORTCUTS } from './keys';
 import { isBlank } from '../../shared/model/queue';
 
@@ -250,7 +250,7 @@ function Label({ id, label }: { id: string; label: string }) {
 function LabelInput({ id, label }: { id: string; label: string }) {
   const { rename, stopEditing } = useGraphActions();
   const draft = useLabel(label, (text) => {
-    rename(id, text);
+    return rename(id, text);
   });
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {

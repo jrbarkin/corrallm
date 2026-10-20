@@ -1,4 +1,4 @@
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import { isWait, withRepeated } from '../../shared/model/queue';
 
 /** One end of a link: an item in a column's queue, or (null) the end of that queue. */
@@ -19,8 +19,8 @@ export interface QueueLink {
  * every wait in either for the other agent (in its queue, or in a repeat there), from what it waits
  * for (one of its items, at any depth, or the end of its queue for all of its work) to the wait.
  */
-export function queueLinks(own: GraphNode, peer: GraphNode): QueueLink[] {
-  const waits = (waiting: GraphNode, column: LinkEnd['column'], other: GraphNode) =>
+export function queueLinks(own: AgentNode, peer: AgentNode): QueueLink[] {
+  const waits = (waiting: AgentNode, column: LinkEnd['column'], other: AgentNode) =>
     withRepeated(waiting.data.queue ?? []).flatMap((item) =>
       isWait(item)
         ? item.waitFor

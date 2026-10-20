@@ -20,7 +20,7 @@ import { actionsOf, adapterCli, DEFAULT_AGENT } from '../graph/agents';
 import type { AgentConnection } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import { chooseTarget, findItem, isApproval, isWait } from '../../shared/model/queue';
 import type { WaitTarget } from '../../shared/model/queue';
 import { QueueAddMenu, QueueEditor } from '../graph/QueueEditor';
@@ -147,9 +147,9 @@ export function AgentView({
   controls,
   onClose,
 }: {
-  node: GraphNode;
+  node: AgentNode;
   /** Every node of the graph: what queued items can act on. */
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   /** Where the node's card is on screen: the panel grows from it and shrinks back into it. */
   origin: () => DOMRect | undefined;
   /**
@@ -358,7 +358,7 @@ export function AgentView({
 
   /** Its own queue's edits. */
   const own = editsOf(edits, node.id);
-  const peerNode = nodes.find((n) => n.id === peer && n.type === 'agent');
+  const peerNode = nodes.filter((n) => n.type === 'agent').find((n) => n.id === peer);
   const links = useMemo(() => (peerNode ? queueLinks(node, peerNode) : []), [node, peerNode]);
   const waiting = choosing && findItem(node.data.queue ?? [], choosing.waitId)?.item;
   const chosen = waiting && isWait(waiting) ? waiting.waitFor[choosing.index] : undefined;

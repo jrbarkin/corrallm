@@ -226,7 +226,7 @@ describe('T3c: usage and settings topics', () => {
       nodes: [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } }],
       links: [],
     });
-    await core.channels.call(7, 'run:save', [token, null, text]);
+    await core.channels.call(7, 'run:save', [token, null, text, snapshot.rev]);
     await vi.waitFor(() => {
       expect(window.changes.find(({ topic }) => topic === `canvas:${canvas}`)).toBeDefined();
     });
