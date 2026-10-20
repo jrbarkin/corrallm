@@ -10,11 +10,12 @@ import type { EntityKey, ItemRow, NodeRow, Row } from './rows';
 
 /*
  * What a change to a canvas's document must hold to, whoever makes it (revision R34, B9 Design
- * §4): what it touched, as its canvas's file would hold it (fromFile's reading of each node it
- * changed, and of each agent whose queue it changed); each step it wrote (one it added, or whose
- * fields it changed) naming an action its agent's adapter declares; and what each item it wrote
- * names, there: the agent it goes to, what a wait waits for, the repeat one goes round with. What
- * it only moved, or left as it was, is read as it was: an older file's step keeps its action until
+ * §4): what it wrote, as its canvas's file would hold it (fromFile's reading of each node it added
+ * or changed in more than where it sits, and of each agent whose queue it wrote); each step it
+ * wrote (one it added, or whose fields it changed) naming an action its agent's adapter declares;
+ * and what each item it wrote names, there: the agent it goes to, what a wait waits for, the repeat
+ * one goes round with. What it only moved, or left as it was, is kept as it was, unread (a drag, or
+ * an arrange moving every node, reads no queue): an older file's step keeps its action until
  * someone rewrites it. An adapter this build lacks declares nothing it can read, so its steps keep
  * theirs. Nothing here reads who wrote an item (`by`).
  */
@@ -35,13 +36,13 @@ export function editFault(
   for (const [key, { before, after }] of touched) {
     if (after === null) continue;
     const entity = entityOf(key);
-    if (entity === 'node') read.add((after as NodeRow).id);
+    if (entity === 'node' && !(before !== null && movedOnly(before as NodeRow, after as NodeRow))) {
+      read.add((after as NodeRow).id);
+    }
     if (entity !== 'item') continue;
     const row = after as ItemRow;
+    if (before !== null && sameJson((before as ItemRow).body, row.body)) continue;
     read.add(row.agent);
-    if (before !== null && JSON.stringify((before as ItemRow).body) === JSON.stringify(row.body)) {
-      continue;
-    }
     const ids = written.get(row.agent) ?? new Set<string>();
     ids.add(row.id);
     written.set(row.agent, ids);
@@ -106,6 +107,17 @@ function itemFault(
     }
   }
   return undefined;
+}
+
+/** Whether a node's row changed in where it sits alone: its place, or its position. */
+function movedOnly(was: NodeRow, is: NodeRow): boolean {
+  const unplaced = (row: NodeRow) => ({ ...row, place: 0, x: 0, y: 0 });
+  return sameJson(unplaced(was), unplaced(is));
+}
+
+/** Whether two plain values are the same, as JSON says them. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** A queue's items, at any depth: what each if-then and repeat holds after it. */

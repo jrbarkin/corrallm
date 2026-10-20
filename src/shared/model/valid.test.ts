@@ -64,10 +64,10 @@ function withQueue(
 }
 const adding = (id: string, item: QueueItem) => withQueue(id, (queue) => [...queue, item]);
 
-/** Why `next`, changed from BEFORE, can't be kept. */
-function faultOf(next: CanvasDocument): string | undefined {
-  const before = toRows(BEFORE);
-  const { rows, changed } = diffRows(before, next, BEFORE);
+/** Why `next`, changed from `was` (BEFORE), can't be kept. */
+function faultOf(next: CanvasDocument, was: CanvasDocument = BEFORE): string | undefined {
+  const before = toRows(was);
+  const { rows, changed } = diffRows(before, next, was);
   const entities = new Map<EntityKey, { before: Row | null; after: Row | null }>(
     changed.map((key) => [key, { before: before[key] ?? null, after: rows[key] ?? null }]),
   );
@@ -150,6 +150,33 @@ describe('editFault', () => {
     ] satisfies QueueItem[];
     for (const item of faults)
       expect(faultOf(adding('a', item)), JSON.stringify(item)).toBeDefined();
+  });
+
+  it('reads no node a change only moved: what it holds is as it was', () => {
+    // Held in rows from before, it says what this build no longer takes.
+    const stale: CanvasDocument = {
+      ...BEFORE,
+      nodes: BEFORE.nodes.map((node) =>
+        node.id === 'b' && node.type === 'agent'
+          ? { ...node, data: { ...node.data, settings: { codex: { mode: 'full-access' } } } }
+          : node,
+      ),
+    };
+    const moved = (document: CanvasDocument, x: number) => ({
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === 'b' ? { ...node, position: { x, y: 40 } } : node,
+      ),
+    });
+    expect(faultOf(moved(stale, 300), stale)).toBeUndefined();
+    // Renamed, it is read.
+    const renamed = {
+      ...stale,
+      nodes: stale.nodes.map((node) =>
+        node.id === 'b' ? { ...node, data: { ...node.data, label: 'Builder' } } : node,
+      ),
+    };
+    expect(faultOf(renamed, stale)).toMatch(/mode must be one of/);
   });
 
   it('reads only what the change wrote: an item moved or left as it was is kept as it is', () => {
