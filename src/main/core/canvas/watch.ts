@@ -22,12 +22,12 @@ export const RETRY_MS = 250;
 
 /**
  * Watches `folder`, saying the name of each entry a change is said of (null: some entry, unnamed),
- * until it errors or closes (`stopped`), or its owner closes it.
+ * until it errors or closes (`stopped`, with the error where known), or its owner closes it.
  */
 export type WatchFolder = (
   folder: string,
   changed: (name: string | null) => void,
-  stopped: () => void,
+  stopped: (error?: unknown) => void,
 ) => { close(): void };
 
 /** `fs.watch` of a folder, holding no process open; a failed watch says why and is re-armed. */
@@ -35,10 +35,7 @@ export const watchFolder: WatchFolder = (folder, changed, stopped) => {
   const watcher = watch(folder, { persistent: false }, (_event, name) => {
     changed(typeof name === 'string' ? name : null);
   });
-  watcher.on('error', (error) => {
-    console.error(`Could not go on watching ${folder} for canvas files changed on disk:`, error);
-    stopped();
-  });
+  watcher.on('error', stopped);
   watcher.on('close', stopped);
   return watcher;
 };
@@ -58,6 +55,8 @@ interface Folder {
   generation: number;
   retry: ReturnType<typeof setTimeout> | undefined;
   delay: number;
+  /** This outage has been said once; failed retries stay quiet until the watch is re-armed. */
+  lost: boolean;
 }
 
 export class FileWatch {
@@ -105,6 +104,7 @@ export class FileWatch {
         generation: 0,
         retry: undefined,
         delay: RETRY_MS,
+        lost: false,
       };
       this.#folders.set(folder, watched);
       watched.files.set(canvas, path.basename(file));
@@ -126,14 +126,15 @@ export class FileWatch {
         (name) => {
           if (!current()) return;
           // Linux's IN_DELETE_SELF can report only the folder's own name, with no error or close.
-          if (name === path.basename(folder)) this.#retry(folder, watched);
+          if (name === path.basename(folder)) this.#retry(folder, watched, 'gone');
           else
             for (const [canvas, named] of watched.files) {
               if (name === null || name === named) this.#soon(canvas);
             }
         },
-        () => {
-          if (current()) this.#retry(folder, watched);
+        (error) => {
+          if (current())
+            this.#retry(folder, watched, error === undefined ? 'closed' : reasonOf(error));
         },
       );
       if (!current()) {
@@ -142,19 +143,26 @@ export class FileWatch {
       }
       watched.watcher = watcher;
       watched.delay = RETRY_MS;
+      if (watched.lost) {
+        watched.lost = false;
+        console.error(`Watching canvas files in ${JSON.stringify(folder)} again.`);
+      }
       if (recovered) for (const canvas of watched.files.keys()) this.#soon(canvas);
     } catch (error) {
-      console.error(`Could not watch ${folder} for canvas files changed on disk:`, error);
-      if (current()) this.#retry(folder, watched);
+      if (current()) this.#retry(folder, watched, reasonOf(error));
     }
   }
 
-  #retry(folder: string, watched: Folder): void {
+  #retry(folder: string, watched: Folder, reason: string): void {
     // Invalidate first: closing it may synchronously say it stopped too.
     watched.generation++;
     const watcher = watched.watcher;
     watched.watcher = undefined;
     watcher?.close();
+    if (!watched.lost) {
+      watched.lost = true;
+      console.error(`Cannot watch canvas files in ${JSON.stringify(folder)}: ${reason}; retrying.`);
+    }
     if (watched.retry !== undefined) return;
     watched.retry = setTimeout(() => {
       watched.retry = undefined;
@@ -188,4 +196,12 @@ export class FileWatch {
     timer.unref();
     this.#timers.set(canvas, timer);
   }
+}
+
+/** A short reason on one line, without the error's diagnostic, path or stack. */
+function reasonOf(error: unknown): string {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+  if (code === 'ENOENT') return 'gone';
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'error';
 }

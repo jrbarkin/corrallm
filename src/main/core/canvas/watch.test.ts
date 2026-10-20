@@ -19,15 +19,16 @@ const THERE = path.resolve('/work/elsewhere');
 
 /** Each folder watched now, and what it tells of a change of an entry. */
 let watched: Map<string, (name: string | null) => void>;
-let stopped: Map<string, () => void>;
+let stopped: Map<string, (error?: unknown) => void>;
 let unavailable: boolean;
+let failure: Error & { code: string };
 let opened: string[];
 let checked: CanvasId[];
 let watch: FileWatch;
 
 const fake: WatchFolder = (folder, changed, ended) => {
   opened.push(folder);
-  if (unavailable) throw new Error('Folder is gone');
+  if (unavailable) throw failure;
   stopped.set(folder, ended);
   watched.set(folder, changed);
   return {
@@ -44,6 +45,9 @@ beforeEach(() => {
   watched = new Map();
   stopped = new Map();
   unavailable = false;
+  failure = Object.assign(new Error('Folder is gone\nwith a multiline diagnostic'), {
+    code: 'ENOENT',
+  });
   opened = [];
   checked = [];
   watch = new FileWatch({
@@ -56,6 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   watch.close();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function tell(folder: string, name: string | null): void {
@@ -117,7 +122,7 @@ describe('the open canvases’ files', () => {
     expect(watched.size).toBe(0);
   });
 
-  it.each(['folder name', 'error or close'])(
+  it.each(['folder name', 'error', 'close'])(
     're-arms after %s, backs off while absent and checks every canvas',
     (event) => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -132,14 +137,17 @@ describe('the open canvases’ files', () => {
       if (!oldChanged || !oldStopped) throw new Error('No folder watch');
       unavailable = true;
       if (event === 'folder name') oldChanged(path.basename(HERE));
-      else oldStopped();
+      else oldStopped(event === 'error' ? failure : undefined);
       // Linux can send the folder's name twice, and closing a failed watch emits close too.
       oldChanged(path.basename(HERE));
       oldStopped();
       expect(watched.size).toBe(0);
       expect(opened).toHaveLength(1);
+      const lost = `Cannot watch canvas files in ${JSON.stringify(HERE)}: ${event === 'close' ? 'closed' : 'gone'}; retrying.`;
+      expect(error.mock.calls).toEqual([[lost]]);
       vi.advanceTimersByTime(RETRY_MS);
       expect(opened).toHaveLength(2);
+      expect(error.mock.calls).toEqual([[lost]]);
       vi.advanceTimersByTime(RETRY_MS);
       expect(opened).toHaveLength(2);
       unavailable = false;
@@ -155,7 +163,10 @@ describe('the open canvases’ files', () => {
       tell(HERE, 'one.corral');
       vi.advanceTimersByTime(SETTLE_MS);
       expect(checked).toEqual([ONE, TWO, ONE]);
-      expect(error).toHaveBeenCalled();
+      expect(error.mock.calls).toEqual([
+        [lost],
+        [`Watching canvas files in ${JSON.stringify(HERE)} again.`],
+      ]);
     },
   );
 
@@ -169,14 +180,48 @@ describe('the open canvases’ files', () => {
     expect(opened).toHaveLength(7);
     vi.advanceTimersByTime(1);
     expect(opened).toHaveLength(8);
-    expect(error).toHaveBeenCalledWith(
-      `Could not watch ${HERE} for canvas files changed on disk:`,
-      expect.objectContaining({ message: 'Folder is gone' }),
-    );
+    expect(error.mock.calls).toEqual([
+      [`Cannot watch canvas files in ${JSON.stringify(HERE)}: gone; retrying.`],
+    ]);
     expect(vi.getTimerCount()).toBe(1);
     watch.close();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each(['ENOENT', 'EMFILE', 'EACCES'])(
+    'says an initial %s once, stays quiet through retries and says when watching resumes',
+    (code) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      unavailable = true;
+      failure = Object.assign(new Error('A diagnostic\nwith a stack and private details'), {
+        code,
+      });
+      const files = new Map([[ONE, path.join(HERE, 'one.corral')]]);
+      watch.follow(files);
+      const lost = `Cannot watch canvas files in ${JSON.stringify(HERE)}: ${code === 'ENOENT' ? 'gone' : code}; retrying.`;
+      expect(error.mock.calls).toEqual([[lost]]);
+      vi.advanceTimersByTime(60_000);
+      watch.follow(files);
+      expect(error.mock.calls).toEqual([[lost]]);
+      expect(vi.getTimerCount()).toBe(1);
+
+      unavailable = false;
+      vi.advanceTimersByTime(10_000);
+      const recovered = `Watching canvas files in ${JSON.stringify(HERE)} again.`;
+      expect(error.mock.calls).toEqual([[lost], [recovered]]);
+      expect(checked).toEqual([ONE]);
+      expect(vi.getTimerCount()).toBe(0);
+      watch.follow(files);
+      vi.advanceTimersByTime(60_000);
+      expect(error.mock.calls).toEqual([[lost], [recovered]]);
+
+      // A later outage is a new loss, not a permanently silenced watch.
+      stopped.get(HERE)?.(failure);
+      expect(error.mock.calls).toEqual([[lost], [recovered], [lost]]);
+      vi.advanceTimersByTime(RETRY_MS);
+      expect(error.mock.calls).toEqual([[lost], [recovered], [lost], [recovered]]);
+    },
+  );
 
   it.each(['last canvas closes', 'core closes'])('drops retries when the %s', (event) => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
