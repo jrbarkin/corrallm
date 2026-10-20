@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
@@ -141,6 +141,7 @@ beforeEach(async () => {
   disk = onDisk(profile);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   disk.close();
   await memory.flush();
   await store.close();
@@ -356,87 +357,55 @@ describe('a canvas’s document', () => {
     expect((await documents.load(canvas)).document).toEqual(next);
   });
 
-  it('is what its rows hold when only its commit’s flush failed, and commits on from there', async () => {
+  it('is left as it was when its commit’s flush fails, every change after it refused with the database’s error until it is opened again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let failing = false;
     await restart({
       ...SYSTEM_DEPS,
-      flush: (fd) => {
-        if (!failing) return SYSTEM_DEPS.flush(fd);
-        failing = false;
-        return Promise.reject(new Error('EIO: fsync failed'));
-      },
+      flush: (fd) =>
+        failing ? Promise.reject(new Error('EIO: fsync failed')) : SYSTEM_DEPS.flush(fd),
     });
     const canvas = newCanvasId();
+    const other = newCanvasId();
     await filed(canvasOf(canvas));
-    const one = renamed((await documents.load(canvas)).document, 'worker', 'One');
+    const file = await filed(canvasOf(other));
+    const before = (await documents.load(canvas)).document;
+    const untouched = (await documents.load(other)).document;
+    const one = renamed(before, 'worker', 'One');
+    /** The database's error, once it failed closed. */
+    const FAILED =
+      /The core’s database could not be written to the drive \(EIO: fsync failed\), so it keeps nothing more until the core opens it again/;
 
     failing = true;
     const failed = commit(canvas, one);
-    await expect(failed).rejects.toMatchObject({
-      name: 'CommitFailed',
-      made: true,
-      message: 'The change was made, but may not be on disk: EIO: fsync failed',
-    });
-    // Its rows hold it, so the live document does.
-    expect(documentRow(canvas)).toMatchObject({ rev: 2 });
-    expect(documents.live(canvas)).toMatchObject({ document: one, rev: 2 });
-    expect(documents.live(canvas).revs.get('node/worker')).toBe(2);
+    await expect(failed).rejects.toBeInstanceOf(CommitFailed);
+    await expect(failed).rejects.toThrow(
+      /^The change couldn’t be written, so nothing changed: The core’s database could not be written to the drive/,
+    );
+    expect(documents.live(canvas)).toMatchObject({ document: before, rev: 1 });
+    expect(documents.edited(canvas)).toBe(false);
+    failing = false;
 
-    const two = renamed(one, 'lead', 'Two');
-    await expect(commit(canvas, two)).resolves.toBe(3);
+    // Its flushes work again, but the database keeps nothing more, of any canvas, until it is
+    // opened again: no commit, edit or save.
+    const two = renamed(untouched, 'lead', 'Two');
+    await expect(commit(other, two)).rejects.toThrow(FAILED);
+    await expect(commit(canvas, one)).rejects.toThrow(FAILED);
+    await expect(documents.edit(other, toFile(two))).rejects.toThrow(FAILED);
+    await expect(documents.save(other, mintTrustedPath(file))).rejects.toThrow(FAILED);
+    expect(documents.live(canvas)).toMatchObject({ document: before, rev: 1 });
+    expect(documents.live(other)).toMatchObject({ document: untouched, rev: 1 });
+    expect(await readFile(file, 'utf8')).toBe(toFile(canvasOf(other)));
+
+    // Opened again (with no other connection keeping its log's index, as in the core's process),
+    // it holds neither change, and commits again.
+    disk.close();
     await restart();
-    expect(await documents.load(canvas)).toMatchObject({ document: two, rev: 3 });
-  });
-
-  it('reads its rows before it is used again when they couldn’t be read after a commit failed', async () => {
-    let failing = false;
-    // A database whose document rows can't be read while `unreadable`: from as its flush fails.
-    let unreadable = false;
-    await restart({
-      ...SYSTEM_DEPS,
-      flush: (fd) => {
-        if (!failing) return SYSTEM_DEPS.flush(fd);
-        failing = false;
-        unreadable = true;
-        return Promise.reject(new Error('EIO: fsync failed'));
-      },
-    });
-    documents = new Documents({
-      store: {
-        prepare: (sql) => {
-          if (unreadable && sql.includes('FROM document')) throw new Error('EIO: read failed');
-          return store.prepare(sql);
-        },
-        write: (run) => store.write(run),
-      },
-      memory,
-      catalog: CATALOG,
-      defaultAdapter: DEFAULT_ADAPTER,
-    });
-    const canvas = newCanvasId();
-    await filed(canvasOf(canvas));
-    const one = renamed((await documents.load(canvas)).document, 'worker', 'One');
-
-    failing = true;
-    await expect(commit(canvas, one)).rejects.toMatchObject({
-      made: undefined,
-      message: 'The change may or may not have been made: EIO: fsync failed',
-    });
-    unreadable = false;
-
-    // The next change is built over what its rows hold: the change, made.
-    const built: string[] = [];
-    const changed = await documents.change(canvas, {
-      revision: { op: 'canvas.rename', by: 'you' },
-      build: (document) => {
-        built.push(document.nodes.map((node) => node.data.label).join(', '));
-        return { next: renamed(document, 'lead', 'Two'), result: undefined };
-      },
-      check: () => undefined,
-      committing: () => undefined,
-    });
-    expect(built).toEqual(['Team, Lead, One']);
-    expect(changed.committed?.rev).toBe(3);
+    disk = onDisk(profile);
+    expect(await documents.load(canvas)).toMatchObject({ document: before, rev: 1 });
+    expect(await documents.load(other)).toMatchObject({ document: untouched, rev: 1 });
+    await expect(commit(canvas, one)).resolves.toBe(2);
+    expect(documentRow(canvas)).toMatchObject({ rev: 2 });
   });
 
   it('refuses a change its rows can’t hold, writing nothing', async () => {

@@ -6,7 +6,6 @@ import type { PartyId } from '../../../shared/model/messages';
 import { OpFailure } from '../call';
 import type { Caller, TokenCaller } from '../caller';
 import type { ChangeSet } from './change';
-import { CommitFailed } from './documents';
 import type { Built, Documents, LiveDocument } from './documents';
 
 /*
@@ -17,7 +16,7 @@ import type { Built, Documents, LiveDocument } from './documents';
  * the change, refused if any rule says so); then, past its point of no return, written
  * write-through (canvas/documents.ts). An op that changes nothing is checked against nothing. What
  * follows a commit (`committed`: the canvas's engine following its document) runs once it is on
- * disk, or once a commit whose flush failed is in the document all the same.
+ * disk, and never for one that failed (CommitFailed), which kept nothing.
  */
 
 /** Checks a change rule on a token's change: refuses it, saying why, or lets it be. */
@@ -60,39 +59,28 @@ export interface CommitterDeps {
 export function committer({ documents, rules, committed }: CommitterDeps): Committer {
   return async (canvas, build, call) => {
     const { caller, party, signal } = call;
-    /** What it changes, once checked. */
-    let checked: ChangeSet | undefined;
-    const changed = await documents
-      .change(canvas, {
-        revision: {
-          op: call.op,
-          by: call.by,
-          ...(call.request === undefined ? {} : { request: call.request }),
-        },
-        build: (document) => {
-          signal.throwIfAborted();
-          return build(document);
-        },
-        check: (change, live) => {
-          checked = change;
-          checkExpect(call.expect, live);
-          if (caller.kind === 'human') return;
-          for (const rule of Object.values(rules)) {
-            const outcome = rule(change, { caller, party });
-            if (outcome) throw new OpFailure('refused', outcome.refuse);
-          }
-        },
-        committing: () => {
-          call.noReturn();
-        },
-      })
-      .catch((error: unknown) => {
-        // Made, though it may not be on disk: the document is the changed one, so it is followed.
-        if (error instanceof CommitFailed && error.made === true && checked !== undefined) {
-          committed?.(canvas, checked);
+    const changed = await documents.change(canvas, {
+      revision: {
+        op: call.op,
+        by: call.by,
+        ...(call.request === undefined ? {} : { request: call.request }),
+      },
+      build: (document) => {
+        signal.throwIfAborted();
+        return build(document);
+      },
+      check: (change, live) => {
+        checkExpect(call.expect, live);
+        if (caller.kind === 'human') return;
+        for (const rule of Object.values(rules)) {
+          const outcome = rule(change, { caller, party });
+          if (outcome) throw new OpFailure('refused', outcome.refuse);
         }
-        throw error;
-      });
+      },
+      committing: () => {
+        call.noReturn();
+      },
+    });
     if (changed.committed === undefined) return { result: changed.result };
     committed?.(canvas, changed.committed.change);
     return { result: changed.result, rev: changed.committed.rev };

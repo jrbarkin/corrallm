@@ -142,7 +142,10 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 its point of no return committed write-through: diffRows' entities in one write at
                 the document's next revision, each stamped with it and its party, with `revision`
                 and `change`; the live document changes only once it is on disk, and a failed write
-                is CommitFailed; one commit at a time a canvas; revisions past the last 1,000
+                is CommitFailed, keeping nothing, the live document as it was (after a failed
+                flush the store fails closed: every later commit, edit and save, of any canvas,
+                refused with its error until the core opens it again); one commit at a time a
+                canvas; revisions past the last 1,000
                 trimmed every 100 commits), the renderer's whole document committed as
                 `canvas.edit` by you until its gestures are operations (`edit`, for run:save and
                 canvas:save), and saved by the core

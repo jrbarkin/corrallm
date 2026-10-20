@@ -279,7 +279,7 @@ describe('core.call', () => {
       let tries = 0;
       const core = committing((_canvas, build) => {
         tries += 1;
-        if (tries === 1) throw new CommitFailed(new Error('The disk is full.'), false);
+        if (tries === 1) throw new CommitFailed(new Error('The disk is full.'));
         return Promise.resolve({ result: build(DOCUMENT).result, rev: 2 });
       });
       const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };

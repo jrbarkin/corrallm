@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
@@ -88,6 +88,7 @@ beforeEach(async () => {
   await documents.edit(canvas, toFile(document(canvas)));
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await store.close();
   await rm(profile, { recursive: true, force: true });
 });
@@ -175,16 +176,14 @@ describe('a commit', () => {
     });
   });
 
-  it('is followed all the same when its change was made, though its flush failed', async () => {
+  it('is followed by nothing when its flush failed: nothing of it was kept, nor of any after it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let failing = false;
     await store.close();
     store = await openTestStore(profile, {
       ...SYSTEM_DEPS,
-      flush: (fd) => {
-        if (!failing) return SYSTEM_DEPS.flush(fd);
-        failing = false;
-        return Promise.reject(new Error('EIO: fsync failed'));
-      },
+      flush: (fd) =>
+        failing ? Promise.reject(new Error('EIO: fsync failed')) : SYSTEM_DEPS.flush(fd),
     });
     documents = new Documents({
       store,
@@ -200,10 +199,17 @@ describe('a commit', () => {
       committed: (_canvas, change) => heard.push(change),
     });
     failing = true;
-    await expect(commit(canvas, rename('worker', 'Builder'), callOf(YOU))).rejects.toMatchObject({
-      made: true,
-    });
-    expect(heard.map((change) => [...change.entities.keys()])).toEqual([['node/worker']]);
+    const call = callOf(YOU);
+    await expect(commit(canvas, rename('worker', 'Builder'), call)).rejects.toThrow(
+      /^The change couldn’t be written, so nothing changed: The core’s database could not be written to the drive \(EIO: fsync failed\), so it keeps nothing more until the core opens it again/,
+    );
+    expect(call.said).toEqual(['past its point of no return']);
+    failing = false;
+    await expect(commit(canvas, rename('lead', 'Head'), callOf(YOU))).rejects.toThrow(
+      'so it keeps nothing more until the core opens it again',
+    );
+    expect(heard).toEqual([]);
+    expect(documents.live(canvas)).toMatchObject({ document: document(canvas), rev: 1 });
   });
 
   it('unwinds, writing nothing, when it is superseded before its point of no return', async () => {
