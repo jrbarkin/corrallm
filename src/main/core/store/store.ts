@@ -1,9 +1,9 @@
 import { closeSync, fsync, fsyncSync, ftruncateSync, openSync, readSync } from 'node:fs';
 
 import { Checkpointer } from './checkpointer';
-import { Recovery } from './recovery';
+import { discardSnapshots, recordRecovery } from './recovery';
 import type { LogPrefix } from './recovery';
-import { remove, takeSnapshot } from './snapshots';
+import { takeSnapshot } from './snapshots';
 import { connect } from './sqlite';
 import type { Connection, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
@@ -29,15 +29,18 @@ import { rollback, savepoint, transaction } from './transaction';
  * Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a quiet drive, and only a
  * connection on a thread of its own would under such writing).
  *
- * A flush that fails fails the store closed: no write that rejects is ever kept, read back or on
- * the drive later, and nothing written after it could be trusted to reach the drive (after a
+ * A flush that fails fails the store closed: rejected writes are taken back, and nothing written
+ * after it could be trusted to reach the drive (after a
  * failed fsync, the system's cache of the file can't be: PostgreSQL's fsyncgate). Every write and
  * read from then on is refused, saying why, as an unopened store's are, until the core opens the
  * database again; it says so once on stderr. What it had committed since its last flush that
  * worked (the failed flush's commits and those made since) is taken back: its log is cut back to
  * where they began, which SQLite says before each commit (`wal_checkpoint(NOOP)`, SQLite 3.51 and
  * later), and closed without SQLite checkpointing it, so the next open recovers the log up to
- * there alone; and every snapshot finished since the first of them is removed. A checkpoint waits
+ * there alone. If cutting or syncing the cut fails, a durable recovery marker makes the next open
+ * repair it before SQLite reads it, or refuse. Only if the flush, the cut and writing that marker
+ * all fail can rejected writes return; that failing drive is beyond this guarantee. Every snapshot
+ * published since the first rejected commit is removed. A checkpoint waits
  * for the flushes going on (the lane commits nothing meanwhile), so none ever copies a commit
  * into the database before its flush worked.
  *
@@ -170,10 +173,6 @@ export class Store {
   /** Taking back what it hadn't flushed when it failed, then closing its connection. */
   #forgetting: Promise<void> | undefined;
   readonly #checkpointer: Checkpointer;
-  readonly #recovery: Recovery;
-  /** A transaction waiting for its recovery record before COMMIT. */
-  #committing: Promise<void> | undefined;
-  #updatingRecovery = false;
   /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
 
@@ -184,7 +183,6 @@ export class Store {
     this.#deps = deps;
     this.#snapshotAt = snapshotAt;
     this.#checkpointer = new Checkpointer(file);
-    this.#recovery = new Recovery(file, profile);
   }
 
   /**
@@ -222,7 +220,6 @@ export class Store {
     const outermost = !this.#connection.isTransaction;
     if (!outermost) return transaction(this.#connection, run);
     if (
-      this.#committing !== undefined ||
       this.#inFlush.length > 0 ||
       this.#unflushed.length > 0 ||
       this.#checkpointing !== undefined
@@ -233,12 +230,10 @@ export class Store {
     }
     if (this.#shut) throw closed();
     const frames = this.#frames();
-    this.#recovery.beginSync(this.#prefix(frames));
     const commit = ++this.#commits;
     const value = transaction(this.#connection, run);
     try {
       fsyncSync(this.#logFile());
-      this.#recovery.flushedSync();
     } catch (error) {
       throw this.#fail(error, { frames, commit });
     }
@@ -277,9 +272,7 @@ export class Store {
     if (this.#checkpointing !== undefined) return this.#checkpointing;
     const checkpointing = (async () => {
       // Only what is on the drive is copied into the database.
-      while (this.#flushing !== undefined || this.#committing !== undefined) {
-        await (this.#committing ?? this.#flushing);
-      }
+      while (this.#flushing !== undefined) await this.#flushing;
       if (this.#failed !== undefined) throw this.#failed;
       try {
         await this.#checkpointer.checkpoint();
@@ -334,15 +327,8 @@ export class Store {
     this.#cancelCheckpoint?.();
     // The writes queued commit now, or once the checkpoint going on is done.
     while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
-    do {
-      this.#flush();
-      await this.#committing;
-      await this.#flushing;
-    } while (
-      this.#queue.length > 0 ||
-      this.#committing !== undefined ||
-      this.#flushing !== undefined
-    );
+    this.#flush();
+    while (this.#flushing !== undefined) await this.#flushing;
     // Failed closed, it took back what it hadn't flushed, and closed its connection then.
     if (this.#forgetting !== undefined) {
       await this.#forgetting;
@@ -362,17 +348,11 @@ export class Store {
     }
     this.#connection.close();
     if (this.#log !== undefined) closeSync(this.#log);
-    await this.#recovery.discarded();
   }
 
   /** Commits every write queued, a batch at a time, unless a checkpoint goes on. */
   #flush(): void {
-    if (
-      this.#checkpointing !== undefined ||
-      this.#committing !== undefined ||
-      this.#updatingRecovery
-    )
-      return;
+    if (this.#checkpointing !== undefined) return;
     let batch = this.#queue;
     this.#queue = [];
     while (batch.length > 0) {
@@ -386,49 +366,47 @@ export class Store {
 
   /** Commits a batch of writes in one transaction; returns those it didn't run. */
   #commit(batch: Queued[]): Queued[] {
-    const done: [write: Queued, value: unknown][] = [];
-    const commit = async () => {
-      const frames = this.#frames();
-      // Force the recovery boundary before opening the transaction: no SQLite lock waits on IO.
-      await this.#recovery.begin(this.#prefix(frames));
-      if (this.#failed !== undefined) throw this.#failed;
+    let frames: number;
+    try {
+      frames = this.#frames();
       this.#connection.exec('BEGIN IMMEDIATE');
-      for (const [i, write] of batch.entries()) {
-        try {
-          done.push([write, savepoint(this.#connection, write.run)]);
-        } catch (error) {
-          write.reject(error);
-          if (!this.#connection.isTransaction) {
-            for (const [lost] of done) lost.reject(error);
-            this.#queue = [...batch.slice(i + 1), ...this.#queue];
-            return;
-          }
+    } catch (error) {
+      for (const write of batch) write.reject(error);
+      return [];
+    }
+    const done: [write: Queued, value: unknown][] = [];
+    for (const [i, write] of batch.entries()) {
+      try {
+        done.push([write, savepoint(this.#connection, write.run)]);
+      } catch (error) {
+        write.reject(error);
+        if (!this.#connection.isTransaction) {
+          // SQLite rolled the whole transaction back (as on a full disk): what the batch wrote
+          // before is gone too, and the writes after it are a batch of their own.
+          for (const [lost] of done) lost.reject(error);
+          return batch.slice(i + 1);
         }
       }
+    }
+    try {
       this.#connection.exec('COMMIT');
-      this.#unflushed.push({
-        resolve: () => {
-          for (const [write, value] of done) write.resolve(value);
-        },
-        reject: (error) => {
-          for (const [write] of done) write.reject(error);
-        },
-        frames,
-        commit: ++this.#commits,
-      });
-      this.#flushLog();
-      this.#committed();
-    };
-    this.#committing = commit()
-      .catch((error: unknown) => {
-        rollback(this.#connection);
-        // Even callbacks not run must settle when their recovery boundary could not be kept.
-        for (const write of batch) write.reject(error);
-      })
-      .finally(() => {
-        this.#committing = undefined;
-        this.#flush();
-      });
+    } catch (error) {
+      rollback(this.#connection);
+      for (const [lost] of done) lost.reject(error);
+      return [];
+    }
+    this.#unflushed.push({
+      resolve: () => {
+        for (const [write, value] of done) write.resolve(value);
+      },
+      reject: (error) => {
+        for (const [write] of done) write.reject(error);
+      },
+      frames,
+      commit: ++this.#commits,
+    });
+    this.#flushLog();
+    this.#committed();
     return [];
   }
 
@@ -446,10 +424,6 @@ export class Store {
     const flushing = (async () => {
       try {
         await this.#deps.flush(this.#logFile());
-        this.#updatingRecovery = true;
-        await this.#committing;
-        const next = this.#unflushed[0];
-        await this.#recovery.flushed(next === undefined ? undefined : this.#prefix(next.frames));
       } catch (error) {
         this.#fail(error);
         return;
@@ -462,9 +436,7 @@ export class Store {
     this.#flushing = flushing;
     void flushing.then(() => {
       this.#flushing = undefined;
-      this.#updatingRecovery = false;
       this.#flushLog();
-      this.#flush();
     });
   }
 
@@ -509,12 +481,15 @@ export class Store {
     this.#unflushed = [];
     const queued = this.#queue;
     this.#queue = [];
-    for (const commit of lost) commit.reject(failed);
     for (const write of queued) write.reject(failed);
     const first = [...lost, ...(also === undefined ? [] : [also])].reduce((earliest, commit) =>
       commit.commit < earliest.commit ? commit : earliest,
     );
-    this.#forgetting = this.#forget(first);
+    this.#forgetting = this.#forget(first).finally(() => {
+      // Until the cut or its marker is durable, a crash can still recover these commits. Refuse
+      // new work at once, but acknowledge their rejection only after protecting their boundary.
+      for (const commit of lost) commit.reject(failed);
+    });
     void this.#forgetting.catch((error: unknown) => {
       console.error('The core’s database still needs recovery before it can open again:', error);
     });
@@ -531,21 +506,46 @@ export class Store {
    */
   async #forget(first: { frames: number; commit: number }): Promise<void> {
     while (this.#flushing !== undefined) await this.#flushing;
-    await this.#committing;
     await this.#snapshotting?.catch(() => undefined);
     await this.#checkpointer.close();
-    let cut = false;
+    const unsafe = this.#taken
+      .filter(({ commits }) => commits >= first.commit)
+      .map(({ file }) => file);
+    let repair = false;
     try {
-      const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
+      await discardSnapshots(this.#profile, unsafe);
+    } catch (error) {
+      console.error('Could not remove snapshots of what the core’s database lost:', error);
+      repair = true;
+    }
+    let prefix: LogPrefix | undefined;
+    try {
+      prefix = this.#prefix(first.frames);
       const log = this.#logFile();
-      ftruncateSync(
-        log,
-        first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
-      );
+      // Keep the header even for an empty prefix: if syncing the cut fails, its recovery marker
+      // must still match this WAL generation on the next open.
+      ftruncateSync(log, prefix.bytes);
       fsyncSync(log);
-      cut = true;
     } catch (error) {
       console.error('Could not take back what the core’s database lost:', error);
+      repair = true;
+    }
+    if (repair) {
+      try {
+        // Successful writes pay only for their WAL flush. If that flush, this cut and this
+        // durable marker all fail, the drive is failing outright: rejected writes may return.
+        await recordRecovery(
+          this.file,
+          this.#profile,
+          prefix ?? this.#prefix(first.frames),
+          unsafe,
+        );
+      } catch (error) {
+        console.error(
+          'Could not write the core’s database recovery marker; rejected writes may be recovered on the next open:',
+          error,
+        );
+      }
     }
     let holder: Connection | undefined;
     try {
@@ -562,10 +562,6 @@ export class Store {
       holder?.close();
     }
     if (this.#log !== undefined) closeSync(this.#log);
-    for (const { file, commits } of this.#taken) {
-      if (commits >= first.commit) await remove(file);
-    }
-    if (cut) await this.#recovery.discarded();
   }
 
   /** The log's file, open to flush it: SQLite makes it with the first commit. */

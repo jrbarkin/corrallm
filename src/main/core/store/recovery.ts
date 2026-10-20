@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -22,92 +20,30 @@ interface Pending extends LogPrefix {
   snapshots: KeptSnapshot[];
 }
 
-/**
- * A recovery record exists before SQLite commits an unflushed write. A successful flush advances
- * its prefix before acknowledging writes. An update's durable fence keeps the old prefix until
- * the update and fence removal are on disk, so an interrupted update can cut to that prefix.
- */
-export class Recovery {
-  readonly #file: string;
-  readonly #profile: string;
-  #pending: Pending | undefined;
-
-  constructor(file: string, profile: string) {
-    this.#file = `${file}.recovery`;
-    this.#profile = profile;
-  }
-
-  async begin(prefix: LogPrefix): Promise<void> {
-    if (this.#pending !== undefined) return;
-    const kept = await Promise.all((await snapshots(this.#profile)).map(identify));
-    const pending = { ...prefix, snapshots: kept };
-    await writeWhole(this.#file, JSON.stringify(pending), { mode: 0o600, durable: true });
-    this.#pending = pending;
-  }
-
-  /** Synchronous transactions are only used by tests; they keep the same recovery boundary. */
-  beginSync(prefix: LogPrefix): void {
-    if (this.#pending !== undefined) throw new Error('A write is already awaiting its flush.');
-    // A synchronous transaction cannot take a snapshot meanwhile. Recovery may discard older
-    // snapshots conservatively if this test-only transaction fails and cleanup cannot finish.
-    const pending = { ...prefix, snapshots: [] };
-    writeRecordSync(this.#file, pending);
-    this.#pending = pending;
-  }
-
-  async flushed(next?: LogPrefix): Promise<void> {
-    const pending =
-      next === undefined ? undefined : { ...next, snapshots: this.#pending?.snapshots ?? [] };
-    await writeWhole(`${this.#file}.updating`, JSON.stringify(this.#pending), {
-      mode: 0o600,
-      durable: true,
-    });
-    await writeWhole(this.#file, JSON.stringify(pending ?? null), { mode: 0o600, durable: true });
-    this.#pending = pending;
-    await eraseFence(this.#file);
-  }
-
-  flushedSync(): void {
-    writeRecordSync(`${this.#file}.updating`, this.#pending ?? null);
-    writeRecordSync(this.#file, null);
-    this.#pending = undefined;
-    rmSync(`${this.#file}.updating`, { force: true });
-    syncFolderSync(path.dirname(this.#file));
-  }
-
-  /** Only after the rejected suffix was cut and fsynced, and unsafe snapshots removed. */
-  async discarded(): Promise<void> {
-    // A power loss must not resurrect an unsafe backup after its recovery record is cleared.
-    if (process.platform !== 'win32') {
-      const backups = await open(path.join(this.#profile, 'backups'), 'r').catch(
-        (error: unknown) => {
-          if (missing(error)) return undefined;
-          throw error;
-        },
-      );
-      if (backups !== undefined) {
-        try {
-          await backups.sync();
-        } finally {
-          await backups.close();
-        }
-      }
-    }
-    await writeWhole(this.#file, 'null', { mode: 0o600, durable: true });
-    this.#pending = undefined;
-    await eraseFence(this.#file);
-  }
+/** Written only when a failed WAL flush could not be taken back by cutting and syncing it. */
+export async function recordRecovery(
+  file: string,
+  profile: string,
+  prefix: LogPrefix,
+  unsafe: readonly string[],
+): Promise<void> {
+  // If backups cannot be identified, recovery conservatively discards them all. That must not
+  // prevent recording the WAL boundary itself on a drive that can still write the marker.
+  const kept = await snapshots(profile)
+    .then((files) =>
+      Promise.all(files.filter((snapshot) => !unsafe.includes(snapshot)).map(identify)),
+    )
+    .catch(() => []);
+  const pending: Pending = { ...prefix, snapshots: kept };
+  await writeWhole(`${file}.recovery`, JSON.stringify(pending), { mode: 0o600, durable: true });
 }
 
 /** Repairs a pending cut, or refuses, before any SQLite connection can read or checkpoint it. */
 export async function recoverLog(file: string, profile: string): Promise<void> {
   const record = `${file}.recovery`;
-  // A fence was forced to disk before replacing the main record. Nothing beyond its old prefix
-  // was acknowledged yet: repair that prefix even if the replacement is already visible.
-  const fenced = await present(`${record}.updating`);
   let text: string;
   try {
-    text = await readFile(fenced ? `${record}.updating` : record, 'utf8');
+    text = await readFile(record, 'utf8');
   } catch (error) {
     if (missing(error)) return;
     throw error;
@@ -118,7 +54,8 @@ export async function recoverLog(file: string, profile: string): Promise<void> {
   } catch {
     /* Refused below. */
   }
-  if (pending === null && !fenced) return;
+  // An earlier build left a null record after successful writes.
+  if (pending === null) return;
   if (!isPending(pending))
     throw new Error(
       'The core’s database recovery record is unreadable; opening is refused to protect rejected writes.',
@@ -143,13 +80,25 @@ export async function recoverLog(file: string, profile: string): Promise<void> {
   }
   // No SQLite connection is open: its old index must not describe the rejected suffix.
   await rm(`${file}-shm`, { force: true });
+  const unsafe: string[] = [];
   for (const snapshot of await snapshots(profile)) {
     const identity = await identify(snapshot);
     if (!pending.snapshots.some((kept) => JSON.stringify(kept) === JSON.stringify(identity))) {
-      await remove(snapshot);
+      unsafe.push(snapshot);
     }
   }
-  await new Recovery(file, profile).discarded();
+  await discardSnapshots(profile, unsafe);
+  // Both the cut and the removal of unsafe backups are durable before removing their marker.
+  await rm(record);
+  await syncFolder(path.dirname(record));
+}
+
+/** Removes snapshots that may hold rejected writes, including their directory entries on disk. */
+export async function discardSnapshots(profile: string, unsafe: readonly string[]): Promise<void> {
+  for (const snapshot of unsafe) await remove(snapshot);
+  await syncFolder(path.join(profile, 'backups')).catch((error: unknown) => {
+    if (!missing(error)) throw error;
+  });
 }
 
 async function identify(file: string): Promise<KeptSnapshot> {
@@ -179,46 +128,15 @@ function isPending(value: unknown): value is Pending {
     )
   );
 }
-async function present(file: string): Promise<boolean> {
-  try {
-    await stat(file);
-    return true;
-  } catch (error) {
-    if (missing(error)) return false;
-    throw error;
-  }
-}
 function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
-async function eraseFence(record: string): Promise<void> {
-  await rm(`${record}.updating`, { force: true });
+async function syncFolder(folder: string): Promise<void> {
   if (process.platform === 'win32') return;
-  const folder = await open(path.dirname(record), 'r');
+  const handle = await open(folder, 'r');
   try {
-    await folder.sync();
+    await handle.sync();
   } finally {
-    await folder.close();
-  }
-}
-function writeRecordSync(file: string, value: Pending | null): void {
-  const partial = `${file}.${randomUUID()}.partial`;
-  const fd = openSync(partial, 'wx', 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(partial, file);
-  syncFolderSync(path.dirname(file));
-}
-function syncFolderSync(folder: string): void {
-  if (process.platform === 'win32') return;
-  const fd = openSync(folder, 'r');
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    await handle.close();
   }
 }
