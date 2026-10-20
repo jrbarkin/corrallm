@@ -80,10 +80,13 @@ export const toml = (text: string): string => JSON.stringify(text);
 
 /**
  * The override that trusts the project folder for one run of Codex (a `-c` value): the user chose
- * it in corrallm's folder dialog, the trust gate; their config.toml is never written.
+ * it in corrallm's folder dialog, the trust gate; their config.toml is never written. `names` are
+ * other paths of the same folder (its real path, where it is reached through a link).
  */
-export const folderTrust = (cwd: string): string =>
-  `projects={${toml(cwd)}={trust_level="trusted"}}`;
+export function folderTrust(cwd: string, ...names: string[]): string {
+  const folders = [...new Set([cwd, ...names])];
+  return `projects={${folders.map((folder) => `${toml(folder)}={trust_level="trusted"}`).join(',')}}`;
+}
 
 /** The overrides that add a session's hooks (`-c` values). */
 export function hookOverrides(hooks: readonly SessionHook[]): string[] {
