@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_LABEL } from '../../shared/api/limits';
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
 import type { RunCheckpoint } from '../../shared/run';
@@ -771,6 +772,30 @@ describe('GraphEditor', () => {
     fireEvent.doubleClick(node('F'), { clientX: 200, clientY: 150 });
     expect(nodes('.react-flow__node-frame.parent')).toHaveLength(1);
     expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('bounds in-place labels and restores a blank label before it can be saved', async () => {
+    const files = {
+      open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+      save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+      forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
+    };
+    const { node } = setup({ nodes: [agentNode('a', 0, 0, { selected: true })], edges: [] }, files);
+    fireEvent.keyDown(document.body, { key: 'F2' });
+    expect(labelInput().maxLength).toBe(MAX_LABEL);
+    fireEvent.change(labelInput(), { target: { value: ' ' } });
+    fireEvent.keyDown(labelInput(), { key: 'Enter' });
+    expect(node('a').textContent).toContain('a');
+    fireEvent.keyDown(document.body, { key: 'F2' });
+    fireEvent.change(labelInput(), { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
+    fireEvent.blur(labelInput());
+    fireEvent.click(button('Save'));
+    await waitFor(() => {
+      expect(files.save).toHaveBeenCalledOnce();
+    });
+    expect(
+      fromFile(files.save.mock.calls[0]?.[0] ?? '', catalog(), DEFAULT_AGENT).nodes[0]?.data.label,
+    ).toBe('x'.repeat(MAX_LABEL));
   });
 
   it('renames a node in place on F2: Enter keeps the text, Escape restores it', () => {

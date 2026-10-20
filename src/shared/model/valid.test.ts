@@ -152,6 +152,27 @@ describe('editFault', () => {
       expect(faultOf(adding('a', item)), JSON.stringify(item)).toBeDefined();
   });
 
+  it('keeps an older action when it moves into a container that can hold it', () => {
+    const before = withQueue('a', (queue) => [
+      ...queue,
+      { id: 'condition', if: { kind: 'succeeded' }, then: [] },
+    ]);
+    const moved = withQueue(
+      'a',
+      (queue) => {
+        const old = queue.find((item) => item.id === 'old');
+        if (!old) throw new Error('The old action is missing.');
+        return queue
+          .filter((item) => item.id !== 'old')
+          .map((item) =>
+            item.id === 'condition' && 'then' in item ? { ...item, then: [old] } : item,
+          ) as QueueItem[];
+      },
+      before,
+    );
+    expect(faultOf(moved, before)).toBeUndefined();
+  });
+
   it('reads no node a change only moved: what it holds is as it was', () => {
     // Held in rows from before, it says what this build no longer takes.
     const stale: CanvasDocument = {

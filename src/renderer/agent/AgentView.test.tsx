@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MAX_LABEL } from '../../shared/api/limits';
 import { useState } from 'react';
 import type { ComponentProps } from 'react';
 
@@ -89,6 +90,18 @@ describe('the agent view', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('keeps the agent header name within the file’s label bounds', () => {
+    const { view } = open();
+    const name = view.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
+    expect(name.maxLength).toBe(MAX_LABEL);
+    fireEvent.change(name, { target: { value: ' ' } });
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(name.value).toBe('a');
+    fireEvent.change(name, { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
+    fireEvent.blur(name);
+    expect(name.value).toBe('x'.repeat(MAX_LABEL));
   });
 
   it('fills the editor, with a back button to the canvas', () => {

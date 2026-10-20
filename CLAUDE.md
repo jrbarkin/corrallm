@@ -124,7 +124,8 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 choice, sticky), in the op's scope before it runs, kept by rule and by op,
                 and each rule checked on the change a token's commit makes, whatever op made it
                 (`changeChecks`: R2, R4 `discard`, which proposes rather than refuses, R6 `self`,
-                R7 `human-gate` on any OK and what the run holds, `heldBy`, R8, R11 `new-agent` on
+                R7 `human-gate` on any OK and what the run holds, `heldBy` (a paused question stays
+                asking, through a restart too), R8, R11 `new-agent` on
                 `Documents.created`, R12, R13, R14 `managers`); an op carries a change rule where a
                 call of its alone can meet it; parties.ts words parties and the
                 pauses they set, for refusals and notices; ops/ is each op's implementation, by
@@ -132,7 +133,8 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit` over
                 shared/model/structure.ts, with explicit not-found and wrong-kind refusals
                 (including missing links), and addAgent only accepts catalog adapters;
-                spawnAgent carries its new→source copies for the change rules, and delete drains
+                spawnAgent carries its new→source copies for the change rules (R11 exempts only
+                connection and modes matching their source, with new-copy chains checked), and delete drains
                 its removed agents' lanes and returns cleared references; agent.ts and queue.ts:
                 agent and queue edits over shared/model/agent-ops.ts and queue-ops.ts through
                 `ctx.commit`, refusing missing agents/items and wrong kinds; setType and
@@ -180,7 +182,9 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 its point of no return committed write-through: diffRows' entities in one write at
                 the document's next revision, each stamped with it and its party, with `revision`
                 and `change`, each agent with the party that created it (`created_by`: none from a
-                file), which `created` counts, a change's new agents from its checks on; the live document changes only once it is on disk, and a failed write
+                file), which `created` counts, a change's new agents from its checks on, subtracting
+                only that party's agents the same change removes on its canvas; the live document
+                changes only once it is on disk, and a failed write
                 is CommitFailed, keeping nothing, the live document as it was (after a failed
                 flush the store fails closed: every later commit, edit and save, of any canvas,
                 refused with its error until the core opens it again); one commit at a time a
@@ -730,7 +734,7 @@ scripts/        corrallm.mjs (`pnpm corrallm`); check-linux.sh, the packaged Lin
 
 Queues: there is one queue component, QueueEditor.tsx. Every queue the app shows (an agent's own, the one shown beside it to pick from, the work panel between two agents, the lanes of All queues) is built from its rows (`QueueRow`), its end (`QueueEnd`) and its picking (`PickTask`), styled once in GraphEditor.css (cards at rest; what edits a task shows on the one pointed at; the drag handle always shows). Bind edits to an agent with `editsOf` (graph/edits.ts), word tasks with src/shared/model/words.ts, and mark them with `queueMarks` (queues/marks.ts) rather than adding another copy.
 
-Canvas text uses `src/renderer/useDraft.ts`: labels and group titles, agent names and roles, queue messages and instructions stay local while edited, committing on blur, single-line Enter or 600 ms idle. Escape cancels pending text; an unchanged field makes no graph change. Incoming changes leave a focused pending draft alone. Its window-wide `flushDrafts` commits pending fields and flushes React updates before another gesture reads the graph or starts work: pointer actions (drags and drops included), shortcuts, Run, the composer's Send, and shutdown's freeze/save. It also awaits commits still in flight (including those started on blur or idle); the GUI client awaits it before sending every operation and registers a draft's calls even if its UI callback returns void. A commit can send its own operation without awaiting itself. Text selection, clipboard shortcuts and multiline Enter stay with the field.
+Canvas text uses `src/renderer/useDraft.ts`: its `useLabel` caps every name field at `MAX_LABEL` and restores a blank commit to its saved name; labels and group titles, agent names and roles, queue messages and instructions stay local while edited, committing on blur, single-line Enter or 600 ms idle. Escape cancels pending text; an unchanged field makes no graph change. Incoming changes leave a focused pending draft alone. Its window-wide `flushDrafts` commits pending fields and flushes React updates before another gesture reads the graph or starts work: pointer actions (drags and drops included), shortcuts, Run, the composer's Send, and shutdown's freeze/save. It also awaits commits still in flight (including those started on blur or idle); the GUI client awaits it before sending every operation and registers a draft's calls even if its UI callback returns void. A commit can send its own operation without awaiting itself. Text selection, clipboard shortcuts and multiline Enter stay with the field.
 
 The canvas's `arrange` setting is saved: absent in a `.corral` file means off, and only on is written. The renderer keeps it with the graph, applies automatic layout after its edits while on, and restores it when opening a canvas or its run. Agent cards have fixed dimensions equal to the model's `CARD_SIZE`, checked against the stylesheet by `graph/card.test.tsx`; long labels use an ellipsis, while badges and handles remain outside the card.
 

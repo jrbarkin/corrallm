@@ -440,7 +440,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           catalog: CATALOG,
           defaultAdapter: DEFAULT_ADAPTER,
           held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
-          created: (party, canvas) => documents.created(party, canvas),
+          created: (party, canvas, removing) => documents.created(party, canvas, removing),
           maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
         }),
         committed: (canvas) => {

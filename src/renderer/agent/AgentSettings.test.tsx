@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AdapterId } from '../../shared/adapter';
+import { MAX_LABEL } from '../../shared/api/limits';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import type { AgentConnection } from '../graph/agents';
@@ -161,6 +162,35 @@ describe('shared agent settings', () => {
     expect(onRole).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it.each(['Enter', 'blur', 'idle'] as const)(
+    'restores a blank name on %s and bounds names',
+    (how) => {
+      vi.useFakeTimers();
+      try {
+        render(<Editor />);
+        const { panel } = open();
+        const name = panel.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
+        expect(name.maxLength).toBe(MAX_LABEL);
+        for (const draft of ['   ', `${' '.repeat(MAX_LABEL)}x`]) {
+          focus(name);
+          fireEvent.change(name, { target: { value: draft } });
+          if (how === 'Enter') fireEvent.keyDown(name, { key: 'Enter' });
+          else if (how === 'blur') fireEvent.blur(name);
+          else
+            act(() => {
+              vi.advanceTimersByTime(600);
+            });
+          expect(name.value).toBe('Reviewer');
+        }
+        fireEvent.change(name, { target: { value: 'x'.repeat(MAX_LABEL + 1) } });
+        fireEvent.blur(name);
+        expect(name.value).toBe('x'.repeat(MAX_LABEL));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('retains spaces in a focused local role draft and saves normalized instructions on leave', () => {
     const onRole = vi.fn();

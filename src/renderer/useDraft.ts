@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { flushSync } from 'react-dom';
 
+import { MAX_LABEL } from '../shared/api/limits';
 import { ipcErrorMessage } from './ipc-error';
 
 const IDLE_MS = 600;
@@ -65,11 +66,14 @@ function draftFailed(error: unknown): void {
 export function useDraft(
   value: string,
   onCommit: (text: string) => unknown,
-  { multiline = false }: { multiline?: boolean } = {},
+  {
+    multiline = false,
+    normalize,
+  }: { multiline?: boolean; normalize?: (text: string) => string } = {},
 ) {
   const [text, setText] = useState(value);
   const [focused, setFocused] = useState(false);
-  const latest = useRef({ value, onCommit });
+  const latest = useRef({ value, onCommit, normalize });
   const state = useRef({
     dirty: false,
     original: value,
@@ -77,7 +81,7 @@ export function useDraft(
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   });
   useLayoutEffect(() => {
-    latest.current = { value, onCommit };
+    latest.current = { value, onCommit, normalize };
   });
   useLayoutEffect(() => {
     if (state.current.dirty) return;
@@ -91,6 +95,10 @@ export function useDraft(
     pending.delete(commit);
     if (!draft.dirty) return;
     draft.dirty = false;
+    if (latest.current.normalize) {
+      draft.text = latest.current.normalize(draft.text);
+      setText(draft.text);
+    }
     const changed = draft.text !== draft.original && draft.text !== latest.current.value;
     draft.original = draft.text;
     if (changed) {
@@ -162,5 +170,18 @@ export function useDraft(
         commit();
       }
     },
+  };
+}
+
+/** Canvas labels obey the file’s bounds, with blank edits restoring the saved label. */
+export function useLabel(value: string, onCommit: (text: string) => unknown) {
+  return {
+    ...useDraft(value, onCommit, {
+      normalize: (text) => {
+        const bounded = text.slice(0, MAX_LABEL).replace(/[\uD800-\uDBFF]$/, '');
+        return bounded.trim() ? bounded : value;
+      },
+    }),
+    maxLength: MAX_LABEL,
   };
 }

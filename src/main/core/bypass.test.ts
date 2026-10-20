@@ -416,6 +416,77 @@ describe('R7: no token touches an OK, or what the run holds for you', () => {
   });
 });
 
+describe('R7: paused repeat holds', () => {
+  it.each(['paused', 'restored'] as const)(
+    'refuses a token editing an exhausted repeat while %s',
+    async (when) => {
+      const { id } = await applied(
+        'queue.add',
+        {
+          agent: 'b',
+          entry: {
+            repeat: [{ message: 'Try' }],
+            until: { kind: 'failed' },
+            rounds: 1,
+            otherwise: 'ask',
+          },
+        },
+        YOU,
+      );
+      const repeat = itemOf('b', String(id));
+      if (!repeat || !('repeat' in repeat)) throw new Error('No repeat');
+      const inner = repeat.repeat[0];
+      if (!inner) throw new Error('No inner item');
+      const open = core.engines.canvas(CANVAS);
+      if (!open) throw new Error('The canvas is not open.');
+      const run = open.engine.run;
+      run.restore(
+        JSON.stringify({
+          version: 2,
+          run: {
+            running: true,
+            agents: {
+              b: {
+                status: 'asking',
+                current: id,
+                outcomes: {
+                  b1: 'succeeded',
+                  b2: 'succeeded',
+                  b3: 'succeeded',
+                  [inner.id]: 'succeeded',
+                },
+                rounds: { [String(id)]: { round: 1 } },
+              },
+            },
+          },
+          replies: [],
+          held: [],
+          arrived: [],
+          ended: [],
+          past: [],
+          due: [],
+          usageDecided: [],
+          warned: [],
+        }),
+      );
+      run.resume();
+      expect(run.snapshot().agents.b).toMatchObject({ status: 'asking', current: id });
+      await applied('run.pause', { target: { agent: 'b' } });
+      if (when === 'restored') {
+        await core.close();
+        core = await start();
+      }
+      await refused('queue.update', {
+        agent: 'b',
+        item: id,
+        change: { kind: 'repeat', otherwise: 'goOn' },
+      });
+      expect(itemOf('b', String(id))).toMatchObject({ otherwise: 'ask' });
+      await applied('run.unpause', { target: { agent: 'b' } });
+    },
+  );
+});
+
 describe('R8: no token changes how an existing agent runs', () => {
   it('answers the ops that would human-only, to an outside token and to the lead', async () => {
     for (const caller of [OUTSIDE, LEAD]) {
@@ -657,11 +728,12 @@ describe('on the change itself, whatever builds it', () => {
     await documents.edit(BUILT, toFile({ ...documents.read(JSON.stringify(MAIN)), id: BUILT }));
     commit = committer({
       documents,
+      propose: () => Promise.resolve(PROPOSAL),
       rules: changeChecks({
         catalog: CATALOG,
         defaultAdapter: DEFAULT_ADAPTER,
         held: () => new Set(['item/a/after']),
-        created: (party, canvas) => documents.created(party, canvas),
+        created: (party, canvas, removing) => documents.created(party, canvas, removing),
         maxCreated: () => 8,
       }),
     });
@@ -683,6 +755,7 @@ describe('on the change itself, whatever builds it', () => {
     });
     return commit(BUILT, built, {
       op: 'canvas.batch',
+      proposes: true,
       caller,
       party: partyOf(caller, isLead),
       by: partyIdOf(caller),
@@ -715,6 +788,94 @@ describe('on the change itself, whatever builds it', () => {
       ],
       links: to === undefined ? document.links : [...document.links, { source: to, target: id }],
     });
+
+  it.each([
+    ['mode', { connection: 'codex.app-server', settings: { codex: { mode: 'plan' } } }, 'a'],
+    ['connection', { connection: 'codex.app-server' }, 'c'],
+    ['missing source', { connection: 'codex.app-server' }, 'absent'],
+  ] as const)('refuses a copy whose %s was not copied', async (_what, data, source) => {
+    if (_what === 'connection')
+      await build(
+        editing('c', (data) => ({ ...data, connection: 'codex.terminal' })),
+        YOU,
+      );
+    const before = documents.live(BUILT);
+    await expect(
+      build(adding('new', data), OUTSIDE, new Map([['new', source]])),
+    ).rejects.toMatchObject({ code: 'refused' });
+    expect(documents.live(BUILT)).toBe(before);
+  });
+
+  it('inherits copied permissions through a new copy, but not a cycle', async () => {
+    const permissions = { connection: 'codex.app-server', settings: { codex: { mode: 'auto' } } };
+    await expect(
+      build(
+        (document) => adding('second', permissions)(adding('first-copy', permissions)(document)),
+        OUTSIDE,
+        new Map([
+          ['first-copy', 'a'],
+          ['second', 'first-copy'],
+        ]),
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      build(
+        (document) => adding('cycle-a', permissions)(adding('cycle-b', permissions)(document)),
+        OUTSIDE,
+        new Map([
+          ['cycle-a', 'cycle-b'],
+          ['cycle-b', 'cycle-a'],
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: 'refused' });
+  });
+
+  it('validates a moved item’s new container without rewriting its fields', async () => {
+    await build(
+      editing('b', (data) => ({
+        ...data,
+        queue: [
+          { id: 'condition', if: { kind: 'succeeded' }, then: [] },
+          { id: 'wait', waitFor: [{ agent: 'c' }] },
+        ],
+      })),
+      YOU,
+    );
+    const before = documents.live(BUILT).rev;
+    await expect(
+      build(
+        editing('b', (data) => {
+          const [condition, wait] = data.queue ?? [];
+          return { ...data, queue: [{ ...condition, then: [wait] }] as QueueItem[] };
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid', message: /if-then cannot hold a wait/ });
+    expect(documents.live(BUILT).rev).toBe(before);
+  });
+
+  it('does not credit a removal of an agent this party did not create', async () => {
+    for (let i = 0; i < 8; i++) await build(adding(`made-${String(i)}`, {}));
+    await expect(
+      build((document) =>
+        adding(
+          'replacement',
+          {},
+        )({ ...document, nodes: document.nodes.filter((n) => n.id !== 'c') }),
+      ),
+    ).rejects.toMatchObject({ code: 'refused', message: /at most 8/ });
+  });
+
+  it('counts a replacement at its final live-agent count, so removal becomes a proposal', async () => {
+    for (let i = 0; i < 8; i++) await build(adding(`made-${String(i)}`, {}));
+    const replace = (document: CanvasDocument) =>
+      adding(
+        'replacement',
+        {},
+      )({ ...document, nodes: document.nodes.filter((n) => n.id !== 'made-0') });
+    // R4 still guards the removal; R11 must not refuse a final count of eight first.
+    await expect(build(replace)).resolves.toEqual({ proposed: PROPOSAL });
+    expect(documents.created(partyIdOf(OUTSIDE))).toBe(8);
+  });
 
   const EDITS: [string, (document: CanvasDocument) => CanvasDocument][] = [
     ['a mode', editing('a', (data) => ({ ...data, settings: { codex: { mode: 'plan' } } }))],
@@ -781,7 +942,12 @@ describe('on the change itself, whatever builds it', () => {
     const moded = adding('new', { settings: { 'claude-code': { mode: 'plan' } } });
     for (const edit of [elsewhere, moded]) {
       await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
-      await expect(build(edit, OUTSIDE, new Map([['new', 'a']]))).resolves.toBeDefined();
+      if (edit === elsewhere)
+        await expect(build(edit, OUTSIDE, new Map([['new', 'a']]))).resolves.toBeDefined();
+      else
+        await expect(build(edit, OUTSIDE, new Map([['new', 'a']]))).rejects.toMatchObject({
+          code: 'refused',
+        });
       await build(
         (document) => ({ ...document, nodes: document.nodes.filter(({ id }) => id !== 'new') }),
         YOU,

@@ -6,7 +6,7 @@ import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { Run } from '../../shared/engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
-import type { CanvasDocument } from '../../shared/model/canvas';
+import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
 import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
@@ -177,7 +177,11 @@ export interface ChangeCheckDeps {
   /** The items a canvas's run holds for you now, by their keys (heldBy). */
   held: (canvas: CanvasId) => ReadonlySet<EntityKey>;
   /** How many live agents `party` created: on `canvas`, or on every canvas the core keeps. */
-  created: (party: PartyId, canvas?: CanvasId) => number;
+  created: (
+    party: PartyId,
+    canvas?: CanvasId,
+    removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
+  ) => number;
   /** The most live agents a token's party may have created (R11): MAX_CREATED_AGENTS. */
   maxCreated: () => number;
 }
@@ -209,7 +213,7 @@ export function changeChecks({
   maxCreated,
 }: ChangeCheckDeps): ChangeChecks {
   /** The adapter and the connection an agent runs: its adapter's first, if it names none. */
-  const runs = (row: NodeRow): [AdapterId, string | undefined] => {
+  const runs = (row: Pick<NodeRow, 'adapter' | 'connection'>): [AdapterId, string | undefined] => {
     const adapter = row.adapter ?? defaultAdapter;
     return [adapter, row.connection ?? adapterIn(catalog, adapter)?.connections[0]?.id];
   };
@@ -329,16 +333,24 @@ export function changeChecks({
     'new-agent': (change, { caller }) => {
       for (const id of change.created) {
         const node = change.after.nodes.find((one) => one.id === id);
-        if (node?.type !== 'agent' || change.copies.has(id)) continue;
+        if (node?.type !== 'agent') continue;
+        const source = copiedFrom(change, id);
         const name = nameOf(change.after.nodes, id);
         const adapter = node.data.adapter ?? defaultAdapter;
         const first = adapterIn(catalog, adapter)?.connections[0]?.id;
-        if (node.data.connection !== undefined && node.data.connection !== first) {
+        if (
+          node.data.connection !== undefined &&
+          node.data.connection !== first &&
+          (source === undefined || runs(node.data).join() !== runs(source.data).join())
+        ) {
           return {
             refuse: `A token’s new agent runs on its adapter’s first connection, ${first ?? adapter}: only the user runs ${name} on ${node.data.connection}.`,
           };
         }
-        const moded = Object.entries(node.data.settings ?? {}).find(([, one]) => one?.mode);
+        const moded = Object.entries(node.data.settings ?? {}).find(
+          ([adapter, one]) =>
+            one?.mode !== undefined && one.mode !== source?.data.settings?.[adapter]?.mode,
+        );
         if (moded) {
           return {
             refuse: `A token’s new agent starts in its user’s own default mode: only the user starts ${name} in ${String(moded[1]?.mode)}.`,
@@ -348,7 +360,7 @@ export function changeChecks({
       if (change.created.size === 0) return undefined;
       const most = maxCreated();
       const everywhere = caller.kind === 'outside';
-      const live = created(change.by, everywhere ? undefined : change.canvas);
+      const live = created(change.by, everywhere ? undefined : change.canvas, change);
       if (live + change.created.size <= most) return undefined;
       return {
         refuse: `${partyText(change.before.nodes, change.by)} keeps at most ${String(most)} live agents it created ${everywhere ? 'across its canvases' : 'on its canvas'}, and has ${String(live)}: only the user adds more, unless one of them is deleted.`,
@@ -392,6 +404,28 @@ export function changeChecks({
       };
     },
   };
+}
+
+/**
+ * A copy's source as it existed, or another new agent it copied. Follow new-copy chains to ensure
+ * they end at an actual source, never a missing source or a cycle of invented exemptions. Each
+ * new source is itself checked by R11; only the permission fields that match it are inherited.
+ */
+function copiedFrom(change: ChangeSet, id: string): AgentNode | undefined {
+  const seen = new Set([id]);
+  let from = change.copies.get(id);
+  let source: AgentNode | undefined;
+  while (from !== undefined) {
+    if (seen.has(from)) return undefined;
+    seen.add(from);
+    const before = change.before.nodes.find((node) => node.id === from && node.type === 'agent');
+    const node = before ?? change.after.nodes.find((node) => node.id === from);
+    if (node?.type !== 'agent') return undefined;
+    source ??= node;
+    if (before !== undefined) return source;
+    from = change.copies.get(from);
+  }
+  return source;
 }
 
 /** Each agent a change kept that existed before it and was changed: its node row then and now. */

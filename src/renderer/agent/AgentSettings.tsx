@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useDraft } from '../useDraft';
+import { useDraft, useLabel } from '../useDraft';
 
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
@@ -90,7 +90,7 @@ export function AgentSettingsPanel({
 }) {
   const sheet = useRef<HTMLDivElement>(null);
   const [problem, setProblem] = useState<string>();
-  const title = useDraft(node.data.label, onRename);
+  const title = useLabel(node.data.label, onRename);
   const role = useDraft(
     node.data.role ?? '',
     (raw) => {

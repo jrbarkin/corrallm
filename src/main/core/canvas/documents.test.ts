@@ -729,6 +729,22 @@ describe('the agents a party created', () => {
       .all(canvas);
   const ORCHESTRATOR = 'outside:orchestrator' as const;
 
+  it('subtracts only this party’s removals on this canvas, even when another canvas repeats an id', async () => {
+    const [one, two] = [newCanvasId(), newCanvasId()];
+    for (const canvas of [one, two]) {
+      await documents.edit(canvas, toFile(canvasOf(canvas)));
+      await commit(canvas, withAgent(documents.live(canvas).document, 'same-id'), {
+        op: 'canvas.addAgent',
+        by: ORCHESTRATOR,
+      });
+    }
+    const removing = { canvas: one, removed: new Set(['same-id', 'worker']) };
+    expect(documents.created(ORCHESTRATOR, undefined, removing)).toBe(1);
+    expect(documents.created(ORCHESTRATOR, one, removing)).toBe(0);
+    expect(documents.created(ORCHESTRATOR, two, removing)).toBe(1);
+    expect(documents.created(ORCHESTRATOR)).toBe(2);
+  });
+
   it('keeps who created each agent: the party whose change made it one, none read from a file, after a restart too', async () => {
     const canvas = newCanvasId();
     await filed(canvasOf(canvas));

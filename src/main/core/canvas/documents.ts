@@ -317,7 +317,11 @@ export class Documents {
    * How many live agents `party` created (R11): on `canvas`, or on every canvas the core keeps,
    * those of changes past their checks on their way to disk included.
    */
-  created(party: PartyId, canvas?: CanvasId): number {
+  created(
+    party: PartyId,
+    canvas?: CanvasId,
+    removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
+  ): number {
     const { store } = this.#deps;
     const kept =
       canvas === undefined
@@ -331,6 +335,17 @@ export class Documents {
             )
             .get(party, canvas);
     let count = Number(kept?.n ?? 0);
+    if (
+      removing !== undefined &&
+      removing.removed.size > 0 &&
+      (canvas === undefined || canvas === removing.canvas)
+    ) {
+      // Only this party's rows on the changed canvas count as removals: ids may repeat elsewhere.
+      const owned = store
+        .prepare(`SELECT id FROM node WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`)
+        .all(party, removing.canvas);
+      count -= owned.filter((row) => removing.removed.has(String(row.id))).length;
+    }
     for (const one of this.#creating) {
       if (one.by === party && (canvas === undefined || one.canvas === canvas)) count += one.count;
     }

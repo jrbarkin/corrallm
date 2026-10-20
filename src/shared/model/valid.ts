@@ -14,9 +14,9 @@ import type { EntityKey, ItemRow, NodeRow, Row } from './rows';
  * or changed in more than where it sits, and of each agent whose queue it wrote); each step it
  * wrote (one it added, or whose fields it changed) naming an action its agent's adapter declares;
  * and what each item it wrote names, there: the agent it goes to, what a wait waits for, the repeat
- * one goes round with. What it only moved, or left as it was, is kept as it was, unread (a drag, or
- * an arrange moving every node, reads no queue): an older file's step keeps its action until
- * someone rewrites it. An adapter this build lacks declares nothing it can read, so its steps keep
+ * one goes round with. What it moved within its container, or left as it was, is kept unread
+ * (a drag, or an arrange moving every node, reads no queue): an older file's step keeps its action
+ * until someone rewrites it. An adapter this build lacks declares nothing it can read, so its steps keep
  * theirs. Nothing here reads who wrote an item (`by`).
  */
 
@@ -41,7 +41,11 @@ export function editFault(
     }
     if (entity !== 'item') continue;
     const row = after as ItemRow;
-    if (before !== null && sameJson((before as ItemRow).body, row.body)) continue;
+    if (before !== null && sameJson((before as ItemRow).body, row.body)) {
+      // A move keeps its authored fields, but its new container must be able to hold it.
+      if ((before as ItemRow).container !== row.container) read.add(row.agent);
+      continue;
+    }
     read.add(row.agent);
     const ids = written.get(row.agent) ?? new Set<string>();
     ids.add(row.id);
