@@ -8,6 +8,7 @@ import { appOps } from './ops/app';
 import { batchOps } from './ops/batch';
 import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
+import { filesOps } from './ops/files';
 import { conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
 import { projectOps } from './ops/project';
@@ -33,6 +34,7 @@ export const OPS = {
   ...catalogOps,
   ...templatesOps,
   ...projectOps,
+  ...filesOps,
   ...canvasOps,
   ...batchOps,
   ...agentOps,

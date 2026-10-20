@@ -1,12 +1,16 @@
+import type { AdapterId, Catalog } from '../../../shared/adapter';
 import type { Current } from '../../../shared/api/errors';
 import type { NeedId } from '../../../shared/api/ids';
 import type { Party, Rule } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
+import { diffRows, META, rowsFault } from '../../../shared/model/rows';
+import { editFault } from '../../../shared/model/valid';
 import { OpFailure } from '../call';
 import type { Caller, TokenCaller } from '../caller';
 import type { Staged } from '../delivery/messages';
+import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
 import type { Built, Documents, LiveDocument } from './documents';
 
@@ -165,4 +169,30 @@ function checkExpect(expect: Readonly<Record<string, number>> | undefined, live:
 /** An entity's revision in `live`: 0 for one that isn't there. */
 function revOf(live: LiveDocument, key: string): number {
   return live.rows[key] === undefined ? 0 : (live.revs.get(key) ?? 0);
+}
+
+/**
+ * Why a token's new canvas holding `next` would be refused, as its commit over an empty document
+ * would check it (its rows, R34's validation, every change rule): checked ahead where a proposal
+ * would otherwise come first (canvas.create replacing a canvas only you may close), so that a
+ * refusal wins over a proposal and Allow never applies what a rule refused. None if it would pass.
+ */
+export function refusalOf(
+  next: CanvasDocument,
+  call: { op: string; by: PartyId; caller: TokenCaller; party: Party },
+  rules: Readonly<Partial<Record<Rule, ChangeRule>>>,
+  context: { catalog: Catalog; defaultAdapter: AdapterId },
+): string | undefined {
+  const fault = rowsFault(next);
+  if (fault !== undefined) return `That canvas can’t be kept: ${fault}.`;
+  const empty: CanvasDocument = { id: next.id, arrange: false, nodes: [], links: [] };
+  const before = { document: empty, rows: { [META]: { arrange: false } }, revs: new Map() };
+  const change = changeSetOf(before, next, diffRows(before.rows, next, empty), call);
+  const invalid = editFault(next, change.entities, context.catalog, context.defaultAdapter);
+  if (invalid !== undefined) return invalid;
+  for (const rule of Object.values(rules)) {
+    const outcome = rule(change, { caller: call.caller, party: call.party });
+    if (outcome && 'refuse' in outcome) return outcome.refuse;
+  }
+  return undefined;
 }

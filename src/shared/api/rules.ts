@@ -38,10 +38,11 @@ export const RULES = {
     sentence: 'Only you answer what only you may decide: a choice marked human-only.',
   },
   // R4: a token's commit that removes an agent becomes a proposal for you, unless another rule
-  // refuses it. Its argument half (discarding unsaved edits, closing or replacing a canvas a
-  // window shows, a save that drops agents) comes with canvas.close, create and save.
+  // refuses it; and so do, on their arguments, canvas.close and canvas.create's `replace` that
+  // would discard edits not saved, or close a canvas a window shows, and a canvas.save that would
+  // remove agents its file on disk has.
   discard: {
-    kind: 'change',
+    kind: 'argument+change',
     sentence:
       'Only you delete an agent or discard work: a token’s call comes to you as a proposal, which you allow or refuse.',
   },

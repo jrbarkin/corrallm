@@ -104,3 +104,10 @@ export const TOKEN_IN_FLIGHT = 8;
 export const TOKEN_WAITS = 16;
 /** At most this many writes a second per token. */
 export const TOKEN_WRITES_PER_SECOND = 30;
+
+/** The most blanks a template's `values` fill in one call (canvas.create, insertTemplate). */
+export const MAX_TEMPLATE_FIELDS = 128;
+/** The longest text one blank is filled with, in characters. */
+export const MAX_TEMPLATE_VALUE = 16_384;
+/** The most agents a call chooses an adapter or a connection for, of a template's. */
+export const MAX_TEMPLATE_AGENTS = 256;

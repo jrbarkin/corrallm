@@ -13,6 +13,8 @@ import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
 import type { OpContext } from '../call';
+import type { Documents } from '../canvas/documents';
+import type { Lifecycle } from '../canvas/lifecycle';
 import type { Proposals } from '../canvas/proposals';
 import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
@@ -26,6 +28,7 @@ import { replyOps } from './reply';
 import { canvasOps } from './canvas';
 import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
+import { filesOps } from './files';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
 import { projectOps } from './project';
@@ -73,6 +76,10 @@ export interface OpServices {
   >;
   /** The canvases the core runs. */
   engines: Engines;
+  /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */
+  lifecycle: Lifecycle;
+  /** Each canvas's document: a canvas made, kept or dropped (canvas.create). */
+  documents: Pick<Documents, 'create' | 'keep' | 'drop'>;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** The proposals waiting for you on each canvas. */
@@ -96,6 +103,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
+    ...filesOps(services),
     ...canvasesOps(services),
     ...canvasOps(services),
     ...batchOps(),

@@ -1,3 +1,4 @@
+import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
 import { itemOf } from '../canvas/proposals';
@@ -14,16 +15,22 @@ import type { Implementations, OpServices } from '.';
  * in this call's turn (ctx.call): its change, the settlement and the proposer's record in one write,
  * only if no entity its change touched has another revision now; if one has, or the op no longer
  * applies (what it named is gone, or it would change nothing), it is settled stale, changing
- * nothing. Either way the proposer gets a record, whose id this returns.
+ * nothing. A proposal of a close, a replace or a save (R4's argument half) touched a canvas's
+ * document and file, not its entities: it goes stale if either changed since; Allow of one, a
+ * command with no change of a document's to carry its settlement, settles it in a write of its own
+ * once it applied. Either way the proposer gets a record, whose id this returns.
  */
 
 /** The failures of Allow's run that mean the canvas moved on under the proposal: it went stale. */
 const STALE = new Set(['conflict', 'not-found', 'invalid', 'refused']);
+/** The keys of a document's entities, which Allow's change expects to be at their revisions still. */
+const ENTITY = /^(?:(?:node|link|item)\/|meta$)/;
 
 export function replyOps({
   proposals,
   needOf,
-}: Pick<OpServices, 'proposals' | 'needOf'>): Pick<Implementations, 'reply'> {
+  lifecycle,
+}: Pick<OpServices, 'proposals' | 'needOf' | 'lifecycle'>): Pick<Implementations, 'reply'> {
   return {
     reply: async ({ canvas, to, answer }, ctx) => {
       const id = canvas as string | undefined as CanvasId | undefined;
@@ -60,11 +67,25 @@ export function replyOps({
         return { id: record.id, outcome };
       };
       if (answer.choice === 'refuse') return settled('refused');
+      // What it touched beyond the document's entities (a canvas's document, its file: R4's
+      // argument half, canvas/lifecycle.ts) must be as it was, or it went stale.
+      const expect: Record<string, number> = {};
+      for (const [key, rev] of Object.entries(proposal.touched)) {
+        if (ENTITY.test(key)) expect[key] = rev;
+        else if ((await lifecycle.touched(key)) !== rev) {
+          return settled(
+            'stale',
+            key.startsWith('file:')
+              ? 'its file changed on disk since it was proposed'
+              : 'the canvas changed since it was proposed',
+          );
+        }
+      }
       const settlement = await proposals.settlement(proposal, 'allowed', ctx.by);
       try {
         await ctx.call(proposal.op, proposal.args, {
           proposedBy: proposal.by,
-          expect: proposal.touched,
+          expect,
           within: () => settlement.within(),
         });
       } catch (error) {
@@ -72,11 +93,21 @@ export function replyOps({
         return settled('stale', error.code === 'conflict' ? undefined : clause(error.message));
       }
       const { record } = settlement;
-      // It committed nothing: what it would change is no longer there to change.
-      if (record === undefined) return settled('stale', 'it would change nothing now');
+      if (record === undefined) {
+        // A command (a close, a save) applied with no change of a document's to settle it with: it
+        // is settled in a write of its own.
+        if (!isDocOp(proposal.op)) return settled('allowed');
+        // It committed nothing: what it would change is no longer there to change.
+        return settled('stale', 'it would change nothing now');
+      }
       return { id: record.id, outcome: 'allowed' as const };
     },
   };
+}
+
+/** Whether `op` is an edit of a canvas's document, which Allow's change carries its settlement. */
+function isDocOp(op: string): boolean {
+  return !Object.hasOwn(SURFACE, op) || SURFACE[op as keyof typeof SURFACE].kind === 'doc';
 }
 
 /** A sentence as a clause, to follow "but": its first letter small, its stop gone. */

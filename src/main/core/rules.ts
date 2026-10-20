@@ -71,12 +71,13 @@ export type ArgumentChecks = {
 
 /**
  * The rules checked on a token's arguments, over the canvases the core runs (`engines`) and what
- * waits for an answer on each, as you see it (`needOf`: an item by its id).
+ * waits for an answer on each, as you see it (`needOf`: an item by its id). R4's (`discard`), on a
+ * canvas's lifetime, are its ops' own (ops/files.ts).
  */
 export function ruleChecks(
   engines: Engines,
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
-): ArgumentChecks {
+): Omit<ArgumentChecks, 'discard'> {
   /** The open canvas a call names, if it is open. */
   const openOf = (canvas: string | undefined) =>
     canvas === undefined ? undefined : engines.canvas(canvas as CanvasId);

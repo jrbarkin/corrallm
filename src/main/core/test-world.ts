@@ -11,11 +11,13 @@ import {
   MAX_OP_NODES,
 } from '../../shared/api/limits';
 import type { OpName, Reach, Rule } from '../../shared/api/surface';
+import type { CanvasId } from '../../shared/canvas';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
@@ -40,6 +42,13 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * proposals waiting for you as the tests begin (PROPOSED, the outside write token's deletes of
  * `condemned-a` and `condemned-b`, which the worker is linked to).
  * While a call meets R11 (`meeting`), every token's party is at its cap.
+ *
+ * Beside it, the profile keeps canvases a canvas's lifetime acts on (FILED), none of them open:
+ * `closing`, which you close; `replaced`, which your canvas.create replaces; `discard-close` and
+ * `discard-replace`, each with edits not saved, which a token's close or replace with discard
+ * proposes and yours discards; and `shrunk`, whose document no longer has an agent its file has,
+ * which a token's save proposes and yours saves. Only you reach them, but while a call meets R4
+ * (`meeting`), the outside write token is granted them too.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -61,6 +70,18 @@ export const PROPOSED = {
   refused: 'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a60',
   allowed: 'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a61',
 } as const;
+
+/** The canvases kept beside the world's own, by what a canvas's lifetime does to them. */
+export const FILED = {
+  closing: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01',
+  replaced: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b02',
+  'discard-close': '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b03',
+  'discard-replace': '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b04',
+  shrunk: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b05',
+} as const satisfies Record<string, string>;
+
+/** A shipped template, with three open agents and a blank: Spec first. */
+export const TEMPLATE = 'fb9ce84a-7237-4271-b494-933cb4d5f274';
 
 /** A `wait` cursor at the start of the canvas's messages. */
 const START = cursorOf('wait', { [CANVAS]: 0 });
@@ -148,7 +169,8 @@ export async function startWorld(): Promise<{
   profile: string;
   /**
    * Readies the world for a call meeting `rule`, before it is made: what undoes that, after. R11's
-   * cap is then none, so that a call meets it whatever its party created before.
+   * cap is then none, so that a call meets it whatever its party created before; R4's canvases
+   * (FILED) are the outside write token's too.
    */
   meeting(rule: Rule): () => void;
   close(): Promise<void>;
@@ -193,7 +215,29 @@ export async function startWorld(): Promise<{
       links: LINKS.map((agents) => ({ agents })),
     }),
   );
-  await keepCanvases(profile, { [CANVAS]: { file, project } });
+  const filed: Record<string, { file: string }> = {};
+  for (const [name, id] of Object.entries(FILED)) {
+    const at = path.join(profile, `${name}.corral`);
+    await writeFile(
+      at,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id,
+        nodes: ['solo', 'gone'].map((agent, i) => ({
+          id: agent,
+          kind: 'agent',
+          label: agent,
+          position: { x: i * 400, y: 0 },
+          adapter: 'codex',
+          connection: 'codex.app-server',
+        })),
+        links: [],
+      }),
+    );
+    filed[id] = { file: at };
+  }
+  await keepCanvases(profile, { ...filed, [CANVAS]: { file, project } });
   await keepMessages(profile, CANVAS, [
     ...Object.entries(SEEDED).map(([party, id]) => ({
       message: {
@@ -270,6 +314,20 @@ export async function startWorld(): Promise<{
       throw new Error(`Not proposed as ${id}: ${JSON.stringify(proposed)}`);
     }
   }
+  // Edits not saved, by you: a rename, and an agent its file has deleted.
+  for (const [canvas, edit, args] of [
+    [FILED['discard-close'], 'canvas.rename', { node: 'solo', label: 'Edited' }],
+    [FILED['discard-replace'], 'canvas.rename', { node: 'solo', label: 'Edited' }],
+    [FILED.shrunk, 'canvas.delete', { nodes: ['gone'] }],
+  ] as const) {
+    for (const [name, more] of [
+      ['canvas.get', {}],
+      [edit, args],
+    ] as const) {
+      const done = await core.call(name, { canvas, ...more }, CALLERS.you);
+      if (!done.ok) throw new Error(done.error.sentence);
+    }
+  }
   await new Promise<void>((resolve) => {
     const stuck = () =>
       core.engines
@@ -286,6 +344,14 @@ export async function startWorld(): Promise<{
     core,
     profile,
     meeting: (rule) => {
+      if (rule === 'discard') {
+        const granted = (CALLERS['outside-write'] as OutsideCaller).canvases as CanvasId[];
+        const before = granted.length;
+        granted.push(...(Object.values(FILED) as CanvasId[]));
+        return () => {
+          granted.splice(before);
+        };
+      }
       if (rule !== 'new-agent') return () => undefined;
       cap = 0;
       return () => {
@@ -301,6 +367,9 @@ export async function startWorld(): Promise<{
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
+
+/** A request id for each fixture of a canvas's lifetime that writes. */
+const lifetime = (n: number) => `3d4e5f60-7182-4a3b-8cad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
 
 /** A target the lead's team holds (its helper, and its own group), and every outside token reaches. */
 const TARGETS = [
@@ -1093,6 +1162,67 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'shell', paths: [path.join(tmpdir(), 'not-a-dropped-file')], request: request(99) },
     ],
     invalid: [{}, { agent: 'shell', paths: [] }, { agent: 'shell', paths: ['relative.png'] }],
+  },
+  // A canvas's lifetime. A token's calls make, save and close canvases of its own, or the world's;
+  // what only you reach (FILED) is yours to make, close or replace, but for the calls meeting R4.
+  'canvas.create': {
+    valid: [{ request: lifetime(0) }],
+    by: {
+      you: [
+        { request: lifetime(1) },
+        { template: TEMPLATE, values: { feature: 'Export CSV' }, request: lifetime(2) },
+        { replace: { canvas: FILED.replaced }, request: lifetime(3) },
+      ],
+    },
+    fresh: ['canvas', 'revs'],
+    invalid: [
+      { template: 'nope' },
+      { values: { feature: 'Export CSV' } },
+      { replace: { canvas: 'nope' } },
+      { replace: { canvas: CANVAS, discard: 'yes' } },
+      { canvas: CANVAS },
+    ],
+    meetsRule: {
+      discard: {
+        replace: { canvas: FILED['discard-replace'], discard: true },
+        request: lifetime(4),
+      },
+      'new-agent': { template: TEMPLATE, request: lifetime(5) },
+    },
+  },
+  'canvas.open': {
+    // The dialog is cancelled: nothing opens, so nothing is replaced.
+    valid: [{}, { replace: { canvas: CANVAS } }],
+    invalid: [{ replace: {} }, { replace: { canvas: 'nope' } }, { canvas: CANVAS }],
+  },
+  'canvas.save': {
+    valid: [{ canvas: CANVAS, request: lifetime(6) }],
+    fresh: ['revs'],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, file: '/etc/passwd' }],
+    meetsRule: { discard: { canvas: FILED.shrunk, request: lifetime(7) } },
+  },
+  'canvas.saveAs': {
+    // The dialog is cancelled: nothing is saved.
+    valid: [{ canvas: CANVAS }, {}],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, file: '/etc/passwd' }],
+  },
+  'canvas.close': {
+    valid: [],
+    by: { you: [{ canvas: FILED.closing, request: lifetime(8) }] },
+    fresh: ['revs'],
+    invalid: [
+      { canvas: 'nope' },
+      { canvas: CANVAS, discard: 'yes' },
+      { canvas: CANVAS, keep: true },
+    ],
+    meetsRule: {
+      discard: { canvas: FILED['discard-close'], discard: true, request: lifetime(9) },
+    },
+  },
+  'project.choose': {
+    // The dialog is cancelled: the folder stays.
+    valid: [{ canvas: CANVAS }],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, path: '/tmp' }],
   },
   wait: {
     valid: [{ timeoutSeconds: 0, after: START }, { timeoutSeconds: 0 }],

@@ -8,6 +8,12 @@
     "api.templates.list",
     "api.settings.get",
     "api.project.files",
+    "api.canvas.create",
+    "api.canvas.open",
+    "api.canvas.save",
+    "api.canvas.saveAs",
+    "api.canvas.close",
+    "api.project.choose",
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
@@ -123,6 +129,8 @@
       "canvas_addAgent",
       "canvas_addParent",
       "canvas_batch",
+      "canvas_close",
+      "canvas_create",
       "canvas_delete",
       "canvas_get",
       "canvas_group",
@@ -130,6 +138,7 @@
       "canvas_list",
       "canvas_move",
       "canvas_rename",
+      "canvas_save",
       "canvas_spawnAgent",
       "canvas_ungroup",
       "canvas_unlink",
@@ -162,7 +171,7 @@
     "lead": 39,
     "worker": 11,
     "outside-read": 16,
-    "outside-write": 40
+    "outside-write": 43
   },
   "unhosted": {
     "agents": "B11",
@@ -179,6 +188,9 @@
     "run.unpause": "B11"
   },
   "deviations": {
+    "canvas.open": "trust-gate",
+    "canvas.saveAs": "trust-gate",
+    "project.choose": "trust-gate",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
@@ -223,6 +235,30 @@
     "project.files": {
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
+    },
+    "canvas.create": {
+      "input": "3394f69e468a0469",
+      "output": "0868276782705988"
+    },
+    "canvas.open": {
+      "input": "8ed9ce92c68e70c8",
+      "output": "14a5e45382fc099f"
+    },
+    "canvas.save": {
+      "input": "f676d264f07b5166",
+      "output": "c1cc906bb41f6113"
+    },
+    "canvas.saveAs": {
+      "input": "f676d264f07b5166",
+      "output": "932560765e6d94c1"
+    },
+    "canvas.close": {
+      "input": "1a908234579fefb6",
+      "output": "402994efc5cbf04e"
+    },
+    "project.choose": {
+      "input": "f676d264f07b5166",
+      "output": "6547d4e49ce2db33"
     },
     "canvas.list": {
       "input": "e5fa5cc18e054cdd",

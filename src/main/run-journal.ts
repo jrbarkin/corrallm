@@ -241,6 +241,13 @@ export class RunJournal {
     });
   }
 
+  /** The canvas is open (the core runs it): until it is closed, beside any other open. */
+  async open(canvas: CanvasId): Promise<void> {
+    await this.#write(() => {
+      this.#markOpen(canvas);
+    });
+  }
+
   /** New: a new draft, its id. The canvas before keeps its run. */
   async draft(): Promise<CanvasId> {
     const canvas = newCanvasId();

@@ -34,9 +34,11 @@ import type { Database } from './store/store';
  * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
  * the user picked in the app (canvas memory), its document as the core keeps it (from its rows,
  * else read from its file: core/canvas/documents.ts), whose live document it reads from then on,
- * and its run as the journal last kept it, restored paused. A draft, which has no file, never
- * opens, nor does a canvas whose file holds another canvas. One opened held delivers nothing until `deliver()`, so a host that may still refuse to
- * start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
+ * and its run as the journal last kept it, restored paused. A canvas with no file opens only if
+ * the core keeps its document (one a token made), and none whose file holds another canvas. It is
+ * open (the journal's `open_canvas`) until it is closed (`closeCanvas`: its run journaled, its
+ * sessions ended). One opened held delivers nothing until `deliver()`, so a host that may still
+ * refuse to start (`corrallm serve`) sends nothing. Whatever its engine does is journaled again: at most one
  * write per COALESCE_MS, and one before every message the run sends, so a sent message's record is
  * always on disk first. Its run and its messages are one record: each write of either holds every
  * change to the other not on disk yet (a run's only if it changed since it last was), so what
@@ -63,7 +65,7 @@ export interface EnginesDeps {
   projects: ProjectFolders;
   journal: RunJournal;
   /** Each canvas's document. */
-  documents: Pick<Documents, 'load' | 'live'>;
+  documents: Pick<Documents, 'load' | 'live' | 'hasRows'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
   /** The profile's database, whose commits hold what changes together. */
@@ -316,6 +318,30 @@ export class Engines {
     await notes.send(agentId, message, send);
   }
 
+  /**
+   * Closes a canvas it runs (canvas.close): what its messages were doing cut off, its run held
+   * where it is and journaled, then its sessions closed. Nothing if it doesn't run it; rejects,
+   * once its sessions are closed, if its run couldn't be journaled.
+   */
+  async closeCanvas(canvas: CanvasId): Promise<void> {
+    const opening = this.#running.get(canvas);
+    if (opening === undefined) return;
+    this.#running.delete(canvas);
+    let running: Running;
+    try {
+      running = await opening;
+    } catch {
+      // It never opened: nothing of it runs.
+      return;
+    }
+    this.#canvases.delete(canvas);
+    try {
+      await this.#stop(running);
+    } finally {
+      await this.#deps.sessions.closeCanvas(canvas);
+    }
+  }
+
   /** Fallible saving before the app commits to closing: sessions and topics remain usable. */
   async flush(): Promise<void> {
     await Promise.all(this.#events.values());
@@ -358,10 +384,14 @@ export class Engines {
     const { projects, journal, documents } = this.#deps;
     if ((await projects.restore(canvas)) === undefined) throw new Error(NO_FOLDER);
     const context = await journal.get(canvas);
-    // Only a canvas saved in the file canvas memory names for it, while that file still holds it:
-    // never a draft, though the journal keeps one's run.
-    if (context.savedText === undefined) throw new Error(NO_FILE);
-    if (canvasIdOf(context.savedText) !== canvas) throw new Error(ANOTHER);
+    // A canvas the core keeps the document of opens with no file (one a token made, never saved:
+    // B9 Design §8); any other only from the file canvas memory names for it, while that file
+    // still holds it: never a draft that holds nothing, though the journal keeps one's run.
+    if (context.savedText === undefined) {
+      if (!documents.hasRows(canvas)) throw new Error(NO_FILE);
+    } else if (canvasIdOf(context.savedText) !== canvas) {
+      throw new Error(ANOTHER);
+    }
     // With its edits since, as the core keeps them.
     const { document } = await documents.load(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
@@ -471,6 +501,8 @@ export class Engines {
       running.timer = undefined;
     };
     this.#canvases.set(canvas, running);
+    // Open until it is closed (B9 Design §2).
+    await journal.open(canvas);
     this.#look(running);
     for (const watcher of this.#watchers) watcher.opened?.(canvas);
     return running;

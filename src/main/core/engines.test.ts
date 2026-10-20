@@ -318,13 +318,50 @@ describe('the core runs each canvas’s engine', () => {
     expect(codex.started).toEqual([]);
   });
 
-  it('refuses an unsaved canvas, though its run was journaled and its folder kept', async () => {
+  it('opens a canvas the core keeps the document of with no file, its run restored paused', async () => {
     await journalRun();
-    // A draft: the profile keeps its folder and its run, and no file.
+    // Its file forgotten: the profile keeps its folder, its run and its document, and no file.
     await keepCanvases(profile, { [CANVAS]: { project } });
+    const engine = await (
+      await start(new FakeConnector({ adapter: 'codex' }))
+    ).engines.open(CANVAS);
+    expect(engine.run.snapshot()).toMatchObject({
+      paused: true,
+      agents: { worker: { status: 'done' } },
+    });
+  });
+
+  it('refuses a draft that holds nothing, though its folder is kept', async () => {
+    const draft = '6e5d4c3b-2a19-4f08-8e7d-6c5b4a392817' as CanvasId;
+    await keepCanvases(profile, { [draft]: { project } });
     await expect(
-      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(CANVAS),
+      (await start(new FakeConnector({ adapter: 'codex' }))).engines.open(draft),
     ).rejects.toThrow(/isn’t saved/);
+  });
+
+  it('closes a canvas it runs: its run held and journaled, its sessions closed, open again paused', async () => {
+    await keepCanvas();
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const started = await start(codex);
+    const engine = await started.engines.open(CANVAS);
+    expect(
+      readOnDisk(profile, (disk) => disk.prepare('SELECT canvas_id FROM open_canvas').all()),
+    ).toEqual([{ canvas_id: CANVAS }]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.worker?.status).toBe('done');
+    });
+    const closing = vi.spyOn(codex, 'start');
+    await started.engines.closeCanvas(CANVAS);
+    expect(started.engines.canvas(CANVAS)).toBeUndefined();
+    expect(started.engines.opened()).toEqual([]);
+    expect(journaled().run.agents.worker).toMatchObject({ outcomes: { hello: 'succeeded' } });
+    // Nothing more of it runs, and closing it again is nothing.
+    await started.engines.closeCanvas(CANVAS);
+    expect(closing).not.toHaveBeenCalled();
+    const again = await started.engines.open(CANVAS);
+    expect(again).not.toBe(engine);
+    expect(again.run.snapshot()).toMatchObject({ running: false, paused: true });
   });
 
   it('refuses a canvas whose file holds another canvas now, though its run was journaled', async () => {

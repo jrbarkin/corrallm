@@ -157,7 +157,7 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
     try {
       server = await startApiServer({
         core: opened,
-        clientOf: (token) => opened.tokens.clientOf(token),
+        clientOf: (token) => opened.clientOf(token),
         port,
       });
     } catch (error) {

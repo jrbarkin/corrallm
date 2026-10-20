@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -40,8 +40,9 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
  * accepted as you; then on changes no single op makes, as a composite or an undo will. R4's
  * proposals: a token's delete applies nothing and waits for you, allowed, refused or settled stale,
  * the proposer told; R3: only you answer one; and `canvas.batch`, whose combined change meets every
- * rule, each inner op checked as the caller's own call. `canvas.save` and `canvas.close`, and file
- * reviews, come with B9's later tasks: their cases are listed below as what remains.
+ * rule, each inner op checked as the caller's own call. R4's argument half: a token's canvas.save
+ * that would remove agents its file has, and its canvas.close or canvas.create replacing a canvas
+ * with edits not saved, with discard, are proposed. File reviews come with B9's task 12.
  *
  * The canvas: `lead` (a lead) holding `helper`, `team` (a frame holding `member`) and `spare` (an
  * empty frame); `a`, set to start in a mode and given a role, whose queue holds an OK with work
@@ -1029,9 +1030,52 @@ describe('proposals', () => {
     }
   });
 
-  // B9 Design §1, Claude 9 and 12: what these rules guard comes with those tasks.
-  it.todo('R4: canvas.save of a document missing agents the file on disk has (Claude 9)');
-  it.todo('R4: canvas.close or create {replace} with discard on an edited canvas (Claude 9)');
+  it('R4: canvas.save of a document missing agents the file on disk has', async () => {
+    const file = path.join(profile, `${CANVAS}.corral`);
+    const saved = await readFile(file, 'utf8');
+    await applied('canvas.delete', { nodes: ['c'] }, YOU);
+    const { proposed } = await applied('canvas.save', {});
+    expect(proposed).toMatch(/^proposal\//);
+    expect(await proposals()).toContainEqual(
+      expect.objectContaining({
+        id: proposed,
+        title: `"orchestrator" asks to save ${CANVAS}.corral, removing C from its file`,
+      }),
+    );
+    // Nothing is written: the file keeps the agent.
+    expect(await readFile(file, 'utf8')).toBe(saved);
+    // Yours saves at once; then nothing is lost, and a token's saves too.
+    expect(await applied('canvas.save', {}, YOU)).toMatchObject({ name: `${CANVAS}.corral` });
+    expect(await readFile(file, 'utf8')).not.toContain('"c"');
+    expect(await applied('canvas.save', {})).toMatchObject({ name: `${CANVAS}.corral` });
+  });
+
+  it('R4: canvas.close or create {replace} with discard on an edited canvas', async () => {
+    await applied('canvas.rename', { node: 'solo', label: 'Edited' }, YOU, SECOND);
+    const close = await applied('canvas.close', { discard: true }, OUTSIDE, SECOND);
+    const replace = await core.call(
+      'canvas.create',
+      { replace: { canvas: SECOND, discard: true } },
+      OUTSIDE,
+    );
+    expect(replace).toMatchObject({ ok: true, value: { proposed: expect.any(String) as string } });
+    // Neither applied: the canvas stays open, with its edits; no canvas was made.
+    expect(core.engines.canvas(SECOND)).toBeDefined();
+    expect(node('solo', SECOND).data.label).toBe('Edited');
+    expect((await proposals(SECOND)).map(({ id }) => id)).toEqual([
+      close.proposed,
+      replace.ok && (replace.value as { proposed: string }).proposed,
+    ]);
+    // Without discard, or on a canvas with no edits, a token closes it at once.
+    await applied('canvas.close', {}, OUTSIDE, SECOND);
+    expect(core.engines.canvas(SECOND)).toBeUndefined();
+    // Yours discards: back to its file.
+    await applied('canvas.close', { discard: true }, YOU, SECOND);
+    const reverted = await core.call('canvas.get', { canvas: SECOND }, YOU);
+    if (!reverted.ok) throw new Error(reverted.error.sentence);
+    expect(reverted.value.nodes.map(({ data }) => data.label)).toEqual(['Solo']);
+  });
+
   it.todo('R3: a token’s reply to a file review is refused (Claude 12)');
 });
 

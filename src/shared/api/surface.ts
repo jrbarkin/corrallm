@@ -140,6 +140,36 @@ export const SURFACE = {
   'templates.list': { access: R, kind: 'read', scope: 'none' },
   'settings.get': { access: R, kind: 'read', scope: 'none', reads: 'settings' },
   'project.files': { access: R, kind: 'read', scope: 'none' },
+  // A canvas's lifetime and where it is kept (B9 Design §1, §8). A path comes only from a dialog
+  // you complete (D1: canvas.open, canvas.saveAs, project.choose). A token's call that would
+  // discard work, or close a canvas a window shows, comes to you as a proposal (R4's argument
+  // half). Closing or replacing a canvas drains it, as choosing its folder does.
+  'canvas.create': {
+    access: W,
+    kind: 'command',
+    scope: 'app',
+    rules: ['discard', 'new-agent'],
+    drains: 'canvas',
+    destructive: true,
+  },
+  'canvas.open': { access: Y, kind: 'command', scope: 'app', drains: 'canvas' },
+  'canvas.save': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    destructive: true,
+  },
+  'canvas.saveAs': { access: Y, kind: 'command', scope: 'canvas' },
+  'canvas.close': {
+    access: W,
+    kind: 'command',
+    scope: 'canvas',
+    rules: ['discard'],
+    drains: 'canvas',
+    destructive: true,
+  },
+  'project.choose': { access: Y, kind: 'command', scope: 'canvas', drains: 'canvas' },
   // A token lists only its own canvases; a lead's canvas holds only what it reaches (§3.4).
   'canvas.list': { access: R, kind: 'read', scope: 'none', reads: 'canvases', varies: ['items'] },
   'canvas.get': {

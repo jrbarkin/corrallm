@@ -22,6 +22,14 @@ export const NO_GESTURE = {
     'B9 task 10 moves adding a parent from the renderer graph onto this operation.',
   'canvas.move': 'B9 task 10 moves dragging from the renderer graph onto this operation.',
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
+  'canvas.create':
+    'B9 task 12 moves New and a template’s New from the canvas:forget channel onto this operation.',
+  'canvas.open': 'B9 task 12 moves Open from the canvas:open channel onto this operation.',
+  'canvas.save': 'B9 task 12 moves Save from the canvas:save channel onto this operation.',
+  'canvas.saveAs': 'B9 task 12 moves Save As from the canvas:save channel onto this operation.',
+  'canvas.close': 'B9 task 13’s Canvases list closes a canvas with it.',
+  'project.choose':
+    'B9 task 12 moves choosing the folder from the project:choose channel onto this operation.',
   reply: 'B9’s proposal cards in the Needs you sidebar (the worker’s task 13) answer with it.',
   'canvas.rename':
     'The canvas’s rename still edits the renderer’s graph; B9’s gestures move onto the core’s operations together.',

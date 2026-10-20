@@ -31,8 +31,9 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
-import { committer } from './canvas/commit';
+import { committer, refusalOf } from './canvas/commit';
 import { Documents } from './canvas/documents';
+import { Lifecycle } from './canvas/lifecycle';
 import { Proposals } from './canvas/proposals';
 import { CanvasStates } from './canvas/states';
 import { seesAll, viewOf } from './canvas/view';
@@ -40,12 +41,13 @@ import { Channels } from './channels';
 import { Windows } from './windows';
 import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
-import type { Caller } from './caller';
+import type { Caller, OutsideCaller } from './caller';
 import { MessageTable } from './delivery/messages';
 import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
+import { discardChecks } from './ops/files';
 import { holder, resolvers } from './reach';
 import { changeChecks, heldBy, ruleChecks } from './rules';
 import { TokenStore } from './tokens';
@@ -136,6 +138,12 @@ export interface Core extends Dispatcher {
   flush(): Promise<void>;
   /** The outside tokens, kept in the profile's tokens.json. */
   tokens: TokenStore;
+  /**
+   * The outside orchestrator a token names, if it is one that hasn't expired: reaching the
+   * canvases it was granted, and those its party made (canvas.create: document.created_by),
+   * kept across renewals.
+   */
+  clientOf(token: string): OutsideCaller | undefined;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
   /**
@@ -269,7 +277,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await projects.restore(canvas);
       return canvas;
     },
-    left: (canvas) => sessions.closeCanvas(canvas),
+    // A canvas the core runs runs on whatever window shows it, or none (decision 5); the app's,
+    // whose run is its window's until B11, ends its sessions as the window leaves it.
+    left: (canvas) => (engines.canvas(canvas) ? Promise.resolve() : sessions.closeCanvas(canvas)),
   });
   const files = new ProjectFiles({ environment });
   const links = new LinkOpener({
@@ -285,11 +295,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await host.showFile(file);
     },
   });
+  const canvasFiles = new CanvasFiles({ host, memory, documents });
   const channels = new Channels({
     processes: children,
     catalog: CATALOG,
     windows,
-    canvases: new CanvasFiles({ host, memory, documents }),
+    canvases: canvasFiles,
     documents,
     runs: journal,
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
@@ -381,6 +392,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       tokens.flush(),
       links.flush(),
     ]);
+  // A canvas's lifetime: made, opened, saved, closed, its folder chosen (B9 Design §1).
+  const lifecycle = new Lifecycle({
+    documents,
+    memory,
+    journal,
+    windows,
+    projects,
+    sessions,
+    engines: { closeCanvas: (canvas) => engines.closeCanvas(canvas) },
+    files: canvasFiles,
+  });
   const engines: Engines = new Engines({
     processes: children,
     engineCatalog: engineCatalog(CATALOG, DEFAULT_ADAPTER),
@@ -404,6 +426,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       states.listChanged();
     },
   });
+  // Every change rule a token's commit is checked against (B9 Design §4).
+  const changeRules = changeChecks({
+    catalog: CATALOG,
+    defaultAdapter: DEFAULT_ADAPTER,
+    held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
+    created: (party, canvas, removing) => documents.created(party, canvas, removing),
+    maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
+  });
   const dispatcher = createDispatcher(
     {
       surface: SURFACE,
@@ -424,6 +454,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         usage,
         engines,
         states,
+        lifecycle,
+        documents,
         proposals,
         needOf,
         isLead,
@@ -431,7 +463,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         tokens,
         ...(config.locale === undefined ? {} : { locale: config.locale }),
       }),
-      rules: ruleChecks(engines, needOf),
+      rules: {
+        ...ruleChecks(engines, needOf),
+        discard: discardChecks({
+          lifecycle,
+          proposals,
+          catalog: CATALOG,
+          defaultAdapter: DEFAULT_ADAPTER,
+          refusal: (document, call) =>
+            refusalOf(document, call, changeRules, {
+              catalog: CATALOG,
+              defaultAdapter: DEFAULT_ADAPTER,
+            }),
+        }),
+      },
     },
     {
       check: config.check,
@@ -439,13 +484,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       resolvers: resolvers(engines, isLead, needOf),
       commit: committer({
         documents,
-        rules: changeChecks({
-          catalog: CATALOG,
-          defaultAdapter: DEFAULT_ADAPTER,
-          held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
-          created: (party, canvas, removing) => documents.created(party, canvas, removing),
-          maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
-        }),
+        rules: changeRules,
         committed: (canvas) => {
           engines.changed(canvas);
         },
@@ -478,6 +517,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await stores();
     },
     tokens,
+    clientOf: (token) => {
+      const caller = tokens.clientOf(token);
+      if (caller === undefined) return undefined;
+      const made = documents.createdBy(`outside:${caller.name}`);
+      return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
+    },
     settings,
     keptCanvas: (file) => keptCanvas(file, memory),
     openHeld: async (canvas) => {

@@ -53,7 +53,7 @@ export interface Proposal {
 }
 
 /** What a proposal would do and lose, worded. */
-interface Lost {
+export interface Lost {
   /** "delete Reviewer": what it would do, to finish "asks to …". */
   what: string;
   title: string;
@@ -132,7 +132,9 @@ export class Proposals {
 
   /**
    * Raises a proposal for you of `op` with `args`, proposed by `by`, whose change is `change`: kept
-   * on disk before it resolves with its id; rejects, keeping nothing, if it couldn't be.
+   * on disk before it resolves with its id; rejects, keeping nothing, if it couldn't be. One that
+   * is no change of a document's (R4's argument half: a close, a replace, a save) says what it
+   * touches and what it would do and lose itself (`touched`, `lost`).
    */
   async raise(
     canvas: CanvasId,
@@ -141,16 +143,33 @@ export class Proposals {
       args,
       by,
       change,
-    }: { op: string; args: Readonly<Record<string, unknown>>; by: PartyId; change: ChangeSet },
+      touched: given,
+      lost: said,
+    }: {
+      op: string;
+      args: Readonly<Record<string, unknown>>;
+      by: PartyId;
+      change?: ChangeSet;
+      touched?: Readonly<Record<string, number>>;
+      lost?: Lost;
+    },
   ): Promise<NeedId> {
     const open = this.#read(canvas);
     if (open === undefined) throw new Error('The canvas’s proposals can’t be read.');
     const uuid = this.#newId();
-    const touched = Object.fromEntries(
-      [...change.entities].map(([key, { rev }]) => [key, rev ?? 0]),
-    );
-    const inner = Array.isArray(args.ops) ? args.ops.length : undefined;
-    const lost = wordsOf(change, await this.#deps.conversations(canvas), inner);
+    let touched: Readonly<Record<string, number>>;
+    let lost: Lost;
+    if (change === undefined) {
+      if (given === undefined || said === undefined) {
+        throw new Error('A proposal says what it touches and what it would lose.');
+      }
+      [touched, lost] = [given, said];
+    } else {
+      touched =
+        given ?? Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
+      const inner = Array.isArray(args.ops) ? args.ops.length : undefined;
+      lost = said ?? wordsOf(change, await this.#deps.conversations(canvas), inner);
+    }
     const proposal: Proposal = {
       id: `proposal/${uuid}` as NeedId,
       canvas,
