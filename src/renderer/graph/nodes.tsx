@@ -249,7 +249,7 @@ function Label({ id, label }: { id: string; label: string }) {
 
 function LabelInput({ id, label }: { id: string; label: string }) {
   const { rename, stopEditing } = useGraphActions();
-  const draft = useLabel(label, (text) => {
+  const { problem, ...draft } = useLabel(label, (text) => {
     return rename(id, text);
   });
   const input = useRef<HTMLInputElement>(null);
@@ -263,13 +263,14 @@ function LabelInput({ id, label }: { id: string; label: string }) {
       className="graph-label nodrag"
       aria-label="Label"
       {...draft}
+      title={problem}
       onKeyDown={(event) => {
-        draft.onKeyDown(event);
+        void draft.onKeyDown(event);
         if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape'))
           stopEditing();
       }}
       onBlur={() => {
-        draft.onBlur();
+        void draft.onBlur();
         stopEditing();
       }}
     />

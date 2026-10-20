@@ -119,9 +119,9 @@ interface QueueProps {
   onRemove: (itemId: string) => void;
   onMove: (itemId: string, before: string | null) => void | Promise<void>;
   onRetarget: (itemId: string, target: string | undefined) => void;
-  onEditMessage: (itemId: string, message: string) => void;
+  onEditMessage: (itemId: string, message: string) => void | Promise<void>;
   /** Sets what a step is to do, in the user's words ('' takes it off). */
-  onInstruction: (itemId: string, instruction: string) => void;
+  onInstruction: (itemId: string, instruction: string) => void | Promise<void>;
   /** Expects a step to fail ('fails'), or (undefined) to succeed. */
   onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onCondition: (ifId: string, condition: Condition) => void;
@@ -467,8 +467,8 @@ interface Context extends AddContext {
   describe: (item: QueueItem) => string;
   onRemove: (itemId: string) => void;
   onRetarget: (itemId: string, target: string | undefined) => void;
-  onEditMessage: (itemId: string, message: string) => void;
-  onInstruction: (itemId: string, instruction: string) => void;
+  onEditMessage: (itemId: string, message: string) => void | Promise<void>;
+  onInstruction: (itemId: string, instruction: string) => void | Promise<void>;
   onExpect: (itemId: string, expect: QueueStep['expect']) => void;
   onWaitFor: (waitId: string, targets: WaitTarget[]) => void;
   onTime: (itemId: string, time: Time | undefined) => void;
@@ -867,10 +867,10 @@ function StepRow({
   context: Context;
 }) {
   const [expecting, setExpecting] = useState(false);
-  const instruction = useDraft(
+  const { problem, ...instruction } = useDraft(
     item.instruction ?? '',
     (text) => {
-      context.onInstruction(item.id, text);
+      return context.onInstruction(item.id, text);
     },
     { multiline: true },
   );
@@ -921,6 +921,11 @@ function StepRow({
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
       <TaskResult item={item} context={context} />
+      {problem && (
+        <p className="graph-queue-result graph-queue-problem" role="alert">
+          {problem}
+        </p>
+      )}
       {fails && <Expectation item={item} context={context} open={expecting} onToggle={toggle} />}
       {expecting && (
         <ExpectPicker
@@ -1065,10 +1070,10 @@ function MessageRow({
   handle: HandleProps;
   context: Context;
 }) {
-  const message = useDraft(
+  const { problem, ...message } = useDraft(
     item.message,
     (text) => {
-      context.onEditMessage(item.id, text);
+      return context.onEditMessage(item.id, text);
     },
     { multiline: true },
   );
@@ -1119,6 +1124,11 @@ function MessageRow({
       <RemoveButton item={item} context={context} />
       <UsageHeld item={item} context={context} />
       <TaskResult item={item} context={context} />
+      {problem && (
+        <p className="graph-queue-result graph-queue-problem" role="alert">
+          {problem}
+        </p>
+      )}
     </div>
   );
 }

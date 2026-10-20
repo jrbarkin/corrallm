@@ -90,8 +90,8 @@ export function AgentSettingsPanel({
 }) {
   const sheet = useRef<HTMLDivElement>(null);
   const [problem, setProblem] = useState<string>();
-  const title = useLabel(node.data.label, onRename);
-  const role = useDraft(
+  const { problem: titleProblem, ...title } = useLabel(node.data.label, onRename);
+  const { problem: roleProblem, ...role } = useDraft(
     node.data.role ?? '',
     (raw) => {
       try {
@@ -213,8 +213,8 @@ export function AgentSettingsPanel({
           <textarea
             aria-label="Role"
             aria-describedby="agent-role-help"
-            aria-invalid={problem !== undefined}
             {...role}
+            aria-invalid={problem !== undefined || roleProblem !== undefined}
             maxLength={MAX_ROLE_LENGTH}
             rows={6}
             placeholder="For example: Review changes for correctness and explain concrete risks."
@@ -228,11 +228,11 @@ export function AgentSettingsPanel({
               }
             }}
             onBlur={() => {
-              role.onBlur();
+              void role.onBlur();
               setProblem(undefined);
             }}
             onKeyDown={(event) => {
-              role.onKeyDown(event);
+              void role.onKeyDown(event);
               if (event.key === 'Escape') setProblem(undefined);
             }}
           />
@@ -241,9 +241,9 @@ export function AgentSettingsPanel({
           Standing instructions for this agent, saved with the workflow. Applied when its session
           starts or restarts.
         </p>
-        {problem && (
+        {(problem ?? roleProblem ?? titleProblem) && (
           <p className="agent-settings-problem" role="alert">
-            {problem}
+            {problem ?? roleProblem ?? titleProblem}
           </p>
         )}
         {connection !== 'unavailable' && (

@@ -3,7 +3,7 @@ import { newCanvasId } from '../../shared/canvas';
 import { toRows } from '../../shared/model/rows';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Entities, Entity } from '../../shared/model/state';
-import { absolutePosition } from '../../shared/model/geometry';
+import { absolutePosition, size } from '../../shared/model/geometry';
 import { group } from '../../shared/model/structure';
 import { CanvasFlow, nodeView } from './flow';
 import type { Graph, GraphNode } from './flow';
@@ -95,6 +95,43 @@ it('keeps selection, measurements and dragging outside the document, preserving 
   expect(projectSelection(projected.graph, EMPTY_SELECTION).nodes[0]).toBe(
     projected.graph.nodes[0],
   );
+});
+
+it('supplies every rendered card and container with a measurement before React Flow observes it', () => {
+  const id = newCanvasId();
+  const doc: CanvasDocument = {
+    id,
+    arrange: false,
+    links: [],
+    nodes: [
+      { id: 'frame', type: 'frame', position: { x: 0, y: 0 }, data: { label: 'Frame' } },
+      { id: 'parent', type: 'agent', position: { x: 250, y: 0 }, data: { label: 'Parent' } },
+      {
+        id: 'child',
+        type: 'agent',
+        parentId: 'parent',
+        position: { x: 20, y: 70 },
+        data: { label: 'Child' },
+      },
+    ],
+  };
+  const graph = new CanvasFlow().read(
+    id,
+    1,
+    Object.fromEntries(
+      Object.entries(toRows(doc)).map(([key, row]) => [key, { ...row, rev: 1, by: 'you' }]),
+    ) as Entities,
+  ).graph;
+  for (const node of graph.nodes) {
+    const shown = nodeView(node, '', undefined);
+    expect(shown.measured).toEqual(size(node));
+    expect(nodeView(node, '', undefined)).toBe(shown);
+  }
+  const measured = { width: 151, height: 35 };
+  const observed = projectOverlay(graph, new Map([['child', { measured }]]));
+  const child = observed.nodes.find((node) => node.id === 'child');
+  if (!child) throw new Error('No child');
+  expect(nodeView(child, '', undefined).measured).toBe(measured);
 });
 
 it('projects display-only queue data onto a card without changing its model or untouched cards', () => {

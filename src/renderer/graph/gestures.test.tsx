@@ -20,6 +20,7 @@ import { ApiError } from '../api/bridge';
 const seen = vi.hoisted(() => ({
   props: undefined as ComponentProps<typeof ReactFlow> | undefined,
   fits: [] as unknown[],
+  nodeLists: [] as NonNullable<ComponentProps<typeof ReactFlow>['nodes']>[],
 }));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof XYFlow>();
@@ -40,6 +41,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     },
     ReactFlow: (props: ComponentProps<typeof ReactFlow>) => {
       seen.props = props;
+      if (props.nodes) seen.nodeLists.push(props.nodes);
       return <actual.ReactFlow {...props} />;
     },
   };
@@ -54,6 +56,7 @@ afterEach(() => {
   });
   vi.restoreAllMocks();
   seen.fits = [];
+  seen.nodeLists = [];
 });
 function setup({
   arrange = false,
@@ -174,6 +177,13 @@ it('adds with one operation and uses the id from the core', async () => {
   await waitFor(() => {
     expect(view.container.querySelectorAll('.react-flow__node-agent')).toHaveLength(3);
   });
+  // Includes its first projection and the selected copy when add's promise resolves, before
+  // ResizeObserver necessarily runs. Later observations may supply different dimensions.
+  for (const nodes of seen.nodeLists)
+    for (const node of nodes) {
+      expect(node.measured?.width).toBeGreaterThan(0);
+      expect(node.measured?.height).toBeGreaterThan(0);
+    }
 });
 it('renames with one operation', async () => {
   const view = setup({ selected: ['a'] });
@@ -684,6 +694,44 @@ it('commits a queue message draft with one op', async () => {
     expect((field as HTMLTextAreaElement).value).toBe('After');
   });
 });
+it.each(['message', 'instruction'] as const)(
+  'keeps a refused queue %s draft with its field error',
+  async (kind) => {
+    const entry =
+      kind === 'message'
+        ? { id: 'work', message: 'Before' }
+        : { id: 'work', action: 'Read', instruction: 'Before' };
+    const view = setup({ queue: [entry] });
+    view.core.reply('queue.update', {
+      ok: false,
+      error: { code: 'refused', sentence: 'Held by the run.' },
+    });
+    fireEvent.doubleClick(view.node('a'));
+    const field = screen.getByRole<HTMLTextAreaElement>('textbox', {
+      name: kind === 'message' ? 'Message to the agent' : 'What Read is to do',
+    });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'Keep this draft' } });
+    fireEvent.blur(field);
+    await called(view.core);
+    const row = field.closest<HTMLElement>('.graph-queue-row');
+    if (!row) throw new Error('No queue row');
+    await waitFor(() => {
+      expect(within(row).getByRole('alert').textContent).toBe('Held by the run.');
+    });
+    expect(field.value).toBe('Keep this draft');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expectOneOp(view.core, 'queue.update', {
+      canvas: view.canvas,
+      agent: 'a',
+      item: 'work',
+      change:
+        kind === 'message'
+          ? { kind, message: 'Keep this draft' }
+          : { kind, instruction: 'Keep this draft' },
+    });
+  },
+);
 it.each(['agent', 'All queues'] as const)('sends one queue.move at drop from %s', async (where) => {
   const view = setup({
     queue: [

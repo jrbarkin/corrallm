@@ -1108,11 +1108,13 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   await add('Read', null); // on this agent
   await add('ok', 'the notes');
   await add('Grep', null);
-  expect(
-    await panel
-      .getByRole('button', { name: /^Move / })
-      .evaluateAll((handles) => handles.map((handle) => handle.getAttribute('aria-label'))),
-  ).toEqual(['Move Read', 'Move Your OK on the notes', 'Move Grep']);
+  await expect
+    .poll(() =>
+      panel
+        .getByRole('button', { name: /^Move / })
+        .evaluateAll((handles) => handles.map((handle) => handle.getAttribute('aria-label'))),
+    )
+    .toEqual(['Move Read', 'Move Your OK on the notes', 'Move Grep']);
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
 
@@ -1219,6 +1221,7 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
   await field.fill('Read');
   await field.press('Enter');
   await field.press('Enter');
+  await expect(added.getByRole('button', { name: 'Move Read', exact: true })).toBeVisible();
   const header = await box(added.locator('.graph-queue-repeat-head'));
   const read = await box(added.getByRole('button', { name: 'Move Read', exact: true }));
   expect(read.y).toBeGreaterThan(header.y + header.height);

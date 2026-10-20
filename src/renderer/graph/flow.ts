@@ -3,7 +3,7 @@ import type { QueueItem, QueueIf, RepeatedItem } from '../../shared/model/queue'
 import type { Edge, Node } from '@xyflow/react';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentData, CanvasDocument, CanvasNode } from '../../shared/model/canvas';
-import { autosize } from '../../shared/model/geometry';
+import { autosize, size } from '../../shared/model/geometry';
 import { entityOf, fromRows, nodeKey } from '../../shared/model/rows';
 import type { Rows } from '../../shared/model/rows';
 import type {
@@ -215,6 +215,9 @@ export function nodeView(
     return kept.node;
   const next = {
     ...node,
+    // Every controlled copy, including the selection after an add, must retain handle bounds
+    // when React Flow adopts it before its ResizeObserver has measured that copy.
+    measured: node.measured ?? size(node),
     data,
     ...(className ? { className } : {}),
     ...(ariaLabel === undefined ? {} : { ariaLabel }),
