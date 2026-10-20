@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
-import { FileWatch, SETTLE_MS } from './watch';
+import { FileWatch, RETRY_MS, SETTLE_MS } from './watch';
 import type { WatchFolder } from './watch';
 
 /*
@@ -19,16 +19,22 @@ const THERE = path.resolve('/work/elsewhere');
 
 /** Each folder watched now, and what it tells of a change of an entry. */
 let watched: Map<string, (name: string | null) => void>;
+let stopped: Map<string, () => void>;
+let unavailable: boolean;
 let opened: string[];
 let checked: CanvasId[];
 let watch: FileWatch;
 
-const fake: WatchFolder = (folder, changed) => {
+const fake: WatchFolder = (folder, changed, ended) => {
   opened.push(folder);
+  if (unavailable) throw new Error('Folder is gone');
+  stopped.set(folder, ended);
   watched.set(folder, changed);
   return {
     close: () => {
       watched.delete(folder);
+      stopped.delete(folder);
+      ended();
     },
   };
 };
@@ -36,6 +42,8 @@ const fake: WatchFolder = (folder, changed) => {
 beforeEach(() => {
   vi.useFakeTimers();
   watched = new Map();
+  stopped = new Map();
+  unavailable = false;
   opened = [];
   checked = [];
   watch = new FileWatch({
@@ -46,6 +54,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  watch.close();
   vi.useRealTimers();
 });
 
@@ -108,21 +117,79 @@ describe('the open canvases’ files', () => {
     expect(watched.size).toBe(0);
   });
 
-  it('leaves a folder that can’t be watched to the other checks', () => {
+  it.each(['folder name', 'error or close'])(
+    're-arms after %s, backs off while absent and checks every canvas',
+    (event) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      watch.follow(
+        new Map([
+          [ONE, path.join(HERE, 'one.corral')],
+          [TWO, path.join(HERE, 'two.corral')],
+        ]),
+      );
+      const oldChanged = watched.get(HERE);
+      const oldStopped = stopped.get(HERE);
+      if (!oldChanged || !oldStopped) throw new Error('No folder watch');
+      unavailable = true;
+      if (event === 'folder name') oldChanged(path.basename(HERE));
+      else oldStopped();
+      // Linux can send the folder's name twice, and closing a failed watch emits close too.
+      oldChanged(path.basename(HERE));
+      oldStopped();
+      expect(watched.size).toBe(0);
+      expect(opened).toHaveLength(1);
+      vi.advanceTimersByTime(RETRY_MS);
+      expect(opened).toHaveLength(2);
+      vi.advanceTimersByTime(RETRY_MS);
+      expect(opened).toHaveLength(2);
+      unavailable = false;
+      vi.advanceTimersByTime(RETRY_MS);
+      expect(opened).toHaveLength(3);
+      expect(watched.size).toBe(1);
+      oldStopped();
+      oldChanged(path.basename(HERE));
+      expect(watched.size).toBe(1);
+      // Anything written during the gap is checked, without another file event or a focus.
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(checked).toEqual([ONE, TWO]);
+      tell(HERE, 'one.corral');
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(checked).toEqual([ONE, TWO, ONE]);
+      expect(error).toHaveBeenCalled();
+    },
+  );
+
+  it('caps the retry backoff at ten seconds, without polling a missing folder in a busy loop', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const failing = new FileWatch({
-      watch: () => {
-        throw new Error('Too many open files');
-      },
-      check: (canvas) => {
-        checked.push(canvas);
-      },
-    });
-    failing.follow(new Map([[ONE, path.join(HERE, 'one.corral')]]));
+    unavailable = true;
+    watch.follow(new Map([[ONE, path.join(HERE, 'one.corral')]]));
+    vi.advanceTimersByTime(15_750);
+    expect(opened).toHaveLength(7);
+    vi.advanceTimersByTime(9_999);
+    expect(opened).toHaveLength(7);
+    vi.advanceTimersByTime(1);
+    expect(opened).toHaveLength(8);
     expect(error).toHaveBeenCalledWith(
       `Could not watch ${HERE} for canvas files changed on disk:`,
-      expect.objectContaining({ message: 'Too many open files' }),
+      expect.objectContaining({ message: 'Folder is gone' }),
     );
-    failing.close();
+    expect(vi.getTimerCount()).toBe(1);
+    watch.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['last canvas closes', 'core closes'])('drops retries when the %s', (event) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    unavailable = true;
+    watch.follow(new Map([[ONE, path.join(HERE, 'one.corral')]]));
+    vi.advanceTimersByTime(RETRY_MS);
+    expect(opened).toHaveLength(2);
+    if (event === 'core closes') watch.close();
+    else watch.follow(new Map());
+    expect(vi.getTimerCount()).toBe(0);
+    unavailable = false;
+    vi.advanceTimersByTime(60_000);
+    expect(opened).toHaveLength(2);
+    expect(checked).toEqual([]);
   });
 });

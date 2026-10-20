@@ -9,31 +9,37 @@ import type { CanvasId } from '../../../shared/canvas';
  * itself would lose track of. A change said of a canvas's file is checked once SETTLE_MS have passed
  * with no other said of it, so an editor's writes in a row are checked once, whole. One watch per
  * folder, shared by the canvases whose files are in it, closed once none open needs it, and all as
- * the core closes. A folder that can't be watched leaves its canvases to the other checks (a window
- * gaining focus, a save). It runs under plain Node (`corrallm serve`) as in the app's core process.
+ * the core closes. A lost watch is retried with a bounded backoff, checking every file once it is
+ * re-armed so changes during the gap are seen too. It runs under plain Node (`corrallm serve`)
+ * as in the app's core process.
  */
 
 /** How long a canvas's file is left after a change is said of it before it is checked, in ms. */
 export const SETTLE_MS = 200;
 
+/** First retry after a watch is lost; later failures back off to at most ten seconds. */
+export const RETRY_MS = 250;
+
 /**
  * Watches `folder`, saying the name of each entry a change is said of (null: some entry, unnamed),
- * until it is closed.
+ * until it errors or closes (`stopped`), or its owner closes it.
  */
 export type WatchFolder = (
   folder: string,
   changed: (name: string | null) => void,
+  stopped: () => void,
 ) => { close(): void };
 
-/** `fs.watch` of a folder, holding no process open; one that fails stops, saying why. */
-export const watchFolder: WatchFolder = (folder, changed) => {
+/** `fs.watch` of a folder, holding no process open; a failed watch says why and is re-armed. */
+export const watchFolder: WatchFolder = (folder, changed, stopped) => {
   const watcher = watch(folder, { persistent: false }, (_event, name) => {
     changed(typeof name === 'string' ? name : null);
   });
   watcher.on('error', (error) => {
     console.error(`Could not go on watching ${folder} for canvas files changed on disk:`, error);
-    watcher.close();
+    stopped();
   });
+  watcher.on('close', stopped);
   return watcher;
 };
 
@@ -49,6 +55,9 @@ export interface FileWatchDeps {
 interface Folder {
   watcher: { close(): void } | undefined;
   files: Map<CanvasId, string>;
+  generation: number;
+  retry: ReturnType<typeof setTimeout> | undefined;
+  delay: number;
 }
 
 export class FileWatch {
@@ -90,19 +99,69 @@ export class FileWatch {
     const folder = path.dirname(file);
     let watched = this.#folders.get(folder);
     if (watched === undefined) {
-      watched = { watcher: undefined, files: new Map() };
-      const files = watched.files;
-      try {
-        watched.watcher = this.#watch(folder, (name) => {
-          for (const [one, named] of files) if (name === null || name === named) this.#soon(one);
-        });
-      } catch (error) {
-        console.error(`Could not watch ${folder} for canvas files changed on disk:`, error);
-      }
+      watched = {
+        watcher: undefined,
+        files: new Map(),
+        generation: 0,
+        retry: undefined,
+        delay: RETRY_MS,
+      };
       this.#folders.set(folder, watched);
+      watched.files.set(canvas, path.basename(file));
+      this.#arm(folder, watched, false);
     }
     watched.files.set(canvas, path.basename(file));
     this.#files.set(canvas, file);
+  }
+
+  /** Starts exactly one watch; callbacks from a retired watch cannot retire its replacement. */
+  #arm(folder: string, watched: Folder, recovered: boolean): void {
+    if (this.#folders.get(folder) !== watched || this.#closed) return;
+    const generation = ++watched.generation;
+    const current = () =>
+      this.#folders.get(folder) === watched && watched.generation === generation;
+    try {
+      const watcher = this.#watch(
+        folder,
+        (name) => {
+          if (!current()) return;
+          // Linux's IN_DELETE_SELF can report only the folder's own name, with no error or close.
+          if (name === path.basename(folder)) this.#retry(folder, watched);
+          else
+            for (const [canvas, named] of watched.files) {
+              if (name === null || name === named) this.#soon(canvas);
+            }
+        },
+        () => {
+          if (current()) this.#retry(folder, watched);
+        },
+      );
+      if (!current()) {
+        watcher.close();
+        return;
+      }
+      watched.watcher = watcher;
+      watched.delay = RETRY_MS;
+      if (recovered) for (const canvas of watched.files.keys()) this.#soon(canvas);
+    } catch (error) {
+      console.error(`Could not watch ${folder} for canvas files changed on disk:`, error);
+      if (current()) this.#retry(folder, watched);
+    }
+  }
+
+  #retry(folder: string, watched: Folder): void {
+    // Invalidate first: closing it may synchronously say it stopped too.
+    watched.generation++;
+    const watcher = watched.watcher;
+    watched.watcher = undefined;
+    watcher?.close();
+    if (watched.retry !== undefined) return;
+    watched.retry = setTimeout(() => {
+      watched.retry = undefined;
+      this.#arm(folder, watched, true);
+    }, watched.delay);
+    watched.retry.unref();
+    watched.delay = Math.min(watched.delay * 2, 10_000);
   }
 
   #unwatch(canvas: CanvasId, file: string): void {
@@ -115,6 +174,7 @@ export class FileWatch {
     watched.files.delete(canvas);
     if (watched.files.size > 0) return;
     this.#folders.delete(folder);
+    clearTimeout(watched.retry);
     watched.watcher?.close();
   }
 
