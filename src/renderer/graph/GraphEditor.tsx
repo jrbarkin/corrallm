@@ -298,8 +298,8 @@ function Editor({
           ...engine.checkpoint(),
           updatedAt: Date.now(),
         }),
-        freeze: () => {
-          void flushDrafts();
+        freeze: async () => {
+          await flushDrafts();
           runStore.pause();
         },
         error: (error) => {
@@ -876,26 +876,32 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
-        void flushDrafts();
-        if (file === 'save' || file === 'saveAs') {
-          commands.save(latest.current.text, file === 'saveAs');
-        } else if (!latest.current.modal) {
-          if (file === 'new') commands.new(latest.current.edited);
-          else commands.open(latest.current.edited);
-        }
+        void flushDrafts(() => {
+          if (file === 'save' || file === 'saveAs') {
+            commands.save(latest.current.text, file === 'saveAs');
+          } else if (!latest.current.modal) {
+            if (file === 'new') commands.new(latest.current.edited);
+            else commands.open(latest.current.edited);
+          }
+        }).catch((error: unknown) => {
+          setProblem(ipcErrorMessage(error));
+        });
         return;
       }
       if (latest.current.modal) return;
       const action = keyAction(event);
       if (action === null) return;
-      void flushDrafts();
       event.preventDefault();
-      if (action !== 'rename') {
-        apply(operation(action));
-        return;
-      }
-      const [only, ...others] = latest.current.graph.nodes.filter((n) => n.selected);
-      if (only && others.length === 0) setEditing(only.id);
+      void flushDrafts(() => {
+        if (action !== 'rename') {
+          apply(operation(action));
+          return;
+        }
+        const [only, ...others] = latest.current.graph.nodes.filter((n) => n.selected);
+        if (only && others.length === 0) setEditing(only.id);
+      }).catch((error: unknown) => {
+        setProblem(ipcErrorMessage(error));
+      });
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -1270,10 +1276,18 @@ function Editor({
                   commands.open(edited);
                 }}
                 onSave={() => {
-                  commands.save(text, false);
+                  void flushDrafts(() => {
+                    commands.save(latest.current.text, false);
+                  }).catch((error: unknown) => {
+                    setProblem(ipcErrorMessage(error));
+                  });
                 }}
                 onSaveAs={() => {
-                  commands.save(text, true);
+                  void flushDrafts(() => {
+                    commands.save(latest.current.text, true);
+                  }).catch((error: unknown) => {
+                    setProblem(ipcErrorMessage(error));
+                  });
                 }}
                 onExamples={() => {
                   setGallery(true);
@@ -1460,8 +1474,11 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
-              void flushDrafts();
-              runStore.start();
+              void flushDrafts(() => {
+                runStore.start();
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
             }}
             onStop={() => {
               runStore.stop();

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useDraft } from '../useDraft';
 
@@ -81,7 +81,7 @@ export function AgentSettingsPanel({
   session: Session;
   options: Options;
   onRename: (name: string) => void;
-  onRole: (role: string | undefined) => void;
+  onRole: (role: string | undefined) => unknown;
   onAgent: (adapter: AdapterId, connection: AgentConnection) => void;
   onSettings: (adapter: AdapterId, settings: AgentSettings) => void;
   onRestart: () => void;
@@ -89,20 +89,11 @@ export function AgentSettingsPanel({
   onClose: () => void;
 }) {
   const sheet = useRef<HTMLDivElement>(null);
-  const [problem, setProblem] = useState<string>();
-  const title = useDraft(node.data.label, onRename);
-  const role = useDraft(
-    node.data.role ?? '',
-    (raw) => {
-      try {
-        onRole(parseRole(raw));
-        setProblem(undefined);
-      } catch (error) {
-        setProblem(error instanceof Error ? error.message : 'Invalid role');
-      }
-    },
-    { multiline: true },
-  );
+  const { problem: titleProblem, ...title } = useDraft(node.data.label, onRename);
+  const { problem, ...role } = useDraft(node.data.role ?? '', (raw) => onRole(parseRole(raw)), {
+    multiline: true,
+    validate: parseRole,
+  });
   const name = node.data.label || 'Unnamed agent';
   const adapter = node.data.adapter ?? DEFAULT_AGENT;
   const connection = connectionOf(node.data);
@@ -196,6 +187,7 @@ export function AgentSettingsPanel({
           Name
           <input aria-label="Name" {...title} placeholder="Unnamed agent" />
         </label>
+        {titleProblem && <p role="alert">{titleProblem}</p>}
         <div className="agent-settings-connection">
           <span>CLI and connection</span>
           <AgentChip
@@ -213,28 +205,10 @@ export function AgentSettingsPanel({
           <textarea
             aria-label="Role"
             aria-describedby="agent-role-help"
-            aria-invalid={problem !== undefined}
             {...role}
             maxLength={MAX_ROLE_LENGTH}
             rows={6}
             placeholder="For example: Review changes for correctness and explain concrete risks."
-            onChange={(event) => {
-              role.onChange(event);
-              try {
-                parseRole(event.target.value);
-                setProblem(undefined);
-              } catch (error) {
-                setProblem(error instanceof Error ? error.message : 'Invalid role');
-              }
-            }}
-            onBlur={() => {
-              role.onBlur();
-              setProblem(undefined);
-            }}
-            onKeyDown={(event) => {
-              role.onKeyDown(event);
-              if (event.key === 'Escape') setProblem(undefined);
-            }}
           />
         </label>
         <p id="agent-role-help" className="agent-settings-help">

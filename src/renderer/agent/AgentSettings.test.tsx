@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdapterId } from '../../shared/adapter';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
@@ -12,6 +12,10 @@ import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
 import { SettingsMenu } from './Settings';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { Session } from '../../shared/model/session';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const agent = (data: Partial<GraphNode['data']> = {}): GraphNode => ({
   id: 'a',
@@ -220,6 +224,33 @@ describe('shared agent settings', () => {
     fireEvent.blur(role);
     expect(onRole).toHaveBeenLastCalledWith('Review safely.');
   });
+
+  it.each(['blur', 'idle'] as const)(
+    'retains an invalid role and its error after %s until Escape',
+    (how) => {
+      vi.useFakeTimers();
+      const onRole = vi.fn();
+      render(<Editor initial={agent({ role: 'Saved role' })} onRole={onRole} />);
+      const { panel } = open();
+      const role = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
+      focus(role);
+      fireEvent.change(role, { target: { value: 'Keep\u0000this draft' } });
+      if (how === 'idle')
+        act(() => {
+          vi.advanceTimersByTime(600);
+        });
+      focus(panel.getByRole('textbox', { name: 'Name' }));
+      expect(role.value).toBe('Keep\u0000this draft');
+      expect(panel.getByRole('alert').textContent).toContain('control characters');
+      expect(onRole).not.toHaveBeenCalled();
+      focus(role);
+      expect(role.value).toBe('Keep\u0000this draft');
+      fireEvent.keyDown(role, { key: 'Escape' });
+      expect(role.value).toBe('Saved role');
+      expect(panel.queryByRole('alert')).toBeNull();
+      vi.useRealTimers();
+    },
+  );
 
   it.each(['working', 'waiting'] as const)(
     'saves role edits while %s without restarting the active session',

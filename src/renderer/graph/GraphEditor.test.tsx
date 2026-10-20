@@ -8,6 +8,7 @@ import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
 import { api } from '../api/client';
+import { useDraft } from '../useDraft';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { readRun } from '../../shared/engine/run/checkpoint';
@@ -94,6 +95,119 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  function DraftGate({ save }: { save: () => Promise<void> }) {
+    const { problem, ...draft } = useDraft('Saved', save);
+    return (
+      <>
+        <input aria-label="Pending draft" {...draft} />
+        {problem && <p role="alert">{problem}</p>}
+      </>
+    );
+  }
+
+  it.each(['save', 'shortcut', 'run', 'composer'] as const)(
+    'waits for in-flight drafts before %s',
+    async (gesture) => {
+      const saving = Promise.withResolvers<undefined>();
+      const files = {
+        open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+        save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+        forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
+      };
+      const { fake, node } = setup(
+        {
+          nodes: [
+            agentNode('a', 0, 0, {
+              data: {
+                label: 'a',
+                connection: 'claude-code.sdk',
+                queue: [{ id: 'work', message: 'Planned' }],
+              },
+            }),
+          ],
+          edges: [],
+        },
+        files,
+      );
+      if (gesture === 'run') fireEvent.click(button('Show all queues'));
+      if (gesture === 'composer') fireEvent.doubleClick(node('a'));
+      const save = vi.fn(() => saving.promise);
+      render(<DraftGate save={save} />);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Pending draft' }), {
+        target: { value: 'New words' },
+      });
+      try {
+        if (gesture === 'save') fireEvent.click(button('Save'));
+        else if (gesture === 'shortcut')
+          fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+        else if (gesture === 'run') fireEvent.click(button('Run'));
+        else {
+          const composer = screen.getByRole('textbox', { name: 'Message a' });
+          fireEvent.change(composer, { target: { value: 'Hello' } });
+          fireEvent.keyDown(composer, { key: 'Enter' });
+        }
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(save).toHaveBeenCalledOnce();
+        expect(files.save).not.toHaveBeenCalled();
+        expect(fake.backend.send).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => {
+          saving.resolve(undefined);
+          await Promise.resolve();
+        });
+      }
+      await waitFor(() => {
+        expect(
+          gesture === 'save' || gesture === 'shortcut' ? files.save : fake.backend.send,
+        ).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it('waits for draft operations before acknowledging the quit freeze', async () => {
+    const saving = Promise.withResolvers<undefined>();
+    let stopping: ((request: string) => void) | undefined;
+    const source = {
+      get: vi
+        .fn<RunSource['get']>()
+        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null, name: null }),
+      save: vi.fn<RunSource['save']>().mockResolvedValue(null),
+      ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
+      onStopping: (listener: (request: string) => void) => {
+        stopping = listener;
+        return () => {
+          stopping = undefined;
+        };
+      },
+    };
+    const fake = automaticBackend();
+    render(<GraphEditor runSource={source} sessionBackend={fake.backend} />);
+    await waitFor(() => {
+      expect(source.save).toHaveBeenCalled();
+    });
+    render(<DraftGate save={() => saving.promise} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Pending draft' }), {
+      target: { value: 'New words' },
+    });
+    try {
+      await act(async () => {
+        stopping?.('quit');
+        await Promise.resolve();
+      });
+      expect(source.ready).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        saving.resolve(undefined);
+        await Promise.resolve();
+      });
+    }
+    await waitFor(() => {
+      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
+    });
+  });
+
   it('commits the agent name before the composer sends without blur', async () => {
     const { fake, node } = setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],

@@ -11,7 +11,7 @@ export interface RunSource {
 interface Owner {
   capture: () => RunCheckpoint;
   restore: (context: RunContext) => void;
-  freeze: () => void;
+  freeze: () => void | Promise<void>;
   error: (error: unknown) => void;
 }
 
@@ -50,8 +50,10 @@ export class RunPersistence {
         void source.ready(request, error).catch(owner.error);
         return;
       }
-      owner.freeze();
-      void this.flush()
+      void (async () => {
+        await owner.freeze();
+        await this.flush();
+      })()
         .then(
           () => source.ready(request, null),
           (error: unknown) => {

@@ -1508,6 +1508,16 @@ input.graph-label {
   padding-top: 4px;
 }
 
+.graph-example-any-agent {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
 /* A template's blanks: what each asks for, over a box to fill it in, then Back or Create. */
 .graph-template-form {
   display: grid;
