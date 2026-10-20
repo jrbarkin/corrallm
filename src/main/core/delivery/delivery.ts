@@ -16,7 +16,15 @@ import { isSessionMode } from '../../../shared/session';
 import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
-import { nameOf, partyName, partyText, pausesText, RELEASES } from '../parties';
+import {
+  nameOf,
+  partyName,
+  partyText,
+  pausesText,
+  quotedName,
+  quotedParty,
+  RELEASES,
+} from '../parties';
 import type { MessageStore } from './messages';
 
 /*
@@ -109,9 +117,15 @@ interface Withdrawal {
   interrupted: boolean;
 }
 
+/**
+ * Why a message was taken back, as its recipient is told should it have reached it: its sender
+ * withdrew it, or a kill of its recipient (or else of its sender) took it back.
+ */
+type TakeBackWhy = 'withdrawn' | 'recipient killed' | 'sender killed';
+
 interface TakingBack {
   by: PartyId;
-  tell: boolean;
+  why: TakeBackWhy;
   reached: boolean;
   ended: Promise<Withdrawal>;
   finish: (result: Withdrawal) => void;
@@ -317,23 +331,30 @@ export class Delivery {
         'Another party’s message can be taken back only while it waits; interrupt its turn instead.',
       );
     }
-    const result = await this.#takeBack(message, by, true);
+    const result = await this.#takeBack(message, by, 'withdrawn');
     if (result.reached) await this.#deps.store.durable();
     return result;
   }
 
   /**
-   * An agent was killed (by `by`): every message to or from it still waiting is withdrawn, and
-   * every one being delivered is taken back, its turn interrupted. Resolves once each is withdrawn
-   * (one being delivered, once its turn has ended).
+   * Agents were killed (by `by`, at once, as a group's are): every message to or from them still
+   * waiting is withdrawn, and every one being delivered is taken back, its turn interrupted, its
+   * recipient told with its next message should it have reached it, as of a withdrawal. Resolves
+   * once each is withdrawn (one being delivered, once its turn has ended).
    */
-  async kill(agent: string, by: PartyId): Promise<void> {
-    const party = agentParty(agent);
+  async kill(agents: readonly string[], by: PartyId): Promise<void> {
+    const killed = new Set(agents.map(agentParty));
     const withdrawing: Promise<Withdrawal>[] = [];
     for (const message of this.#deps.store.all()) {
-      if (message.kind !== 'text' || (message.to !== party && message.from !== party)) continue;
+      if (message.kind !== 'text') continue;
+      const why: TakeBackWhy | undefined = killed.has(message.to)
+        ? 'recipient killed'
+        : killed.has(message.from)
+          ? 'sender killed'
+          : undefined;
+      if (why === undefined) continue;
       if (message.state === 'pending') this.#withdrawn(message, by);
-      else if (this.#inFlight(message)) withdrawing.push(this.#takeBack(message, by, false));
+      else if (this.#inFlight(message)) withdrawing.push(this.#takeBack(message, by, why));
     }
     this.schedule();
     await Promise.all(withdrawing);
@@ -857,7 +878,7 @@ export class Delivery {
   }
 
   /** Takes back a message being delivered for `by`: withdrawn once its turn has ended. */
-  #takeBack(message: Message, by: PartyId, tell: boolean): Promise<Withdrawal> {
+  #takeBack(message: Message, by: PartyId, why: TakeBackWhy): Promise<Withdrawal> {
     const existing = this.#withdrawing.get(message.id);
     if (existing) return existing.ended;
     const takeBack = this.#sent.get(message.id);
@@ -870,7 +891,7 @@ export class Delivery {
     const ended = new Promise<Withdrawal>((resolve) => {
       finish = resolve;
     });
-    this.#withdrawing.set(message.id, { by, tell, reached: this.#reached(message), ended, finish });
+    this.#withdrawing.set(message.id, { by, why, reached: this.#reached(message), ended, finish });
     takeBack();
     return ended;
   }
@@ -895,14 +916,26 @@ export class Delivery {
     this.#withdrawing.delete(message.id);
     const reached = taking.reached || this.#reached(message);
     const result = { reached, interrupted: reached && interrupted };
-    const sender =
-      message.from === 'you' ? 'the user' : partyName(this.#deps.nodes(), message.from);
-    const note =
-      taking.tell && reached
-        ? `Message ${message.id} from "${sender}" was withdrawn by its sender after it reached you${result.interrupted ? ', and its turn was interrupted' : ''}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`
-        : undefined;
+    const note = reached ? this.#note(message, taking, result.interrupted) : undefined;
     this.#withdrawn(message, taking.by, note);
     taking.finish(result);
+  }
+
+  /**
+   * What a message's recipient is told of it taken back after it reached it: which message, whom
+   * from, who took it back (its sender, or the kill of whom, by whom), and not to carry it out. It
+   * quotes nothing of the canvas but parties' names, capped as notices cap them.
+   */
+  #note(message: Message, { by, why }: TakingBack, interrupted: boolean): string {
+    const nodes = this.#deps.nodes();
+    const sender =
+      message.from === 'you' ? quotedName('the user') : quotedParty(nodes, message.from);
+    const turn = interrupted ? ', and its turn was interrupted' : '';
+    const how =
+      why === 'withdrawn'
+        ? `by its sender after it reached you${turn}`
+        : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
+    return `Message ${message.id} from ${sender} was withdrawn ${how}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
@@ -1008,9 +1041,9 @@ export class Delivery {
     const outside = outsideOf(from);
     const [who, what] =
       agent !== undefined
-        ? [`agent "${this.#name(agent)}"`, 'an agent']
+        ? [`agent ${quotedParty(this.#deps.nodes(), from)}`, 'an agent']
         : outside !== undefined
-          ? [`"${outside}"`, 'an orchestrator outside corrallm']
+          ? [quotedName(outside), 'an orchestrator outside corrallm']
           : ['corrallm', 'corrallm itself'];
     const about =
       turn !== undefined && replyTo !== undefined
@@ -1072,6 +1105,25 @@ export class Delivery {
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
 type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+
+/**
+ * Whom the kill that took back `message` killed, its recipient or its sender, and who killed it, as
+ * the note its recipient is told says ("you were killed by the user", "its sender was killed at its
+ * own request").
+ */
+function killedText(
+  nodes: readonly CanvasNode[],
+  message: Message,
+  by: PartyId,
+  why: Exclude<TakeBackWhy, 'withdrawn'>,
+): string {
+  const [whom, own, killed] =
+    why === 'recipient killed'
+      ? ['you were', 'your', message.to]
+      : ['its sender was', 'its', message.from];
+  if (by === killed) return `${whom} killed at ${own} own request`;
+  return `${whom} killed by ${by === message.to ? 'you' : quotedParty(nodes, by)}`;
+}
 
 /** What a sender is told of its message to agent `name` waiting because it would act without asking. */
 function unaskingText(name: string, why: UnaskingWhy): string {

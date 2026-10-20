@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseBackend, parseRule, parseWindows, usageOver, windowNow } from './usage';
+import { parseBackend, parseRule, parseWindows, usageOver, usedUpUntil, windowNow } from './usage';
 import type { UsageReading } from './usage';
 
 const NOW = Date.UTC(2026, 9, 12, 12, 0);
@@ -97,5 +97,47 @@ describe('usageOver', () => {
     expect(windowNow(reading, 'fiveHour', NOW + HOUR)).toBeUndefined();
     expect(usageOver(undefined, 'fiveHour', 1, NOW)).toBe(false);
     expect(usageOver({ ...reading, windows: {} }, 'weekly', 1, NOW)).toBe(false);
+  });
+});
+
+describe('usedUpUntil', () => {
+  it('says until when a reading shows its backend used up: the latest reset of its full windows', () => {
+    expect(usedUpUntil({ fiveHour: { usedPercent: 100, resetsAt: NOW + HOUR } }, NOW)).toBe(
+      NOW + HOUR,
+    );
+    // The weekly window, used up too, holds it past the 5-hour window's reset.
+    expect(
+      usedUpUntil(
+        {
+          fiveHour: { usedPercent: 100, resetsAt: NOW + HOUR },
+          weekly: { usedPercent: 100, resetsAt: NOW + 50 * HOUR },
+        },
+        NOW,
+      ),
+    ).toBe(NOW + 50 * HOUR);
+    expect(
+      usedUpUntil(
+        {
+          fiveHour: { usedPercent: 40, resetsAt: NOW + HOUR },
+          weekly: { usedPercent: 100, resetsAt: NOW + 50 * HOUR },
+        },
+        NOW,
+      ),
+    ).toBe(NOW + 50 * HOUR);
+  });
+
+  it('says nothing where no window is full, or a full one’s reset has passed or isn’t said', () => {
+    expect(usedUpUntil({}, NOW)).toBeUndefined();
+    expect(
+      usedUpUntil(
+        {
+          fiveHour: { usedPercent: 99, resetsAt: NOW + HOUR },
+          weekly: { usedPercent: 60, resetsAt: NOW + 50 * HOUR },
+        },
+        NOW,
+      ),
+    ).toBeUndefined();
+    expect(usedUpUntil({ fiveHour: { usedPercent: 100, resetsAt: NOW } }, NOW)).toBeUndefined();
+    expect(usedUpUntil({ weekly: { usedPercent: 100, resetsAt: null } }, NOW)).toBeUndefined();
   });
 });

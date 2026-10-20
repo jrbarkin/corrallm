@@ -227,8 +227,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     sending: (canvas, agentId, message, send) => engines.sending(canvas, agentId, message, send),
     emit: (canvas, agentId, connection, event) => {
       void engines.emit(canvas, agentId, connection, event).then(
-        () => {
-          channels.emit(canvas, 'session:event', agentId, connection, event);
+        (taken) => {
+          channels.emit(canvas, 'session:event', agentId, connection, taken);
         },
         (error: unknown) => {
           console.error('Could not deliver a session event:', error);

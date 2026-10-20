@@ -9,8 +9,11 @@ import { windowText } from '../../shared/model/words';
  * agent spends, are the engine's (src/shared/model/words.ts, src/shared/engine/catalog.ts).
  */
 
-/** The backend an adapter's agents spend in `catalog`: the first its connections declare, if any. */
-export function backendOfType(catalog: Catalog, adapter: AdapterId): UsageBackendId | undefined {
+/**
+ * The backend an adapter's agents spend in `catalog`: the first its connections declare, if any.
+ * One agent's is its connection's (the engine's usageBackendOf), which may be none.
+ */
+function backendOfType(catalog: Catalog, adapter: AdapterId): UsageBackendId | undefined {
   const found = adapterIn(catalog, adapter);
   return found?.connections.find((connection) => connection.usage !== null)?.usage ?? undefined;
 }

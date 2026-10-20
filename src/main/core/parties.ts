@@ -13,26 +13,56 @@ import { andList } from '../../shared/model/words';
  */
 
 /**
- * The most characters of a node's name a sentence quotes, on one line and cut at a word: a capped
+ * The most characters of a name a sentence quotes, before escaping, cut at a word: a capped
  * title, never a whole label (API Spec §5.8).
  */
 const TITLE = 120;
 
-/** A node's name, as a sentence quotes it: on one line, capped. */
-export function nameOf(nodes: readonly NodeLike[], id: string): string {
-  return threadTitle(agentName(nodes, id), TITLE);
+/**
+ * A name in trusted prose: cap first, then quote and escape, never cutting an escape sequence.
+ * JSON quotes C0 controls; DEL, C1 controls and Unicode line separators need escaping too.
+ */
+export function quotedName(name: string): string {
+  let capped = name;
+  if (name.length > TITLE) {
+    const cut = name.slice(0, TITLE);
+    const space = cut.lastIndexOf(' ');
+    capped = `${(space > TITLE / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+  }
+  return JSON.stringify(capped).replace(
+    /[\u007f-\u009f\u2028\u2029]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
 }
 
-/** A party's name, unquoted: an agent's, an outside orchestrator's, or "you" or "corrallm". */
-export function partyName(nodes: readonly NodeLike[], party: PartyId): string {
+/** A node's name in a sentence without surrounding quotes: capped and escaped by the same rule. */
+export function nameOf(nodes: readonly NodeLike[], id: string): string {
+  return quotedName(agentName(nodes, id)).slice(1, -1);
+}
+
+function rawPartyName(nodes: readonly NodeLike[], party: PartyId): string {
   const agent = agentOf(party);
-  return agent === undefined ? (outsideOf(party) ?? party) : nameOf(nodes, agent);
+  return agent === undefined ? (outsideOf(party) ?? party) : agentName(nodes, agent);
+}
+
+/** A party's display name, unquoted: separate from names embedded in trusted prose. */
+export function partyName(nodes: readonly NodeLike[], party: PartyId): string {
+  return threadTitle(rawPartyName(nodes, party), TITLE);
 }
 
 /** A party, as a refusal or notice names it: the user, or an outside orchestrator in quotes. */
 export function partyText(nodes: readonly NodeLike[], party: PartyId): string {
   if (party === 'you') return 'the user';
-  return outsideOf(party) === undefined ? partyName(nodes, party) : `"${partyName(nodes, party)}"`;
+  const name = quotedName(rawPartyName(nodes, party));
+  return outsideOf(party) === undefined ? name.slice(1, -1) : name;
+}
+
+/**
+ * A party, as what corrallm tells an agent names it: the user, or anyone else by its name in
+ * quotes, so that no name reads as the user's own words.
+ */
+export function quotedParty(nodes: readonly NodeLike[], party: PartyId): string {
+  return party === 'you' ? 'the user' : quotedName(rawPartyName(nodes, party));
 }
 
 /**
@@ -47,7 +77,7 @@ export function pausesText(
   return andList(
     causes.map(
       ({ id: on, by }, i) =>
-        `${i === 0 ? '' : 'by '}${partyText(nodes, by)}${on === id ? '' : ` on its group "${nameOf(nodes, on)}"`}`,
+        `${i === 0 ? '' : 'by '}${partyText(nodes, by)}${on === id ? '' : ` on its group ${quotedName(agentName(nodes, on))}`}`,
     ),
   );
 }
