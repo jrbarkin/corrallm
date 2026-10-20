@@ -63,6 +63,10 @@ import type { ChangeSet } from './change';
  * what each changed. Each agent keeps the party whose change made it one (none for one read from
  * a file), which counts a party's live agents (`created`, R11): from when its change passed its
  * checks, so that changes on two canvases checked one after the other never both pass a cap.
+ * Each commit is told, once it is on disk and the live document is the changed one, to whoever
+ * subscribes (`subscribe`), before anything else reads it: the canvas's topic is said from there
+ * (canvas/states.ts). A change that isn't the document's (its meta) takes the canvas's next
+ * revision in memory alone (`bump`), between its commits (`between`), so no commit takes it too.
  *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
  * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
