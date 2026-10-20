@@ -36,6 +36,12 @@ export const RULES = {
     sentence:
       'An agent never changes its own role, settings, adapter, connection or manager, nor removes itself.',
   },
+  // R7, as strict as revision R34 (B9 Design §12): any OK, held or not.
+  'human-gate': {
+    kind: 'change',
+    sentence:
+      'Only you remove, move or change an OK or what the run holds for you, move work from behind an OK to before it, or delete an agent whose queue holds one.',
+  },
   // R8: the guard behind agent.setType and agent.setConnection being yours alone.
   connection: {
     kind: 'change',

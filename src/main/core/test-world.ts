@@ -28,7 +28,8 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * take one back, and a notice corrallm sent the read-only token's party; and the lead is paused,
  * by you. The lead's team also holds what calls meeting the change rules change, as you apply them
  * once every token was refused: `deputy` (linked to the lead and the helper) with `aide` nested
- * inside it, and the frame `frame-team` holding `member`.
+ * inside it, the frame `frame-team` holding `member`, `gate`, whose queue holds an OK, and OKs at
+ * the end of the helper's queue.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -59,6 +60,7 @@ const NODES = [
   { id: 'deputy', connection: 'codex.app-server', parent: 'lead' },
   { id: 'aide', connection: 'codex.app-server', parent: 'deputy' },
   { id: 'member', connection: 'codex.app-server', parent: 'frame-team' },
+  { id: 'gate', connection: 'codex.app-server', parent: 'lead' },
   { id: 'worker', connection: 'codex.app-server' },
   { id: 'apprentice', connection: 'codex.app-server', parent: 'worker' },
   { id: 'peer', adapter: 'gemini' },
@@ -79,6 +81,7 @@ const HELPER_QUEUE = [
     id: `remove-${party}`,
     message: 'Remove me',
   })),
+  ...['remove', 'move', 'update'].map((what) => ({ id: `ok-${what}`, approve: `The ${what}` })),
 ];
 const LINKS = [
   ['worker', 'peer'],
@@ -131,7 +134,9 @@ export async function startWorld(): Promise<{
             ? { queue: HELPER_QUEUE }
             : id === 'stranger'
               ? { queue: [{ id: 'stranger-item', message: 'Private' }] }
-              : {}),
+              : id === 'gate'
+                ? { queue: [{ id: 'gate-ok', approve: 'Check' }] }
+                : {}),
           ...(connection === undefined ? {} : { connection }),
           ...(parent === undefined ? {} : { parent }),
         })),
@@ -373,6 +378,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { links: Array.from({ length: MAX_OP_NODES + 1 }, () => ({ a: 'helper', b: 'lead' })) },
     ],
     meetsRule: {
+      'human-gate': { canvas: CANVAS, nodes: ['gate'], request: request(19) },
       links: { canvas: CANVAS, links: [{ a: 'deputy', b: 'helper' }], request: request(3) },
     },
   },
@@ -610,6 +616,14 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', item: '' },
       { agent: 'helper', item: 'text', extra: true },
     ],
+    meetsRule: {
+      'human-gate': {
+        canvas: CANVAS,
+        agent: 'helper',
+        item: 'ok-remove',
+        request: request(24),
+      },
+    },
   },
   'queue.move': {
     valid: [
@@ -628,6 +642,15 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', item: 'text', before: null, after: null },
       { agent: 'helper', item: 'text', before: '' },
     ],
+    meetsRule: {
+      'human-gate': {
+        canvas: CANVAS,
+        agent: 'helper',
+        item: 'ok-move',
+        before: 'text',
+        request: request(25),
+      },
+    },
   },
   'queue.update': {
     valid: [
@@ -651,6 +674,15 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', item: 'text', change: { kind: 'message', message: '', by: 'you' } },
       { agent: 'helper', item: 'text', change: { kind: 'target', target: '' } },
     ],
+    meetsRule: {
+      'human-gate': {
+        canvas: CANVAS,
+        agent: 'helper',
+        item: 'ok-update',
+        change: { kind: 'approve', approve: 'Check again' },
+        request: request(26),
+      },
+    },
   },
   agents: {
     valid: [{ canvas: CANVAS }, {}],

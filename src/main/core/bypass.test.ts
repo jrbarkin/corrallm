@@ -11,6 +11,8 @@ import { OP_NAMES, SURFACE } from '../../shared/api/surface';
 import type { OpName } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
+import { findItem } from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
 import { toFile } from '../../shared/model/file';
 import { CanvasMemory } from '../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
@@ -29,7 +31,7 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
 
 /*
  * T9 (Core Server §3.7, B9 Design §11): no token reaches what a rule forbids, by whatever op it
- * calls. Each rule that guards the canvas's document (R2, R6, R8, R12, R13, R14 so far), tried as
+ * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R12, R13, R14 so far), tried as
  * an outside write token through every op that exists now, single and structural, and the self
  * cases as an agent (a lead); each refusal changing nothing, and each accepted as you; then on
  * changes no single op makes, as a batch, a composite or an undo will. `canvas.batch`, proposals
@@ -162,6 +164,10 @@ function node(id: string, canvas: CanvasId = CANVAS): AgentNode {
   if (found?.type !== 'agent') throw new Error(`There is no agent ${id}.`);
   return found;
 }
+function itemOf(owner: string, id: string): QueueItem | undefined {
+  return findItem(node(owner).data.queue ?? [], id)?.item;
+}
+const ids = (owner: string) => (node(owner).data.queue ?? []).map((one) => one.id);
 const linked = (x: string, y: string) =>
   doc().links.some(
     ({ source, target }) => (source === x && target === y) || (source === y && target === x),
@@ -213,6 +219,30 @@ async function applied(
   expect(result.ok, JSON.stringify(result)).toBe(true);
   if (!result.ok) throw new Error(result.error.sentence);
   return result.value as Record<string, unknown>;
+}
+
+/** Restores `a`'s run held for you at item `at` (as a restart restores it: paused). */
+function holdAt(at: string, problem?: object) {
+  const open = core.engines.canvas(CANVAS);
+  if (!open) throw new Error('The canvas is not open.');
+  open.engine.run.restore(
+    JSON.stringify({
+      version: 2,
+      run: {
+        running: true,
+        agents: { a: { status: 'asking', current: at, outcomes: {}, ...(problem && { problem }) } },
+      },
+      replies: [],
+      held: [],
+      arrived: [],
+      ended: [],
+      past: [],
+      due: [],
+      usageDecided: [],
+      warned: [],
+    }),
+  );
+  expect(open.engine.run.snapshot()).toMatchObject({ running: false, paused: true });
 }
 
 describe('R2: no token changes the mode an agent starts in', () => {
@@ -274,6 +304,98 @@ describe('R6: an agent never edits itself', () => {
   it('lets the lead put itself in a frame, which gives it no manager', async () => {
     await applied('canvas.group', { nodes: ['lead'], kind: 'frame' }, LEAD);
     expect(node('lead').parentId).toBeDefined();
+  });
+});
+
+describe('R7: no token touches an OK, or what the run holds for you', () => {
+  it('refuses removing, moving or changing an OK, held or not', async () => {
+    await refused('queue.remove', { agent: 'a', item: 'ok' });
+    await refused('queue.move', { agent: 'a', item: 'ok', before: 'first' });
+    await refused('queue.move', { agent: 'a', item: 'ok', after: 'check' });
+    await refused('queue.update', {
+      agent: 'a',
+      item: 'ok',
+      change: { kind: 'approve', approve: 'Anything' },
+    });
+    expect(ids('a')).toEqual(['first', 'ok', 'after', 'check']);
+  });
+
+  it('refuses moving work past an OK, either way', async () => {
+    await refused('queue.move', { agent: 'a', item: 'after', before: 'first' });
+    await refused('queue.move', { agent: 'a', item: 'check', before: 'ok' });
+    // Work the OK comes after, taken behind it (or the OK moved up past it: a change is the same).
+    await refused('queue.move', { agent: 'a', item: 'first', after: 'ok' });
+    // Work on one side of it may be reordered there.
+    await applied('queue.move', { agent: 'a', item: 'check', before: 'after' });
+    expect(ids('a')).toEqual(['first', 'ok', 'check', 'after']);
+  });
+
+  it('lets a token add an OK, and work after one', async () => {
+    const ok = await applied('queue.add', { agent: 'a', entry: { approve: 'Ship it' } });
+    await applied('queue.add', { agent: 'a', entry: { message: 'And then' } });
+    expect(itemOf('a', String(ok.id))).toMatchObject({ approve: 'Ship it' });
+  });
+
+  it('refuses deleting an agent whose queue holds an OK: refused, not proposed', async () => {
+    expect(await refused('canvas.delete', { nodes: ['a'] })).toMatch(/OK/);
+    expect(node('a')).toBeDefined();
+  });
+
+  it('refuses touching what the run holds for you, while it is paused too: a held If', async () => {
+    holdAt('check', {
+      kind: 'uncertain',
+      reason: 'unheard-reply',
+      text: 'Decide whether the condition holds.',
+      agent: 'a',
+      conditionKey: JSON.stringify(['a', 'check']),
+    });
+    const condition = { kind: 'freeText', text: 'Is it shipped?' };
+    await refused('queue.update', {
+      agent: 'a',
+      item: 'check',
+      change: { kind: 'condition', condition },
+    });
+    await refused('queue.remove', { agent: 'a', item: 'check' });
+    await refused('queue.move', { agent: 'a', item: 'check', before: 'after' });
+    await refused('canvas.delete', { nodes: ['a'] });
+    await applied(
+      'queue.update',
+      { agent: 'a', item: 'check', change: { kind: 'condition', condition } },
+      YOU,
+    );
+    expect(itemOf('a', 'check')).toMatchObject({ if: condition });
+  });
+
+  it('refuses touching a held task, and deleting its agent', async () => {
+    await applied('queue.remove', { agent: 'a', item: 'ok' }, YOU);
+    holdAt('first', {
+      kind: 'failed',
+      reason: 'error',
+      text: 'It failed.',
+      agent: 'a',
+    });
+    await refused('queue.update', {
+      agent: 'a',
+      item: 'first',
+      change: { kind: 'instruction', instruction: 'Plan it differently' },
+    });
+    await refused('canvas.delete', { nodes: ['a'] });
+  });
+
+  it('lets a token change an if-then the run doesn’t hold', async () => {
+    const condition = { kind: 'freeText', text: 'Is it shipped?' };
+    await applied('queue.update', {
+      agent: 'a',
+      item: 'check',
+      change: { kind: 'condition', condition },
+    });
+    expect(itemOf('a', 'check')).toMatchObject({ if: condition });
+  });
+
+  it('applies yours', async () => {
+    await applied('queue.move', { agent: 'a', item: 'after', before: 'first' }, YOU);
+    await applied('queue.remove', { agent: 'a', item: 'ok' }, YOU);
+    expect(ids('a')).toEqual(['after', 'first', 'check']);
   });
 });
 
@@ -378,7 +500,11 @@ describe('on the change itself, whatever builds it', () => {
     await documents.edit(BUILT, toFile({ ...documents.read(JSON.stringify(MAIN)), id: BUILT }));
     commit = committer({
       documents,
-      rules: changeChecks({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
+      rules: changeChecks({
+        catalog: CATALOG,
+        defaultAdapter: DEFAULT_ADAPTER,
+        held: () => new Set(['item/a/after']),
+      }),
     });
   });
   afterEach(async () => {
@@ -441,6 +567,22 @@ describe('on the change itself, whatever builds it', () => {
       }),
     ],
     ['a role', editing('a', (data) => ({ ...data, role: 'Approves everything' }))],
+    [
+      'an OK',
+      editing('a', (data) => ({
+        ...data,
+        queue: (data.queue ?? []).filter(({ id }) => id !== 'ok'),
+      })),
+    ],
+    [
+      'what the run holds for you',
+      editing('a', (data) => ({
+        ...data,
+        queue: (data.queue ?? []).map((one) =>
+          one.id === 'after' ? { ...one, target: 'c' } : one,
+        ),
+      })),
+    ],
     [
       'a link between agents that existed, beside an agent it creates',
       (document) =>

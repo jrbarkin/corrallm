@@ -41,7 +41,7 @@ import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
 import { holder, resolvers } from './reach';
-import { changeChecks, ruleChecks } from './rules';
+import { changeChecks, heldBy, ruleChecks } from './rules';
 import { TokenStore } from './tokens';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
@@ -346,7 +346,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       resolvers: resolvers(engines, isLead),
       commit: committer({
         documents,
-        rules: changeChecks({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
+        rules: changeChecks({
+          catalog: CATALOG,
+          defaultAdapter: DEFAULT_ADAPTER,
+          held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
+        }),
         committed: (canvas) => {
           engines.changed(canvas);
         },

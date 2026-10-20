@@ -4,8 +4,12 @@ import type { ArgsOf } from '../../shared/api/registry';
 import type { RULES } from '../../shared/api/rules';
 import type { OpName, Party, Rule, SURFACE } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
-import { entityOf, nodeKey } from '../../shared/model/rows';
-import type { LinkRow, NodeRow } from '../../shared/model/rows';
+import type { Run } from '../../shared/engine/run/runner';
+import type { CanvasDocument } from '../../shared/model/canvas';
+import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
+import type { QueueItem } from '../../shared/model/queue';
+import { entityOf, itemKey, nodeKey } from '../../shared/model/rows';
+import type { EntityKey, ItemRow, LinkRow, NodeRow } from '../../shared/model/rows';
 import { andList } from '../../shared/model/words';
 import type { AgentSettings } from '../../shared/session';
 import type { RuleOutcome } from './call';
@@ -133,11 +137,27 @@ export function ruleChecks(engines: Engines): ArgumentChecks {
   };
 }
 
-/** What the change rules read besides the change: how agents run. */
+/** What the change rules read besides the change: how agents run, and what the run holds. */
 export interface ChangeCheckDeps {
   catalog: Catalog;
   /** The adapter an agent naming none runs. */
   defaultAdapter: AdapterId;
+  /** The items a canvas's run holds for you now, by their keys (heldBy). */
+  held: (canvas: CanvasId) => ReadonlySet<EntityKey>;
+}
+
+/**
+ * The items `run` holds for you (B9 Design §4): each agent's task while it asks you (an OK waiting,
+ * a condition for your yes or no, a task's problem, a session that won't start, a usage rule's
+ * question), from where each agent is, paused or not (never heldAsks, which a paused run holds
+ * none of), by its key.
+ */
+export function heldBy(run: Run | undefined): Set<EntityKey> {
+  return new Set(
+    Object.entries(run?.agents ?? {}).flatMap(([agent, at]) =>
+      at.status === 'asking' && at.current !== undefined ? [itemKey(agent, at.current)] : [],
+    ),
+  );
 }
 
 /**
@@ -145,7 +165,7 @@ export interface ChangeCheckDeps {
  * agents it kept, that existed before it, unless a rule says otherwise. The first that refuses says
  * why, naming what it would change.
  */
-export function changeChecks({ catalog, defaultAdapter }: ChangeCheckDeps): ChangeChecks {
+export function changeChecks({ catalog, defaultAdapter, held }: ChangeCheckDeps): ChangeChecks {
   /** The adapter and the connection a node row runs: its adapter's first, if it names none. */
   const runs = (row: NodeRow): [AdapterId, string | undefined] => {
     const adapter = row.adapter ?? defaultAdapter;
@@ -190,6 +210,47 @@ export function changeChecks({ catalog, defaultAdapter }: ChangeCheckDeps): Chan
         if (adapter === undefined) continue;
         return {
           refuse: `Only the user changes the mode ${nameOf(change.before.nodes, id)} starts in (its ${adapter} settings): leave mode out, or pass the saved one.`,
+        };
+      }
+      return undefined;
+    },
+    // R7, as strict as revision R34 (B9 Design §12): an OK, held or not, or an item the run holds
+    // for you, removed or changed; an agent removed whose queue holds one; or work moved past one,
+    // either way. (Which of two items moved, a change can't say: an OK moved up past work is that
+    // work moved down past it.) An OK, and work after one, may be added.
+    'human-gate': (change) => {
+      const holds = held(change.canvas);
+      const gated = (agent: string) => (item: QueueItem) =>
+        isApproval(item) || holds.has(itemKey(agent, item.id));
+      for (const id of change.removed) {
+        const item = itemsOf(queueOf(change.before, id) ?? []).find(gated(id));
+        if (item === undefined) continue;
+        return {
+          refuse: `Only the user deletes ${nameOf(change.before.nodes, id)}: its queue holds ${gatedText(item)} (${item.id}).`,
+        };
+      }
+      for (const [key, { before, after }] of change.entities) {
+        if (entityOf(key) !== 'item' || before === null) continue;
+        const [was, is] = [before as ItemRow, after as ItemRow | null];
+        if (was.kind !== 'approval' && !holds.has(key)) continue;
+        // Its place alone: whether work crossed it is read below.
+        if (is !== null && is.container === was.container && sameJson(is.body, was.body)) continue;
+        return {
+          refuse: `Only the user ${is === null ? 'removes' : 'changes'} ${was.kind === 'approval' ? 'an OK' : 'what the run holds for them'} (${was.id} in ${nameOf(change.before.nodes, was.agent)}’s queue).`,
+        };
+      }
+      const touched = new Set(
+        [...change.entities].flatMap(([key, { before, after }]) =>
+          entityOf(key) === 'item' ? [((after ?? before) as ItemRow).agent] : [],
+        ),
+      );
+      for (const agent of touched) {
+        const was = queueOf(change.before, agent);
+        const is = queueOf(change.after, agent);
+        const crossed = was && is && crossing(was, is, gated(agent));
+        if (!crossed) continue;
+        return {
+          refuse: `Only the user moves work past ${gatedText(crossed.gate)} (${crossed.gate.id}): ${crossed.item} would come ${crossed.ahead ? 'before' : 'after'} it in ${nameOf(change.before.nodes, agent)}’s queue.`,
         };
       }
       return undefined;
@@ -256,6 +317,54 @@ function keptAgents(change: ChangeSet): [string, NodeRow, NodeRow][] {
     if (was?.kind === 'agent' && is?.kind === 'agent') kept.push([is.id, was, is]);
   }
   return kept;
+}
+
+/** Agent `id`'s queue in `document`, if it is an agent there. */
+function queueOf(document: CanvasDocument, id: string): readonly QueueItem[] | undefined {
+  const node = document.nodes.find((one) => one.id === id);
+  return node?.type === 'agent' ? (node.data.queue ?? []) : undefined;
+}
+
+/** A queue's items, at any depth: each if-then's and repeat's after it. */
+function itemsOf(queue: readonly QueueItem[]): QueueItem[] {
+  return queue.flatMap((item) => [
+    item,
+    ...(isIf(item) ? item.then : isRepeat(item) ? item.repeat : []),
+  ]);
+}
+
+/** What a gated item is, as a refusal says it. */
+function gatedText(item: QueueItem): string {
+  return isApproval(item) ? 'an OK' : 'what the run holds for the user';
+}
+
+/**
+ * The first item a queue's change moved past a gated item it kept (one `gated` before), either way,
+ * at any depth: whether it now comes ahead of it.
+ */
+function crossing(
+  was: readonly QueueItem[],
+  is: readonly QueueItem[],
+  gated: (item: QueueItem) => boolean,
+): { item: string; gate: QueueItem; ahead: boolean } | undefined {
+  const order = (queue: readonly QueueItem[]) =>
+    new Map(itemsOf(queue).map((item, at) => [item.id, at]));
+  const [before, after] = [order(was), order(is)];
+  for (const gate of itemsOf(was).filter(gated)) {
+    const [then, now] = [before.get(gate.id), after.get(gate.id)];
+    if (then === undefined || now === undefined) continue;
+    for (const [item, at] of after) {
+      const prior = before.get(item);
+      if (prior === undefined || item === gate.id || prior < then === at < now) continue;
+      return { item, gate, ahead: at < now };
+    }
+  }
+  return undefined;
+}
+
+/** Whether two plain values are the same, as JSON says them. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Where a change puts an agent, as its manager says it: under an agent, or under none. */
