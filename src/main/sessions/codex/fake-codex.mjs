@@ -25,7 +25,9 @@
 // file it keeps its threads in, so that a later app server resumes them), FAKE_CODEX_LOG (a file
 // it appends each request it gets to, one JSON line each), FAKE_CODEX_CONFIG_FAIL (config/read
 // fails with that message), FAKE_CODEX_LINGER (how many ms it takes to exit once its input ends,
-// as one finishing what it runs: none by default).
+// as one finishing what it runs: none by default), FAKE_CODEX_SANDBOX and FAKE_CODEX_APPROVAL
+// (the sandbox and approvals a thread given none runs with, as the user's config.toml would set
+// them: read-only and on-request by default).
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -188,8 +190,8 @@ function load(id, params) {
     id,
     cwd: params.cwd ?? process.cwd(),
     model: params.model ?? kept[id]?.model ?? 'gpt-6.1-sol',
-    approvalPolicy: params.approvalPolicy ?? 'on-request',
-    sandbox: SANDBOXES[params.sandbox ?? 'read-only'],
+    approvalPolicy: params.approvalPolicy ?? process.env.FAKE_CODEX_APPROVAL ?? 'on-request',
+    sandbox: SANDBOXES[params.sandbox ?? process.env.FAKE_CODEX_SANDBOX ?? 'read-only'],
     plan: false,
     turn: undefined,
   };

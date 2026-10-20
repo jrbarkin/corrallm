@@ -47,13 +47,18 @@ describe('claudeOptions', () => {
       'max',
     ]);
     expect(models[0]?.efforts?.[3]).toMatchObject({ label: 'Extra high' });
-    // Nothing set anywhere: the CLI's own.
-    expect(defaults).toEqual({ model: null, effort: null, mode: null });
+    // Nothing set anywhere: the CLI's own, whose mode, Manual, asks.
+    expect(defaults).toEqual({ model: null, effort: null, mode: null, asks: true });
   });
 
   it('says the user’s own defaults, as their settings set them', async () => {
     await user({ model: 'opus', effortLevel: 'xhigh', permissions: { defaultMode: 'auto' } });
-    expect((await options()).defaults).toEqual({ model: 'opus', effort: 'xhigh', mode: 'auto' });
+    expect((await options()).defaults).toEqual({
+      model: 'opus',
+      effort: 'xhigh',
+      mode: 'auto',
+      asks: true,
+    });
   });
 
   it('reads the project’s settings over the user’s, and its local ones over both', async () => {
@@ -61,7 +66,12 @@ describe('claudeOptions', () => {
     await shared({ model: 'sonnet', permissions: { defaultMode: 'acceptEdits' } });
     await local({ effortLevel: 'low', permissions: { defaultMode: 'default' } });
     // 'default' is Claude Code's name for Manual.
-    expect((await options()).defaults).toEqual({ model: 'sonnet', effort: 'low', mode: 'manual' });
+    expect((await options()).defaults).toEqual({
+      model: 'sonnet',
+      effort: 'low',
+      mode: 'manual',
+      asks: true,
+    });
   });
 
   it('takes ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL over the settings, as Claude Code does', async () => {
@@ -99,9 +109,24 @@ describe('claudeOptions', () => {
       effortLevel: 'turbo',
       permissions: { defaultMode: 'dontAsk' },
     });
+    // A mode it doesn't know: whether it asks, it can't tell.
     expect((await options()).defaults).toEqual({ model: null, effort: null, mode: null });
     // Theirs, whatever it is: Claude Code starts in it when corrallm passes none.
     await shared({ permissions: { defaultMode: 'bypassPermissions' } });
     expect((await options()).defaults.mode).toBe('bypassPermissions');
+  });
+
+  it('says whether the mode the most particular settings set asks before acting', async () => {
+    const asks = async () => (await options()).defaults.asks;
+    await user({ permissions: { defaultMode: 'default' } });
+    expect(await asks()).toBe(true);
+    await local({ permissions: { defaultMode: 'bypassPermissions' } });
+    expect(await asks()).toBe(false);
+    await local({ permissions: { defaultMode: 'acceptEdits' } });
+    expect(await asks()).toBe(true);
+    // One it doesn't know, set over one it does: it can't tell.
+    await shared({ permissions: { defaultMode: 'dontAsk' } });
+    await local({});
+    expect(await asks()).toBe(undefined);
   });
 });

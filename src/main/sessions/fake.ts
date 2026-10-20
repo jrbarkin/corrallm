@@ -43,18 +43,26 @@ export class FakeConnector implements Connector<SessionMode> {
   /** Every session it started, each with the messages it was sent. */
   readonly sessions: FakeSession[] = [];
   readonly #pause: number;
-  readonly #mode: SessionMode;
+  readonly #mode: SessionMode | null;
+  readonly #asks: boolean | undefined;
   readonly #adapter: AdapterId;
 
-  /** `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for. */
+  /**
+   * `pause`: how long (ms) between the events of a turn; `adapter`: the one it stands in for;
+   * `mode`: its native setting, which applies when no mode is chosen (null: one it never reports,
+   * as a CLI that never says its mode); `asks`: whether that setting asks, as it says where its
+   * mode doesn't (a policy that is no mode).
+   */
   constructor({
     pause = 0,
     adapter = 'claude-code',
     mode,
-  }: { pause?: number; adapter?: AdapterId; mode?: SessionMode } = {}) {
+    asks,
+  }: { pause?: number; adapter?: AdapterId; mode?: SessionMode | null; asks?: boolean } = {}) {
     this.#pause = pause;
     this.#adapter = adapter;
-    this.#mode = mode ?? (adapter === 'codex' ? 'auto' : 'manual');
+    this.#mode = mode === undefined ? (adapter === 'codex' ? 'auto' : 'manual') : mode;
+    this.#asks = asks;
   }
 
   start(spec: SessionSpec<SessionMode>, host: SessionHost): Promise<LiveSession<SessionMode>> {
@@ -74,6 +82,7 @@ export class FakeConnector implements Connector<SessionMode> {
       mode,
       models: codex ? FAKE_CODEX_MODELS : FAKE_MODELS,
       ...(codex ? { effort: spec.effort ?? null } : {}),
+      ...(spec.mode === null && this.#asks !== undefined ? { asks: this.#asks } : {}),
     });
     const session = new FakeSession(mode, host, this.#pause);
     this.sessions.push(session);
@@ -97,13 +106,13 @@ const ASKING: readonly SessionMode[] = ['manual', 'plan', 'read-only'];
 class FakeSession implements LiveSession<SessionMode> {
   /** Every message it was sent, in order. */
   readonly sent: UserMessage[] = [];
-  #mode: SessionMode;
+  #mode: SessionMode | null;
   readonly #host: SessionHost;
   readonly #pause: number;
   #turn: Turn | undefined;
   #turns = 0;
 
-  constructor(mode: SessionMode, host: SessionHost, pause: number) {
+  constructor(mode: SessionMode | null, host: SessionHost, pause: number) {
     this.#mode = mode;
     this.#host = host;
     this.#pause = pause;
@@ -228,7 +237,7 @@ class FakeSession implements LiveSession<SessionMode> {
       const command = { tool: 'Bash', summary: 'echo hello' };
       turn.tool = tool;
       emit({ type: 'tool', id: tool, ...command, status: 'running' });
-      if (ASKING.includes(this.#mode)) {
+      if (this.#mode !== null && ASKING.includes(this.#mode)) {
         const answer = await ask(`${id}/permission`, () => {
           emit({
             type: 'permission',

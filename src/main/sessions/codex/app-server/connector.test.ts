@@ -140,6 +140,23 @@ describe('the App Server connection', () => {
     expect(sent).not.toHaveProperty('approvalPolicy');
     expect(sent).not.toHaveProperty('sandboxPolicy');
   });
+  it('says whether the user’s own policies ask before acting, where they are none of its modes', async () => {
+    const reported = async (sandbox: string, approval: string) => {
+      const { events } = await start(
+        { mode: null },
+        { FAKE_CODEX_SANDBOX: sandbox, FAKE_CODEX_APPROVAL: approval },
+      );
+      const [started] = events;
+      return started?.type === 'started' ? [started.mode, started.asks] : undefined;
+    };
+    // No sandbox, asking only once one fails: there is nothing to fail, so it never asks.
+    expect(await reported('danger-full-access', 'on-failure')).toEqual([null, false]);
+    // A sandbox, asking for anything untrusted: it asks.
+    expect(await reported('workspace-write', 'untrusted')).toEqual([null, true]);
+    // A preset says it all: Full access never asks.
+    expect(await reported('danger-full-access', 'never')).toEqual(['full-access', undefined]);
+  });
+
   it('resumes without a role without reading native instructions, even if the read would fail', async () => {
     const env = {
       FAKE_CODEX_STATE: path.join(dir, 'threads.json'),

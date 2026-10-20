@@ -95,6 +95,38 @@ export function presetOf(sandbox: unknown, approvals: unknown): CodexMode | null
 }
 
 /**
+ * Whether a sandbox and approvals (the user's config's, or what Codex reports for a thread) ask
+ * before acting on what a message says: false where they never do, undefined where corrallm can't
+ * tell (a value it doesn't know). Approvals `never` never ask, sandboxed or not; nor do any but
+ * `untrusted` with no sandbox, since nothing then fails or needs escalating (Codex approves every
+ * command and patch itself: codex-rs core's safety checks). Left out (null), each is Codex's
+ * default for a trusted folder: the project folder's sandbox, asking on request.
+ */
+export function asksOf(sandbox: unknown, approvals: unknown): boolean | undefined {
+  const kind =
+    typeof sandbox === 'object' && sandbox !== null && 'type' in sandbox ? sandbox.type : sandbox;
+  const open = kind === 'danger-full-access' || kind === 'dangerFullAccess';
+  const sandboxed =
+    kind == null ||
+    kind === 'read-only' ||
+    kind === 'readOnly' ||
+    kind === 'workspace-write' ||
+    kind === 'workspaceWrite';
+  if (!open && !sandboxed) return undefined;
+  switch (approvals ?? 'on-request') {
+    case 'never':
+      return false;
+    case 'untrusted':
+      return true;
+    case 'on-request':
+    case 'on-failure':
+      return !open;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * The sandbox policy of a sandbox mode, for turn/start. `known` is the policy Codex reported for
  * the thread, which carries the user's own settings (config.toml's writable roots, network
  * access): kept when it is of the same kind.

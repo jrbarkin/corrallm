@@ -27,6 +27,7 @@ import type { Prompts } from './prompts';
 import {
   imageInput,
   modeSettings,
+  asksOf,
   presetOf,
   readSandboxPolicy,
   sandboxPolicy,
@@ -224,6 +225,17 @@ export class AppServerSession implements LiveSession<CodexMode> {
     return this.#thread.sandbox === undefined || this.#thread.approval === undefined
       ? null
       : presetOf(this.#thread.sandbox, this.#thread.approval);
+  }
+
+  /**
+   * Whether the user's own policies Codex reports for the thread ask before acting, where they
+   * are no preset (its mode null): undefined where its mode says, or corrallm can't tell.
+   */
+  get asks(): boolean | undefined {
+    if (this.mode !== null) return undefined;
+    return this.#thread.sandbox === undefined || this.#thread.approval === undefined
+      ? undefined
+      : asksOf(this.#thread.sandbox, this.#thread.approval);
   }
 
   send(message: UserMessage): Promise<void> {

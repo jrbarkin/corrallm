@@ -318,10 +318,15 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       to: 'builder',
       body: 'slow down',
     });
-    await vi.waitFor(async () => {
-      const { items } = await call<{ items: Message[] }>(client, 'messages');
-      expect(items.find((message) => message.id === id)?.state).toBe('delivered');
-    });
+    // Delivered once what Builder's codex defaults to is read (a private app server, which a fake
+    // that lingers as it exits takes that much longer to close).
+    await vi.waitFor(
+      async () => {
+        const { items } = await call<{ items: Message[] }>(client, 'messages');
+        expect(items.find((message) => message.id === id)?.state).toBe('delivered');
+      },
+      { timeout: 10_000, interval: 50 },
+    );
     return id;
   }
 

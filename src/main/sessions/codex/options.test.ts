@@ -81,7 +81,7 @@ describe('codexOptions', () => {
       'max',
     ]);
     // Their config.toml's model and effort; no sandbox or approval set: Codex's Default.
-    expect(defaults).toEqual({ model: 'gpt-6.1-sol', effort: 'max', mode: 'auto' });
+    expect(defaults).toEqual({ model: 'gpt-6.1-sol', effort: 'max', mode: 'auto', asks: true });
 
     // The user's own codex, in the project folder, trusted for this server alone (as their
     // Terminal session trusts it, so its config is what that session gets).
@@ -106,6 +106,7 @@ describe('codexOptions', () => {
       model: 'gpt-6.1-sol',
       effort: null,
       mode: 'auto',
+      asks: true,
     });
   });
 
@@ -125,6 +126,44 @@ describe('codexOptions', () => {
     expect(await mode({ sandbox_mode: 'danger-full-access', approval_policy: 'untrusted' })).toBe(
       null,
     );
+  });
+
+  it('says whether the config’s sandbox and approvals ask before acting, where it can tell', async () => {
+    const asks = async (values: Record<string, unknown>) => {
+      const { start } = fakeStart({ ...RECORDED, 'config/read': config(values) });
+      return (await codexOptions(CONTEXT, { start })).defaults.asks;
+    };
+    // Codex's Default, set or not: a sandbox of the project folder, asking on request.
+    expect(await asks({})).toBe(true);
+    expect(await asks({ sandbox_mode: 'workspace-write', approval_policy: 'on-request' })).toBe(
+      true,
+    );
+    expect(await asks({ sandbox_mode: 'read-only', approval_policy: 'on-failure' })).toBe(true);
+    expect(await asks({ sandbox_mode: 'danger-full-access', approval_policy: 'untrusted' })).toBe(
+      true,
+    );
+    // Never asking, in a sandbox or not; or no sandbox, so nothing ever needs asking about.
+    expect(await asks({ approval_policy: 'never' })).toBe(false);
+    expect(await asks({ sandbox_mode: 'read-only', approval_policy: 'never' })).toBe(false);
+    expect(await asks({ sandbox_mode: 'danger-full-access', approval_policy: 'on-failure' })).toBe(
+      false,
+    );
+    expect(await asks({ sandbox_mode: 'danger-full-access' })).toBe(false);
+    // Settings it doesn't know: it can't tell.
+    expect(await asks({ approval_policy: { granular: { sandbox_approval: true } } })).toBe(
+      undefined,
+    );
+    expect(await asks({ sandbox_mode: 'external-sandbox' })).toBe(undefined);
+  });
+
+  it('can’t tell whether the user’s default asks when Codex can’t read its config', async () => {
+    const { start } = fakeStart({
+      ...RECORDED,
+      'config/read': () => Promise.reject(new Error('no config')),
+    });
+    const { defaults } = await codexOptions(CONTEXT, { start });
+    expect(defaults.mode).toBeNull();
+    expect(defaults).not.toHaveProperty('asks');
   });
 
   it('fails, saying so, when Codex cannot list its models', async () => {

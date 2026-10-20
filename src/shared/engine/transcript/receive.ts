@@ -282,6 +282,7 @@ export class ConnectedDriver implements SessionDriver {
           mode: event.mode,
           ...(event.modes === undefined ? {} : { modes: event.modes }),
           ...(event.effort === undefined ? {} : { effort: event.effort }),
+          ...(event.asks === undefined ? {} : { asks: event.asks }),
         });
         return;
       case 'commands':

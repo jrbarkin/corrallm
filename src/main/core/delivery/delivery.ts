@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
 import { MAX_MESSAGE_BYTES, MAX_WAITING } from '../../../shared/api/limits';
+import type { AdapterId, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
 import { needsItem, needsOf } from '../../../shared/engine/needs';
-import type { NeedsInput } from '../../../shared/engine/needs';
+import type { NeedsInput, UnaskingWhy } from '../../../shared/engine/needs';
 import type { Engine } from '../../../shared/engine/engine';
 import type { PauseCause } from '../../../shared/engine/run/runner';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
@@ -11,6 +12,7 @@ import { agentOf, agentParty, outsideOf } from '../../../shared/model/messages';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
 import { holdText, resetTime } from '../../../shared/model/words';
+import { isSessionMode } from '../../../shared/session';
 import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
@@ -21,17 +23,18 @@ import type { MessageStore } from './messages';
  * Delivering a canvas's messages (API Spec §5.5 to §5.7, Core Server §5.9). A message to an agent
  * waits until the agent is idle (no turn going, nothing asked, nothing queued in its session, nor
  * on its way there from the run) and nothing holds it: its own or its group's pause (a kill too), a
- * session that would not start (it stays first in line), a session running in a mode that never
- * asks (which no party's text drives), or its backend's usage rule. Then it is journaled as
- * delivering, with the id it will be sent under, committed, and only then sent, whether or not a
- * run is going: a whole-run Stop, and the paused state a run restores in, hold only the run's own
- * sends. What you send goes past those holds into the session's queue, as you typed it; anything
- * else reaches the agent behind a first line saying whom it is from, so the agent's CLI never takes
- * it for its user's. When a message's turn ends, what the agent replied is a message to its sender,
- * with how the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never
- * answered by another reply. corrallm tells a sender once when its message waits on something (a
- * pause, a session that won't start, a mode that never asks, a usage window) or its turn waits for
- * you, and when it ends withdrawn or unresolved.
+ * session that would not start (it stays first in line), a session that would act on it without
+ * asking (#asking: one that runs, or would start, in a mode that never asks, or that corrallm
+ * can't tell asks), or its backend's usage rule. Then it is journaled as delivering, with the id
+ * it will be sent under, committed, and only then sent, whether or not a run is going: a
+ * whole-run Stop, and the paused state a run restores in, hold only the run's own sends. What you
+ * send goes past those holds into the session's queue, as you typed it; anything else reaches the
+ * agent behind a first line saying whom it is from, so the agent's CLI never takes it for its
+ * user's. When a message's turn ends, what the agent replied is a message to its sender, with how
+ * the turn ended: delivered to an agent as a turn, kept for anyone else to read, and never answered
+ * by another reply. corrallm tells a sender once when its message waits on something (a pause, a
+ * session that won't start, one that would act without asking, a usage window) or its turn waits
+ * for you, and when it ends withdrawn or unresolved.
  */
 
 export interface DeliveryDeps {
@@ -47,6 +50,31 @@ export interface DeliveryDeps {
   changed: () => void;
   /** The locale times of day are told in (the host's): the runtime's own, when none. */
   locale?: string;
+  /**
+   * Whether the user's own default for agents of `adapter` (what a session given no mode starts
+   * in) asks before it acts, as its CLI's settings say in the canvas's project folder: undefined
+   * where that can't be told. Read once a session (#default).
+   */
+  defaultAsks: (adapter: AdapterId) => Promise<boolean | undefined>;
+}
+
+/**
+ * Whether an agent's session asks before it acts on what it is sent, now or as it would start:
+ * 'asks', or why a party's text would act unchecked (UnaskingWhy), or 'reading' while its CLI's
+ * default is read.
+ */
+type Asking = 'asks' | 'reading' | UnaskingWhy;
+
+/**
+ * What an agent's CLI defaults to, as read for the session it runs or would start: the connection
+ * it was read for, when, whether it asks (undefined: corrallm can't tell; 'reading' until it is
+ * read), and whether a session of the agent's has run since.
+ */
+interface Default {
+  connection: ConnectionId;
+  at: number;
+  asks: boolean | undefined | 'reading';
+  ran: boolean;
 }
 
 /** Why an agent's session won't start, and what would let it. */
@@ -60,7 +88,7 @@ type Hold =
   | { kind: 'busy' }
   | { kind: 'paused'; holding: PauseCause[] }
   | ({ kind: 'stuck' } & Unstartable)
-  | { kind: 'unasking' }
+  | { kind: 'unasking'; why: UnaskingWhy }
   | { kind: 'limited'; backend: string; until: number }
   | { kind: 'usage'; hold: UsageHold; until: number };
 
@@ -131,6 +159,11 @@ export class Delivery {
   readonly #told = new Set<string>();
   /** The agents whose sessions would not start, by id. */
   readonly #stuck = new Map<string, Stuck>();
+  /**
+   * What each agent's CLI defaults to, by the agent's id: read once a session (again once it ends,
+   * or with the next message sent it RETRY_AFTER or more after a read that held its messages).
+   */
+  readonly #defaults = new Map<string, Default>();
   /** What wakes delivery when a usage window resets. */
   #alarm: { at: number; cancel: () => void } | undefined;
   /**
@@ -238,6 +271,17 @@ export class Delivery {
     }
     const stuck = this.#stuck.get(to);
     if (stuck && this.#deps.now() - stuck.at >= RETRY_AFTER) stuck.retrying = true;
+    // What its CLI defaults to, read for a session yet to start, that held its messages: read again.
+    const known = this.#defaults.get(to);
+    if (
+      known !== undefined &&
+      known.asks !== true &&
+      known.asks !== 'reading' &&
+      this.#deps.engine.sessions.of(to).running === undefined &&
+      this.#deps.now() - known.at >= RETRY_AFTER
+    ) {
+      this.#defaults.delete(to);
+    }
     this.#pump();
     return this.#deps.store.get(message.id) ?? message;
   }
@@ -327,17 +371,18 @@ export class Delivery {
       : { kind: 'limited', backend, until };
   }
 
-  /** The agents whose sessions run in a mode that never asks while parties' messages to them wait. */
-  unasking(): string[] {
-    return this.#deps
-      .nodes()
-      .flatMap((node) =>
-        node.type === 'agent' &&
-        this.#unasking(node) &&
-        this.#waiting(node.id).some(({ from }) => from !== 'you')
-          ? [node.id]
-          : [],
-      );
+  /**
+   * The agents that would act on parties' messages without asking while those wait (but those whose
+   * sessions won't start), and why.
+   */
+  unasking(): { agent: string; why: UnaskingWhy }[] {
+    return this.#deps.nodes().flatMap((node) => {
+      if (node.type !== 'agent') return [];
+      if (!this.#waiting(node.id).some(({ from }) => from !== 'you')) return [];
+      if (this.#stuckOf(node) !== undefined) return [];
+      const why = this.#asking(node);
+      return why === 'asks' || why === 'reading' ? [] : [{ agent: node.id, why }];
+    });
   }
 
   /** The message whose turn an agent is on, if one is. */
@@ -386,6 +431,7 @@ export class Delivery {
       waiting.set(agent, [...(waiting.get(agent) ?? []), message]);
     }
     this.#tellWaiting(messages);
+    this.#followDefaults();
     let alarm: number | undefined;
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
@@ -426,7 +472,7 @@ export class Delivery {
           this.#tell(
             holdKey('unasking', node.id, message.from),
             message,
-            `${this.#name(node.id)} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.`,
+            unaskingText(this.#name(node.id), hold.why),
           );
         }
         if (hold.kind === 'usage') {
@@ -503,7 +549,10 @@ export class Delivery {
     if (holding.length > 0) return { kind: 'paused', holding };
     const stuck = this.#stuckHold(node);
     if (stuck !== undefined) return stuck;
-    if (this.#unasking(node)) return { kind: 'unasking' };
+    const asking = this.#asking(node);
+    // Its CLI's default being read, it waits, as for a turn.
+    if (asking === 'reading') return { kind: 'busy' };
+    if (asking !== 'asks') return { kind: 'unasking', why: asking };
     // The run's own message on its way to it goes first, as one in its session's queue would.
     const session = engine.sessions.of(node.id);
     if (
@@ -524,18 +573,78 @@ export class Delivery {
   }
 
   /**
-   * Whether agent `node`'s session runs, now, in a mode its adapter says never asks: it acts on
-   * whatever it is sent, so a party's text would act unchecked. Only its reported native mode
-   * can say so; an unstarted session has no mode yet.
+   * Whether agent `node`'s session asks before it acts on what it is sent, now or as it would
+   * start: one that never asks acts on whatever it is sent, so a party's text would act unchecked,
+   * as would one corrallm can't tell asks. A session that runs says so by its mode (one its adapter
+   * says never asks), or, on settings that are none of its modes, by whether they ask; one that
+   * says neither (a CLI that never reports its mode, or not yet) runs in what it started in: the
+   * mode it was set to start in (each asks), else its CLI's own default. One yet to start starts in
+   * its saved start mode, where its connection starts in it (each asks), else its CLI's default.
+   * That default is read once a session (#default; not now unless `read`: 'reading').
    */
-  #unasking(node: AgentNode): boolean {
+  #asking(node: AgentNode, read = true): Asking {
     const { catalog, sessions } = this.#deps.engine;
+    const connection = catalog.connectionOf(node.data);
+    // It runs nothing: a session that won't start holds it (#stuckOf).
+    if (connection === 'unavailable') return 'asks';
     const session = sessions.of(node.id);
-    return (
-      session.running !== undefined &&
-      session.mode !== null &&
-      catalog.neverAsks(catalog.connectionOf(node.data), session.mode)
+    if (session.running !== undefined) {
+      if (session.mode !== null) {
+        return catalog.neverAsks(connection, session.mode) ? 'mode' : 'asks';
+      }
+      if (session.asks !== undefined) return session.asks ? 'asks' : 'mode';
+      if (session.running.mode !== undefined) return 'asks';
+    } else {
+      const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
+      if (mode !== undefined && isSessionMode(mode) && catalog.isStartMode(connection, mode)) {
+        return 'asks';
+      }
+    }
+    return this.#default(node.id, connection, read);
+  }
+
+  /**
+   * What agent `agent`'s CLI defaults to on `connection`, as read for the session it runs or would
+   * start: read now (unless not `read`) if it hasn't been for it, 'reading' until it is, then looked
+   * at again.
+   */
+  #default(agent: string, connection: ConnectionId, read: boolean): Asking {
+    const known = this.#defaults.get(agent);
+    if (known?.connection === connection) {
+      if (known.asks === 'reading') return 'reading';
+      return known.asks === undefined ? 'unknown' : known.asks ? 'asks' : 'default';
+    }
+    if (!read) return 'reading';
+    const reading: Default = { connection, at: this.#deps.now(), asks: 'reading', ran: false };
+    this.#defaults.set(agent, reading);
+    void this.#deps
+      .defaultAsks(this.#deps.engine.catalog.adapterOf(connection))
+      .catch(() => undefined)
+      .then((asks) => {
+        if (this.#defaults.get(agent) !== reading) return;
+        reading.asks = asks;
+        this.schedule();
+      });
+    return 'reading';
+  }
+
+  /**
+   * Keeps what each agent's CLI defaults to for the session it was read for: through that session,
+   * once it runs, and no longer once it ends (the next is read for anew), nor for an agent gone.
+   */
+  #followDefaults(): void {
+    const agents = new Set(
+      this.#deps.nodes().flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
     );
+    for (const [agent, known] of this.#defaults) {
+      if (!agents.has(agent)) {
+        this.#defaults.delete(agent);
+        continue;
+      }
+      const running = this.#deps.engine.sessions.of(agent).running !== undefined;
+      if (running) known.ran = true;
+      else if (known.ran) this.#defaults.delete(agent);
+    }
   }
 
   /**
@@ -587,14 +696,14 @@ export class Delivery {
   /**
    * Forgets what senders were told of a hold on agent `node` that is gone, so that they are told
    * again should it hold again: a pause, once nothing pauses it; a session that wouldn't start, once
-   * it has started (after a restart too, when only the notices kept say it refused); a mode that
-   * never asks, once it runs in none.
+   * it has started (after a restart too, when only the notices kept say it refused); acting
+   * without asking, once it is known to ask (not while its CLI's default is still to be read).
    */
   #forgetReleased(node: AgentNode): void {
     const { engine } = this.#deps;
     if (engine.run.holding({ agent: node.id }).length === 0) this.#forget('paused', node.id);
     if (engine.sessions.of(node.id).running !== undefined) this.#forget('stuck', node.id);
-    if (!this.#unasking(node)) this.#forget('unasking', node.id);
+    if (this.#asking(node, false) === 'asks') this.#forget('unasking', node.id);
     if (this.#limited(node) === undefined) this.#forget('limited', node.id);
   }
 
@@ -935,6 +1044,18 @@ export class Delivery {
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
 type HoldKind = 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+
+/** What a sender is told of its message to agent `name` waiting because it would act without asking. */
+function unaskingText(name: string, why: UnaskingWhy): string {
+  switch (why) {
+    case 'mode':
+      return `${name} runs in a mode that never asks before it acts, so your message waits until it runs in one that asks again: only the user can switch it.`;
+    case 'default':
+      return `${name}’s CLI defaults to a mode that never asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
+    case 'unknown':
+      return `corrallm can’t tell whether ${name}’s CLI defaults to a mode that asks before it acts, so your message waits until ${name} runs in one that asks, which only the user can set.`;
+  }
+}
 
 /**
  * The key of what a sender is told of a hold of `kind` on agent `agent`, and what it is told of

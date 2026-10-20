@@ -190,7 +190,11 @@ export const claudeCode: Adapter = {
   }),
   readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
   fake: (pause) => new FakeConnector({ pause }),
-  fakeOptions: { models: FAKE_MODELS, defaults: { model: null, effort: null, mode: null } },
+  fakeOptions: {
+    models: FAKE_MODELS,
+    // The fake's own default, Manual, asks.
+    defaults: { model: null, effort: null, mode: null, asks: true },
+  },
   conversations: new Conversations(),
   selfTests: [{ name: 'Agent SDK', run: () => checkAgentSdk() }],
   usageBackends: [

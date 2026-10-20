@@ -178,6 +178,11 @@ export interface Session {
   queued: { id: string; text: string; images?: MessageImage[] }[];
   /** Its reported mode, or null until the native session says. */
   mode: Mode | null;
+  /**
+   * Whether what a connected session runs with asks before it acts, as it said where its mode
+   * doesn't (null: settings of the user's own that are none of its modes); absent where it didn't.
+   */
+  asks?: boolean;
   /** The model picked for it; null for its agent's default. */
   model: string | null;
   /**

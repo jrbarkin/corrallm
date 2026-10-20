@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
+import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
@@ -21,6 +21,7 @@ import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import type { OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createOptions } from '../sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
@@ -90,13 +91,16 @@ export interface CoreConfig {
   fakeSessions?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
-   * (sessions/fake.ts), the environment they run in instead of the login shell's, and what reads a
-   * held usage backend instead of its adapter's reader (none, for a backend left out).
+   * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
+   * held usage backend instead of its adapter's reader (none, for a backend left out), and what
+   * reads what an agent of each adapter can be set to run with, and its user's own defaults,
+   * instead of its CLI's settings (the adapters' fake options, for an adapter left out).
    */
   sessions?: {
     connectors: Readonly<Partial<Record<ConnectionId, Connector<SessionMode>>>>;
     environment: () => Promise<Readonly<Record<string, string>>>;
     readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
+    options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
   };
 }
 
@@ -212,7 +216,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         },
       }),
     environment,
-    options: createOptions({ fake }),
+    // Tests never read a real CLI's settings.
+    options: {
+      ...createOptions({ fake: fake || config.sessions !== undefined }),
+      ...config.sessions?.options,
+    },
     ...(conversations === undefined ? {} : { conversations }),
     projectOf: (canvas) => projects.of(canvas),
     memory,
