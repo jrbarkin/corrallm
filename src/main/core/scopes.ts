@@ -7,12 +7,14 @@
  * runs in its scope and in the scopes beneath it, waits for that to unwind, and runs ahead of what
  * is queued, so a stop is never stuck behind a slow start. Preempting ops never abort each other
  * (two withdraws both take their message back): those that overlap run one at a time, in the order
- * they came. A draining op (closing a canvas, deleting an agent) aborts what runs beneath its scope
- * in the scopes it drains as it comes, and takes its turn in its own scope's queue as usual, never
- * jumping it: it starts once its turn comes and what it aborted has unwound. Each op gets a signal
- * that aborts when it is superseded or its caller gives up; it unwinds by itself, until it says it
- * is past its point of no return (a commit queued): then nothing aborts it, and what would have
- * waits for it to end.
+ * they came. A draining op (closing a canvas, deleting an agent) holds the scopes it drains beneath
+ * its own from the moment it comes until it ends, so nothing runs on what it removes or switches
+ * meanwhile: it aborts what runs there (a preempting op it lets finish), supersedes what waits
+ * there, and starts nothing there until it ends (what comes meanwhile waits for it). It takes its
+ * turn in its own scope's queue as usual, never jumping it: it starts once its turn comes and what
+ * runs in the scopes it drains has unwound. Each op gets a signal that aborts when it is
+ * superseded or its caller gives up; it unwinds by itself, until it says it is past its point of no
+ * return (a commit queued): then nothing aborts it, and what would have waits for it to end.
  */
 
 /** Why an op's signal aborted: a preempting op in its scope superseded it. */
@@ -37,21 +39,34 @@ interface Running {
 export interface Turn {
   preempt?: boolean;
   /**
-   * The scopes (paths) it drains: what runs in them, or beneath them, deeper than its own scope, is
-   * aborted as it comes.
+   * The scopes (paths) it drains: those deeper than its own scope, in them or beneath them, are
+   * held from when it comes until it ends, what runs there aborted and what waits there superseded.
    */
   drains?: readonly (readonly string[])[];
+}
+
+/** The scopes a draining op holds: those in or beneath `paths`, at least `depth` deep. */
+interface Drain {
+  paths: readonly (readonly string[])[];
+  depth: number;
 }
 
 /** An op: what it does with its signal, saying when it is past its point of no return. */
 export type ScopedOp<T> = (signal: AbortSignal, noReturn: () => void) => Promise<T>;
 
+/** An op waiting its turn: what starts it, at once, and what refuses it, superseded. */
+interface Waiting {
+  start: () => void;
+  supersede: () => void;
+}
+
 interface Lane {
+  path: readonly string[];
   running: Running | undefined;
   /** The preempting ops waiting their turn, in order: they go before `queue`. */
-  preempts: (() => void)[];
-  /** The other ops waiting their turn, in order. Each entry starts its op, at once, when called. */
-  queue: (() => void)[];
+  preempts: Waiting[];
+  /** The other ops waiting their turn, in order. */
+  queue: Waiting[];
   /** How many preempting ops wait for what they aborted to unwind, holding the lane meanwhile. */
   held: number;
 }
@@ -60,6 +75,8 @@ const keyOf = (path: readonly string[]) => path.join('\u0000');
 
 export class Scopes {
   readonly #lanes = new Map<string, Lane>();
+  /** What the draining ops that came and haven't ended hold. */
+  readonly #drains = new Set<Drain>();
 
   /**
    * Runs `op` in the scope `path` (null: none), taking its turn as `turn` says, with `signal` the
@@ -73,48 +90,67 @@ export class Scopes {
   ): Promise<T> {
     if (path === null) return op(signal ?? new AbortController().signal, () => undefined);
     const key = keyOf(path);
-    const lane = this.#lane(key);
+    const lane = this.#lane(key, path);
     if (preempt) {
       lane.held++;
       try {
-        await this.#stop(this.#within([path], 0));
+        await this.#stop(this.#beneath(path).filter((running) => !running.preempt));
       } finally {
         lane.held--;
       }
       return this.#enter(lane, key, path, true, signal, op);
     }
-    const drained =
-      drains.length === 0 ? undefined : this.#stop(this.#within(drains, path.length + 1));
-    return this.#enter(lane, key, path, false, signal, op, drained);
+    if (drains.length === 0) return this.#enter(lane, key, path, false, signal, op);
+    const drain: Drain = { paths: drains, depth: path.length + 1 };
+    this.#drains.add(drain);
+    try {
+      return await this.#enter(lane, key, path, false, signal, op, this.#drain(drain));
+    } finally {
+      this.#drains.delete(drain);
+      for (const [held, beneath] of this.#lanes) {
+        if (holds(drain, beneath.path)) this.#next(held, beneath);
+      }
+    }
   }
 
-  #lane(key: string): Lane {
+  #lane(key: string, path: readonly string[]): Lane {
     let lane = this.#lanes.get(key);
     if (!lane) {
-      lane = { running: undefined, preempts: [], queue: [], held: 0 };
+      lane = { path, running: undefined, preempts: [], queue: [], held: 0 };
       this.#lanes.set(key, lane);
     }
     return lane;
   }
 
-  /**
-   * What runs, but for preempting ops, in the scopes `paths` or beneath them, in a scope at least
-   * `depth` deep.
-   */
-  #within(paths: readonly (readonly string[])[], depth: number): Running[] {
+  /** What runs in the scope `path` or beneath it. */
+  #beneath(path: readonly string[]): Running[] {
     return [...this.#lanes.values()].flatMap(({ running }) =>
-      running &&
-      !running.preempt &&
-      running.path.length >= depth &&
-      paths.some((path) => path.every((part, i) => running.path[i] === part))
-        ? [running]
-        : [],
+      running && path.every((part, i) => running.path[i] === part) ? [running] : [],
     );
   }
 
-  /** Aborts `ops`, but those past their point of no return, and waits for all of them to end. */
+  /**
+   * Drains the scopes `drain` holds, as a draining op comes: supersedes what waits there, but for
+   * preempting ops, and aborts what runs there. Resolves once what ran there has ended.
+   */
+  #drain(drain: Drain): Promise<void> {
+    const running: Running[] = [];
+    for (const lane of this.#lanes.values()) {
+      if (!holds(drain, lane.path)) continue;
+      for (const waiting of lane.queue.splice(0)) waiting.supersede();
+      if (lane.running) running.push(lane.running);
+    }
+    return this.#stop(running);
+  }
+
+  /**
+   * Aborts `ops`, but preempting ones and those past their point of no return, and waits for all
+   * of them to end.
+   */
   async #stop(ops: readonly Running[]): Promise<void> {
-    for (const { past, controller } of ops) if (!past) controller.abort(new Superseded());
+    for (const { preempt, past, controller } of ops) {
+      if (!preempt && !past) controller.abort(new Superseded());
+    }
     await Promise.all(ops.map(({ settled }) => settled));
   }
 
@@ -139,29 +175,37 @@ export class Scopes {
         return;
       }
       const waiting = preempt ? lane.preempts : lane.queue;
-      const start = () => {
-        signal?.removeEventListener('abort', gaveUp);
-        this.#start(lane, key, path, preempt, signal, op, drained).then(resolve, reject);
+      const entry: Waiting = {
+        start: () => {
+          signal?.removeEventListener('abort', gaveUp);
+          this.#start(lane, key, path, preempt, signal, op, drained).then(resolve, reject);
+        },
+        supersede: () => {
+          signal?.removeEventListener('abort', gaveUp);
+          reject(new Superseded());
+        },
       };
       const gaveUp = () => {
-        waiting.splice(waiting.indexOf(start), 1);
+        waiting.splice(waiting.indexOf(entry), 1);
         this.#forget(key, lane);
         reject(signal?.reason as Error);
       };
       signal?.addEventListener('abort', gaveUp, { once: true });
-      waiting.push(start);
+      waiting.push(entry);
       this.#next(key, lane);
     });
   }
 
   /**
-   * Starts the next op waiting in a lane that nothing runs in or holds: the first preempting one,
-   * else the first queued. Nothing can start in between, so one op at a time runs in the lane.
+   * Starts the next op waiting in a lane that nothing runs in or holds (a preempting op, or a
+   * draining op that holds its scope): the first preempting one, else the first queued. Nothing
+   * can start in between, so one op at a time runs in the lane.
    */
   #next(key: string, lane: Lane): void {
     if (lane.running || lane.held > 0) return;
+    if ([...this.#drains].some((drain) => holds(drain, lane.path))) return;
     const next = lane.preempts.shift() ?? lane.queue.shift();
-    if (next) next();
+    if (next) next.start();
     else this.#forget(key, lane);
   }
 
@@ -211,4 +255,12 @@ export class Scopes {
       this.#lanes.delete(key);
     }
   }
+}
+
+/** Whether `drain` holds the scope `path`: one in or beneath what it drains, deep enough. */
+function holds(drain: Drain, path: readonly string[]): boolean {
+  return (
+    path.length >= drain.depth &&
+    drain.paths.some((drained) => drained.every((part, i) => path[i] === part))
+  );
 }

@@ -273,6 +273,91 @@ describe('Scopes', () => {
     expect(log).toContain('elsewhere done');
   });
 
+  it('supersedes what waits in the scopes it drains, and starts nothing there until it is done', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const agent = ['app', 'c', 'a'];
+    const running = controlled(log, 'running');
+    const queued = controlled(log, 'queued');
+    const drain = controlled(log, 'drain');
+    const later = controlled(log, 'later');
+    const fresh = controlled(log, 'fresh');
+    const ran = scopes.run(agent, {}, undefined, running.op);
+    const waited = scopes.run(agent, {}, undefined, queued.op);
+    await running.started;
+    const draining = scopes.run(['app', 'c'], { drains: [['app', 'c']] }, undefined, drain.op);
+    await expect(waited).rejects.toBeInstanceOf(Superseded);
+    await drain.started;
+    // What comes meanwhile, in a scope it drains (one that had nothing yet too), waits for it.
+    const after = [
+      scopes.run(agent, {}, undefined, later.op),
+      scopes.run(['app', 'c', 'b'], {}, undefined, fresh.op),
+    ];
+    await tick();
+    expect(log).toEqual(['running started', 'running aborted', 'drain started']);
+    drain.release();
+    await Promise.all([later.started, fresh.started]);
+    later.release();
+    fresh.release();
+    expect(await Promise.all([ran, draining, ...after])).toEqual([
+      'running',
+      'drain',
+      'later',
+      'fresh',
+    ]);
+    expect(log.slice(0, 4)).toEqual([
+      'running started',
+      'running aborted',
+      'drain started',
+      'drain done',
+    ]);
+  });
+
+  it('waits for a preempting op that runs in a scope it drains, aborting it not', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const stop = controlled(log, 'stop');
+    const drain = controlled(log, 'drain');
+    const stopping = scopes.run(['app', 'c', 'a'], { preempt: true }, undefined, stop.op);
+    const signal = await stop.started;
+    const draining = scopes.run(['app', 'c'], { drains: [['app', 'c', 'a']] }, undefined, drain.op);
+    await tick();
+    expect(signal.aborted).toBe(false);
+    expect(log).toEqual(['stop started']);
+    stop.release();
+    await drain.started;
+    drain.release();
+    expect(await Promise.all([stopping, draining])).toEqual(['stop', 'drain']);
+    expect(log).toEqual(['stop started', 'stop done', 'drain started', 'drain done']);
+  });
+
+  it('lets the scopes it drains go once its caller gives up on it before its turn', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const canvas = controlled(log, 'canvas');
+    const drain = controlled(log, 'drain');
+    const later = controlled(log, 'later');
+    const holding = scopes.run(['app', 'c'], {}, undefined, canvas.op);
+    await canvas.started;
+    const caller = new AbortController();
+    const draining = scopes.run(
+      ['app', 'c'],
+      { drains: [['app', 'c', 'a']] },
+      caller.signal,
+      drain.op,
+    );
+    const after = scopes.run(['app', 'c', 'a'], {}, undefined, later.op);
+    await tick();
+    expect(log).toEqual(['canvas started']);
+    caller.abort(new Error('gone'));
+    await expect(draining).rejects.toThrow('gone');
+    await later.started;
+    later.release();
+    canvas.release();
+    expect(await Promise.all([holding, after])).toEqual(['canvas', 'later']);
+    expect(log).not.toContain('drain started');
+  });
+
   it('never runs a draining op superseded while it waited for what it drains', async () => {
     const scopes = new Scopes();
     const log: string[] = [];

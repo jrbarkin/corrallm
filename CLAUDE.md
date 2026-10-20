@@ -93,10 +93,12 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 outside token) and their parties (no token is ever you; only gui.ts makes you);
                 scopes.ts the order ops run in (one at a time per scope; a preempting op aborts
                 what runs beneath it first, never another preempting op, and those that overlap
-                run in turn, ahead of the queue; a draining op, `drains`, aborts what runs on its
-                canvas or on the agents it removes or switches as it comes, then takes its turn
-                as usual; nothing aborts an op past its point of no return, a commit queued, and
-                what would have waits for it);
+                run in turn, ahead of the queue; a draining op, `drains`, holds its canvas's
+                scopes, or those of the agents it removes or switches, from when it comes until it
+                ends: it aborts what runs there (waiting for a preempting op), supersedes what
+                waits there and starts nothing there meanwhile, then takes its turn as usual;
+                nothing aborts an op past its point of no return, a commit queued, and what would
+                have waits for it);
                 throttle.ts the limits per token (calls in flight and writes a second; a long
                 poll, `waits`, counts against the waits in flight instead of the calls);
                 requests.ts the repeated requests (each caller's own; a result kept only when its
