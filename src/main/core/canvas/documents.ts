@@ -48,10 +48,13 @@ import type { ChangeSet } from './change';
  * write-through, past its point of no return once its write is queued: what it changed, entity by
  * entity, is written in one write of the database's lane with the revision it takes (the
  * document's next) and what it was, and the live document is the changed one only once that write
- * is on disk, so a commit that fails (CommitFailed) leaves it as it was. Commits on a canvas go one
- * at a time, each built against what the one before left. Each entity changed is stamped with the
- * revision and the party; a row whose place alone was numbered anew keeps its own. Revisions past
- * the last REVISIONS_KEPT are trimmed every TRIM_EVERY commits, with what each changed.
+ * is on disk. A commit that fails (CommitFailed) leaves the live document as the canvas's rows
+ * hold it: as it was, unless only the flush of the database's log failed, when they hold the
+ * change though it may not be on disk, and the next commit takes the revision after it. Commits on
+ * a canvas go one at a time, each built against what the one before left. Each entity changed is
+ * stamped with the revision and the party; a row whose place alone was numbered anew keeps its
+ * own. Revisions past the last REVISIONS_KEPT are trimmed every TRIM_EVERY commits, with what each
+ * changed.
  *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
  * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
@@ -115,14 +118,26 @@ export interface Changed<R> {
   committed?: { rev: number; change: ChangeSet };
 }
 
-/** A change's write failed: nothing of it is kept, on disk or in memory. A retry may succeed. */
+/**
+ * A change's write failed. Nothing of it is kept, unless its rows hold it all the same (`made`: only
+ * the flush of the database's log failed, so it may not be on disk), when the live document is the
+ * changed one too; `made` is undefined if that couldn't be told. A retry may succeed.
+ */
 export class CommitFailed extends Error {
-  constructor(cause: unknown) {
+  readonly made: boolean | undefined;
+
+  constructor(cause: unknown, made: boolean | undefined) {
+    const why = cause instanceof Error ? cause.message : String(cause);
     super(
-      `The change couldn’t be written, so nothing changed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      made === true
+        ? `The change was made, but may not be on disk: ${why}`
+        : made === false
+          ? `The change couldn’t be written, so nothing changed: ${why}`
+          : `The change may or may not have been made: ${why}`,
       { cause },
     );
     this.name = 'CommitFailed';
+    this.made = made;
   }
 }
 
@@ -151,6 +166,8 @@ interface Live extends LiveDocument {
   fileHash: string | undefined;
   /** Of the text a save is writing, until its file is written. */
   writingHash: string | undefined;
+  /** Whether its rows couldn't be read after a write failed: they are read before it is used. */
+  unsure: boolean;
 }
 
 export class Documents {
@@ -215,12 +232,14 @@ export class Documents {
    * Makes `change` to the canvas's document, which must be loaded: once what the canvas's document
    * was doing is done, builds it over the live document, and if that changes anything, checks it,
    * says it is committing and commits it. Resolves once it is on disk, with what it did; rejects,
-   * leaving the document as it was, if it was refused, or couldn't be written (CommitFailed).
+   * leaving the document as it was, if it was refused, or as its rows hold it if it couldn't be
+   * written (CommitFailed).
    */
   change<R>(canvas: CanvasId, change: Change<R>): Promise<Changed<R>> {
     return this.#queue(canvas, async () => {
       const live = this.#lives.get(canvas);
       if (live === undefined) throw new Error(NOT_OPEN);
+      this.#sure(live);
       const { next, result, copies } = change.build(live.document);
       if (next.id !== canvas) throw new Error(ANOTHER);
       const rows = diffRows(live.rows, next, live.document);
@@ -258,25 +277,33 @@ export class Documents {
       const live = await this.#load(canvas);
       const { text, hash } = this.#text(live.document);
       const { store, memory } = this.#deps;
-      await store.write(() => {
-        this.#ensure(live, 'you');
-        store.prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?').run(hash, canvas);
-      });
-      live.kept = true;
-      live.writingHash = hash;
-      await writeWhole(file, text, { durable: true });
-      // One commit, the lane's for writes asked for in one turn.
-      await Promise.all([
-        memory.setFile(canvas, file),
-        store.write(() => {
+      try {
+        await store.write(() => {
+          this.#ensure(live, 'you');
           store
-            .prepare(
-              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL
-               WHERE canvas_id = ?`,
-            )
-            .run(hash, hash, canvas);
-        }),
-      ]);
+            .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
+            .run(hash, canvas);
+        });
+        live.kept = true;
+        live.writingHash = hash;
+        await writeWhole(file, text, { durable: true });
+        // One commit, the lane's for writes asked for in one turn.
+        await Promise.all([
+          memory.setFile(canvas, file),
+          store.write(() => {
+            store
+              .prepare(
+                `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL
+                 WHERE canvas_id = ?`,
+              )
+              .run(hash, hash, canvas);
+          }),
+        ]);
+      } catch (error) {
+        // Its rows may hold a write whose log's flush failed.
+        this.#reread(live);
+        throw error;
+      }
       live.savedHash = hash;
       live.fileHash = hash;
       live.writingHash = undefined;
@@ -308,7 +335,10 @@ export class Documents {
     opened?: { text: string; document: CanvasDocument },
   ): Promise<Live> {
     const loaded = this.#lives.get(canvas);
-    if (loaded !== undefined) return loaded;
+    if (loaded !== undefined) {
+      this.#sure(loaded);
+      return loaded;
+    }
     const kept = this.#read(canvas);
     if (kept !== undefined) {
       this.#lives.set(canvas, kept);
@@ -331,6 +361,7 @@ export class Documents {
       savedHash: undefined,
       fileHash: undefined,
       writingHash: undefined,
+      unsure: false,
     };
     if (text === undefined || document === undefined) {
       this.#lives.set(canvas, live);
@@ -428,7 +459,41 @@ export class Documents {
       savedHash: text(head.saved_hash),
       fileHash: text(head.file_hash),
       writingHash: text(head.writing_hash),
+      unsure: false,
     };
+  }
+
+  /**
+   * `live` as the canvas's rows hold it now, if they hold it (a draft's may not), else as it was:
+   * the same document while its revision is the same, as diffs by reference read it. Throws if they
+   * can't be read.
+   */
+  #adopt(live: Live): void {
+    const kept = this.#read(live.document.id);
+    if (kept === undefined) live.unsure = false;
+    else if (kept.rev !== live.rev) Object.assign(live, kept);
+    else
+      Object.assign(live, { ...kept, document: live.document, rows: live.rows, revs: live.revs });
+  }
+
+  /**
+   * After a write that failed: `live` as the canvas's rows hold it, which, if only the flush of the
+   * database's log failed, is with the write. Its revision now; undefined if its rows couldn't be
+   * read, when they are read before it is used again (#sure).
+   */
+  #reread(live: Live): number | undefined {
+    try {
+      this.#adopt(live);
+      return live.rev;
+    } catch {
+      live.unsure = true;
+      return undefined;
+    }
+  }
+
+  /** `live`, read from its rows first if a write that failed left it unsure of them. */
+  #sure(live: Live): void {
+    if (live.unsure) this.#adopt(live);
   }
 
   /**
@@ -461,7 +526,7 @@ export class Documents {
   /**
    * Commits `next` over `live`, by what it changes of it (`change`): in one write, at the next
    * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
-   * from it. Throws CommitFailed, leaving `live` as it was, if the write failed.
+   * from it. Throws CommitFailed if the write failed, leaving `live` as the canvas's rows hold it.
    */
   async #commit(
     live: Live,
@@ -483,7 +548,8 @@ export class Documents {
         }
       });
     } catch (error) {
-      throw new CommitFailed(error);
+      const now = this.#reread(live);
+      throw new CommitFailed(error, now === undefined ? undefined : now === rev);
     }
     live.document = next;
     live.rows = rows;

@@ -356,6 +356,89 @@ describe('a canvas’s document', () => {
     expect((await documents.load(canvas)).document).toEqual(next);
   });
 
+  it('is what its rows hold when only its commit’s flush failed, and commits on from there', async () => {
+    let failing = false;
+    await restart({
+      ...SYSTEM_DEPS,
+      flush: (fd) => {
+        if (!failing) return SYSTEM_DEPS.flush(fd);
+        failing = false;
+        return Promise.reject(new Error('EIO: fsync failed'));
+      },
+    });
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const one = renamed((await documents.load(canvas)).document, 'worker', 'One');
+
+    failing = true;
+    const failed = commit(canvas, one);
+    await expect(failed).rejects.toMatchObject({
+      name: 'CommitFailed',
+      made: true,
+      message: 'The change was made, but may not be on disk: EIO: fsync failed',
+    });
+    // Its rows hold it, so the live document does.
+    expect(documentRow(canvas)).toMatchObject({ rev: 2 });
+    expect(documents.live(canvas)).toMatchObject({ document: one, rev: 2 });
+    expect(documents.live(canvas).revs.get('node/worker')).toBe(2);
+
+    const two = renamed(one, 'lead', 'Two');
+    await expect(commit(canvas, two)).resolves.toBe(3);
+    await restart();
+    expect(await documents.load(canvas)).toMatchObject({ document: two, rev: 3 });
+  });
+
+  it('reads its rows before it is used again when they couldn’t be read after a commit failed', async () => {
+    let failing = false;
+    // A database whose document rows can't be read while `unreadable`: from as its flush fails.
+    let unreadable = false;
+    await restart({
+      ...SYSTEM_DEPS,
+      flush: (fd) => {
+        if (!failing) return SYSTEM_DEPS.flush(fd);
+        failing = false;
+        unreadable = true;
+        return Promise.reject(new Error('EIO: fsync failed'));
+      },
+    });
+    documents = new Documents({
+      store: {
+        prepare: (sql) => {
+          if (unreadable && sql.includes('FROM document')) throw new Error('EIO: read failed');
+          return store.prepare(sql);
+        },
+        write: (run) => store.write(run),
+      },
+      memory,
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+    });
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const one = renamed((await documents.load(canvas)).document, 'worker', 'One');
+
+    failing = true;
+    await expect(commit(canvas, one)).rejects.toMatchObject({
+      made: undefined,
+      message: 'The change may or may not have been made: EIO: fsync failed',
+    });
+    unreadable = false;
+
+    // The next change is built over what its rows hold: the change, made.
+    const built: string[] = [];
+    const changed = await documents.change(canvas, {
+      revision: { op: 'canvas.rename', by: 'you' },
+      build: (document) => {
+        built.push(document.nodes.map((node) => node.data.label).join(', '));
+        return { next: renamed(document, 'lead', 'Two'), result: undefined };
+      },
+      check: () => undefined,
+      committing: () => undefined,
+    });
+    expect(built).toEqual(['Team, Lead, One']);
+    expect(changed.committed?.rev).toBe(3);
+  });
+
   it('removes what goes, items before what holds them and nodes before their parents', async () => {
     const canvas = newCanvasId();
     await filed(canvasOf(canvas));

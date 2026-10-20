@@ -14,6 +14,7 @@ import { OpFailure } from '../call';
 import type { Caller } from '../caller';
 import { asHuman } from '../gui';
 import { Superseded } from '../scopes';
+import { SYSTEM_DEPS } from '../store/store';
 import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
 import type { ChangeSet } from './change';
@@ -172,6 +173,37 @@ describe('a commit', () => {
     await expect(commit(canvas, rename('lead', 'Forbidden'), callOf(YOU))).resolves.toMatchObject({
       rev: 2,
     });
+  });
+
+  it('is followed all the same when its change was made, though its flush failed', async () => {
+    let failing = false;
+    await store.close();
+    store = await openTestStore(profile, {
+      ...SYSTEM_DEPS,
+      flush: (fd) => {
+        if (!failing) return SYSTEM_DEPS.flush(fd);
+        failing = false;
+        return Promise.reject(new Error('EIO: fsync failed'));
+      },
+    });
+    documents = new Documents({
+      store,
+      memory: new CanvasMemory(store),
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+    });
+    await documents.load(canvas);
+    const heard: ChangeSet[] = [];
+    const commit = committer({
+      documents,
+      rules: {},
+      committed: (_canvas, change) => heard.push(change),
+    });
+    failing = true;
+    await expect(commit(canvas, rename('worker', 'Builder'), callOf(YOU))).rejects.toMatchObject({
+      made: true,
+    });
+    expect(heard.map((change) => [...change.entities.keys()])).toEqual([['node/worker']]);
   });
 
   it('unwinds, writing nothing, when it is superseded before its point of no return', async () => {
