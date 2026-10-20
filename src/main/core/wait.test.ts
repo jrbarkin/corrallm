@@ -15,6 +15,8 @@ import type { OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { cursorOf, readCursor } from './delivery/messages';
+import { SYSTEM_DEPS } from './store/store';
+import type { StoreDeps } from './store/store';
 import { keepCanvases, readPositions, refuseWrites } from './store/test-store';
 import { NO_DESKTOP } from './test-registry';
 
@@ -78,10 +80,11 @@ async function keep(both = false): Promise<void> {
   });
 }
 
-async function start(open: CanvasId[] = [M1]): Promise<Core> {
+async function start(open: CanvasId[] = [M1], store?: StoreDeps): Promise<Core> {
   core = await createCore(
     {
       profile,
+      ...(store === undefined ? {} : { store }),
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
@@ -426,6 +429,39 @@ describe('wait', () => {
       allow();
     }
     expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
+  });
+
+  it('moves no read position whose flush failed, even across a restart: the next wait returns what that one didn’t', async () => {
+    await keep();
+    // The drive fails to flush the database's log while the test says so.
+    let failing = false;
+    await start([M1], {
+      ...SYSTEM_DEPS,
+      flush: (fd) =>
+        failing ? Promise.reject(new Error('EIO: i/o error, fsync')) : SYSTEM_DEPS.flush(fd),
+    });
+    const { token: made, caller } = await token();
+    const id = await exchange(caller, 'One');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    failing = true;
+    const failed = await current().call('wait', { timeoutSeconds: 0 }, caller);
+    expect(failed).toMatchObject({ ok: false, error: { code: 'unavailable' } });
+    failing = false;
+    // What the database couldn't keep, the core keeps no more of until it restarts, saying so once.
+    expect(
+      await current().call('message', { canvas: M1, to: 'builder', body: 'Two' }, caller),
+    ).toMatchObject({ ok: false });
+    const said = errors.mock.calls.map(([line]) => String(line));
+    expect(said.filter((line) => line.startsWith('The core’s database could not'))).toHaveLength(1);
+    await current()
+      .close()
+      .catch(() => undefined);
+    core = undefined;
+    errors.mockRestore();
+
+    await start();
+    expect(keptReads()).toEqual({});
+    expect((await wait(callerOf(made))).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
   });
 
   it('moves every read position a wait across canvases moves in one write, or none, losing nothing', async () => {

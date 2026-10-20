@@ -46,6 +46,8 @@ export interface SessionDriver {
   stopTask(taskId: string): void;
   /** Makes sure the session runs, as when its view opens: a connected one starts or resumes. */
   open(): void;
+  /** Starts a native session without a message, resolving after its startup report. */
+  ready?(): Promise<void>;
   /** Lets the session go, for another driver or none: a turn going on ends, interrupted. */
   close(): void;
 }

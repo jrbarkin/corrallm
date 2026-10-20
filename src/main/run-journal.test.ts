@@ -201,6 +201,7 @@ describe('RunJournal', () => {
   });
 
   it('writes the workflow a save has, whatever an earlier save’s flush did', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let failing = false;
     await reopen({
       ...SYSTEM_DEPS,
@@ -211,15 +212,20 @@ describe('RunJournal', () => {
     const { token } = await runs.get(canvas);
     const edited = { ...checkpoint, workflow: '{"edit":"two"}', updatedAt: 456 };
     await runs.save(canvas, token, checkpoint);
-    // Committed, though its log couldn't be flushed: the row holds it.
+    // Committed, but its log couldn't be flushed: kept nowhere, the database refusing every write
+    // until it is opened again.
     failing = true;
     await expect(runs.save(canvas, token, edited)).rejects.toThrow('EIO');
     failing = false;
-    // The edit undone.
-    await runs.save(canvas, token, { ...checkpoint, updatedAt: 789 });
-    expect(ran(canvas)).toMatchObject({ workflow: checkpoint.workflow, updated_at: 789 });
+    await expect(runs.save(canvas, token, checkpoint)).rejects.toThrow('EIO');
+    reader.close();
     await reopen();
-    expect((await journal().get(canvas)).checkpoint).toEqual({ ...checkpoint, updatedAt: 789 });
+    reader = onDisk(profile);
+    expect(ran(canvas)).toMatchObject({ workflow: checkpoint.workflow, updated_at: 123 });
+    // Saved again, the edit is written as it is.
+    const again = journal();
+    await again.save(canvas, (await again.get(canvas)).token, edited);
+    expect(ran(canvas)).toMatchObject({ workflow: edited.workflow, updated_at: 456 });
   });
 
   it('writes the workflow the last of saves made together has', async () => {

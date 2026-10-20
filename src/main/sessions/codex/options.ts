@@ -2,7 +2,7 @@ import { EFFORT_PATTERN, MODEL_PATTERN } from '../../../shared/session';
 import type { ModelChoice, SettingsOptions } from '../../../shared/session';
 import { property, text } from '../transcript';
 import { readModels } from './app-server/session';
-import { presetOf } from './app-server/protocol';
+import { asksOf, presetOf } from './app-server/protocol';
 import { askAppServer, startAppServer } from './rpc';
 import type { AppServer, AppServerOptions } from './rpc';
 import { folderTrust } from './terminal/hooks';
@@ -12,7 +12,8 @@ import { folderTrust } from './terminal/hooks';
  * user's own `codex`, in the project folder, trusted for that server alone as a Codex Terminal
  * session trusts it) is asked only `model/list` (the models its pickers offer, with their
  * reasoning efforts) and `config/read` (the user's effective config.toml, the project's included:
- * their default model, effort, sandbox and approvals), then closed. No thread starts and no model
+ * their default model, effort, sandbox and approvals, and whether those ask before acting:
+ * app-server/protocol.ts' `asksOf`), then closed. No thread starts and no model
  * is asked anything, so it spends no usage and needs no consent on a ChatGPT plan. Nothing is
  * written.
  */
@@ -62,6 +63,11 @@ export async function codexOptions(
     : undefined;
   const model = text(property(config, 'model')) ?? fallback;
   const effort = text(property(config, 'model_reasoning_effort'));
+  // A config it couldn't read says nothing of whether its default asks.
+  const asks =
+    config === undefined
+      ? undefined
+      : asksOf(property(config, 'sandbox_mode'), property(config, 'approval_policy'));
   return {
     models: readModels(listed).map(
       ({ value, label, description, efforts, defaultEffort }): ModelChoice => ({
@@ -79,6 +85,7 @@ export async function codexOptions(
         config === undefined
           ? null
           : presetOf(property(config, 'sandbox_mode'), property(config, 'approval_policy')),
+      ...(asks === undefined ? {} : { asks }),
     },
   };
 }

@@ -19,8 +19,10 @@ import { corrallmMode } from './sdk/translate';
  * their settings as Claude Code reads them (the project's local settings, then its shared ones,
  * then the user's, in CLAUDE_CONFIG_DIR or ~/.claude: `model`, `effortLevel`,
  * `permissions.defaultMode`), with ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL (the agents'
- * environment, or a settings file's `env`) over them, as in Claude Code. Nothing is written, and
- * nothing run. Not read: managed (policy) settings.
+ * environment, or a settings file's `env`) over them, as in Claude Code; and whether the mode it
+ * starts in asks before acting (not told for a mode corrallm doesn't know), which holds parties'
+ * messages to an agent that would start in one that doesn't (core/delivery/delivery.ts). Nothing
+ * is written, and nothing run. Not read: managed (policy) settings.
  */
 
 /** The aliases `claude --model` takes, in the order Claude Code lists them. */
@@ -68,6 +70,10 @@ export async function claudeOptions(
     first((settings) => text(settings.effortLevel)),
   ].find((value) => value !== undefined);
   const mode = first((settings) => corrallmMode(record(settings.permissions)?.defaultMode));
+  // Whether the mode it starts in asks: the one the most particular settings that name one name
+  // (none: Claude Code's own, Manual), unless corrallm doesn't know it.
+  const named = first((settings) => text(record(settings.permissions)?.defaultMode));
+  const starts = named === undefined ? 'manual' : corrallmMode(named);
   const available = first((settings) =>
     Array.isArray(settings.availableModels)
       ? settings.availableModels.filter(
@@ -95,6 +101,7 @@ export async function claudeOptions(
           ? effort
           : null,
       mode: mode ?? null,
+      ...(starts === undefined ? {} : { asks: starts !== 'bypassPermissions' }),
     },
   };
 }

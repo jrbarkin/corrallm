@@ -318,10 +318,15 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       to: 'builder',
       body: 'slow down',
     });
-    await vi.waitFor(async () => {
-      const { items } = await call<{ items: Message[] }>(client, 'messages');
-      expect(items.find((message) => message.id === id)?.state).toBe('delivered');
-    });
+    // Delivered once what Builder's codex defaults to is read (a private app server, which a fake
+    // that lingers as it exits takes that much longer to close).
+    await vi.waitFor(
+      async () => {
+        const { items } = await call<{ items: Message[] }>(client, 'messages');
+        expect(items.find((message) => message.id === id)?.state).toBe('delivered');
+      },
+      { timeout: 10_000, interval: 50 },
+    );
     return id;
   }
 
@@ -658,6 +663,36 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const client = await connect(server.url, token);
       expect((await call<{ agents: unknown[] }>(client, 'agents')).agents).toHaveLength(2);
     },
+  );
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
+    'exits once its terminal is gone, having let the profile go',
+    async () => {
+      const { server } = await serveOnTerminal([]);
+      const alive = () => {
+        try {
+          process.kill(server.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        // script(1) killed: the terminal serve runs on hangs up, and nothing reads it any more.
+        server.child.kill('SIGKILL');
+        await vi.waitFor(
+          () => {
+            expect(alive()).toBe(false);
+          },
+          { timeout: 5000, interval: 50 },
+        );
+        expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+        expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      } finally {
+        if (alive()) process.kill(server.pid, 'SIGKILL');
+      }
+    },
+    20_000,
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(

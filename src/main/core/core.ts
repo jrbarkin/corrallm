@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import type { ConnectionId, UsageBackendId } from '../../shared/adapter';
+import type { AdapterId, ConnectionId, UsageBackendId } from '../../shared/adapter';
 import { canvasIdOf } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { OpResult } from '../../shared/api/errors';
@@ -21,6 +21,7 @@ import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
 import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import type { OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createOptions } from '../sessions/connectors';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
@@ -47,6 +48,7 @@ import { Children } from './children';
 import type { ChildSystem } from './children';
 import { openStore } from './store/open';
 import { unopened } from './store/store';
+import type { StoreDeps } from './store/store';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -60,6 +62,8 @@ import { unopened } from './store/store';
 export interface CoreConfig {
   /** For tests: process identity and group signalling instead of the OS. */
   children?: ChildSystem;
+  /** For tests: the database's clock, timers and log flushes instead of the system's. */
+  store?: StoreDeps;
   /** The profile folder, where the core keeps its stores. */
   profile: string;
   /** Which app this is, as app.info says. */
@@ -87,13 +91,16 @@ export interface CoreConfig {
   fakeSessions?: boolean;
   /**
    * For tests: what runs agents' sessions instead of each connection's own connector
-   * (sessions/fake.ts), the environment they run in instead of the login shell's, and what reads a
-   * held usage backend instead of its adapter's reader (none, for a backend left out).
+   * (sessions/fake.ts), the environment they run in instead of the login shell's, what reads a
+   * held usage backend instead of its adapter's reader (none, for a backend left out), and what
+   * reads what an agent of each adapter can be set to run with, and its user's own defaults,
+   * instead of its CLI's settings (the adapters' fake options, for an adapter left out).
    */
   sessions?: {
     connectors: Readonly<Partial<Record<ConnectionId, Connector<SessionMode>>>>;
     environment: () => Promise<Readonly<Record<string, string>>>;
     readUsage?: Readonly<Partial<Record<UsageBackendId, UsageRead>>>;
+    options?: Readonly<Partial<Record<AdapterId, OptionsReader>>>;
   };
 }
 
@@ -145,7 +152,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Before anything reads what it keeps. One that can't be opened fails every read and write of
   // what it keeps, saying why: the core journals nothing, and sends nothing whose record can't be
   // on disk first.
-  const opened = await openStore(profile);
+  const opened = await openStore(profile, config.store);
   if (opened.store === undefined) console.error(opened.said.join(' '));
   const store = opened.store ?? unopened(opened.said.join(' '));
   const children = new Children(profile, config.children);
@@ -209,7 +216,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         },
       }),
     environment,
-    options: createOptions({ fake }),
+    // Tests never read a real CLI's settings.
+    options: {
+      ...createOptions({ fake: fake || config.sessions !== undefined }),
+      ...config.sessions?.options,
+    },
     ...(conversations === undefined ? {} : { conversations }),
     projectOf: (canvas) => projects.of(canvas),
     memory,

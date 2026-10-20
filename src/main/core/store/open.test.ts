@@ -54,6 +54,12 @@ const pragma = (store: Store, name: string): unknown =>
   store.prepare(`PRAGMA ${name}`).get()?.[name];
 
 describe('openStore', () => {
+  it('creates only SQLite’s database, log and index on a normal open', async () => {
+    const { said } = await open();
+    expect(said).toEqual([]);
+    expect((await readdir(profile)).sort()).toEqual(['core.db', 'core.db-shm', 'core.db-wal']);
+  });
+
   it.skipIf(process.platform === 'win32')(
     'makes the database, its log and its index the user’s alone, whatever the umask',
     async () => {

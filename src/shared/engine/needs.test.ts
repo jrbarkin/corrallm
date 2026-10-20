@@ -136,7 +136,7 @@ describe('needs', () => {
         nodes: [starter, slashed, plain],
         run: { running: true, agents: { s: asks('start'), 'a/b': asks('c'), a: asks('b/c') } },
         stuck: [{ agent: 's', text: 'This login can’t run here.', clears: 'It tries again.' }],
-        unasking: ['s'],
+        unasking: [{ agent: 's', why: 'mode' }],
       }),
     );
     expect(items.map(({ kind, agent }) => [kind, agent])).toEqual([
@@ -147,6 +147,37 @@ describe('needs', () => {
       ['hold', 's'],
     ]);
     expect(new Set(items.map(({ id }) => id)).size).toBe(items.length);
+  });
+
+  it('says why parties’ messages wait on an agent that would act without asking', () => {
+    const planner2 = agent('q', 'Reviewer');
+    const items = needs(
+      input({
+        nodes: [builder, planner, planner2],
+        unasking: [
+          { agent: 'b', why: 'mode' },
+          { agent: 'p', why: 'default' },
+          { agent: 'q', why: 'unknown' },
+        ],
+      }),
+    );
+    expect(items.map(({ id, title, detail }) => [id, title, detail])).toEqual([
+      [
+        'unasking/b',
+        'Builder runs without asking, so messages from other parties wait',
+        'They go once it runs in a mode that asks again.',
+      ],
+      [
+        'unasking/p',
+        'Planner’s CLI defaults to a mode that never asks, so messages from other parties wait',
+        'They go once it runs in a mode that asks: set it to start in one.',
+      ],
+      [
+        'unasking/q',
+        'corrallm can’t tell whether Reviewer’s CLI defaults to a mode that asks, so messages from other parties wait',
+        'They go once it runs in a mode that asks: set it to start in one.',
+      ],
+    ]);
   });
 
   it('marks each choice only you may make, saying why', () => {
