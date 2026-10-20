@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
-import { MAX_MESSAGE_BYTES } from '../../shared/api/limits';
+import { MAX_LABEL, MAX_MESSAGE_BYTES } from '../../shared/api/limits';
 import type { OpName, Reach } from '../../shared/api/surface';
+import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
 import { MAX_FILE_QUERY_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
@@ -81,7 +82,12 @@ const REFUSING: Connector<SessionMode> = {
 };
 
 /** Starts the core on a profile of its own, keeping the canvas, with its canvas open. */
-export async function startWorld(): Promise<{ core: Core; close(): Promise<void> }> {
+export async function startWorld(): Promise<{
+  core: Core;
+  /** The profile folder it keeps its stores in. */
+  profile: string;
+  close(): Promise<void>;
+}> {
   const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-world-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
@@ -178,6 +184,7 @@ export async function startWorld(): Promise<{ core: Core; close(): Promise<void>
   });
   return {
     core,
+    profile,
     close: async () => {
       await core.close();
       await rm(profile, { recursive: true, force: true });
@@ -216,6 +223,28 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, query: 'x'.repeat(MAX_FILE_QUERY_LENGTH + 1) },
       { canvas: CANVAS, query: 'ipc', folder: '/etc' },
       { canvas: 'nope', query: '' },
+    ],
+  },
+  'canvas.rename': {
+    // The first call renames the helper; each after it names it as it is then, changing nothing,
+    // so expecting its revision before is no conflict.
+    valid: [
+      {
+        canvas: CANVAS,
+        node: 'helper',
+        label: 'Assistant',
+        expect: { 'node/helper': 1, 'item/helper/none': 0 },
+        request: request(31),
+      },
+      { node: 'helper', label: 'Assistant', request: request(32) },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { canvas: CANVAS, node: 'helper' },
+      { canvas: CANVAS, node: '', label: 'Helper' },
+      { canvas: CANVAS, node: 'helper', label: 'x'.repeat(MAX_LABEL + 1) },
+      { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { meta: 1 } },
+      { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { 'node/helper': -1 } },
     ],
   },
   agents: {
@@ -463,6 +492,19 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   CanvasId: () => [OTHER_CANVAS],
   AgentId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
+  // A node is reached as an agent is.
+  NodeId: (caller, reach) =>
+    caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
+  // Whatever a key names on a token's canvas; for an agent, what names an agent it doesn't reach:
+  // its node, its items, a link to it.
+  EntityKey: (caller, reach) =>
+    caller.kind === 'outside'
+      ? []
+      : AGENTS_OUT_OF_REACH[caller.agent]?.[reach]?.flatMap((agent) => [
+          nodeKey(agent),
+          itemKey(agent, 'none'),
+          linkKey(agent, caller.agent),
+        ]),
   // A lead's team holds its own group, not the worker's.
   GroupId: (caller, reach) =>
     caller.kind === 'outside'

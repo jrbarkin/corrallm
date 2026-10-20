@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
 import { appOps } from './ops/app';
+import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
 import { conversationOps } from './ops/conversation';
 import { linkOps } from './ops/link';
@@ -29,6 +30,7 @@ export const OPS = {
   ...catalogOps,
   ...templatesOps,
   ...projectOps,
+  ...canvasOps,
   ...conversationOps,
   ...sessionOps,
   ...settingsOps,

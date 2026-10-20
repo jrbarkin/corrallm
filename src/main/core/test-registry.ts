@@ -345,16 +345,29 @@ export function unreachableCalls(
   });
 }
 
-/** `args` with `id` in place of the id `ref` found in it, by its path (`.agent`, `.nodes[0]`). */
+/**
+ * `args` with `id` in place of the id `ref` found in it, by its path (`.agent`, `.nodes[0]`): as
+ * the key of what it keyed, for a map's key.
+ */
 function withId(args: unknown, ref: IdRef, id: string): unknown {
   const root: Record<PropertyKey, unknown> = { args: structuredClone(args) };
+  let parent = root;
   let holder = root;
   let at: PropertyKey = 'args';
+  let held: PropertyKey = 'args';
   for (const [, key, index] of ref.path.matchAll(/\.([^.[]+)|\[(\d+)\]/g)) {
+    parent = holder;
+    held = at;
     holder = holder[at] as Record<PropertyKey, unknown>;
     at = key ?? Number(index);
   }
-  holder[at] = id;
+  if (ref.key) {
+    parent[held] = Object.fromEntries(
+      Object.entries(holder).map(([key, value]) => [key === at ? id : key, value]),
+    );
+  } else {
+    holder[at] = id;
+  }
   return root.args;
 }
 

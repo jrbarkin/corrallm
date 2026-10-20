@@ -107,10 +107,13 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 message it sent or received there; a caller with one canvas may leave it out;
                 `holder`, which of a caller's canvases holds a message it sent or got); rules.ts
                 checks each rule an op carries on a token's arguments (shell-text, sticky), in the
-                op's scope before it runs, kept by rule and by op; parties.ts words parties and
-                the pauses they set, for refusals and notices; ops/ is each op's implementation, by area (open.ts: the
-                open canvas a call names, and pages of a list within MAX_PAGE_BYTES; wait.ts:
-                `wait`, see Headless); core.ts is createCore, the operations composed over the
+                op's scope before it runs, kept by rule and by op, and holds where each rule
+                checked on a change plugs in (`changeChecks`); parties.ts words parties and the
+                pauses they set, for refusals and notices; ops/ is each op's implementation, by
+                area (open.ts: the open canvas a call names, and pages of a list within
+                MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit`, as
+                `canvas.rename`; wait.ts: `wait`, see Headless); core.ts is createCore, the
+                operations composed over the
                 Electron-free services, kept in a profile folder (in the app and under
                 `corrallm serve`; tests may say which agents are leads, none being until
                 B24, and give the limits per token a clock), with its tokens, `keptCanvas` (the

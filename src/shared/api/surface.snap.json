@@ -8,6 +8,7 @@
     "api.templates.list",
     "api.settings.get",
     "api.project.files",
+    "api.canvas.rename",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -24,6 +25,7 @@
     "lead": [
       "agents",
       "app_info",
+      "canvas_rename",
       "catalog_get",
       "catalog_installed",
       "message",
@@ -73,6 +75,7 @@
     "outside-write": [
       "agents",
       "app_info",
+      "canvas_rename",
       "catalog_get",
       "catalog_installed",
       "message",
@@ -94,10 +97,10 @@
     ]
   },
   "counts": {
-    "lead": 19,
+    "lead": 20,
     "worker": 10,
     "outside-read": 14,
-    "outside-write": 20
+    "outside-write": 21
   },
   "unhosted": {
     "agents": "B11",
@@ -156,6 +159,10 @@
     "project.files": {
       "input": "c42bffd7c0a78bc0",
       "output": "48481aeb891f3b2d"
+    },
+    "canvas.rename": {
+      "input": "7e50fe59d461bed7",
+      "output": "647bbd6cc7b4f077"
     },
     "agents": {
       "input": "41356bc15da6df1b",

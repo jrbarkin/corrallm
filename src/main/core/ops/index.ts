@@ -16,6 +16,7 @@ import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import type { TokenStore } from '../tokens';
 import { appOps } from './app';
+import { canvasOps } from './canvas';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
 import { linkOps } from './link';
@@ -81,6 +82,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
+    ...canvasOps(),
     ...conversationOps(services),
     ...sessionOps(services),
     ...settingsOps(services),
