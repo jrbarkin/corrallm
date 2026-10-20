@@ -32,20 +32,25 @@ export type Access = { readonly you?: 'all' } & Readonly<
 /** Ops in one scope run one at a time (core/scopes.ts): the app's, a canvas's, an agent's. */
 export type Scope = 'app' | 'canvas' | 'agent' | 'none';
 
-/** The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key). */
+/**
+ * The rules that narrow what a token may do (Core Server §3.6: R1 to R13, by key; and B9 Design
+ * §4's R14, `managers`).
+ */
 export type Rule =
   | 'shell-text'
   | 'mode-permits'
   | 'human-choice'
   | 'discard'
   | 'restore-code'
+  | 'self'
   | 'human-gate'
   | 'connection'
   | 'sticky'
   | 'team'
   | 'new-agent'
   | 'role'
-  | 'links';
+  | 'links'
+  | 'managers';
 
 /** 'read' changes nothing (MCP's readOnlyHint); 'doc' is a pure document edit; 'command' the rest. */
 export type Kind = 'read' | 'doc' | 'command';
@@ -142,20 +147,63 @@ export const SURFACE = {
     access: L,
     kind: 'doc',
     scope: 'canvas',
+    rules: ['links'],
     self: 'refused',
     drains: 'agents',
     destructive: true,
   },
-  'canvas.link': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
-  'canvas.unlink': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
-  'canvas.group': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
-  'canvas.ungroup': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
-  'canvas.addParent': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  'canvas.link': { access: L, kind: 'doc', scope: 'canvas', rules: ['links'], self: 'allowed' },
+  'canvas.unlink': { access: L, kind: 'doc', scope: 'canvas', rules: ['links'], self: 'allowed' },
+  'canvas.group': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['managers'],
+    self: 'allowed',
+  },
+  'canvas.ungroup': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['managers'],
+    self: 'allowed',
+  },
+  'canvas.addParent': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['managers'],
+    self: 'allowed',
+  },
   'canvas.move': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
-  'agent.setType': { access: Y, kind: 'doc', scope: 'canvas', drains: 'agents' },
-  'agent.setConnection': { access: Y, kind: 'doc', scope: 'canvas', drains: 'agents' },
-  'agent.setSettings': { access: L, kind: 'doc', scope: 'canvas', self: 'refused' },
-  'agent.setRole': { access: L, kind: 'doc', scope: 'canvas', self: 'refused' },
+  'agent.setType': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+    drains: 'agents',
+  },
+  'agent.setConnection': {
+    access: Y,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['connection'],
+    drains: 'agents',
+  },
+  'agent.setSettings': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['mode-permits', 'self'],
+    self: 'refused',
+  },
+  'agent.setRole': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: ['self', 'role'],
+    self: 'refused',
+  },
   'queue.add': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
   'queue.remove': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed', destructive: true },
   'queue.move': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },

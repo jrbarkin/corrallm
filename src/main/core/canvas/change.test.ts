@@ -56,11 +56,15 @@ function inside(node: CanvasNode, parent?: string): CanvasNode {
 describe('changeSetOf', () => {
   it('holds each entity it touched, as it was and is, with its revision before', () => {
     const [, , , peer] = BEFORE.nodes as [CanvasNode, CanvasNode, CanvasNode, CanvasNode];
-    const change = changeTo({
+    const next = {
       ...withNodes([...BEFORE.nodes.slice(0, 3), { ...peer, data: { label: 'Partner' } }]),
       links: [],
-    });
+    };
+    const change = changeTo(next);
     expect(change).toMatchObject({ canvas: CANVAS, op: 'canvas.test', by: 'outside:orchestrator' });
+    // And the document before and after it, for what a rule reads across entities.
+    expect([change.before, change.after]).toEqual([BEFORE, next]);
+    expect(change.after).toBe(next);
     expect([...change.entities.keys()]).toEqual([nodeKey('peer'), linkKey('lead', 'peer')]);
     expect(change.entities.get(nodeKey('peer'))).toMatchObject({
       before: { label: 'Peer' },

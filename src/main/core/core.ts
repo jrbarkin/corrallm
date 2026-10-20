@@ -346,7 +346,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       resolvers: resolvers(engines, isLead),
       commit: committer({
         documents,
-        rules: changeChecks(),
+        rules: changeChecks({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
         committed: (canvas) => {
           engines.changed(canvas);
         },

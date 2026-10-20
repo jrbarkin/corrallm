@@ -26,7 +26,9 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * an adapter this build lacks, and `shell`'s Terminal won't start; the others are never sent
  * anything. Its message store starts with a message waiting for `peer` from each party that may
  * take one back, and a notice corrallm sent the read-only token's party; and the lead is paused,
- * by you.
+ * by you. The lead's team also holds what calls meeting the change rules change, as you apply them
+ * once every token was refused: `deputy` (linked to the lead and the helper) with `aide` nested
+ * inside it, and the frame `frame-team` holding `member`.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -54,6 +56,9 @@ const SENDERS = {
 const NODES = [
   { id: 'lead', connection: 'codex.app-server' },
   { id: 'helper', connection: 'codex.app-server', parent: 'lead' },
+  { id: 'deputy', connection: 'codex.app-server', parent: 'lead' },
+  { id: 'aide', connection: 'codex.app-server', parent: 'deputy' },
+  { id: 'member', connection: 'codex.app-server', parent: 'frame-team' },
   { id: 'worker', connection: 'codex.app-server' },
   { id: 'apprentice', connection: 'codex.app-server', parent: 'worker' },
   { id: 'peer', adapter: 'gemini' },
@@ -80,6 +85,8 @@ const LINKS = [
   ['lead', 'peer'],
   ['worker', 'shell'],
   ['lead', 'shell'],
+  ['lead', 'deputy'],
+  ['helper', 'deputy'],
 ];
 
 /** A Terminal whose sessions never start: it says why, as a login it can't run on does. */
@@ -130,7 +137,7 @@ export async function startWorld(): Promise<{
         })),
         // Separate empty frames let each party add a parent once. Their ids stay in reach after
         // conversion, so transport retries can still resolve them before request deduplication.
-        ...['you', 'lead', 'outside-write', 'delete'].map((party, i) => ({
+        ...['you', 'lead', 'outside-write', 'delete', 'team'].map((party, i) => ({
           id: `frame-${party}`,
           kind: 'group',
           label: 'Frame',
@@ -330,6 +337,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { a: 'helper', b: 'lead', dots: ['left', 'top'] },
       { a: 'helper', b: 'lead', source: 1 },
     ],
+    // Two agents of the lead's team that exist and aren't linked.
+    meetsRule: { links: { canvas: CANVAS, a: 'aide', b: 'helper', request: request(4) } },
   },
   'canvas.unlink': {
     valid: [{ canvas: CANVAS, a: 'helper', b: 'lead', expect: NO_ITEM, request: request(44) }],
@@ -339,6 +348,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { a: 'helper', b: '' },
       { a: 'helper', b: 'lead', dots: ['top', 'bottom'] },
     ],
+    meetsRule: { links: { canvas: CANVAS, a: 'lead', b: 'deputy', request: request(5) } },
   },
   'canvas.delete': {
     valid: [{ canvas: CANVAS, nodes: [], links: [], expect: NO_ITEM, request: request(45) }],
@@ -362,6 +372,9 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper') },
       { links: Array.from({ length: MAX_OP_NODES + 1 }, () => ({ a: 'helper', b: 'lead' })) },
     ],
+    meetsRule: {
+      links: { canvas: CANVAS, links: [{ a: 'deputy', b: 'helper' }], request: request(3) },
+    },
   },
   'canvas.group': {
     valid: [
@@ -373,6 +386,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { nodes: ['helper'], kind: 'group' },
       { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper'), kind: 'frame' },
     ],
+    // An agent made around the aide gives it another manager.
+    meetsRule: {
+      managers: { canvas: CANVAS, nodes: ['aide'], kind: 'agent', request: request(6) },
+    },
   },
   'canvas.ungroup': {
     // Keep the named agent so a retry still resolves it; only its children move up. The lead
@@ -385,6 +402,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { nodes: [''] },
       { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper') },
     ],
+    // What the deputy holds goes up to the lead.
+    meetsRule: { managers: { canvas: CANVAS, nodes: ['deputy'], request: request(7) } },
   },
   'canvas.addParent': {
     valid: [],
@@ -396,6 +415,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ),
     fresh: ['revs'],
     invalid: [{}, { frame: '' }, { frame: 'frame-you', extra: true }],
+    // The frame holding the member becomes its manager.
+    meetsRule: { managers: { canvas: CANVAS, frame: 'frame-team', request: request(8) } },
   },
   'canvas.move': {
     valid: [
@@ -435,6 +456,16 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', adapter: '' },
       { agent: 'helper', adapter: 'codex', then: { command: 'go' } },
     ],
+    // Yours alone: no token is in its audience to refuse.
+    meetsRule: {
+      connection: {
+        canvas: CANVAS,
+        agent: 'stranger',
+        adapter: 'codex',
+        connection: 'codex.app-server',
+        request: request(9),
+      },
+    },
   },
   'agent.setConnection': {
     valid: [
@@ -452,6 +483,14 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', connection: '' },
       { agent: 'helper', connection: 'codex.app-server', then: { command: 'go' } },
     ],
+    meetsRule: {
+      connection: {
+        canvas: CANVAS,
+        agent: 'worker',
+        connection: 'codex.app-server',
+        request: request(14),
+      },
+    },
   },
   'agent.setSettings': {
     valid: [
@@ -468,9 +507,28 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     invalid: [
       { agent: 'helper', adapter: 'codex' },
       { agent: 'helper', adapter: 'codex', settings: { model: '-flag' } },
-      { agent: 'helper', adapter: 'codex', settings: { mode: 'full' } },
+      // Not a mode's id. (One that is, but that its connection can't start in, is a token's to
+      // change no more than any other: R2 refuses it before the op reads it.)
+      { agent: 'helper', adapter: 'codex', settings: { mode: 'Full access' } },
       { agent: 'helper', adapter: 'codex', settings: { other: true } },
     ],
+    meetsRule: {
+      // The helper starts in its user's default mode: a token sets it none.
+      'mode-permits': {
+        canvas: CANVAS,
+        agent: 'helper',
+        adapter: 'codex',
+        settings: { mode: 'read-only' },
+        request: request(15),
+      },
+      self: {
+        canvas: CANVAS,
+        agent: 'lead',
+        adapter: 'codex',
+        settings: { model: 'lead-model' },
+        request: request(16),
+      },
+    },
   },
   'agent.setRole': {
     valid: [
@@ -488,6 +546,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { agent: 'helper', role: 'x'.repeat(MAX_ROLE_LENGTH + 1) },
       { agent: 'helper', role: 'bad\u0001role' },
     ],
+    meetsRule: {
+      self: { canvas: CANVAS, agent: 'lead', role: 'Leads the team', request: request(17) },
+      role: { canvas: CANVAS, agent: 'helper', role: 'Plans the work', request: request(18) },
+    },
   },
   'queue.add': {
     valid: [

@@ -9,7 +9,8 @@ import type { EntityKey, NodeRow, Row, Rows, RowsChange } from '../../../shared/
  * What a commit changes of a canvas's document (B9 Design §4), as the change rules read it,
  * whatever op made it: each entity it touched, as it was and as it is, with the revision it had;
  * the agents it created and removed, those it made as copies of another, the agents it changed the
- * manager of; and which agents existed before it.
+ * manager of; which agents existed before it; and the document before and after it, for what a
+ * rule reads across entities (an item's place in its queue against an OK's).
  */
 
 /** An entity a commit touched: its row before (none: it is new) and after (none: it is gone). */
@@ -35,6 +36,9 @@ export interface ChangeSet {
   readonly manager: ReadonlyMap<string, readonly [string | null, string | null]>;
   /** Whether `agent` was an agent before the commit. */
   existed(agent: string): boolean;
+  /** The document before the commit, and after it. */
+  readonly before: CanvasDocument;
+  readonly after: CanvasDocument;
 }
 
 /** A canvas's document before a commit: its rows, and each entity's revision. */
@@ -93,5 +97,7 @@ export function changeSetOf(
     copies,
     manager,
     existed: (agent) => agents.has(agent),
+    before: before.document,
+    after: next,
   };
 }
