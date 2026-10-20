@@ -402,6 +402,20 @@ describe('links', () => {
 });
 
 describe('remove', () => {
+  it('deletes a link named in reverse without changing its nodes or other links', () => {
+    const before = frozen(
+      [agent('a'), agent('b'), agent('c')],
+      [
+        { source: 'b', target: 'a', dots: ['bottom', 'top'] },
+        { source: 'b', target: 'c' },
+      ],
+    );
+    const changed = remove(before, { links: [{ source: 'a', target: 'b' }] });
+    expect(changed.next.links).toEqual([before.links[1]]);
+    expect(changed.next.nodes).toBe(before.nodes);
+    expect(changed.result.cleared).toEqual([]);
+  });
+
   it('clears references at every depth and leaves a file that reads back', () => {
     const before = frozen([
       agent('builder'),
@@ -448,7 +462,7 @@ describe('remove', () => {
     );
     const changed = remove(before, { nodes: ['a'], links: [{ source: 'b', target: 'c' }] }).next;
     expect(changed.nodes.map((node) => node.id)).toEqual(['b', 'c']);
-    expect(changed.links).toEqual([{ source: 'c', target: 'b' }]);
+    expect(changed.links).toEqual([]);
   });
   it('does nothing when no existing entity is named', () => {
     const before = frozen([agent('a')]);

@@ -9,6 +9,15 @@
     "api.settings.get",
     "api.project.files",
     "api.canvas.rename",
+    "api.canvas.addAgent",
+    "api.canvas.spawnAgent",
+    "api.canvas.delete",
+    "api.canvas.link",
+    "api.canvas.unlink",
+    "api.canvas.group",
+    "api.canvas.ungroup",
+    "api.canvas.addParent",
+    "api.canvas.move",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -25,7 +34,16 @@
     "lead": [
       "agents",
       "app_info",
+      "canvas_addAgent",
+      "canvas_addParent",
+      "canvas_delete",
+      "canvas_group",
+      "canvas_link",
+      "canvas_move",
       "canvas_rename",
+      "canvas_spawnAgent",
+      "canvas_ungroup",
+      "canvas_unlink",
       "catalog_get",
       "catalog_installed",
       "message",
@@ -75,7 +93,16 @@
     "outside-write": [
       "agents",
       "app_info",
+      "canvas_addAgent",
+      "canvas_addParent",
+      "canvas_delete",
+      "canvas_group",
+      "canvas_link",
+      "canvas_move",
       "canvas_rename",
+      "canvas_spawnAgent",
+      "canvas_ungroup",
+      "canvas_unlink",
       "catalog_get",
       "catalog_installed",
       "message",
@@ -97,10 +124,10 @@
     ]
   },
   "counts": {
-    "lead": 20,
+    "lead": 29,
     "worker": 10,
     "outside-read": 14,
-    "outside-write": 21
+    "outside-write": 30
   },
   "unhosted": {
     "agents": "B11",
@@ -162,6 +189,42 @@
     },
     "canvas.rename": {
       "input": "7e50fe59d461bed7",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.addAgent": {
+      "input": "7632cef4695ef99a",
+      "output": "ebd0120825103788"
+    },
+    "canvas.spawnAgent": {
+      "input": "6f3b714de36712b7",
+      "output": "ebd0120825103788"
+    },
+    "canvas.delete": {
+      "input": "13089a4ee94a5b15",
+      "output": "fcaf4b6069703347"
+    },
+    "canvas.link": {
+      "input": "621da187728c140f",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.unlink": {
+      "input": "9fbc9faaf2444f51",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.group": {
+      "input": "f03685873a1a715d",
+      "output": "ebd0120825103788"
+    },
+    "canvas.ungroup": {
+      "input": "b5f57f90e952d92e",
+      "output": "647bbd6cc7b4f077"
+    },
+    "canvas.addParent": {
+      "input": "d338ea8434911d34",
+      "output": "ebd0120825103788"
+    },
+    "canvas.move": {
+      "input": "f837a789fb1b2ea8",
       "output": "647bbd6cc7b4f077"
     },
     "agents": {

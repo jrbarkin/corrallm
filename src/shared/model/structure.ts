@@ -191,7 +191,7 @@ export function unlink(doc: CanvasDocument, ends: Ends): Built {
   };
 }
 
-/** Removes explicit nodes and links, keeping children in place and clearing surviving references. */
+/** Removes nodes and undirected links, keeping children in place and clearing surviving references. */
 export function remove(
   doc: CanvasDocument,
   { nodes: ids = [], links: ends = [] }: { nodes?: readonly string[]; links?: readonly Ends[] },
@@ -202,7 +202,9 @@ export function remove(
     (link) =>
       !removed.has(link.source) &&
       !removed.has(link.target) &&
-      !ends.some((end) => sameEnds(link, end)),
+      !ends.some(
+        (end) => sameEnds(link, end) || sameEnds(link, { source: end.target, target: end.source }),
+      ),
   );
   if (removed.size === 0)
     return links.length === doc.links.length

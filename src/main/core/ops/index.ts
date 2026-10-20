@@ -82,7 +82,7 @@ export function implementations(services: OpServices): Implementations {
     ...catalogOps(services),
     ...templatesOps(services),
     ...projectOps(services),
-    ...canvasOps(),
+    ...canvasOps(services),
     ...conversationOps(services),
     ...sessionOps(services),
     ...settingsOps(services),

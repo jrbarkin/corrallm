@@ -113,8 +113,11 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 checked on a change plugs in (`changeChecks`); parties.ts words parties and the
                 pauses they set, for refusals and notices; ops/ is each op's implementation, by
                 area (open.ts: the open canvas a call names, and pages of a list within
-                MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit`, as
-                `canvas.rename`; wait.ts: `wait`, see Headless); core.ts is createCore, the
+                MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit` over
+                shared/model/structure.ts, with explicit not-found and wrong-kind refusals;
+                spawnAgent carries its new→source copies for the change rules, and delete drains
+                its removed agents' lanes and returns cleared references; wait.ts: `wait`, see
+                Headless); core.ts is createCore, the
                 operations composed over the
                 Electron-free services, kept in a profile folder (in the app and under
                 `corrallm serve`; tests may say which agents are leads, none being until
