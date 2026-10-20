@@ -63,8 +63,10 @@ export function changeSetOf(
     entities.set(key, { before: was, after: is, rev: before.revs.get(key) ?? null });
     if (entityOf(key) !== 'node') continue;
     const [old, now] = [was as NodeRow | null, is as NodeRow | null];
-    if (old === null && now?.kind === 'agent') created.add(now.id);
-    if (now === null && old?.kind === 'agent') removed.add(old.id);
+    // A node that keeps its id but becomes an agent (addParent's frame) is one created, and one
+    // that stops being one is one removed.
+    if (now?.kind === 'agent' && old?.kind !== 'agent') created.add(now.id);
+    if (old?.kind === 'agent' && now?.kind !== 'agent') removed.add(old.id);
     if (old === null || now === null || old.parent !== now.parent || old.kind !== now.kind) {
       nested = true;
     }

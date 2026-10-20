@@ -93,6 +93,36 @@ describe('changeSetOf', () => {
     expect(change.existed('crew')).toBe(false);
   });
 
+  it('counts a node that keeps its id but becomes an agent as created, and one that stops being one as removed', () => {
+    const [lead, crew, worker, peer] = BEFORE.nodes as [
+      CanvasNode,
+      CanvasNode,
+      CanvasNode,
+      CanvasNode,
+    ];
+    // The crew made an agent, as addParent makes a group's frame its lead, with a startup mode.
+    const made = changeTo(
+      withNodes([
+        lead,
+        {
+          ...crew,
+          type: 'agent',
+          data: { label: 'Crew lead', settings: { 'claude-code': { mode: 'acceptEdits' } } },
+        },
+        worker,
+        peer,
+      ]),
+    );
+    expect([...made.created]).toEqual(['crew']);
+    expect(made.existed('crew')).toBe(false);
+    // The peer made a frame.
+    const unmade = changeTo({
+      ...withNodes([lead, crew, worker, { ...peer, type: 'frame', data: { label: 'Peer' } }]),
+      links: [],
+    });
+    expect([...unmade.removed]).toEqual(['peer']);
+  });
+
   it('says whose manager it changed: the nearest agent each existing agent is in', () => {
     const [lead, crew, worker, peer] = BEFORE.nodes as [
       CanvasNode,
