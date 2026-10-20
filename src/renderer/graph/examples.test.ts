@@ -17,7 +17,7 @@ import {
 } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { workEdges } from '../../shared/model/work';
-import { documentOf, graphOf } from './graph';
+import { documentOf, graphOf } from '../test-graph-data';
 
 describe.each(EXAMPLES)('the $name example', (example) => {
   const graph = graphOf(fromFile(example.text, catalog(), DEFAULT_AGENT));

@@ -1,3 +1,4 @@
+import { asHuman } from './gui';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -124,7 +125,14 @@ describe('the core runs each canvas’s engine', () => {
     if (!worker) throw new Error('No worker was restored.');
     worker.label = 'Edited in renderer';
     const edited = { ...checkpoint, updatedAt: Date.now() };
-    await app.channels.call(7, 'run:save', [context.token, edited, JSON.stringify(document)]);
+    const snapshot = await app.call('canvas.get', { canvas: CANVAS }, asHuman(7));
+    if (!snapshot.ok) throw new Error(snapshot.error.sentence);
+    await app.channels.call(7, 'run:save', [
+      context.token,
+      edited,
+      JSON.stringify(document),
+      snapshot.value.rev,
+    ]);
     await app.close();
     core = undefined;
     expect(journaledRun(profile, CANVAS)).toEqual(edited);

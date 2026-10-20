@@ -1,3 +1,5 @@
+import type { OpResult } from './api/errors';
+
 import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
 import type { GuiBridge } from './gui-link';
@@ -44,8 +46,8 @@ export interface IpcContract {
    * writes from an earlier canvas generation.
    */
   'run:save': {
-    args: [token: string, checkpoint: RunCheckpoint | null, document: string];
-    result: null;
+    args: [token: string, checkpoint: RunCheckpoint | null, document: string, rev: number];
+    result: OpResult<{ rev: number }>;
   };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
@@ -63,7 +65,10 @@ export interface IpcContract {
    * project folder and its agents' conversations). Resolves with the file's name, or null if
    * cancelled.
    */
-  'canvas:save': { args: [text: string, choose: boolean]; result: string | null };
+  'canvas:save': {
+    args: [text: string, choose: boolean, rev: number];
+    result: OpResult<{ name: string | null; rev: number }>;
+  };
   /**
    * Begins a new canvas, a draft with an id of its own: its first save asks where. The canvas
    * before is kept as it was, and its agents' sessions end. Resolves with the new canvas's id.

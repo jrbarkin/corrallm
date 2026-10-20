@@ -14,8 +14,7 @@ import {
 } from '../graph/agents';
 import { editsOf } from '../graph/edits';
 import type { QueueEdits } from '../graph/edits';
-import { canvasNodes } from '../graph/graph';
-import type { GraphNode } from '../graph/graph';
+import type { CanvasNode } from '../../shared/model/canvas';
 import { holdText, itemLabel, taskLabel } from '../../shared/model/words';
 import { chooseTarget, findItem, isMessage, isRepeat, isWait } from '../../shared/model/queue';
 import type { WaitTarget } from '../../shared/model/queue';
@@ -88,7 +87,7 @@ export function QueuesView({
   settingsOptions,
   onClose,
 }: {
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
   run: Run;
   edits: QueueEdits;
@@ -201,8 +200,11 @@ export function QueuesView({
   const marks = queueMarks(layout, run, asking, engine, activeEnds);
   /** What the wait being picked waits for now, in the lane it is picked in: undefined for all. */
   const waitChosen = choosing
-    ? findItem(nodes.find((n) => n.id === choosing.owner)?.data.queue ?? [], choosing.choice.waitId)
-        ?.item
+    ? findItem(
+        nodes.filter((n) => n.type === 'agent').find((n) => n.id === choosing.owner)?.data.queue ??
+          [],
+        choosing.choice.waitId,
+      )?.item
     : undefined;
   const choosingTarget =
     choosing && waitChosen && isWait(waitChosen)
@@ -213,7 +215,10 @@ export function QueuesView({
     if (!choosing) return;
     const { owner, choice } = choosing;
     setChoosing(undefined);
-    const wait = findItem(nodes.find((n) => n.id === owner)?.data.queue ?? [], choice.waitId)?.item;
+    const wait = findItem(
+      nodes.filter((n) => n.type === 'agent').find((n) => n.id === owner)?.data.queue ?? [],
+      choice.waitId,
+    )?.item;
     if (!wait || !isWait(wait)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choice.agent } : { agent: choice.agent, item };
@@ -236,7 +241,7 @@ export function QueuesView({
         : undefined;
   };
   /** What the run holds for the user: a session that would not start says so in its lane's head. */
-  const asks = useMemo(() => heldAsks(canvasNodes(nodes), run, engine), [nodes, run, engine]);
+  const asks = useMemo(() => heldAsks(nodes, run, engine), [nodes, run, engine]);
   const agents = Object.entries(run.agents);
   const count = (which: (id: string, status: string) => boolean) =>
     agents.filter(([id, a]) => which(id, a.status)).length;
@@ -439,7 +444,7 @@ function LaneCells({
 }: {
   lane: Lane;
   column: number;
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   /** What names a usage backend in its words. */
   catalog: EngineCatalog;
   grid: RefObject<HTMLDivElement | null>;

@@ -61,9 +61,6 @@ export function replyOps({
         return { id: record.id, outcome };
       };
       if (answer.choice === 'refuse') return settled('refused');
-      // Older proposals recorded only their first write set, so cannot guard newly affected work.
-      if (proposal.before === undefined)
-        return settled('stale', 'its earlier canvas snapshot cannot be checked safely');
       const settlement = await proposals.settlement(proposal, 'allowed', ctx.by);
       try {
         await ctx.call(proposal.op, proposal.args, {

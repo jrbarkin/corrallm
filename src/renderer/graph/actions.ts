@@ -9,7 +9,7 @@ export interface GraphActions {
   editing: string | undefined;
   startEditing: (id: string) => void;
   stopEditing: () => void;
-  rename: (id: string, label: string) => void;
+  rename: (id: string, label: string) => unknown;
   remove: (id: string) => void;
   /** A container's children move out of it; any other node moves out of its container. */
   ungroup: (id: string) => void;

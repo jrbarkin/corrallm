@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GraphNode } from '../graph/graph';
+import type { AgentNode } from '../../shared/model/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import { queueLinks } from './links';
 
-const agent = (id: string, queue: QueueItem[]): GraphNode => ({
+const agent = (id: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },

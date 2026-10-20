@@ -6,7 +6,12 @@ import type { RunCheckpoint, RunContext } from '../../shared/run';
  */
 export interface RunSource {
   get: () => Promise<RunContext>;
-  save: (token: string, checkpoint: RunCheckpoint | null, document: string) => Promise<null>;
+  save: (
+    token: string,
+    checkpoint: RunCheckpoint | null,
+    document: string,
+    rev: number,
+  ) => Promise<number>;
   ready: (request: string, error: string | null) => Promise<null>;
   onStopping: (listener: (request: string) => void) => () => void;
 }
@@ -15,8 +20,10 @@ interface Owner {
   capture: () => RunCheckpoint;
   /** The canvas as the renderer has it: its file's text. */
   document: () => string;
-  restore: (context: RunContext) => void;
-  freeze: () => void;
+  revision: () => number;
+  beforeSave?: () => Promise<void>;
+  restore: (context: RunContext) => void | Promise<void>;
+  freeze: () => void | Promise<void>;
   error: (error: unknown) => void;
 }
 
@@ -55,8 +62,9 @@ export class RunPersistence {
         void source.ready(request, error).catch(owner.error);
         return;
       }
-      owner.freeze();
-      void this.flush()
+      void Promise.resolve()
+        .then(() => owner.freeze())
+        .then(() => this.flush())
         .then(
           () => source.ready(request, null),
           (error: unknown) => {
@@ -71,12 +79,12 @@ export class RunPersistence {
 
   #load(): Promise<RunContext> {
     this.#loading ??= (this.#context ??= this.#source.get())
-      .then((context) => {
+      .then(async (context) => {
         if (this.#disposed) {
           this.#loading = undefined;
           return context;
         }
-        this.#owner.restore(context);
+        await this.#owner.restore(context);
         this.#token = context.token;
         this.#last = '';
         return context;
@@ -121,7 +129,7 @@ export class RunPersistence {
       this.#token = undefined;
       const context = await this.#source.get();
       if (this.#disposed) return context;
-      if (restore) this.#owner.restore(context);
+      if (restore) await this.#owner.restore(context);
       this.#token = context.token;
       this.#last = '';
       this.#context = this.#loading = Promise.resolve(context);
@@ -141,11 +149,13 @@ export class RunPersistence {
 
   async flush(): Promise<void> {
     await this.#load();
+    if (this.#owner.beforeSave) await this.#owner.beforeSave();
     while (this.#changing) await this.#changing;
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
     const checkpoint = this.#owner.capture();
     const document = this.#owner.document();
+    const revision = this.#owner.revision();
     const key = JSON.stringify([token, document, checkpoint.state, checkpoint.messages]);
     if (key === this.#last) {
       await this.#writes;
@@ -155,7 +165,7 @@ export class RunPersistence {
     const write = this.#writes
       .catch(() => undefined)
       .then(async () => {
-        await this.#source.save(token, checkpoint, document);
+        await this.#source.save(token, checkpoint, document, revision);
       })
       .catch((error: unknown) => {
         if (this.#last === key) this.#last = '';
@@ -163,6 +173,19 @@ export class RunPersistence {
       });
     this.#writes = write;
     await write;
+  }
+
+  /** A temporary whole-document edit, guarded by the revision it was built from. */
+  async editDocument(document: string, rev: number): Promise<number> {
+    await this.#load();
+    while (this.#changing) await this.#changing;
+    const token = this.#token;
+    if (this.#disposed || token === undefined) throw new Error('The run storage is not available.');
+    const write = this.#writes
+      .catch(() => undefined)
+      .then(() => this.#source.save(token, this.#owner.capture(), document, rev));
+    this.#writes = write;
+    return write;
   }
 
   /** Hold writes/sends across main's canvas-token change, without interrupting native work. */
@@ -185,7 +208,7 @@ export class RunPersistence {
       let context: RunContext;
       try {
         context = await this.#source.get();
-        if (shouldRestore) this.#owner.restore(context);
+        if (shouldRestore) await this.#owner.restore(context);
       } catch (error) {
         // The selected file is already main's canvas. Detach it before the retained
         // renderer state can save, then bind that state to the recovered draft.

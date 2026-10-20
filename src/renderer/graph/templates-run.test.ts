@@ -6,7 +6,7 @@ import { manual, setup } from '../../shared/engine/run/test-run';
 import { catalog } from '../catalog';
 import { connectionsOf, DEFAULT_AGENT } from './agents';
 import { EXAMPLES } from '../../shared/examples';
-import { canvasNodes, graphOf } from './graph';
+import { canvasNodes, graphOf } from '../test-graph-data';
 import { fillTemplate } from '../../shared/model/templates';
 
 /*

@@ -18,7 +18,7 @@ function stubApi(api: Partial<AppApi>) {
     getRun: vi
       .fn<AppApi['getRun']>()
       .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
-    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
+    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue({ ok: true, value: { rev: 0 } }),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
@@ -34,7 +34,26 @@ function stubApi(api: Partial<AppApi>) {
       return () => undefined;
     }),
   };
-  Object.defineProperty(window, 'api', { value: { ...usage, ...api }, configurable: true });
+  const subscribe = api.topicsSubscribe ?? usage.topicsSubscribe;
+  if (!subscribe) throw new Error('No fixture subscriber');
+  const topicsSubscribe: AppApi['topicsSubscribe'] = (args) =>
+    args.topic === 'canvas'
+      ? Promise.resolve({
+          ok: true,
+          value: {
+            epoch: 'one',
+            rev: 0,
+            revs: {},
+            state: {
+              meta: { arrange: false, name: null, edited: false, project: null, rev: 0, by: 'you' },
+            },
+          },
+        })
+      : subscribe(args);
+  Object.defineProperty(window, 'api', {
+    value: { ...usage, ...api, topicsSubscribe },
+    configurable: true,
+  });
 }
 
 describe('App', () => {
@@ -85,7 +104,7 @@ describe('App', () => {
     const windowGet = vi
       .fn<AppApi['windowGet']>()
       .mockResolvedValue({ ok: true, value: { canvas: c } });
-    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
+    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue({ ok: true, value: { rev: 0 } });
     stubApi({
       appInfo: vi
         .fn<AppApi['appInfo']>()

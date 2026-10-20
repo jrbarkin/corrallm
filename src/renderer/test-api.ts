@@ -93,6 +93,9 @@ export function fakeCore() {
     ): void {
       replies.set(op, reply);
     },
+    state<K extends TopicKey>(topic: K): (TopicSnapshot & { state: TopicStates[K] }) | undefined {
+      return snapshots.get(topic) as (TopicSnapshot & { state: TopicStates[K] }) | undefined;
+    },
     snapshot<K extends TopicKey>(topic: K, state: TopicStates[K], rev = 0): void {
       snapshots.set(topic, { epoch, rev, state });
     },

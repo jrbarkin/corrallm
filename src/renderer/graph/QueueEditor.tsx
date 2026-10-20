@@ -31,7 +31,7 @@ import {
 } from '../../shared/model/words';
 import { DEFAULT_AGENT, runCatalog } from './agents';
 import type { AgentAction } from './agents';
-import type { GraphNode } from './graph';
+import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import type { RepeatChange } from './edits';
 import { agentName } from '../../shared/model/queries';
 import {
@@ -88,7 +88,7 @@ interface Target {
   name: string;
 }
 
-const nameOf = (node: GraphNode | undefined) =>
+const nameOf = (node: AgentNode | undefined) =>
   node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
 
 /** Data attributes a row carries: how links mark its task, and where the queues' run is with it. */
@@ -112,9 +112,9 @@ export interface Picking {
 
 /** What QueueEditor and QueueRow edit, and with what. */
 interface QueueProps {
-  node: GraphNode;
+  node: AgentNode;
   /** Every node of the graph: the agents steps can act on, and their names. */
-  nodes: readonly GraphNode[];
+  nodes: readonly CanvasNode[];
   agent: AdapterId;
   /** What the agent can do. */
   actions: readonly AgentAction[];
@@ -393,7 +393,7 @@ function contextOf({
   rowOf,
   picking,
 }: QueueProps): Context {
-  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const others = nodes.filter((n) => n.type === 'agent').filter((n) => n.id !== node.id);
   const engine = runCatalog();
   const name = (id: string | undefined) => (id === undefined ? 'this agent' : agentName(nodes, id));
   const targetLabel = (target: WaitTarget) => waitTargetLabel(nodes, target, engine);
@@ -452,7 +452,7 @@ interface AddContext {
   /** What names a usage backend in the queue's words: the run's catalog (runCatalog). */
   catalog: EngineCatalog;
   actions: readonly AgentAction[];
-  others: readonly GraphNode[];
+  others: readonly AgentNode[];
   itemLabel: (item: QueueItem) => string;
   onChooseStep?: (choice: StepChoice) => void;
 }
@@ -496,8 +496,8 @@ export function QueueAddMenu({
   onAdd,
   onChooseStep,
 }: {
-  node: GraphNode;
-  nodes: readonly GraphNode[];
+  node: AgentNode;
+  nodes: readonly CanvasNode[];
   actions: readonly AgentAction[];
   /** Its name, telling it from the queue's own ⊕. */
   label?: string;
@@ -505,7 +505,7 @@ export function QueueAddMenu({
   onAdd: (entry: QueueEntry) => void;
   onChooseStep?: (choice: StepChoice) => void;
 }) {
-  const others = nodes.filter((n) => n.type === 'agent' && n.id !== node.id);
+  const others = nodes.filter((n) => n.type === 'agent').filter((n) => n.id !== node.id);
   const engine = runCatalog();
   const context = {
     owner: node.id,
@@ -1128,7 +1128,7 @@ function MessageRow({
  * once its repeat is over.
  */
 function waitOptions(context: AddContext) {
-  const option = (agent: GraphNode, item: QueueItem, detail: string) => ({
+  const option = (agent: AgentNode, item: QueueItem, detail: string) => ({
     target: { agent: agent.id, item: item.id },
     label: `${nameOf(agent)}: ${context.itemLabel(item)}`,
     detail,

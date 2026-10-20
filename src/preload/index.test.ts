@@ -321,8 +321,8 @@ describe('preload', () => {
     // The canvas file functions channel their channels with their arguments.
     await api.openCanvas();
     expect(channel).toHaveBeenLastCalledWith('canvas:open');
-    await api.saveCanvas('{}', true);
-    expect(channel).toHaveBeenLastCalledWith('canvas:save', '{}', true);
+    await api.saveCanvas('{}', true, 1);
+    expect(channel).toHaveBeenLastCalledWith('canvas:save', '{}', true, 1);
     await api.forgetCanvas();
     expect(channel).toHaveBeenLastCalledWith('canvas:forget');
     await api.chooseProject();
@@ -539,8 +539,8 @@ describe('run persistence preload', () => {
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
     await api.getRun();
     expect(channel).toHaveBeenLastCalledWith('run:get');
-    await api.saveRun('token', checkpoint, '{"canvas":true}');
-    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint, '{"canvas":true}');
+    await api.saveRun('token', checkpoint, '{"canvas":true}', 1);
+    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint, '{"canvas":true}', 1);
     await api.runReady('request', null);
     expect(channel).toHaveBeenLastCalledWith('run:ready', 'request', null);
     const listener = vi.fn();

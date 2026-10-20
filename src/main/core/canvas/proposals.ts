@@ -47,8 +47,8 @@ export interface Proposal {
   by: PartyId;
   /** Each entity its change touched, by key, with the revision it had then (0: none). */
   touched: Readonly<Record<string, number>>;
-  /** The canvas when proposed: a replay may touch rows the original build did not. Legacy: none. */
-  before?: Readonly<Record<string, number>>;
+  /** The canvas when proposed: a replay may touch rows the original build did not. */
+  before: Readonly<Record<string, number>>;
   /** What it would do and lose, worded as it was raised. */
   lost: Lost;
   /** When it was raised, in epoch ms. */
@@ -184,7 +184,7 @@ export class Proposals {
           op,
           JSON.stringify(args),
           by,
-          JSON.stringify({ version: 2, touched, before }),
+          JSON.stringify({ touched, before }),
           JSON.stringify(lost),
           proposal.at,
         );
@@ -380,8 +380,8 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
     const { id, op, by_party: by, raised_at: at } = row;
     const args: unknown = JSON.parse(String(row.args));
     const clock: unknown = JSON.parse(String(row.touched));
-    const touched = isRecord(clock) && clock.version === 2 ? clock.touched : clock;
-    const before = isRecord(clock) && clock.version === 2 ? clock.before : undefined;
+    if (!isRecord(clock)) return undefined;
+    const { touched, before } = clock;
     const lost: unknown = JSON.parse(String(row.lost));
     if (
       typeof id !== 'string' ||
@@ -390,6 +390,7 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       typeof at !== 'number' ||
       !isRecord(args) ||
       !revisions(touched) ||
+      !revisions(before) ||
       !isRecord(lost) ||
       typeof lost.what !== 'string' ||
       typeof lost.title !== 'string'
@@ -403,7 +404,7 @@ function proposalOf(row: Record<string, unknown>, canvas: CanvasId): Proposal | 
       args,
       by: by as PartyId,
       touched,
-      ...(revisions(before) ? { before } : {}),
+      before,
       lost: lost as unknown as Lost,
       at,
     };

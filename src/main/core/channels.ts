@@ -1,3 +1,5 @@
+import { OpFailure } from './call';
+import type { OpResult } from '../../shared/api/errors';
 import type { Children } from './children';
 import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
@@ -96,13 +98,20 @@ type HandlerTable = {
   [C in CoreChannel]: { parseArgs: ArgsParser<C>; handler: ChannelHandler<C> };
 };
 
-/** `ArgsParser` for canvas:save: the canvas's text (within the size limit), and `choose`. */
+/** `ArgsParser` for canvas:save: the bounded canvas text, `choose` and its mirror revision. */
 export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
-  const [text, choose] = args;
-  if (args.length !== 2 || typeof text !== 'string' || typeof choose !== 'boolean') {
-    throw new TypeError('Expected the canvas text and whether to choose a file');
+  const [text, choose, rev] = args;
+  if (
+    args.length !== 3 ||
+    typeof text !== 'string' ||
+    typeof choose !== 'boolean' ||
+    !revision(rev)
+  ) {
+    throw new TypeError(
+      'Expected the canvas text, whether to choose a file and its mirror revision',
+    );
   }
-  return [canvasText(text), choose];
+  return [canvasText(text), choose, rev];
 }
 
 /** A canvas's text as the renderer sends it, within the size limit. */
@@ -111,6 +120,28 @@ function canvasText(text: string): string {
     throw new RangeError('The canvas is too large to save');
   }
   return text;
+}
+
+/** A whole-document edit names the mirror revision it was built from. */
+function revision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Structured op failures survive the channel's port, including conflict.current. */
+async function edited<T>(task: () => Promise<T>): Promise<OpResult<T>> {
+  try {
+    return { ok: true, value: await task() };
+  } catch (error) {
+    if (!(error instanceof OpFailure)) throw error;
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        sentence: error.message,
+        ...(error.current === undefined ? {} : { current: error.current }),
+      },
+    };
+  }
 }
 
 /** The usage backends the catalog lists: those whose usage corrallm reads. */
@@ -158,29 +189,34 @@ function createHandlers({
     },
     'run:save': {
       parseArgs: (args) => {
-        const [token, checkpoint, document] = args;
+        const [token, checkpoint, document, rev] = args;
         if (
-          args.length !== 3 ||
+          args.length !== 4 ||
+          !revision(rev) ||
           typeof token !== 'string' ||
           token.length > 100 ||
           typeof document !== 'string'
         ) {
-          throw new TypeError('Expected a canvas token, a run checkpoint and the canvas');
+          throw new TypeError(
+            'Expected a canvas token, a run checkpoint, the canvas and its mirror revision',
+          );
         }
         return [
           token,
           checkpoint === null ? null : parseRunCheckpoint(checkpoint),
           canvasText(document),
+          rev,
         ];
       },
-      handler: async ({ window }, token, checkpoint, document) => {
-        const canvas = await of(window);
-        // Neither an earlier canvas's run nor its document.
-        runs.check(canvas, token);
-        await documents.edit(canvas, document);
-        await runs.save(canvas, token, checkpoint);
-        return null;
-      },
+      handler: ({ window }, token, checkpoint, document, expected) =>
+        edited(async () => {
+          const canvas = await of(window);
+          // Neither an earlier canvas's run nor its document.
+          runs.check(canvas, token);
+          const rev = await documents.edit(canvas, document, expected);
+          await runs.save(canvas, token, checkpoint);
+          return { rev };
+        }),
     },
     'run:ready': {
       parseArgs: (args) => {
@@ -217,14 +253,15 @@ function createHandlers({
     },
     'canvas:save': {
       parseArgs: parseSaveArgs,
-      handler: async ({ window }, text, choose) => {
-        const canvas = await of(window);
-        // As the renderer has it, then as the core saves it.
-        await documents.edit(canvas, text);
-        const name = await canvases.save(window, canvas, choose);
-        if (name !== null) await runs.saved(canvas);
-        return name;
-      },
+      handler: ({ window }, text, choose, expected) =>
+        edited(async () => {
+          const canvas = await of(window);
+          // As the renderer has it, then as the core saves it.
+          const rev = await documents.edit(canvas, text, expected);
+          const name = await canvases.save(window, canvas, choose);
+          if (name !== null) await runs.saved(canvas);
+          return { name, rev };
+        }),
     },
     'canvas:forget': {
       parseArgs: noArgs,

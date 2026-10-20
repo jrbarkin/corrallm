@@ -13,8 +13,8 @@ import { QuestionsSidebar } from './Questions';
 import { actionsOf, runCatalog } from './agents';
 import { editsOf } from './edits';
 import type { QueueEdits } from './edits';
-import { canvasNodes } from './graph';
-import type { GraphNode } from './graph';
+import { canvasNodes } from '../test-graph-data';
+import type { AgentNode } from '../../shared/model/canvas';
 import { QueueEditor } from './QueueEditor';
 
 function edits(): QueueEdits {
@@ -36,7 +36,7 @@ function edits(): QueueEdits {
   };
 }
 
-const agent = (id: string, queue: QueueItem[]): GraphNode => ({
+const agent = (id: string, queue: QueueItem[]): AgentNode => ({
   id,
   type: 'agent',
   position: { x: 0, y: 0 },
