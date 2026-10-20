@@ -92,13 +92,19 @@ export class Scopes {
     const key = keyOf(path);
     const lane = this.#lane(key, path);
     if (preempt) {
-      lane.held++;
+      const held: Drain = { paths: [path], depth: path.length + 1 };
+      this.#drains.add(held);
       try {
-        await this.#stop(this.#beneath(path).filter((running) => !running.preempt));
+        lane.held++;
+        try {
+          await this.#stop(this.#beneath(path));
+        } finally {
+          lane.held--;
+        }
+        return await this.#enter(lane, key, path, true, signal, op);
       } finally {
-        lane.held--;
+        this.#release(held);
       }
-      return this.#enter(lane, key, path, true, signal, op);
     }
     if (drains.length === 0) return this.#enter(lane, key, path, false, signal, op);
     const drain: Drain = { paths: drains, depth: path.length + 1 };
@@ -106,11 +112,13 @@ export class Scopes {
     try {
       return await this.#enter(lane, key, path, false, signal, op, this.#drain(drain));
     } finally {
-      this.#drains.delete(drain);
-      for (const [held, beneath] of this.#lanes) {
-        if (holds(drain, beneath.path)) this.#next(held, beneath);
-      }
+      this.#release(drain);
     }
+  }
+
+  #release(drain: Drain): void {
+    this.#drains.delete(drain);
+    for (const [key, lane] of this.#lanes) if (holds(drain, lane.path)) this.#next(key, lane);
   }
 
   #lane(key: string, path: readonly string[]): Lane {
@@ -229,6 +237,11 @@ export class Scopes {
       settled: settled.promise,
     };
     lane.running = running;
+    const gaveUp = () => {
+      if (!running.past) controller.abort(signal?.reason);
+    };
+    signal?.addEventListener('abort', gaveUp, { once: true });
+    if (signal?.aborted) gaveUp();
     try {
       if (drained !== undefined) {
         await drained;
@@ -236,13 +249,12 @@ export class Scopes {
         controller.signal.throwIfAborted();
         signal?.throwIfAborted();
       }
-      return await op(
-        signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
-        () => {
-          running.past = true;
-        },
-      );
+      return await op(controller.signal, () => {
+        controller.signal.throwIfAborted();
+        running.past = true;
+      });
     } finally {
+      signal?.removeEventListener('abort', gaveUp);
       lane.running = undefined;
       settled.resolve(undefined);
       this.#next(key, lane);

@@ -1,6 +1,7 @@
 import type { AdapterId, ConnectionId } from '../adapter';
 import type { CanvasId } from '../canvas';
 import type { AgentSettings } from '../session';
+import { MAX_POSITION } from './canvas';
 import type { AgentData, CanvasDocument, CanvasNode, Link } from './canvas';
 import { inFileOrder } from './file';
 import { isApproval, isDelay, isIf, isRepeat, isWait } from './queue';
@@ -247,6 +248,12 @@ export function rowsFault(document: CanvasDocument): string | undefined {
   const kinds = new Map<string, CanvasNode['type']>();
   for (const node of document.nodes) {
     const key = nodeKey(node.id);
+    if (
+      [node.position.x, node.position.y].some(
+        (value) => !Number.isFinite(value) || Math.abs(value) > MAX_POSITION,
+      )
+    )
+      return `${key}: its position must be within ±${String(MAX_POSITION)} on each axis`;
     if (kinds.has(node.id)) return `${key}: two nodes have this id`;
     if (node.parentId !== undefined && !kinds.has(node.parentId)) {
       return document.nodes.some((one) => one.id === node.parentId)

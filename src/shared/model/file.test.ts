@@ -994,3 +994,20 @@ it('keeps queue text authors through a file round trip and rejects an invalid pa
     /\.by.*party/,
   );
 });
+
+describe('canvas label and position bounds', () => {
+  it.each(['', ' \n\t'])('refuses a blank label (%j)', (label) => {
+    const copy = {
+      ...canvas,
+      nodes: canvas.nodes.map((node) => ({ ...node, data: { ...node.data, label } })),
+    };
+    expect(() => read(toFile(copy))).toThrow(/label/);
+  });
+  it.each([
+    { x: 1000001, y: 0 },
+    { x: 0, y: -1000001 },
+  ])('refuses an out-of-bounds position (%j)', (position) => {
+    const copy = { ...canvas, nodes: canvas.nodes.map((node) => ({ ...node, position })) };
+    expect(() => read(toFile(copy))).toThrow(/position/);
+  });
+});

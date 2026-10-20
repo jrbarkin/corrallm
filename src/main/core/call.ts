@@ -33,8 +33,10 @@ import { Throttle } from './throttle';
  * (refusing text with a broken character, a lone surrogate, which the core's database can't keep
  * as it is), resolves every id a token names against its reach, refuses an agent aiming at itself an op it
  * may not, returns a repeated request's first result, and runs the op in its scope, checking the
- * op's rules on a token's arguments there first (a met rule refuses it, or makes it a proposal for
- * you), since they read what the ops before it in its scope left. It never throws: a failure is a
+ * op's reach again there, then its rules on a token's arguments (a met rule refuses it, or makes it
+ * a proposal for you), since they read what the ops before it in its scope left; its reach is
+ * checked once more as each of its commits builds, in the canvas's turn, and so is each inner op's
+ * of a batch, since what a token reaches may change while it waits. It never throws: a failure is a
  * value, whose code survives any transport. An op may run another as part of itself, in its own
  * turn (`ctx.call`, `ctx.prepare`): checked as a call of its caller's own would be (its audience,
  * arguments, reach, self and argument rules), never throttled, deduped or scoped apart. A commit
@@ -271,6 +273,33 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
   }
 
   /**
+   * Throws unless every id a token's `args` for op `name` names is in its reach now, none aimed at
+   * the agent itself where the op may not be: checked as the call comes, again in its scope, and
+   * again as each of its commits builds (an inner op of a batch's too), since what a token reaches
+   * may change while its call waits (a lead's agent moved out of its team). You reach everything.
+   */
+  function checkReach(
+    name: string,
+    surface: Surface,
+    def: OpDef,
+    args: unknown,
+    caller: Caller,
+    party: Party,
+  ): void {
+    if (caller.kind === 'human') return;
+    const reach = party === 'you' ? surface.access.you : surface.access[party];
+    if (reach === undefined) {
+      throw new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
+    }
+    const ids = idsIn(def.input, args);
+    const missing = outOfReach(ids, caller, reach, resolvers);
+    if (missing) throw new OpFailure('not-found', missing);
+    if (surface.self === 'refused' && aimsAtItself(ids, caller)) {
+      throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
+    }
+  }
+
+  /**
    * The op's rules on a token's arguments, in its scope: throws for one that refuses them; the
    * proposal a rule made of them, if one did; else nothing.
    */
@@ -314,14 +343,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
     }
     const args = parse(def, raw);
-    if (caller.kind !== 'human') {
-      const ids = idsIn(def.input, args);
-      const missing = outOfReach(ids, caller, reach, resolvers);
-      if (missing) throw new OpFailure('not-found', missing);
-      if (surface.self === 'refused' && aimsAtItself(ids, caller)) {
-        throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
-      }
-    }
+    checkReach(name, surface, def, args, caller, party);
     return args;
   }
 
@@ -331,7 +353,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
    */
   async function run(
     name: string,
-    [surface, , implementation]: [Surface, OpDef, Implementation],
+    [surface, def, implementation]: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
     party: Party,
@@ -360,22 +382,30 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         if (canvas === undefined) {
           throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
         }
-        const done = await commit(canvas as CanvasId, build, {
-          op: name,
-          caller,
-          party,
-          by,
-          ...(request === undefined ? {} : { request }),
-          ...(expect === undefined ? {} : { expect }),
-          signal: turn.signal,
-          noReturn: () => {
-            turn.noReturn();
+        const done = await commit(
+          canvas as CanvasId,
+          (document) => {
+            // In the canvas's turn: what the caller reaches may have changed while it waited.
+            checkReach(name, surface, def, args, caller, party);
+            return build(document);
           },
-          proposes,
-          args: kept(args),
-          ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
-          ...(options.within === undefined ? {} : { within: options.within }),
-        });
+          {
+            op: name,
+            caller,
+            party,
+            by,
+            ...(request === undefined ? {} : { request }),
+            ...(expect === undefined ? {} : { expect }),
+            signal: turn.signal,
+            noReturn: () => {
+              turn.noReturn();
+            },
+            proposes,
+            args: kept(args),
+            ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
+            ...(options.within === undefined ? {} : { within: options.within }),
+          },
+        );
         if ('proposed' in done) throw new ProposedInstead(done.proposed);
         if (done.rev !== undefined) turn.revs[`canvas:${canvas}`] = done.rev;
         return done.result;
@@ -386,7 +416,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       },
       prepare: async (sub, raw) => {
         const op = opOf(sub);
-        const [inner, , build] = op;
+        const [inner, innerDef, build] = op;
         if (inner.kind !== 'doc') {
           throw new OpFailure('invalid', `${sub} isn’t an edit of a canvas’s document.`);
         }
@@ -412,7 +442,12 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
           throw new OpFailure('invalid', `${sub} can’t be made as part of another edit.`);
         }
         void returned.catch(() => undefined);
-        return captured;
+        const made = captured;
+        // Built in the commit's turn of the op that prepared it: what the caller reaches then.
+        return (document) => {
+          checkReach(sub, inner, innerDef, parsed, caller, party);
+          return made(document);
+        };
       },
     };
     try {
@@ -450,6 +485,8 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         signal,
         async (opSignal, noReturn) => {
           ran = opSignal;
+          // In its scope: what the caller reaches may have changed while it waited its turn.
+          checkReach(name, surface, def, args, caller, party);
           /** The revision of each topic the op reached. */
           const revs: Record<string, number> = {};
           const result = await run(name, op, args, caller, party, {
@@ -502,14 +539,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
-      if (caller.kind !== 'human') {
-        const ids = idsIn(def.input, args);
-        const missing = outOfReach(ids, caller, reach, resolvers);
-        if (missing) throw new OpFailure('not-found', missing);
-        if (surface.self === 'refused' && aimsAtItself(ids, caller)) {
-          throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
-        }
-      }
+      checkReach(name, surface, def, args, caller, party);
       const run = () => apply(name, op, args, caller, party, signal);
       const { request } = args as { request?: unknown };
       return typeof request === 'string'

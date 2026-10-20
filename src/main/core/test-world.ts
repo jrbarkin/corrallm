@@ -35,9 +35,10 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * by you. The lead's team also holds what calls meeting the change rules change, as you apply them
  * once every token was refused: `deputy` (linked to the lead and the helper) with `aide` nested
  * inside it, the frame `frame-team` holding `member`, `gate`, whose queue holds an OK, OKs at the
- * end of the helper's queue, and empty frames; and what tokens' deletes propose to remove
- * (`doomed`, `doomed-batch`), with two proposals waiting for you as the tests begin (PROPOSED, the
- * outside write token's deletes of `condemned-a` and `condemned-b`, which the worker is linked to).
+ * end of the helper's queue, `unlink-you` (linked to the helper, for you to unlink), and empty
+ * frames; and what tokens' deletes propose to remove (`doomed`, `doomed-batch`), with two
+ * proposals waiting for you as the tests begin (PROPOSED, the outside write token's deletes of
+ * `condemned-a` and `condemned-b`, which the worker is linked to).
  * While a call meets R11 (`meeting`), every token's party is at its cap.
  */
 
@@ -91,6 +92,8 @@ const NODES = [
     connection: 'codex.app-server',
     parent: 'lead',
   })),
+  // What you unlink from the helper (canvas.unlink).
+  { id: 'unlink-you', connection: 'codex.app-server', parent: 'lead' },
 ];
 const HELPER_QUEUE = [
   { id: 'text', message: 'Original' },
@@ -112,6 +115,7 @@ const HELPER_QUEUE = [
   })),
 ];
 const LINKS = [
+  ['helper', 'unlink-you'],
   ['worker', 'peer'],
   ['lead', 'peer'],
   ['worker', 'shell'],
@@ -425,7 +429,14 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     meetsRule: { links: { canvas: CANVAS, a: 'aide', b: 'helper', request: request(4) } },
   },
   'canvas.unlink': {
-    valid: [{ canvas: CANVAS, a: 'helper', b: 'lead', expect: NO_ITEM, request: request(44) }],
+    // A link that isn't there is not-found, and a token never unlinks two agents that exist (R13,
+    // below): only you have one to unlink, of your own.
+    valid: [],
+    by: {
+      you: [
+        { canvas: CANVAS, a: 'helper', b: 'unlink-you', expect: NO_ITEM, request: request(80) },
+      ],
+    },
     fresh: ['revs'],
     invalid: [
       { a: 'helper' },

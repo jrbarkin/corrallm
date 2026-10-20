@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import * as wholeFile from '../../whole-file';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -639,6 +641,76 @@ describe('a canvas’s document', () => {
     expect(String((refused as PromiseRejectedResult).reason)).toMatch(/FOREIGN KEY/);
     expect(sent).toMatchObject({ status: 'fulfilled' });
     expect(count('message', canvas)).toBe(1);
+  });
+  it('a failed Save As path update rolls back its hashes and rejects', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const canvas = newCanvasId();
+    const file = await filed(canvasOf(canvas));
+    await documents.load(canvas);
+    const saved = documentRow(canvas);
+    await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Changed'));
+    const next = mintTrustedPath(path.join(profile, 'new.corral'));
+    store.exec(
+      "CREATE TEMP TRIGGER fail_file_memory BEFORE UPDATE OF file ON canvas BEGIN SELECT RAISE(ABORT, 'disk full writing canvas file'); END",
+    );
+    try {
+      const result = await documents.save(canvas, next).catch((error: unknown) => error);
+      expect(result).toBeInstanceOf(Error);
+      const freshMemory = new CanvasMemory(store);
+      expect((await freshMemory.get(canvas)).file).toBe(file);
+      expect(documentRow(canvas)).toMatchObject({
+        saved_hash: saved?.saved_hash,
+        file_hash: saved?.file_hash,
+        writing_hash: sha256(toFile(documents.live(canvas).document)),
+      });
+      const fresh = new Documents({
+        store,
+        memory: freshMemory,
+        catalog: CATALOG,
+        defaultAdapter: DEFAULT_ADAPTER,
+      });
+      await fresh.load(canvas);
+      expect(fresh.edited(canvas)).toBe(true);
+    } finally {
+      store.exec('DROP TRIGGER fail_file_memory');
+      await memory.setFile(canvas, mintTrustedPath(file));
+    }
+  });
+
+  it('serializes saves across canvases so a file’s last writer is its remembered owner', async () => {
+    await restart({ ...SYSTEM_DEPS, flush: () => Promise.resolve() });
+    const first = newCanvasId();
+    const second = newCanvasId();
+    await documents.edit(first, toFile(canvasOf(first)));
+    await documents.edit(second, toFile(canvasOf(second)));
+    const file = mintTrustedPath(path.join(profile, 'shared.corral'));
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const starts: string[] = [];
+    vi.spyOn(wholeFile, 'writeWhole').mockImplementation(async (file, text) => {
+      const id = (JSON.parse(text) as { id: string }).id;
+      starts.push(id);
+      writeFileSync(file, text);
+      if (id === first) {
+        entered.resolve(undefined);
+        await release.promise;
+      }
+    });
+    const one = documents.save(first, file);
+    await entered.promise;
+    const two = documents.save(second, file);
+    try {
+      // With flushes resolved immediately, two turns let an unguarded second save enter its writer.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([first]);
+    } finally {
+      release.resolve(undefined);
+      await Promise.all([one, two]);
+    }
+    expect((JSON.parse(await readFile(file, 'utf8')) as { id: string }).id).toBe(second);
+    expect(await memory.canvasWithFile(file)).toBe(second);
+    expect(documentRow(second)?.file_hash).toBe(sha256(await readFile(file, 'utf8')));
   });
 });
 

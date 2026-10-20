@@ -94,7 +94,7 @@ const everything: CanvasDocument = {
         queue: [{ id: 'x', action: 'Read' }],
       },
     },
-    { id: 'Ünïcode 𝔸', type: 'agent', position: { x: 600, y: 0 }, data: { label: '' } },
+    { id: 'Ünïcode 𝔸', type: 'agent', position: { x: 600, y: 0 }, data: { label: 'Unicode' } },
     { id: '\uFFFD', type: 'agent', position: { x: 900, y: 0 }, data: { label: 'Replacement' } },
   ],
   links: [

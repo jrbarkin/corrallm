@@ -9,7 +9,7 @@ import { SURFACE } from '../../../shared/api/surface';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { itemKey, linkKey, nodeKey } from '../../../shared/model/rows';
-import { DEFAULT_ADAPTER } from '../../sessions/adapters';
+import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
 import { FakeConnector } from '../../sessions/fake';
 import { createDispatcher } from '../call';
 import type { Dispatcher, OpContext } from '../call';
@@ -231,7 +231,6 @@ describe('canvas structure commits through core.call', () => {
   it.each([
     ['canvas.delete', { nodes: [], links: [] }],
     ['canvas.link', { a: 'c', b: 'b' }],
-    ['canvas.unlink', { a: 'a', b: 'c' }],
     ['canvas.ungroup', { nodes: ['c'] }],
     ['canvas.move', { moves: [{ node: 'a', position: { x: 0, y: 0 } }] }],
   ])('%s returns no revisions when nothing changes', async (name, args) => {
@@ -289,7 +288,7 @@ describe('canvas structure commits through core.call', () => {
         ops: { ...registry.ops, 'canvas.delete': OPS['canvas.delete'] },
         implementations: {
           ...registry.implementations,
-          ...canvasOps({ defaultAdapter: DEFAULT_ADAPTER }),
+          ...canvasOps({ defaultAdapter: DEFAULT_ADAPTER, catalog: CATALOG }),
           'test.hold': (_args, { signal }: OpContext) =>
             new Promise((resolve) => {
               signal.addEventListener(
@@ -337,5 +336,52 @@ describe('canvas structure commits through core.call', () => {
     });
     expect(order).toEqual(['aborted', 'unwound', 'committed']);
     expect(current.nodes.some((one) => one.id === 'a')).toBe(false);
+  });
+  it.each([
+    ['canvas.delete', { links: [{ a: 'a', b: 'c' }] }, 'not-found'],
+    ['canvas.unlink', { a: 'a', b: 'c' }, 'not-found'],
+    ['canvas.addAgent', { at: { x: 0, y: 0 }, adapter: 'unknown' }, 'invalid'],
+    ['canvas.rename', { node: 'a', label: '' }, 'invalid'],
+    ['canvas.rename', { node: 'a', label: ' \n\t' }, 'invalid'],
+    ['canvas.addAgent', { at: { x: 1000001, y: 0 }, adapter: 'codex' }, 'invalid'],
+    ['canvas.move', { moves: [{ node: 'a', position: { x: 0, y: -1000001 } }] }, 'invalid'],
+  ])(
+    '%s refuses missing links, unknown adapters and unreachable positions (%j)',
+    async (name, args, code) => {
+      const before = doc();
+      const result = await (core as Dispatcher).call(
+        name,
+        { canvas: CANVAS, ...(args as object) },
+        CALLERS.you,
+      );
+      expect(result).toMatchObject({ ok: false, error: { code } });
+      if (code === 'not-found') {
+        if (result.ok) throw new Error('Unexpected success');
+        expect(result.error.sentence).toContain('a');
+        expect(result.error.sentence).toContain('c');
+      }
+      expect(doc()).toBe(before);
+      expect(rows()).toEqual([]);
+    },
+  );
+  it('refuses a move whose group fitting would produce out-of-bounds positions', async () => {
+    await edit('canvas.group', { nodes: ['a', 'b'], kind: 'frame' });
+    const before = doc();
+    const changes = rows();
+    expect(
+      await (core as Dispatcher).call(
+        'canvas.move',
+        {
+          canvas: CANVAS,
+          moves: [
+            { node: 'a', position: { x: -1000000, y: 0 } },
+            { node: 'b', position: { x: 1000000, y: 0 } },
+          ],
+        },
+        CALLERS.you,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(doc()).toBe(before);
+    expect(rows()).toEqual(changes);
   });
 });

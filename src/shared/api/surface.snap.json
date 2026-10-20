@@ -230,14 +230,14 @@
     },
     "canvas.get": {
       "input": "41356bc15da6df1b",
-      "output": "2aaaf63df95362d3"
+      "output": "9fc524dd502d7945"
     },
     "canvas.rename": {
-      "input": "7e50fe59d461bed7",
+      "input": "7c9d45e28398fe9e",
       "output": "647bbd6cc7b4f077"
     },
     "canvas.addAgent": {
-      "input": "74e49497e5b835dc",
+      "input": "0f3ca90703374a72",
       "output": "ebd0120825103788"
     },
     "canvas.spawnAgent": {
@@ -269,11 +269,11 @@
       "output": "ebd0120825103788"
     },
     "canvas.move": {
-      "input": "f837a789fb1b2ea8",
+      "input": "75d231ce281d8f76",
       "output": "647bbd6cc7b4f077"
     },
     "canvas.batch": {
-      "input": "d7f96265830c24be",
+      "input": "07b5262a1e042e15",
       "output": "774dad2f1bf247cd"
     },
     "agent.setType": {

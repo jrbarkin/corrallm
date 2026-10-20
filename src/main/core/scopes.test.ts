@@ -454,4 +454,55 @@ describe('Scopes', () => {
       'next',
     );
   });
+  it('preemption keeps queued descendant operations behind it', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const started = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const active = scopes.run(['app', 'c', 'a'], {}, undefined, async (signal) => {
+      started.resolve(undefined);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      log.push('old ended');
+    });
+    await started.promise;
+    const queued = scopes.run(['app', 'c', 'a'], {}, undefined, async () => {
+      log.push('queued started');
+      await release.promise;
+      log.push('queued ended');
+    });
+    const preempt = scopes.run(['app', 'c'], { preempt: true }, undefined, () => {
+      log.push('preempt');
+      return Promise.resolve();
+    });
+    await preempt;
+    release.resolve(undefined);
+    await Promise.all([active, queued]);
+    expect(log.indexOf('preempt')).toBeLessThan(log.indexOf('queued started'));
+  });
+
+  it('caller cancellation cannot abort a scope after noReturn', async () => {
+    const scopes = new Scopes();
+    const caller = new AbortController();
+    const entered = Promise.withResolvers<AbortSignal>();
+    const release = Promise.withResolvers<undefined>();
+    const operation = scopes.run(['app', 'c'], {}, caller.signal, async (signal, noReturn) => {
+      noReturn();
+      entered.resolve(signal);
+      await release.promise;
+      return signal.aborted;
+    });
+    await entered.promise;
+    caller.abort(new Error('client disconnected'));
+    release.resolve(undefined);
+    const aborted = await operation;
+    expect(aborted).toBe(false);
+  });
 });
