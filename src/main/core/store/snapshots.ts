@@ -148,7 +148,7 @@ function isPartial(name: string): boolean {
   return snapshot !== undefined && snapshotTime(snapshot) !== undefined;
 }
 
-/** Removes a database's file and those SQLite kept beside it. */
-async function remove(file: string): Promise<void> {
+/** Removes a database's file and those SQLite kept beside it: a snapshot too. */
+export async function remove(file: string): Promise<void> {
   for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
 }

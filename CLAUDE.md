@@ -168,8 +168,15 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 `write` (the lane: writes queued in one turn of the loop share one commit, each in a
                 savepoint, each resolving only once that commit returned and its log was flushed to
                 the drive, off the loop: Node's fsync on its thread pool, F_FULLFSYNC on macOS, one
-                flush at a time for every commit made before it began, a failed one rejecting their
-                writes: "on disk before it is sent"), `checkpoint` (checkpointer.ts: PASSIVE, on a
+                flush at a time for every commit made before it began: "on disk before it is sent").
+                A failed flush fails the store closed, so no write that rejects is ever kept, read
+                back or on the drive later: every write and read refused from then on, saying why
+                (once on stderr), until the core opens it again; what it committed since its last
+                flush that worked taken back (the log cut back to where those commits began, as
+                `wal_checkpoint(NOOP)` said before each, and closed while a connection that only
+                reads holds the database, so SQLite checkpoints none of it, and the next open
+                recovers the log up to there alone; every snapshot finished since removed).
+                `checkpoint` (checkpointer.ts: PASSIVE, once every commit made is flushed, on a
                 worker thread with a connection of its own, whose code is a string run as CommonJS,
                 since the bundles are one file each; sqlite.ts gives the expression it connects
                 with; once it copied all of the log it begins it anew there, cutting it back to

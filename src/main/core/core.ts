@@ -47,6 +47,7 @@ import { Children } from './children';
 import type { ChildSystem } from './children';
 import { openStore } from './store/open';
 import { unopened } from './store/store';
+import type { StoreDeps } from './store/store';
 
 /*
  * corrallm's core, composed: the registry's operations over the Electron-free services they act
@@ -60,6 +61,8 @@ import { unopened } from './store/store';
 export interface CoreConfig {
   /** For tests: process identity and group signalling instead of the OS. */
   children?: ChildSystem;
+  /** For tests: the database's clock, timers and log flushes instead of the system's. */
+  store?: StoreDeps;
   /** The profile folder, where the core keeps its stores. */
   profile: string;
   /** Which app this is, as app.info says. */
@@ -145,7 +148,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Before anything reads what it keeps. One that can't be opened fails every read and write of
   // what it keeps, saying why: the core journals nothing, and sends nothing whose record can't be
   // on disk first.
-  const opened = await openStore(profile);
+  const opened = await openStore(profile, config.store);
   if (opened.store === undefined) console.error(opened.said.join(' '));
   const store = opened.store ?? unopened(opened.said.join(' '));
   const children = new Children(profile, config.children);

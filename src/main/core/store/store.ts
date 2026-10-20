@@ -1,7 +1,8 @@
-import { closeSync, fsync, fsyncSync, openSync } from 'node:fs';
+import { closeSync, fsync, fsyncSync, ftruncateSync, openSync } from 'node:fs';
 
 import { Checkpointer } from './checkpointer';
-import { takeSnapshot } from './snapshots';
+import { remove, takeSnapshot } from './snapshots';
+import { connect } from './sqlite';
 import type { Connection, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
 
@@ -14,17 +15,29 @@ import { rollback, savepoint, transaction } from './transaction';
  * and rejects only its caller. Each resolves with what its function returned only once the commit
  * that holds it has returned and the log it was written to has been flushed to the drive: a write
  * is on disk when its promise resolves, which is what "its record on disk before it is sent"
- * means. A commit that fails, or whose flush fails, rejects every write it held, and the writes
- * after it are a batch of their own. A commit runs on the loop (node:sqlite is synchronous), but
- * SQLite syncs nothing as it commits (synchronous NORMAL: open.ts): the store flushes the log
- * itself, off the loop, on Node's thread pool (Node's fsync, F_FULLFSYNC on macOS, which flushes
- * the drive's cache too), one flush at a time, each for every commit made before it began. So the
- * drive's flush, milliseconds at best and far more while other programs write, never waits on the
- * loop while the store is open, and one flush covers every commit made while the last went on.
- * The commit's own writes into the log do run on the loop: into the system's cache, which is
- * quick, but which the system holds back while other programs fill it, as heavy writing to the
- * same drive does (Core Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a
- * quiet drive, and only a connection on a thread of its own would under such writing).
+ * means. A commit that fails rejects every write it held, and the writes after it are a batch of
+ * their own. A commit runs on the loop (node:sqlite is synchronous), but SQLite syncs nothing as
+ * it commits (synchronous NORMAL: open.ts): the store flushes the log itself, off the loop, on
+ * Node's thread pool (Node's fsync, F_FULLFSYNC on macOS, which flushes the drive's cache too),
+ * one flush at a time, each for every commit made before it began. So the drive's flush,
+ * milliseconds at best and far more while other programs write, never waits on the loop while the
+ * store is open, and one flush covers every commit made while the last went on. The commit's own
+ * writes into the log do run on the loop: into the system's cache, which is quick, but which the
+ * system holds back while other programs fill it, as heavy writing to the same drive does (Core
+ * Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a quiet drive, and only a
+ * connection on a thread of its own would under such writing).
+ *
+ * A flush that fails fails the store closed: no write that rejects is ever kept, read back or on
+ * the drive later, and nothing written after it could be trusted to reach the drive (after a
+ * failed fsync, the system's cache of the file can't be: PostgreSQL's fsyncgate). Every write and
+ * read from then on is refused, saying why, as an unopened store's are, until the core opens the
+ * database again; it says so once on stderr. What it had committed since its last flush that
+ * worked (the failed flush's commits and those made since) is taken back: its log is cut back to
+ * where they began, which SQLite says before each commit (`wal_checkpoint(NOOP)`, SQLite 3.51 and
+ * later), and closed without SQLite checkpointing it, so the next open recovers the log up to
+ * there alone; and every snapshot finished since the first of them is removed. A checkpoint waits
+ * for the flushes going on (the lane commits nothing meanwhile), so none ever copies a commit
+ * into the database before its flush worked.
  *
  * SQLite checkpoints nothing by itself (wal_autocheckpoint is off: its checkpoints would land in
  * the middle of a commit): the store checkpoints its log into the database once it is idle, off the
@@ -99,11 +112,19 @@ interface Queued {
   reject: (error: unknown) => void;
 }
 
-/** A commit whose log isn't flushed yet: what settles the writes it held. */
+/** A commit whose log isn't flushed yet: what settles the writes it held, and where it began. */
 interface Unflushed {
   resolve: () => void;
   reject: (error: unknown) => void;
+  /** The frames the log held before it: what a failed flush cuts the log back to. */
+  frames: number;
+  /** Which commit of the store's it was (counted from 1). */
+  commit: number;
 }
+
+/** A log's header, and the header of each frame in it, before its page (sqlite.org/fileformat2). */
+const LOG_HEADER_BYTES = 32;
+const FRAME_HEADER_BYTES = 24;
 
 export class Store {
   /** The database's file. */
@@ -134,8 +155,18 @@ export class Store {
   #log: number | undefined;
   /** The commits made since the flush going on began, in order. */
   #unflushed: Unflushed[] = [];
+  /** The commits the flush going on is for. */
+  #inFlush: Unflushed[] = [];
   /** The flush going on, if one is. */
   #flushing: Promise<void> | undefined;
+  /** How many commits the store has made. */
+  #commits = 0;
+  /** The snapshots it took, each with how many commits it had made once it was taken. */
+  #taken: { file: string; commits: number }[] = [];
+  /** Why it failed closed (a flush of its log failed), once it has: every write and read refused. */
+  #failed: Error | undefined;
+  /** Taking back what it hadn't flushed when it failed, then closing its connection. */
+  #forgetting: Promise<void> | undefined;
   readonly #checkpointer: Checkpointer;
   /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
@@ -154,6 +185,11 @@ export class Store {
    * themselves, or each would be kept apart.
    */
   prepare(sql: string): Statement {
+    if (this.#failed !== undefined) throw this.#failed;
+    return this.#prepare(sql);
+  }
+
+  #prepare(sql: string): Statement {
     let statement = this.#statements.get(sql);
     if (statement === undefined) {
       statement = this.#connection.prepare(sql);
@@ -164,22 +200,30 @@ export class Store {
 
   /** Runs SQL without parameters (statements separated by semicolons). */
   exec(sql: string): void {
+    if (this.#failed !== undefined) throw this.#failed;
     this.#connection.exec(sql);
   }
 
   /**
    * Runs `run` in a transaction, committed once it returns, and returns what it returned; within
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns, its
-   * log flushed on the loop. Refused once the store is closing, but within a write it commits.
+   * log flushed on the loop (a flush that fails failing the store closed). Refused once the store
+   * is closing, but within a write it commits, and once it failed closed.
    */
   tx<T>(run: () => T): T {
+    if (this.#failed !== undefined) throw this.#failed;
     const outermost = !this.#connection.isTransaction;
-    if (outermost && this.#shut) throw closed();
+    if (!outermost) return transaction(this.#connection, run);
+    if (this.#shut) throw closed();
+    const frames = this.#frames();
+    const commit = ++this.#commits;
     const value = transaction(this.#connection, run);
-    if (outermost) {
+    try {
       fsyncSync(this.#logFile());
-      this.#committed();
+    } catch (error) {
+      throw this.#fail(error, { frames, commit });
     }
+    this.#committed();
     return value;
   }
 
@@ -190,6 +234,7 @@ export class Store {
    * store is closing.
    */
   write<T>(run: () => T): Promise<T> {
+    if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#shut) return Promise.reject(closed());
     return new Promise<T>((resolve, reject) => {
       this.#queue.push({ run, resolve: resolve as (value: unknown) => void, reject });
@@ -204,19 +249,25 @@ export class Store {
 
   /**
    * Checkpoints the log into the database now, off the loop (one at a time: asked for while one
-   * goes on, it is that one), beginning it anew there if it copied all of it. The writes queued
-   * meanwhile commit once it is done. Resolves once it is done; rejects if it couldn't be.
+   * goes on, it is that one), once every commit made is flushed, beginning it anew there if it
+   * copied all of it. The writes queued meanwhile commit once it is done. Resolves once it is done;
+   * rejects if it couldn't be, or a flush it waited for failed.
    */
   checkpoint(): Promise<void> {
+    if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#checkpointing !== undefined) return this.#checkpointing;
-    const checkpointing = this.#checkpointer.checkpoint().then(
-      () => undefined,
-      (error: unknown) => {
+    const checkpointing = (async () => {
+      // Only what is on the drive is copied into the database.
+      while (this.#flushing !== undefined) await this.#flushing;
+      if (this.#failed !== undefined) throw this.#failed;
+      try {
+        await this.#checkpointer.checkpoint();
+      } catch (error) {
         throw new Error(`Could not checkpoint the core’s database: ${reason(error)}`, {
           cause: error,
         });
-      },
-    );
+      }
+    })();
     this.#checkpointing = checkpointing;
     void checkpointing
       .catch(() => undefined)
@@ -232,11 +283,17 @@ export class Store {
    * while one is being taken, it is that one). Resolves with its file.
    */
   snapshot(): Promise<string> {
+    if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#snapshotting !== undefined) return this.#snapshotting;
     const at = this.#deps.now();
-    const taking = takeSnapshot(this.file, this.#profile, at).finally(() => {
-      this.#snapshotting = undefined;
-    });
+    const taking = takeSnapshot(this.file, this.#profile, at)
+      .then((file) => {
+        this.#taken.push({ file, commits: this.#commits });
+        return file;
+      })
+      .finally(() => {
+        this.#snapshotting = undefined;
+      });
     this.#snapshotting = taking;
     this.#snapshotAt = at;
     return taking;
@@ -244,8 +301,8 @@ export class Store {
 
   /**
    * Closes the database once the writes queued so far are committed, checkpointing its log into it
-   * and taking a snapshot of it. Writes asked for meanwhile are refused. Closing it again does
-   * nothing more.
+   * and taking a snapshot of it (neither once it failed closed). Writes asked for meanwhile are
+   * refused. Closing it again does nothing more.
    */
   close(): Promise<void> {
     if (this.#closing === undefined) {
@@ -261,6 +318,11 @@ export class Store {
     while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
     this.#flush();
     while (this.#flushing !== undefined) await this.#flushing;
+    // Failed closed, it took back what it hadn't flushed, and closed its connection then.
+    if (this.#forgetting !== undefined) {
+      await this.#forgetting;
+      return;
+    }
     await this.#checkpointer.close();
     await this.#snapshotting?.catch(() => undefined);
     try {
@@ -282,12 +344,20 @@ export class Store {
     if (this.#checkpointing !== undefined) return;
     let batch = this.#queue;
     this.#queue = [];
-    while (batch.length > 0) batch = this.#commit(batch);
+    while (batch.length > 0) {
+      if (this.#failed !== undefined) {
+        for (const write of batch) write.reject(this.#failed);
+        return;
+      }
+      batch = this.#commit(batch);
+    }
   }
 
   /** Commits a batch of writes in one transaction; returns those it didn't run. */
   #commit(batch: Queued[]): Queued[] {
+    let frames: number;
     try {
+      frames = this.#frames();
       this.#connection.exec('BEGIN IMMEDIATE');
     } catch (error) {
       for (const write of batch) write.reject(error);
@@ -321,6 +391,8 @@ export class Store {
       reject: (error) => {
         for (const [write] of done) write.reject(error);
       },
+      frames,
+      commit: ++this.#commits,
     });
     this.#flushLog();
     this.#committed();
@@ -329,26 +401,113 @@ export class Store {
 
   /**
    * Flushes the log to the drive, off the loop, for every commit made since the last flush began:
-   * one flush at a time, the commits made meanwhile settled by the next. A flush that fails rejects
-   * the writes of the commits it was for.
+   * one flush at a time, the commits made meanwhile settled by the next. A flush that fails fails
+   * the store closed (`#fail`).
    */
   #flushLog(): void {
     if (this.#flushing !== undefined || this.#unflushed.length === 0) return;
+    if (this.#failed !== undefined) return;
     const commits = this.#unflushed;
     this.#unflushed = [];
+    this.#inFlush = commits;
     const flushing = (async () => {
       try {
         await this.#deps.flush(this.#logFile());
-        for (const commit of commits) commit.resolve();
       } catch (error) {
-        for (const commit of commits) commit.reject(error);
+        this.#fail(error);
+        return;
       }
+      this.#inFlush = [];
+      // Failed meanwhile (a `tx`'s flush), it took these back too.
+      if (this.#failed !== undefined) return;
+      for (const commit of commits) commit.resolve();
     })();
     this.#flushing = flushing;
     void flushing.then(() => {
       this.#flushing = undefined;
       this.#flushLog();
     });
+  }
+
+  /** How many frames the log holds now, as SQLite says without checkpointing any. */
+  #frames(): number {
+    const log = this.#prepare('PRAGMA wal_checkpoint(NOOP)').get()?.log;
+    if (typeof log !== 'number' || !Number.isInteger(log) || log < 0) {
+      throw new Error('SQLite did not say how long the core’s database’s log is.');
+    }
+    return log;
+  }
+
+  /**
+   * Fails the store closed, a flush of its log having failed (`error`): every commit not flushed
+   * yet rejected (`also`, a `tx`'s, with them), every write queued and every one after refused,
+   * saying why, and said once on stderr; then what they wrote taken back (`#forget`). Returns why.
+   */
+  #fail(error: unknown, also?: { frames: number; commit: number }): Error {
+    if (this.#failed !== undefined) return this.#failed;
+    const failed = new Error(
+      `The core’s database could not be written to the drive (${reason(error)}), so it keeps nothing more until the core opens it again: what it wrote since it was last on the drive is lost.`,
+      { cause: error },
+    );
+    this.#failed = failed;
+    console.error(failed.message);
+    this.#cancelCheckpoint?.();
+    this.#cancelCheckpoint = undefined;
+    const lost = [...this.#inFlush, ...this.#unflushed];
+    this.#inFlush = [];
+    this.#unflushed = [];
+    const queued = this.#queue;
+    this.#queue = [];
+    for (const commit of lost) commit.reject(failed);
+    for (const write of queued) write.reject(failed);
+    const first = [...lost, ...(also === undefined ? [] : [also])].reduce((earliest, commit) =>
+      commit.commit < earliest.commit ? commit : earliest,
+    );
+    this.#forgetting = this.#forget(first);
+    return failed;
+  }
+
+  /**
+   * Takes back, off the drive, what the store committed from `first` on: its log cut back to the
+   * frames before it, then its connection closed without SQLite checkpointing the log (another
+   * connection, which only reads, holds the database meanwhile; one closing that only reads never
+   * checkpoints), so the next open recovers the log up to there alone; and every snapshot taken
+   * since it, which may hold it, removed. Once the flush and the snapshot going on have ended, and
+   * the checkpointer's connection is closed: nothing else in the process keeps the log's index.
+   */
+  async #forget(first: { frames: number; commit: number }): Promise<void> {
+    while (this.#flushing !== undefined) await this.#flushing;
+    await this.#snapshotting?.catch(() => undefined);
+    await this.#checkpointer.close();
+    try {
+      const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
+      const log = this.#logFile();
+      ftruncateSync(
+        log,
+        first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
+      );
+      fsyncSync(log);
+    } catch (error) {
+      console.error('Could not take back what the core’s database lost:', error);
+    }
+    let holder: Connection | undefined;
+    try {
+      holder = connect(this.file, { readOnly: true, timeout: 0 });
+      holder.prepare('SELECT count(*) FROM sqlite_schema').get();
+    } catch {
+      // Closing alone, the connection checkpoints what the log holds now: up to the cut alone.
+      holder?.close();
+      holder = undefined;
+    }
+    try {
+      this.#connection.close();
+    } finally {
+      holder?.close();
+    }
+    if (this.#log !== undefined) closeSync(this.#log);
+    for (const { file, commits } of this.#taken) {
+      if (commits >= first.commit) await remove(file).catch(() => undefined);
+    }
   }
 
   /** The log's file, open to flush it: SQLite makes it with the first commit. */
@@ -362,7 +521,7 @@ export class Store {
    * once it is closing, which checkpoints as it closes.
    */
   #committed(): void {
-    if (this.#shut) return;
+    if (this.#shut || this.#failed !== undefined) return;
     this.#cancelCheckpoint?.();
     const now = this.#deps.now();
     this.#uncheckpointedSince ??= now;
@@ -379,8 +538,10 @@ export class Store {
   #checkpoint(): void {
     this.#cancelCheckpoint = undefined;
     this.#uncheckpointedSince = undefined;
+    if (this.#failed !== undefined) return;
     this.checkpoint().catch((error: unknown) => {
-      console.error(error);
+      // Failing closed is said once, as it fails.
+      if (error !== this.#failed) console.error(error);
     });
     if (
       this.#snapshotAt === undefined ||
