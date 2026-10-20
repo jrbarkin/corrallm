@@ -317,9 +317,9 @@ export interface UnreachableCall {
 
 /**
  * The calls of op `name` naming what a token party doesn't reach (Core Server §3.7: reach,
- * generated per op and party): for each token party in its audience, each of its valid arguments
- * with each id in it swapped, in turn, for each id of its kind `world` says the party doesn't
- * reach, as far as the op lets it.
+ * generated per op and party): for each token party in its audience, each of its valid arguments,
+ * and those meeting a rule (which reach is checked before), with each id in it swapped, in turn,
+ * for each id of its kind `world` says the party doesn't reach, as far as the op lets it.
  */
 export function unreachableCalls(
   core: Pick<Dispatcher, 'ops' | 'surface'>,
@@ -334,13 +334,14 @@ export function unreachableCalls(
     const reach = party === 'you' ? undefined : surface.access[party];
     if (reach === undefined) return [];
     const caller = CALLERS[party] as TokenCaller;
-    return validFor(fixture, party).flatMap((args) =>
-      idsIn(def.input, args).flatMap((ref) =>
-        (world[ref.brand]?.(caller, reach) ?? []).map((id) => ({
-          party,
-          args: withId(args, ref, id),
-        })),
-      ),
+    return [...validFor(fixture, party), ...Object.values(fixture.meetsRule ?? {})].flatMap(
+      (args) =>
+        idsIn(def.input, args).flatMap((ref) =>
+          (world[ref.brand]?.(caller, reach) ?? []).map((id) => ({
+            party,
+            args: withId(args, ref, id),
+          })),
+        ),
     );
   });
 }

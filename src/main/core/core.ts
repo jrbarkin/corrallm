@@ -12,6 +12,8 @@ import type { ResultOf } from '../../shared/api/registry';
 import { SURFACE } from '../../shared/api/surface';
 import type { OpName, Party, Reach } from '../../shared/api/surface';
 import { engineCatalog } from '../../shared/engine/catalog';
+import { needs } from '../../shared/engine/needs';
+import type { NeedsItem } from '../../shared/model/needs';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -31,6 +33,7 @@ import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
 import { committer } from './canvas/commit';
 import { Documents } from './canvas/documents';
+import { Proposals } from './canvas/proposals';
 import { CanvasStates } from './canvas/states';
 import { seesAll, viewOf } from './canvas/view';
 import { Channels } from './channels';
@@ -39,7 +42,7 @@ import { createDispatcher } from './call';
 import type { Dispatcher } from './call';
 import type { Caller } from './caller';
 import { MessageTable } from './delivery/messages';
-import { Engines } from './engines';
+import { Engines, needsInput } from './engines';
 import type { Watcher } from './engines';
 import type { HostServices, WindowId } from './host';
 import { implementations } from './ops';
@@ -97,6 +100,8 @@ export interface CoreConfig {
    * MAX_CREATED_AGENTS, but in tests that meet the cap without making that many.
    */
   maxCreatedAgents?: () => number;
+  /** For tests: the id each proposal raised takes (its Needs item's is proposal/<it>). */
+  proposalIds?: () => string;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
@@ -342,6 +347,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   settings.subscribe(() => {
     topics.changed('settings', 'you');
   });
+  // The proposals waiting for you (R4): their proposers' records go to each canvas's messages,
+  // and what waits on a canvas is read again as one is raised or settled.
+  const proposals = new Proposals({
+    store,
+    messages: (canvas) => engines.messagesOf(canvas),
+    conversations: async (canvas) => {
+      const { conversations } = await memory.get(canvas);
+      return new Set(Object.values(conversations).flatMap((byAgent) => Object.keys(byAgent)));
+    },
+    changed: (canvas, by) => {
+      topics.changed(`needs:${canvas}`, by);
+      engines.needsChanged(canvas);
+    },
+    ...(config.proposalIds === undefined ? {} : { newId: config.proposalIds }),
+  });
+  /** What waits for you on a canvas: its run's holds and sessions' prompts, and the proposals. */
+  const waitingFor = (canvas: CanvasId): NeedsItem[] => {
+    const open = engines.canvas(canvas);
+    return [...(open ? needs(needsInput(open, config.locale)) : []), ...proposals.items(canvas)];
+  };
+  const needOf = (canvas: CanvasId, id: string) =>
+    waitingFor(canvas).find((item) => item.id === id);
   const stores = () =>
     Promise.all([
       memory.flush(),
@@ -364,6 +391,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files,
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
+    needs: (canvas) => proposals.items(canvas),
   });
   engines.watch({
     needs: (canvas) => {
@@ -393,17 +421,19 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         usage,
         engines,
         states,
+        proposals,
+        needOf,
         isLead,
         host,
         tokens,
         ...(config.locale === undefined ? {} : { locale: config.locale }),
       }),
-      rules: ruleChecks(engines),
+      rules: ruleChecks(engines, needOf),
     },
     {
       check: config.check,
       isLead,
-      resolvers: resolvers(engines, isLead),
+      resolvers: resolvers(engines, isLead, needOf),
       commit: committer({
         documents,
         rules: changeChecks({
@@ -416,6 +446,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         committed: (canvas) => {
           engines.changed(canvas);
         },
+        // A token's change only you may make waits for you (R4).
+        propose: (canvas, change, call) =>
+          proposals.raise(canvas, { op: call.op, args: call.args ?? {}, by: call.by, change }),
       }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),

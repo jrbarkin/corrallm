@@ -6,6 +6,7 @@ import type { OpDef } from '../define';
 import { AgentId, NodeId, OpCanvas } from '../ids';
 import { MAX_LABEL, MAX_OP_NODES } from '../limits';
 import type { OpName } from '../surface';
+import { Role } from './agent';
 
 const Position = z.strictObject({ x: z.number(), y: z.number() });
 const Ends = z.strictObject({ a: AgentId, b: AgentId });
@@ -82,11 +83,15 @@ export const canvasOps = {
     output: z.strictObject({}),
   }),
   'canvas.addAgent': define('canvas.addAgent', {
-    summary: 'Adds an agent at a canvas point, inside its innermost group, with a fresh queue.',
+    summary:
+      'Adds an agent at a canvas point, inside its innermost group, with a fresh queue and the ' +
+      'role given, if one is (its standing instructions). A token gives a role only to an agent ' +
+      'it creates, as it creates it.',
     input: z.strictObject({
       canvas: OpCanvas,
       at: Position,
       adapter: z.string().min(1).max(32).regex(ID_PATTERN),
+      role: Role.optional(),
     }),
     output: z.strictObject({ id: AgentId }),
   }),

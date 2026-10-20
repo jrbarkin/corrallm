@@ -2,6 +2,7 @@ import type { AdapterId, Catalog } from '../../../shared/adapter';
 import type { ArgsOf, ProducedOf } from '../../../shared/api/registry';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
+import type { NeedsItem } from '../../../shared/model/needs';
 import type { Settings } from '../../settings';
 import type { UsageReadings } from '../../usage';
 import type { LinkOpener } from '../../links';
@@ -12,6 +13,7 @@ import type { SessionManager } from '../../sessions/manager';
 import type { Windows } from '../windows';
 import type { Topics } from '../topics';
 import type { OpContext } from '../call';
+import type { Proposals } from '../canvas/proposals';
 import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
@@ -19,6 +21,8 @@ import type { TokenStore } from '../tokens';
 import { agentOps } from './agent';
 import { queueOps } from './queue';
 import { appOps } from './app';
+import { batchOps } from './batch';
+import { replyOps } from './reply';
 import { canvasOps } from './canvas';
 import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
@@ -71,6 +75,10 @@ export interface OpServices {
   engines: Engines;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
+  /** The proposals waiting for you on each canvas. */
+  proposals: Pick<Proposals, 'get' | 'items' | 'settled' | 'settle' | 'settlement'>;
+  /** What waits for an answer on a canvas, for you, by its id: its Needs item. */
+  needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined;
   /** Whether an agent is a lead now, as kept on this machine. */
   isLead: (canvas: CanvasId, agent: string) => boolean;
   /** The locale what the core says tells times of day in: the runtime's own, when none. */
@@ -90,9 +98,11 @@ export function implementations(services: OpServices): Implementations {
     ...projectOps(services),
     ...canvasesOps(services),
     ...canvasOps(services),
+    ...batchOps(),
     ...agentOps(services),
     ...queueOps(),
     ...conversationOps(services),
+    ...replyOps(services),
     ...sessionOps(services),
     ...settingsOps(services),
     ...runOps(services),

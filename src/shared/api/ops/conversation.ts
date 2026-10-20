@@ -5,7 +5,7 @@ import { NEED_KINDS } from '../../model/needs';
 import { TURN_REASONS } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
-import { AgentId, MessageId, OpCanvas } from '../ids';
+import { AgentId, MessageId, NeedId, OpCanvas } from '../ids';
 import { MAX_MESSAGE_BYTES, MAX_PAGE, MAX_WAIT_SECONDS } from '../limits';
 import type { OpName } from '../surface';
 
@@ -180,6 +180,23 @@ export const conversationOps = {
       timeoutSeconds: z.int().min(0).max(MAX_WAIT_SECONDS),
     }),
     output: z.strictObject({ messages: z.array(Message), next: Cursor }),
+  }),
+  reply: define('reply', {
+    summary:
+      'Answers something waiting for an answer (an item `needs` lists, by its id) with one of ' +
+      'its choices. So far that is a proposal (a token’s delete, waiting for the user), which ' +
+      'only the user answers: Allow applies it as the user, unless what it touched changed since ' +
+      '(then it is settled stale and nothing changes), and Refuse changes nothing. Its proposer ' +
+      'gets a record either way. Returns that record’s id, and how it was settled.',
+    input: z.strictObject({
+      canvas,
+      to: NeedId,
+      answer: z.strictObject({ choice: z.string().min(1).max(64) }),
+    }),
+    output: z.strictObject({
+      id: z.uuid(),
+      outcome: z.enum(['allowed', 'refused', 'stale']).optional(),
+    }),
   }),
   withdraw: define('withdraw', {
     summary:

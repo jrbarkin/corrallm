@@ -21,6 +21,8 @@ export const NO_GESTURE = {
   'canvas.addParent':
     'B9 task 10 moves adding a parent from the renderer graph onto this operation.',
   'canvas.move': 'B9 task 10 moves dragging from the renderer graph onto this operation.',
+  'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
+  reply: 'B9’s proposal cards in the Needs you sidebar (the worker’s task 13) answer with it.',
   'canvas.rename':
     'The canvas’s rename still edits the renderer’s graph; B9’s gestures move onto the core’s operations together.',
 } satisfies Partial<Record<GuiOp, string>>;

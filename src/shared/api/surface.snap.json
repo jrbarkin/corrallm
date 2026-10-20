@@ -20,6 +20,7 @@
     "api.canvas.ungroup",
     "api.canvas.addParent",
     "api.canvas.move",
+    "api.canvas.batch",
     "api.agent.setType",
     "api.agent.setConnection",
     "api.agent.setSettings",
@@ -28,6 +29,7 @@
     "api.queue.remove",
     "api.queue.move",
     "api.queue.update",
+    "api.reply",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -48,6 +50,7 @@
       "app_info",
       "canvas_addAgent",
       "canvas_addParent",
+      "canvas_batch",
       "canvas_delete",
       "canvas_get",
       "canvas_group",
@@ -68,6 +71,7 @@
       "queue_move",
       "queue_remove",
       "queue_update",
+      "reply",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -87,6 +91,7 @@
       "message",
       "messages",
       "needs",
+      "reply",
       "session_get",
       "session_transcript",
       "usage_get",
@@ -117,6 +122,7 @@
       "app_info",
       "canvas_addAgent",
       "canvas_addParent",
+      "canvas_batch",
       "canvas_delete",
       "canvas_get",
       "canvas_group",
@@ -137,6 +143,7 @@
       "queue_move",
       "queue_remove",
       "queue_update",
+      "reply",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -152,10 +159,10 @@
     ]
   },
   "counts": {
-    "lead": 37,
-    "worker": 10,
+    "lead": 39,
+    "worker": 11,
     "outside-read": 16,
-    "outside-write": 38
+    "outside-write": 40
   },
   "unhosted": {
     "agents": "B11",
@@ -230,7 +237,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.addAgent": {
-      "input": "7632cef4695ef99a",
+      "input": "74e49497e5b835dc",
       "output": "ebd0120825103788"
     },
     "canvas.spawnAgent": {
@@ -239,7 +246,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "fcaf4b6069703347"
+      "output": "d6eb9a964d2422be"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -264,6 +271,10 @@
     "canvas.move": {
       "input": "f837a789fb1b2ea8",
       "output": "647bbd6cc7b4f077"
+    },
+    "canvas.batch": {
+      "input": "d7f96265830c24be",
+      "output": "774dad2f1bf247cd"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -320,6 +331,10 @@
     "wait": {
       "input": "d429567b08fb223f",
       "output": "ab20146cfb571ed1"
+    },
+    "reply": {
+      "input": "bbfd718db9f62552",
+      "output": "b93ec9601e5e7210"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",

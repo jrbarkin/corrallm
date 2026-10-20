@@ -16,7 +16,8 @@ import { asHuman } from '../gui';
 import { Superseded } from '../scopes';
 import { SYSTEM_DEPS } from '../store/store';
 import type { Store } from '../store/store';
-import { openTestStore } from '../store/test-store';
+import { openTestStore, readOnDisk } from '../store/test-store';
+import { PROPOSAL } from '../test-registry';
 import type { ChangeSet } from './change';
 import { committer } from './commit';
 import type { ChangeRule, CommitCall } from './commit';
@@ -210,6 +211,118 @@ describe('a commit', () => {
     );
     expect(heard).toEqual([]);
     expect(documents.live(canvas)).toMatchObject({ document: document(canvas), rev: 1 });
+  });
+
+  it('makes a token’s change only you may make a proposal, writing nothing, if its op may be one', async () => {
+    const raised: [CanvasId, string[], CommitCall][] = [];
+    const commit = committer({
+      documents,
+      rules: { discard: () => ({ propose: 'Only the user deletes Worker' }) },
+      propose: (on, change, call) => {
+        raised.push([on, [...change.entities.keys()], call]);
+        return Promise.resolve(PROPOSAL);
+      },
+    });
+    const call = callOf(ORCHESTRATOR, { proposes: true, args: { node: 'worker' } });
+    expect(await commit(canvas, rename('worker', 'Builder'), call)).toEqual({
+      proposed: PROPOSAL,
+    });
+    expect(raised).toEqual([[canvas, ['node/worker'], call]]);
+    expect([documents.live(canvas).rev, call.said]).toEqual([1, []]);
+    // An op that can't be one is refused instead, saying why.
+    await expect(
+      commit(canvas, rename('worker', 'Builder'), callOf(ORCHESTRATOR)),
+    ).rejects.toMatchObject({
+      code: 'refused',
+      message:
+        'Only the user deletes Worker, and canvas.rename can’t come to them as a proposal: ask with canvas.delete or canvas.batch, which can.',
+    });
+    // Yours applies.
+    await expect(commit(canvas, rename('worker', 'Builder'), callOf(YOU))).resolves.toMatchObject({
+      rev: 2,
+    });
+  });
+
+  it('refuses a change a rule refuses rather than propose it, whichever rule comes first', async () => {
+    const raised: unknown[] = [];
+    const commit = committer({
+      documents,
+      rules: {
+        discard: () => ({ propose: 'Only the user deletes Worker' }),
+        links: () => ({ refuse: 'Never.' }),
+      },
+      propose: () => {
+        raised.push('raised');
+        return Promise.resolve(PROPOSAL);
+      },
+    });
+    await expect(
+      commit(canvas, rename('worker', 'Builder'), callOf(ORCHESTRATOR, { proposes: true })),
+    ).rejects.toMatchObject({ code: 'refused', message: 'Never.' });
+    expect(raised).toEqual([]);
+  });
+
+  it('records the party whose proposal you allowed, and writes what else its write holds with it', async () => {
+    const said: string[] = [];
+    const commit = committer({ documents, rules: {} });
+    await commit(
+      canvas,
+      rename('worker', 'Builder'),
+      callOf(YOU, {
+        proposedBy: 'outside:orchestrator',
+        within: () => {
+          store.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/settled', canvas);
+          said.push('staged');
+          return { reveal: () => said.push('revealed'), undo: () => said.push('undone') };
+        },
+      }),
+    );
+    expect(said).toEqual(['staged', 'revealed']);
+    expect(
+      readOnDisk(profile, (disk) => ({
+        ...disk
+          .prepare('SELECT op, by_party, proposed_by FROM revision WHERE canvas_id = ? AND rev = 2')
+          .get(canvas),
+        ...disk.prepare('SELECT project FROM canvas WHERE id = ?').get(canvas),
+      })),
+    ).toEqual({
+      op: 'canvas.rename',
+      by_party: 'you',
+      proposed_by: 'outside:orchestrator',
+      project: '/settled',
+    });
+  });
+
+  it('undoes what else its write held when the write failed, keeping nothing', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await store.close();
+    store = await openTestStore(profile, {
+      ...SYSTEM_DEPS,
+      flush: () => Promise.reject(new Error('EIO: fsync failed')),
+    });
+    documents = new Documents({
+      store,
+      memory: new CanvasMemory(store),
+      catalog: CATALOG,
+      defaultAdapter: DEFAULT_ADAPTER,
+    });
+    await documents.load(canvas);
+    const said: string[] = [];
+    const commit = committer({ documents, rules: {} });
+    await expect(
+      commit(
+        canvas,
+        rename('worker', 'Builder'),
+        callOf(YOU, {
+          within: () => {
+            said.push('staged');
+            return { reveal: () => said.push('revealed'), undo: () => said.push('undone') };
+          },
+        }),
+      ),
+    ).rejects.toThrow('EIO: fsync failed');
+    expect(said).toEqual(['staged', 'undone']);
+    expect(documents.live(canvas).rev).toBe(1);
   });
 
   it('unwinds, writing nothing, when it is superseded before its point of no return', async () => {

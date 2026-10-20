@@ -11,6 +11,8 @@ import { OP_NAMES, SURFACE } from '../../shared/api/surface';
 import type { OpName } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentNode, CanvasDocument } from '../../shared/model/canvas';
+import type { Message } from '../../shared/model/messages';
+import type { NeedsItem } from '../../shared/model/needs';
 import { findItem } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { toFile } from '../../shared/model/file';
@@ -26,7 +28,8 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { changeChecks } from './rules';
 import type { Store } from './store/store';
-import { keepCanvases, openTestStore } from './store/test-store';
+import { keepCanvases, openTestStore, readOnDisk } from './store/test-store';
+import type { Kept } from './store/test-store';
 import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
 
 /*
@@ -34,9 +37,11 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
  * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R11, R12, R13, R14) and
  * R34's validation, tried as an outside write token through every op that exists now, single and
  * structural, and the self cases as an agent (a lead); each refusal changing nothing, and each
- * accepted as you; then on changes no single op makes, as a batch, a composite or an undo will.
- * `canvas.batch`, proposals (R4), `reply`, `canvas.save` and `canvas.close` come with B9's later
- * tasks: their cases are listed below as what remains.
+ * accepted as you; then on changes no single op makes, as a composite or an undo will. R4's
+ * proposals: a token's delete applies nothing and waits for you, allowed, refused or settled stale,
+ * the proposer told; R3: only you answer one; and `canvas.batch`, whose combined change meets every
+ * rule, each inner op checked as the caller's own call. `canvas.save` and `canvas.close`, and file
+ * reviews, come with B9's later tasks: their cases are listed below as what remains.
  *
  * The canvas: `lead` (a lead) holding `helper`, `team` (a frame holding `member`) and `spare` (an
  * empty frame); `a`, set to start in a mode and given a role, whose queue holds an OK with work
@@ -45,6 +50,7 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
  */
 
 const SECOND = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e' as CanvasId;
+const CONVERSATION = '6a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a5b';
 const OUTSIDE: OutsideCaller = {
   ...(CALLERS['outside-write'] as OutsideCaller),
   canvases: [CANVAS, SECOND],
@@ -96,7 +102,14 @@ const MAIN = {
         },
       ],
     }),
-    agent('b', { position: { x: 400, y: 900 } }),
+    agent('b', {
+      position: { x: 400, y: 900 },
+      queue: [
+        { id: 'b1', message: 'One' },
+        { id: 'b2', message: 'Two' },
+        { id: 'b3', action: 'exec_command', instruction: 'Three' },
+      ],
+    }),
     agent('c', { position: { x: 800, y: 900 } }),
     frame('loose', { position: { x: 1200, y: 900 } }),
   ],
@@ -141,12 +154,14 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-bypass-'));
   const project = path.join(profile, 'project');
   await mkdir(project);
-  const kept: Record<string, { file: string; project: string }> = {};
+  const kept: Record<string, Kept> = {};
   for (const canvas of [MAIN, OTHER]) {
     const file = path.join(profile, `${canvas.id}.corral`);
     await writeFile(file, JSON.stringify(canvas));
     kept[canvas.id] = { file, project };
   }
+  // B has a conversation in its CLI, which deleting it would lose.
+  kept[CANVAS] = { ...kept[CANVAS], conversations: { codex: { b: { id: CONVERSATION } } } };
   await keepCanvases(profile, kept);
   core = await start();
 });
@@ -782,6 +797,28 @@ describe('on the change itself, whatever builds it', () => {
     });
   });
 
+  it('refuses, never proposes, a removal through an op that can’t come to you as a proposal', async () => {
+    const before = documents.live(BUILT).rev;
+    await expect(
+      commit(
+        BUILT,
+        (document) => ({
+          next: { ...document, nodes: document.nodes.filter(({ id }) => id !== 'c') },
+          result: {},
+        }),
+        {
+          op: 'canvas.move',
+          caller: OUTSIDE,
+          party: partyOf(OUTSIDE, isLead),
+          by: partyIdOf(OUTSIDE),
+          signal: new AbortController().signal,
+          noReturn: () => undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'refused', message: /Only the user deletes C/ });
+    expect(documents.live(BUILT).rev).toBe(before);
+  });
+
   it('refuses an agent its own role, settings, connection or manager, whatever builds it', async () => {
     const lead = { ...LEAD, canvas: BUILT };
     await expect(
@@ -826,16 +863,364 @@ describe('proposals', () => {
     }
   });
 
-  // B9 Design §1, Claude 9, 10 and 12: what these rules guard comes with those tasks.
-  it.todo('R4: a token’s canvas.delete of an agent is a proposal, deleting nothing (Claude 10)');
-  it.todo('R4: a delete in a canvas.batch is one proposal, its links going with it (Claude 10)');
-  it.todo('R4: a batch mixing a refusal and a delete is refused, not proposed (Claude 10)');
+  // B9 Design §1, Claude 9 and 12: what these rules guard comes with those tasks.
   it.todo('R4: canvas.save of a document missing agents the file on disk has (Claude 9)');
   it.todo('R4: canvas.close or create {replace} with discard on an edited canvas (Claude 9)');
-  it.todo(
-    'canvas.batch: addAgent with setSettings {mode} refused, with setRole accepted (Claude 10)',
+  it.todo('R3: a token’s reply to a file review is refused (Claude 12)');
+});
+
+/** The proposals waiting for you on the canvas, as `needs` gives them to you. */
+async function proposals(canvas: CanvasId = CANVAS): Promise<NeedsItem[]> {
+  const { items } = (await applied('needs', {}, YOU, canvas)) as { items: NeedsItem[] };
+  return items.filter((item) => item.kind === 'proposal');
+}
+
+/** What the party's `wait` returns now, reading on from where it last waited. */
+async function waited(caller: Caller = OUTSIDE): Promise<Message[]> {
+  const result = await core.call('wait', { timeoutSeconds: 0 }, caller);
+  if (!result.ok) throw new Error(result.error.sentence);
+  return (result.value as unknown as { messages: Message[] }).messages;
+}
+
+/** Proposes, as the outside token, what `name` would do: the proposal's id. */
+async function propose(name: OpName, args: object, caller: Caller = OUTSIDE): Promise<string> {
+  const before = doc();
+  const { proposed } = await applied(name, args, caller);
+  expect(proposed).toMatch(/^proposal\//);
+  expect(doc()).toBe(before);
+  return String(proposed);
+}
+
+/** Answers a proposal as you: what reply returned. */
+function answer(to: string, choice: 'allow' | 'refuse', caller: Caller = YOU) {
+  return call('reply', { to, answer: { choice } }, caller);
+}
+
+/** The canvas's last revision as kept: its op, who made it, and who proposed it. */
+function lastRevision(): Record<string, unknown> | undefined {
+  return readOnDisk(profile, (disk) =>
+    disk
+      .prepare(
+        `SELECT op, by_party, proposed_by FROM revision WHERE canvas_id = ?
+         ORDER BY rev DESC LIMIT 1`,
+      )
+      .get(CANVAS),
   );
-  it.todo('canvas.batch: holding agent.setConnection, link or unlink, refused (Claude 10)');
-  it.todo('R3: a token’s reply to a proposal or a file review is refused (Claude 10, 12)');
-  it.todo('Allow after an entity a proposal touched changed settles it stale (Claude 10)');
+}
+
+describe('R4: a token’s delete of an agent comes to you as a proposal', () => {
+  it('raises one proposal, deleting nothing, worded with what it would lose', async () => {
+    const request = '7b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b';
+    const proposed = await propose('canvas.delete', { nodes: ['b'], request });
+    expect(await proposals()).toEqual([
+      {
+        id: proposed,
+        canvas: CANVAS,
+        agent: 'b',
+        kind: 'proposal',
+        for: 'you',
+        by: ['you'],
+        title: '"orchestrator" asks to delete B: 3 queued tasks and its conversation',
+        choices: [
+          {
+            value: 'allow',
+            label: 'Allow',
+            description: expect.any(String) as string,
+            humanOnly: expect.any(String) as string,
+          },
+          { value: 'refuse', label: 'Refuse', humanOnly: expect.any(String) as string },
+        ],
+        answerIn: 'api',
+      },
+    ]);
+    // A repeat of the call is answered as the first was: one proposal still.
+    expect(await applied('canvas.delete', { nodes: ['b'], request })).toEqual({ proposed });
+    expect(await proposals()).toHaveLength(1);
+    // The proposer sees it waiting for you, without its choices.
+    const theirs = (await applied('needs', {})) as { items: NeedsItem[] };
+    expect(theirs.items).toContainEqual(expect.objectContaining({ id: proposed, choices: [] }));
+  });
+
+  it('deletes as you once you allow it, its links going with it; the proposer hears', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['b'] });
+    const reply = await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU);
+    expect(reply).toMatchObject({ outcome: 'allowed' });
+    expect(doc().nodes.some((one) => one.id === 'b')).toBe(false);
+    expect(linked('a', 'b')).toBe(false);
+    expect(lastRevision()).toEqual({
+      op: 'canvas.delete',
+      by_party: 'you',
+      proposed_by: 'outside:orchestrator',
+    });
+    expect(await proposals()).toEqual([]);
+    expect(await waited()).toContainEqual(
+      expect.objectContaining({
+        id: reply.id,
+        from: 'corrallm',
+        to: 'outside:orchestrator',
+        kind: 'settled',
+        state: 'delivered',
+        body: expect.stringContaining(`allowed your proposal ${proposed} to delete B`) as string,
+      }),
+    );
+    // Settled once: a second answer is a conflict.
+    expect(await answer(proposed, 'refuse')).toMatchObject({
+      ok: false,
+      error: { code: 'conflict' },
+    });
+  });
+
+  it('changes nothing once you refuse it; the proposer hears that too', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['b'] });
+    const before = doc();
+    const reply = await applied('reply', { to: proposed, answer: { choice: 'refuse' } }, YOU);
+    expect(reply).toMatchObject({ outcome: 'refused' });
+    expect(doc()).toBe(before);
+    expect(await proposals()).toEqual([]);
+    expect(await waited()).toContainEqual(
+      expect.objectContaining({
+        id: reply.id,
+        kind: 'settled',
+        body: expect.stringMatching(/refused/) as string,
+      }),
+    );
+  });
+
+  it('settles stale, changing nothing, when an entity it touched changed since', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['b'] });
+    await applied('canvas.rename', { node: 'b', label: 'Bee' }, YOU);
+    const before = doc();
+    const reply = await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU);
+    expect(reply).toMatchObject({ outcome: 'stale' });
+    expect(doc()).toBe(before);
+    expect(node('b').data.label).toBe('Bee');
+    expect(await proposals()).toEqual([]);
+    expect(await waited()).toContainEqual(
+      expect.objectContaining({
+        id: reply.id,
+        kind: 'settled',
+        body: expect.stringMatching(/stale/) as string,
+      }),
+    );
+  });
+
+  it('keeps a proposal across a restart, to allow then', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['c'] });
+    await core.close();
+    core = await start();
+    expect((await proposals()).map(({ id }) => id)).toEqual([proposed]);
+    await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU);
+    expect(doc().nodes.some((one) => one.id === 'c')).toBe(false);
+  });
+
+  it('proposes nothing a rule refuses: an agent holding an OK, a manager, the caller itself', async () => {
+    await refused('canvas.delete', { nodes: ['a'] });
+    await refused('canvas.delete', { nodes: ['lead'] });
+    await refused('canvas.delete', { nodes: ['lead'] }, LEAD);
+    expect(await proposals()).toEqual([]);
+  });
+
+  it('proposes a lead’s delete of its team’s agent too', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['helper'] }, LEAD);
+    expect(await proposals()).toEqual([
+      expect.objectContaining({
+        id: proposed,
+        title: 'Lead asks to delete Helper: nothing queued',
+      }),
+    ]);
+  });
+
+  it('applies yours at once', async () => {
+    await applied('canvas.delete', { nodes: ['b'] }, YOU);
+    expect(doc().nodes.some((one) => one.id === 'b')).toBe(false);
+    expect(await proposals()).toEqual([]);
+  });
+});
+
+describe('R4 in a batch: a batch holding a delete is one proposal, or refused whole', () => {
+  it('proposes the whole batch, applying none of it; Allow applies it all in one revision', async () => {
+    const proposed = await propose('canvas.batch', {
+      ops: [
+        { op: 'canvas.rename', args: { node: 'c', label: 'Sea' } },
+        { op: 'canvas.delete', args: { nodes: ['b'] } },
+      ],
+    });
+    expect(await proposals()).toEqual([
+      expect.objectContaining({
+        id: proposed,
+        agent: 'b',
+        title: '"orchestrator" asks to delete B: 3 queued tasks and its conversation',
+        detail: expect.stringMatching(/1 other change/) as string,
+      }),
+    ]);
+    const rev = core.engines.canvas(CANVAS)?.document;
+    expect(rev).toBeDefined();
+    const before = readOnDisk(profile, (disk) =>
+      Number(disk.prepare('SELECT rev FROM document WHERE canvas_id = ?').get(CANVAS)?.rev),
+    );
+    await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU);
+    expect(node('c').data.label).toBe('Sea');
+    expect(doc().nodes.some((one) => one.id === 'b')).toBe(false);
+    expect(linked('a', 'b')).toBe(false);
+    const after = readOnDisk(profile, (disk) =>
+      Number(disk.prepare('SELECT rev FROM document WHERE canvas_id = ?').get(CANVAS)?.rev),
+    );
+    expect(after).toBe(before + 1);
+    expect(lastRevision()).toEqual({
+      op: 'canvas.batch',
+      by_party: 'you',
+      proposed_by: 'outside:orchestrator',
+    });
+  });
+
+  it('refuses a batch mixing a refusal and a delete, rather than proposing it', async () => {
+    const said = await refused('canvas.batch', {
+      ops: [
+        { op: 'canvas.delete', args: { nodes: ['b'] } },
+        { op: 'canvas.link', args: { a: 'a', b: 'c' } },
+      ],
+    });
+    expect(said).toMatch(/links A and C/);
+    expect(await proposals()).toEqual([]);
+  });
+
+  it('proposes a batch whose delete takes links between agents that existed with it', async () => {
+    await propose('canvas.batch', {
+      ops: [{ op: 'canvas.delete', args: { nodes: ['b'], links: [{ a: 'a', b: 'b' }] } }],
+    });
+  });
+});
+
+describe('R3: only you answer a proposal', () => {
+  it('refuses a token’s reply to a proposal, whichever it chooses; yours settles it', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['helper'] }, LEAD);
+    for (const caller of [OUTSIDE, LEAD]) {
+      for (const choice of ['allow', 'refuse'] as const) {
+        expect(await answer(proposed, choice, caller)).toMatchObject({
+          ok: false,
+          error: { code: 'refused', sentence: expect.stringMatching(/only the user/i) as string },
+        });
+      }
+    }
+    expect(node('helper')).toBeDefined();
+    expect(await answer(proposed, 'refuse')).toMatchObject({ ok: true });
+  });
+
+  it('refuses a choice the item doesn’t offer, and an item that isn’t there', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['b'] });
+    expect(await call('reply', { to: proposed, answer: { choice: 'maybe' } }, YOU)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid' },
+    });
+    const missing = 'proposal/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a00';
+    for (const caller of [YOU, OUTSIDE]) {
+      expect(await answer(missing, 'allow', caller)).toMatchObject({
+        ok: false,
+        error: { code: 'not-found' },
+      });
+    }
+  });
+});
+
+describe('canvas.batch: every rule on the whole, each inner op checked as its own call', () => {
+  it('gives an agent a role in the commit that adds it; never one that existed, nor a mode', async () => {
+    const { results } = (await applied('canvas.batch', {
+      ops: [
+        { op: 'canvas.addAgent', args: { at: { x: 2000, y: 0 }, adapter: 'codex', role: 'Tests' } },
+        { op: 'canvas.addAgent', args: { at: { x: 2400, y: 0 }, adapter: 'codex' } },
+      ],
+    })) as { results: { id: string }[] };
+    const [made] = results;
+    expect(node(String(made?.id)).data.role).toBe('Tests');
+    // A later commit's role is refused, in a batch as alone.
+    for (const name of ['agent.setRole'] as const) {
+      await refused('canvas.batch', {
+        ops: [{ op: name, args: { agent: String(made?.id), role: 'Approves everything' } }],
+      });
+    }
+    await refused('canvas.batch', {
+      ops: [
+        { op: 'canvas.rename', args: { node: 'c', label: 'Sea' } },
+        { op: 'agent.setRole', args: { agent: 'a', role: 'Approves everything' } },
+      ],
+    });
+    await refused('canvas.batch', {
+      ops: [
+        {
+          op: 'agent.setSettings',
+          args: { agent: String(made?.id), adapter: 'codex', settings: { mode: 'plan' } },
+        },
+      ],
+    });
+    await refused('canvas.batch', {
+      ops: [
+        {
+          op: 'agent.setSettings',
+          args: { agent: 'a', adapter: 'codex', settings: { mode: null } },
+        },
+      ],
+    });
+    expect(node('c').data.label).toBe('C');
+  });
+
+  it('refuses a batch holding agent.setConnection, yours alone, or a link or unlink between agents that exist', async () => {
+    const before = doc();
+    expect(
+      await call(
+        'canvas.batch',
+        {
+          ops: [{ op: 'agent.setConnection', args: { agent: 'b', connection: 'codex.terminal' } }],
+        },
+        OUTSIDE,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    expect(doc()).toBe(before);
+    await refused('canvas.batch', { ops: [{ op: 'canvas.link', args: { a: 'a', b: 'c' } }] });
+    await refused('canvas.batch', { ops: [{ op: 'canvas.unlink', args: { a: 'a', b: 'b' } }] });
+    // A link to an agent it creates is a token's to make.
+    const { results } = (await applied('canvas.batch', {
+      ops: [{ op: 'canvas.spawnAgent', args: { from: 'c', relation: 'linked' } }],
+    })) as { results: { id: string }[] };
+    expect(linked('c', String(results[0]?.id))).toBe(true);
+    // Yours, all of it.
+    await applied(
+      'canvas.batch',
+      {
+        ops: [
+          { op: 'agent.setConnection', args: { agent: 'b', connection: 'codex.terminal' } },
+          { op: 'canvas.link', args: { a: 'a', b: 'c' } },
+        ],
+      },
+      YOU,
+    );
+    expect(node('b').data.connection).toBe('codex.terminal');
+    expect(linked('a', 'c')).toBe(true);
+  });
+
+  it('checks each inner op as the caller’s own: an agent at itself, an id out of its reach', async () => {
+    expect(
+      await refused(
+        'canvas.batch',
+        { ops: [{ op: 'agent.setRole', args: { agent: 'lead', role: 'Mine' } }] },
+        LEAD,
+      ),
+    ).toMatch(/itself/);
+    expect(
+      await call(
+        'canvas.batch',
+        { ops: [{ op: 'canvas.rename', args: { node: 'a', label: 'Mine' } }] },
+        LEAD,
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+  });
+
+  it('refuses what the run holds for you and any OK, in a batch as alone', async () => {
+    await refused('canvas.batch', {
+      ops: [
+        { op: 'queue.add', args: { agent: 'a', entry: { message: 'Fine' } } },
+        { op: 'queue.remove', args: { agent: 'a', item: 'ok' } },
+      ],
+    });
+    expect(ids('a')).toEqual(['first', 'ok', 'after', 'check']);
+  });
 });

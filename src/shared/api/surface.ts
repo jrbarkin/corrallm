@@ -158,11 +158,12 @@ export const SURFACE = {
     rules: ['new-agent'],
     self: 'allowed',
   },
+  // A token's delete of an agent comes to you as a proposal (R4), unless another rule refuses it.
   'canvas.delete': {
     access: L,
     kind: 'doc',
     scope: 'canvas',
-    rules: ['human-gate', 'links'],
+    rules: ['human-gate', 'links', 'discard'],
     self: 'refused',
     drains: 'agents',
     destructive: true,
@@ -191,6 +192,28 @@ export const SURFACE = {
     self: 'allowed',
   },
   'canvas.move': { access: L, kind: 'doc', scope: 'canvas', self: 'allowed' },
+  // Several doc ops as one commit: every change rule a batch can meet is checked on its whole
+  // change (R8 only through agent.setConnection or agent.setType, which are yours alone), and each
+  // inner op is checked as the caller's own call, its own `self` included. It drains the agents its
+  // inner ops would.
+  'canvas.batch': {
+    access: L,
+    kind: 'doc',
+    scope: 'canvas',
+    rules: [
+      'discard',
+      'mode-permits',
+      'self',
+      'human-gate',
+      'new-agent',
+      'role',
+      'links',
+      'managers',
+    ],
+    self: 'allowed',
+    drains: 'agents',
+    destructive: true,
+  },
   'agent.setType': {
     access: Y,
     kind: 'doc',
@@ -266,6 +289,8 @@ export const SURFACE = {
     self: 'refused',
   },
   withdraw: { access: M, kind: 'command', scope: 'canvas', preempt: true, destructive: true },
+  // Answers a Needs item its caller may answer: in B9, a proposal (yours alone, R3).
+  reply: { access: M, kind: 'command', scope: 'canvas', rules: ['human-choice'] },
   'session.get': {
     access: A,
     kind: 'read',

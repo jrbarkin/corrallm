@@ -31,6 +31,20 @@ export const RULES = {
     sentence:
       'Only you change the mode an agent that exists starts in: a token leaves it out, or passes the saved one.',
   },
+  // R3: as `reply` arrives, the caller must be one the item names to answer it (its `by`), and
+  // may pick no choice marked `humanOnly` (a proposal's, a file review's: yours alone).
+  'human-choice': {
+    kind: 'argument',
+    sentence: 'Only you answer what only you may decide: a choice marked human-only.',
+  },
+  // R4: a token's commit that removes an agent becomes a proposal for you, unless another rule
+  // refuses it. Its argument half (discarding unsaved edits, closing or replacing a canvas a
+  // window shows, a save that drops agents) comes with canvas.close, create and save.
+  discard: {
+    kind: 'change',
+    sentence:
+      'Only you delete an agent or discard work: a token’s call comes to you as a proposal, which you allow or refuse.',
+  },
   // R6: its declared half is each op's `self`, checked in core.call.
   self: {
     kind: 'change',

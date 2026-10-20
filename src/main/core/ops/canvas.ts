@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AgentId, NodeId } from '../../../shared/api/ids';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
+import * as agents from '../../../shared/model/agent-ops';
 import * as structure from '../../../shared/model/structure';
 import type { Built, Created, StructureContext } from '../../../shared/model/structure';
 import { OpFailure } from '../call';
@@ -30,10 +31,16 @@ export function canvasOps({
         requireNode(doc, node);
         return { next: structure.rename(doc, { id: node, label }).next, result: {} };
       }),
-    'canvas.addAgent': ({ canvas, at, adapter }, ctx) =>
-      ctx.commit(canvas, (doc) =>
-        created(structure.addAgent(doc, { at, adapter }, context), AgentId),
-      ),
+    'canvas.addAgent': ({ canvas, at, adapter, role }, ctx) =>
+      ctx.commit(canvas, (doc) => {
+        const built = created(structure.addAgent(doc, { at, adapter }, context), AgentId);
+        if (role === undefined) return built;
+        // Its role as it is made: in the same change, which a token may give it (R12).
+        return {
+          next: agents.setRole(built.next, { agent: built.result.id, role }).next,
+          result: built.result,
+        };
+      }),
     'canvas.spawnAgent': ({ canvas, from, relation }, ctx) =>
       ctx.commit(canvas, (doc) => {
         requireNode(doc, from, 'agent');

@@ -74,6 +74,8 @@ export interface EnginesDeps {
   environment: () => Promise<Readonly<Record<string, string>>>;
   /** The locale the engines tell times of day in (the host's): the runtime's own, when none. */
   locale?: string;
+  /** What else waits for you on a canvas, besides its run's holds and its sessions' prompts. */
+  needs?: (canvas: CanvasId) => readonly NeedsItem[];
 }
 
 /** A canvas the core runs: its document, its engine and its messages. */
@@ -165,6 +167,23 @@ export class Engines {
     running.delivery.schedule();
     // What waits there is worded from the document too.
     this.#look(running);
+  }
+
+  /**
+   * What waits for an answer on the canvas may have changed beside its engine (a proposal raised
+   * or settled): watchers look again.
+   */
+  needsChanged(canvas: CanvasId): void {
+    const running = this.#canvases.get(canvas);
+    if (running) this.#look(running);
+  }
+
+  /**
+   * The canvas's messages, read once, whether or not it is open here: where corrallm's records to
+   * its parties go (a proposal's settlement).
+   */
+  async messagesOf(canvas: CanvasId): Promise<MessageStore> {
+    return (await this.#mailOf(canvas)).messages;
   }
 
   /** The canvases the core has open, in the order they opened. */
@@ -491,7 +510,10 @@ export class Engines {
       if (this.#canvases.get(running.document.id) !== running) return;
       for (const watcher of this.#watchers) watcher.needs?.(running.document.id);
       if (![...this.#watchers].some((watcher) => watcher.need !== undefined)) return;
-      const items = needs(needsInput(running, this.#deps.locale));
+      const items = [
+        ...needs(needsInput(running, this.#deps.locale)),
+        ...(this.#deps.needs?.(running.document.id) ?? []),
+      ];
       for (const item of items) {
         if (running.needs.has(item.id)) continue;
         for (const watcher of this.#watchers) watcher.need?.(running.document.id, item);

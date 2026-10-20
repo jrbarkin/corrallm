@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
 import {
+  MAX_BATCH_OPS,
   MAX_CREATED_AGENTS,
   MAX_LABEL,
   MAX_MESSAGE_BYTES,
@@ -34,8 +35,10 @@ import type { OpFixture, OutOfReach } from './test-registry';
  * by you. The lead's team also holds what calls meeting the change rules change, as you apply them
  * once every token was refused: `deputy` (linked to the lead and the helper) with `aide` nested
  * inside it, the frame `frame-team` holding `member`, `gate`, whose queue holds an OK, OKs at the
- * end of the helper's queue, and empty frames. While a call meets R11 (`meeting`), every token's
- * party is at its cap.
+ * end of the helper's queue, and empty frames; and what tokens' deletes propose to remove
+ * (`doomed`, `doomed-batch`), with two proposals waiting for you as the tests begin (PROPOSED, the
+ * outside write token's deletes of `condemned-a` and `condemned-b`, which the worker is linked to).
+ * While a call meets R11 (`meeting`), every token's party is at its cap.
  */
 
 /** The messages waiting for `peer` as the core starts, each from a party that may take it back. */
@@ -48,6 +51,15 @@ export const SEEDED = {
 
 /** The notice corrallm sent the read-only token's party (`watcher`) before the core started. */
 export const NOTICE = '1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a54';
+
+/**
+ * The proposals waiting for you as the generated tests begin: the outside write token's deletes of
+ * `condemned-a` (which you refuse) and `condemned-b` (which tokens may not answer, and you allow).
+ */
+export const PROPOSED = {
+  refused: 'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a60',
+  allowed: 'proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a61',
+} as const;
 
 /** A `wait` cursor at the start of the canvas's messages. */
 const START = cursorOf('wait', { [CANVAS]: 0 });
@@ -72,6 +84,13 @@ const NODES = [
   { id: 'peer', adapter: 'gemini' },
   { id: 'shell', connection: 'codex.terminal' },
   { id: 'stranger', connection: 'codex.app-server' },
+  // What tokens' deletes propose to remove, each once: alone, in a batch, and the two proposals
+  // waiting as the tests begin.
+  ...['doomed', 'doomed-batch', 'condemned-a', 'condemned-b'].map((id) => ({
+    id,
+    connection: 'codex.app-server',
+    parent: 'lead',
+  })),
 ];
 const HELPER_QUEUE = [
   { id: 'text', message: 'Original' },
@@ -87,7 +106,10 @@ const HELPER_QUEUE = [
     id: `remove-${party}`,
     message: 'Remove me',
   })),
-  ...['remove', 'move', 'update'].map((what) => ({ id: `ok-${what}`, approve: `The ${what}` })),
+  ...['remove', 'move', 'update', 'batch'].map((what) => ({
+    id: `ok-${what}`,
+    approve: `The ${what}`,
+  })),
 ];
 const LINKS = [
   ['worker', 'peer'],
@@ -96,6 +118,9 @@ const LINKS = [
   ['lead', 'shell'],
   ['lead', 'deputy'],
   ['helper', 'deputy'],
+  // The worker reaches what the waiting proposals would delete, so it may try to answer them.
+  ['worker', 'condemned-a'],
+  ['worker', 'condemned-b'],
 ];
 
 /** A Terminal whose sessions never start: it says why, as a login it can't run on does. */
@@ -191,6 +216,7 @@ export async function startWorld(): Promise<{
   ]);
   let clock = 0;
   let cap = MAX_CREATED_AGENTS;
+  const proposals = Object.values(PROPOSED).map((id) => id.slice('proposal/'.length));
   const core = await createCore(
     {
       profile,
@@ -201,6 +227,7 @@ export async function startWorld(): Promise<{
       // Each call a second after the last: no token's writes are limited here.
       limitsClock: () => (clock += 1000),
       maxCreatedAgents: () => cap,
+      proposalIds: () => proposals.shift() ?? crypto.randomUUID(),
       sessions: {
         connectors: {
           'codex.app-server': new FakeConnector({ adapter: 'codex' }),
@@ -226,6 +253,19 @@ export async function startWorld(): Promise<{
     CALLERS.you,
   );
   if (!tried.ok) throw new Error(tried.error.sentence);
+  for (const [doomed, id] of [
+    ['condemned-a', PROPOSED.refused],
+    ['condemned-b', PROPOSED.allowed],
+  ] as const) {
+    const proposed = await core.call(
+      'canvas.delete',
+      { canvas: CANVAS, nodes: [doomed] },
+      CALLERS['outside-write'],
+    );
+    if (!proposed.ok || !('proposed' in proposed.value) || proposed.value.proposed !== id) {
+      throw new Error(`Not proposed as ${id}: ${JSON.stringify(proposed)}`);
+    }
+  }
   await new Promise<void>((resolve) => {
     const stuck = () =>
       core.engines
@@ -419,6 +459,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     meetsRule: {
       'human-gate': { canvas: CANVAS, nodes: ['gate'], request: request(19) },
       links: { canvas: CANVAS, links: [{ a: 'deputy', b: 'helper' }], request: request(3) },
+      // A leaf of the lead's team, nothing in its queue: a token's delete of it is proposed.
+      discard: { canvas: CANVAS, nodes: ['doomed'], request: request(34) },
     },
   },
   'canvas.group': {
@@ -728,6 +770,83 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     },
   },
+  'canvas.batch': {
+    // Each call after the first renames the helper as it is and moves its step where it is: no
+    // change, as alike for every party.
+    valid: [
+      {
+        canvas: CANVAS,
+        ops: [
+          { op: 'canvas.rename', args: { node: 'helper', label: 'Assistant' } },
+          { op: 'queue.move', args: { agent: 'helper', item: 'step', before: 'text' } },
+        ],
+        expect: NO_ITEM,
+        request: request(35),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { ops: [] },
+      { ops: [{ op: 'run.pause', args: { target: { agent: 'helper' } } }] },
+      { ops: [{ op: 'canvas.batch', args: { ops: [] } }] },
+      { ops: [{ op: 'canvas.rename', args: { canvas: CANVAS, node: 'helper', label: 'X' } }] },
+      {
+        ops: Array.from({ length: MAX_BATCH_OPS + 1 }, () => ({
+          op: 'canvas.rename',
+          args: { node: 'helper', label: 'X' },
+        })),
+      },
+    ],
+    // Every rule a batch can meet, each through one op of its own, on the whole change.
+    meetsRule: {
+      discard: {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.delete', args: { nodes: ['doomed-batch'] } }],
+        request: request(36),
+      },
+      // The helper starts in read-only by now (agent.setSettings's own case, yours).
+      'mode-permits': {
+        canvas: CANVAS,
+        ops: [
+          {
+            op: 'agent.setSettings',
+            args: { agent: 'helper', adapter: 'codex', settings: { mode: 'plan' } },
+          },
+        ],
+        request: request(37),
+      },
+      self: {
+        canvas: CANVAS,
+        ops: [{ op: 'agent.setRole', args: { agent: 'lead', role: 'Leads in a batch' } }],
+        request: request(38),
+      },
+      'human-gate': {
+        canvas: CANVAS,
+        ops: [{ op: 'queue.remove', args: { agent: 'helper', item: 'ok-batch' } }],
+        request: request(39),
+      },
+      'new-agent': {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.addAgent', args: { at: { x: 3300, y: 0 }, adapter: 'codex' } }],
+        request: request(83),
+      },
+      role: {
+        canvas: CANVAS,
+        ops: [{ op: 'agent.setRole', args: { agent: 'helper', role: 'Plans in a batch' } }],
+        request: request(84),
+      },
+      links: {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.link', args: { a: 'aide', b: 'lead' } }],
+        request: request(85),
+      },
+      managers: {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.group', args: { nodes: ['member'], kind: 'agent' } }],
+        request: request(86),
+      },
+    },
+  },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: 1 }],
@@ -784,6 +903,36 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       'outside-write': [{ canvas: CANVAS, id: SEEDED.orchestrator, request: request(23) }],
     },
     invalid: [{ canvas: CANVAS, id: 'nope' }, { canvas: CANVAS }],
+  },
+  reply: {
+    // Only you answer a proposal: you refuse one, and allow the other once every token's answer
+    // to it was refused.
+    valid: [],
+    by: {
+      you: [
+        {
+          canvas: CANVAS,
+          to: PROPOSED.refused,
+          answer: { choice: 'refuse' },
+          request: request(87),
+        },
+      ],
+    },
+    fresh: ['id', 'revs'],
+    invalid: [
+      { to: 'nope', answer: { choice: 'allow' } },
+      { to: PROPOSED.allowed, answer: {} },
+      { to: PROPOSED.allowed, answer: { choice: '' } },
+      { to: PROPOSED.allowed, answer: { choice: 'allow' }, extra: true },
+    ],
+    meetsRule: {
+      'human-choice': {
+        canvas: CANVAS,
+        to: PROPOSED.allowed,
+        answer: { choice: 'allow' },
+        request: request(88),
+      },
+    },
   },
   'session.get': {
     valid: [{ canvas: CANVAS, agent: 'peer' }],
@@ -1009,4 +1158,6 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
         : undefined,
   MessageId: (caller) =>
     MESSAGES_OUT_OF_REACH[caller.kind === 'outside' ? caller.name : caller.agent],
+  // A Needs item that isn't there.
+  NeedId: () => ['proposal/1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],
 };

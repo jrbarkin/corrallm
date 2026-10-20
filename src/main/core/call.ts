@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 
+import { PROPOSING_RULES } from '../../shared/api/define';
 import type { OpDef } from '../../shared/api/define';
 import { TOO_MANY_WAITS } from '../../shared/api/errors';
 import type { Current, OpError, OpErrorCode, OpResult } from '../../shared/api/errors';
@@ -14,6 +15,7 @@ import { callerKey, canvasesOf, partyIdOf, partyOf } from './caller';
 import type { Committer } from './canvas/commit';
 import type { Built } from './canvas/documents';
 import type { Caller, TokenCaller } from './caller';
+import type { Staged } from './delivery/messages';
 import { outOfReach } from './reach';
 import type { Resolver } from './reach';
 import { Requests } from './requests';
@@ -33,7 +35,11 @@ import { Throttle } from './throttle';
  * may not, returns a repeated request's first result, and runs the op in its scope, checking the
  * op's rules on a token's arguments there first (a met rule refuses it, or makes it a proposal for
  * you), since they read what the ops before it in its scope left. It never throws: a failure is a
- * value, whose code survives any transport.
+ * value, whose code survives any transport. An op may run another as part of itself, in its own
+ * turn (`ctx.call`, `ctx.prepare`): checked as a call of its caller's own would be (its audience,
+ * arguments, reach, self and argument rules), never throttled, deduped or scoped apart. A commit
+ * that a change rule makes a proposal for you (R4) applies nothing: the op's result is
+ * `{ proposed }`.
  */
 
 /**
@@ -53,6 +59,17 @@ export class OpFailure extends Error {
 }
 
 /**
+ * How a commit is made beyond what the call itself says (Allow's, B9 Design §5): recording the
+ * party whose proposal you allowed, expecting the revisions its change touched, and holding what
+ * else its write must (the proposal's settlement and its record).
+ */
+export interface CommitOptions {
+  proposedBy?: PartyId;
+  expect?: Readonly<Record<string, number>>;
+  within?: () => Staged;
+}
+
+/**
  * What an op is called with besides its arguments: who called, as what party, its signal, and how
  * it changes a canvas's document.
  */
@@ -69,9 +86,38 @@ export interface OpContext {
    * for a token, the change rules, then written past the call's point of no return. Resolves with
    * the op's result once it is on disk, the revision it took the call's (`revs`); rejects, changing
    * nothing, if the canvas isn't open, an entity the call expects is at another revision (a
-   * conflict, saying what each is now), a change rule refuses it, or it couldn't be written.
+   * conflict, saying what each is now), a change rule refuses it, or it couldn't be written. A doc
+   * op's implementation calls it at once, and once: what `prepare` reads its change from. A change
+   * only you may make, from a token, rejects with ProposedInstead, which the op's result becomes.
    */
   commit<R>(canvas: string | undefined, build: (document: CanvasDocument) => Built<R>): Promise<R>;
+  /**
+   * Runs op `name` with `args` as part of this one, in its turn, as the caller: checked as a call
+   * of the caller's own would be (its audience, its arguments, the ids it names in reach, an agent
+   * not aiming at itself what it may not, its argument rules), its commits made as `options` say.
+   * Its result, or `{ proposed }`; rejects as that call would fail.
+   */
+  call(name: string, args: unknown, options?: CommitOptions): Promise<unknown>;
+  /**
+   * What the doc op `name` would build of a canvas's document with `args`, checked as `call` checks
+   * it, for this op to commit together with others (canvas.batch). Rejects as that call would fail
+   * before it commits.
+   */
+  prepare(name: string, args: unknown): Promise<(document: CanvasDocument) => Built<unknown>>;
+}
+
+/**
+ * A commit that became a proposal for you, applying nothing: the op's result is `{ proposed }`.
+ * Thrown by ctx.commit; an op lets it pass.
+ */
+export class ProposedInstead extends Error {
+  readonly need: NeedId;
+
+  constructor(need: NeedId) {
+    super('It came to the user as a proposal.');
+    this.name = 'ProposedInstead';
+    this.need = need;
+  }
 }
 
 /** An op's implementation: its arguments, parsed, to its result. */
@@ -137,6 +183,23 @@ export interface Dispatcher {
     caller: Caller,
     signal?: AbortSignal,
   ): Promise<OpResult<unknown>>;
+}
+
+/** An op's turn in its scope: its signal, what says it is past its point of no return, its revs. */
+interface Turn {
+  signal: AbortSignal;
+  noReturn(): void;
+  /** The revision of each topic its commits reached. */
+  revs: Record<string, number>;
+}
+
+/** An op's arguments as a proposal of it keeps them: but its request and expect, its own. */
+function kept(args: unknown): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(args as Record<string, unknown>).filter(
+      ([key]) => key !== 'request' && key !== 'expect',
+    ),
+  );
 }
 
 /** The kinds of id that name an agent, which an agent may not aim an op declared `self: refused` at. */
@@ -208,6 +271,159 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
   }
 
   /**
+   * The op's rules on a token's arguments, in its scope: throws for one that refuses them; the
+   * proposal a rule made of them, if one did; else nothing.
+   */
+  async function checkRules(
+    name: string,
+    surface: Surface,
+    args: unknown,
+    caller: TokenCaller,
+    party: Party,
+  ): Promise<NeedId | undefined> {
+    for (const rule of surface.rules ?? []) {
+      const checks = registry.rules[rule];
+      // A rule with no checks is checked on the change an op commits, if anywhere.
+      if (checks === undefined) continue;
+      const checkRule = Object.hasOwn(checks, name) ? checks[name] : undefined;
+      if (!checkRule) {
+        throw new OpFailure('refused', `No check is kept for the rule ${rule} on ${name}.`);
+      }
+      const outcome = await checkRule(args as never, { caller, party });
+      if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
+      if (outcome) return outcome.propose;
+    }
+    return undefined;
+  }
+
+  /**
+   * `raw` as op `name` takes it from `caller` within another op: its audience checked, parsed,
+   * and, for a token, every id it names in reach, none aimed at itself where it may not be.
+   */
+  function admit(
+    name: string,
+    [surface, def]: [Surface, OpDef, Implementation],
+    raw: unknown,
+    caller: Caller,
+    party: Party,
+  ): unknown {
+    const reach = party === 'you' ? surface.access.you : surface.access[party];
+    if (reach === undefined) {
+      throw party !== 'you' && Object.keys(surface.access).every((p) => p === 'you')
+        ? new OpFailure('human-only', `Only the user can call ${name}, in corrallm’s window.`)
+        : new OpFailure('forbidden', `${PARTY_WORDS[party]} can’t call ${name}.`);
+    }
+    const args = parse(def, raw);
+    if (caller.kind !== 'human') {
+      const ids = idsIn(def.input, args);
+      const missing = outOfReach(ids, caller, reach, resolvers);
+      if (missing) throw new OpFailure('not-found', missing);
+      if (surface.self === 'refused' && aimsAtItself(ids, caller)) {
+        throw new OpFailure('refused', `An agent can’t call ${name} on itself.`);
+      }
+    }
+    return args;
+  }
+
+  /**
+   * Runs op `name`'s implementation with its parsed `args`, its rules checked, in a turn its own
+   * or the op's it is part of: its result, or `{ proposed }` if a rule made it a proposal for you.
+   */
+  async function run(
+    name: string,
+    [surface, , implementation]: [Surface, OpDef, Implementation],
+    args: unknown,
+    caller: Caller,
+    party: Party,
+    turn: Turn,
+    options: CommitOptions = {},
+  ): Promise<unknown> {
+    if (caller.kind !== 'human') {
+      const proposed = await checkRules(name, surface, args, caller, party);
+      if (proposed !== undefined) return { proposed };
+    }
+    const by = partyIdOf(caller);
+    const { request, expect = options.expect } = args as {
+      request?: string;
+      expect?: Readonly<Record<string, number>>;
+    };
+    const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) === true;
+    const ctx: OpContext = {
+      caller,
+      party,
+      by,
+      signal: turn.signal,
+      commit: async (canvas, build) => {
+        if (commit === undefined) {
+          throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
+        }
+        if (canvas === undefined) {
+          throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
+        }
+        const done = await commit(canvas as CanvasId, build, {
+          op: name,
+          caller,
+          party,
+          by,
+          ...(request === undefined ? {} : { request }),
+          ...(expect === undefined ? {} : { expect }),
+          signal: turn.signal,
+          noReturn: () => {
+            turn.noReturn();
+          },
+          proposes,
+          args: kept(args),
+          ...(options.proposedBy === undefined ? {} : { proposedBy: options.proposedBy }),
+          ...(options.within === undefined ? {} : { within: options.within }),
+        });
+        if ('proposed' in done) throw new ProposedInstead(done.proposed);
+        if (done.rev !== undefined) turn.revs[`canvas:${canvas}`] = done.rev;
+        return done.result;
+      },
+      call: (sub, raw, more) => {
+        const op = opOf(sub);
+        return run(sub, op, admit(sub, op, raw, caller, party), caller, party, turn, more);
+      },
+      prepare: async (sub, raw) => {
+        const op = opOf(sub);
+        const [inner, , build] = op;
+        if (inner.kind !== 'doc') {
+          throw new OpFailure('invalid', `${sub} isn’t an edit of a canvas’s document.`);
+        }
+        const parsed = admit(sub, op, raw, caller, party);
+        if (caller.kind !== 'human' && (await checkRules(sub, inner, parsed, caller, party))) {
+          throw new OpFailure('refused', `${sub} can’t come to the user as a proposal here.`);
+        }
+        let captured: ((document: CanvasDocument) => Built<unknown>) | undefined;
+        const capture: OpContext = {
+          ...ctx,
+          commit: (_canvas, made) => {
+            if (captured !== undefined) throw new Error(`${sub} commits more than once.`);
+            captured = made;
+            // Its result is the build's, which the op that prepared it commits.
+            return new Promise(() => undefined);
+          },
+          call: () => Promise.reject(new Error(`${sub} runs no other op.`)),
+          prepare: () => Promise.reject(new Error(`${sub} prepares no other op.`)),
+        };
+        const returned = Promise.resolve(build(parsed as never, capture));
+        if (captured === undefined) {
+          await returned;
+          throw new OpFailure('invalid', `${sub} can’t be made as part of another edit.`);
+        }
+        void returned.catch(() => undefined);
+        return captured;
+      },
+    };
+    try {
+      return await implementation(args as never, ctx);
+    } catch (error) {
+      if (error instanceof ProposedInstead) return { proposed: error.need };
+      throw error;
+    }
+  }
+
+  /**
    * Runs the op in its scope, once a token's rules are checked there (they read what the ops before
    * it in its scope left): its result, kept for a repeat of its request unless the op failed for
    * being cancelled (its caller left, a preempting op stopped it) or with what nobody expected,
@@ -215,67 +431,31 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
    */
   async function apply(
     name: string,
-    [surface, def, implementation]: [Surface, OpDef, Implementation],
+    op: [Surface, OpDef, Implementation],
     args: unknown,
     caller: Caller,
     party: Party,
     signal: AbortSignal | undefined,
   ): Promise<Attempt> {
+    const [surface, def] = op;
     /** The signal the op ran with, once it runs: aborted if it was superseded or its caller left. */
     let ran: AbortSignal | undefined;
     try {
       const value = await scopes.run(
         scopeOf(surface, args),
-        { preempt: surface.preempt === true, drains: drainsOf(surface, args) },
+        {
+          preempt: surface.preempt === true,
+          drains: drainsOf(surface, args, registry.surface),
+        },
         signal,
         async (opSignal, noReturn) => {
           ran = opSignal;
-          if (caller.kind !== 'human') {
-            for (const rule of surface.rules ?? []) {
-              const checks = registry.rules[rule];
-              // A rule with no checks is checked on the change an op commits, if anywhere.
-              if (checks === undefined) continue;
-              const checkRule = Object.hasOwn(checks, name) ? checks[name] : undefined;
-              if (!checkRule) {
-                throw new OpFailure('refused', `No check is kept for the rule ${rule} on ${name}.`);
-              }
-              const outcome = await checkRule(args as never, { caller, party });
-              if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
-              if (outcome) return { proposed: outcome.propose };
-            }
-          }
-          const by = partyIdOf(caller);
-          const { request, expect } = args as {
-            request?: string;
-            expect?: Readonly<Record<string, number>>;
-          };
           /** The revision of each topic the op reached. */
           const revs: Record<string, number> = {};
-          const result = await implementation(args as never, {
-            caller,
-            party,
-            by,
+          const result = await run(name, op, args, caller, party, {
             signal: opSignal,
-            commit: async (canvas, build) => {
-              if (commit === undefined) {
-                throw new OpFailure('unavailable', 'This core keeps no canvas’s document.');
-              }
-              if (canvas === undefined) {
-                throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
-              }
-              const done = await commit(canvas as CanvasId, build, {
-                op: name,
-                caller,
-                party,
-                by,
-                ...(request === undefined ? {} : { request }),
-                ...(expect === undefined ? {} : { expect }),
-                signal: opSignal,
-                noReturn,
-              });
-              if (done.rev !== undefined) revs[`canvas:${canvas}`] = done.rev;
-              return done.result;
-            },
+            noReturn,
+            revs,
           });
           // A write says what it reached: the revisions of the topics it changed.
           return surface.kind === 'read' || isProposal(result)
@@ -378,30 +558,43 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
 /**
  * The scopes an op drains as it comes, from its arguments: every scope beneath its canvas's (in the
  * app's scope, the canvas it replaces, `replace`, if it replaces one), or those of the agents it
- * removes or switches (`agent`, `nodes`).
+ * removes or switches (`agent`, `nodes`), and those its inner ops would (a batch's `ops`, by their
+ * surfaces in `surfaces`).
  */
-export function drainsOf(surface: Pick<Surface, 'scope' | 'drains'>, args: unknown): string[][] {
+export function drainsOf(
+  surface: Pick<Surface, 'scope' | 'drains'>,
+  args: unknown,
+  surfaces: Readonly<Record<string, Pick<Surface, 'scope' | 'drains'>>> = {},
+): string[][] {
   const {
     canvas,
     replace,
     agent,
     nodes = [],
+    ops = [],
   } = args as {
     canvas?: string;
     replace?: { canvas?: string };
     agent?: string;
     nodes?: readonly string[];
+    ops?: readonly { op: string; args: object }[];
   };
   if (surface.drains === 'canvas') {
     const drained = surface.scope === 'app' ? replace?.canvas : canvas;
     return drained === undefined ? [] : [['app', drained]];
   }
   if (surface.drains === undefined) return [];
-  return [...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
-    'app',
-    String(canvas),
-    one,
-  ]);
+  return [
+    ...[...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
+      'app',
+      String(canvas),
+      one,
+    ]),
+    ...ops.flatMap(({ op, args: inner }) => {
+      const drains = Object.hasOwn(surfaces, op) ? surfaces[op] : undefined;
+      return drains?.drains === 'agents' ? drainsOf(drains, { ...inner, canvas }, surfaces) : [];
+    }),
+  ];
 }
 
 /**

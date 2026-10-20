@@ -136,9 +136,18 @@ const CHAR_BYTES = 6;
 
 /**
  * The most bytes a JSON value the schema accepts can take, or where it is unbounded: a string
- * without a maximum length, a list without a maximum count, a map without both.
+ * without a maximum length, a list without a maximum count, a map without both. A value bounded as
+ * a whole too (`maxBytes`, which its schema checks: canvas.batch's ops) takes at most that, once
+ * every part of it is bounded.
  */
 function worstCase(schema: JsonSchema, path = ''): number | { unbounded: string } {
+  const parts = worstOfParts(schema, path);
+  const whole = schema.maxBytes;
+  return typeof parts === 'number' && typeof whole === 'number' ? Math.min(parts, whole) : parts;
+}
+
+/** The most bytes a JSON value the schema accepts can take, by its parts. */
+function worstOfParts(schema: JsonSchema, path: string): number | { unbounded: string } {
   const most = (list: (number | { unbounded: string })[]) =>
     list.reduce<number | { unbounded: string }>(
       (a, b) => (typeof a !== 'number' ? a : typeof b !== 'number' ? b : Math.max(a, b)),
@@ -542,6 +551,16 @@ describe('T1: the surface’s rules', () => {
         ),
       }),
       'test.big: its input may take 60000043 bytes, over MAX_REQUEST_BYTES',
+    ],
+    [
+      'a list bounded as a whole, but not in its parts',
+      registry({
+        'test.whole': op(
+          { access: both, kind: 'read', scope: 'none' },
+          z.strictObject({ words: z.array(z.string()).max(10).meta({ maxBytes: 1000 }) }),
+        ),
+      }),
+      'test.whole: .words[] is unbounded',
     ],
     [
       'a long poll that writes',

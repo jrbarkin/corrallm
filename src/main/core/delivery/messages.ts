@@ -36,6 +36,15 @@ import type { Database } from '../store/store';
 export type Draft = Omit<Message, 'id' | 'canvas' | 'at'>;
 
 /**
+ * What a write staged with what else it writes: told once the write's commit returned, or undone if
+ * it failed.
+ */
+export interface Staged {
+  reveal(): void;
+  undo(): void;
+}
+
+/**
  * A message as the store keeps it: its place in the order, how big its record is, and, for a
  * notice, what it told (its key: Delivery tells each thing once, across restarts too).
  */
@@ -229,6 +238,33 @@ export class MessageStore {
     this.#keep({ seq, message, bytes: 0, ...(told === undefined ? {} : { told }) });
     for (const listener of this.#listeners) listener(message);
     return message;
+  }
+
+  /**
+   * Within a write: adds a message whose row that very write holds, with whatever else it writes
+   * (B9 Design §3: a proposal's settlement, and Allow's change, with the record its proposer gets),
+   * so that it is on disk with them or not at all. It is kept, in its place in the order, at once,
+   * as every message the store adds is (a reader never skips past it); `reveal` tells those who
+   * hear messages, once the write's commit returned, and `undo` forgets it, if the write failed.
+   * Throws, adding nothing, if the store journals nothing.
+   */
+  stageWithin(draft: Draft): Staged & { message: Message } {
+    if (this.#unjournaled !== undefined) throw new Error(this.#unjournaled);
+    const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
+    const kept: Kept = { seq: this.#table.place(), message, bytes: 0 };
+    this.#table.ensure(this.canvas);
+    this.#table.keep(kept);
+    this.#kept.set(message.id, { ...kept, bytes: sizeOf(kept) });
+    return {
+      message,
+      reveal: () => {
+        this.#prune();
+        for (const listener of this.#listeners) listener(message);
+      },
+      undo: () => {
+        this.#kept.delete(message.id);
+      },
+    };
   }
 
   /** Hears each message added from now on, as it is kept (a `wait` wakes on it). */

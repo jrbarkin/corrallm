@@ -291,6 +291,43 @@ describe('the message store', () => {
     expect(rows().map(({ id }) => id)).toContain(second.id);
     expect(marked).toEqual(['beside', 'beside']);
   });
+
+  it('stages a record within another write: on disk with it, in its place, told once it returned', async () => {
+    const messages = await store();
+    const heard: string[] = [];
+    messages.subscribe((message) => heard.push(message.id));
+    const before = messages.add(draft('you', 'agent:builder'));
+    await messages.durable();
+    let staged: ReturnType<MessageStore['stageWithin']> | undefined;
+    await database.write(() => {
+      database.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/beside', CANVAS);
+      staged = messages.stageWithin(draft('corrallm', 'outside:orchestrator', 'delivered'));
+      // Kept in its place at once, so no reader reads past it; not yet told.
+      expect(messages.seqOf(staged.message.id)).toBeGreaterThan(messages.seqOf(before.id) ?? 0);
+      expect(heard).toEqual([before.id]);
+    });
+    staged?.reveal();
+    expect(heard).toEqual([before.id, staged?.message.id]);
+    expect(rows().map(({ id }) => id)).toEqual([before.id, staged?.message.id]);
+    // Nothing more to write of it.
+    await messages.durable();
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('stages nothing a failed write held: undone, it is gone', async () => {
+    const messages = await store();
+    let staged: ReturnType<MessageStore['stageWithin']> | undefined;
+    await expect(
+      database.write(() => {
+        staged = messages.stageWithin(draft('corrallm', 'outside:orchestrator', 'delivered'));
+        throw new Error('The settlement failed');
+      }),
+    ).rejects.toThrow('The settlement failed');
+    staged?.undo();
+    expect(messages.all()).toEqual([]);
+    await messages.durable();
+    expect(rows()).toEqual([]);
+  });
 });
 
 describe('the message store, when its database fails', () => {

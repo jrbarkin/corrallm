@@ -65,6 +65,11 @@ export const MAX_INITIAL_QUEUE_ITEMS = 16;
 
 /** The most ops one canvas.batch holds. */
 export const MAX_BATCH_OPS = 100;
+/**
+ * The most bytes of JSON one canvas.batch's ops take together: each may be as large as it may be
+ * alone, but not all of them at once, which no request could hold.
+ */
+export const MAX_BATCH_BYTES = 16 * 1024 * 1024;
 
 /** The most entities a doc op may say it expects the revisions of (Core Server §5.4). */
 export const MAX_EXPECT = 100;

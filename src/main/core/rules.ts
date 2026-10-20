@@ -7,6 +7,7 @@ import type { CanvasId } from '../../shared/canvas';
 import type { Run } from '../../shared/engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
 import type { CanvasDocument } from '../../shared/model/canvas';
+import type { NeedsItem } from '../../shared/model/needs';
 import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { entityOf, itemKey, nodeKey } from '../../shared/model/rows';
@@ -28,6 +29,9 @@ import { nameOf, partyText, pausesText, RELEASES } from './parties';
  * token's op commits, whatever op made it (canvas/commit.ts). A rule met refuses the token, saying
  * why; you are never checked.
  */
+
+/** The most agents a refusal names, then how many more there are. */
+const NAMED = 5;
 
 /** The rules RULES checks on arguments. */
 type ArgumentRule = {
@@ -65,11 +69,35 @@ export type ArgumentChecks = {
   };
 };
 
-export function ruleChecks(engines: Engines): ArgumentChecks {
+/**
+ * The rules checked on a token's arguments, over the canvases the core runs (`engines`) and what
+ * waits for an answer on each, as you see it (`needOf`: an item by its id).
+ */
+export function ruleChecks(
+  engines: Engines,
+  needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
+): ArgumentChecks {
   /** The open canvas a call names, if it is open. */
   const openOf = (canvas: string | undefined) =>
     canvas === undefined ? undefined : engines.canvas(canvas as CanvasId);
   return {
+    // R3: the caller must be one the item names to answer it now (its `by`), and may pick no
+    // choice only you may (`humanOnly`). An item that isn't there is the op's to say.
+    'human-choice': {
+      reply: ({ canvas, to, answer }, { caller }) => {
+        const item = canvas === undefined ? undefined : needOf(canvas as string as CanvasId, to);
+        if (item === undefined) return undefined;
+        if (!item.by.includes(partyIdOf(caller))) {
+          return {
+            refuse: `Only ${andList(item.by.map((party) => partyText([], party)))} may answer this: ${item.title}.`,
+          };
+        }
+        const choice = item.choices.find(({ value }) => value === answer.choice);
+        return choice?.humanOnly === undefined
+          ? undefined
+          : { refuse: `Only the user may choose ${choice.label}: ${choice.humanOnly}` };
+      },
+    },
     // R1: only what you typed may run a shell command, and a body that starts with its recipient's
     // shell prefix would (src/shared/adapter.ts ConnectionDescriptor.shellPrefix).
     'shell-text': {
@@ -105,6 +133,9 @@ export function ruleChecks(engines: Engines): ArgumentChecks {
               : `${nameOf(nodes, agent)} starts in ${saved} on ${adapter}: only the user changes that. Leave mode out, or pass "${saved}".`,
         };
       },
+      // Each of its ops is checked as it is prepared, as a call of its own: agent.setSettings's
+      // check above among them.
+      'canvas.batch': () => undefined,
     },
     // R9: a token releases only the pauses its own party set; yours (and others') stay. One whose
     // own release would let go of nothing that holds the target is refused, saying who holds it:
@@ -183,6 +214,18 @@ export function changeChecks({
     return [adapter, row.connection ?? adapterIn(catalog, adapter)?.connections[0]?.id];
   };
   return {
+    // R4: deleting an agent is yours to decide: a token's delete comes to you as a proposal, unless
+    // another rule refuses it.
+    discard: (change) => {
+      if (change.removed.size === 0) return undefined;
+      const names = change.before.nodes.flatMap((node) =>
+        change.removed.has(node.id) ? [nameOf(change.before.nodes, node.id)] : [],
+      );
+      const more = names.length - NAMED;
+      return {
+        propose: `Only the user deletes ${andList(more > 0 ? [...names.slice(0, NAMED), `${String(more)} more`] : names)}`,
+      };
+    },
     // R6: an agent never changes its own role, settings, adapter, connection or manager, nor
     // removes itself, whatever op would (its declared half, `self`, refuses one naming itself).
     self: (change, { caller }) => {

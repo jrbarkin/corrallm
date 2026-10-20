@@ -3,6 +3,7 @@ import type { Reach } from '../../shared/api/surface';
 import type { CanvasId } from '../../shared/canvas';
 import type { CanvasNode, Link } from '../../shared/model/canvas';
 import type { Message } from '../../shared/model/messages';
+import type { NeedsItem } from '../../shared/model/needs';
 import { areLinked, groupMembers, isGroup, managerOf, teamOf } from '../../shared/model/queries';
 import { findItem } from '../../shared/model/queue';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
@@ -225,12 +226,14 @@ export function agentsReached(
 /**
  * How the core resolves each kind of id a token names, over the canvases it runs (`engines`): a
  * canvas it has; a node, a group, an agent or an item of its queue it reaches there; a message it
- * sent or received there. On a
- * canvas of its own that isn't open, nothing can be told, so the op answers that it isn't open.
+ * sent or received there; a Needs item there (`needOf`: what waits for you, by its id) on an agent
+ * it reaches. On a canvas of its own that isn't open, nothing can be told, so the op answers that
+ * it isn't open; but no Needs item is in reach there.
  */
 export function resolvers(
   engines: Engines,
   isLead: (canvas: CanvasId, agent: string) => boolean,
+  needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
 ): Readonly<Partial<Record<Brand, Resolver>>> {
   const lead = (caller: TokenCaller, canvas: CanvasId) =>
     caller.kind === 'agent' && isLead(canvas, caller.agent);
@@ -271,6 +274,20 @@ export function resolvers(
     EntityKey: over((world, key, caller, reach, isALead) =>
       reachesEntity(world, caller, reach, key, isALead),
     ),
+    // A token sees your items on the agents it reaches (Core Server §5.1), and only those.
+    NeedId: (id, caller, reach, { canvas }) => {
+      if (canvas === undefined || !canvasesOf(caller).includes(canvas as CanvasId)) return false;
+      const open = engines.canvas(canvas as CanvasId);
+      const item = needOf(canvas as CanvasId, id);
+      if (!open || item?.agent === undefined) return false;
+      return reachesAgent(
+        open.document,
+        caller,
+        reach,
+        item.agent,
+        lead(caller, canvas as CanvasId),
+      );
+    },
     MessageId: (id, caller, _reach, { canvas }) => {
       // An op that takes no canvas (`wait`) names a message on any of the caller's open ones.
       if (canvas === undefined) {

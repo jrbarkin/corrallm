@@ -34,6 +34,7 @@ import type { CanvasMemory } from '../../memory';
 import { writeWhole } from '../../whole-file';
 import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
+import type { Staged } from '../delivery/messages';
 import type { Database } from '../store/store';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
@@ -65,7 +66,8 @@ import type { ChangeSet } from './change';
  * checks, so that changes on two canvases checked one after the other never both pass a cap.
  * Each commit is told, once it is on disk and the live document is the changed one, to whoever
  * subscribes (`subscribe`), before anything else reads it: the canvas's topic is said from there
- * (canvas/states.ts). A change that isn't the document's (its meta) takes the canvas's next
+ * (canvas/states.ts). A change may hold more in its write (`within`: Allow's settlement of a
+ * proposal and its proposer's record), told after them, or undone if the write failed. A change that isn't the document's (its meta) takes the canvas's next
  * revision in memory alone (`bump`), between its commits (`between`), so no commit takes it too.
  *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
@@ -122,6 +124,13 @@ export interface Change<R> {
   check(change: ChangeSet, live: LiveDocument): void;
   /** Said once it is past its point of no return: as its write is queued. */
   committing(): void;
+  /**
+   * Within its write, after its rows: what else that write holds (B9 Design §3: a proposal's
+   * settlement and the record its proposer gets, with Allow's change), so that all of it is on disk
+   * or none. Told once the commit returned and the live document is the changed one, or undone if
+   * the write failed.
+   */
+  within?(): Staged;
 }
 
 /** What a change did: the op's result; and, if it changed anything, its revision and what changed. */
@@ -360,6 +369,7 @@ export class Documents {
         const rev = await this.#commit(live, next, rows, change.revision, {
           creator: change.revision.by,
           creating,
+          ...(change.within === undefined ? {} : { within: () => change.within?.() }),
         });
         return { result, committed: { rev, change: set } };
       } finally {
@@ -613,8 +623,9 @@ export class Documents {
    * Commits `next` over `live`, by what it changes of it (`change`): in one write, at the next
    * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
    * from it; with `creator`, the party that created the agents it makes (none: they are read from
-   * a file), whose count `creating` holds until their rows do. Throws CommitFailed, leaving `live`
-   * as it was, if the write failed.
+   * a file), whose count `creating` holds until their rows do; with `within`, what else its write
+   * holds (told once it is on disk, after those who hear commits). Throws CommitFailed, leaving
+   * `live` as it was (and undoing what `within` staged), if the write failed.
    */
   async #commit(
     live: Live,
@@ -625,12 +636,19 @@ export class Documents {
       hashes,
       creator,
       creating,
-    }: { hashes?: { saved: string; file: string }; creator?: PartyId; creating?: Creating } = {},
+      within,
+    }: {
+      hashes?: { saved: string; file: string };
+      creator?: PartyId;
+      creating?: Creating;
+      within?: () => Staged | undefined;
+    } = {},
   ): Promise<number> {
     if (changed.length === 0 && hashes === undefined) return live.rev;
     const rev = live.rev + 1;
     const at = this.#now();
     const creators = creatorsAfter(live, rows, changed, creator);
+    let staged: Staged | undefined;
     try {
       await this.#deps.store.write(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
@@ -641,8 +659,11 @@ export class Documents {
             .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
             .run(hashes.saved, hashes.file, next.id);
         }
+        // Last, so that nothing after it fails the write once it has staged what it holds.
+        staged = within?.();
       });
     } catch (error) {
+      staged?.undo();
       throw new CommitFailed(error);
     }
     live.document = next;
@@ -672,6 +693,7 @@ export class Documents {
         console.error('Could not tell of a commit:', error);
       }
     }
+    staged?.reveal();
     return rev;
   }
 

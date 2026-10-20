@@ -393,6 +393,28 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     }
   });
 
+  it('keeps every copy its read as a token’s delete comes to you as a proposal, and as you allow it', async () => {
+    const proposed = await world.core.call(
+      'canvas.delete',
+      { canvas: CANVAS, nodes: ['stranger'] },
+      CALLERS['outside-write'],
+    );
+    if (!proposed.ok || !('proposed' in proposed.value)) throw new Error(JSON.stringify(proposed));
+    const { proposed: id } = proposed.value;
+    await expectCopiesRead();
+    const yours = () =>
+      (copies.get('you')?.get(`needs:${CANVAS}`)?.state as { items: { id: string }[] }).items;
+    expect(yours().map((item) => item.id)).toContain(id);
+    const allowed = await world.core.call(
+      'reply',
+      { canvas: CANVAS, to: id, answer: { choice: 'allow' } },
+      CALLERS.you,
+    );
+    expect(allowed).toMatchObject({ ok: true, value: { outcome: 'allowed' } });
+    await expectCopiesRead();
+    expect(yours().map((item) => item.id)).not.toContain(id);
+  });
+
   it('sends a canvas’s changes as what each commit changed, in order of its sequence', () => {
     const yours = copies.get('you')?.get(`canvas:${CANVAS}`);
     expect(yours?.changes.length).toBeGreaterThan(DOC_OPS.length);
@@ -400,7 +422,8 @@ describe('T3c: the canvas, canvases and needs topics', () => {
       expect('replace' in change).toBe(false);
       if (!('set' in change)) continue;
       // Never the whole document: a commit changes a few entities of the world's dozens.
-      expect(Object.keys(change.set).length + (change.remove?.length ?? 0)).toBeLessThan(20);
+      // (An agent added renumbers the nodes' places: still under half the world's ~50.)
+      expect(Object.keys(change.set).length + (change.remove?.length ?? 0)).toBeLessThan(25);
       for (const entity of Object.values(change.set)) {
         expect(entity.rev).toBeLessThanOrEqual(change.rev);
       }

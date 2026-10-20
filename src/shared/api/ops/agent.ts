@@ -15,7 +15,8 @@ const Settings = z.strictObject({
   effort: z.string().max(40).regex(EFFORT_PATTERN).nullable().optional(),
   mode: CatalogId.nullable().optional(),
 });
-const Role = z
+/** An agent's role: its standing instructions (src/shared/role.ts), trimmed; blank clears it. */
+export const Role = z
   .string()
   .max(MAX_ROLE_LENGTH)
   .refine((role) => {

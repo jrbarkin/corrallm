@@ -5,6 +5,7 @@ import type { OpDef } from './define';
 import { agentOps } from './ops/agent';
 import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
+import { batchOps } from './ops/batch';
 import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
 import { conversationOps } from './ops/conversation';
@@ -33,6 +34,7 @@ export const OPS = {
   ...templatesOps,
   ...projectOps,
   ...canvasOps,
+  ...batchOps,
   ...agentOps,
   ...queueOps,
   ...conversationOps,
