@@ -106,16 +106,17 @@ export class CanvasMemory {
 
   /**
    * Sets the file a canvas is opened from and saved to (undefined: none, a draft's). Another canvas
-   * that had that file has it no more.
+   * that had that file has it no more. An optional SQL callback runs in the same savepoint;
+   * with one, failure rejects rather than being left to flush (the document save needs both).
    */
-  setFile(canvas: CanvasId, file: TrustedPath | undefined): Promise<void> {
+  setFile(canvas: CanvasId, file: TrustedPath | undefined, within?: () => void): Promise<void> {
     return this.#change(() => {
       const other = file === undefined ? undefined : this.#withFile(file);
       if (other !== undefined && other !== canvas) {
         this.#set(other, withFile(this.#current(other), undefined));
       }
       this.#set(canvas, withFile(this.#current(canvas), file));
-    });
+    }, within);
   }
 
   /**
@@ -136,27 +137,27 @@ export class CanvasMemory {
   }
 
   /** Makes a change, then writes every canvas changed whose row isn't on disk as it is. */
-  #change(apply: () => void): Promise<void> {
+  #change(apply: () => void, within?: () => void): Promise<void> {
     let written: () => void = () => undefined;
-    const writing = this.#store
-      .write(() => {
-        apply();
-        written = this.#writeUnwritten();
-      })
-      .then(
-        () => {
-          written();
-          if (this.#unwritten.size === 0) this.#writeError = undefined;
-        },
-        // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs: what
-        // failed stays unwritten, for the next write, and fails `flush` meanwhile.
-        (error: unknown) => {
-          this.#writeError = error instanceof Error ? error : new Error(String(error));
-          console.error('Could not remember the canvas:', error);
-        },
-      );
+    const attempt = this.#store.write(() => {
+      apply();
+      written = this.#writeUnwritten();
+      within?.();
+    });
+    const writing = attempt.then(
+      () => {
+        written();
+        if (this.#unwritten.size === 0) this.#writeError = undefined;
+      },
+      // Ordinary changes remain nonfatal, but shutdown must not lose native resume IDs: what
+      // failed stays unwritten, for the next write, and fails `flush` meanwhile.
+      (error: unknown) => {
+        this.#writeError = error instanceof Error ? error : new Error(String(error));
+        console.error('Could not remember the canvas:', error);
+      },
+    );
     this.#writing = Promise.all([this.#writing, writing]);
-    return writing;
+    return within === undefined ? writing : attempt.then(() => undefined);
   }
 
   /**

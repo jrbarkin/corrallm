@@ -4,10 +4,11 @@ import { ID_PATTERN } from '../../adapter';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { AgentId, NodeId, OpCanvas } from '../ids';
-import { MAX_LABEL, MAX_OP_NODES } from '../limits';
+import { MAX_LABEL, MAX_OP_NODES, MAX_POSITION } from '../limits';
 import type { OpName } from '../surface';
 
-const Position = z.strictObject({ x: z.number(), y: z.number() });
+const Coordinate = z.number().min(-MAX_POSITION).max(MAX_POSITION);
+const Position = z.strictObject({ x: Coordinate, y: Coordinate });
 const Ends = z.strictObject({ a: AgentId, b: AgentId });
 const Nodes = z.array(NodeId).max(MAX_OP_NODES);
 
@@ -15,7 +16,11 @@ const Nodes = z.array(NodeId).max(MAX_OP_NODES);
 export const canvasOps = {
   'canvas.rename': define('canvas.rename', {
     summary: 'Renames an agent or a group: the name the canvas shows it by.',
-    input: z.strictObject({ canvas: OpCanvas, node: NodeId, label: z.string().max(MAX_LABEL) }),
+    input: z.strictObject({
+      canvas: OpCanvas,
+      node: NodeId,
+      label: z.string().max(MAX_LABEL).regex(/\S/, 'A label must not be blank'),
+    }),
     output: z.strictObject({}),
   }),
   'canvas.addAgent': define('canvas.addAgent', {

@@ -59,6 +59,11 @@ const NODES = [
   { id: 'peer', adapter: 'gemini' },
   { id: 'shell', connection: 'codex.terminal' },
   { id: 'stranger', connection: 'codex.app-server' },
+  ...['you', 'lead', 'outside-write'].map((party) => ({
+    id: `unlink-${party}`,
+    connection: 'codex.app-server',
+    parent: 'lead',
+  })),
 ];
 const HELPER_QUEUE = [
   { id: 'text', message: 'Original' },
@@ -76,6 +81,7 @@ const HELPER_QUEUE = [
   })),
 ];
 const LINKS = [
+  ...['you', 'lead', 'outside-write'].map((party) => ['helper', `unlink-${party}`]),
   ['worker', 'peer'],
   ['lead', 'peer'],
   ['worker', 'shell'],
@@ -332,7 +338,21 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
   },
   'canvas.unlink': {
-    valid: [{ canvas: CANVAS, a: 'helper', b: 'lead', expect: NO_ITEM, request: request(44) }],
+    valid: [],
+    by: Object.fromEntries(
+      (['you', 'lead', 'outside-write'] as const).map((party, i) => [
+        party,
+        [
+          {
+            canvas: CANVAS,
+            a: 'helper',
+            b: `unlink-${party}`,
+            expect: NO_ITEM,
+            request: request(80 + i),
+          },
+        ],
+      ]),
+    ),
     fresh: ['revs'],
     invalid: [
       { a: 'helper' },

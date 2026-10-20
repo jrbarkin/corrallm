@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { adapterIn } from '../../../shared/adapter';
 import { AgentId, NodeId } from '../../../shared/api/ids';
 import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import * as structure from '../../../shared/model/structure';
@@ -10,7 +11,8 @@ import type { Implementations, OpServices } from '.';
 /** Each structural op builds one pure change over the document ctx.commit supplies. */
 export function canvasOps({
   defaultAdapter,
-}: Pick<OpServices, 'defaultAdapter'>): Pick<
+  catalog,
+}: Pick<OpServices, 'defaultAdapter' | 'catalog'>): Pick<
   Implementations,
   | 'canvas.rename'
   | 'canvas.addAgent'
@@ -31,9 +33,11 @@ export function canvasOps({
         return { next: structure.rename(doc, { id: node, label }).next, result: {} };
       }),
     'canvas.addAgent': ({ canvas, at, adapter }, ctx) =>
-      ctx.commit(canvas, (doc) =>
-        created(structure.addAgent(doc, { at, adapter }, context), AgentId),
-      ),
+      ctx.commit(canvas, (doc) => {
+        if (!adapterIn(catalog, adapter))
+          throw new OpFailure('invalid', `There is no adapter ${adapter}.`);
+        return created(structure.addAgent(doc, { at, adapter }, context), AgentId);
+      }),
     'canvas.spawnAgent': ({ canvas, from, relation }, ctx) =>
       ctx.commit(canvas, (doc) => {
         requireNode(doc, from, 'agent');
@@ -43,7 +47,7 @@ export function canvasOps({
     'canvas.delete': ({ canvas, nodes = [], links = [] }, ctx) =>
       ctx.commit(canvas, (doc) => {
         for (const node of nodes) requireNode(doc, node);
-        for (const { a, b } of links) requireEnds(doc, a, b);
+        for (const { a, b } of links) requireLink(doc, a, b);
         return structure.remove(doc, {
           nodes,
           links: links.map(({ a, b }) => ({ source: a, target: b })),
@@ -63,7 +67,7 @@ export function canvasOps({
       }),
     'canvas.unlink': ({ canvas, a, b }, ctx) =>
       ctx.commit(canvas, (doc) => {
-        requireEnds(doc, a, b);
+        requireLink(doc, a, b);
         return { next: structure.unlink(doc, { source: a, target: b }).next, result: {} };
       }),
     'canvas.group': ({ canvas, nodes, kind }, ctx) =>
@@ -110,4 +114,15 @@ function created<I extends string>(
 ) {
   if (result.id === undefined) throw new OpFailure('invalid', 'That edit creates no node.');
   return { next, result: { id: schema.parse(result.id) } };
+}
+
+function requireLink(doc: CanvasDocument, a: string, b: string): void {
+  requireEnds(doc, a, b);
+  if (
+    !doc.links.some(
+      (link) =>
+        (link.source === a && link.target === b) || (link.source === b && link.target === a),
+    )
+  )
+    throw new OpFailure('not-found', `There is no link between ${a} and ${b}.`);
 }

@@ -18,6 +18,9 @@ import type { QueueItem } from './queue';
  * file's and the API's alike, and so what an agent's party id holds (src/shared/model/messages.ts).
  */
 export const MAX_NODE_ID = 256;
+/** Node labels and local coordinates have the same bounds in files and operations. */
+export const MAX_LABEL = 200;
+export const MAX_POSITION = 1_000_000;
 
 /** Where a node sits: relative to its parent's position, as its file keeps it. */
 export interface Position {

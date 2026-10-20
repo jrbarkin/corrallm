@@ -88,7 +88,7 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 (see The registry): call.ts is core.call, the one dispatcher every transport calls
                 (audience, limits per token, the canvas, filled in for a caller with one, or the
                 one holding a message it names (`withdraw` takes none), and asked of one with
-                several otherwise, schema, reach, self, repeated requests, scopes, rules in the
+                several otherwise, schema, reach, self, repeated requests, scopes (reach and self checked again when the call runs and when its commit builds), rules in the
                 scope; failures as values); caller.ts its callers (you, an agent's session, an
                 outside token) and their parties (no token is ever you; only gui.ts makes you);
                 scopes.ts the order ops run in (one at a time per scope; a preempting op aborts
@@ -97,7 +97,8 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 scopes, or those of the agents it removes or switches, from when it comes until it
                 ends: it aborts what runs there (waiting for a preempting op), supersedes what
                 waits there and starts nothing there meanwhile, then takes its turn as usual;
-                nothing aborts an op past its point of no return, a commit queued, and what would
+                a preempt holds descendant lanes until it ends; nothing, including caller
+                cancellation, aborts an op past its point of no return, a commit queued, and what would
                 have waits for it);
                 throttle.ts the limits per token (calls in flight and writes a second; a long
                 poll, `waits`, counts against the waits in flight instead of the calls);
@@ -114,7 +115,8 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 pauses they set, for refusals and notices; ops/ is each op's implementation, by
                 area (open.ts: the open canvas a call names, and pages of a list within
                 MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit` over
-                shared/model/structure.ts, with explicit not-found and wrong-kind refusals;
+                shared/model/structure.ts, with explicit not-found and wrong-kind refusals
+                (including missing links), and addAgent only accepts catalog adapters;
                 spawnAgent carries its new→source copies for the change rules, and delete drains
                 its removed agents' lanes and returns cleared references; agent.ts and queue.ts:
                 agent and queue edits over shared/model/agent-ops.ts and queue-ops.ts through
@@ -161,7 +163,10 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 `canvas.edit` by you until its gestures are operations (`edit`, for run:save and
                 canvas:save), and saved by the core
                 itself (`save`: writing_hash committed, the file written whole and forced to disk,
-                then file_hash and saved_hash with canvas memory's file; a save cut short is settled
+                then file_hash and saved_hash in the same savepoint as canvas memory's file
+                (a path write that fails rejects the save and keeps the old hashes); saves on
+                different canvases serialize too, so writing one path cannot publish another
+                canvas as its owner; a save cut short is settled
                 as the canvas next loads, by whether the file's bytes hash to writing_hash); `edited`
                 is whether its text's hash is saved_hash. canvas/commit.ts is what an op's
                 `ctx.commit` does (B9 Design §3): its change built in the canvas's turn unless the
@@ -543,7 +548,8 @@ src/shared/     Types shared by all processes, including the IPC contract (ipc.t
                 here.
 src/shared/model/  The canvas as the model keeps it, read wherever the engine runs: canvas.ts (AgentNode,
                 FrameNode, Link, CanvasDocument: by what they mean, with no React Flow, selection
-                or sizes; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
+                or sizes; labels are nonblank and at most 200 characters; local positions are
+                within ±1,000,000 on each axis in files and operation inputs; NodeLike, what reading a canvas's nodes needs, whoever keeps them),
                 queue.ts (an agent's queue items, their checks, and live submissions' records),
                 references.ts (clears surviving queues when agents are deleted, returning what
                 changed in words; used by structure.ts's remove),

@@ -55,7 +55,7 @@ export const MAX_PAGE_BYTES = 60 * 1024;
 export const MAX_NEED_ID = 4096;
 
 /** The longest name of an agent or a group an op gives it, in characters. */
-export const MAX_LABEL = 200;
+export { MAX_LABEL, MAX_POSITION } from '../model/canvas';
 
 /** The most nodes one op names, or moves, on a canvas. */
 export const MAX_OP_NODES = 500;

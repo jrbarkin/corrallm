@@ -5,7 +5,7 @@ import { parseRole } from '../role';
 import { EFFORT_PATTERN, MODEL_PATTERN } from '../session';
 import type { AgentSettings } from '../session';
 import { USAGE_WINDOWS } from '../usage';
-import { MAX_NODE_ID } from './canvas';
+import { MAX_LABEL, MAX_POSITION, MAX_NODE_ID } from './canvas';
 import type { CanvasDocument, CanvasNode, Link } from './canvas';
 import { GROUP_COLORS } from './geometry';
 import { isIf, isRepeat, MAX_ROUNDS, MAX_SECONDS, sameTarget } from './queue';
@@ -335,10 +335,10 @@ function readNode(
   return {
     id,
     kind,
-    label: text(node.label, `${where}.label`),
+    label: label(node.label, `${where}.label`),
     position: {
-      x: number(position.x, `${where}.position.x`),
-      y: number(position.y, `${where}.position.y`),
+      x: coordinate(position.x, `${where}.position.x`),
+      y: coordinate(position.y, `${where}.position.y`),
     },
     ...(node.parent === undefined ? {} : { parent: name(node.parent, `${where}.parent`) }),
     ...(adapter === undefined ? {} : { adapter }),
@@ -757,4 +757,20 @@ function number(value: unknown, where: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value))
     throw new Error(`${where} must be a number`);
   return value;
+}
+
+function label(value: unknown, where: string): string {
+  const read = text(value, where);
+  if (!read.trim()) throw new Error(`${where} must not be blank`);
+  if (read.length > MAX_LABEL)
+    throw new Error(`${where} must be at most ${String(MAX_LABEL)} characters`);
+  return read;
+}
+function coordinate(value: unknown, where: string): number {
+  const read = number(value, where);
+  if (Math.abs(read) > MAX_POSITION)
+    throw new Error(
+      `${where} must be between -${String(MAX_POSITION)} and ${String(MAX_POSITION)}`,
+    );
+  return read;
 }

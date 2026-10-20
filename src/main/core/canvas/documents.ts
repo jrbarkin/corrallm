@@ -172,6 +172,8 @@ export class Documents {
   readonly #lives = new Map<CanvasId, Live>();
   /** What each canvas's document is doing: its loads, commits and saves, one at a time. */
   readonly #busy = new Map<CanvasId, Promise<void>>();
+  /** Saves may choose the same file, even on different canvases: publish each file with its owner. */
+  #saving: Promise<void> = Promise.resolve();
   /** Each document's text, and its hash, as toFile writes it. */
   readonly #texts = new WeakMap<CanvasDocument, { text: string; hash: string }>();
 
@@ -270,32 +272,34 @@ export class Documents {
    * committed as the file's and as saved. Rejects if it couldn't be.
    */
   save(canvas: CanvasId, file: TrustedPath): Promise<void> {
-    return this.#queue(canvas, async () => {
-      const live = await this.#load(canvas);
-      const { text, hash } = this.#text(live.document);
-      const { store, memory } = this.#deps;
-      await store.write(() => {
-        this.#ensure(live, 'you');
-        store.prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?').run(hash, canvas);
-      });
-      live.kept = true;
-      live.writingHash = hash;
-      await writeWhole(file, text, { durable: true });
-      // One commit, the lane's for writes asked for in one turn.
-      await Promise.all([
-        memory.setFile(canvas, file),
-        store.write(() => {
+    return this.#queue(canvas, () => {
+      const saving = this.#saving.then(async () => {
+        const live = await this.#load(canvas);
+        const { text, hash } = this.#text(live.document);
+        const { store, memory } = this.#deps;
+        await store.write(() => {
+          this.#ensure(live, 'you');
+          store
+            .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
+            .run(hash, canvas);
+        });
+        live.kept = true;
+        live.writingHash = hash;
+        await writeWhole(file, text, { durable: true });
+        // The chosen path and hashes are one savepoint, so neither can succeed alone.
+        await memory.setFile(canvas, file, () => {
           store
             .prepare(
-              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL
-               WHERE canvas_id = ?`,
+              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?`,
             )
             .run(hash, hash, canvas);
-        }),
-      ]);
-      live.savedHash = hash;
-      live.fileHash = hash;
-      live.writingHash = undefined;
+        });
+        live.savedHash = hash;
+        live.fileHash = hash;
+        live.writingHash = undefined;
+      });
+      this.#saving = saving.catch(() => undefined);
+      return saving;
     });
   }
 

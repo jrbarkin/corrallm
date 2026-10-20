@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
+import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_PAGE_BYTES, MAX_WAITING } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import type { Message } from '../../shared/model/messages';
 import type { Entry } from '../../shared/model/session';
@@ -505,7 +505,10 @@ describe('delivery', () => {
   });
 
   it('quotes a long name, and a long reason a session won’t start, cut short', async () => {
-    await keepCanvas([{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_MESSAGE_BYTES)}` }], []);
+    await keepCanvas(
+      [{ ...BUILDER_AGENT, label: `Builder ${'x'.repeat(MAX_LABEL - 'Builder '.length)}` }],
+      [],
+    );
     await start({
       appServer: refusing(`This login can’t run here: ${'because '.repeat(MAX_MESSAGE_BYTES / 8)}`),
     });

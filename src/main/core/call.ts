@@ -207,6 +207,24 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     }
   }
 
+  function checkReach(
+    surface: Surface,
+    def: OpDef,
+    args: unknown,
+    caller: Caller,
+    party: Party,
+  ): void {
+    if (caller.kind === 'human') return;
+    const reach = surface.access[party];
+    if (reach === undefined)
+      throw new OpFailure('forbidden', 'That party cannot call this operation.');
+    const ids = idsIn(def.input, args);
+    const missing = outOfReach(ids, caller, reach, resolvers);
+    if (missing) throw new OpFailure('not-found', missing);
+    if (surface.self === 'refused' && aimsAtItself(ids, caller))
+      throw new OpFailure('refused', 'An agent cannot call this operation on itself.');
+  }
+
   /**
    * Runs the op in its scope, once a token's rules are checked there (they read what the ops before
    * it in its scope left): its result, kept for a repeat of its request unless the op failed for
@@ -230,6 +248,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         signal,
         async (opSignal, noReturn) => {
           ran = opSignal;
+          checkReach(surface, def, args, caller, party);
           if (caller.kind !== 'human') {
             for (const rule of surface.rules ?? []) {
               const checks = registry.rules[rule];
@@ -263,16 +282,23 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
               if (canvas === undefined) {
                 throw new OpFailure('unavailable', 'No canvas is open in corrallm.');
               }
-              const done = await commit(canvas as CanvasId, build, {
-                op: name,
-                caller,
-                party,
-                by,
-                ...(request === undefined ? {} : { request }),
-                ...(expect === undefined ? {} : { expect }),
-                signal: opSignal,
-                noReturn,
-              });
+              const done = await commit(
+                canvas as CanvasId,
+                (document) => {
+                  checkReach(surface, def, args, caller, party);
+                  return build(document);
+                },
+                {
+                  op: name,
+                  caller,
+                  party,
+                  by,
+                  ...(request === undefined ? {} : { request }),
+                  ...(expect === undefined ? {} : { expect }),
+                  signal: opSignal,
+                  noReturn,
+                },
+              );
               if (done.rev !== undefined) revs[`canvas:${canvas}`] = done.rev;
               return done.result;
             },
