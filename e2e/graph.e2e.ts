@@ -7,6 +7,7 @@ import type { ElectronApplication, Locator, Page } from '@playwright/test';
 
 import { launchApp } from './launch';
 import { newCanvasId } from '../src/shared/canvas';
+import { MAX_LABEL } from '../src/shared/model/canvas';
 import { CARD_SIZE } from '../src/shared/model/geometry';
 
 interface Point {
@@ -27,7 +28,8 @@ test('long names and full queues keep ordinary and parent cards at the model’s
   const agent = (id: string, parent?: string) => ({
     id,
     kind: 'agent',
-    label: `${id} ${'A very long name '.repeat(40)}`,
+    // Just under the longest a file holds, and far wider than a card.
+    label: `${id} ${'A very long name '.repeat(12)}`.slice(0, MAX_LABEL - 1),
     position: { x: 20, y: 70 },
     queue,
     ...(parent === undefined ? {} : { parent }),
