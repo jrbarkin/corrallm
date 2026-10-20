@@ -1386,6 +1386,30 @@ describe('R3: only you answer a proposal', () => {
   });
 });
 
+describe('a token’s repeated request', () => {
+  it('gets its first result though what it deleted is gone; anything else naming it finds nothing', async () => {
+    const request = '6a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a70';
+    const first = await call('canvas.delete', { nodes: ['loose'], request }, OUTSIDE);
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    expect(doc().nodes.some(({ id }) => id === 'loose')).toBe(false);
+    // The client's retry, as an MCP client retries a call whose answer it lost.
+    expect(await call('canvas.delete', { nodes: ['loose'], request }, OUTSIDE)).toEqual(first);
+    // A call of no request, another token's of the same id, or this token's of the same id and
+    // another node, each its own call.
+    for (const [args, caller] of [
+      [{ nodes: ['loose'] }, OUTSIDE],
+      [{ nodes: ['loose'], request }, RENEWED],
+      [{ nodes: ['loose', 'spare'], request }, OUTSIDE],
+    ] as const) {
+      expect(await call('canvas.delete', args, caller)).toMatchObject({
+        ok: false,
+        error: { code: 'not-found' },
+      });
+    }
+    expect(doc().nodes.some(({ id }) => id === 'spare')).toBe(true);
+  });
+});
+
 describe('canvas.batch: every rule on the whole, each inner op checked as its own call', () => {
   it('gives an agent a role in the commit that adds it; never one that existed, nor a mode', async () => {
     const { results } = (await applied('canvas.batch', {

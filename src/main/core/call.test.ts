@@ -772,6 +772,62 @@ describe('core.call', () => {
     expect(calls['test.agent']).toHaveLength(1);
   });
 
+  it('answers a caller’s repeated request before it resolves reach: a retry of what removed its target gets its first result', async () => {
+    let there = true;
+    const { core, calls, registry } = setup({
+      resolvers: {
+        ...RESOLVERS,
+        // `gone` is reached until the op removes it.
+        AgentId: (id, caller, reach, at) =>
+          id === 'gone' ? there : (RESOLVERS.AgentId?.(id, caller, reach, at) ?? false),
+      },
+    });
+    registry.implementations['test.agent'] = ({ agent }: { agent: string }) => {
+      calls['test.agent'].push(agent);
+      there = false;
+      return { agent };
+    };
+    const token = CALLERS['outside-write'] as OutsideCaller;
+    const args = { canvas: CANVAS, agent: 'gone', request: REQUEST };
+    const first = await core.call('test.agent', args, token);
+    expect(first).toEqual({ ok: true, value: { agent: 'gone', revs: {} } });
+    expect(await core.call('test.agent', args, token)).toEqual(first);
+    expect(calls['test.agent']).toHaveLength(1);
+    // Anything else naming it finds nothing: a call of no request, or another caller's of the
+    // same id, which is its own.
+    for (const [again, caller] of [
+      [{ canvas: CANVAS, agent: 'gone' }, token],
+      [args, { ...token, token: 'another-token' }],
+    ] as const) {
+      expect(await core.call('test.agent', again, caller)).toMatchObject({
+        ok: false,
+        error: { code: 'not-found' },
+      });
+    }
+    expect(calls['test.agent']).toHaveLength(1);
+  });
+
+  it('never answers a call with the result of another that carried its request id', async () => {
+    const { core, calls } = setup();
+    const call = (agent: string, more: object = {}) =>
+      core.call('test.agent', { canvas: CANVAS, agent, request: REQUEST, ...more }, CALLERS.you);
+    const first = await call('helper');
+    expect(first).toEqual({ ok: true, value: { agent: 'helper', revs: {} } });
+    // Its own call, run as one.
+    expect(await call('worker')).toEqual({ ok: true, value: { agent: 'worker', revs: {} } });
+    expect(calls['test.agent']).toHaveLength(2);
+    // Each repeated is answered with its own result, however its keys were sent.
+    expect(
+      await core.call(
+        'test.agent',
+        { request: REQUEST, agent: 'helper', canvas: CANVAS },
+        CALLERS.you,
+      ),
+    ).toEqual(first);
+    expect(await call('worker')).toEqual({ ok: true, value: { agent: 'worker', revs: {} } });
+    expect(calls['test.agent']).toHaveLength(2);
+  });
+
   it('runs a request again whose first call was cancelled, once that call has unwound', async () => {
     const { core, registry } = setup();
     const args = { canvas: CANVAS, agent: 'helper', request: REQUEST };

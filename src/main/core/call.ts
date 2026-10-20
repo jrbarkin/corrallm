@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { z } from 'zod';
 
 import { PROPOSING_RULES } from '../../shared/api/define';
@@ -31,8 +33,10 @@ import { Throttle } from './throttle';
  * caller left out (its only one, or the one holding a message it names), or asks a caller with
  * several to name one if its arguments otherwise fit, parses them with the op's one schema
  * (refusing text with a broken character, a lone surrogate, which the core's database can't keep
- * as it is), resolves every id a token names against its reach, refuses an agent aiming at itself an op it
- * may not, returns a repeated request's first result, and runs the op in its scope, checking the
+ * as it is), returns a caller's repeated request's first result (the same op, request id and
+ * arguments; before reach, since what its first call did may have put what it names out of reach),
+ * resolves every id a token names against its reach,
+ * refuses an agent aiming at itself an op it may not, and runs the op in its scope, checking the
  * op's reach again there, then its rules on a token's arguments (a met rule refuses it, or makes it
  * a proposal for you), since they read what the ops before it in its scope left; its reach is
  * checked once more as each of its commits builds, in the canvas's turn, and so is each inner op's
@@ -562,11 +566,19 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         release = admitted;
       }
       const args = parse(def, withCanvas(def, raw, caller, openCanvases, holds));
-      checkReach(name, surface, def, args, caller);
-      const run = () => apply(name, op, args, caller, signal);
+      // A caller's own repeated request is answered before reach is resolved: what its first call
+      // did (a delete) may have put what it names out of reach. One that runs is checked first.
+      const run = async (): Promise<Attempt> => {
+        try {
+          checkReach(name, surface, def, args, caller);
+        } catch (error) {
+          return { result: { ok: false, error: errorOf(error, signal) }, kept: false };
+        }
+        return apply(name, op, args, caller, signal);
+      };
       const { request } = args as { request?: unknown };
       return typeof request === 'string'
-        ? await requests.remembered(callerKey(caller), `${name}|${request}`, run)
+        ? await requests.remembered(callerKey(caller), `${name}|${request}|${keyOf(args)}`, run)
         : (await run()).result;
     } catch (error) {
       return { ok: false, error: errorOf(error, signal) };
@@ -698,6 +710,22 @@ function withCanvas(
   }
   const [only] = canvases;
   return only === undefined ? raw : { ...given, canvas: only };
+}
+
+/**
+ * A call's parsed arguments, as the SHA-256 of their JSON with each object's keys in order: equal
+ * for two calls of the same arguments, however their keys were sent, and short however large they
+ * are (a batch's).
+ */
+function keyOf(args: unknown): string {
+  const json = JSON.stringify(args, (_key, value: unknown) =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([one], [other]) => (one < other ? -1 : one > other ? 1 : 0)),
+        )
+      : value,
+  );
+  return createHash('sha256').update(json).digest('base64url');
 }
 
 /** Whether an op's result is a proposal for you, which applied nothing. */
