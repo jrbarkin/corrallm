@@ -54,6 +54,23 @@ const pragma = (store: Store, name: string): unknown =>
   store.prepare(`PRAGMA ${name}`).get()?.[name];
 
 describe('openStore', () => {
+  it.each(['unreadable', 'updating'])(
+    'refuses a %s recovery record before SQLite can open the database',
+    async (kind) => {
+      const { store } = await open();
+      await store.write(() =>
+        store.prepare("INSERT INTO canvas (id, used_at) VALUES ('kept', 1)").run(),
+      );
+      await store.close();
+      const before = await readFile(file);
+      await writeFile(`${file}.recovery${kind === 'updating' ? '.updating' : ''}`, 'incomplete');
+      const result = await openStore(profile);
+      expect(result.store).toBeUndefined();
+      expect(result.said.join(' ')).toMatch(/recovery.*refused/i);
+      expect(await readFile(file)).toEqual(before);
+    },
+  );
+
   it.skipIf(process.platform === 'win32')(
     'makes the database, its log and its index the user’s alone, whatever the umask',
     async () => {

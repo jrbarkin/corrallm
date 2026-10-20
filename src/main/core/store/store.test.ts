@@ -1,4 +1,6 @@
 import { fstatSync } from 'node:fs';
+import type * as Fs from 'node:fs';
+import type * as FsPromises from 'node:fs/promises';
 import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,6 +38,45 @@ let now: number;
 let timers: Timer[];
 /** The flushes of its log the store asked for while the test holds them (else they run at once). */
 let flushes: { fd: number; done: (error?: Error) => void }[] | undefined;
+const diskFault = vi.hoisted(() => ({
+  truncate: false,
+  repair: false,
+  marker: false,
+  snapshotFolder: '',
+}));
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof Fs>();
+  return {
+    ...fs,
+    ftruncateSync: (...args: Parameters<typeof fs.ftruncateSync>) => {
+      if (diskFault.truncate) throw new Error('EIO: i/o error, ftruncate');
+      fs.ftruncateSync(...args);
+    },
+  };
+});
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof FsPromises>();
+  return {
+    ...fs,
+    open: async (...args: Parameters<typeof fs.open>) => {
+      const handle = await fs.open(...args);
+      if (String(args[0]) === diskFault.snapshotFolder) {
+        handle.sync = () => Promise.reject(new Error('EIO: i/o error, fsync folder'));
+      }
+      if (String(args[0]).endsWith('-wal') && diskFault.repair) {
+        handle.truncate = () => Promise.reject(new Error('EIO: i/o error, recovery truncate'));
+      }
+      if (
+        String(args[0]).includes('core.db.recovery.') &&
+        String(args[0]).endsWith('.partial') &&
+        diskFault.marker
+      ) {
+        handle.sync = () => Promise.reject(new Error('EIO: recovery record could not be flushed'));
+      }
+      return handle;
+    },
+  };
+});
 const deps: StoreDeps = {
   later: (run, ms) => {
     const timer = { run, ms, done: false };
@@ -82,6 +123,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  diskFault.truncate = false;
+  diskFault.repair = false;
+  diskFault.marker = false;
+  diskFault.snapshotFolder = '';
   if (reader.isOpen) reader.close();
   for (const { done } of flushes?.splice(0) ?? []) done();
   flushes = undefined;
@@ -297,12 +342,12 @@ describe('the write lane', () => {
       // A transaction within the lane's goes on as a savepoint of it.
       store.tx(() => add('nested'));
       queued = store.write(() => add('queued by it'));
+      void queued.catch(() => undefined);
     });
     const closed = store.close();
     // Refused at once, as it closed; the write that queued it, once its log is flushed.
-    const refused = expect(queued).rejects.toThrow('The core’s database is closed.');
     await expect(outer).resolves.toBeUndefined();
-    await refused;
+    await expect(queued).rejects.toThrow('The core’s database is closed.');
     await closed;
     expect(pending()).toEqual([]);
     expect(notes()).toEqual(['outer', 'nested']);
@@ -332,6 +377,82 @@ describe('a failed flush', () => {
     });
     flushes?.[0]?.done(new Error('EIO: i/o error, fsync'));
   }
+
+  it.each(['repair', 'interrupted update', 'blocked repair', 'wrong header'])(
+    'never reopens rejected commits when truncating the WAL fails (%s)',
+    async (recovery) => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await store.write(() => add('kept'));
+      flushes = [];
+      const lost = store.write(() => add('lost'));
+      diskFault.truncate = true;
+      await failFlush();
+      await expect(lost).rejects.toThrow(FAILED);
+      await store.close();
+      reader.close();
+      diskFault.truncate = false;
+      flushes = undefined;
+      if (recovery === 'wrong header') {
+        const record = `${store.file}.recovery`;
+        const kept = JSON.parse(await readFile(record, 'utf8')) as { header: string };
+        const header = Buffer.from(kept.header, 'hex');
+        header[16] = (header[16] ?? 0) ^ 1;
+        await writeFile(record, JSON.stringify({ ...kept, header: header.toString('hex') }));
+      } else if (recovery === 'interrupted update') {
+        const record = `${store.file}.recovery`;
+        await writeFile(`${record}.updating`, await readFile(record));
+        await writeFile(record, 'null');
+      }
+      diskFault.repair = recovery === 'blocked repair';
+      const before = await readFile(`${store.file}-wal`);
+      const opened = await openStore(profile, deps);
+      if (recovery === 'blocked repair' || recovery === 'wrong header') {
+        expect(opened.store).toBeUndefined();
+        expect(opened.said.join(' ')).toMatch(/recover|rejected|flush/i);
+        expect(await readFile(`${store.file}-wal`)).toEqual(before);
+      } else {
+        if (opened.store === undefined) throw new Error(opened.said.join(' '));
+        store = opened.store;
+        reader = connect(store.file, { readOnly: true });
+        expect(notes()).toEqual(['kept']);
+      }
+    },
+  );
+
+  it('commits nothing when its recovery record cannot reach disk', async () => {
+    await store.write(() => add('kept'));
+    diskFault.marker = true;
+    let ran = false;
+    await expect(
+      store.write(() => {
+        ran = true;
+        add('not committed');
+      }),
+    ).rejects.toThrow('recovery record');
+    expect(ran).toBe(false);
+    expect(notes()).toEqual(['kept']);
+    diskFault.marker = false;
+    await store.write(() => add('again'));
+    expect(notes()).toEqual(['kept', 'again']);
+  });
+
+  it('removes a snapshot whose publication failed after rename before discarding an unflushed write', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await store.write(() => add('kept'));
+    flushes = [];
+    const lost = store.write(() => add('lost'));
+    await vi.waitFor(() => {
+      expect(flushes).toHaveLength(1);
+    });
+    diskFault.snapshotFolder = path.join(profile, 'backups');
+    await expect(store.snapshot()).rejects.toThrow('EIO');
+    diskFault.snapshotFolder = '';
+    await failFlush();
+    await expect(lost).rejects.toThrow(FAILED);
+    await store.close();
+    expect(await readdir(path.join(profile, 'backups'))).toEqual([]);
+    expect(await reopened()).toEqual(['kept']);
+  });
 
   it('keeps none of its writes, nor any committed after them, and fails closed, saying so once', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -513,7 +634,8 @@ describe('checkpoints', () => {
     store.tx(() => add('one more'));
     expect(pending().map(({ ms }) => ms)).toEqual([0]);
     fire();
-    store.tx(() => add('after the checkpoint'));
+    // The write lane waits for the worker rather than racing a synchronous transaction with it.
+    await store.write(() => add('after the checkpoint'));
     expect(pending().map(({ ms }) => ms)).toEqual([1000]);
   });
 
@@ -667,7 +789,8 @@ describe('snapshots', () => {
       written++;
     }
     const { check, notes } = inSnapshot(path.basename(await taken));
-    expect(writtenBefore).toBeGreaterThan(0);
+    // A concurrent write progresses; its fsync need not finish before the backup's publication.
+    expect(written).toBeGreaterThan(0);
     expect(check).toBe('ok');
     expect(notes).toBe(2000);
   });

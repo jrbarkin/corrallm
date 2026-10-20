@@ -151,6 +151,8 @@ describe('the App Server connection', () => {
     };
     // No sandbox, asking only once one fails: there is nothing to fail, so it never asks.
     expect(await reported('danger-full-access', 'on-failure')).toEqual([null, false]);
+    // Even without a sandbox, on-request asks for dangerous commands.
+    expect(await reported('danger-full-access', 'on-request')).toEqual([null, true]);
     // A sandbox, asking for anything untrusted: it asks.
     expect(await reported('workspace-write', 'untrusted')).toEqual([null, true]);
     // A preset says it all: Full access never asks.

@@ -2,6 +2,7 @@ import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from '../c
 import { parseCommand, USAGE, UsageError } from './args';
 import type { Command } from './args';
 import { USAGE_ERROR } from './node';
+import { writtenOut } from './output';
 import { serveCommand } from './serve';
 import { waitCommand } from './wait';
 
@@ -18,16 +19,13 @@ import { waitCommand } from './wait';
  * 3 on a timeout, 4 on an uncaught error.
  */
 
-/** How long exiting waits for what was printed on a terminal to be written out, at most. */
-const WRITTEN_OUT_MS = 1000;
-
 /** Where a command prints: `serve` only on stderr, `wait` only its JSON line on stdout. */
 type Printed = readonly ('stdout' | 'stderr')[];
 const BOTH: Printed = ['stdout', 'stderr'];
 
 /**
  * Exits with `code` once what was printed on `printed` has been written out: as long as a pipe's
- * reader takes (`wait`'s line is never cut off), but at most WRITTEN_OUT_MS on a terminal, which
+ * reader takes (`wait`'s line is never cut off), but at most a second for each terminal, which
  * may never say so once it hung up (its window closed, script(1) killed). A stream the command
  * never printed on is never touched: Node opens one as it is first asked for, and on macOS opening
  * a terminal that hung up never returns.
@@ -35,16 +33,7 @@ const BOTH: Printed = ['stdout', 'stderr'];
 function exit(code: number, printed: Printed): void {
   process.exitCode = code;
   const streams = printed.map((name) => process[name]);
-  if (streams.some((stream) => stream.isTTY)) {
-    setTimeout(() => process.exit(code), WRITTEN_OUT_MS);
-  }
-  let left = streams.length;
-  for (const stream of streams) {
-    stream.write('', () => {
-      left -= 1;
-      if (left === 0) process.exit(code);
-    });
-  }
+  void writtenOut(streams).then(() => process.exit(code));
 }
 
 async function selfTest(): Promise<void> {

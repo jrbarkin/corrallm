@@ -1,6 +1,8 @@
-import { closeSync, fsync, fsyncSync, ftruncateSync, openSync } from 'node:fs';
+import { closeSync, fsync, fsyncSync, ftruncateSync, openSync, readSync } from 'node:fs';
 
 import { Checkpointer } from './checkpointer';
+import { Recovery } from './recovery';
+import type { LogPrefix } from './recovery';
 import { remove, takeSnapshot } from './snapshots';
 import { connect } from './sqlite';
 import type { Connection, Statement } from './sqlite';
@@ -168,6 +170,10 @@ export class Store {
   /** Taking back what it hadn't flushed when it failed, then closing its connection. */
   #forgetting: Promise<void> | undefined;
   readonly #checkpointer: Checkpointer;
+  readonly #recovery: Recovery;
+  /** A transaction waiting for its recovery record before COMMIT. */
+  #committing: Promise<void> | undefined;
+  #updatingRecovery = false;
   /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
 
@@ -178,6 +184,7 @@ export class Store {
     this.#deps = deps;
     this.#snapshotAt = snapshotAt;
     this.#checkpointer = new Checkpointer(file);
+    this.#recovery = new Recovery(file, profile);
   }
 
   /**
@@ -214,12 +221,24 @@ export class Store {
     if (this.#failed !== undefined) throw this.#failed;
     const outermost = !this.#connection.isTransaction;
     if (!outermost) return transaction(this.#connection, run);
+    if (
+      this.#committing !== undefined ||
+      this.#inFlush.length > 0 ||
+      this.#unflushed.length > 0 ||
+      this.#checkpointing !== undefined
+    ) {
+      throw new Error(
+        'A synchronous transaction cannot overlap the store’s write lane or checkpoint.',
+      );
+    }
     if (this.#shut) throw closed();
     const frames = this.#frames();
+    this.#recovery.beginSync(this.#prefix(frames));
     const commit = ++this.#commits;
     const value = transaction(this.#connection, run);
     try {
       fsyncSync(this.#logFile());
+      this.#recovery.flushedSync();
     } catch (error) {
       throw this.#fail(error, { frames, commit });
     }
@@ -258,7 +277,9 @@ export class Store {
     if (this.#checkpointing !== undefined) return this.#checkpointing;
     const checkpointing = (async () => {
       // Only what is on the drive is copied into the database.
-      while (this.#flushing !== undefined) await this.#flushing;
+      while (this.#flushing !== undefined || this.#committing !== undefined) {
+        await (this.#committing ?? this.#flushing);
+      }
       if (this.#failed !== undefined) throw this.#failed;
       try {
         await this.#checkpointer.checkpoint();
@@ -286,14 +307,11 @@ export class Store {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#snapshotting !== undefined) return this.#snapshotting;
     const at = this.#deps.now();
-    const taking = takeSnapshot(this.file, this.#profile, at)
-      .then((file) => {
-        this.#taken.push({ file, commits: this.#commits });
-        return file;
-      })
-      .finally(() => {
-        this.#snapshotting = undefined;
-      });
+    const taking = takeSnapshot(this.file, this.#profile, at, (file) => {
+      this.#taken.push({ file, commits: this.#commits });
+    }).finally(() => {
+      this.#snapshotting = undefined;
+    });
     this.#snapshotting = taking;
     this.#snapshotAt = at;
     return taking;
@@ -316,8 +334,15 @@ export class Store {
     this.#cancelCheckpoint?.();
     // The writes queued commit now, or once the checkpoint going on is done.
     while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
-    this.#flush();
-    while (this.#flushing !== undefined) await this.#flushing;
+    do {
+      this.#flush();
+      await this.#committing;
+      await this.#flushing;
+    } while (
+      this.#queue.length > 0 ||
+      this.#committing !== undefined ||
+      this.#flushing !== undefined
+    );
     // Failed closed, it took back what it hadn't flushed, and closed its connection then.
     if (this.#forgetting !== undefined) {
       await this.#forgetting;
@@ -337,11 +362,17 @@ export class Store {
     }
     this.#connection.close();
     if (this.#log !== undefined) closeSync(this.#log);
+    await this.#recovery.discarded();
   }
 
   /** Commits every write queued, a batch at a time, unless a checkpoint goes on. */
   #flush(): void {
-    if (this.#checkpointing !== undefined) return;
+    if (
+      this.#checkpointing !== undefined ||
+      this.#committing !== undefined ||
+      this.#updatingRecovery
+    )
+      return;
     let batch = this.#queue;
     this.#queue = [];
     while (batch.length > 0) {
@@ -355,47 +386,49 @@ export class Store {
 
   /** Commits a batch of writes in one transaction; returns those it didn't run. */
   #commit(batch: Queued[]): Queued[] {
-    let frames: number;
-    try {
-      frames = this.#frames();
-      this.#connection.exec('BEGIN IMMEDIATE');
-    } catch (error) {
-      for (const write of batch) write.reject(error);
-      return [];
-    }
     const done: [write: Queued, value: unknown][] = [];
-    for (const [i, write] of batch.entries()) {
-      try {
-        done.push([write, savepoint(this.#connection, write.run)]);
-      } catch (error) {
-        write.reject(error);
-        if (!this.#connection.isTransaction) {
-          // SQLite rolled the whole transaction back (as on a full disk): what the batch wrote
-          // before is gone too, and the writes after it are a batch of their own.
-          for (const [lost] of done) lost.reject(error);
-          return batch.slice(i + 1);
+    const commit = async () => {
+      const frames = this.#frames();
+      // Force the recovery boundary before opening the transaction: no SQLite lock waits on IO.
+      await this.#recovery.begin(this.#prefix(frames));
+      if (this.#failed !== undefined) throw this.#failed;
+      this.#connection.exec('BEGIN IMMEDIATE');
+      for (const [i, write] of batch.entries()) {
+        try {
+          done.push([write, savepoint(this.#connection, write.run)]);
+        } catch (error) {
+          write.reject(error);
+          if (!this.#connection.isTransaction) {
+            for (const [lost] of done) lost.reject(error);
+            this.#queue = [...batch.slice(i + 1), ...this.#queue];
+            return;
+          }
         }
       }
-    }
-    try {
       this.#connection.exec('COMMIT');
-    } catch (error) {
-      rollback(this.#connection);
-      for (const [lost] of done) lost.reject(error);
-      return [];
-    }
-    this.#unflushed.push({
-      resolve: () => {
-        for (const [write, value] of done) write.resolve(value);
-      },
-      reject: (error) => {
-        for (const [write] of done) write.reject(error);
-      },
-      frames,
-      commit: ++this.#commits,
-    });
-    this.#flushLog();
-    this.#committed();
+      this.#unflushed.push({
+        resolve: () => {
+          for (const [write, value] of done) write.resolve(value);
+        },
+        reject: (error) => {
+          for (const [write] of done) write.reject(error);
+        },
+        frames,
+        commit: ++this.#commits,
+      });
+      this.#flushLog();
+      this.#committed();
+    };
+    this.#committing = commit()
+      .catch((error: unknown) => {
+        rollback(this.#connection);
+        // Even callbacks not run must settle when their recovery boundary could not be kept.
+        for (const write of batch) write.reject(error);
+      })
+      .finally(() => {
+        this.#committing = undefined;
+        this.#flush();
+      });
     return [];
   }
 
@@ -413,6 +446,10 @@ export class Store {
     const flushing = (async () => {
       try {
         await this.#deps.flush(this.#logFile());
+        this.#updatingRecovery = true;
+        await this.#committing;
+        const next = this.#unflushed[0];
+        await this.#recovery.flushed(next === undefined ? undefined : this.#prefix(next.frames));
       } catch (error) {
         this.#fail(error);
         return;
@@ -425,7 +462,9 @@ export class Store {
     this.#flushing = flushing;
     void flushing.then(() => {
       this.#flushing = undefined;
+      this.#updatingRecovery = false;
       this.#flushLog();
+      this.#flush();
     });
   }
 
@@ -436,6 +475,18 @@ export class Store {
       throw new Error('SQLite did not say how long the core’s database’s log is.');
     }
     return log;
+  }
+
+  #prefix(frames: number): LogPrefix {
+    const header = Buffer.alloc(LOG_HEADER_BYTES);
+    if (readSync(this.#logFile(), header, 0, header.length, 0) !== header.length) {
+      throw new Error('Could not read the core database’s WAL header for recovery.');
+    }
+    const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
+    return {
+      header: header.toString('hex'),
+      bytes: LOG_HEADER_BYTES + frames * (FRAME_HEADER_BYTES + page),
+    };
   }
 
   /**
@@ -464,6 +515,9 @@ export class Store {
       commit.commit < earliest.commit ? commit : earliest,
     );
     this.#forgetting = this.#forget(first);
+    void this.#forgetting.catch((error: unknown) => {
+      console.error('The core’s database still needs recovery before it can open again:', error);
+    });
     return failed;
   }
 
@@ -477,8 +531,10 @@ export class Store {
    */
   async #forget(first: { frames: number; commit: number }): Promise<void> {
     while (this.#flushing !== undefined) await this.#flushing;
+    await this.#committing;
     await this.#snapshotting?.catch(() => undefined);
     await this.#checkpointer.close();
+    let cut = false;
     try {
       const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
       const log = this.#logFile();
@@ -487,6 +543,7 @@ export class Store {
         first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
       );
       fsyncSync(log);
+      cut = true;
     } catch (error) {
       console.error('Could not take back what the core’s database lost:', error);
     }
@@ -506,8 +563,9 @@ export class Store {
     }
     if (this.#log !== undefined) closeSync(this.#log);
     for (const { file, commits } of this.#taken) {
-      if (commits >= first.commit) await remove(file).catch(() => undefined);
+      if (commits >= first.commit) await remove(file);
     }
+    if (cut) await this.#recovery.discarded();
   }
 
   /** The log's file, open to flush it: SQLite makes it with the first commit. */

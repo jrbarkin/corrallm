@@ -17,6 +17,7 @@ import type { UsageWindows } from '../../shared/usage';
 import { callTool } from '../api/mcp';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
+import { CodexTui } from '../sessions/codex/terminal/tui';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
@@ -919,6 +920,59 @@ describe('a mode that never asks', () => {
   const UNKNOWN_WAITS =
     'corrallm can’t tell whether Builder’s CLI defaults to a mode that asks before it acts, so your message waits until Builder runs in one that asks, which only the user can set.';
 
+  it.each([false, undefined])(
+    'checks the first party message against the started session (asks: %s), while yours still go',
+    async (asks) => {
+      await keepCanvas();
+      codexDefault(true);
+      appServer = new FakeConnector({
+        adapter: 'codex',
+        mode: null,
+        ...(asks === undefined ? {} : { asks }),
+      });
+      const engine = await (await start()).engines.open(CANVAS);
+      const first = await send('builder', 'Wait for permission');
+      await vi.waitFor(() => {
+        expect(appServer.started).toHaveLength(1);
+      });
+      await vi.waitFor(async () => {
+        expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/builder' })]);
+      });
+      expect(sent(appServer)).toEqual([]);
+      expect((await find(first))?.state).toBe('pending');
+      const yours = await send('builder', 'My message', YOU);
+      await vi.waitFor(async () => {
+        expect((await find(yours, YOU))?.state).toBe('replied');
+      });
+      expect(sent(appServer)).toEqual(['My message']);
+      engine.sessions.setMode('builder', 'auto');
+      await vi.waitFor(async () => {
+        expect((await find(first))?.state).toBe('replied');
+      });
+    },
+  );
+
+  it('holds an unknown native startup report even when a startup mode was requested', async () => {
+    await keepCanvas();
+    await start({
+      appServer: {
+        start: (spec, host) =>
+          appServer.start(spec, {
+            ...host,
+            emit: (event) => {
+              host.emit(event.type === 'started' ? { ...event, mode: null } : event);
+            },
+          }),
+      },
+    });
+    const id = await send('checker', 'Wait for native permissions');
+    await vi.waitFor(async () => {
+      expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/checker' })]);
+    });
+    expect((await find(id))?.state).toBe('pending');
+    expect(sent(appServer)).toEqual([]);
+  });
+
   it('holds a party’s message for an agent yet to start whose CLI defaults to a mode that never asks; yours start it', async () => {
     await keepCanvas();
     const codex = codexDefault(false);
@@ -956,7 +1010,7 @@ describe('a mode that never asks', () => {
     expect(codex.reads()).toBe(1);
   });
 
-  it('delivers to an agent yet to start whose CLI defaults to a mode that asks, reading that once a session', async () => {
+  it('delivers to Builder with no saved mode on Codex Default, reading that once a session', async () => {
     await keepCanvas();
     const codex = codexDefault(true);
     let host: SessionHost | undefined;
@@ -975,6 +1029,7 @@ describe('a mode that never asks', () => {
       expect((await find(second))?.state).toBe('replied');
     });
     expect((await find(first))?.state).toBe('replied');
+    expect(appServer.started[0]?.mode).toBeNull();
     expect(codex.reads()).toBe(1);
     // Its session ends: its next is read for again.
     host?.emit({ type: 'closed' });
@@ -984,6 +1039,42 @@ describe('a mode that never asks', () => {
     });
     expect(codex.reads()).toBe(2);
     expect(await notices()).toEqual([]);
+  });
+
+  it('holds and releases Terminal messages when a hook reports Full access and then an asking mode', async () => {
+    await keepCanvas();
+    const tui = new CodexTui({
+      trust: () => Promise.reject(new Error('No hook setup in this test')),
+    });
+    let host: SessionHost | undefined;
+    await start({
+      terminal: {
+        start: (spec, given) => {
+          host = given;
+          return terminal.start(spec, given);
+        },
+      },
+    });
+    const first = await send('shell', 'Start');
+    await vi.waitFor(async () => {
+      expect((await find(first))?.state).toBe('replied');
+    });
+    const hook = (permission_mode: string) => {
+      for (const signal of tui.hook({ hook_event_name: 'Stop', permission_mode })) {
+        if (signal.kind === 'mode') host?.emit({ type: 'mode', mode: signal.mode });
+      }
+    };
+    hook('bypassPermissions');
+    const held = await send('shell', 'Wait for permission');
+    await vi.waitFor(async () => {
+      expect(await needsOf()).toEqual([expect.objectContaining({ id: 'unasking/shell' })]);
+    });
+    expect((await find(held))?.state).toBe('pending');
+    expect(sent(terminal)).toHaveLength(1);
+    hook('default');
+    await vi.waitFor(async () => {
+      expect((await find(held))?.state).toBe('replied');
+    });
   });
 
   it('holds a party’s message when corrallm can’t tell what an agent’s CLI defaults to, and reads it again a minute on', async () => {
@@ -1051,9 +1142,9 @@ describe('a mode that never asks', () => {
     expect((await needsOf()).map(({ id }) => id)).toEqual(['unasking/builder']);
   });
 
-  it('holds a party’s message to a running session that never says its mode, by what its CLI defaults to', async () => {
+  it('holds a party’s message when the running session cannot report its permissions', async () => {
     await keepCanvas();
-    // Shell's terminal never says its mode (Codex's TUI doesn't); its CLI's default never asks.
+    // Shell's terminal has not reported its permissions; its earlier default cannot vouch for it.
     const codex = codexDefault(false);
     terminal = new FakeConnector({ adapter: 'codex', mode: null });
     const engine = await (await start()).engines.open(CANVAS);
@@ -1065,10 +1156,10 @@ describe('a mode that never asks', () => {
     const first = await send('shell', 'First');
     await vi.waitFor(async () => {
       expect((await notices()).map(({ replyTo, body }) => [replyTo, body])).toEqual([
-        [first, DEFAULT_WAITS.replaceAll('Builder', 'Shell')],
+        [first, UNKNOWN_WAITS.replaceAll('Builder', 'Shell')],
       ]);
     });
-    expect(codex.reads()).toBe(1);
+    expect(codex.reads()).toBe(0);
   });
 
   it('delivers to a session that never says its mode when it is set to start in one that asks', async () => {

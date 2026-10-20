@@ -7,6 +7,7 @@ import { beginLog, JOURNAL_SIZE_LIMIT } from './checkpointer';
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import { settleRestored } from './restored';
+import { recoverLog } from './recovery';
 import { restoreSnapshot, snapshots, snapshotTime } from './snapshots';
 import {
   connect,
@@ -80,6 +81,7 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
   const file = path.join(profile, STORE_FILE);
   const said: string[] = [];
   try {
+    await recoverLog(file, profile);
     let connection: Connection;
     if (!existsSync(file) && (await snapshots(profile)).length > 0) {
       // Set aside without a snapshot in its place yet: a restore cut short, finished now.

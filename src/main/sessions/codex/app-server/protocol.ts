@@ -97,9 +97,10 @@ export function presetOf(sandbox: unknown, approvals: unknown): CodexMode | null
 /**
  * Whether a sandbox and approvals (the user's config's, or what Codex reports for a thread) ask
  * before acting on what a message says: false where they never do, undefined where corrallm can't
- * tell (a value it doesn't know). Approvals `never` never ask, sandboxed or not; nor do any but
- * `untrusted` with no sandbox, since nothing then fails or needs escalating (Codex approves every
- * command and patch itself: codex-rs core's safety checks). Left out (null), each is Codex's
+ * tell (a value it doesn't know). Approvals `never` never ask, sandboxed or not; on-failure with
+ * no sandbox has nothing to fail. On-request still asks for dangerous commands without a sandbox:
+ * codex-rs/core/src/exec_policy_tests.rs, dangerous_rm_rf_requires_approval_in_danger_full_access
+ * (OpenAI Codex 8c076942cb70fba8e5c4732c23f1faabc4aed484). Left out (null), each is Codex's
  * default for a trusted folder: the project folder's sandbox, asking on request.
  */
 export function asksOf(sandbox: unknown, approvals: unknown): boolean | undefined {
@@ -119,6 +120,7 @@ export function asksOf(sandbox: unknown, approvals: unknown): boolean | undefine
     case 'untrusted':
       return true;
     case 'on-request':
+      return true;
     case 'on-failure':
       return !open;
     default:

@@ -167,6 +167,10 @@ export class ConnectedDriver implements SessionDriver {
     );
   }
 
+  ready(): Promise<void> {
+    return this.#run();
+  }
+
   start(turn: Turn, done: DriverDone): void {
     this.#lastError = undefined;
     const sent: SentTurn = { done, sent: false, started: this.#io.now() };

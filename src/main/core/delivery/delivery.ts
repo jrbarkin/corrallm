@@ -577,8 +577,8 @@ export class Delivery {
    * start: one that never asks acts on whatever it is sent, so a party's text would act unchecked,
    * as would one corrallm can't tell asks. A session that runs says so by its mode (one its adapter
    * says never asks), or, on settings that are none of its modes, by whether they ask; one that
-   * says neither (a CLI that never reports its mode, or not yet) runs in what it started in: the
-   * mode it was set to start in (each asks), else its CLI's own default. One yet to start starts in
+   * says neither is unknown until it reports permissions, even if a startup mode was requested.
+   * One yet to start starts in
    * its saved start mode, where its connection starts in it (each asks), else its CLI's default.
    * That default is read once a session (#default; not now unless `read`: 'reading').
    */
@@ -593,7 +593,7 @@ export class Delivery {
         return catalog.neverAsks(connection, session.mode) ? 'mode' : 'asks';
       }
       if (session.asks !== undefined) return session.asks ? 'asks' : 'mode';
-      if (session.running.mode !== undefined) return 'asks';
+      return 'unknown';
     } else {
       const mode = node.data.settings?.[catalog.adapterOf(connection)]?.mode;
       if (mode !== undefined && isSessionMode(mode) && catalog.isStartMode(connection, mode)) {
@@ -731,12 +731,40 @@ export class Delivery {
     });
     this.#writing.add(node.id);
     void this.#deps.store.durable().then(
-      () => {
-        this.#writing.delete(node.id);
-        if (this.#closed) return;
-        // Taken back while it was journaled, it is never sent: what waits behind it goes.
-        if (this.#deps.store.get(message.id)?.state !== 'delivering') this.schedule();
-        else this.#hand(node, message, as);
+      async () => {
+        try {
+          if (message.from !== 'you') {
+            try {
+              await this.#deps.engine.sessions.ready(node.id);
+            } catch (error) {
+              this.#refused(
+                node,
+                message.id,
+                error instanceof Error ? error.message : String(error),
+              );
+              return;
+            }
+          }
+          if (this.#closed) return;
+          // Taken back while it was journaled, it is never sent: what waits behind it goes.
+          if (this.#deps.store.get(message.id)?.state !== 'delivering') this.schedule();
+          else {
+            const current = this.#deps
+              .nodes()
+              .find((one) => one.id === node.id && one.type === 'agent');
+            if (
+              message.from !== 'you' &&
+              (current?.type !== 'agent' ||
+                this.#deps.engine.sessions.of(node.id).running === undefined ||
+                this.#holdOf(current) !== undefined)
+            ) {
+              this.#deps.store.update(message.id, { state: 'pending' });
+              this.schedule();
+            } else this.#hand(node, message, as);
+          }
+        } finally {
+          this.#writing.delete(node.id);
+        }
       },
       (error: unknown) => {
         this.#writing.delete(node.id);

@@ -10,7 +10,7 @@ import { FakeConnector } from '../../sessions/fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { createCore } from '../core';
 import type { Core } from '../core';
-import { MessageTable } from './messages';
+import { MessageStore } from './messages';
 import { Store } from '../store/store';
 import { journaledRun, keepCanvases, readOnDisk, refuseWrites } from '../store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from '../test-registry';
@@ -108,14 +108,16 @@ async function holdCommits(only?: 'messages'): Promise<() => void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
   const held = Promise.withResolvers<undefined>();
   if (only === 'messages') {
-    const { value: write } = Object.getOwnPropertyDescriptor(MessageTable.prototype, 'write') as {
-      value: MessageTable['write'];
+    const { value: durable } = Object.getOwnPropertyDescriptor(
+      MessageStore.prototype,
+      'durable',
+    ) as {
+      value: MessageStore['durable'];
     };
-    vi.spyOn(MessageTable.prototype, 'write').mockImplementation(function (
-      this: MessageTable,
-      run,
-    ) {
-      return held.promise.then(() => write.call(this, run));
+    vi.spyOn(MessageStore.prototype, 'durable').mockImplementation(function (this: MessageStore) {
+      // Run journaling can commit message rows too. Hold delivery's durability barrier itself,
+      // regardless of which write happens to carry those rows to disk first.
+      return held.promise.then(() => durable.call(this));
     });
   } else {
     const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'write') as {

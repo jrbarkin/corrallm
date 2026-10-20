@@ -142,13 +142,17 @@ describe('codexOptions', () => {
     expect(await asks({ sandbox_mode: 'danger-full-access', approval_policy: 'untrusted' })).toBe(
       true,
     );
-    // Never asking, in a sandbox or not; or no sandbox, so nothing ever needs asking about.
+    // Full disk access still asks about dangerous commands under on-request.
+    expect(await asks({ sandbox_mode: 'danger-full-access', approval_policy: 'on-request' })).toBe(
+      true,
+    );
+    expect(await asks({ sandbox_mode: 'danger-full-access' })).toBe(true);
+    // Never asking, in a sandbox or not; on-failure needs a sandbox to fail.
     expect(await asks({ approval_policy: 'never' })).toBe(false);
     expect(await asks({ sandbox_mode: 'read-only', approval_policy: 'never' })).toBe(false);
     expect(await asks({ sandbox_mode: 'danger-full-access', approval_policy: 'on-failure' })).toBe(
       false,
     );
-    expect(await asks({ sandbox_mode: 'danger-full-access' })).toBe(false);
     // Settings it doesn't know: it can't tell.
     expect(await asks({ approval_policy: { granular: { sandbox_approval: true } } })).toBe(
       undefined,
