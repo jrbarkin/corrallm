@@ -92,6 +92,13 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...batchOps(),
           ...replyOps({
             needOf: () => undefined,
+            // No file is reviewed here.
+            reviews: { get: () => undefined, items: () => [], settled: () => undefined },
+            documents: {
+              applyFile: () => Promise.reject(new Error('No file is reviewed here.')),
+              keepFile: () => Promise.reject(new Error('No file is reviewed here.')),
+            },
+            engines: { changed: () => undefined },
             // Its proposal touched only entities: no document's or file's fingerprint is read.
             lifecycle: { touched: () => Promise.resolve(undefined) },
             proposals: {

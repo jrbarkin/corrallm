@@ -42,7 +42,7 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
  * the proposer told; R3: only you answer one; and `canvas.batch`, whose combined change meets every
  * rule, each inner op checked as the caller's own call. R4's argument half: a token's canvas.save
  * that would remove agents its file has, and its canvas.close or canvas.create replacing a canvas
- * with edits not saved, with discard, are proposed. File reviews come with B9's task 12.
+ * with edits not saved, with discard, are proposed. R3 on a file review: no token answers it.
  *
  * The canvas: `lead` (a lead) holding `helper`, `team` (a frame holding `member`) and `spare` (an
  * empty frame); `a`, set to start in a mode and given a role, whose queue holds an OK with work
@@ -1076,7 +1076,40 @@ describe('proposals', () => {
     expect(reverted.value.nodes.map(({ data }) => data.label)).toEqual(['Solo']);
   });
 
-  it.todo('R3: a token’s reply to a file review is refused (Claude 12)');
+  it('R3: a token’s reply to a file review is refused; yours settles it', async () => {
+    const file = path.join(profile, `${CANVAS}.corral`);
+    const theirs = JSON.stringify({
+      ...MAIN,
+      nodes: [...MAIN.nodes, agent('d', { position: { x: 1600, y: 900 } })],
+    });
+    await writeFile(file, theirs);
+    // Checked before a save, which it refuses while it is open.
+    expect(await call('canvas.save', {}, YOU)).toMatchObject({
+      ok: false,
+      error: { code: 'refused' },
+    });
+    const { items } = (await applied('needs', {}, YOU)) as { items: NeedsItem[] };
+    const review = items.find((item) => item.kind === 'file');
+    if (review === undefined) throw new Error('No file review was raised.');
+    // Its choices are yours alone; it is on no agent, which no token reaches, so no token finds it
+    // to answer (R3 would refuse it, and the item's `by` too).
+    expect(review.choices.every(({ humanOnly }) => humanOnly !== undefined)).toBe(true);
+    for (const caller of [OUTSIDE, LEAD]) {
+      for (const choice of ['apply', 'keep']) {
+        expect(
+          await call('reply', { to: review.id, answer: { choice } }, caller),
+          `${partyIdOf(caller)}: ${choice}`,
+        ).toMatchObject({ ok: false, error: { code: 'not-found' } });
+      }
+    }
+    expect(doc().nodes.some(({ id }) => id === 'd')).toBe(false);
+    expect(await readFile(file, 'utf8')).toBe(theirs);
+    expect(await call('reply', { to: review.id, answer: { choice: 'apply' } }, YOU)).toMatchObject({
+      ok: true,
+      value: { outcome: 'applied' },
+    });
+    expect(node('d')).toBeDefined();
+  });
 });
 
 /** The proposals waiting for you on the canvas, as `needs` gives them to you. */

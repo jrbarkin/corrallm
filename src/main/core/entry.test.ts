@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CoreGuiSide, GuiSide } from '../../shared/gui-link';
 import { CoreLink } from '../../shared/link';
+import type * as CoreModule from './core';
 import type { CoreSide, HostSide } from './protocol';
 import { NO_DESKTOP } from './test-registry';
 
@@ -151,6 +152,37 @@ describe('the core process’s init', () => {
     });
     main.emit('windowGone', 7, true);
     expect(await main.request('shown', [7])).toEqual({ ok: true, value: [] });
+  });
+});
+
+describe('a window gaining focus', () => {
+  it('has the core check the file of the canvas it shows', async () => {
+    const focused: number[] = [];
+    vi.doMock('./core', async (original) => {
+      const real = await original<typeof CoreModule>();
+      return {
+        ...real,
+        createCore: async (...args: Parameters<typeof real.createCore>) => {
+          const core = await real.createCore(...args);
+          const check = core.focused.bind(core);
+          core.focused = (window) => {
+            focused.push(window);
+            return check(window);
+          };
+          return core;
+        },
+      };
+    });
+    try {
+      const entry = await start();
+      expect(await entry.init()).toEqual({ ok: true, value: null });
+      main.emit('windowFocused', 7);
+      await vi.waitFor(() => {
+        expect(focused).toEqual([7]);
+      });
+    } finally {
+      vi.doUnmock('./core');
+    }
   });
 });
 

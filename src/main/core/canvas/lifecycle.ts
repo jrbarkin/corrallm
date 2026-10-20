@@ -44,6 +44,7 @@ export interface LifecycleDeps {
     | 'forget'
     | 'hasRows'
     | 'keep'
+    | 'review'
   >;
   memory: Pick<CanvasMemory, 'get' | 'keeps'>;
   journal: Pick<RunJournal, 'opened' | 'open' | 'close' | 'last' | 'saved'>;
@@ -158,13 +159,15 @@ export class Lifecycle {
   }
 
   /**
-   * Shows `canvas` in `window` (window.show), its folder restored: open from now until it is
-   * closed, as a canvas opened is, the one the profile used last. The canvas the window showed
-   * stays open.
+   * Shows `canvas` in `window` (window.show), its folder restored and its file checked as it opens
+   * (B9 Design §5): open from now until it is closed, as a canvas opened is, the one the profile
+   * used last. The canvas the window showed stays open.
    */
   async show(window: WindowId, canvas: CanvasId): Promise<void> {
-    const { journal, windows, projects } = this.#deps;
+    const { journal, windows, projects, documents } = this.#deps;
     await journal.open(canvas);
+    // A document that can't be read is said so where it is read (canvas.get).
+    await documents.review(canvas).catch(() => undefined);
     if ((await windows.canvasOf(window)) === canvas) return;
     await projects.restore(canvas);
     await windows.show(window, canvas);

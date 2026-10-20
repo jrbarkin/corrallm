@@ -16,6 +16,7 @@ import type { OpContext } from '../call';
 import type { Documents } from '../canvas/documents';
 import type { Lifecycle } from '../canvas/lifecycle';
 import type { Proposals } from '../canvas/proposals';
+import type { FileReviews } from '../canvas/reviews';
 import type { CanvasStates } from '../canvas/states';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
@@ -79,12 +80,17 @@ export interface OpServices {
   engines: Engines;
   /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */
   lifecycle: Lifecycle;
-  /** Each canvas's document: a canvas made, kept or dropped (canvas.create). */
-  documents: Pick<Documents, 'create' | 'keep' | 'drop' | 'forget'>;
+  /**
+   * Each canvas's document: a canvas made, kept or dropped (canvas.create), and a file changed on
+   * disk applied or kept over (reply).
+   */
+  documents: Pick<Documents, 'create' | 'keep' | 'drop' | 'forget' | 'applyFile' | 'keepFile'>;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** The proposals waiting for you on each canvas. */
   proposals: Pick<Proposals, 'get' | 'items' | 'settled' | 'settle' | 'settlement'>;
+  /** The review of each canvas's file changed on disk, waiting for you. */
+  reviews: Pick<FileReviews, 'get' | 'items' | 'settled'>;
   /** What waits for an answer on a canvas, for you, by its id: its Needs item. */
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined;
   /** Whether an agent is a lead now, as kept on this machine. */

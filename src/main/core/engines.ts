@@ -33,8 +33,9 @@ import type { Database } from './store/store';
  * its messages (delivery/messages.ts), which parties send its agents (delivery/delivery.ts). A
  * canvas opens by its id, from what the profile keeps of it: its file and its project folder, which
  * the user picked in the app (canvas memory), its document as the core keeps it (from its rows,
- * else read from its file: core/canvas/documents.ts), whose live document it reads from then on,
- * and its run as the journal last kept it, restored paused. A canvas with no file opens only if
+ * else read from its file: core/canvas/documents.ts; a file changed on disk is reviewed, never read
+ * over its rows), whose live document it reads from then on, and its run as the journal last kept
+ * it, restored paused. A canvas with no file opens only if
  * the core keeps its document (one a token made), and none whose file holds another canvas. It is
  * open (the journal's `open_canvas`) until it is closed (`closeCanvas`: its run journaled, its
  * sessions ended). One opened held delivers nothing until `deliver()`, so a host that may still
@@ -64,8 +65,8 @@ export interface EnginesDeps {
   sessions: SessionManager;
   projects: ProjectFolders;
   journal: RunJournal;
-  /** Each canvas's document. */
-  documents: Pick<Documents, 'load' | 'live' | 'hasRows'>;
+  /** Each canvas's document, its file checked as it opens. */
+  documents: Pick<Documents, 'review' | 'live' | 'hasRows'>;
   /** Every canvas's messages, in the profile's database. */
   messages: MessageTable;
   /** The profile's database, whose commits hold what changes together. */
@@ -386,14 +387,22 @@ export class Engines {
     const context = await journal.get(canvas);
     // A canvas the core keeps the document of opens with no file (one a token made, never saved:
     // B9 Design §8); any other only from the file canvas memory names for it, while that file
-    // still holds it: never a draft that holds nothing, though the journal keeps one's run.
+    // holds no other canvas: never a draft that holds nothing, though the journal keeps one's run.
     if (context.savedText === undefined) {
       if (!documents.hasRows(canvas)) throw new Error(NO_FILE);
-    } else if (canvasIdOf(context.savedText) !== canvas) {
-      throw new Error(ANOTHER);
+    } else {
+      let holds: CanvasId | undefined;
+      try {
+        holds = canvasIdOf(context.savedText);
+      } catch (error) {
+        // One whose document the core keeps opens from it, its file reviewed (B9 Design §5).
+        if (!documents.hasRows(canvas)) throw error;
+      }
+      if (holds !== undefined && holds !== canvas) throw new Error(ANOTHER);
     }
-    // With its edits since, as the core keeps them.
-    const { document } = await documents.load(canvas);
+    // With its edits since, as the core keeps them: a file changed on disk meanwhile is never read
+    // over them, but reviewed (B9 Design §5).
+    const { document } = await documents.review(canvas);
     if (context.checkpoint) Engine.check(context.checkpoint);
     const listeners: Running['listeners'] = new Set();
     const { messages } = await this.#mailOf(canvas);

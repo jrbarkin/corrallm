@@ -35,7 +35,10 @@ import { committer, refusalOf } from './canvas/commit';
 import { Documents } from './canvas/documents';
 import { Lifecycle } from './canvas/lifecycle';
 import { Proposals } from './canvas/proposals';
+import { FileReviews } from './canvas/reviews';
 import { CanvasStates } from './canvas/states';
+import { FileWatch } from './canvas/watch';
+import type { WatchFolder } from './canvas/watch';
 import { seesAll, viewOf } from './canvas/view';
 import { Channels } from './channels';
 import { Windows } from './windows';
@@ -104,6 +107,8 @@ export interface CoreConfig {
   maxCreatedAgents?: () => number;
   /** For tests: the id each proposal raised takes (its Needs item's is proposal/<it>). */
   proposalIds?: () => string;
+  /** For tests: what watches the folders of the open canvases' files, instead of fs.watch. */
+  watchFolder?: WatchFolder;
   /** Fake connectors and options for an unpackaged app's tests, admitted by its host. */
   fakeSessions?: boolean;
   /**
@@ -164,6 +169,11 @@ export interface Core extends Dispatcher {
   /** Hears every canvas it runs: each message, and what newly waits for an answer. */
   watch(watcher: Watcher): () => void;
   /**
+   * A window gained focus (main says so): the file of the canvas it shows, if it shows one, is
+   * checked for a change on disk (B9 Design §5). Resolves once it is.
+   */
+  focused(window: WindowId): Promise<void>;
+  /**
    * Stops: each canvas's run held where it is and journaled, every session closed, and what the
    * core keeps written out. Rejects, once all that is done, if a run couldn't be journaled.
    */
@@ -191,11 +201,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const memory: CanvasMemory = new CanvasMemory(store, undefined, (canvas: CanvasId): boolean =>
     documents.unsaved(canvas),
   );
+  // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
+  // again as one is raised or settled.
+  const reviews = new FileReviews({
+    store,
+    changed: (canvas, by) => {
+      topics.changed(`needs:${canvas}`, by);
+      engines.needsChanged(canvas);
+    },
+  });
   const documents: Documents = new Documents({
     store,
     memory,
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
+    reviews,
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });
@@ -343,6 +363,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   memory.subscribe((canvas) => {
+    follow();
     if (canvas === undefined) states.listChanged();
     else
       void states.refresh(canvas).catch((error: unknown) => {
@@ -350,9 +371,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
   });
   journal.subscribe((canvas) => {
+    follow();
     states.runChanged(canvas);
   });
   windows.subscribe(() => {
+    follow();
     states.listChanged();
   });
   usage.subscribe((_state, by) => {
@@ -376,10 +399,17 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     ...(config.proposalIds === undefined ? {} : { newId: config.proposalIds }),
   });
-  /** What waits for you on a canvas: its run's holds and sessions' prompts, and the proposals. */
+  /**
+   * What waits for you on a canvas: its run's holds and sessions' prompts, the proposals, and the
+   * review of its file changed on disk.
+   */
   const waitingFor = (canvas: CanvasId): NeedsItem[] => {
     const open = engines.canvas(canvas);
-    return [...(open ? needs(needsInput(open, config.locale)) : []), ...proposals.items(canvas)];
+    return [
+      ...(open ? needs(needsInput(open, config.locale)) : []),
+      ...proposals.items(canvas),
+      ...reviews.items(canvas),
+    ];
   };
   const needOf = (canvas: CanvasId, id: string) =>
     waitingFor(canvas).find((item) => item.id === id);
@@ -416,16 +446,68 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     files,
     environment,
     ...(config.locale === undefined ? {} : { locale: config.locale }),
-    needs: (canvas) => proposals.items(canvas),
+    needs: (canvas) => [...proposals.items(canvas), ...reviews.items(canvas)],
   });
   engines.watch({
     needs: (canvas) => {
       topics.changed(`needs:${canvas}`, 'corrallm');
     },
     opened: () => {
+      follow();
       states.listChanged();
     },
   });
+  /** The checks of canvas files going on: what closing waits for. */
+  const checking = new Set<Promise<void>>();
+  let closing = false;
+  /** Checks a canvas's file for a change on disk (B9 Design §5): resolves once it is checked. */
+  const check = (canvas: CanvasId): Promise<void> => {
+    if (closing) return Promise.resolve();
+    const checked = documents.review(canvas).then(
+      () => undefined,
+      (error: unknown) => {
+        console.error('Could not check the canvas’s file for a change on disk:', error);
+      },
+    );
+    checking.add(checked);
+    void checked.then(() => checking.delete(checked));
+    return checked;
+  };
+  // The files of the canvases open (open until closed, run, or shown in a window) are watched.
+  const watching = new FileWatch({
+    check: (canvas) => {
+      void check(canvas);
+    },
+    ...(config.watchFolder === undefined ? {} : { watch: config.watchFolder }),
+  });
+  let following = false;
+  /** Soon watches the files of the canvases open then, and no others. */
+  function follow(): void {
+    if (following || closing) return;
+    following = true;
+    queueMicrotask(() => {
+      following = false;
+      if (closing) return;
+      try {
+        const open = new Set<CanvasId>([
+          ...store
+            .prepare('SELECT canvas_id FROM open_canvas')
+            .all()
+            .map(({ canvas_id: id }) => String(id) as CanvasId),
+          ...engines.opened(),
+          ...windows.canvases(),
+        ]);
+        const files = new Map<CanvasId, string>();
+        for (const canvas of open) {
+          const file = memory.fileOf(canvas);
+          if (file !== undefined) files.set(canvas, file);
+        }
+        watching.follow(files);
+      } catch (error) {
+        console.error('Could not watch the open canvases’ files for changes on disk:', error);
+      }
+    });
+  }
   // Every change rule a token's commit is checked against (B9 Design §4).
   const changeRules = changeChecks({
     catalog: CATALOG,
@@ -457,6 +539,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         lifecycle,
         documents,
         proposals,
+        reviews,
         needOf,
         isLead,
         host,
@@ -505,6 +588,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   );
   // Held backends are read from now on, so a limit that ended while the core was down is noticed.
   probe.start();
+  // The canvases open from before, watched from now on.
+  follow();
   return {
     surface: dispatcher.surface,
     ops: dispatcher.ops,
@@ -537,7 +622,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     deliver: () => engines.deliver(),
     watch: (watcher) => engines.watch(watcher),
+    focused: async (window) => {
+      const canvas = windows.shownIn(window);
+      if (canvas !== undefined) await check(canvas);
+    },
     close: async () => {
+      closing = true;
+      watching.close();
+      await Promise.all(checking);
       probe.stop();
       states.close();
       topics.close();

@@ -105,6 +105,11 @@ export interface OpContext {
    */
   commit<R>(canvas: string | undefined, build: (document: CanvasDocument) => Built<R>): Promise<R>;
   /**
+   * Says the op changed canvas `canvas`'s document to its revision `rev` other than by `commit` (an
+   * applied file review, which the canvas's document commits itself): the call's `revs` carry it.
+   */
+  reached(canvas: string, rev: number): void;
+  /**
    * Runs op `name` with `args` as part of this one, in its turn, as the caller: checked as a call
    * of the caller's own would be (its audience, its arguments, the ids it names in reach, an agent
    * not aiming at itself what it may not, its argument rules), its commits made as `options` say.
@@ -433,6 +438,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         if ('proposed' in done) throw new ProposedInstead(done.proposed);
         if (done.rev !== undefined) turn.revs[`canvas:${canvas}`] = done.rev;
         return done.result;
+      },
+      reached: (canvas, rev) => {
+        turn.revs[`canvas:${canvas}`] = rev;
       },
       call: (sub, raw, more) => {
         const op = opOf(sub);

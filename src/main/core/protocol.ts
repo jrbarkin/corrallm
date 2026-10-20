@@ -6,7 +6,7 @@ import type { CheckResult } from './selftest';
  * What main and the core process ask and tell each other, over CoreLink on the core's parentPort
  * (entry.ts in the core, host/core-process.ts in main). Main asks the app's core up (`init`), or,
  * in the native self-test, only for its checks; it answers what the core asks of the desktop
- * (HostServices) and tells it when a window is gone. Each window's port crosses the same
+ * (HostServices) and tells it when a window is gone, or gains focus. Each window's port crosses the same
  * parentPort beside the link, in a message of its own (WindowMessage), its port transferred.
  */
 
@@ -71,6 +71,8 @@ export interface HostSide {
   events: {
     /** The window closed, crashed or reloaded: its port to the core is done. */
     windowGone: [window: WindowId, closed?: boolean];
+    /** The window gained focus: the canvas it shows has its file checked (B9 Design §5). */
+    windowFocused: [window: WindowId];
   };
 }
 

@@ -78,6 +78,11 @@ export class Windows {
     return this.#shown.get(window);
   }
 
+  /** The canvases the windows show, each once. */
+  canvases(): CanvasId[] {
+    return [...new Set(this.#shown.values())];
+  }
+
   /** Whether the window shows a canvas. */
   has(window: WindowId): boolean {
     return this.#shown.has(window);

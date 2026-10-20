@@ -37,6 +37,8 @@ export interface CoreProcess {
   connect(window: WindowId, port: MessagePortMain): void;
   /** Tells the core that `window` closed, crashed or reloaded: its port is done. */
   windowGone(window: WindowId, closed?: boolean): void;
+  /** Tells the core that `window` gained focus. */
+  windowFocused(window: WindowId): void;
   kill(): void;
 }
 
@@ -64,6 +66,9 @@ export function forkCore({ entry, output, check, host }: CoreProcessOptions): Co
     windowGone: (window, closed) => {
       if (closed === undefined) link.emit('windowGone', window);
       else link.emit('windowGone', window, closed);
+    },
+    windowFocused: (window) => {
+      link.emit('windowFocused', window);
     },
     kill: () => {
       child.kill();

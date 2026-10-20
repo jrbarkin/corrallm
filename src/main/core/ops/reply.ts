@@ -1,17 +1,27 @@
 import type { CanvasId } from '../../../shared/canvas';
 import { OpFailure } from '../call';
+import type { OpContext } from '../call';
 import type { Lifecycle } from '../canvas/lifecycle';
 import { isDocOp, itemOf } from '../canvas/proposals';
 import type { Outcome } from '../canvas/proposals';
+import { itemOf as reviewItemOf } from '../canvas/reviews';
 import { partyText } from '../parties';
 import type { Implementations, OpServices } from '.';
 
 /*
  * `reply` (API Spec §7.5, B9 Design §5): answers a Needs item its caller may answer, by its id, with
- * one of its choices. In B9 that is a proposal, which only you answer (R3, checked as the call
- * arrives: rules.ts), choosing Allow or Refuse; a hold of the run and a session's prompt are
- * answered in corrallm's window until B11 moves them into the core, and file reviews come with B9's
- * task 12. Refuse settles the proposal. Allow runs its op again, as you, recording who proposed it,
+ * one of its choices. In B9 that is a proposal or the review of a canvas file changed on disk, which
+ * only you answer (R3, checked as the call arrives: rules.ts; then the item's `by`, here), choosing
+ * Allow or Refuse, or Apply or Keep; a hold of the run and a session's prompt are answered in
+ * corrallm's window until B11 moves them into the core.
+ *
+ * A review (canvas/reviews.ts): Apply reads the file again and, if its bytes are still those
+ * reviewed, makes the canvas it holds your change (`file.apply`), its hashes and the settlement in
+ * the same commit, which the canvas's run follows; if the file changed since, the review is
+ * superseded by one of what is there now (none if that is as the core has it), changing nothing.
+ * Keep settles it; the canvas's next save writes it over the file.
+ *
+ * A proposal: Refuse settles it. Allow runs its op again, as you, recording who proposed it,
  * in this call's turn (ctx.call), draining its lanes: its change, the settlement and the proposer's
  * record in one write, only if neither its original touched entities nor anything its replay now
  * changes has another revision than the canvas had when it was proposed; if one has, or the op no
@@ -30,15 +40,62 @@ const ENTITY = /^(?:(?:node|link|item)\/|meta$)/;
 
 export function replyOps({
   proposals,
+  reviews,
+  documents,
+  engines,
   needOf,
   lifecycle,
-}: Pick<OpServices, 'proposals' | 'needOf'> & {
+}: Pick<OpServices, 'proposals' | 'reviews' | 'needOf'> & {
+  documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
+  engines: Pick<OpServices['engines'], 'changed'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
 }): Pick<Implementations, 'reply'> {
+  /** Answers the review `to` of the canvas's file with `choice`, as `ctx`'s caller. */
+  async function review(canvas: CanvasId, to: string, choice: string, ctx: OpContext) {
+    const open = reviews.get(canvas, to);
+    if (open === undefined) {
+      const settled = reviews.settled(canvas, to);
+      if (settled === undefined) {
+        throw new OpFailure('not-found', `There is no Needs item ${to} on this canvas.`);
+      }
+      throw new OpFailure(
+        'conflict',
+        `${to} is settled already: ${settled.outcome === 'superseded' ? 'the file changed since, which superseded it' : `${partyText([], settled.by)} ${settled.outcome} it`}.`,
+      );
+    }
+    const item = reviewItemOf(open);
+    if (!item.by.includes(ctx.by)) {
+      throw new OpFailure('refused', `Only the user may answer ${to}: ${item.title}.`);
+    }
+    if (!item.choices.some(({ value }) => value === choice)) {
+      throw new OpFailure(
+        'invalid',
+        `${to} takes ${item.choices.map(({ value }) => `"${value}"`).join(' or ')}, not "${choice}".`,
+      );
+    }
+    if (choice === 'keep') {
+      await documents.keepFile(canvas, open, ctx.by);
+      return { outcome: 'kept' as const };
+    }
+    const applied = await documents.applyFile(canvas, open, ctx.by);
+    if ('superseded' in applied) {
+      const { superseded: raised } = applied;
+      return {
+        outcome: 'superseded' as const,
+        ...(raised === undefined ? {} : { raised: raised.id }),
+      };
+    }
+    // Its run follows it, as it follows any change.
+    engines.changed(canvas);
+    ctx.reached(canvas, applied.rev);
+    return { outcome: 'applied' as const };
+  }
+
   return {
     reply: async ({ canvas, to, answer }, ctx) => {
       const id = canvas as string | undefined as CanvasId | undefined;
       if (id === undefined) throw new OpFailure('invalid', 'Name the canvas the item is on.');
+      if (to.startsWith('file/')) return review(id, to, answer.choice, ctx);
       const proposal = proposals.get(id, to);
       if (proposal === undefined) {
         const settled = proposals.settled(id, to);
@@ -51,7 +108,7 @@ export function replyOps({
         if (needOf(id, to) !== undefined) {
           throw new OpFailure(
             'unavailable',
-            `corrallm answers only proposals with reply so far: answer ${to} in corrallm’s window.`,
+            `corrallm answers only proposals and file reviews with reply so far: answer ${to} in corrallm’s window.`,
           );
         }
         throw new OpFailure('not-found', `There is no Needs item ${to} on this canvas.`);

@@ -69,7 +69,7 @@ export class CanvasFiles {
       id = newCanvasId();
       copy = `${name} is a copy of a canvas saved as ${path.basename(owner)}: it opened as a canvas of its own.`;
     }
-    await documents.open(id, text);
+    await documents.open(id, text, name);
     await memory.setFile(id, file);
     return { id, name, ...(copy === undefined ? {} : { copy }) };
   }

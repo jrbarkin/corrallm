@@ -187,7 +187,7 @@ describe('a canvas’s document', () => {
   it('is read under the id it opens as: a copy’s own, not the one its file holds', async () => {
     const original = canvasOf(newCanvasId());
     const copy = newCanvasId();
-    const live = await documents.open(copy, toFile(original));
+    const live = await documents.open(copy, toFile(original), 'original.corral');
     expect(live.document).toEqual({ ...original, id: copy });
     expect(await documents.textOf(copy)).toBe(toFile({ ...original, id: copy }));
   });

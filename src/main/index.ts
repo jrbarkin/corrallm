@@ -250,6 +250,11 @@ function main(): void {
       app.on('before-quit', (event) => {
         if (!quit.request()) event.preventDefault();
       });
+      // A window gaining focus has the core check the file of the canvas it shows for a change on
+      // disk (B9 Design §5): one made in another program while corrallm was in the background.
+      app.on('browser-window-focus', (_event, window) => {
+        supervisor.windowFocused(window.webContents.id);
+      });
       app.on('browser-window-created', (_event, window) => {
         // macOS window close does not quit the app, but must save/freeze the run all the same.
         const close = new Closing({

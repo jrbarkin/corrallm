@@ -184,18 +184,23 @@ export const conversationOps = {
   reply: define('reply', {
     summary:
       'Answers something waiting for an answer (an item `needs` lists, by its id) with one of ' +
-      'its choices. So far that is a proposal (a token’s delete, waiting for the user), which ' +
-      'only the user answers: Allow applies it as the user, unless what it touched changed since ' +
-      '(then it is settled stale and nothing changes), and Refuse changes nothing. Its proposer ' +
-      'gets a record either way. Returns that record’s id, and how it was settled.',
+      'its choices. So far that is a proposal (a token’s delete, waiting for the user) or the ' +
+      'review of a canvas file changed on disk, which only the user answers. A proposal: Allow ' +
+      'applies it as the user, unless what it touched changed since (then it is settled stale and ' +
+      'nothing changes), and Refuse changes nothing; its proposer gets a record either way, whose ' +
+      'id this returns. A review: Apply makes the file’s canvas the user’s change, unless the ' +
+      'file changed again since (then it is superseded by a review of what is there now, which ' +
+      'this names as `raised`), and Keep keeps the canvas as corrallm has it, for its next save ' +
+      'to write over the file. Returns how it was settled.',
     input: z.strictObject({
       canvas,
       to: NeedId,
       answer: z.strictObject({ choice: z.string().min(1).max(64) }),
     }),
     output: z.strictObject({
-      id: z.uuid(),
-      outcome: z.enum(['allowed', 'refused', 'stale']).optional(),
+      id: z.uuid().optional(),
+      outcome: z.enum(['allowed', 'refused', 'stale', 'applied', 'kept', 'superseded']).optional(),
+      raised: NeedId.optional(),
     }),
   }),
   withdraw: define('withdraw', {

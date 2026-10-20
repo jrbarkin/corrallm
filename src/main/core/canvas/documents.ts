@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AdapterId, Catalog } from '../../../shared/adapter';
@@ -38,6 +38,8 @@ import type { Staged } from '../delivery/messages';
 import type { Database } from '../store/store';
 import { changeSetOf } from './change';
 import type { ChangeSet } from './change';
+import { summarize } from './reviews';
+import type { FileReview, FileReviews, Told } from './reviews';
 
 /*
  * Each canvas's document as the core keeps it (B9 Design §2, §5): in its database's rows
@@ -45,7 +47,7 @@ import type { ChangeSet } from './change';
  * in memory from then on, the live document every reader reads. A canvas with no rows yet is read
  * from the file canvas memory keeps for it (`file.open`, by you), and kept in rows from then on: so
  * its edits since it was saved survive a restart, and a file changed on disk is never read over
- * them (B9's file reviews will say so). A draft is kept once it holds something.
+ * them. A draft is kept once it holds something.
  *
  * An op changes a loaded document (`change`, B9 Design §3): what it builds from the live document is
  * diffed by reference against it (diffRows), refused if its rows couldn't hold it (rowsFault: they
@@ -82,6 +84,19 @@ import type { ChangeSet } from './change';
  * memory keeps for the canvas. A save cut short is settled as the canvas next loads: its file's
  * bytes hashing to writing_hash were saved; any others were not. Whether a document is edited is
  * whether its text's hash is saved_hash (a draft never saved: whether it holds anything).
+ *
+ * A canvas's file changed on disk is never read over its document (B9 Design §5, Core Server
+ * §5.10). Its file is checked in the canvas's turn as its document loads from its rows, as it is
+ * opened again (`review`, `open`: a file opened), and before a save writes over it: bytes hashing
+ * to file_hash are the file as the core last read or wrote it; to writing_hash, a save of its own
+ * cut short once its text was there, adopted as saved; to those of a review you kept, changed from
+ * the file the core has now, what you kept corrallm's canvas over. A file holding the canvas the
+ * core has, or last saved, written another way, has its bytes adopted as the file's. Any other
+ * raises a review for you (reviews.ts), superseding the one open, and a save over the file is
+ * refused while one is open. Apply (`applyFile`) commits the canvas the file holds as one change,
+ * with the bytes' hashes and the review's settlement in its write, if the bytes are still those
+ * reviewed; Keep (`keepFile`) settles it, and the next save writes the canvas over the file. A file
+ * that is missing or can't be read raises no review.
  */
 
 /** How many of a canvas's revisions are kept (what they changed with them), the latest. */
@@ -103,8 +118,13 @@ export interface DocumentsDeps {
   catalog: Catalog;
   /** The adapter an agent naming none runs. */
   defaultAdapter: AdapterId;
+  /** The reviews of files changed on disk. Without them, no file is checked (a document's tests). */
+  reviews?: Pick<FileReviews, 'open' | 'kept' | 'raiseWithin' | 'settleWithin' | 'supersedeWithin'>;
   now?: () => number;
 }
+
+/** What Apply did: committed the file's canvas, at a revision; or found the file changed since. */
+export type Applied = { rev: number } | { superseded: FileReview | undefined };
 
 /** What made a revision: the op, the party that called it, and the request it carried. */
 export interface Revision {
@@ -255,13 +275,100 @@ export class Documents {
   }
 
   /**
-   * The canvas whose file holds `text` was opened: its document, from its rows if it has them,
-   * else read from `text` under the canvas's id (a copy's own). Rejects, saying why, if `text`
-   * isn't a canvas this corrallm reads, keeping nothing of it.
+   * The canvas whose file, named `name`, holds `text` was opened: its document, from its rows if it
+   * has them, else read from `text` under the canvas's id (a copy's own). One kept is checked
+   * against `text`, which raises a review if it isn't the file as the core last read or wrote it.
+   * Rejects, saying why, if `text` isn't a canvas this corrallm reads, keeping nothing of it.
    */
-  async open(canvas: CanvasId, text: string): Promise<LiveDocument> {
+  async open(canvas: CanvasId, text: string, name: string): Promise<LiveDocument> {
     const document = this.read(text);
-    return this.#queue(canvas, () => this.#load(canvas, { text, document }));
+    return this.#queue(canvas, async () => {
+      const loaded = this.#lives.get(canvas);
+      const live = await this.#load(canvas, { text, document, name });
+      // One loaded now was checked as it loaded.
+      if (loaded !== undefined) await this.#review(live, { name, text });
+      return live;
+    });
+  }
+
+  /**
+   * The canvas opens, or its file may have changed (its folder's watch said so, a window showing it
+   * gained focus): its document loaded, if it isn't, and its file checked, in its turn, against what
+   * the core last read or wrote of it, which raises a review if it is none of that. Resolves with
+   * its document; rejects, saying why, if it can't be loaded.
+   */
+  review(canvas: CanvasId): Promise<LiveDocument> {
+    return this.#queue(canvas, async () => {
+      const loaded = this.#lives.get(canvas);
+      const live = await this.#load(canvas);
+      if (loaded !== undefined) await this.#review(live);
+      return live;
+    });
+  }
+
+  /**
+   * Applies `review` (B9 Design §5), by `by`, once what the canvas's document was doing is done:
+   * its file is read again, and if its bytes are still those reviewed, the canvas it holds is
+   * committed as one change (`file.apply`), the bytes' hashes as its file's and as saved and the
+   * review settled applied in the same write: the revision it took. If the file changed since (or
+   * went), what is there now is checked instead, which settles the review superseded: the review
+   * open now, if any. Rejects, changing nothing, for a review no longer open, a file that can't be
+   * read or isn't a canvas this corrallm reads, or a write that failed (CommitFailed).
+   */
+  applyFile(canvas: CanvasId, review: FileReview, by: PartyId): Promise<Applied> {
+    return this.#queue(canvas, async () => {
+      const reviews = this.#reviewing(canvas, review);
+      const live = await this.#load(canvas);
+      let file;
+      try {
+        file = await this.#file(canvas);
+      } catch (error) {
+        throw new OpFailure(
+          'unavailable',
+          `${review.summary.file} can’t be read: ${reasonOf(error)}`,
+        );
+      }
+      if (file === undefined) {
+        // Gone: nothing is there to apply.
+        const told = await this.#writeAlone(() => reviews.supersedeWithin(canvas));
+        told?.();
+        return { superseded: undefined };
+      }
+      if (sha256(file.text) !== review.hash) return { superseded: await this.#review(live, file) };
+      let next: CanvasDocument;
+      try {
+        next = { ...this.read(file.text), id: canvas };
+      } catch (error) {
+        throw new OpFailure(
+          'invalid',
+          `${review.summary.file} isn’t a canvas this corrallm reads: ${reasonOf(error)}`,
+        );
+      }
+      const rev = await this.#commit(
+        live,
+        next,
+        diffRows(live.rows, next, live.document),
+        { op: 'file.apply', by },
+        {
+          hashes: { saved: this.#text(next).hash, file: review.hash },
+          within: () => staged(reviews.settleWithin(review, 'applied', by)),
+        },
+      );
+      return { rev };
+    });
+  }
+
+  /**
+   * Keeps the canvas's document over `review`'s file (B9 Design §5), by `by`, once what its
+   * document was doing is done: the review settled kept, on disk once it resolves; the canvas's next
+   * save writes it over the file. Rejects for a review no longer open.
+   */
+  keepFile(canvas: CanvasId, review: FileReview, by: PartyId): Promise<void> {
+    return this.#queue(canvas, async () => {
+      const reviews = this.#reviewing(canvas, review);
+      const told = await this.#writeAlone(() => reviews.settleWithin(review, 'kept', by));
+      told?.();
+    });
   }
 
   /** The canvas's document, loaded. Throws if it isn't. */
@@ -424,7 +531,12 @@ export class Documents {
       ) {
         return undefined;
       }
-      return this.#commit(live, next, rows, revision, { hashes });
+      // Back to its file as it is: a review open of it is moot.
+      const { reviews } = this.#deps;
+      return this.#commit(live, next, rows, revision, {
+        hashes,
+        ...(reviews === undefined ? {} : { within: () => staged(reviews.supersedeWithin(canvas)) }),
+      });
     });
   }
 
@@ -561,14 +673,22 @@ export class Documents {
   /**
    * Saves the canvas's document to `file`, which becomes its file (canvas memory's), in order: the
    * hash of its text committed as being written, the file written whole and on disk, then its hash
-   * committed as the file's and as saved. Rejects if it couldn't be.
+   * committed as the file's and as saved. Over its own file, the file is checked first, and the save
+   * refused while a review of it is open (B9 Design §5); to another, a review of the one it had is
+   * moot once it is saved. Rejects if it couldn't be.
    */
   save(canvas: CanvasId, file: TrustedPath): Promise<void> {
     return this.#queue(canvas, () => {
       const saving = this.#saving.then(async () => {
+        const loaded = this.#lives.get(canvas);
         const live = await this.#load(canvas);
+        const { store, memory, reviews } = this.#deps;
+        if (reviews !== undefined && (await sameFile(memory.fileOf(canvas), file))) {
+          // One loaded now was checked as it loaded.
+          const open = loaded === undefined ? reviews.open(canvas) : await this.#review(live);
+          if (open !== undefined) throw new OpFailure('refused', saveRefusal(open));
+        }
         const { text, hash } = this.#text(live.document);
-        const { store, memory } = this.#deps;
         await store.write(() => {
           this.#ensure(live, 'you');
           store
@@ -579,16 +699,20 @@ export class Documents {
         live.writingHash = hash;
         await writeWhole(file, text, { durable: true });
         // The chosen path and hashes are one savepoint, so neither can succeed alone.
+        let told: Told | undefined;
         await memory.setFile(canvas, file, () => {
           store
             .prepare(
               `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?`,
             )
             .run(hash, hash, canvas);
+          // The file is corrallm's now: a review of the one it had (Save As) is moot.
+          told = reviews?.supersedeWithin(canvas);
         });
         live.savedHash = hash;
         live.fileHash = hash;
         live.writingHash = undefined;
+        told?.();
       });
       this.#saving = saving.catch(() => undefined);
       return saving;
@@ -612,12 +736,12 @@ export class Documents {
 
   /**
    * The canvas's document, loaded once: from its rows (a save cut short settled by its file's
-   * bytes, those `opened` holds if it was just opened), else from `opened`'s text or its file's,
-   * read under its id and kept in rows, else a draft's, empty.
+   * bytes, those `opened` holds if it was just opened, and its file checked against them), else
+   * from `opened`'s text or its file's, read under its id and kept in rows, else a draft's, empty.
    */
   async #load(
     canvas: CanvasId,
-    opened?: { text: string; document: CanvasDocument },
+    opened?: { text: string; document: CanvasDocument; name: string },
   ): Promise<Live> {
     const loaded = this.#lives.get(canvas);
     if (loaded !== undefined) return loaded;
@@ -626,6 +750,7 @@ export class Documents {
     if (kept !== undefined) {
       this.#lives.set(canvas, kept);
       if (kept.writingHash !== undefined) await this.#settle(canvas, kept, opened?.text);
+      await this.#review(kept, opened && { name: opened.name, text: opened.text });
       return kept;
     }
     let text = opened?.text;
@@ -770,6 +895,82 @@ export class Documents {
       live.fileHash = live.writingHash;
     }
     live.writingHash = undefined;
+  }
+
+  /**
+   * Checks the canvas's file (`read`, just read, else read now) against what the core last read or
+   * wrote of it, in the canvas's turn (B9 Design §5): the review open on it after, if any. Bytes as
+   * a review open has them change nothing. A save of its own cut short once its text was there is
+   * saved; bytes as the core has them, or as you kept them over the file it has now, settle the
+   * review open superseded, moot; so does a file holding the canvas the core has, or last saved,
+   * written another way, whose bytes are the file's from then on. Any other raises a review,
+   * superseding the one open. A file that is gone or can't be read checks nothing, nor does a draft.
+   */
+  async #review(
+    live: Live,
+    read?: { name: string; text: string },
+  ): Promise<FileReview | undefined> {
+    const { reviews, store } = this.#deps;
+    const canvas = live.document.id;
+    if (reviews === undefined || !live.kept) return undefined;
+    let file = read;
+    if (file === undefined) {
+      try {
+        file = await this.#file(canvas);
+      } catch {
+        // Checked again once it can be read (a watch, a window's focus, a save).
+        return reviews.open(canvas);
+      }
+      if (file === undefined) return reviews.open(canvas);
+    }
+    const hash = sha256(file.text);
+    const open = reviews.open(canvas);
+    if (open?.hash === hash) return open;
+    if (live.writingHash !== undefined) await this.#settle(canvas, live, file.text);
+    if (hash === live.fileHash || reviews.kept(canvas, hash, live.fileHash)) {
+      if (open !== undefined) (await this.#writeAlone(() => reviews.supersedeWithin(canvas)))?.();
+      return undefined;
+    }
+    let next: CanvasDocument | { fault: string };
+    try {
+      next = { ...this.read(file.text), id: canvas };
+    } catch (error) {
+      next = { fault: reasonOf(error) };
+    }
+    if (!('fault' in next)) {
+      const text = this.#text(next).hash;
+      if (text === this.#text(live.document).hash || text === live.savedHash) {
+        // Written another way: nothing to review, and these bytes are the file's from now on.
+        const told = await this.#writeAlone(() => {
+          store.prepare('UPDATE document SET file_hash = ? WHERE canvas_id = ?').run(hash, canvas);
+          return reviews.supersedeWithin(canvas);
+        });
+        live.fileHash = hash;
+        told?.();
+        return undefined;
+      }
+    }
+    const summary = summarize(file.name, live.fileHash, live, next);
+    (await this.#writeAlone(() => reviews.raiseWithin(canvas, hash, summary)))?.();
+    return reviews.open(canvas);
+  }
+
+  /** The reviews, while `review` is open on the canvas: else it was settled, a conflict. */
+  #reviewing(canvas: CanvasId, review: FileReview): NonNullable<DocumentsDeps['reviews']> {
+    const { reviews } = this.#deps;
+    if (reviews === undefined || reviews.open(canvas)?.id !== review.id) {
+      throw new OpFailure('conflict', `${review.id} is settled already.`);
+    }
+    return reviews;
+  }
+
+  /** Writes what `within` does in a write of its own: what tells of it, once it is on disk. */
+  async #writeAlone(within: () => Told | undefined): Promise<Told | undefined> {
+    let told: Told | undefined;
+    await this.#deps.store.write(() => {
+      told = within();
+    });
+    return told;
   }
 
   /**
@@ -1192,6 +1393,31 @@ function creatorsAfter(
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** What tells of a change to the reviews as a write's other change (`within`): nothing to undo. */
+function staged(told: Told | undefined): Staged | undefined {
+  return told === undefined ? undefined : { reveal: told, undo: () => undefined };
+}
+
+/** Why a save over a canvas's file is refused while `review` of it is open. */
+function saveRefusal(review: FileReview): string {
+  return `${review.summary.file} changed on disk since corrallm last read or wrote it: apply it or keep corrallm’s canvas (${review.id}, in Needs you) before saving it.`;
+}
+
+/** Whether `one` and `other` are the same file: their real paths, else as they are written. */
+async function sameFile(one: string | undefined, other: string): Promise<boolean> {
+  if (one === undefined) return false;
+  if (path.resolve(one) === path.resolve(other)) return true;
+  const [a, b] = await Promise.all([
+    realpath(one).catch(() => undefined),
+    realpath(other).catch(() => undefined),
+  ]);
+  return a !== undefined && a === b;
+}
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

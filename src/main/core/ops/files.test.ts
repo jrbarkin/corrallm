@@ -572,9 +572,19 @@ describe('R4: what a token may not discard comes to you as a proposal', () => {
       await applied('reply', { canvas: TEAM, to: proposed, answer: { choice: 'allow' } }),
     ).toMatchObject({ outcome: 'stale' });
     expect(await readFile(files.team, 'utf8')).toBe(changed);
-    // Proposed anew, then allowed: written as the canvas has it.
+    // Proposed anew and allowed, it goes stale too: a save over a file changed on disk waits for
+    // you to review the change (B9 Design §5).
     const again = await applied('canvas.save', { canvas: TEAM }, TOKEN);
-    await applied('reply', { canvas: TEAM, to: again.proposed, answer: { choice: 'allow' } });
+    expect(
+      await applied('reply', { canvas: TEAM, to: again.proposed, answer: { choice: 'allow' } }),
+    ).toMatchObject({ outcome: 'stale' });
+    expect(await readFile(files.team, 'utf8')).toBe(changed);
+    const { items } = (await applied('needs', { canvas: TEAM })) as { items: NeedsItem[] };
+    const review = items.find((item) => item.kind === 'file');
+    await applied('reply', { canvas: TEAM, to: review?.id, answer: { choice: 'keep' } });
+    // Kept, then proposed and allowed: written as the canvas has it.
+    const kept = await applied('canvas.save', { canvas: TEAM }, TOKEN);
+    await applied('reply', { canvas: TEAM, to: kept.proposed, answer: { choice: 'allow' } });
     expect(nodesIn(await readFile(files.team, 'utf8'))).toEqual([
       expect.objectContaining({ id: 'lead' }),
     ]);
