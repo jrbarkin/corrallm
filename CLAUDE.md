@@ -116,7 +116,15 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 MAX_PAGE_BYTES; canvas.ts: the canvas's structure, each op one `ctx.commit` over
                 shared/model/structure.ts, with explicit not-found and wrong-kind refusals;
                 spawnAgent carries its new→source copies for the change rules, and delete drains
-                its removed agents' lanes and returns cleared references; wait.ts: `wait`, see
+                its removed agents' lanes and returns cleared references; agent.ts and queue.ts:
+                agent and queue edits over shared/model/agent-ops.ts and queue-ops.ts through
+                `ctx.commit`, refusing missing agents/items and wrong kinds; setType and
+                setConnection are yours alone and drain the switched agent's lane; settings merge
+                (omitted keeps, null unsets), roles trim, and queue text records `ctx.by` as its
+                author; queue.add returns the item's new id, queue.move names a neighbour in the
+                same list (before or after; null means the end). An initial If or repeat has at most
+                16 children to fit the request bound, with further children added through into;
+                wait.ts: `wait`, see
                 Headless); core.ts is createCore, the
                 operations composed over the
                 Electron-free services, kept in a profile folder (in the app and under

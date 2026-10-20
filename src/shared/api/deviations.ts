@@ -25,6 +25,8 @@ export type Reason = keyof typeof REASONS;
 
 /** Each operation on one surface only, with its reason. */
 export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
+  'agent.setType': 'permissions',
+  'agent.setConnection': 'permissions',
   'topics.subscribe': 'transport',
   'topics.unsubscribe': 'transport',
   'usage.setRule': 'spending-guard',
