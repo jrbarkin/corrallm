@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
-import { MAX_LABEL, MAX_MESSAGE_BYTES } from '../../shared/api/limits';
+import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_OP_NODES } from '../../shared/api/limits';
 import type { OpName, Reach } from '../../shared/api/surface';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
@@ -98,15 +98,26 @@ export async function startWorld(): Promise<{
       format: 'corrallm',
       version: 2,
       id: CANVAS,
-      nodes: NODES.map(({ id, connection, parent, adapter = 'codex' }, i) => ({
-        id,
-        kind: 'agent',
-        label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
-        position: { x: 0, y: i * 100 },
-        adapter,
-        ...(connection === undefined ? {} : { connection }),
-        ...(parent === undefined ? {} : { parent }),
-      })),
+      nodes: [
+        ...NODES.map(({ id, connection, parent, adapter = 'codex' }, i) => ({
+          id,
+          kind: 'agent',
+          label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
+          position: { x: 0, y: i * 100 },
+          adapter,
+          ...(connection === undefined ? {} : { connection }),
+          ...(parent === undefined ? {} : { parent }),
+        })),
+        // Separate empty frames let each party add a parent once. Their ids stay in reach after
+        // conversion, so transport retries can still resolve them before request deduplication.
+        ...['you', 'lead', 'outside-write', 'delete'].map((party, i) => ({
+          id: `frame-${party}`,
+          kind: 'group',
+          label: 'Frame',
+          parent: 'lead',
+          position: { x: 600, y: 100 + i * 100 },
+        })),
+      ],
       links: LINKS.map((agents) => ({ agents })),
     }),
   );
@@ -201,6 +212,9 @@ const TARGETS = [
   { canvas: CANVAS, target: { group: 'lead' } },
 ];
 
+/** An absent item in the lead’s team: a stable expectation that also exercises EntityKey reach. */
+const NO_ITEM = { 'item/helper/none': 0 };
+
 /** What the generated tests call each of the registry's operations with. */
 export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
@@ -245,6 +259,143 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       { canvas: CANVAS, node: 'helper', label: 'x'.repeat(MAX_LABEL + 1) },
       { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { meta: 1 } },
       { canvas: CANVAS, node: 'helper', label: 'Helper', expect: { 'node/helper': -1 } },
+    ],
+  },
+  'canvas.addAgent': {
+    valid: [
+      {
+        canvas: CANVAS,
+        at: { x: 2000, y: 0 },
+        adapter: 'codex',
+        expect: NO_ITEM,
+        request: request(40),
+      },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { at: { x: 0, y: 0 } },
+      { at: { x: '0', y: 0 }, adapter: 'codex' },
+      { at: { x: 0, y: 0 }, adapter: '' },
+      { at: { x: 0, y: 0 }, adapter: 'codex', extra: true },
+    ],
+  },
+  'canvas.spawnAgent': {
+    valid: [
+      { canvas: CANVAS, from: 'helper', relation: 'peer', expect: NO_ITEM, request: request(41) },
+      { canvas: CANVAS, from: 'helper', relation: 'linked', expect: NO_ITEM, request: request(42) },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { from: 'helper' },
+      { from: '', relation: 'peer' },
+      { from: 'helper', relation: 'child' },
+    ],
+  },
+  'canvas.link': {
+    valid: [
+      {
+        canvas: CANVAS,
+        a: 'helper',
+        b: 'lead',
+        source: 'lead',
+        dots: ['top', 'bottom'],
+        expect: NO_ITEM,
+        request: request(43),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { a: 'helper' },
+      { a: '', b: 'lead' },
+      { a: 'helper', b: 'lead', dots: ['left', 'top'] },
+      { a: 'helper', b: 'lead', source: 1 },
+    ],
+  },
+  'canvas.unlink': {
+    valid: [{ canvas: CANVAS, a: 'helper', b: 'lead', expect: NO_ITEM, request: request(44) }],
+    fresh: ['revs'],
+    invalid: [
+      { a: 'helper' },
+      { a: 'helper', b: '' },
+      { a: 'helper', b: 'lead', dots: ['top', 'bottom'] },
+    ],
+  },
+  'canvas.delete': {
+    valid: [{ canvas: CANVAS, nodes: [], links: [], expect: NO_ITEM, request: request(45) }],
+    // A removed id cannot pass a token’s reach check on its transport retry. The human fixture
+    // exercises removal; tokens use the empty edit, with every named id still resolvable.
+    by: {
+      you: [
+        {
+          canvas: CANVAS,
+          nodes: ['frame-delete'],
+          links: [{ a: 'helper', b: 'lead' }],
+          expect: NO_ITEM,
+          request: request(54),
+        },
+      ],
+    },
+    fresh: ['revs'],
+    invalid: [
+      { nodes: [1] },
+      { links: [{ a: 'helper' }] },
+      { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper') },
+      { links: Array.from({ length: MAX_OP_NODES + 1 }, () => ({ a: 'helper', b: 'lead' })) },
+    ],
+  },
+  'canvas.group': {
+    valid: [
+      { canvas: CANVAS, nodes: ['helper'], kind: 'frame', expect: NO_ITEM, request: request(46) },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { nodes: [], kind: 'frame' },
+      { nodes: ['helper'], kind: 'group' },
+      { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper'), kind: 'frame' },
+    ],
+  },
+  'canvas.ungroup': {
+    // Keep the named agent so a retry still resolves it; only its children move up. The lead
+    // cannot reach the worker, so its valid call explicitly has no targets.
+    valid: [{ canvas: CANVAS, nodes: ['worker'], expect: NO_ITEM, request: request(47) }],
+    by: { lead: [{ canvas: CANVAS, nodes: [], expect: NO_ITEM, request: request(48) }] },
+    fresh: ['revs'],
+    invalid: [
+      {},
+      { nodes: [''] },
+      { nodes: Array.from({ length: MAX_OP_NODES + 1 }, () => 'helper') },
+    ],
+  },
+  'canvas.addParent': {
+    valid: [],
+    by: Object.fromEntries(
+      (['you', 'lead', 'outside-write'] as const).map((party, i) => [
+        party,
+        [{ canvas: CANVAS, frame: `frame-${party}`, expect: NO_ITEM, request: request(50 + i) }],
+      ]),
+    ),
+    fresh: ['revs'],
+    invalid: [{}, { frame: '' }, { frame: 'frame-you', extra: true }],
+  },
+  'canvas.move': {
+    valid: [
+      {
+        canvas: CANVAS,
+        moves: [{ node: 'helper', position: { x: 60, y: 80 } }],
+        expect: NO_ITEM,
+        request: request(53),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { moves: [{ node: 'helper' }] },
+      { moves: [{ node: '', position: { x: 0, y: 0 } }] },
+      {
+        moves: Array.from({ length: MAX_OP_NODES + 1 }, () => ({
+          node: 'helper',
+          position: { x: 0, y: 0 },
+        })),
+      },
     ],
   },
   agents: {
