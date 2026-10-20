@@ -54,18 +54,10 @@ const pragma = (store: Store, name: string): unknown =>
   store.prepare(`PRAGMA ${name}`).get()?.[name];
 
 describe('openStore', () => {
-  it('refuses an unreadable recovery record before SQLite can open the database', async () => {
-    const { store } = await open();
-    await store.write(() =>
-      store.prepare("INSERT INTO canvas (id, used_at) VALUES ('kept', 1)").run(),
-    );
-    await store.close();
-    const before = await readFile(file);
-    await writeFile(`${file}.recovery`, 'incomplete');
-    const result = await openStore(profile);
-    expect(result.store).toBeUndefined();
-    expect(result.said.join(' ')).toMatch(/recovery.*refused/i);
-    expect(await readFile(file)).toEqual(before);
+  it('creates only SQLite’s database, log and index on a normal open', async () => {
+    const { said } = await open();
+    expect(said).toEqual([]);
+    expect((await readdir(profile)).sort()).toEqual(['core.db', 'core.db-shm', 'core.db-wal']);
   });
 
   it.skipIf(process.platform === 'win32')(

@@ -1,9 +1,7 @@
-import { closeSync, fsync, fsyncSync, ftruncateSync, openSync, readSync } from 'node:fs';
+import { closeSync, fsync, fsyncSync, ftruncateSync, openSync } from 'node:fs';
 
 import { Checkpointer } from './checkpointer';
-import { discardSnapshots, recordRecovery } from './recovery';
-import type { LogPrefix } from './recovery';
-import { takeSnapshot } from './snapshots';
+import { discardSnapshots, takeSnapshot } from './snapshots';
 import { connect } from './sqlite';
 import type { Connection, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
@@ -29,18 +27,16 @@ import { rollback, savepoint, transaction } from './transaction';
  * Database §4, G2: e2e/load.e2e.ts holds the loop within its budget on a quiet drive, and only a
  * connection on a thread of its own would under such writing).
  *
- * A flush that fails fails the store closed: rejected writes are taken back, and nothing written
- * after it could be trusted to reach the drive (after a
- * failed fsync, the system's cache of the file can't be: PostgreSQL's fsyncgate). Every write and
- * read from then on is refused, saying why, as an unopened store's are, until the core opens the
- * database again; it says so once on stderr. What it had committed since its last flush that
+ * A flush that fails fails the store closed: nothing written after it could be trusted to reach
+ * the drive (after a failed fsync, the system's cache of the file can't be: PostgreSQL's fsyncgate).
+ * Every write and read from then on is refused, saying why, as an unopened store's are, until the
+ * core opens the database again; it says so once on stderr. What it had committed since its last flush that
  * worked (the failed flush's commits and those made since) is taken back: its log is cut back to
  * where they began, which SQLite says before each commit (`wal_checkpoint(NOOP)`, SQLite 3.51 and
  * later), and closed without SQLite checkpointing it, so the next open recovers the log up to
- * there alone. If cutting or syncing the cut fails, a durable recovery marker makes the next open
- * repair it before SQLite reads it, or refuse. Only if the flush, the cut and writing that marker
- * all fail can rejected writes return; that failing drive is beyond this guarantee. Every snapshot
- * published since the first rejected commit is removed. A checkpoint waits
+ * there alone. The cut is best effort: if cutting or syncing it fails, a write whose flush failed
+ * may return after a restart, in doubt as in PostgreSQL and SQLite; it says so on stderr. Every
+ * snapshot published since the first rejected commit is removed. A checkpoint waits
  * for the flushes going on (the lane commits nothing meanwhile), so none ever copies a commit
  * into the database before its flush worked.
  *
@@ -449,18 +445,6 @@ export class Store {
     return log;
   }
 
-  #prefix(frames: number): LogPrefix {
-    const header = Buffer.alloc(LOG_HEADER_BYTES);
-    if (readSync(this.#logFile(), header, 0, header.length, 0) !== header.length) {
-      throw new Error('Could not read the core database’s WAL header for recovery.');
-    }
-    const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
-    return {
-      header: header.toString('hex'),
-      bytes: LOG_HEADER_BYTES + frames * (FRAME_HEADER_BYTES + page),
-    };
-  }
-
   /**
    * Fails the store closed, a flush of its log having failed (`error`): every commit not flushed
    * yet rejected (`also`, a `tx`'s, with them), every write queued and every one after refused,
@@ -469,7 +453,7 @@ export class Store {
   #fail(error: unknown, also?: { frames: number; commit: number }): Error {
     if (this.#failed !== undefined) return this.#failed;
     const failed = new Error(
-      `The core’s database could not be written to the drive (${reason(error)}), so it keeps nothing more until the core opens it again: what it wrote since it was last on the drive is lost.`,
+      `The core’s database could not be written to the drive (${reason(error)}), so it keeps nothing more until the core opens it again: what it wrote since it was last on the drive could not be confirmed.`,
       { cause: error },
     );
     this.#failed = failed;
@@ -486,12 +470,11 @@ export class Store {
       commit.commit < earliest.commit ? commit : earliest,
     );
     this.#forgetting = this.#forget(first).finally(() => {
-      // Until the cut or its marker is durable, a crash can still recover these commits. Refuse
-      // new work at once, but acknowledge their rejection only after protecting their boundary.
+      // Refuse new work at once, and finish the best-effort rollback before rejecting commits.
       for (const commit of lost) commit.reject(failed);
     });
     void this.#forgetting.catch((error: unknown) => {
-      console.error('The core’s database still needs recovery before it can open again:', error);
+      console.error('Could not finish closing the core’s database after its failed flush:', error);
     });
     return failed;
   }
@@ -511,41 +494,26 @@ export class Store {
     const unsafe = this.#taken
       .filter(({ commits }) => commits >= first.commit)
       .map(({ file }) => file);
-    let repair = false;
     try {
       await discardSnapshots(this.#profile, unsafe);
     } catch (error) {
       console.error('Could not remove snapshots of what the core’s database lost:', error);
-      repair = true;
     }
-    let prefix: LogPrefix | undefined;
     try {
-      prefix = this.#prefix(first.frames);
+      const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
       const log = this.#logFile();
-      // Keep the header even for an empty prefix: if syncing the cut fails, its recovery marker
-      // must still match this WAL generation on the next open.
-      ftruncateSync(log, prefix.bytes);
+      // Best effort: if this cut or its fsync fails, the failed commit is in doubt across a
+      // restart, as in PostgreSQL and SQLite. No recovery marker is kept to change that limit.
+      ftruncateSync(
+        log,
+        first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
+      );
       fsyncSync(log);
     } catch (error) {
-      console.error('Could not take back what the core’s database lost:', error);
-      repair = true;
-    }
-    if (repair) {
-      try {
-        // Successful writes pay only for their WAL flush. If that flush, this cut and this
-        // durable marker all fail, the drive is failing outright: rejected writes may return.
-        await recordRecovery(
-          this.file,
-          this.#profile,
-          prefix ?? this.#prefix(first.frames),
-          unsafe,
-        );
-      } catch (error) {
-        console.error(
-          'Could not write the core’s database recovery marker; rejected writes may be recovered on the next open:',
-          error,
-        );
-      }
+      console.error(
+        'Could not take back the core’s unflushed writes; a write whose flush failed may come back after a restart, in doubt as in PostgreSQL and SQLite:',
+        error,
+      );
     }
     let holder: Connection | undefined;
     try {

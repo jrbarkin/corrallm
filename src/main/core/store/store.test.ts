@@ -40,10 +40,6 @@ let timers: Timer[];
 let flushes: { fd: number; done: (error?: Error) => void }[] | undefined;
 const diskFault = vi.hoisted(() => ({
   truncate: false,
-  repair: false,
-  marker: false,
-  markerSync: undefined as (() => Promise<void>) | undefined,
-  recoveryWrites: [] as string[],
   snapshotFolder: '',
 }));
 vi.mock('node:fs', async (original) => {
@@ -61,28 +57,9 @@ vi.mock('node:fs/promises', async (original) => {
   return {
     ...fs,
     open: async (...args: Parameters<typeof fs.open>) => {
-      if (String(args[0]).includes('core.db.recovery.') && args[1] === 'w') {
-        diskFault.recoveryWrites.push(String(args[0]));
-      }
       const handle = await fs.open(...args);
       if (String(args[0]) === diskFault.snapshotFolder) {
         handle.sync = () => Promise.reject(new Error('EIO: i/o error, fsync folder'));
-      }
-      if (String(args[0]).endsWith('-wal') && diskFault.repair) {
-        handle.truncate = () => Promise.reject(new Error('EIO: i/o error, recovery truncate'));
-      }
-      if (String(args[0]).includes('core.db.recovery.') && String(args[0]).endsWith('.partial')) {
-        if (diskFault.marker) {
-          handle.sync = () =>
-            Promise.reject(new Error('EIO: recovery record could not be flushed'));
-        } else if (diskFault.markerSync !== undefined) {
-          const sync = handle.sync.bind(handle);
-          const wait = diskFault.markerSync;
-          handle.sync = async () => {
-            await wait();
-            await sync();
-          };
-        }
       }
       return handle;
     },
@@ -135,16 +112,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   diskFault.truncate = false;
-  diskFault.repair = false;
-  diskFault.marker = false;
-  diskFault.markerSync = undefined;
   diskFault.snapshotFolder = '';
   if (reader.isOpen) reader.close();
   for (const { done } of flushes?.splice(0) ?? []) done();
   flushes = undefined;
   await store.close();
   await rm(profile, { recursive: true, force: true });
-  diskFault.recoveryWrites = [];
 });
 
 const add = (text: string) => store.prepare('INSERT INTO note (text) VALUES (?)').run(text);
@@ -158,14 +131,13 @@ const notes = () =>
 const outcomes = (promises: Promise<unknown>[]) => Promise.allSettled(promises);
 
 describe('the write lane', () => {
-  it('writes no recovery file when writes and their WAL flushes succeed', async () => {
+  it('creates only SQLite’s database, log and index on successful writes', async () => {
+    const files = ['core.db', 'core.db-shm', 'core.db-wal'];
+    expect((await readdir(profile)).sort()).toEqual(files);
     await store.write(() => add('one'));
-    expect(diskFault.recoveryWrites).toEqual([]);
     store.tx(() => add('two'));
     await store.checkpoint();
-    await store.close();
-    expect(diskFault.recoveryWrites).toEqual([]);
-    expect((await readdir(profile)).filter((name) => name.includes('.recovery'))).toEqual([]);
+    expect((await readdir(profile)).sort()).toEqual(files);
     expect(notes()).toEqual(['one', 'two']);
   });
 
@@ -402,96 +374,22 @@ describe('a failed flush', () => {
     flushes?.[0]?.done(new Error('EIO: i/o error, fsync'));
   }
 
-  it.each(['repair', 'blocked repair', 'wrong header'])(
-    'never reopens rejected commits when truncating the WAL fails (%s)',
-    async (recovery) => {
-      vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      await store.write(() => add('kept'));
-      flushes = [];
-      const lost = store.write(() => add('lost'));
-      diskFault.truncate = true;
-      await failFlush();
-      await expect(lost).rejects.toThrow(FAILED);
-      await store.close();
-      reader.close();
-      diskFault.truncate = false;
-      flushes = undefined;
-      if (recovery === 'wrong header') {
-        const record = `${store.file}.recovery`;
-        const kept = JSON.parse(await readFile(record, 'utf8')) as { header: string };
-        const header = Buffer.from(kept.header, 'hex');
-        header[16] = (header[16] ?? 0) ^ 1;
-        await writeFile(record, JSON.stringify({ ...kept, header: header.toString('hex') }));
-      }
-      diskFault.repair = recovery === 'blocked repair';
-      const before = await readFile(`${store.file}-wal`);
-      const opened = await openStore(profile, deps);
-      if (recovery === 'blocked repair' || recovery === 'wrong header') {
-        expect(opened.store).toBeUndefined();
-        expect(opened.said.join(' ')).toMatch(/recover|rejected|flush/i);
-        expect(await readFile(`${store.file}-wal`)).toEqual(before);
-      } else {
-        if (opened.store === undefined) throw new Error(opened.said.join(' '));
-        store = opened.store;
-        reader = connect(store.file, { readOnly: true });
-        expect(notes()).toEqual(['kept']);
-      }
-    },
-  );
-
-  it('says on stderr when the flush, the cut and the recovery marker all fail', async () => {
+  it('says on stderr that an unflushed write may come back after a restart if the cut fails', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await store.write(() => add('kept'));
     flushes = [];
     const lost = store.write(() => add('lost'));
-    await vi.waitFor(() => {
-      expect(flushes).toHaveLength(1);
-    });
     diskFault.truncate = true;
-    diskFault.marker = true;
     await failFlush();
     await expect(lost).rejects.toThrow(FAILED);
     await store.close();
     expect(errors.mock.calls).toContainEqual([
-      expect.stringMatching(/recovery marker.*rejected writes may be recovered/i),
-      expect.objectContaining({ message: 'EIO: recovery record could not be flushed' }),
+      expect.stringMatching(/could not take back.*may come back after a restart/i),
+      expect.objectContaining({ message: 'EIO: i/o error, ftruncate' }),
     ]);
     expect(() => store.prepare('SELECT text FROM note')).toThrow(FAILED);
     await expect(store.write(() => add('after'))).rejects.toThrow(FAILED);
-  });
-
-  it('protects the failed prefix before rejecting writes when its cut fails', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => add('kept'));
-    flushes = [];
-    let rejected = false;
-    const lost = outcomes([store.write(() => add('lost'))]).then((settled) => {
-      rejected = true;
-      return settled;
-    });
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const syncing = vi.fn(() => blocked);
-    diskFault.truncate = true;
-    diskFault.markerSync = syncing;
-    try {
-      await failFlush();
-      await vi.waitFor(() => {
-        expect(syncing).toHaveBeenCalled();
-      });
-      expect(rejected).toBe(false);
-      expect(() => store.prepare('SELECT text FROM note')).toThrow(FAILED);
-    } finally {
-      release();
-      await lost;
-      await store.close();
-    }
-    expect(await lost).toMatchObject([{ status: 'rejected' }]);
-    diskFault.truncate = false;
-    diskFault.markerSync = undefined;
-    expect(await reopened()).toEqual(['kept']);
+    expect((await readdir(profile)).sort()).toEqual(['core.db', 'core.db-shm', 'core.db-wal']);
   });
 
   it('removes a snapshot whose publication failed after rename before discarding an unflushed write', async () => {

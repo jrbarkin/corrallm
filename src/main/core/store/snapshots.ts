@@ -159,3 +159,19 @@ function isPartial(name: string): boolean {
 export async function remove(file: string): Promise<void> {
   for (const suffix of SIDECARS) await rm(`${file}${suffix}`, { force: true });
 }
+
+/** Removes snapshots that may hold rejected writes, including their directory entries on disk. */
+export async function discardSnapshots(profile: string, unsafe: readonly string[]): Promise<void> {
+  for (const snapshot of unsafe) await remove(snapshot);
+  if (process.platform === 'win32') return;
+  const folder = await open(path.join(profile, SNAPSHOT_FOLDER), 'r').catch((error: unknown) => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (folder === undefined) return;
+  try {
+    await folder.sync();
+  } finally {
+    await folder.close();
+  }
+}

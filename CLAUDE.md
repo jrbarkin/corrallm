@@ -169,24 +169,18 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 savepoint, each resolving only once that commit returned and its log was flushed to
                 the drive, off the loop: Node's fsync on its thread pool, F_FULLFSYNC on macOS, one
                 flush at a time for every commit made before it began: "on disk before it is sent").
-                A failed flush fails the store closed: every write and read refused from then on, saying why
-                (once on stderr), until the core opens it again; what it committed since its last
-                flush that worked taken back (the log cut back to where those commits began, as
-                `wal_checkpoint(NOOP)` said before each, and closed while a connection that only
+                A failed flush fails the store closed: every write and read refused from then on,
+                saying why (once on stderr), until the core opens it again; what it committed since
+                its last flush that worked taken back best effort (the log cut back to where those
+                commits began, as `wal_checkpoint(NOOP)` said before each, and closed while a connection that only
                 reads holds the database, so SQLite checkpoints none of it, and the next open
                 recovers the log up to there alone; every snapshot published since removed, including
-                one whose rename succeeded but publication rejected). Successful writes cost only
-                their WAL flush, with no recovery-file IO. If cutting the rejected suffix or syncing
-                that cut fails (or removing unsafe snapshots does), recovery.ts durably writes
-                core.db.recovery with the safe prefix, bound to the WAL header, and the identities
-                of safe snapshots. The write lane’s rejected commits settle only after the cut or
-                marker was attempted, so a crash while recording the marker does not acknowledge
-                a rejection it cannot yet protect. Opening repairs the cut and removes unsafe
-                snapshots before SQLite reads the WAL, then durably removes the marker. A mismatched
-                or unreadable record or a failed repair refuses opening. Limit: if the WAL flush,
-                the cut and the durable marker’s write all fail, the drive is failing outright;
-                rejected writes may return on the next open. The store says so on stderr. No
-                per-write recovery record or update fence is kept.
+                one whose rename succeeded but publication rejected). Limit: if cutting the log or
+                syncing that cut itself fails, a write whose flush failed may come back after a
+                restart, in doubt as in PostgreSQL and SQLite. The store says so on stderr. No
+                recovery marker is written or checked at open. Successful writes cost only their
+                WAL flush; normal opens and writes create only core.db, -wal and -shm (snapshots
+                are taken separately, as it closes or once due).
                 `checkpoint` (checkpointer.ts: PASSIVE, once every commit made is flushed, on a
                 worker thread with a connection of its own, whose code is a string run as CommonJS,
                 since the bundles are one file each; sqlite.ts gives the expression it connects
