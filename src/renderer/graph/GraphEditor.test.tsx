@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
+import type { QueueItem } from '../../shared/model/queue';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
@@ -1585,6 +1586,97 @@ describe('GraphEditor', () => {
     expect(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Codex’s usage resets (weekly)',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('offers an agent whose connection spends no usage backend no usage condition or reset', () => {
+    // An Agent SDK agent runs on an API key: its connection declares no usage backend.
+    const { node } = setup({
+      nodes: [agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk' } })],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('s'));
+    const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    // Neither the queue's own ⊕ nor the one above its message box.
+    for (const add of ['Add to queue', 'Queue something']) {
+      fireEvent.click(panel.getByRole('button', { name: add }));
+      fireEvent.click(panel.getByRole('option', { name: /^If… then/ }));
+      expect(options()).toEqual([
+        'the previous step succeeded',
+        'the previous step failed',
+        'the output contains…',
+        'the wait ran out of time',
+      ]);
+      fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+      fireEvent.click(panel.getByRole('button', { name: add }));
+      fireEvent.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+      expect(options()).toEqual([
+        '5 minutes',
+        '10 minutes',
+        '30 minutes',
+        '1 hour',
+        '4 hours',
+        'Until 9:00 AM',
+      ]);
+      fireEvent.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+    }
+  });
+
+  it('keeps a usage condition and reset an agent spending no usage backend has, editable', () => {
+    // Written while it ran in a Terminal, or shared in a file: each still names its backend.
+    const queue: QueueItem[] = [
+      {
+        id: 'high',
+        if: { kind: 'usageAbove', backend: 'claude-code', window: 'fiveHour', percent: 80 },
+        then: [],
+      },
+      { id: 'reset', delay: { resets: 'weekly', backend: 'claude-code' } },
+    ];
+    const { node } = setup({
+      nodes: [
+        agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk', queue } }),
+      ],
+      edges: [],
+    });
+    fireEvent.doubleClick(node('s'));
+    const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+
+    fireEvent.click(
+      panel.getByRole('button', {
+        name: 'Change the condition: Claude’s usage is over 80% (5-hour)',
+      }),
+    );
+    fireEvent.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
+    expect(field().value).toBe('80%');
+    fireEvent.change(field(), { target: { value: '90 weekly' } });
+    fireEvent.click(panel.getByRole('option', { name: 'Over 90% of the weekly window' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change the condition: Claude’s usage is over 90% (weekly)',
+      }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Claude’s usage resets (weekly)',
+      }),
+    );
+    expect(field().value).toBe('until Claude’s usage resets (weekly)');
+    expect(options()).toEqual(['Until Claude’s usage resets (weekly)']);
+    // Its own backend's other window too.
+    fireEvent.change(field(), { target: { value: 'resets' } });
+    expect(options()).toEqual([
+      'Until Claude’s usage resets (5-hour)',
+      'Until Claude’s usage resets (weekly)',
+    ]);
+    fireEvent.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Claude’s usage resets (5-hour)',
       }),
     ).toBeTruthy();
   });
