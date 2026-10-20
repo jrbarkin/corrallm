@@ -103,6 +103,8 @@ let terminal: FakeConnector;
 let readUsage: Partial<Record<string, () => Promise<UsageWindows | undefined>>> | undefined;
 /** What reads each adapter's user's own defaults instead of its CLI's settings: the fakes' unless set. */
 let options: Partial<Record<AdapterId, () => Promise<SettingsOptions>>> | undefined;
+/** Which agents are leads: none unless set. */
+let leads: ((canvas: CanvasId, agent: string) => boolean) | undefined;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-delivery-'));
@@ -112,6 +114,7 @@ beforeEach(async () => {
   terminal = new FakeConnector({ adapter: 'codex' });
   readUsage = undefined;
   options = undefined;
+  leads = undefined;
 });
 
 afterEach(async () => {
@@ -183,6 +186,7 @@ async function start(
       check: true,
       distribution: 'local',
       locale: 'en-GB',
+      ...(leads === undefined ? {} : { leads }),
       sessions: {
         connectors: {
           'codex.app-server': connectors.appServer ?? appServer,
@@ -1395,8 +1399,8 @@ describe('a turn waiting for you', () => {
 const withdrawalNote = (id: string, sender = 'orchestrator') =>
   `Message ${id} from "${sender}" was withdrawn by its sender after it reached you, and its turn was interrupted. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
 
-/** A received turn withdrawn before its fake session finishes. */
-async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
+/** What `caller` sends `to`, once its agent's CLI has it and its turn goes on: its id. */
+async function receive(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
   const id = await send(to, '/question Do this old work', caller);
   await vi.waitFor(() => {
     expect(
@@ -1406,6 +1410,12 @@ async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promi
         .entries.some((entry) => entry.kind === 'user' && entry.reached),
     ).toBe(true);
   });
+  return id;
+}
+
+/** A received turn withdrawn before its fake session finishes. */
+async function withdrawReceived(to = 'builder', caller: Caller = OUTSIDE): Promise<string> {
+  const id = await receive(to, caller);
   expect(await ok('withdraw', { id }, caller)).toEqual({ reached: true, interrupted: true });
   expect((await find(id, caller))?.state).toBe('withdrawn');
   return id;
@@ -1718,6 +1728,205 @@ describe('telling an agent of a withdrawal after receipt', () => {
       expect(sent(appServer)).toHaveLength(2);
     });
     expect(sent(appServer)[1]).toContain(withdrawalNote(id));
+  });
+});
+
+/** What corrallm tells an agent whose earlier message a kill took back after receipt. */
+const killNote = (id: string, killed: string, sender = 'orchestrator') =>
+  `Message ${id} from "${sender}" was withdrawn after it reached you, and its turn was interrupted, when ${killed}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
+
+/** The text agent `agent`'s sessions on `connector` were sent, each turn. */
+function sentTo(connector: FakeConnector, agent: string): string[] {
+  return connector.sessions.flatMap((session, i) =>
+    connector.started[i]?.agentId === agent ? session.sent.map(({ text }) => text) : [],
+  );
+}
+
+describe('telling an agent of a kill after receipt', () => {
+  beforeEach(() => {
+    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+  });
+
+  /** Builder and Helper in the group Team. */
+  const TEAM = AGENTS.map((agent) =>
+    agent.id === 'builder' || agent.id === 'helper' ? { ...agent, parent: 'team' } : agent,
+  );
+  /** Helper, calling as itself. */
+  const HELPER: AgentCaller = { ...BUILDER, agent: 'helper', session: 'helper-session' };
+
+  /** What `caller` sends agent `to` next, once it is replied to: the text its CLI got. */
+  async function next(to: string, caller: Caller = OTHER): Promise<string> {
+    const before = sentTo(appServer, to).length;
+    const id = await send(to, 'New work', caller);
+    await vi.waitFor(async () => {
+      expect((await find(id, caller))?.state).toBe('replied');
+    });
+    expect(sentTo(appServer, to)).toHaveLength(before + 1);
+    return sentTo(appServer, to)[before] ?? '';
+  }
+
+  it('tells an agent killed mid-turn of the party’s message it took back, once, with the next message delivered', async () => {
+    await keepCanvas();
+    await start();
+    const id = await receive('builder');
+    await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    expect(await find(id)).toMatchObject({ state: 'withdrawn', by: 'you' });
+    // Killed, it is held: yours still go, and carry the note in their own frame.
+    expect(await next('builder', YOU)).toBe(
+      `[corrallm] ${killNote(id, 'you were killed by the user')}\n\nNew work`,
+    );
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    expect(await next('builder')).not.toContain(id);
+  });
+
+  it.each([
+    ['its recipient', 'helper', 'you were killed by "orchestrator"'],
+    ['its sender', 'builder', 'its sender was killed by "orchestrator"'],
+  ])(
+    'tells an agent of another agent’s message taken back by a kill of %s',
+    async (_whom, killed, how) => {
+      await keepCanvas();
+      await start();
+      const id = await receive('helper', BUILDER);
+      await ok('run.kill', { target: { agent: killed } });
+      expect(await find(id, BUILDER)).toMatchObject({
+        state: 'withdrawn',
+        by: 'outside:orchestrator',
+      });
+      await ok('run.unpause', { target: { agent: killed } });
+      const text = await next('helper');
+      expect(text).toContain(killNote(id, how, 'Builder'));
+      expect(text.match(/\[corrallm\]/g)).toHaveLength(1);
+    },
+  );
+
+  it('tells each agent of a group it kills what it took back from it', async () => {
+    await keepCanvas(TEAM, LINKS, [{ id: 'team', label: 'Team' }]);
+    await start();
+    const [toBuilder, toHelper] = await Promise.all([
+      receive('builder'),
+      receive('helper', BUILDER),
+    ]);
+    await ok('run.kill', { target: { group: 'team' } });
+    await ok('run.unpause', { target: { group: 'team' } });
+    // Its recipient killed too, Helper hears of that, not of its sender's kill.
+    expect(await next('builder')).toContain(
+      killNote(toBuilder, 'you were killed by "orchestrator"'),
+    );
+    expect(await next('helper')).toContain(
+      killNote(toHelper, 'you were killed by "orchestrator"', 'Builder'),
+    );
+  });
+
+  it.each<{
+    what: string;
+    /** The lead, and the agents nested in it. */
+    lead: string;
+    team: string[];
+    /** Who sends whom the message the kill takes back. */
+    from: Caller;
+    to: string;
+    killer: AgentCaller;
+    killed: string;
+    /** Whom the note says was killed, and by whom; and whom the message was from. */
+    how: string;
+    sender: string;
+  }>([
+    {
+      what: 'itself',
+      lead: 'builder',
+      team: [],
+      from: OUTSIDE,
+      to: 'builder',
+      killer: BUILDER,
+      killed: 'builder',
+      how: 'you were killed at your own request',
+      sender: 'orchestrator',
+    },
+    {
+      what: 'an agent in its team',
+      lead: 'builder',
+      team: ['helper'],
+      from: BUILDER,
+      to: 'helper',
+      killer: BUILDER,
+      killed: 'helper',
+      how: 'you were killed by "Builder"',
+      sender: 'Builder',
+    },
+    {
+      what: 'itself as its own message goes',
+      lead: 'builder',
+      team: ['helper'],
+      from: BUILDER,
+      to: 'helper',
+      killer: BUILDER,
+      killed: 'builder',
+      how: 'its sender was killed at its own request',
+      sender: 'Builder',
+    },
+    {
+      what: 'the sender of a message it is on',
+      lead: 'helper',
+      team: ['builder'],
+      from: BUILDER,
+      to: 'helper',
+      killer: HELPER,
+      killed: 'builder',
+      how: 'its sender was killed by you',
+      sender: 'Builder',
+    },
+  ])(
+    'names a lead that kills $what',
+    async ({ lead, team, from, to, killer, killed, how, sender }) => {
+      leads = (_canvas, agent) => agent === lead;
+      await keepCanvas(
+        AGENTS.map((agent) => (team.includes(agent.id) ? { ...agent, parent: lead } : agent)),
+      );
+      await start();
+      const id = await receive(to, from);
+      await ok('run.kill', { target: { agent: killed } }, killer);
+      await ok('run.unpause', { target: { agent: killed } }, YOU);
+      expect(await next(to)).toContain(killNote(id, how, sender));
+    },
+  );
+
+  it('adds no note for a message its kill took off the session’s queue before the CLI had it', async () => {
+    await keepCanvas();
+    await start();
+    const going = await receive('builder');
+    const queued = await send('builder', 'Never received', YOU);
+    await vi.waitFor(async () => {
+      expect((await find(queued, YOU))?.state).toBe('delivering');
+    });
+    await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    expect((await find(queued, YOU))?.state).toBe('withdrawn');
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    const text = await next('builder');
+    expect(text).toContain(killNote(going, 'you were killed by the user'));
+    expect(text).not.toContain(queued);
+  });
+
+  it('keeps the note across a restart, telling it once, with the next message delivered', async () => {
+    await keepCanvas();
+    await start();
+    const id = await receive('builder');
+    await ok('run.kill', { target: { agent: 'builder' } }, YOU);
+    const note = killNote(id, 'you were killed by the user');
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
+      ),
+    ).toEqual({ withdrawal: JSON.stringify({ text: note }) });
+    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    await restart({ appServer });
+    await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
+    // A note starts no turn by itself.
+    expect(sent(appServer)).toEqual([]);
+    expect(await next('builder')).toContain(note);
+    appServer = new FakeConnector({ adapter: 'codex', pause: 100 });
+    await restart({ appServer });
+    expect(await next('builder')).not.toContain(id);
   });
 });
 

@@ -39,15 +39,13 @@ export function runOps({
       if ('agent' in target) engine.run.killAgent(target.agent, by);
       else engine.run.killGroup(target.group, by);
       // What waits is withdrawn at once, committed with the hold: neither reaches the disk without
-      // the other. One being delivered is withdrawn once its interrupted turn ends.
-      const withdrawing = members.map((agent) => {
-        const withdrawn = delivery.kill(agent, by);
-        engine.sessions.stop(agent);
-        return withdrawn;
-      });
+      // the other. One being delivered is withdrawn once its interrupted turn ends, with the note
+      // its recipient is told of it, should it have reached it.
+      const withdrawing = delivery.kill(members, by);
+      for (const agent of members) engine.sessions.stop(agent);
       await saved(
         open.journal().then(async () => {
-          await Promise.all(withdrawing);
+          await withdrawing;
           await open.messages.durable();
         }),
         KILL_UNSAVED,

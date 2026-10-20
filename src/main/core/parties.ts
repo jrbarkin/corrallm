@@ -36,6 +36,14 @@ export function partyText(nodes: readonly NodeLike[], party: PartyId): string {
 }
 
 /**
+ * A party, as what corrallm tells an agent names it: the user, or anyone else by its name in
+ * quotes, so that no name reads as the user's own words.
+ */
+export function quotedParty(nodes: readonly NodeLike[], party: PartyId): string {
+  return party === 'you' ? 'the user' : `"${partyName(nodes, party)}"`;
+}
+
+/**
  * Who set the pauses that hold an agent or a group (`id`), in words: each party, and the group a
  * pause is on when it isn't on `id` itself ('"ops" and by the user on its group "Team"').
  */
