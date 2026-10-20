@@ -7,7 +7,7 @@ import { MAX_LABEL, MAX_MESSAGE_BYTES, MAX_OP_NODES } from '../../shared/api/lim
 import type { OpName, Reach } from '../../shared/api/surface';
 import { itemKey, linkKey, nodeKey } from '../../shared/model/rows';
 import type { SessionMode } from '../../shared/session';
-import { MAX_FILE_QUERY_LENGTH } from '../../shared/session';
+import { MAX_FILE_QUERY_LENGTH, MAX_ROLE_LENGTH } from '../../shared/session';
 import type { Connector } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
@@ -60,6 +60,21 @@ const NODES = [
   { id: 'shell', connection: 'codex.terminal' },
   { id: 'stranger', connection: 'codex.app-server' },
 ];
+const HELPER_QUEUE = [
+  { id: 'text', message: 'Original' },
+  { id: 'step', action: 'exec_command', instruction: 'Work' },
+  {
+    id: 'loop',
+    repeat: [{ id: 'inner', message: 'Inner' }],
+    until: { kind: 'succeeded' },
+    rounds: 3,
+    otherwise: 'ask',
+  },
+  ...['you', 'lead', 'outside-write'].map((party) => ({
+    id: `remove-${party}`,
+    message: 'Remove me',
+  })),
+];
 const LINKS = [
   ['worker', 'peer'],
   ['lead', 'peer'],
@@ -105,6 +120,11 @@ export async function startWorld(): Promise<{
           label: `${id.charAt(0).toUpperCase()}${id.slice(1)}`,
           position: { x: 0, y: i * 100 },
           adapter,
+          ...(id === 'helper'
+            ? { queue: HELPER_QUEUE }
+            : id === 'stranger'
+              ? { queue: [{ id: 'stranger-item', message: 'Private' }] }
+              : {}),
           ...(connection === undefined ? {} : { connection }),
           ...(parent === undefined ? {} : { parent }),
         })),
@@ -398,6 +418,178 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     ],
   },
+  'agent.setType': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        adapter: 'claude-code',
+        connection: 'claude-code.sdk',
+        expect: NO_ITEM,
+        request: request(60),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', adapter: '' },
+      { agent: 'helper', adapter: 'codex', then: { command: 'go' } },
+    ],
+  },
+  'agent.setConnection': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'worker',
+        connection: 'codex.terminal',
+        expect: NO_ITEM,
+        request: request(61),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', connection: '' },
+      { agent: 'helper', connection: 'codex.app-server', then: { command: 'go' } },
+    ],
+  },
+  'agent.setSettings': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        adapter: 'codex',
+        settings: { model: 'new-model' },
+        expect: NO_ITEM,
+        request: request(62),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper', adapter: 'codex' },
+      { agent: 'helper', adapter: 'codex', settings: { model: '-flag' } },
+      { agent: 'helper', adapter: 'codex', settings: { mode: 'full' } },
+      { agent: 'helper', adapter: 'codex', settings: { other: true } },
+    ],
+  },
+  'agent.setRole': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        role: 'Reviews changes',
+        expect: NO_ITEM,
+        request: request(63),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', role: 'x'.repeat(MAX_ROLE_LENGTH + 1) },
+      { agent: 'helper', role: 'bad\u0001role' },
+    ],
+  },
+  'queue.add': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        entry: {
+          repeat: [{ waitFor: [{ agent: 'helper', item: 'text' }] }],
+          until: { kind: 'repeatEnds', agent: 'helper', item: 'loop' },
+          rounds: 3,
+          otherwise: 'ask',
+        },
+        expect: NO_ITEM,
+        request: request(64),
+      },
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        into: 'loop',
+        entry: { message: 'Child' },
+        expect: NO_ITEM,
+        request: request(65),
+      },
+    ],
+    fresh: ['id', 'revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', entry: { message: '', by: 'you' } },
+      { agent: 'helper', entry: { message: 'x'.repeat(MAX_MESSAGE_BYTES + 1) } },
+      { agent: 'helper', entry: { action: 'x'.repeat(MAX_LABEL + 1) } },
+      {
+        agent: 'helper',
+        entry: { waitFor: Array.from({ length: MAX_OP_NODES + 1 }, () => ({ agent: 'helper' })) },
+      },
+    ],
+  },
+  'queue.remove': {
+    valid: [],
+    // Separate items exercise successful removal for every audience. T3a tries you first, so
+    // its token parity calls see the same not-found on both transports after that removal.
+    by: Object.fromEntries(
+      (['you', 'lead', 'outside-write'] as const).map((party, i) => [
+        party,
+        [
+          {
+            canvas: CANVAS,
+            agent: 'helper',
+            item: `remove-${party}`,
+            expect: NO_ITEM,
+            request: request(66 + i),
+          },
+        ],
+      ]),
+    ),
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper' },
+      { agent: 'helper', item: '' },
+      { agent: 'helper', item: 'text', extra: true },
+    ],
+  },
+  'queue.move': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        item: 'step',
+        before: 'text',
+        expect: NO_ITEM,
+        request: request(69),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper', item: 'text' },
+      { agent: 'helper', item: 'text', before: null, after: null },
+      { agent: 'helper', item: 'text', before: '' },
+    ],
+  },
+  'queue.update': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'helper',
+        item: 'text',
+        change: { kind: 'message', message: 'New text' },
+        expect: NO_ITEM,
+        request: request(70),
+      },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { agent: 'helper', item: 'text' },
+      {
+        agent: 'helper',
+        item: 'text',
+        change: { kind: 'message', message: 'x'.repeat(MAX_MESSAGE_BYTES + 1) },
+      },
+      { agent: 'helper', item: 'text', change: { kind: 'message', message: '', by: 'you' } },
+      { agent: 'helper', item: 'text', change: { kind: 'target', target: '' } },
+    ],
+  },
   agents: {
     valid: [{ canvas: CANVAS }, {}],
     invalid: [{ canvas: 'nope' }, { canvas: CANVAS, extra: 1 }],
@@ -646,6 +838,8 @@ export const REAL_OUT_OF_REACH: OutOfReach = {
   // A node is reached as an agent is.
   NodeId: (caller, reach) =>
     caller.kind === 'outside' ? [] : AGENTS_OUT_OF_REACH[caller.agent]?.[reach],
+  // A real item on another agent, never in the queue a fixture edits.
+  ItemId: () => ['stranger-item'],
   // Whatever a key names on a token's canvas; for an agent, what names an agent it doesn't reach:
   // its node, its items, a link to it.
   EntityKey: (caller, reach) =>

@@ -15,6 +15,8 @@ import type { OpContext } from '../call';
 import type { Engines } from '../engines';
 import type { HostServices } from '../host';
 import type { TokenStore } from '../tokens';
+import { agentOps } from './agent';
+import { queueOps } from './queue';
 import { appOps } from './app';
 import { canvasOps } from './canvas';
 import { catalogOps } from './catalog';
@@ -83,6 +85,8 @@ export function implementations(services: OpServices): Implementations {
     ...templatesOps(services),
     ...projectOps(services),
     ...canvasOps(services),
+    ...agentOps(services),
+    ...queueOps(),
     ...conversationOps(services),
     ...sessionOps(services),
     ...settingsOps(services),

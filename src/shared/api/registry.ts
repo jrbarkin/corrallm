@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
+import { agentOps } from './ops/agent';
+import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
 import { canvasOps } from './ops/canvas';
 import { catalogOps } from './ops/catalog';
@@ -31,6 +33,8 @@ export const OPS = {
   ...templatesOps,
   ...projectOps,
   ...canvasOps,
+  ...agentOps,
+  ...queueOps,
   ...conversationOps,
   ...sessionOps,
   ...settingsOps,

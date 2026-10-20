@@ -18,6 +18,14 @@
     "api.canvas.ungroup",
     "api.canvas.addParent",
     "api.canvas.move",
+    "api.agent.setType",
+    "api.agent.setConnection",
+    "api.agent.setSettings",
+    "api.agent.setRole",
+    "api.queue.add",
+    "api.queue.remove",
+    "api.queue.move",
+    "api.queue.update",
     "api.usage.get",
     "api.usage.setRule",
     "api.usage.simulate",
@@ -32,6 +40,8 @@
   ],
   "mcp": {
     "lead": [
+      "agent_setRole",
+      "agent_setSettings",
       "agents",
       "app_info",
       "canvas_addAgent",
@@ -50,6 +60,10 @@
       "messages",
       "needs",
       "project_files",
+      "queue_add",
+      "queue_move",
+      "queue_remove",
+      "queue_update",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -91,6 +105,8 @@
       "wait"
     ],
     "outside-write": [
+      "agent_setRole",
+      "agent_setSettings",
       "agents",
       "app_info",
       "canvas_addAgent",
@@ -109,6 +125,10 @@
       "messages",
       "needs",
       "project_files",
+      "queue_add",
+      "queue_move",
+      "queue_remove",
+      "queue_update",
       "run_kill",
       "run_pause",
       "run_unpause",
@@ -124,10 +144,10 @@
     ]
   },
   "counts": {
-    "lead": 29,
+    "lead": 35,
     "worker": 10,
     "outside-read": 14,
-    "outside-write": 30
+    "outside-write": 36
   },
   "unhosted": {
     "agents": "B11",
@@ -144,6 +164,8 @@
     "run.unpause": "B11"
   },
   "deviations": {
+    "agent.setType": "permissions",
+    "agent.setConnection": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -225,6 +247,38 @@
     },
     "canvas.move": {
       "input": "f837a789fb1b2ea8",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setType": {
+      "input": "ae31f270ae564f34",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setConnection": {
+      "input": "1c2f2508eb96bb91",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setSettings": {
+      "input": "4a7da49e2038ee1b",
+      "output": "647bbd6cc7b4f077"
+    },
+    "agent.setRole": {
+      "input": "9ec5f7819f183ec2",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.add": {
+      "input": "6c0526a84b580c24",
+      "output": "ebd0120825103788"
+    },
+    "queue.remove": {
+      "input": "59877be71de6830f",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.move": {
+      "input": "04b29796baa7cc10",
+      "output": "647bbd6cc7b4f077"
+    },
+    "queue.update": {
+      "input": "db4f4d577744625b",
       "output": "647bbd6cc7b4f077"
     },
     "agents": {

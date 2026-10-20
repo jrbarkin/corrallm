@@ -89,7 +89,10 @@ function takesUnbrandedText(schema: z.ZodType): boolean {
 function unbrandedIds(schema: z.ZodType, path = ''): string[] {
   return children(schema).flatMap(({ key, schema: child }) => {
     const at = key === undefined ? path : `${path}.${key}`;
-    if (key !== undefined && ID_KEYS.has(key) && takesUnbrandedText(child)) return [at];
+    // Queue entries and changes call their authored text `message`; other message fields name ids.
+    const messageText = key === 'message' && child.meta()?.contentMediaType === 'text/plain';
+    if (key !== undefined && ID_KEYS.has(key) && !messageText && takesUnbrandedText(child))
+      return [at];
     return unbrandedIds(child, at);
   });
 }
@@ -336,6 +339,16 @@ describe('T1: the surface’s rules', () => {
     input?: z.ZodObject<z.core.$ZodShape, z.core.$strict>,
     output?: z.ZodType,
   ): [Surface, OpDef] => [surface, read(surface, input, output)];
+
+  it('distinguishes explicitly authored message text from message ids', () => {
+    const text = z.string().max(100).meta({ contentMediaType: 'text/plain' });
+    expect(unbrandedIds(z.strictObject({ message: text }))).toEqual([]);
+    expect(unbrandedIds(z.strictObject({ message: z.string().max(100) }))).toEqual(['.message']);
+    expect(unbrandedIds(z.strictObject({ agent: text, before: z.string().max(100) }))).toEqual([
+      '.agent',
+      '.before',
+    ]);
+  });
 
   it.each<[string, Registry, string]>([
     [

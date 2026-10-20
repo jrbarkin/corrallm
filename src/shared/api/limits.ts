@@ -60,6 +60,9 @@ export const MAX_LABEL = 200;
 /** The most nodes one op names, or moves, on a canvas. */
 export const MAX_OP_NODES = 500;
 
+/** Initial children in one queue.add container, bounded with their nested wait targets. */
+export const MAX_INITIAL_QUEUE_ITEMS = 16;
+
 /** The most ops one canvas.batch holds. */
 export const MAX_BATCH_OPS = 100;
 
