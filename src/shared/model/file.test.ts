@@ -957,6 +957,27 @@ describe('fromFile', () => {
       (f) => Object.assign(f, { links: [{ agents: ['a', 'X'] }] }),
       /links\[0\]\.agents/,
     ],
+    // Text a database or a key can't keep as it is: a lone surrogate.
+    [
+      'an id with a broken character',
+      (f) => Object.assign(f.nodes[2] ?? {}, { id: 'b\ud800' }),
+      /^nodes\[2\]\.id holds a broken character \(a lone surrogate\)$/,
+    ],
+    [
+      'a label with a broken character',
+      (f) => Object.assign(f.nodes[0] ?? {}, { label: '\udc00Team' }),
+      /^nodes\[0\]\.label holds a broken character \(a lone surrogate\)$/,
+    ],
+    [
+      'a role with a broken character',
+      (f) => Object.assign(f.nodes[2] ?? {}, { role: 'Review\ud83d' }),
+      /^nodes\[2\]\.role: The role must not hold a broken character \(a lone surrogate\)\.$/,
+    ],
+    [
+      'an item’s text with a broken character',
+      (f) => Object.assign(f.nodes[1] ?? {}, { queue: [{ id: 'm', message: 'Fix \ud800 it' }] }),
+      /^nodes\[1\]\.queue\[0\]\.message holds a broken character \(a lone surrogate\)$/,
+    ],
   ])('rejects %s, saying where', (_label, breakIt, message) => {
     const file = structuredClone(saved);
     breakIt(file);

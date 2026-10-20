@@ -7,6 +7,9 @@ export function parseRole(value: unknown): string | undefined {
   if (value.length > MAX_ROLE_LENGTH) {
     throw new RangeError(`The role must be at most ${String(MAX_ROLE_LENGTH)} characters.`);
   }
+  if (!value.isWellFormed()) {
+    throw new TypeError('The role must not hold a broken character (a lone surrogate).');
+  }
   if (/\p{Cc}/u.test(value.replace(/[\t\n\r]/g, ''))) {
     throw new TypeError(
       'The role must not contain control characters other than tabs and line breaks.',

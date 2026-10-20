@@ -62,8 +62,9 @@ import type {
  * or { "kind": "repeatEnds", "agent", "item" } to go round with another agent's repeat); at most
  * how many rounds (1 to 20); and then "ask" or "goOn". Ids are unique across a queue, the items its
  * if-thens and repeats hold included, since waits name them. A link's dots are the ones it was drawn
- * between ("top" or "bottom"). Where the queues' run is, and what the user decided in it, is never
- * saved.
+ * between ("top" or "bottom"). Its ids and text hold no broken character (a lone surrogate), which
+ * the core's database and its rows' keys can't keep as it is. Where the queues' run is, and what
+ * the user decided in it, is never saved.
  */
 const FORMAT = 'corrallm';
 const NOT_A_CANVAS = 'This is not a corrallm canvas';
@@ -705,6 +706,8 @@ function record(value: unknown, where: string): Record<string, unknown> {
 
 function text(value: unknown, where: string): string {
   if (typeof value !== 'string') throw new Error(`${where} must be text`);
+  if (!value.isWellFormed())
+    throw new Error(`${where} holds a broken character (a lone surrogate)`);
   return value;
 }
 
@@ -719,7 +722,7 @@ function catalogId(value: unknown, where: string, what: string): string {
 /** An id, or a name like an action's: text that is not empty. */
 function name(value: unknown, where: string): string {
   if (typeof value !== 'string' || value === '') throw new Error(`${where} must be non-empty text`);
-  return value;
+  return text(value, where);
 }
 
 function number(value: unknown, where: string): number {

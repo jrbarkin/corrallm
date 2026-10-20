@@ -27,8 +27,9 @@ import { Throttle } from './throttle';
  * caller's party against the op's audience (decision 2: a tool missing from a party's list is
  * refused when called anyway), admits a token's call within its limits, fills in the canvas a
  * caller left out (its only one, or the one holding a message it names), or asks a caller with
- * several to name one if its arguments otherwise fit, parses them with the op's one schema,
- * resolves every id a token names against its reach, refuses an agent aiming at itself an op it
+ * several to name one if its arguments otherwise fit, parses them with the op's one schema
+ * (refusing text with a broken character, a lone surrogate, which the core's database can't keep
+ * as it is), resolves every id a token names against its reach, refuses an agent aiming at itself an op it
  * may not, returns a repeated request's first result, and runs the op in its scope, checking the
  * op's rules on a token's arguments there first (a met rule refuses it, or makes it a proposal for
  * you), since they read what the ops before it in its scope left. It never throws: a failure is a
@@ -184,6 +185,13 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     const parsed = def.input.safeParse(raw === undefined ? {} : raw);
     if (!parsed.success)
       throw new OpFailure('invalid', `Invalid arguments${issueOf(parsed.error)}.`);
+    const broken = brokenTextIn(parsed.data);
+    if (broken !== undefined) {
+      throw new OpFailure(
+        'invalid',
+        `Invalid arguments${at(broken)}: it holds a broken character (a lone surrogate).`,
+      );
+    }
     return parsed.data;
   }
 
@@ -463,8 +471,28 @@ function aimsAtItself(ids: readonly IdRef[], caller: TokenCaller): boolean {
 function issueOf(error: z.ZodError): string {
   const [issue] = error.issues;
   if (!issue) return '';
-  const path = issue.path.map(String).join('.');
-  return `${path === '' ? '' : ` (${path})`}: ${issue.message}`;
+  return `${at(issue.path)}: ${issue.message}`;
+}
+
+/** Where in arguments a path leads, as a sentence says it: " (labels.lead)", or nothing at the top. */
+function at(path: readonly PropertyKey[]): string {
+  const joined = path.map(String).join('.');
+  return joined === '' ? '' : ` (${joined})`;
+}
+
+/**
+ * The path to text with a broken character (a lone surrogate) in `value`, parsed arguments: a
+ * string, or a key, named by what holds it. Undefined if it holds none.
+ */
+function brokenTextIn(value: unknown, path: readonly string[] = []): string[] | undefined {
+  if (typeof value === 'string') return value.isWellFormed() ? undefined : [...path];
+  if (typeof value !== 'object' || value === null) return undefined;
+  for (const [key, one] of Object.entries(value)) {
+    if (!key.isWellFormed()) return [...path];
+    const found = brokenTextIn(one, [...path, key]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /** What a failure answers as. */

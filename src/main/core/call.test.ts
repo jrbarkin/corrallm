@@ -175,6 +175,51 @@ describe('core.call', () => {
     expect(await holding).toEqual({ ok: true, value: { stopped: true } });
   });
 
+  it('refuses text with a broken character (a lone surrogate) anywhere in its arguments', async () => {
+    const registry = testRegistry();
+    const surface = { access: { you: 'all' }, kind: 'command', scope: 'none' } as const;
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: { ...registry.surface, 'test.labels': surface },
+        ops: {
+          ...registry.ops,
+          'test.labels': withEnvelope(surface, {
+            summary: 'Labels things.',
+            input: z.strictObject({
+              labels: z.record(z.string().max(10), z.string().max(10)).optional(),
+            }),
+            output: z.strictObject({}),
+          }),
+        },
+        implementations: { ...registry.implementations, 'test.labels': () => ({}) },
+      },
+      { isLead, resolvers: RESOLVERS, check: true },
+    );
+    const broken = (where: string) => ({
+      ok: false,
+      error: {
+        code: 'invalid',
+        sentence: `Invalid arguments (${where}): it holds a broken character (a lone surrogate).`,
+      },
+    });
+    expect(await core.call('test.message', message({ body: 'hello \ud800' }), CALLERS.you)).toEqual(
+      broken('body'),
+    );
+    expect(await core.call('test.agent', { canvas: CANVAS, agent: '\udc00' }, CALLERS.you)).toEqual(
+      broken('agent'),
+    );
+    // A key too, named by what holds it.
+    expect(await core.call('test.labels', { labels: { 'a\ud800': 'x' } }, CALLERS.you)).toEqual(
+      broken('labels'),
+    );
+    expect([registry.calls['test.message'], registry.calls['test.agent']]).toEqual([[], []]);
+    // Whole surrogate pairs are text like any other.
+    expect(await core.call('test.labels', { labels: { '𝔸': '𝔸' } }, CALLERS.you)).toMatchObject({
+      ok: true,
+    });
+  });
+
   it('gives every write’s result the revisions it reached, and a read’s none', async () => {
     const { core } = setup();
     expect(await core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.you)).toEqual(
