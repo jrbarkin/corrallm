@@ -42,7 +42,8 @@ const EARLIER = 'This run belongs to an earlier canvas';
  *
  *   run            the run's state (the document it runs is the core's: core/canvas/documents.ts)
  *   read_position  each party's read position in the canvas's messages
- *   open_canvas    the canvas the profile had open last: a window that shows none restores it
+ *   open_canvas    each canvas open, until it is closed, and when it was used last: a window that
+ *                  shows none restores the one used last
  *
  * Its writes go through the database's write lane, in order, each on the drive once it resolves
  * (the commit that holds it returned and the log was flushed); the core's canvases journal their
@@ -250,10 +251,28 @@ export class RunJournal {
     return canvas;
   }
 
-  /** A canvas was saved (Save As too, which keeps its id): it is the one the profile has open. */
+  /**
+   * A canvas was saved (Save As too, which keeps its id): if it is open, it is the one the profile
+   * used last. One closed stays closed.
+   */
   async saved(canvas: CanvasId): Promise<void> {
     await this.#write(() => {
-      this.#markOpen(canvas);
+      this.#deps.store
+        .prepare('UPDATE open_canvas SET opened_at = ? WHERE canvas_id = ?')
+        .run(this.#nextOpen(), canvas);
+      this.#tell(canvas);
+    });
+  }
+
+  /**
+   * The canvas is closed (B9 Design §2): no longer open, so a window that shows none restores
+   * another, and canvas memory may forget it once it is used least recently and holds no edits.
+   * What is kept of it stays. On disk once it resolves.
+   */
+  async close(canvas: CanvasId): Promise<void> {
+    await this.#write(() => {
+      this.#deps.store.prepare('DELETE FROM open_canvas WHERE canvas_id = ?').run(canvas);
+      this.#tell(canvas);
     });
   }
 
@@ -278,18 +297,31 @@ export class RunJournal {
     return written;
   }
 
-  /** Within a write: `canvas` is the one the profile has open now, and the only one. */
+  /**
+   * Within a write: `canvas` is open, the one the profile used last: open beside the others open,
+   * until it is closed.
+   */
   #markOpen(canvas: CanvasId): void {
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
-    store.prepare('DELETE FROM open_canvas WHERE canvas_id <> ?').run(canvas);
     store
       .prepare(
         `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET opened_at = excluded.opened_at`,
       )
-      .run(canvas, Date.now());
+      .run(canvas, this.#nextOpen());
     this.#tell(canvas);
+  }
+
+  /**
+   * Within a write: when a canvas used now was: now, unless another was opened at or after it (in
+   * the same millisecond, or by a clock set back since), then just after that one.
+   */
+  #nextOpen(): number {
+    const last = this.#deps.store
+      .prepare('SELECT max(opened_at) AS last FROM open_canvas')
+      .get()?.last;
+    return Math.max(Date.now(), typeof last === 'number' ? last + 1 : 0);
   }
 
   /** Tells what hears it of `canvas`. */

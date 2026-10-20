@@ -22,6 +22,7 @@ function fakeServices() {
       canvasOf: vi.fn<ChannelServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
       show: vi.fn<ChannelServices['windows']['show']>().mockResolvedValue(undefined),
       showing: vi.fn<ChannelServices['windows']['showing']>().mockReturnValue([7]),
+      shownIn: vi.fn<ChannelServices['windows']['shownIn']>().mockReturnValue(undefined),
       gone: vi.fn<ChannelServices['windows']['gone']>().mockResolvedValue(undefined),
     },
     canvases: {
@@ -41,6 +42,7 @@ function fakeServices() {
       opened: vi.fn<ChannelServices['runs']['opened']>().mockResolvedValue(undefined),
       saved: vi.fn<ChannelServices['runs']['saved']>().mockResolvedValue(undefined),
       draft: vi.fn<ChannelServices['runs']['draft']>().mockResolvedValue(DRAFT),
+      close: vi.fn<ChannelServices['runs']['close']>().mockResolvedValue(undefined),
     },
     shutdown: { ready: vi.fn<ChannelServices['shutdown']['ready']>() },
     projects: {
@@ -181,6 +183,32 @@ describe('canvas:* handlers', () => {
     const sender = 7;
     await expect(invoke('canvas:forget', [], sender)).resolves.toBe(DRAFT);
     expect(services.windows.show).toHaveBeenCalledWith(sender, DRAFT);
+  });
+
+  it('closes the canvas the window showed before, once no window shows it, whichever replaced it', async () => {
+    const sender = 7;
+    const id = newCanvasId();
+    services.windows.shownIn.mockReturnValue(CANVAS);
+    services.windows.showing.mockReturnValue([]);
+    services.canvases.open.mockResolvedValue({ id, name: 'team.corral' });
+    await invoke('canvas:open', [], sender);
+    expect(services.runs.close).toHaveBeenCalledWith(CANVAS);
+    expect(services.runs.close.mock.invocationCallOrder[0]).toBeGreaterThan(
+      services.windows.show.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    await invoke('canvas:forget', [], sender);
+    expect(services.runs.close).toHaveBeenCalledTimes(2);
+
+    // Another window shows it still, or the window shows it again: it stays open.
+    services.windows.showing.mockReturnValue([8]);
+    await invoke('canvas:forget', [], sender);
+    services.windows.showing.mockReturnValue([]);
+    services.canvases.open.mockResolvedValue({ id: CANVAS, name: 'team.corral' });
+    await invoke('canvas:open', [], sender);
+    // None before: nothing to close.
+    services.windows.shownIn.mockReturnValue(undefined);
+    await invoke('canvas:forget', [], sender);
+    expect(services.runs.close).toHaveBeenCalledTimes(2);
   });
 });
 

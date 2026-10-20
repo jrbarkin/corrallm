@@ -70,6 +70,12 @@ import type { ChangeSet } from './change';
  * proposal and its proposer's record), told after them, or undone if the write failed. A change that isn't the document's (its meta) takes the canvas's next
  * revision in memory alone (`bump`), between its commits (`between`), so no commit takes it too.
  *
+ * A canvas made by a party (canvas.create) keeps it as its creator (document.created_by), which an
+ * outside token's reach reads: kept once it holds something, or when asked. Discarding a canvas's
+ * edits reverts it to its file, as one change; a draft discarded is forgotten, with everything kept
+ * of it. Whether a canvas not loaded has edits not saved is read from its rows (`unsaved`), so that
+ * canvas memory never forgets one that has.
+ *
  * The core saves its own document, as its file's text (toFile), in order: the hash of the text it
  * writes (writing_hash) committed first, then the file written whole and forced to disk, then its
  * hash committed as the file's (file_hash) and as what was saved (saved_hash), with the file canvas
@@ -85,6 +91,8 @@ const TRIM_EVERY = 100;
 const ANOTHER = 'This canvas’s text is another canvas’s.';
 const NOT_LOADED = 'This canvas’s document isn’t loaded in the core.';
 const NOT_OPEN = 'That canvas isn’t open in corrallm.';
+const NO_FILE_TO_REVERT =
+  'This canvas has no file to go back to: its file was never saved, or isn’t there any more.';
 
 export interface DocumentsDeps {
   /** The profile's database, which keeps the documents. */
@@ -201,6 +209,8 @@ interface Live extends LiveDocument {
   kept: boolean;
   /** The party that created each agent, by its id: none for one read from a file. */
   creators: Map<string, PartyId>;
+  /** The party that made the canvas (canvas.create): none for one opened or begun otherwise. */
+  createdBy: PartyId | undefined;
   /** The SHA-256 of its text as last saved or read. */
   savedHash: string | undefined;
   /** Of its file's bytes as last read or written. */
@@ -223,6 +233,11 @@ export class Documents {
   readonly #creating = new Set<Creating>();
   /** What hears each commit. */
   readonly #listeners = new Set<(commit: Commit) => void>();
+  /**
+   * Whether each canvas not loaded has edits not saved, as its rows said when canvas memory last
+   * asked: they change only once it is loaded.
+   */
+  readonly #unsaved = new Map<CanvasId, boolean>();
 
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
@@ -308,9 +323,112 @@ export class Documents {
   /** Whether the canvas's document differs from its text as last saved or read. */
   edited(canvas: CanvasId): boolean {
     const live = this.#lives.get(canvas);
-    if (live === undefined) return false;
-    if (live.savedHash === undefined) return live.document.nodes.length > 0;
-    return this.#text(live.document).hash !== live.savedHash;
+    return live !== undefined && this.#edited(live);
+  }
+
+  /**
+   * Whether the canvas's document has edits not saved, loaded or not: what canvas memory never
+   * forgets (B9 Design §2). Synchronous, so that it is asked within a write: one not loaded is read
+   * from its rows, once. One whose rows can't be read is said to have them: forgetting it would lose
+   * what can't be told.
+   */
+  unsaved(canvas: CanvasId): boolean {
+    const live = this.#lives.get(canvas);
+    if (live !== undefined) return this.#edited(live);
+    let known = this.#unsaved.get(canvas);
+    if (known === undefined) {
+      try {
+        const kept = this.#read(canvas);
+        known = kept !== undefined && this.#edited(kept);
+      } catch {
+        known = true;
+      }
+      this.#unsaved.set(canvas, known);
+    }
+    return known;
+  }
+
+  /**
+   * Makes canvas `canvas` (canvas.create), by `by`, its creator: its document empty, loaded, and
+   * kept once it holds something (a template's agents, committed as any change is) or when asked
+   * (`keep`), with its creator, which a token's reach reads. Throws for a canvas the core keeps a
+   * document of already.
+   */
+  create(canvas: CanvasId, by: PartyId): void {
+    if (this.#lives.has(canvas) || this.hasRows(canvas)) {
+      throw new Error(`There is a canvas ${canvas} already.`);
+    }
+    this.#unsaved.delete(canvas);
+    this.#lives.set(canvas, { ...emptyLive(canvas), createdBy: by });
+  }
+
+  /**
+   * Keeps the canvas's document in rows now, though it holds nothing (a canvas a token made: its
+   * creator with it). On disk once it resolves. Throws if it isn't loaded.
+   */
+  keep(canvas: CanvasId): Promise<void> {
+    return this.#queue(canvas, async () => {
+      const live = this.#lives.get(canvas);
+      if (live === undefined) throw new Error(NOT_LOADED);
+      await this.#deps.store.write(() => {
+        this.#ensure(live, live.createdBy ?? 'you');
+      });
+      live.kept = true;
+    });
+  }
+
+  /** Drops a canvas made (`create`) and never kept: a change to it was refused. */
+  drop(canvas: CanvasId): Promise<void> {
+    return this.#queue(canvas, () => {
+      if (this.#lives.get(canvas)?.kept === false) this.#lives.delete(canvas);
+      return Promise.resolve();
+    });
+  }
+
+  /** The canvases `party` made (canvas.create) that the core keeps: those its reach reads. */
+  createdBy(party: PartyId): CanvasId[] {
+    return this.#deps.store
+      .prepare('SELECT canvas_id FROM document WHERE created_by = ? ORDER BY canvas_id')
+      .all(party)
+      .flatMap(({ canvas_id: id }) => (typeof id === 'string' ? [id as CanvasId] : []));
+  }
+
+  /**
+   * Reverts the canvas's document to its file as it is on disk (a discard, B9 Design §5), as one
+   * change by `revision`, after what it was doing: not edited once it resolves, with the revision
+   * it took; none if there was nothing to revert. Rejects, changing nothing, if it has no file, or
+   * its file isn't a canvas this corrallm reads.
+   */
+  revert(canvas: CanvasId, revision: Revision): Promise<number | undefined> {
+    return this.#queue(canvas, async () => {
+      const live = await this.#load(canvas);
+      const file = await this.#file(canvas);
+      if (file === undefined) throw new Error(NO_FILE_TO_REVERT);
+      const next = { ...this.#readFile(file), id: canvas };
+      const hashes = { saved: this.#text(next).hash, file: sha256(file.text) };
+      const rows = diffRows(live.rows, next, live.document);
+      if (
+        rows.changed.length === 0 &&
+        live.savedHash === hashes.saved &&
+        live.fileHash === hashes.file
+      ) {
+        return undefined;
+      }
+      return this.#commit(live, next, rows, revision, { hashes });
+    });
+  }
+
+  /**
+   * Forgets the canvas, a draft discarded (B9 Design §5): its document, and everything the profile
+   * keeps of it (canvas memory's `forget`). On disk once it resolves; rejects, forgetting nothing,
+   * if it couldn't be written.
+   */
+  forget(canvas: CanvasId): Promise<void> {
+    return this.#queue(canvas, async () => {
+      await this.#deps.memory.forget(canvas);
+      this.#lives.delete(canvas);
+      this.#unsaved.delete(canvas);
+    });
   }
 
   /**
@@ -479,6 +597,7 @@ export class Documents {
   ): Promise<Live> {
     const loaded = this.#lives.get(canvas);
     if (loaded !== undefined) return loaded;
+    this.#unsaved.delete(canvas);
     const kept = this.#read(canvas);
     if (kept !== undefined) {
       this.#lives.set(canvas, kept);
@@ -492,18 +611,7 @@ export class Documents {
       text = file?.text;
       if (file !== undefined) document = this.#readFile(file);
     }
-    const live: Live = {
-      document: { id: canvas, arrange: false, nodes: [], links: [] },
-      rev: 0,
-      rows: { [META]: { arrange: false } },
-      revs: new Map(),
-      bys: new Map(),
-      kept: false,
-      creators: new Map(),
-      savedHash: undefined,
-      fileHash: undefined,
-      writingHash: undefined,
-    };
+    const live = emptyLive(canvas);
     if (text === undefined || document === undefined) {
       this.#lives.set(canvas, live);
       return live;
@@ -527,7 +635,7 @@ export class Documents {
     const { store } = this.#deps;
     const head = store
       .prepare(
-        `SELECT rev, arrange, saved_hash, file_hash, writing_hash FROM document
+        `SELECT rev, arrange, saved_hash, file_hash, writing_hash, created_by FROM document
          WHERE canvas_id = ?`,
       )
       .get(canvas);
@@ -605,6 +713,7 @@ export class Documents {
       bys,
       kept: true,
       creators,
+      createdBy: text(head.created_by) as PartyId | undefined,
       savedHash: text(head.saved_hash),
       fileHash: text(head.file_hash),
       writingHash: text(head.writing_hash),
@@ -939,8 +1048,9 @@ export class Documents {
     }
     store
       .prepare(
-        `INSERT INTO document (canvas_id, rev, arrange, saved_hash, file_hash, by_party, changed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO document (canvas_id, rev, arrange, saved_hash, file_hash, created_by, by_party,
+           changed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         canvas,
@@ -948,6 +1058,7 @@ export class Documents {
         live.document.arrange ? 1 : 0,
         live.savedHash ?? null,
         live.fileHash ?? null,
+        live.createdBy ?? null,
         by,
         this.#now(),
       );
@@ -986,6 +1097,12 @@ export class Documents {
     }
   }
 
+  /** Whether a document differs from its text as last saved or read (a draft: holds anything). */
+  #edited(live: Live): boolean {
+    if (live.savedHash === undefined) return live.document.nodes.length > 0;
+    return this.#text(live.document).hash !== live.savedHash;
+  }
+
   /** A document's text, as toFile writes it, and its hash: once for each document. */
   #text(document: CanvasDocument): { text: string; hash: string } {
     let known = this.#texts.get(document);
@@ -996,6 +1113,23 @@ export class Documents {
     }
     return known;
   }
+}
+
+/** A canvas's document as a draft's is: empty, kept nowhere yet. */
+function emptyLive(canvas: CanvasId): Live {
+  return {
+    document: { id: canvas, arrange: false, nodes: [], links: [] },
+    rev: 0,
+    rows: { [META]: { arrange: false } },
+    revs: new Map(),
+    bys: new Map(),
+    kept: false,
+    creators: new Map(),
+    createdBy: undefined,
+    savedHash: undefined,
+    fileHash: undefined,
+    writingHash: undefined,
+  };
 }
 
 /**

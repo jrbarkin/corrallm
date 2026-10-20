@@ -51,11 +51,11 @@ export interface ChannelServices {
   processes?: Pick<Children, 'run'>;
   /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
   catalog: Catalog;
-  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'gone'>;
+  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'shownIn' | 'gone'>;
   canvases: Pick<CanvasFiles, 'open' | 'save'>;
   /** Each canvas's document: the renderer's edits commit to it until they are operations. */
   documents: Pick<Documents, 'edit' | 'textOf'>;
-  runs: Pick<RunJournal, 'get' | 'check' | 'save' | 'opened' | 'saved' | 'draft'>;
+  runs: Pick<RunJournal, 'get' | 'check' | 'save' | 'opened' | 'saved' | 'draft' | 'close'>;
   shutdown: { ready: HostServices['runReady'] };
   projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   sessions: Pick<
@@ -146,6 +146,17 @@ function createHandlers({
 }: ChannelServices): HandlerTable {
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (window: WindowId) => windows.canvasOf(window);
+  /**
+   * The window shows `canvas` now, in place of the one it showed (New, Open): that one is closed
+   * once no window shows it (B9 Design §2), as `canvas.create` and `canvas.open` replace it.
+   */
+  const replace = async (window: WindowId, canvas: CanvasId) => {
+    const before = windows.shownIn(window);
+    await windows.show(window, canvas);
+    if (before !== undefined && before !== canvas && windows.showing(before).length === 0) {
+      await runs.close(before);
+    }
+  };
   return {
     'run:get': {
       parseArgs: noArgs,
@@ -209,7 +220,7 @@ function createHandlers({
         const { id, name, copy } = opened;
         await runs.opened(id, copy);
         // Another canvas: the old one's sessions end, and the new one's folder comes back.
-        await windows.show(window, id);
+        await replace(window, id);
         const project = await projects.restore(id);
         const text = (await documents.textOf(id)) ?? '';
         return { id, name, text, ...(project ? { project } : {}) };
@@ -231,7 +242,7 @@ function createHandlers({
       handler: async ({ window }) => {
         // New keeps the canvas before as it was, even one that could not be restored.
         const draft = await runs.draft();
-        await windows.show(window, draft);
+        await replace(window, draft);
         return draft;
       },
     },

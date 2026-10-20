@@ -179,8 +179,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   await usage.load();
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
-  const memory = new CanvasMemory(store);
-  const documents = new Documents({
+  // A canvas with edits not saved is never forgotten (B9 Design §2), nor one open.
+  const memory: CanvasMemory = new CanvasMemory(store, undefined, (canvas: CanvasId): boolean =>
+    documents.unsaved(canvas),
+  );
+  const documents: Documents = new Documents({
     store,
     memory,
     catalog: CATALOG,

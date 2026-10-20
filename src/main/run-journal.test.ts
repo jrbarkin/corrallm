@@ -54,6 +54,12 @@ async function named(name: string, text = '{"saved":true}'): Promise<[CanvasId, 
 /** The canvas's run, as on disk. */
 const ran = (canvas: CanvasId) =>
   reader.prepare('SELECT state, updated_at FROM run WHERE canvas_id = ?').get(canvas);
+/** The canvases open, as on disk: the one opened (or journaled) last first. */
+const open = () =>
+  reader
+    .prepare('SELECT canvas_id FROM open_canvas ORDER BY opened_at DESC')
+    .all()
+    .map(({ canvas_id: id }) => id);
 /** Where each party has read to in the canvas's messages, as on disk. */
 const readTo = (canvas: CanvasId) =>
   reader
@@ -118,13 +124,46 @@ describe('RunJournal', () => {
       { canvas_id: canvas },
     ]);
 
-    // Another canvas opened is the one the profile had last now, and the only one.
+    // Another canvas opened is the one the profile had last now; the first stays open beside it.
     const [other] = await named('other.corral');
     await runs.opened(other);
-    expect(reader.prepare('SELECT canvas_id FROM open_canvas').all()).toEqual([
-      { canvas_id: other },
-    ]);
+    expect(open()).toEqual([other, canvas]);
     expect(await journal().last()).toBe(other);
+  });
+
+  it('keeps each canvas open until it is closed, across restarts, the one opened last restored', async () => {
+    const [team] = await named('team.corral');
+    const [other] = await named('other.corral');
+    const runs = journal();
+    await runs.opened(team);
+    await runs.opened(other);
+    const draft = await runs.draft();
+    await reopen();
+    expect(open()).toEqual([draft, other, team]);
+    expect(await journal().last()).toBe(draft);
+
+    // Closed, it is no longer open, nor restored; what else is open stays.
+    let closed: unknown;
+    await journal()
+      .close(draft)
+      .then(() => {
+        closed = open();
+      });
+    expect(closed).toEqual([other, team]);
+    expect(await journal().last()).toBe(other);
+    // Journaling a run of a canvas open keeps it open, the one used last restored first.
+    const runsAgain = journal();
+    await runsAgain.save(team, (await runsAgain.get(team)).token, checkpoint);
+    expect(open()).toEqual([team, other]);
+    // A save marks no canvas open that was closed: it only says which open one was used last.
+    await runsAgain.close(other);
+    await runsAgain.saved(other);
+    expect(open()).toEqual([team]);
+    // None open: a new draft, open from then on.
+    await runsAgain.close(team);
+    const fresh = await journal().last();
+    expect([team, other, draft]).not.toContain(fresh);
+    expect(open()).toEqual([fresh]);
   });
 
   it('restores a named canvas and its saved text, keeping checkpoint edits separate', async () => {
@@ -231,10 +270,12 @@ describe('RunJournal', () => {
     await memory.update(saved, (kept) => ({ ...kept, project: mintTrustedPath('/work/app') }));
     const runs = journal();
     // New, pressed more often than memory keeps canvases: each a draft whose window journals its
-    // run, as the app's does.
+    // run, as the app's does, closing the one before it.
     const drafts: CanvasId[] = [];
     for (let i = 0; i < 5; i++) {
       const draft = await runs.draft();
+      const before = drafts.at(-1);
+      if (before !== undefined) await runs.close(before);
       await runs.save(draft, (await runs.get(draft)).token, { ...checkpoint, updatedAt: i });
       drafts.push(draft);
     }
@@ -244,9 +285,9 @@ describe('RunJournal', () => {
       conversations: {},
     });
     expect(await journal().last()).toBe(drafts.at(-1));
-    // The oldest drafts are forgotten, with their runs: the drafts kept are as many as the
-    // canvases kept with a file, folder or conversations may be.
-    expect(drafts.map((draft) => ran(draft)?.updated_at)).toEqual([undefined, undefined, 2, 3, 4]);
+    // The oldest drafts are forgotten, with their runs: the drafts kept besides the one open are as
+    // many as the canvases kept with a file, folder or conversations may be.
+    expect(drafts.map((draft) => ran(draft)?.updated_at)).toEqual([undefined, 1, 2, 3, 4]);
   });
 
   it('keeps the canvas’s run and token through Save As', async () => {

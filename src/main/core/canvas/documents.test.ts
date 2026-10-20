@@ -809,3 +809,124 @@ describe('the agents a party created', () => {
     expect(documents.created(ORCHESTRATOR)).toBe(1);
   });
 });
+
+describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
+  const ORCHESTRATOR = 'outside:orchestrator' as const;
+  const createdBy = (canvas: CanvasId) =>
+    disk.prepare('SELECT created_by FROM document WHERE canvas_id = ?').get(canvas)?.created_by;
+
+  it('says whether a canvas has edits not saved, loaded or not, as canvas memory asks', async () => {
+    const [saved, edited, draft, empty] = [
+      newCanvasId(),
+      newCanvasId(),
+      newCanvasId(),
+      newCanvasId(),
+    ];
+    await filed(canvasOf(saved));
+    await documents.load(saved);
+    await filed(canvasOf(edited));
+    await commit(edited, renamed((await documents.load(edited)).document, 'lead', 'Head'));
+    await documents.edit(draft, toFile(canvasOf(draft)));
+    expect([saved, edited, draft, empty].map((one) => documents.unsaved(one))).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+    // Read from its rows, not loaded.
+    await restart();
+    expect([saved, edited, draft, empty].map((one) => documents.unsaved(one))).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it('makes a canvas by a party, kept with it as its creator once it holds something, or when asked', async () => {
+    const empty = newCanvasId();
+    documents.create(empty, ORCHESTRATOR);
+    expect(documents.live(empty).document).toEqual({
+      id: empty,
+      arrange: false,
+      nodes: [],
+      links: [],
+    });
+    expect(documentRow(empty)).toBeUndefined();
+    await documents.keep(empty);
+    expect(createdBy(empty)).toBe(ORCHESTRATOR);
+    expect(memory.keeps(empty)).toBe(true);
+
+    const filled = newCanvasId();
+    documents.create(filled, ORCHESTRATOR);
+    await commit(filled, canvasOf(filled), { op: 'canvas.create', by: ORCHESTRATOR });
+    expect(createdBy(filled)).toBe(ORCHESTRATOR);
+    // Its creator stays when its rows are written whole again (canvas memory forgot it while it was
+    // loaded), after a restart too.
+    await restart();
+    await documents.load(filled);
+    store.prepare('DELETE FROM canvas WHERE id = ?').run(filled);
+    await commit(filled, renamed(documents.live(filled).document, 'lead', 'Head'));
+    expect(createdBy(filled)).toBe(ORCHESTRATOR);
+    expect(documents.createdBy(ORCHESTRATOR).sort()).toEqual([empty, filled].sort());
+    // A made canvas a change refused is dropped, kept nowhere.
+    const refused = newCanvasId();
+    documents.create(refused, ORCHESTRATOR);
+    await documents.drop(refused);
+    expect(documents.loaded(refused)).toBeUndefined();
+    expect(() => {
+      documents.create(empty, 'you');
+    }).toThrow();
+  });
+
+  it('lists the canvases a party created, across restarts', async () => {
+    const [one, two, yours] = [newCanvasId(), newCanvasId(), newCanvasId()];
+    for (const canvas of [one, two]) {
+      documents.create(canvas, ORCHESTRATOR);
+      await documents.keep(canvas);
+    }
+    documents.create(yours, 'you');
+    await commit(yours, canvasOf(yours));
+    await restart();
+    expect(documents.createdBy(ORCHESTRATOR).sort()).toEqual([one, two].sort());
+    expect(documents.createdBy('outside:other')).toEqual([]);
+  });
+
+  it('reverts a canvas’s edits to its file, as one change, not edited after', async () => {
+    const canvas = newCanvasId();
+    const file = await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    await commit(canvas, renamed(document, 'lead', 'Head'));
+    expect(documents.edited(canvas)).toBe(true);
+    const rev = await documents.revert(canvas, { op: 'canvas.close', by: 'you' });
+    expect(rev).toBe(3);
+    expect(documents.live(canvas).document).toEqual(document);
+    expect(documents.edited(canvas)).toBe(false);
+    expect(documentRow(canvas)).toMatchObject({
+      rev: 3,
+      saved_hash: sha256(toFile(document)),
+      file_hash: sha256(await readFile(file, 'utf8')),
+    });
+    // Nothing to revert: no change.
+    expect(await documents.revert(canvas, { op: 'canvas.close', by: 'you' })).toBeUndefined();
+    // A file no longer there, or no longer a canvas, can't be reverted to.
+    await commit(canvas, renamed(document, 'lead', 'Again'));
+    await writeFile(file, 'Remember the milk');
+    await expect(documents.revert(canvas, { op: 'canvas.close', by: 'you' })).rejects.toThrow(
+      /not a corrallm canvas/,
+    );
+    expect(documents.live(canvas).document).toEqual(renamed(document, 'lead', 'Again'));
+  });
+
+  it('forgets a draft discarded, with everything kept of it', async () => {
+    const draft = newCanvasId();
+    await documents.edit(draft, toFile(canvasOf(draft)));
+    expect(documentRow(draft)).toBeDefined();
+    await documents.forget(draft);
+    expect(documents.loaded(draft)).toBeUndefined();
+    expect(documentRow(draft)).toBeUndefined();
+    expect(count('node', draft)).toBe(0);
+    expect(memory.keeps(draft)).toBe(false);
+    expect(documents.unsaved(draft)).toBe(false);
+  });
+});

@@ -73,6 +73,11 @@ export class Windows {
     };
   }
 
+  /** The canvas the window shows, if it shows one yet: never restoring one. */
+  shownIn(window: WindowId): CanvasId | undefined {
+    return this.#shown.get(window);
+  }
+
   /** Whether the window shows a canvas. */
   has(window: WindowId): boolean {
     return this.#shown.has(window);

@@ -61,13 +61,17 @@ const KEPT = `(file IS NOT NULL OR project IS NOT NULL
  * LIMIT canvases used most recently (`used_at`, which each change moves past every other's) with a
  * file, folder or conversations, and the LIMIT drafts used most recently (each New makes one, with
  * its run), forgetting the others with everything the database keeps of them: drafts never push
- * out a canvas kept for its file or folder. The paths it reads back are
+ * out a canvas kept for its file or folder. It never forgets a canvas open (`open_canvas`: until it
+ * is closed), nor one whose document has edits not saved (`spare`: B9 Design §2), however long
+ * since it was used; it forgets one when asked to (`forget`: a draft discarded). The paths it reads back are
  * trusted: it wrote them, from the app's dialogs. What isn't right (a path that isn't absolute, a
  * conversation whose id isn't a session's) is left out.
  */
 export class CanvasMemory {
   readonly #store: Database;
   readonly #limit: number;
+  /** Whether a canvas holds what forgetting it would lose: edits not saved. */
+  readonly #spare: (canvas: CanvasId) => boolean;
   /** Every change asked for so far, written or failed. */
   #writing: Promise<unknown> = Promise.resolve();
   /**
@@ -84,9 +88,14 @@ export class CanvasMemory {
   /** The canvases the change being applied changed. */
   #touched: CanvasId[] = [];
 
-  constructor(store: Database, limit = LIMIT) {
+  /**
+   * `spare`: whether a canvas has what forgetting it would lose (its document's edits not saved),
+   * asked within a write of only the canvases it would forget otherwise.
+   */
+  constructor(store: Database, limit = LIMIT, spare: (canvas: CanvasId) => boolean = () => false) {
     this.#store = store;
     this.#limit = limit;
+    this.#spare = spare;
   }
 
   /** What it remembers of a canvas, with every change asked for so far. */
@@ -193,6 +202,22 @@ export class CanvasMemory {
       this.#forgetOldest();
       this.#tell(undefined);
     }
+  }
+
+  /**
+   * Forgets `canvas`, with everything the database keeps of it (its document, run, messages and
+   * conversations), and any change of it not on disk yet. On disk once it resolves; rejects,
+   * forgetting nothing, if it couldn't be written.
+   */
+  forget(canvas: CanvasId): Promise<void> {
+    return this.#change(
+      () => {
+        this.#unwritten.delete(canvas);
+        this.#store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+        this.#tell(undefined);
+      },
+      () => undefined,
+    );
   }
 
   /** Resolves once every change so far is on disk; rejects while a write that failed isn't. */
@@ -365,19 +390,23 @@ export class CanvasMemory {
   /**
    * Forgets every canvas kept with a file, folder or conversations but the LIMIT used most
    * recently, and every draft but the LIMIT used most recently, with all the database keeps of
-   * them.
+   * them: never one open, nor one with edits not saved (`spare`).
    */
   #forgetOldest(): void {
     let forgot = 0;
+    const forget = this.#store.prepare('DELETE FROM canvas WHERE id = ?');
     for (const kind of [KEPT, `NOT ${KEPT}`]) {
-      forgot += Number(
-        this.#store
-          .prepare(
-            `DELETE FROM canvas WHERE id IN
-               (SELECT id FROM canvas WHERE ${kind} ORDER BY used_at DESC LIMIT -1 OFFSET ?)`,
-          )
-          .run(this.#limit).changes,
-      );
+      const old = this.#store
+        .prepare(
+          `SELECT id FROM canvas WHERE ${kind}
+             AND NOT EXISTS (SELECT 1 FROM open_canvas WHERE open_canvas.canvas_id = canvas.id)
+           ORDER BY used_at DESC LIMIT -1 OFFSET ?`,
+        )
+        .all(this.#limit);
+      for (const { id } of old) {
+        if (isCanvasId(id) && this.#spare(id)) continue;
+        forgot += Number(forget.run(id ?? null).changes);
+      }
     }
     if (forgot > 0) this.#tell(undefined);
   }
