@@ -661,6 +661,36 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
   );
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
+    'exits once its terminal is gone, having let the profile go',
+    async () => {
+      const { server } = await serveOnTerminal([]);
+      const alive = () => {
+        try {
+          process.kill(server.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        // script(1) killed: the terminal serve runs on hangs up, and nothing reads it any more.
+        server.child.kill('SIGKILL');
+        await vi.waitFor(
+          () => {
+            expect(alive()).toBe(false);
+          },
+          { timeout: 5000, interval: 50 },
+        );
+        expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
+        expect(existsSync(path.join(profile, 'core.lock'))).toBe(false);
+      } finally {
+        if (alive()) process.kill(server.pid, 'SIGKILL');
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     'renews a token by name across a restart: the new one reads what the old hadn’t, and the old gets 401',
     async () => {
       const first = await serve();

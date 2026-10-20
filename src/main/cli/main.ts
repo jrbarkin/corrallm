@@ -18,26 +18,45 @@ import { waitCommand } from './wait';
  * 3 on a timeout, 4 on an uncaught error.
  */
 
-/** Exits with `code` once what was printed has been written out (a pipe may lag). */
-function exit(code: number): void {
+/** How long exiting waits for what was printed on a terminal to be written out, at most. */
+const WRITTEN_OUT_MS = 1000;
+
+/** Where a command prints: `serve` only on stderr, `wait` only its JSON line on stdout. */
+type Printed = readonly ('stdout' | 'stderr')[];
+const BOTH: Printed = ['stdout', 'stderr'];
+
+/**
+ * Exits with `code` once what was printed on `printed` has been written out: as long as a pipe's
+ * reader takes (`wait`'s line is never cut off), but at most WRITTEN_OUT_MS on a terminal, which
+ * may never say so once it hung up (its window closed, script(1) killed). A stream the command
+ * never printed on is never touched: Node opens one as it is first asked for, and on macOS opening
+ * a terminal that hung up never returns.
+ */
+function exit(code: number, printed: Printed): void {
   process.exitCode = code;
-  process.stdout.write('', () => {
-    process.stderr.write('', () => {
-      process.exit(code);
+  const streams = printed.map((name) => process[name]);
+  if (streams.some((stream) => stream.isTTY)) {
+    setTimeout(() => process.exit(code), WRITTEN_OUT_MS);
+  }
+  let left = streams.length;
+  for (const stream of streams) {
+    stream.write('', () => {
+      left -= 1;
+      if (left === 0) process.exit(code);
     });
-  });
+  }
 }
 
 async function selfTest(): Promise<void> {
   const fail = (kind: string) => (error: unknown) => {
     console.error(`[native-selftest] ${kind}:`, error);
-    exit(4);
+    exit(4, BOTH);
   };
   process.on('uncaughtException', fail('uncaught exception'));
   process.on('unhandledRejection', fail('unhandled rejection'));
   const timeout = setTimeout(() => {
     console.error('[native-selftest] timed out');
-    exit(3);
+    exit(3, BOTH);
   }, SELFTEST_TIMEOUT_MS);
 
   // Since this process started: Node's own start, and loading the bundle.
@@ -50,7 +69,7 @@ async function selfTest(): Promise<void> {
   }
   console.log(`[native-selftest] cli: after the checks, ${memoryText()}`);
   clearTimeout(timeout);
-  exit(results.every(({ ok }) => ok) ? 0 : 2);
+  exit(results.every(({ ok }) => ok) ? 0 : 2, BOTH);
 }
 
 /**
@@ -116,12 +135,18 @@ if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
         `${JSON.stringify({ error: { code: 'invalid', sentence: error.message } })}\n`,
       );
     }
-    exit(USAGE_ERROR);
+    exit(USAGE_ERROR, process.argv[2] === 'wait' ? BOTH : ['stderr']);
   }
   if (command) {
-    run(command).then(exit, (error: unknown) => {
-      console.error(`corrallm ${command.command}:`, error);
-      exit(4);
-    });
+    const serving = command.command === 'serve';
+    run(command).then(
+      (code) => {
+        exit(code, serving ? ['stderr'] : ['stdout']);
+      },
+      (error: unknown) => {
+        console.error(`corrallm ${command.command}:`, error);
+        exit(4, serving ? ['stderr'] : BOTH);
+      },
+    );
   }
 }
