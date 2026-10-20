@@ -263,3 +263,65 @@ describe('what a review says', () => {
     });
   });
 });
+
+it.each(['finished', 'recovered'] as const)(
+  'expires Keep when a %s save writes the same baseline hash, across a restart',
+  async (how) => {
+    const canvas = newCanvasId();
+    const file = await filed(canvasOf(canvas));
+    await documents.load(canvas);
+    const theirs = toFile(canvasOf(canvas, [agent('tester')]));
+    await writeFile(file, theirs);
+    await documents.review(canvas);
+    const review = reviews.open(canvas);
+    if (!review) throw new Error('No review');
+    await documents.keepFile(canvas, review, 'you');
+    if (how === 'recovered') {
+      const write = wholeFile.writeWhole;
+      vi.spyOn(wholeFile, 'writeWhole').mockImplementationOnce(async (...args) => {
+        await write(...args);
+        throw new Error('Stopped after publishing the file');
+      });
+      await expect(documents.save(canvas, mintTrustedPath(file))).rejects.toThrow(
+        'Stopped after publishing the file',
+      );
+    } else await documents.save(canvas, mintTrustedPath(file));
+    await restart();
+    await documents.review(canvas);
+    await writeFile(file, theirs);
+    await documents.review(canvas);
+    expect(reviews.open(canvas)?.id).toBeDefined();
+    expect(reviews.open(canvas)?.id).not.toBe(review.id);
+  },
+);
+
+it.each(['apply', 'discard'] as const)(
+  'clears an abandoned Save As writing hash when %s establishes a baseline',
+  async (how) => {
+    const canvas = newCanvasId();
+    const original = canvasOf(canvas);
+    const file = await filed(original);
+    await documents.load(canvas);
+    await writeFile(file, toFile(canvasOf(canvas, [agent('tester')])));
+    await documents.review(canvas);
+    const review = reviews.open(canvas);
+    if (!review) throw new Error('No review');
+    vi.spyOn(wholeFile, 'writeWhole').mockRejectedValueOnce(new Error('Save As failed'));
+    await expect(
+      documents.save(canvas, mintTrustedPath(path.join(profile, 'failed.corral'))),
+    ).rejects.toThrow('Save As failed');
+    if (how === 'apply')
+      await documents.applyFile(canvas, review, 'you', {
+        signal: new AbortController().signal,
+        noReturn: () => undefined,
+      });
+    else await documents.revert(canvas, { op: 'canvas.close', by: 'you' });
+    expect(
+      disk.prepare('SELECT writing_hash FROM document WHERE canvas_id = ?').get(canvas),
+    ).toEqual({ writing_hash: null });
+    // The old attempted save is an external edit now, never recovery of that abandoned save.
+    await writeFile(file, toFile(original));
+    await documents.review(canvas);
+    expect(reviews.open(canvas)).toBeDefined();
+  },
+);

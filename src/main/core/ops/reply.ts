@@ -77,7 +77,7 @@ export function replyOps({
       await documents.keepFile(canvas, open, ctx.by);
       return { outcome: 'kept' as const };
     }
-    const applied = await documents.applyFile(canvas, open, ctx.by);
+    const applied = await documents.applyFile(canvas, open, ctx.by, ctx);
     if ('superseded' in applied) {
       const { superseded: raised } = applied;
       return {

@@ -118,6 +118,8 @@ export interface DocumentsDeps {
   catalog: Catalog;
   /** The adapter an agent naming none runs. */
   defaultAdapter: AdapterId;
+  /** An accepted file changes the saved baseline without changing the document's rows. */
+  baselineChanged?: (canvas: CanvasId) => void;
   /** The reviews of files changed on disk. Without them, no file is checked (a document's tests). */
   reviews?: Pick<FileReviews, 'open' | 'kept' | 'raiseWithin' | 'settleWithin' | 'supersedeWithin'>;
   now?: () => number;
@@ -313,9 +315,15 @@ export class Documents {
    * review settled applied in the same write: the revision it took. If the file changed since (or
    * went), what is there now is checked instead, which settles the review superseded: the review
    * open now, if any. Rejects, changing nothing, for a review no longer open, a file that can't be
-   * read or isn't a canvas this corrallm reads, or a write that failed (CommitFailed).
+   * read or isn't a canvas this corrallm reads, cancellation before the commit, or a write that
+   * failed (CommitFailed). Once committing, it is irreversible as an op's ctx.commit is.
    */
-  applyFile(canvas: CanvasId, review: FileReview, by: PartyId): Promise<Applied> {
+  applyFile(
+    canvas: CanvasId,
+    review: FileReview,
+    by: PartyId,
+    turn: { signal: AbortSignal; noReturn(): void },
+  ): Promise<Applied> {
     return this.#queue(canvas, async () => {
       const reviews = this.#reviewing(canvas, review);
       const live = await this.#load(canvas);
@@ -328,13 +336,18 @@ export class Documents {
           `${review.summary.file} can’t be read: ${reasonOf(error)}`,
         );
       }
+      turn.signal.throwIfAborted();
       if (file === undefined) {
         // Gone: nothing is there to apply.
+        turn.noReturn();
         const told = await this.#writeAlone(() => reviews.supersedeWithin(canvas));
         told?.();
         return { superseded: undefined };
       }
-      if (sha256(file.text) !== review.hash) return { superseded: await this.#review(live, file) };
+      if (sha256(file.text) !== review.hash) {
+        turn.noReturn();
+        return { superseded: await this.#review(live, file) };
+      }
       let next: CanvasDocument;
       try {
         next = { ...this.read(file.text), id: canvas };
@@ -344,6 +357,7 @@ export class Documents {
           `${review.summary.file} isn’t a canvas this corrallm reads: ${reasonOf(error)}`,
         );
       }
+      turn.noReturn();
       const rev = await this.#commit(
         live,
         next,
@@ -527,7 +541,8 @@ export class Documents {
       if (
         rows.changed.length === 0 &&
         live.savedHash === hashes.saved &&
-        live.fileHash === hashes.file
+        live.fileHash === hashes.file &&
+        live.writingHash === undefined
       ) {
         return undefined;
       }
@@ -703,7 +718,8 @@ export class Documents {
         await memory.setFile(canvas, file, () => {
           store
             .prepare(
-              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?`,
+              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL,
+                 file_generation = file_generation + 1 WHERE canvas_id = ?`,
             )
             .run(hash, hash, canvas);
           // The file is corrallm's now: a review of the one it had (Save As) is moot.
@@ -883,7 +899,7 @@ export class Documents {
         store
           .prepare(
             `UPDATE document SET saved_hash = writing_hash, file_hash = writing_hash,
-               writing_hash = NULL WHERE canvas_id = ?`,
+               writing_hash = NULL, file_generation = file_generation + 1 WHERE canvas_id = ?`,
           )
           .run(canvas);
       } else {
@@ -941,12 +957,18 @@ export class Documents {
       const text = this.#text(next).hash;
       if (text === this.#text(live.document).hash || text === live.savedHash) {
         // Written another way: nothing to review, and these bytes are the file's from now on.
+        const saved = text === this.#text(live.document).hash ? text : live.savedHash;
         const told = await this.#writeAlone(() => {
-          store.prepare('UPDATE document SET file_hash = ? WHERE canvas_id = ?').run(hash, canvas);
+          store
+            .prepare('UPDATE document SET file_hash = ?, saved_hash = ? WHERE canvas_id = ?')
+            .run(hash, saved ?? null, canvas);
           return reviews.supersedeWithin(canvas);
         });
         live.fileHash = hash;
+        const changed = live.savedHash !== saved;
+        live.savedHash = saved;
         told?.();
+        if (changed) this.#deps.baselineChanged?.(canvas);
         return undefined;
       }
     }
@@ -1010,7 +1032,9 @@ export class Documents {
         if (creating !== undefined) this.#creating.delete(creating);
         if (hashes !== undefined) {
           this.#deps.store
-            .prepare('UPDATE document SET saved_hash = ?, file_hash = ? WHERE canvas_id = ?')
+            .prepare(
+              'UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?',
+            )
             .run(hashes.saved, hashes.file, next.id);
         }
         // Last, so that nothing after it fails the write once it has staged what it holds.
@@ -1038,6 +1062,7 @@ export class Documents {
     if (hashes !== undefined) {
       live.savedHash = hashes.saved;
       live.fileHash = hashes.file;
+      live.writingHash = undefined;
     }
     const commit = { canvas: next.id, rev, by: revision.by, changed, renumbered, live };
     for (const listener of this.#listeners) {

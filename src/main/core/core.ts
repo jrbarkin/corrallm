@@ -216,6 +216,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     catalog: CATALOG,
     defaultAdapter: DEFAULT_ADAPTER,
     reviews,
+    baselineChanged: (canvas) => {
+      void states.refresh(canvas).catch((error: unknown) => {
+        console.error('Could not publish the canvas’s saved baseline:', error);
+      });
+    },
   });
   const settings = new Settings(path.join(profile, 'settings.json'));
   const projects = new ProjectFolders({ host, memory });

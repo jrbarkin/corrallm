@@ -136,6 +136,7 @@ export const MIGRATIONS: readonly Migration[] = [
         saved_hash TEXT,
         file_hash TEXT,
         writing_hash TEXT,
+        file_generation INTEGER NOT NULL DEFAULT 0 CHECK (file_generation >= 0),
         created_by TEXT,
         by_party TEXT NOT NULL,
         changed_at INTEGER NOT NULL
@@ -252,11 +253,13 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX proposal_by_canvas ON proposal (canvas_id);
 
       -- A canvas's file changed on disk, waiting for you to apply it or keep corrallm's: the
-      -- file's hash and what changed, worded; one open (outcome none) at a time.
+      -- file's hash, its confirmed-write generation and what changed, worded; one open (outcome
+      -- none) at a time. Keep expires with the generation, even when a write repeats the same bytes.
       CREATE TABLE file_review (
         id TEXT PRIMARY KEY NOT NULL,
         canvas_id TEXT NOT NULL REFERENCES document (canvas_id) ON DELETE CASCADE,
         file_hash TEXT NOT NULL,
+        file_generation INTEGER NOT NULL CHECK (file_generation >= 0),
         summary TEXT NOT NULL CHECK (json_valid(summary)),
         raised_at INTEGER NOT NULL,
         outcome TEXT,

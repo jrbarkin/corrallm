@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import { toFile } from '../../shared/model/file';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,6 +31,11 @@ import { CALLERS, NO_DESKTOP } from './test-registry';
  * `other` (agent `solo`). The folders' watch is off but where a test turns it on, so that each
  * other check is seen alone.
  */
+
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof fs>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const TEAM = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4d01' as CanvasId;
 const OTHER = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4d02' as CanvasId;
@@ -569,4 +576,93 @@ describe('a canvas file’s folder, watched while the canvas is open', () => {
     await core.engines.open(TEAM);
     expect(await reviewsOf(TEAM)).toHaveLength(1);
   });
+});
+
+it('adopts the live document as the saved baseline and publishes clean meta on both topics', async () => {
+  await core.engines.open(TEAM);
+  await show(TEAM);
+  await applied('canvas.save', { canvas: TEAM });
+  const old = await readFile(files.team, 'utf8');
+  await applied('canvas.rename', { canvas: TEAM, node: 'lead', label: 'Head' });
+  const open = core.engines.canvas(TEAM);
+  if (!open) throw new Error('No open canvas');
+  const text = toFile(open.document);
+  await vi.waitFor(async () => {
+    const { items } = (await applied('canvas.list', {})) as {
+      items: { canvas: string; edited: boolean }[];
+    };
+    expect(items.find((item) => item.canvas === TEAM)?.edited).toBe(true);
+  });
+  let canvasEdited: boolean | undefined;
+  let listEdited: boolean | undefined;
+  const canvasFeed = await core.topics.follow(YOU, `canvas:${TEAM}`, (changes) => {
+    for (const change of changes) {
+      const rows =
+        'replace' in change
+          ? (change.replace as Record<string, { edited: boolean }>)
+          : (change.set as Record<string, { edited: boolean }>);
+      if (rows.meta) canvasEdited = rows.meta.edited;
+    }
+  });
+  const listFeed = await core.topics.follow(YOU, 'canvases', (changes) => {
+    for (const change of changes)
+      if ('replace' in change) {
+        const { items } = change.replace as { items: { canvas: string; edited: boolean }[] };
+        listEdited = items.find((item) => item.canvas === TEAM)?.edited;
+      }
+  });
+  try {
+    await writeFile(files.team, text);
+    await core.focused(1);
+    await vi.waitFor(() => {
+      expect(canvasEdited).toBe(false);
+      expect(listEdited).toBe(false);
+    });
+    expect(hashesOf(TEAM)).toMatchObject({ saved_hash: sha256(text), file_hash: sha256(text) });
+    await writeFile(files.team, old);
+    await core.focused(1);
+    expect(await reviewsOf(TEAM)).toHaveLength(1);
+  } finally {
+    canvasFeed.stop();
+    listFeed.stop();
+  }
+});
+
+it('does not apply a review cancelled while its file is being read', async () => {
+  await show(TEAM);
+  await writeFile(files.team, JSON.stringify(team(agent('tester', 800))));
+  await core.focused(1);
+  const review = await reviewOf(TEAM);
+  const read = (await vi.importActual<typeof fs>('node:fs/promises')).readFile;
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  const blocked = vi.mocked(fs.readFile).mockImplementation(async (...args) => {
+    if (args[0] === files.team) {
+      entered.resolve(undefined);
+      await release.promise;
+    }
+    return read(...args);
+  });
+  const abort = new AbortController();
+  const request = '6a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a73';
+  const args = { canvas: TEAM, to: review.id, answer: { choice: 'apply' }, request };
+  const pending = core.call('reply', args, YOU, abort.signal);
+  await entered.promise;
+  abort.abort();
+  release.resolve(undefined);
+  try {
+    expect(await pending).toMatchObject({
+      ok: false,
+      error: { code: 'refused', sentence: 'The call was cancelled.' },
+    });
+    expect(await labelsOf(TEAM)).toEqual(['Lead', 'Worker']);
+    expect((await reviewOf(TEAM)).id).toBe(review.id);
+    // A cancelled attempt was not cached: the retry can apply it.
+    expect(await core.call('reply', args, YOU)).toMatchObject({
+      ok: true,
+      value: { outcome: 'applied' },
+    });
+  } finally {
+    blocked.mockImplementation(read);
+  }
 });

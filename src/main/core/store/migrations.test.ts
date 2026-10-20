@@ -215,8 +215,8 @@ describe('the schema', () => {
     addCanvas();
     addDocument();
     const raise = connection.prepare(
-      `INSERT INTO file_review (id, canvas_id, file_hash, summary, raised_at)
-       VALUES (?, ?, 'h', '{}', 1)`,
+      `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+       VALUES (?, ?, 'h', 0, '{}', 1)`,
     );
     raise.run('first', CANVAS);
     expect(() => raise.run('second', CANVAS)).toThrow(/UNIQUE constraint failed/);
@@ -459,8 +459,8 @@ describe('the schema', () => {
       .run(CANVAS);
     connection
       .prepare(
-        `INSERT INTO file_review (id, canvas_id, file_hash, summary, raised_at)
-         VALUES ('f', ?, 'h', '{}', 1)`,
+        `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+         VALUES ('f', ?, 'h', 0, '{}', 1)`,
       )
       .run(CANVAS);
     connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);

@@ -91,6 +91,8 @@ export interface OpContext {
   readonly by: PartyId;
   /** Aborts when a preempting op supersedes it, or its caller gives up: then it unwinds. */
   readonly signal: AbortSignal;
+  /** Marks a direct document write irreversible, checking cancellation first, as commit does. */
+  noReturn(): void;
   /** Defers a command's final cleanup until its successful proposal settlement. */
   readonly after?: (cleanup: () => Promise<void>) => void;
   /**
@@ -400,6 +402,9 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       },
       by,
       signal: turn.signal,
+      noReturn: () => {
+        turn.noReturn();
+      },
       ...(options.after === undefined ? {} : { after: options.after }),
       commit: async (canvas, build) => {
         if (commit === undefined) {
@@ -585,9 +590,15 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         return apply(name, op, args, caller, signal);
       };
       const { request } = args as { request?: unknown };
-      return typeof request === 'string'
-        ? await requests.remembered(callerKey(caller), `${name}|${request}|${keyOf(args)}`, run)
-        : (await run()).result;
+      const result =
+        typeof request === 'string'
+          ? await requests.remembered(callerKey(caller), `${name}|${request}|${keyOf(args)}`, run)
+          : (await run()).result;
+      // Current rows are disclosed only while the caller still reaches them, even in a cached
+      // refusal. Successful deletes keep their first result after their targets have gone.
+      if (!result.ok && result.error.current !== undefined)
+        checkReach(name, surface, def, args, caller);
+      return result;
     } catch (error) {
       return { ok: false, error: errorOf(error, signal) };
     } finally {

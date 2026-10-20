@@ -88,7 +88,7 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 (see The registry): call.ts is core.call, the one dispatcher every transport calls
                 (audience, limits per token, the canvas, filled in for a caller with one, or the
                 one holding a message it names (`withdraw` takes none), and asked of one with
-                several otherwise, schema, reach, self, repeated requests, scopes, reach and self
+                several otherwise, schema, repeated requests, reach and self, scopes, reach and self
                 again in the scope, rules in the scope, and reach and self once more as each commit
                 builds, in the canvas's turn, recomputing its caller's party each time, so a call
                 that waited can't keep a lead's revoked authority or reach what left its reach
@@ -115,7 +115,9 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 throttle.ts the limits per token (calls in flight and writes a second; a long
                 poll, `waits`, counts against the waits in flight instead of the calls);
                 requests.ts the repeated requests (each caller's own; a result kept only when its
-                op came to it by itself, so a cancelled call's retry runs again); reach.ts
+                op came to it by itself, so a cancelled call's retry runs again; a failure carrying
+                `current` is reach-checked again before it is returned, cached or fresh, while a
+                successful delete keeps its result after its target has gone); reach.ts
                 resolves the ids a token names against its reach (`resolvers`: a canvas it has; an
                 agent, a node (an agent as itself, a frame as its agents), a group (every agent of
                 it) it reaches there, or an item of the queue of the agent named beside it; a
@@ -229,11 +231,13 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 `canvas.edit` by you until its gestures are operations (`edit`, for run:save and
                 canvas:save), and saved by the core
                 itself (`save`: writing_hash committed, the file written whole and forced to disk,
-                then file_hash and saved_hash in the same savepoint as canvas memory's file
+                then file_hash and saved_hash, writing_hash cleared and file_generation incremented,
+                in the same savepoint as canvas memory's file
                 (a path write that fails rejects the save and keeps the old hashes); saves on
                 different canvases serialize too, so writing one path cannot publish another
                 canvas as its owner; a save cut short is settled
-                as the canvas next loads, by whether the file's bytes hash to writing_hash); `edited`
+                as the canvas next loads, by whether the file's bytes hash to writing_hash (one
+                adopted as written increments the generation too)); `edited`
                 is whether its text's hash differs from saved_hash, or it holds nodes but has
                 lost its file association. canvas/commit.ts is what an op's
                 `ctx.commit` does (B9 Design §3): its change built in the canvas's turn unless the
@@ -241,7 +245,15 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 with `current` otherwise) and, for a token, every change rule (`ChangeRule`,
                 rules.ts' `changeChecks`), written past the call's point of no return, its
                 revision the call's `revs`; then the canvas's engine follows its document
-                (`Engines.changed`). A token's change no rule refuses but R4 reserves to you (it
+                (`Engines.changed`). File reviews (`canvas/reviews.ts`, `file_review`) are yours
+                alone, in `needs:<c>`: Apply re-reads the file, checks cancellation and marks its
+                write irreversible (`ctx.noReturn`), then commits the file's document, hashes,
+                writing_hash cleared and settlement together. Discard clears an abandoned writing
+                hash too. Keep is bound to the file baseline and the durable file_generation when
+                raised, so the next confirmed write expires it even if it writes identical bytes,
+                across restarts too. A file matching the live document is adopted with its canonical
+                saved_hash as well as its bytes' file_hash; the canvas and list meta refresh so it
+                becomes clean. A token's change no rule refuses but R4 reserves to you (it
                 deletes an agent) applies nothing: refusals win, and it becomes a proposal only for
                 an op declaring R4 or R5 (`proposes`), else it is refused. canvas/proposals.ts keeps
                 them (Proposals: the `proposal` table, read once per canvas; Core Server §6.9, B9

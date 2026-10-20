@@ -1545,3 +1545,22 @@ describe('canvas.batch: every rule on the whole, each inner op checked as its ow
     expect(ids('a')).toEqual(['first', 'ok', 'after', 'check']);
   });
 });
+
+it('rechecks reach before returning a repeated conflict with current rows', async () => {
+  const args = {
+    node: 'helper',
+    label: 'Renamed',
+    expect: { 'node/helper': 0 },
+    request: '6a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a71',
+  };
+  const first = await call('canvas.rename', args, LEAD);
+  expect(first).toMatchObject({
+    ok: false,
+    error: { code: 'conflict', current: { 'node/helper': { value: { label: 'Helper' } } } },
+  });
+  await applied('canvas.ungroup', { nodes: ['helper'] }, YOU);
+  expect(await call('canvas.rename', args, LEAD)).toMatchObject({
+    ok: false,
+    error: { code: 'not-found' },
+  });
+});

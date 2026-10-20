@@ -155,15 +155,17 @@ export class FileReviews {
   /**
    * Whether you kept corrallm's canvas over the file's bytes hashing to `hash`, changed from those
    * hashing to `from` (the file as the core last read or wrote it): what Keep holds to, until the
-   * file is written over them.
+   * file is written over them. Its generation must still match too: even a write of the same
+   * baseline bytes expires the earlier Keep.
    */
   kept(canvas: CanvasId, hash: string, from: string | undefined): boolean {
     return this.#deps.store
       .prepare(
         `SELECT summary FROM file_review
-         WHERE canvas_id = ? AND file_hash = ? AND outcome = 'kept'`,
+         WHERE canvas_id = ? AND file_hash = ? AND outcome = 'kept'
+           AND file_generation = (SELECT file_generation FROM document WHERE canvas_id = ?)`,
       )
-      .all(canvas, hash)
+      .all(canvas, hash, canvas)
       .some((row) => summaryOf(row.summary)?.from === (from ?? null));
   }
 
@@ -177,10 +179,10 @@ export class FileReviews {
     const uuid = this.#newId();
     this.#deps.store
       .prepare(
-        `INSERT INTO file_review (id, canvas_id, file_hash, summary, raised_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+         VALUES (?, ?, ?, (SELECT file_generation FROM document WHERE canvas_id = ?), ?, ?)`,
       )
-      .run(uuid, canvas, hash, JSON.stringify(summary), this.#now());
+      .run(uuid, canvas, hash, canvas, JSON.stringify(summary), this.#now());
     return () => {
       this.#deps.changed?.(canvas, 'corrallm');
     };
