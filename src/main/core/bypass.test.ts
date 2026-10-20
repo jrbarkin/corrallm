@@ -1170,6 +1170,81 @@ describe('R4: a token’s delete of an agent comes to you as a proposal', () => 
     );
   });
 
+  it.each(['message', 'OK', 'link'] as const)(
+    'settles stale when a delete would now remove a newly added %s, across a restart',
+    async (what) => {
+      const proposed = await propose('canvas.delete', { nodes: ['c'] });
+      if (what === 'link') await applied('canvas.link', { a: 'b', b: 'c' }, YOU);
+      else
+        await applied(
+          'queue.add',
+          {
+            agent: 'c',
+            entry: what === 'message' ? { message: 'New work' } : { approve: 'New decision' },
+          },
+          YOU,
+        );
+      await core.close();
+      core = await start();
+      const before = doc();
+      expect(
+        await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU),
+      ).toMatchObject({ outcome: 'stale' });
+      expect(doc()).toBe(before);
+      expect(await proposals()).toEqual([]);
+    },
+  );
+
+  it('settles a batch stale when a formerly unrelated row it would now clear changed', async () => {
+    const proposed = await propose('canvas.batch', {
+      ops: [
+        { op: 'canvas.rename', args: { node: 'b', label: 'Bee' } },
+        { op: 'canvas.delete', args: { nodes: ['c'] } },
+      ],
+    });
+    await applied(
+      'queue.update',
+      { agent: 'b', item: 'b1', change: { kind: 'target', target: 'c' } },
+      YOU,
+    );
+    const before = doc();
+    expect(
+      await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU),
+    ).toMatchObject({ outcome: 'stale' });
+    expect(doc()).toBe(before);
+  });
+
+  it('allows an unrelated edit after a proposal without making the proposal stale', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['c'] });
+    await applied('canvas.rename', { node: 'b', label: 'Bee' }, YOU);
+    expect(
+      await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU),
+    ).toMatchObject({ outcome: 'allowed' });
+    expect(node('b').data.label).toBe('Bee');
+    expect(doc().nodes.some((node) => node.id === 'c')).toBe(false);
+  });
+
+  it('settles a legacy proposal stale when its original canvas snapshot was not kept', async () => {
+    const proposed = await propose('canvas.delete', { nodes: ['c'] });
+    await core.close();
+    const database = await openTestStore(profile);
+    try {
+      await database.write(() =>
+        database
+          .prepare('UPDATE proposal SET touched = ? WHERE id = ?')
+          .run(JSON.stringify({ 'node/c': 1 }), proposed.slice('proposal/'.length)),
+      );
+    } finally {
+      await database.close();
+    }
+    core = await start();
+    const before = doc();
+    expect(
+      await applied('reply', { to: proposed, answer: { choice: 'allow' } }, YOU),
+    ).toMatchObject({ outcome: 'stale' });
+    expect(doc()).toBe(before);
+  });
+
   it('keeps a proposal across a restart, to allow then', async () => {
     const proposed = await propose('canvas.delete', { nodes: ['c'] });
     await core.close();

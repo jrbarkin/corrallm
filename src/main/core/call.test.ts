@@ -104,6 +104,128 @@ describe('drainsOf', () => {
 });
 
 describe('core.call', () => {
+  it('revokes a queued lead-only call before it gets its scope', async () => {
+    const registry = testRegistry();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let lead = true;
+    const holdSurface = registry.surface['test.hold'];
+    const agentSurface = registry.surface['test.agent'];
+    if (!holdSurface || !agentSurface) throw new Error('The registry lacks its fixture ops.');
+    const core = createDispatcher(
+      {
+        ...registry,
+        surface: {
+          ...registry.surface,
+          'test.hold': { ...holdSurface, scope: 'canvas' },
+          'test.agent': { ...agentSurface, scope: 'canvas' },
+        },
+        implementations: {
+          ...registry.implementations,
+          'test.hold': async () => {
+            entered.resolve(undefined);
+            await release.promise;
+            return { stopped: true };
+          },
+        },
+      },
+      { isLead: () => lead, resolvers: RESOLVERS, check: true },
+    );
+    const held = core.call('test.hold', { canvas: CANVAS, agent: 'helper' }, CALLERS.you);
+    await entered.promise;
+    const waiting = core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.lead);
+    lead = false;
+    release.resolve(undefined);
+    await held;
+    expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(registry.calls['test.agent']).toEqual([]);
+  });
+
+  it('rechecks lead status as a commit builds after the implementation already started', async () => {
+    const registry = testRegistry();
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let lead = true;
+    const core = createDispatcher(
+      {
+        ...registry,
+        implementations: {
+          ...registry.implementations,
+          'test.agent': ({ canvas, agent }: { canvas: string; agent: string }, ctx: OpContext) =>
+            ctx.commit(canvas, (doc) => ({ next: doc, result: { agent } })),
+        },
+      },
+      {
+        isLead: () => lead,
+        resolvers: RESOLVERS,
+        check: true,
+        commit: async (_canvas, build) => {
+          entered.resolve(undefined);
+          await release.promise;
+          return {
+            result: build({ id: CANVAS, arrange: false, nodes: [], links: [] }).result,
+            rev: 2,
+          };
+        },
+      },
+    );
+    const waiting = core.call('test.agent', { canvas: CANVAS, agent: 'helper' }, CALLERS.lead);
+    await entered.promise;
+    lead = false;
+    release.resolve(undefined);
+    expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+  });
+  it.each(['call', 'prepare'] as const)(
+    'uses the current party when an existing turn tries ctx.%s',
+    async (how) => {
+      const registry = testRegistry();
+      const surface = registry.surface['test.agent'];
+      if (!surface) throw new Error('No fixture op');
+      const entered = Promise.withResolvers<undefined>();
+      const release = Promise.withResolvers<undefined>();
+      let lead = true;
+      const core = createDispatcher(
+        {
+          ...registry,
+          surface: { ...registry.surface, 'test.agent': { ...surface, kind: 'doc' } },
+          implementations: {
+            ...registry.implementations,
+            'test.agent': ({ canvas, agent }: { canvas: string; agent: string }, ctx: OpContext) =>
+              ctx.commit(canvas, (doc) => ({ next: doc, result: { agent } })),
+            'test.tokens': async (_args, ctx: OpContext) => {
+              entered.resolve(undefined);
+              await release.promise;
+              const args = { canvas: CANVAS, agent: 'helper' };
+              if (how === 'call') {
+                await ctx.call('test.agent', args);
+                return { done: true };
+              }
+              const build = await ctx.prepare('test.agent', args);
+              return ctx.commit(CANVAS, (doc) => ({
+                next: build(doc).next,
+                result: { done: true },
+              }));
+            },
+          },
+        },
+        {
+          isLead: () => lead,
+          resolvers: RESOLVERS,
+          check: true,
+          commit: (_canvas, build) =>
+            Promise.resolve({
+              result: build({ id: CANVAS, arrange: false, nodes: [], links: [] }).result,
+              rev: 2,
+            }),
+        },
+      );
+      const waiting = core.call('test.tokens', {}, CALLERS.lead);
+      await entered.promise;
+      lead = false;
+      release.resolve(undefined);
+      expect(await waiting).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    },
+  );
   it('lets a draining op stop what holds an agent’s scope on its canvas, then run', async () => {
     const registry = testRegistry();
     const surface = {

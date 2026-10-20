@@ -121,6 +121,28 @@ export class Scopes {
     for (const [key, lane] of this.#lanes) if (holds(drain, lane.path)) this.#next(key, lane);
   }
 
+  /**
+   * An op already in its scope runs another there (Allow's replay): hold and drain the inner
+   * op's lanes without entering the owner's scope again, which would wait on itself forever.
+   */
+  async draining<T>(
+    path: readonly string[] | null,
+    paths: readonly (readonly string[])[],
+    signal: AbortSignal,
+    op: () => Promise<T>,
+  ): Promise<T> {
+    if (paths.length === 0) return op();
+    const drain: Drain = { paths, depth: (path?.length ?? 0) + 1 };
+    this.#drains.add(drain);
+    try {
+      await this.#drain(drain);
+      signal.throwIfAborted();
+      return await op();
+    } finally {
+      this.#release(drain);
+    }
+  }
+
   #lane(key: string, path: readonly string[]): Lane {
     let lane = this.#lanes.get(key);
     if (!lane) {

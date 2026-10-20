@@ -36,6 +36,32 @@ function controlled(log: string[], name: string, { past = false } = {}) {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('Scopes', () => {
+  it('releases an inner drain after a cancelled owner without aborting work past its commit point', async () => {
+    const scopes = new Scopes();
+    const log: string[] = [];
+    const active = controlled(log, 'active', { past: true });
+    const first = scopes.run(['app', 'c', 'a'], {}, undefined, active.op);
+    const signal = await active.started;
+    const owner = new AbortController();
+    let ran = false;
+    const draining = scopes.draining(['app', 'c'], [['app', 'c', 'a']], owner.signal, () => {
+      ran = true;
+      return Promise.resolve();
+    });
+    const cancelled = expect(draining).rejects.toThrow('left');
+    const later = controlled(log, 'later');
+    const next = scopes.run(['app', 'c', 'a'], {}, undefined, later.op);
+    owner.abort(new Error('left'));
+    expect(signal.aborted).toBe(false);
+    active.release();
+    await first;
+    await cancelled;
+    await later.started;
+    later.release();
+    await next;
+    expect(ran).toBe(false);
+    expect(log).toEqual(['active started', 'active done', 'later started', 'later done']);
+  });
   it('runs the ops of one scope one at a time, in the order they came', async () => {
     const scopes = new Scopes();
     const log: string[] = [];

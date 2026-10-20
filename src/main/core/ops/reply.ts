@@ -11,8 +11,9 @@ import type { Implementations, OpServices } from '.';
  * arrives: rules.ts), choosing Allow or Refuse; a hold of the run and a session's prompt are
  * answered in corrallm's window until B11 moves them into the core, and file reviews come with B9's
  * task 12. Refuse settles the proposal. Allow runs its op again, as you, recording who proposed it,
- * in this call's turn (ctx.call): its change, the settlement and the proposer's record in one write,
- * only if no entity its change touched has another revision now; if one has, or the op no longer
+ * in this call's turn (ctx.call), draining its lanes: its change, the settlement and the proposer's
+ * record in one write, only if neither its original touched entities nor anything its replay now
+ * changes has another revision; if one has, or the op no longer
  * applies (what it named is gone, or it would change nothing), it is settled stale, changing
  * nothing. Either way the proposer gets a record, whose id this returns.
  */
@@ -60,11 +61,15 @@ export function replyOps({
         return { id: record.id, outcome };
       };
       if (answer.choice === 'refuse') return settled('refused');
+      // Older proposals recorded only their first write set, so cannot guard newly affected work.
+      if (proposal.before === undefined)
+        return settled('stale', 'its earlier canvas snapshot cannot be checked safely');
       const settlement = await proposals.settlement(proposal, 'allowed', ctx.by);
       try {
         await ctx.call(proposal.op, proposal.args, {
           proposedBy: proposal.by,
           expect: proposal.touched,
+          unchanged: proposal.before,
           within: () => settlement.within(),
         });
       } catch (error) {

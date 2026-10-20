@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_LINK_LENGTH } from '../../shared/ipc';
+import { toFile } from '../../shared/model/file';
+import type { RunContext } from '../../shared/run';
 import { createCore } from './core';
 import type { Core } from './core';
 import { mintTrustedPath } from './host';
@@ -166,6 +168,25 @@ describe.each(['link.open', 'link.reveal'] as const)('%s arguments', (op) => {
 });
 
 describe('window.get', () => {
+  it('lists the current running state when two journal saves have the same timestamp', async () => {
+    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
+    for (const running of [true, false, true]) {
+      await core.channels.call(7, 'run:save', [
+        context.token,
+        {
+          version: 2,
+          state: JSON.stringify({ version: 2, run: { running } }),
+          messages: '[]',
+          updatedAt: 1234,
+        },
+        toFile({ id: context.id, arrange: false, nodes: [], links: [] }),
+      ]);
+      const listed = await core.call('canvas.list', {}, SEVEN);
+      expect(listed.ok).toBe(true);
+      if (!listed.ok) throw new Error(listed.error.sentence);
+      expect(listed.value.items.find((item) => item.canvas === context.id)?.running).toBe(running);
+    }
+  });
   it('returns the calling window’s canvas, restoring it on its first call', async () => {
     const first = await core.call('window.get', {}, SEVEN);
     const context = await core.channels.call(7, 'run:get', []);

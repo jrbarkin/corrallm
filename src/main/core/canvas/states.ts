@@ -103,8 +103,8 @@ export class CanvasStates {
   /** The canvases being followed, until they are. */
   readonly #following = new Map<CanvasId, Promise<Feed>>();
   readonly #listeners = new Set<StatesListener>();
-  /** Each canvas's run, as last journaled: when, and whether it was running. */
-  readonly #runs = new Map<CanvasId, { at: number; running: boolean }>();
+  /** Each canvas's run as last read, invalidated by every journal save, not its wall-clock time. */
+  readonly #runs = new Map<CanvasId, boolean>();
   readonly #stop: () => void;
   #closed = false;
 
@@ -222,6 +222,12 @@ export class CanvasStates {
   listChanged(): void {
     if (this.#closed) return;
     for (const listener of this.#listeners) listener.list?.();
+  }
+
+  /** The journal wrote this canvas: its timestamp can equal the preceding save's. */
+  runChanged(canvas: CanvasId): void {
+    this.#runs.delete(canvas);
+    this.listChanged();
   }
 
   close(): void {
@@ -378,18 +384,16 @@ export class CanvasStates {
 
   /**
    * Whether each canvas's run is running, as last journaled: its saved run state's (B9 Design §7,
-   * until B11), read again only for a run journaled since it last was.
+   * until B11), read again after every journal notification.
    */
   #running(): Map<CanvasId, boolean> {
     const { store } = this.#deps;
     const running = new Map<CanvasId, boolean>();
-    for (const { canvas_id: id, updated_at: at } of store
-      .prepare('SELECT canvas_id, updated_at FROM run')
-      .all()) {
+    for (const { canvas_id: id } of store.prepare('SELECT canvas_id FROM run').all()) {
       const canvas = String(id) as CanvasId;
       const known = this.#runs.get(canvas);
-      if (known?.at === Number(at)) {
-        running.set(canvas, known.running);
+      if (known !== undefined) {
+        running.set(canvas, known);
         continue;
       }
       const state = store
@@ -399,7 +403,7 @@ export class CanvasStates {
         )
         .get(canvas);
       const now = state?.running === 1;
-      this.#runs.set(canvas, { at: Number(at), running: now });
+      this.#runs.set(canvas, now);
       running.set(canvas, now);
     }
     return running;
