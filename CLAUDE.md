@@ -559,7 +559,9 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      one as a group through api.canvasInsertTemplate (model/insert.ts in the core,
                      which fills fields and mints every id); New calls api.canvasCreate with the
                      template and choices, making the template the canvas itself, retaining its node
-                     ids, with no enclosing group and no project folder inherited.
+                     ids, with no enclosing group and no project folder inherited. It leaves the
+                     previous canvas open, keeping its unsaved work and folder; creating another
+                     template therefore needs no discard confirmation.
 src/renderer/agent/  The agent view (AgentView.tsx), opened full-screen from an agent on the canvas:
                      the agent's native questions and queue,
                      showing live manual submissions as read-only Message rows (model/queue.ts'

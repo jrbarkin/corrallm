@@ -485,12 +485,6 @@ it('does not leave a viewport fit queued for the first node of an empty restored
 });
 
 it('keeps nested group cards inside the new frame through a reparenting operation', async () => {
-  const bounds = HTMLElement.prototype.getBoundingClientRect;
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    return this.classList.contains('react-flow') ? new DOMRect(0, 0, 1000, 800) : bounds.call(this);
-  });
   const doc: CanvasDocument = { id: newCanvasId(), arrange: false, links: [], nodes: [] };
   const canvas = fakeCanvas(doc);
   cleanups.push(() => {
@@ -499,6 +493,9 @@ it('keeps nested group cards inside the new frame through a reparenting operatio
   const view = render(
     <GraphEditor canvas={doc.id} client={canvas.core.api} mirror={canvas.core.topics} />,
   );
+  const flow = view.container.querySelector<HTMLElement>('.react-flow');
+  if (!flow) throw new Error('No flow');
+  vi.spyOn(flow, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1000, 800));
   const pane = view.container.querySelector('.react-flow__pane');
   if (!pane) throw new Error('No pane');
   const pointer = (type: string, x: number, y: number) => {
@@ -605,6 +602,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
   await called(view.core);
   expect(view.core.operations[0]?.op).toBe('canvas.create');
+  expect(view.core.operations[0]?.args).not.toHaveProperty('replace');
   await waitFor(() => {
     expect(view.document.id).not.toBe(view.canvas);
   });
