@@ -1986,6 +1986,30 @@ describe('GraphEditor', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
+    it('creates another template canvas with no folder after choosing the first canvas’s folder', async () => {
+      const files = {
+        ...fakeFiles(),
+        chooseProject: vi
+          .fn<NonNullable<CanvasFiles['chooseProject']>>()
+          .mockResolvedValue({ name: 'app', path: '/work/app' }),
+      };
+      const { nodes } = await setup(undefined, files);
+      const create = async (name: string) => {
+        await events.click(button('Templates…'));
+        const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+        await events.click(await gallery.findByRole('button', { name: new RegExp(`^${name}`) }));
+        await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
+        await screen.findByRole('button', { name: 'Choose a project folder' });
+      };
+      await create('Independent cross-check');
+      await events.click(button('Choose a project folder'));
+      await screen.findByRole('button', { name: 'Project folder: app' });
+      await create('Review loop');
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(files.forget).not.toHaveBeenCalled();
+      expect(nodes().map((node) => node.textContent)).toContain('Reviewer');
+    });
+
     it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
       const files = {
         ...fakeFiles({

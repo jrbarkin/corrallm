@@ -212,6 +212,17 @@ describe('canvas.create', () => {
     expect(spec).not.toHaveProperty('by');
   });
 
+  it('keeps the first template canvas and its folder when showing a new template canvas', async () => {
+    const { canvas: first } = await applied('canvas.create', { template: TEMPLATE });
+    answers.folder.push(profile);
+    await applied('project.choose', { canvas: first });
+    const { canvas: second } = await applied('canvas.create', { template: TEMPLATE });
+    expect(await listed()).toMatchObject({
+      [String(first)]: { open: true, edited: true, project: { path: profile }, shownIn: [] },
+      [String(second)]: { open: true, edited: true, project: null, shownIn: [1] },
+    });
+  });
+
   it('refuses a template there isn’t, or choices it doesn’t have, making nothing', async () => {
     const before = Object.keys(await listed());
     expect(

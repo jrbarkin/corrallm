@@ -878,33 +878,30 @@ function Editor({
         });
       },
       /** Opens a template as a new canvas, saved nowhere yet, as `choices` fill it in. */
-      example: (template: string, choices: TemplateChoices, edited: boolean) => {
-        unless(edited, () => {
-          const create = async () => {
-            const result = await api.canvasCreate({
-              template,
-              values: choices.values,
-              agents: Object.fromEntries(
-                Object.entries(choices.agents).flatMap(([key, value]) =>
-                  value === undefined ? [] : [[key, value]],
-                ),
+      example: (template: string, choices: TemplateChoices) => {
+        const create = async () => {
+          const result = await api.canvasCreate({
+            template,
+            values: choices.values,
+            agents: Object.fromEntries(
+              Object.entries(choices.agents).flatMap(([key, value]) =>
+                value === undefined ? [] : [[key, value]],
               ),
-              connections: choices.connections,
-              replace: { canvas: binding.canvas, discard: true },
-            });
-            if ('canvas' in result) load(result.canvas as CanvasId);
-          };
-          if (persistence) {
-            runStore.pause();
-            void persistence
-              .prepareForReplacement()
-              .then(() => persistence.transition(create, true))
-              .then(() => {
-                setRestoreFailed(false);
-                persistence.changed();
-              }, failed('open the template'));
-          } else void create().catch(failed('open the template'));
-        });
+            ),
+            connections: choices.connections,
+          });
+          if ('canvas' in result) load(result.canvas as CanvasId);
+        };
+        if (persistence) {
+          runStore.pause();
+          void persistence
+            .prepareForReplacement()
+            .then(() => persistence.transition(create, true))
+            .then(() => {
+              setRestoreFailed(false);
+              persistence.changed();
+            }, failed('open the template'));
+        } else void create().catch(failed('open the template'));
       },
       /** Asks for the folder the canvas's agents work in. */
       chooseProject:
@@ -1670,7 +1667,7 @@ function Editor({
             onPick={(template, choices, use) => {
               setGallery(false);
               if (use === 'new') {
-                commands?.example(template.id, choices, edited);
+                commands?.example(template.id, choices);
                 return;
               }
               perform(
