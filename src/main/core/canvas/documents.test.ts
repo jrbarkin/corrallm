@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
-import type { CanvasDocument } from '../../../shared/model/canvas';
+import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
@@ -437,6 +437,42 @@ describe('a canvas’s document', () => {
     });
     expect(built).toEqual(['Team, Lead, One']);
     expect(changed.committed?.rev).toBe(3);
+  });
+
+  it('refuses a change its rows can’t hold, writing nothing', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    const [team, lead, worker] = document.nodes as [CanvasNode, CanvasNode, CanvasNode];
+    // The worker made a frame, its link to the lead kept.
+    const framed: CanvasDocument = {
+      ...document,
+      nodes: [team, lead, { ...worker, type: 'frame', data: { label: 'Worker' } }],
+    };
+    // The lead put in a frame that comes after it.
+    const crew: CanvasNode = {
+      id: 'crew',
+      type: 'frame',
+      position: { x: 0, y: 0 },
+      data: { label: 'Crew' },
+    };
+    const misordered: CanvasDocument = {
+      ...document,
+      nodes: [team, { ...lead, parentId: 'crew' }, worker, crew],
+    };
+    for (const [next, fault] of [
+      [framed, 'link/lead/worker: one of its agents isn’t there'],
+      [misordered, 'node/lead: it comes before its parent'],
+    ] as const) {
+      await expect(commit(canvas, next)).rejects.toMatchObject({
+        code: 'invalid',
+        message: `That change can’t be kept: ${fault}.`,
+      });
+    }
+    expect(documents.live(canvas)).toMatchObject({ document, rev: 1 });
+    expect(count('revision', canvas)).toBe(1);
+    await restart();
+    expect((await documents.load(canvas)).document).toEqual(document);
   });
 
   it('removes what goes, items before what holds them and nodes before their parents', async () => {

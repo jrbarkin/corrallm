@@ -6,7 +6,7 @@ import { EXAMPLES } from '../examples';
 import type { AgentNode, CanvasDocument, CanvasNode } from './canvas';
 import { fromFile, toFile } from './file';
 import type { QueueItem } from './queue';
-import { diffRows, fromRows, itemKey, linkKey, META, nodeKey, toRows } from './rows';
+import { diffRows, fromRows, itemKey, linkKey, META, nodeKey, rowsFault, toRows } from './rows';
 import type { ItemRow, LinkRow, NodeRow, Rows } from './rows';
 
 /*
@@ -346,6 +346,84 @@ describe('toRows and fromRows', () => {
     const rows: Record<string, unknown> = { ...toRows(queued([message('one')])) };
     breakIt(rows);
     expect(() => fromRows(ID, rows as Rows)).toThrow(error);
+  });
+});
+
+describe('rowsFault', () => {
+  it('finds nothing in a canvas its rows hold: every shipped template, and everything a canvas may hold', () => {
+    for (const example of EXAMPLES) {
+      expect(rowsFault(fromFile(example.text, TEST_CATALOG, 'claude-code')), example.name).toBe(
+        undefined,
+      );
+    }
+    expect(rowsFault(everything)).toBeUndefined();
+  });
+
+  const frame = (id: string, parentId?: string): CanvasNode => ({
+    id,
+    type: 'frame',
+    position: { x: 0, y: 0 },
+    ...(parentId === undefined ? {} : { parentId }),
+    data: { label: id },
+  });
+  const [a, b] = queued([]).nodes as [AgentNode, AgentNode];
+  it.each<[string, CanvasDocument, string]>([
+    [
+      'two nodes of one id',
+      { ...queued([]), nodes: [a, b, { ...b, data: { label: 'B again' } }] },
+      'node/b: two nodes have this id',
+    ],
+    [
+      'a node inside one that isn’t there',
+      { ...queued([]), nodes: [a, { ...b, parentId: 'gone' }] },
+      'node/b: its parent isn’t there',
+    ],
+    [
+      'a node before the one it is inside',
+      { ...queued([]), nodes: [{ ...a, parentId: 'f' }, b, frame('f')] },
+      'node/a: it comes before its parent',
+    ],
+    [
+      'a node inside itself',
+      { ...queued([]), nodes: [frame('f', 'f'), a, b] },
+      'node/f: it comes before its parent',
+    ],
+    [
+      'a link to what is no agent',
+      { ...queued([]), nodes: [a, frame('b')], links: [{ source: 'a', target: 'b' }] },
+      'link/a/b: one of its agents isn’t there',
+    ],
+    [
+      'a link to an agent that isn’t there',
+      { ...queued([]), links: [{ source: 'a', target: 'gone' }] },
+      'link/a/gone: one of its agents isn’t there',
+    ],
+    [
+      'a link from an agent to itself',
+      { ...queued([]), links: [{ source: 'a', target: 'a' }] },
+      'link/a/a: it links an agent to itself',
+    ],
+    [
+      'two links between the same agents',
+      {
+        ...queued([]),
+        links: [
+          { source: 'a', target: 'b' },
+          { source: 'b', target: 'a' },
+        ],
+      },
+      'link/a/b: the agents are linked twice',
+    ],
+    [
+      'two items of one id in a queue, at any depth',
+      queued([
+        message('one'),
+        { id: 'if', if: { kind: 'failed' }, then: [{ id: 'one', message: 'one' }] },
+      ]),
+      'item/a/one: two items of its queue have this id',
+    ],
+  ])('finds what keeps a canvas from its rows: %s', (_label, document, fault) => {
+    expect(rowsFault(document)).toBe(fault);
   });
 });
 

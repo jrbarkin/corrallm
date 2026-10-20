@@ -237,6 +237,46 @@ export function fromRows(id: CanvasId, rows: Rows): CanvasDocument {
   return { id, arrange, nodes, links };
 }
 
+/**
+ * What keeps `document` from the rows it would be kept in, which would read back as another
+ * document (fromRows), naming the row: two nodes of one id, a node inside one that isn't there or
+ * that comes after it, a link to what is no agent, from an agent to itself or between agents linked
+ * already, two items of one id in a queue. Undefined if nothing does.
+ */
+export function rowsFault(document: CanvasDocument): string | undefined {
+  const kinds = new Map<string, CanvasNode['type']>();
+  for (const node of document.nodes) {
+    const key = nodeKey(node.id);
+    if (kinds.has(node.id)) return `${key}: two nodes have this id`;
+    if (node.parentId !== undefined && !kinds.has(node.parentId)) {
+      return document.nodes.some((one) => one.id === node.parentId)
+        ? `${key}: it comes before its parent`
+        : `${key}: its parent isn’t there`;
+    }
+    kinds.set(node.id, node.type);
+  }
+  const linked = new Set<EntityKey>();
+  for (const { source, target } of document.links) {
+    const key = linkKey(source, target);
+    if (kinds.get(source) !== 'agent' || kinds.get(target) !== 'agent') {
+      return `${key}: one of its agents isn’t there`;
+    }
+    if (source === target) return `${key}: it links an agent to itself`;
+    if (linked.has(key)) return `${key}: the agents are linked twice`;
+    linked.add(key);
+  }
+  for (const node of document.nodes) {
+    if (node.type !== 'agent') continue;
+    const ids = new Set<string>();
+    for (const item of everyItemOf(node.data.queue ?? [])) {
+      if (ids.has(item.id))
+        return `${itemKey(node.id, item.id)}: two items of its queue have this id`;
+      ids.add(item.id);
+    }
+  }
+  return undefined;
+}
+
 /** What holds no items says so as: */
 const HOLDERS: Record<Exclude<ItemKind, 'if' | 'repeat'>, string> = {
   step: 'a step',

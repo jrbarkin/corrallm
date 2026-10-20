@@ -16,6 +16,7 @@ import {
   linkKey,
   META,
   nodeKey,
+  rowsFault,
   toRows,
 } from '../../../shared/model/rows';
 import type {
@@ -30,6 +31,7 @@ import type {
 } from '../../../shared/model/rows';
 import type { CanvasMemory } from '../../memory';
 import { writeWhole } from '../../whole-file';
+import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
 import type { Database } from '../store/store';
 import { changeSetOf } from './change';
@@ -44,7 +46,8 @@ import type { ChangeSet } from './change';
  * them (B9's file reviews will say so). A draft is kept once it holds something.
  *
  * An op changes a loaded document (`change`, B9 Design §3): what it builds from the live document is
- * diffed by reference against it (diffRows), checked (expect, the change rules) and committed
+ * diffed by reference against it (diffRows), refused if its rows couldn't hold it (rowsFault: they
+ * would read back as another document), checked (expect, the change rules) and committed
  * write-through, past its point of no return once its write is queued: what it changed, entity by
  * entity, is written in one write of the database's lane with the revision it takes (the
  * document's next) and what it was, and the live document is the changed one only once that write
@@ -244,6 +247,9 @@ export class Documents {
       if (next.id !== canvas) throw new Error(ANOTHER);
       const rows = diffRows(live.rows, next, live.document);
       if (rows.changed.length === 0) return { result };
+      const fault = rowsFault(next);
+      if (fault !== undefined)
+        throw new OpFailure('invalid', `That change can’t be kept: ${fault}.`);
       const set = changeSetOf(live, next, rows, change.revision, copies);
       change.check(set, live);
       change.committing();
