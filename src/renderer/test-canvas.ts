@@ -8,6 +8,7 @@ import { diffRows } from '../shared/model/rows';
 import type { Entities, Entity, MetaEntity } from '../shared/model/state';
 import * as S from '../shared/model/structure';
 import * as Q from '../shared/model/queue-ops';
+import * as A from '../shared/model/agent-ops';
 import type { QueueChange, QueueEntry } from '../shared/model/queue';
 import { arrange } from '../shared/model/layout';
 import { insert } from '../shared/model/insert';
@@ -70,28 +71,35 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.respond('window.get', { canvas: next.id });
   };
   open(initial);
-  core.reply('canvas.create', (raw) => {
+  const create = (raw: unknown) => {
     const args = OPS['canvas.create'].input.parse(raw);
     const example = args.template === undefined ? undefined : exampleOf(args.template);
-    if (!example) throw new Error('No test template');
-    const part = withConnections(
-      withAgents(
-        fillTemplate(fromFile(example.text, catalog(), DEFAULT_AGENT), args.values ?? {}),
-        args.agents ?? {},
-        { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
-      ),
-      args.connections ?? {},
-      { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
-    );
+    if (args.template !== undefined && !example) throw new Error('No test template');
+    const part = !example
+      ? emptyCanvas()
+      : withConnections(
+          withAgents(
+            fillTemplate(fromFile(example.text, catalog(), DEFAULT_AGENT), args.values ?? {}),
+            args.agents ?? {},
+            { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+          ),
+          args.connections ?? {},
+          { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+        );
     meta.name = null;
     meta.project = null;
     open({ ...part, id: newCanvasId() }, true);
     return Promise.resolve({
-      ok: true,
+      ok: true as const,
       value: { canvas: document.id, revs: { [`canvas:${document.id}`]: rev } },
     });
-  });
+  };
+  core.reply('canvas.create', create);
   const ops: GuiOp[] = [
+    'agent.setType',
+    'agent.setConnection',
+    'agent.setSettings',
+    'agent.setRole',
     'queue.add',
     'queue.remove',
     'queue.move',
@@ -113,6 +121,45 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.reply(op, (raw) => {
       let built: S.Built<unknown>;
       switch (op) {
+        case 'agent.setType': {
+          const args = OPS[op].input.parse(raw);
+          const next = A.setType(document, args, {
+            catalog: catalog(),
+            defaultAdapter: DEFAULT_AGENT,
+          });
+          built =
+            args.connection === undefined
+              ? next
+              : A.setConnection(
+                  next.next,
+                  { agent: args.agent, connection: args.connection },
+                  { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+                );
+          break;
+        }
+        case 'agent.setConnection': {
+          const args = OPS[op].input.parse(raw);
+          built = A.setConnection(document, args, {
+            catalog: catalog(),
+            defaultAdapter: DEFAULT_AGENT,
+          });
+          break;
+        }
+        case 'agent.setSettings': {
+          const args = OPS[op].input.parse(raw);
+          built = A.setSettings(document, {
+            ...args,
+            change: Object.fromEntries(
+              Object.entries(args.settings).filter(([, value]) => value !== undefined),
+            ),
+          });
+          break;
+        }
+        case 'agent.setRole': {
+          const args = OPS[op].input.parse(raw);
+          built = A.setRole(document, args);
+          break;
+        }
         case 'queue.add': {
           const { agent, entry, into } = OPS[op].input.parse(raw);
           const made = Q.add(
@@ -236,6 +283,7 @@ export function fakeCanvas(initial: CanvasDocument) {
     });
   return {
     core,
+    create,
     open,
     get document() {
       return document;

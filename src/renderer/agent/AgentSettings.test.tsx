@@ -7,7 +7,9 @@ import { MAX_LABEL } from '../../shared/api/limits';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import type { AgentConnection } from '../graph/agents';
-import { setAgent, setConnection, setRole } from '../graph/graph';
+import * as AgentOps from '../../shared/model/agent-ops';
+import { catalog } from '../catalog';
+import { DEFAULT_AGENT } from '../graph/agents';
 import type { CanvasId } from '../../shared/canvas';
 import type { AgentNode } from '../../shared/model/canvas';
 import { AgentSettingsPanel, AgentSettingsSummary } from './AgentSettings';
@@ -59,14 +61,18 @@ function Editor({
     onRole(role);
     setNode(
       (current) =>
-        (setRole(asDoc(current), current.id, role).nodes[0] as AgentNode | undefined) ?? current,
+        (AgentOps.setRole(asDoc(current), { agent: current.id, role }).next.nodes[0] as
+          AgentNode | undefined) ?? current,
     );
   };
   const changeAgent = (next: AdapterId, connection: AgentConnection) => {
     setNode(
       (current) =>
-        (setConnection(setAgent(asDoc(current), current.id, next), current.id, connection)
-          .nodes[0] as AgentNode | undefined) ?? current,
+        (AgentOps.setType(
+          asDoc(current),
+          { agent: current.id, adapter: next, connection },
+          { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
+        ).next.nodes[0] as AgentNode | undefined) ?? current,
     );
   };
   const changeSettings = (cli: AdapterId, settings: AgentSettings) => {

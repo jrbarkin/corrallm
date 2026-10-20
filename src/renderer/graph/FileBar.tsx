@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 import type { ProjectFolder } from '../../shared/ipc';
@@ -7,22 +6,19 @@ import { SHORTCUTS } from './keys';
 /**
  * The canvas's file: its name (and whether it has changes not saved), with New, Open, Save, Save
  * As and the examples, and (given `project`) the folder its agents work in, which a click
- * changes, with `extra` beside it (the usage gauges). Below it, a question before unsaved changes
- * are discarded (`discarding`), or why the last open or save failed (`problem`).
+ * changes, with `extra` beside it (the usage gauges). Below it, why the last open or save failed
+ * (`problem`).
  */
 export function FileBar({
   name,
   edited,
   project,
   problem,
-  discarding,
   onNew,
   onOpen,
   onSave,
   onSaveAs,
   onExamples,
-  onDiscard,
-  onKeep,
   onDismiss,
   extra,
 }: {
@@ -32,15 +28,11 @@ export function FileBar({
   /** The folder the canvas's agents work in (null: none chosen yet), and what chooses another. */
   project?: { folder: ProjectFolder | null; onChoose: () => void };
   problem: string | undefined;
-  discarding: boolean;
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
   onExamples: () => void;
-  onDiscard: () => void;
-  /** Keeps the unsaved changes: what would have discarded them does not happen. */
-  onKeep: () => void;
   onDismiss: () => void;
   /** Shown beside the project folder. */
   extra?: ReactNode;
@@ -91,7 +83,6 @@ export function FileBar({
         )}
         {extra}
       </div>
-      {discarding && <DiscardQuestion name={name} onDiscard={onDiscard} onKeep={onKeep} />}
       {problem !== undefined && (
         <p className="graph-file-problem graph-panel" role="alert">
           {problem}
@@ -100,43 +91,6 @@ export function FileBar({
           </button>
         </p>
       )}
-    </div>
-  );
-}
-
-function DiscardQuestion({
-  name,
-  onDiscard,
-  onKeep,
-}: {
-  name: string | undefined;
-  onDiscard: () => void;
-  onKeep: () => void;
-}) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onKeep();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [onKeep]);
-  return (
-    <div
-      className="graph-file-discard graph-panel"
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Discard unsaved changes?"
-    >
-      <p>{name ?? 'This canvas'} has changes that are not saved.</p>
-      <button type="button" onClick={onDiscard}>
-        Discard
-      </button>
-      {/* Focused: the safe answer is the one Enter gives. */}
-      <button type="button" autoFocus onClick={onKeep}>
-        Cancel
-      </button>
     </div>
   );
 }

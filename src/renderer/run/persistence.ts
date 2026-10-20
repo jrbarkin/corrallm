@@ -1,30 +1,23 @@
-import { refreshOnConflict } from '../api/conflicts';
-import type { RunCheckpoint, RunContext } from '../../shared/run';
+import type { CanvasId } from '../../shared/canvas';
+import type { RunCheckpoint, RunRestore } from '../../shared/run';
 
 /**
  * The core owns storage, the canvas's document and native conversation identity; the renderer
- * supplies queue metadata, and its edits to the document until they are operations of their own.
+ * supplies run metadata only. Document gestures use operations.
  */
 export interface RunSource {
-  get: () => Promise<RunContext>;
-  save: (
-    token: string,
-    checkpoint: RunCheckpoint | null,
-    document: string,
-    rev: number,
-  ) => Promise<number>;
+  get: () => Promise<RunRestore>;
+  save: (token: string, checkpoint: RunCheckpoint | null) => Promise<unknown>;
   ready: (request: string, error: string | null) => Promise<null>;
   onStopping: (listener: (request: string) => void) => () => void;
 }
 
 interface Owner {
   capture: () => RunCheckpoint;
-  /** The canvas as the renderer has it: its file's text. */
-  document: () => string;
-  revision: () => number;
-  refresh: () => Promise<void>;
+  /** Reset view/run stores and await the new canvas's mirror before reading its checkpoint. */
+  open: (canvas: CanvasId) => Promise<void>;
   beforeSave?: () => Promise<void>;
-  restore: (context: RunContext) => void | Promise<void>;
+  restore: (context: RunRestore) => void | Promise<void>;
   freeze: () => void | Promise<void>;
   error: (error: unknown) => void;
 }
@@ -32,8 +25,8 @@ interface Owner {
 /** Serial checkpoint writes and an acknowledged freeze before main closes native sessions. */
 export class RunPersistence {
   #token: string | undefined;
-  #context: Promise<RunContext> | undefined;
-  #loading: Promise<RunContext> | undefined;
+  #context: Promise<RunRestore> | undefined;
+  #loading: Promise<RunRestore> | undefined;
   #writes: Promise<unknown> = Promise.resolve();
   #disposed = false;
   #last = '';
@@ -50,7 +43,7 @@ export class RunPersistence {
   }
 
   /** Starts hearing main again after cleanup, without restoring over current work. */
-  initialize(): Promise<RunContext> {
+  initialize(): Promise<RunRestore> {
     this.#disposed = false;
     const source = this.#source;
     const owner = this.#owner;
@@ -79,7 +72,7 @@ export class RunPersistence {
     return this.#load();
   }
 
-  #load(): Promise<RunContext> {
+  #load(): Promise<RunRestore> {
     this.#loading ??= (this.#context ??= this.#source.get())
       .then(async (context) => {
         if (this.#disposed) {
@@ -101,47 +94,8 @@ export class RunPersistence {
     return this.#loading;
   }
 
-  /** A rejected restore stays untouched until the user explicitly chooses another canvas. */
-  async prepareForReplacement(): Promise<void> {
-    try {
-      await this.flush();
-    } catch (error) {
-      if (!this.#failedInitialization) throw error;
-    }
-  }
-
   failedInitialization(): boolean {
     return this.#failedInitialization;
-  }
-
-  /**
-   * Call after main opens/saves/forgets a canvas: it rotates the storage generation. A flush asked
-   * for meanwhile (as main quits) waits for it, then saves under the new token.
-   */
-  async rebind(restore: boolean): Promise<RunContext> {
-    let release: (() => void) | undefined;
-    const before = this.#changing;
-    const changing = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    this.#changing = changing;
-    try {
-      await before;
-      await this.#writes.catch(() => undefined);
-      this.#token = undefined;
-      const context = await this.#source.get();
-      if (this.#disposed) return context;
-      if (restore) await this.#owner.restore(context);
-      this.#token = context.token;
-      this.#last = '';
-      this.#context = this.#loading = Promise.resolve(context);
-      this.#failedInitialization = false;
-      this.#failedBaseline = undefined;
-      return context;
-    } finally {
-      if (this.#changing === changing) this.#changing = undefined;
-      release?.();
-    }
   }
 
   changed(): void {
@@ -150,14 +104,14 @@ export class RunPersistence {
   }
 
   async flush(): Promise<void> {
+    while (this.#changing) await this.#changing;
     await this.#load();
     if (this.#owner.beforeSave) await this.#owner.beforeSave();
     while (this.#changing) await this.#changing;
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
     const checkpoint = this.#owner.capture();
-    const document = this.#owner.document();
-    const key = JSON.stringify([token, document, checkpoint.state, checkpoint.messages]);
+    const key = JSON.stringify([token, checkpoint.state, checkpoint.messages]);
     if (key === this.#last) {
       await this.#writes;
       return;
@@ -165,13 +119,7 @@ export class RunPersistence {
     this.#last = key;
     const write = this.#writes
       .catch(() => undefined)
-      .then(async () => {
-        await refreshOnConflict(
-          () =>
-            this.#source.save(token, checkpoint, this.#owner.document(), this.#owner.revision()),
-          this.#owner.refresh,
-        );
-      })
+      .then(() => this.#source.save(token, checkpoint))
       .catch((error: unknown) => {
         if (this.#last === key) this.#last = '';
         throw error;
@@ -180,64 +128,51 @@ export class RunPersistence {
     await write;
   }
 
-  /** A temporary whole-document edit, guarded by the revision it was built from. */
-  async editDocument(document: string, rev: number): Promise<number> {
-    await this.#load();
-    while (this.#changing) await this.#changing;
-    const token = this.#token;
-    if (this.#disposed || token === undefined) throw new Error('The run storage is not available.');
-    const write = this.#writes
-      .catch(() => undefined)
-      .then(() => this.#source.save(token, this.#owner.capture(), document, rev));
-    this.#writes = write;
-    return write;
-  }
-
-  /** Hold writes/sends across main's canvas-token change, without interrupting native work. */
-  async transition<T>(
-    action: () => Promise<T>,
-    restore: boolean | ((value: T) => boolean),
-    rejectedRestore?: () => Promise<unknown>,
-  ): Promise<T> {
-    let release: (() => void) | undefined;
+  /** Flush the old run, call one switching op, reset/bind its mirror, then restore its run. */
+  async switch(action: () => Promise<CanvasId | null>): Promise<void> {
     const before = this.#changing;
-    const changing = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    this.#changing = changing;
+    const done = Promise.withResolvers<void>();
+    this.#changing = done.promise;
     try {
       await before;
-      await this.#writes;
-      const result = await action();
-      const shouldRestore = typeof restore === 'function' ? restore(result) : restore;
-      let context: RunContext;
       try {
-        context = await this.#source.get();
-        if (shouldRestore) await this.#owner.restore(context);
-      } catch (error) {
-        // The selected file is already main's canvas. Detach it before the retained
-        // renderer state can save, then bind that state to the recovered draft.
-        if (shouldRestore && rejectedRestore) {
-          this.#token = undefined;
-          await rejectedRestore();
-          const recovered = await this.#source.get();
-          this.#token = recovered.token;
-          this.#last = '';
-          this.#context = this.#loading = Promise.resolve(recovered);
-          this.#failedInitialization = false;
-          this.#failedBaseline = undefined;
+        await this.#load();
+        await this.#owner.beforeSave?.();
+        // This switch owns the barrier; a public flush waits until the new token is installed.
+        if (this.#token && !this.#disposed) {
+          const token = this.#token,
+            checkpoint = this.#owner.capture();
+          this.#writes = this.#writes
+            .catch(() => undefined)
+            .then(() => this.#source.save(token, checkpoint));
+          await this.#writes;
         }
+      } catch (error) {
+        if (!this.#failedInitialization) throw error;
+      }
+      const canvas = await action();
+      if (canvas === null) return;
+      this.#token = undefined;
+      try {
+        await this.#owner.open(canvas);
+        const context = await this.#source.get();
+        if (this.#disposed) return;
+        await this.#owner.restore(context);
+        this.#token = context.token;
+        this.#last = '';
+        this.#context = this.#loading = Promise.resolve(context);
+        this.#failedInitialization = false;
+        this.#failedBaseline = undefined;
+      } catch (error) {
+        this.#failedInitialization = true;
+        this.#failedBaseline = contentsKey(this.#owner);
+        this.#context = this.#loading = Promise.reject(error);
+        void this.#loading.catch(() => undefined);
         throw error;
       }
-      this.#token = context.token;
-      this.#last = '';
-      this.#context = this.#loading = Promise.resolve(context);
-      this.#failedInitialization = false;
-      this.#failedBaseline = undefined;
-      return result;
     } finally {
-      if (this.#changing === changing) this.#changing = undefined;
-      release?.();
+      if (this.#changing === done.promise) this.#changing = undefined;
+      done.resolve();
     }
   }
 
@@ -250,5 +185,5 @@ export class RunPersistence {
 
 function contentsKey(owner: Owner): string {
   const { state, messages } = owner.capture();
-  return JSON.stringify([owner.document(), state, messages]);
+  return JSON.stringify([state, messages]);
 }

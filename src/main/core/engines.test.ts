@@ -119,20 +119,17 @@ describe('the core runs each canvas’s engine', () => {
     ]);
     expect(app.engines.opened()).toEqual([]);
     const checkpoint = context.checkpoint;
-    if (!checkpoint || context.document === undefined) throw new Error('Nothing was restored.');
-    const document = JSON.parse(context.document) as { nodes: { label: string }[] };
-    const worker = document.nodes[0];
-    if (!worker) throw new Error('No worker was restored.');
-    worker.label = 'Edited in renderer';
+    if (!checkpoint) throw new Error('Nothing was restored.');
     const edited = { ...checkpoint, updatedAt: Date.now() };
-    const snapshot = await app.call('canvas.get', { canvas: CANVAS }, asHuman(7));
-    if (!snapshot.ok) throw new Error(snapshot.error.sentence);
-    await app.channels.call(7, 'run:save', [
-      context.token,
-      edited,
-      JSON.stringify(document),
-      snapshot.value.rev,
-    ]);
+    const loaded = await app.call('canvas.get', { canvas: CANVAS }, asHuman(7));
+    if (!loaded.ok) throw new Error(loaded.error.sentence);
+    const renamed = await app.call(
+      'canvas.rename',
+      { canvas: CANVAS, node: 'worker', label: 'Edited in renderer', request: crypto.randomUUID() },
+      asHuman(7),
+    );
+    if (!renamed.ok) throw new Error(renamed.error.sentence);
+    await app.channels.call(7, 'run:save', [context.token, edited]);
     await app.close();
     core = undefined;
     expect(journaledRun(profile, CANVAS)).toEqual(edited);

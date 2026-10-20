@@ -8,7 +8,7 @@ import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
 import { fromFile } from '../../shared/model/file';
 import { GraphEditor } from '../test-graph';
-import type { CanvasFiles } from '../graph/GraphEditor';
+import type { CanvasFiles } from '../test-graph';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../../shared/engine/test-backend';

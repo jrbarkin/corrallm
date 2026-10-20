@@ -87,7 +87,16 @@ export class RunJournal {
   }
 
   /** What a window showing `canvas` restores: its run, its file's name and text, its folder. */
-  async get(canvas: CanvasId): Promise<RunContext> {
+  async get(
+    canvas: CanvasId,
+  ): Promise<
+    RunContext & {
+      name: string | null;
+      savedText?: string;
+      project?: { name: string; path: string };
+      warning?: string;
+    }
+  > {
     await this.flush();
     const entry = this.#entry(canvas);
     const row = this.#deps.store

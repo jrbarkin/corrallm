@@ -82,12 +82,12 @@ async function channel<C extends CoreChannel>(
   window: WindowLink,
   name: C,
   ...args: C extends 'run:save'
-    ? [string, RunCheckpoint | null, string]
+    ? [string, RunCheckpoint | null]
     : C extends 'canvas:save'
       ? [string, boolean]
       : IpcArgs<C>
-): Promise<C extends 'canvas:save' ? string | null : C extends 'run:save' ? null : IpcResult<C>> {
-  if (name === 'run:save' || name === 'canvas:save') {
+): Promise<C extends 'canvas:save' ? string | null : IpcResult<C>> {
+  if (name === 'canvas:save') {
     const own = await window.request('call', 'window.get', {});
     if (!own.ok || !own.value.ok) throw new Error('No window canvas');
     const state = await window.request('call', 'canvas.get', {
@@ -98,22 +98,14 @@ async function channel<C extends CoreChannel>(
   }
   const answer = await window.request('channel', name, args);
   if (!answer.ok) throw new Error(answer.error.message);
-  if (name === 'run:save' || name === 'canvas:save') {
+  if (name === 'canvas:save') {
     const result = answer.value as
       | { ok: true; value: { name?: string | null; rev: number } }
       | { ok: false; error: { sentence: string } };
     if (!result.ok) throw new Error(result.error.sentence);
-    return (name === 'canvas:save' ? (result.value.name ?? null) : null) as C extends 'canvas:save'
-      ? string | null
-      : C extends 'run:save'
-        ? null
-        : IpcResult<C>;
+    return (result.value.name ?? null) as C extends 'canvas:save' ? string | null : IpcResult<C>;
   }
-  return answer.value as C extends 'canvas:save'
-    ? string | null
-    : C extends 'run:save'
-      ? null
-      : IpcResult<C>;
+  return answer.value as C extends 'canvas:save' ? string | null : IpcResult<C>;
 }
 
 function events(window: WindowLink) {
@@ -316,7 +308,7 @@ describe('the app’s core and window channels', () => {
     const run = await channel(window, 'run:get');
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
     const empty = toFile({ id, arrange: false, nodes: [], links: [] });
-    await channel(window, 'run:save', run.token, checkpoint, empty);
+    await channel(window, 'run:save', run.token, checkpoint);
     await channel(window, 'session:start', 'a', {
       connection: 'codex.app-server',
       model: null,
@@ -362,7 +354,7 @@ describe('the app’s core and window channels', () => {
     await channel(eight, 'canvas:forget');
     const other = await channel(eight, 'run:get');
     const empty = toFile({ id, arrange: false, nodes: [], links: [] });
-    expect(await seven.request('channel', 'run:save', [other.token, null, empty, 0])).toEqual({
+    expect(await seven.request('channel', 'run:save', [other.token, null])).toEqual({
       ok: false,
       error: { message: 'This run belongs to an earlier canvas' },
     });
@@ -401,21 +393,35 @@ describe('the canvas’s document, which the core keeps', () => {
     const window = connect(7);
     const id = await channel(window, 'canvas:forget');
     const { token } = await channel(window, 'run:get');
-    await channel(window, 'run:save', token, checkpoint, canvasText(id));
+    await channel(window, 'run:save', token, checkpoint);
     dialogs.save = fileIn('team.corral');
     await expect(channel(window, 'canvas:save', canvasText(id), false)).resolves.toBe(
       'team.corral',
     );
-    await channel(window, 'run:save', token, checkpoint, canvasText(id, 'Head'));
+    await window.request('call', 'canvas.rename', {
+      canvas: id,
+      node: 'lead',
+      label: 'Head',
+      request: crypto.randomUUID(),
+    });
 
     const restarted = await restart();
-    const context = await channel(restarted.connect(7), 'run:get');
+    const restored = restarted.connect(7);
+    const context = await channel(restored, 'run:get');
+    expect(await restored.request('call', 'canvas.get', { canvas: id })).toMatchObject({
+      ok: true,
+      value: {
+        ok: true,
+        value: {
+          nodes: expect.arrayContaining([
+            expect.objectContaining({ data: expect.objectContaining({ label: 'Head' }) }),
+          ]),
+        },
+      },
+    });
 
     expect(context).toMatchObject({
       id,
-      name: 'team.corral',
-      document: canvasText(id, 'Head'),
-      savedText: canvasText(id),
       checkpoint,
     });
     expect(await readFile(fileIn('team.corral'), 'utf8')).toBe(canvasText(id));
@@ -463,7 +469,10 @@ describe('the canvas’s document, which the core keeps', () => {
     const window = connect(7);
     dialogs.open = fileIn('arranged.corral');
     await channel(window, 'canvas:open');
-    expect((await channel(window, 'run:get')).document).toBe(canvasText(id, 'Lead', true));
+    expect(await window.request('call', 'canvas.get', { canvas: id })).toMatchObject({
+      ok: true,
+      value: { ok: true, value: { arrange: true } },
+    });
   });
 
   it('refuses a file that isn’t a canvas, keeping the canvas shown, never taking the file as its', async () => {
@@ -471,7 +480,7 @@ describe('the canvas’s document, which the core keeps', () => {
     const window = connect(7);
     const id = await channel(window, 'canvas:forget');
     const before = await channel(window, 'run:get');
-    await channel(window, 'run:save', before.token, checkpoint, canvasText(id));
+    await channel(window, 'run:save', before.token, checkpoint);
     dialogs.save = fileIn('kept.corral');
     await channel(window, 'canvas:save', canvasText(id), false);
     await writeFile(fileIn('notes.corral'), 'Remember the milk');
@@ -500,15 +509,22 @@ describe('the canvas’s document, which the core keeps', () => {
     const { connect } = await app();
     const window = connect(7);
 
-    await expect(channel(window, 'run:get')).rejects.toThrow(
-      'broken.corral: This is not a corrallm canvas',
-    );
+    const failed = await window.request('call', 'canvas.get', { canvas: id });
+    expect(failed).toMatchObject({
+      ok: true,
+      value: {
+        ok: false,
+        error: {
+          sentence: expect.stringContaining('broken.corral: This is not a corrallm canvas'),
+        },
+      },
+    });
 
     const draft = await channel(window, 'canvas:forget');
     await expect(channel(window, 'run:get')).resolves.toMatchObject({ id: draft });
   });
 
-  it('commits the renderer’s document only when it changed, and never an earlier canvas’s', async () => {
+  it('journals no document revision and refuses an earlier canvas’s token', async () => {
     const { connect } = await app();
     const window = connect(7);
     const id = await channel(window, 'canvas:forget');
@@ -517,14 +533,14 @@ describe('the canvas’s document, which the core keeps', () => {
       readOnDisk(profile, (disk) =>
         disk.prepare('SELECT rev, op FROM revision WHERE canvas_id = ?').all(id),
       );
-    await channel(window, 'run:save', token, checkpoint, canvasText(id));
-    await channel(window, 'run:save', token, { ...checkpoint, updatedAt: 2 }, canvasText(id));
-    expect(revisions()).toEqual([{ rev: 1, op: 'canvas.edit' }]);
+    await channel(window, 'run:save', token, checkpoint);
+    await channel(window, 'run:save', token, { ...checkpoint, updatedAt: 2 });
+    expect(revisions()).toEqual([]);
 
     await channel(window, 'canvas:forget');
-    await expect(
-      channel(window, 'run:save', token, checkpoint, canvasText(id, 'Stale')),
-    ).rejects.toThrow('This run belongs to an earlier canvas');
-    expect(revisions()).toEqual([{ rev: 1, op: 'canvas.edit' }]);
+    await expect(channel(window, 'run:save', token, checkpoint)).rejects.toThrow(
+      'This run belongs to an earlier canvas',
+    );
+    expect(revisions()).toEqual([]);
   });
 });

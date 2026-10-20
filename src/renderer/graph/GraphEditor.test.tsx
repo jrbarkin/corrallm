@@ -20,7 +20,7 @@ import { automaticBackend, fakeBackend } from '../../shared/engine/test-backend'
 import type { UsageSource } from '../usage/store';
 import { fromFile, toFile } from '../../shared/model/file';
 import { GraphEditor } from '../test-graph';
-import type { CanvasFiles } from './GraphEditor';
+import type { CanvasFiles } from '../test-graph';
 import { PADDING } from '../../shared/model/geometry';
 import type { Graph, GraphNode } from './flow';
 import { documentOf, graphOf } from '../test-graph-data';
@@ -175,7 +175,7 @@ describe('GraphEditor', () => {
     const source = {
       get: vi
         .fn<RunSource['get']>()
-        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null, name: null }),
+        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null }),
       save: vi.fn<RunSource['save']>().mockResolvedValue(0),
       ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
       onStopping: (listener: (request: string) => void) => {
@@ -383,9 +383,7 @@ describe('GraphEditor', () => {
       get: vi.fn<RunSource['get']>().mockResolvedValue({
         id,
         token: 'saved',
-        name: 'saved.corral',
         checkpoint,
-        document: toFile(documentOf(saved, id)),
       }),
       save: vi.fn<RunSource['save']>().mockResolvedValue(0),
       ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
@@ -399,7 +397,7 @@ describe('GraphEditor', () => {
     const sessions = fakeBackend();
     const { container, unmount } = await renderReady(
       <StrictMode>
-        <GraphEditor runSource={source} sessionBackend={sessions.backend} />
+        <GraphEditor initialGraph={saved} runSource={source} sessionBackend={sessions.backend} />
       </StrictMode>,
     );
     const card = await screen.findByLabelText('Restored, Claude · SDK');
@@ -423,10 +421,8 @@ describe('GraphEditor', () => {
     await waitFor(() => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
     });
-    const [, stopped, canvas] = source.save.mock.calls.at(-1) ?? [];
-    expect(canvas && graphOf(fromFile(canvas, catalog(), DEFAULT_AGENT)).nodes[0]?.data.label).toBe(
-      'Shown',
-    );
+    const [, stopped] = source.save.mock.calls.at(-1) ?? [];
+    expect(source.save.mock.calls.every((args) => args.length === 2)).toBe(true);
     expect(stopped && readRun(stopped.state).run).toMatchObject({
       running: false,
       paused: true,
@@ -1735,7 +1731,7 @@ describe('GraphEditor', () => {
     expect(panel.queryByRole('option', { name: /Simulated/ })).toBeNull();
     await events.click(panel.getByRole('option', { name: /^Claude · Agent SDK/ }));
     expect(tag('a')).toBe('claude-code');
-    expect(panel.getByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
+    expect(await panel.findByRole('button', { name: 'Agent: Claude · Agent SDK' })).toBeTruthy();
   });
 
   it('opens only a double-clicked node that is part of a multi-selection', async () => {
@@ -2130,7 +2126,7 @@ describe('GraphEditor', () => {
         expect(document.title).toBe('team.corral — corrallm');
       });
       const [text, choose] = files.save.mock.calls[0] ?? [];
-      expect(choose).toBe(false);
+      expect(choose).toBe(true);
       expect(
         graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes.map((n) => n.data.label),
       ).toEqual(['Agent 1']);
@@ -2142,24 +2138,20 @@ describe('GraphEditor', () => {
       expect(files.save).toHaveBeenLastCalledWith(expect.any(String), false, expect.any(Number));
     });
 
-    it('opens a canvas file and starts new ones, asking before unsaved changes are lost', async () => {
+    it('opens a canvas and starts new ones while keeping the previous canvas open', async () => {
       const id = newCanvasId();
       const files = fakeFiles({ id, name: 'review.corral', text: toFile(documentOf(coder, id)) });
       const { pane, nodes } = await setup(undefined, files);
       await events.doubleClick(pane, { clientX: 200, clientY: 100 });
 
       await events.click(button('Open…'));
-      const ask = screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' });
-      await events.click(within(ask).getByRole('button', { name: 'Cancel' }));
-      expect(files.open).not.toHaveBeenCalled();
-      expect(nodes().map((n) => n.textContent)).toEqual(['Agent 1']);
-
-      await events.click(button('Open…'));
-      await events.click(button('Discard'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(files.open).toHaveBeenCalledOnce();
       await waitFor(() => {
         expect(nodes().map((n) => n.textContent)).toEqual(['Coder']);
       });
       expect(document.title).toBe('review.corral — corrallm');
+      expect(screen.getByRole('status').textContent).toContain('stays open with its changes');
 
       // Nothing to lose: New asks nothing, and the canvas is main's new draft.
       await events.click(button('New'));
@@ -2217,11 +2209,12 @@ describe('GraphEditor', () => {
     });
 
     it('shows the folder its agents work in, chooses another, and brings it back with the canvas', async () => {
+      const id = newCanvasId();
       const files = {
         ...fakeFiles({
-          id: newCanvasId(),
+          id,
           name: 'shop.corral',
-          text: toFile(documentOf(coder, newCanvasId())),
+          text: toFile(documentOf(coder, id)),
           project: { name: 'shop', path: '/work/shop' },
         }),
         chooseProject: vi
@@ -2401,7 +2394,6 @@ describe('GraphEditor', () => {
               id: replaced ? draft : before,
               token: replaced ? 'new-draft' : 'old',
               name: null,
-              ...(replaced ? {} : { document: toFile(documentOf(coder, before)) }),
               checkpoint: replaced
                 ? null
                 : {
@@ -2455,7 +2447,7 @@ describe('GraphEditor', () => {
       },
     );
 
-    it('sends the restored canvas’s id with its document from its first save, a draft’s too', async () => {
+    it('saves run checkpoints without sending a document, a restored canvas’s or a draft’s', async () => {
       const id = newCanvasId();
       const runSource = {
         get: vi.fn(() => Promise.resolve({ id, token: 'restored', checkpoint: null, name: null })),
@@ -2467,9 +2459,8 @@ describe('GraphEditor', () => {
       await waitFor(() => {
         expect(runSource.save).toHaveBeenCalled();
       });
-      expect(runSource.save.mock.calls.map(([, , document]) => canvasIdOf(document))).toEqual(
-        runSource.save.mock.calls.map(() => id),
-      );
+      expect(runSource.save.mock.calls.every((args) => args.length === 2)).toBe(true);
+      expect(runSource.save).toHaveBeenCalledWith('restored', expect.any(Object));
     });
 
     it('keeps the canvas, saving it under its own token, when the core refuses a file', async () => {
@@ -2482,16 +2473,15 @@ describe('GraphEditor', () => {
             id,
             token: 'kept',
             checkpoint: null,
-            name: 'kept.corral',
-            document: toFile(documentOf(coder, id)),
-            savedText: toFile(documentOf(coder, id)),
           }),
         ),
         save: vi.fn().mockResolvedValue(null),
         ready: vi.fn().mockResolvedValue(null),
         onStopping: () => () => undefined,
       };
-      const { container } = await renderReady(<GraphEditor files={files} runSource={runSource} />);
+      const { container } = await renderReady(
+        <GraphEditor initialGraph={coder} files={files} runSource={runSource} />,
+      );
       await waitFor(() => {
         expect(button('Open…').disabled).toBe(false);
       });

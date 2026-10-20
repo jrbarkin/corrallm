@@ -193,41 +193,24 @@ function createHandlers({
       parseArgs: noArgs,
       handler: async ({ window }) => {
         const canvas = await of(window);
-        const context = await runs.get(canvas);
-        const document = await documents.textOf(canvas);
-        return { ...context, ...(document === undefined ? {} : { document }) };
+        const { id, token, checkpoint, warning } = await runs.get(canvas);
+        return { id, token, checkpoint, notices: warning === undefined ? [] : [warning] };
       },
     },
     'run:save': {
       parseArgs: (args) => {
-        const [token, checkpoint, document, rev] = args;
-        if (
-          args.length !== 4 ||
-          !revision(rev) ||
-          typeof token !== 'string' ||
-          token.length > 100 ||
-          typeof document !== 'string'
-        ) {
-          throw new TypeError(
-            'Expected a canvas token, a run checkpoint, the canvas and its mirror revision',
-          );
+        const [token, checkpoint] = args;
+        if (args.length !== 2 || typeof token !== 'string' || token.length > 100) {
+          throw new TypeError('Expected a canvas token and a run checkpoint');
         }
-        return [
-          token,
-          checkpoint === null ? null : parseRunCheckpoint(checkpoint),
-          canvasText(document),
-          rev,
-        ];
+        return [token, checkpoint === null ? null : parseRunCheckpoint(checkpoint)];
       },
-      handler: ({ window }, token, checkpoint, document, expected) =>
-        edited(async () => {
-          const canvas = await of(window);
-          // Neither an earlier canvas's run nor its document.
-          runs.check(canvas, token);
-          const rev = await documents.edit(canvas, document, expected);
-          await runs.save(canvas, token, checkpoint);
-          return { rev };
-        }),
+      handler: async ({ window }, token, checkpoint) => {
+        const canvas = await of(window);
+        runs.check(canvas, token);
+        await runs.save(canvas, token, checkpoint);
+        return null;
+      },
     },
     'run:ready': {
       parseArgs: (args) => {

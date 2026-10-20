@@ -539,8 +539,8 @@ describe('run persistence preload', () => {
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
     await api.getRun();
     expect(channel).toHaveBeenLastCalledWith('run:get');
-    await api.saveRun('token', checkpoint, '{"canvas":true}', 1);
-    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint, '{"canvas":true}', 1);
+    await api.saveRun('token', checkpoint);
+    expect(channel).toHaveBeenLastCalledWith('run:save', 'token', checkpoint);
     await api.runReady('request', null);
     expect(channel).toHaveBeenLastCalledWith('run:ready', 'request', null);
     const listener = vi.fn();

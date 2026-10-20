@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react';
 
-import { canvasIdOf } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
 import { findProjectFiles } from './agent/completion';
 import { GraphEditor } from './graph/GraphEditor';
-import type { CanvasFiles } from './graph/GraphEditor';
 import { fromMain } from './ipc-error';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
 import type { TerminalBackend } from './terminal/backend';
-import { ApiError } from './api/bridge';
 import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
@@ -21,31 +18,12 @@ const runSource: RunSource = {
     const { canvas } = await api.windowGet();
     await topics.whenAt(`canvas:${canvas as CanvasId}`, 0);
     const context = await window.api.getRun();
-    return { ...context, id: canvas as CanvasId };
+    await topics.whenAt(`canvas:${context.id}`, 0);
+    return context;
   },
-  save: async (token, checkpoint, document, rev) => {
-    const result = await window.api.saveRun(token, checkpoint, document, rev);
-    if (!result.ok) throw new ApiError(result.error);
-    await topics.whenAt(`canvas:${canvasIdOf(document)}`, result.value.rev);
-    return result.value.rev;
-  },
+  save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),
-};
-
-/**
- * Canvases are opened and saved by the core process (src/main/canvas.ts), which also keeps the
- * folder their agents work in (src/main/project.ts).
- */
-const files: CanvasFiles = {
-  open: () => window.api.openCanvas(),
-  save: async (text, choose, rev) => {
-    const result = await window.api.saveCanvas(text, choose, rev);
-    if (!result.ok) throw new ApiError(result.error);
-    return result.value.name;
-  },
-  forget: () => window.api.forgetCanvas(),
-  chooseProject: () => window.api.chooseProject(),
 };
 
 /** Connected agents' sessions run in the core process (src/main/sessions/). */
@@ -140,7 +118,6 @@ export function App() {
       </header>
       <OpenLinkContext.Provider value={openLink}>
         <GraphEditor
-          files={files}
           sessionBackend={sessionBackend}
           terminalBackend={terminalBackend}
           usageSource={usageSource}

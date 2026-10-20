@@ -14,8 +14,6 @@ import { toFile } from '../../shared/model/file';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { GraphEditor } from './GraphEditor';
-import type { CanvasFiles } from './GraphEditor';
-import { ApiError } from '../api/bridge';
 
 const seen = vi.hoisted(() => ({
   props: undefined as ComponentProps<typeof ReactFlow> | undefined,
@@ -106,7 +104,8 @@ function setup({
   cleanups.push(() => {
     canvas.core.dispose();
   });
-  const save = vi.fn<CanvasFiles['save']>(() => Promise.resolve(null));
+  const save = vi.fn(() => Promise.resolve({ ok: true as const, value: { name: null, revs: {} } }));
+  canvas.core.reply('canvas.saveAs', save);
   const view = render(
     <GraphEditor
       canvas={doc.id}
@@ -118,23 +117,13 @@ function setup({
             runSource: {
               get: () =>
                 Promise.resolve({ id: doc.id, token: 'test', checkpoint: null, name: null }),
-              save: (_token: string, _checkpoint: unknown, text: string, rev: number) =>
-                canvas.edit(text, rev),
+              save: () => Promise.resolve(null),
               ready: () => Promise.resolve(null),
               onStopping: () => () => undefined,
             },
           }
         : {})}
-      {...(files
-        ? {
-            files: {
-              open: () => Promise.resolve(null),
-              save,
-              forget: () => Promise.resolve(newCanvasId()),
-              chooseProject: () => Promise.resolve(null),
-            },
-          }
-        : {})}
+      files={files}
     />,
   );
   return {
@@ -477,7 +466,7 @@ it('waits for a label operation and its mirror before saving from the file butto
   await waitFor(() => {
     expect(view.save).toHaveBeenCalledOnce();
   });
-  expect(view.save).toHaveBeenCalledWith(toFile(view.document), false, view.rev);
+  expect(view.save).toHaveBeenCalledWith({ canvas: view.canvas });
   expect(view.document.nodes[0]?.data.label).toBe('After');
 });
 
@@ -613,10 +602,25 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   fireEvent.click(button('Templates…'));
   const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
   fireEvent.click(await gallery.findByRole('button', { name: new RegExp(`^${example.name}`) }));
+  const agents: Record<string, string> = {},
+    connections: Record<string, string> = {};
+  for (const role of template.agents) {
+    const adapter = gallery.getByRole<HTMLSelectElement>('combobox', {
+      name: `${role.name}'s agent`,
+    }).value;
+    if (adapter) agents[role.id] = adapter;
+    connections[role.id] = gallery.getByRole<HTMLSelectElement>('combobox', {
+      name: `How ${role.name} runs`,
+    }).value;
+  }
   fireEvent.click(gallery.getByRole('button', { name: 'Create canvas' }));
   await called(view.core);
-  expect(view.core.operations[0]?.op).toBe('canvas.create');
-  expect(view.core.operations[0]?.args).not.toHaveProperty('replace');
+  expectOneOp(view.core, 'canvas.create', {
+    template: template.id,
+    values: Object.fromEntries(template.fields.map((field) => [field.key, field.example])),
+    agents,
+    connections,
+  });
   await waitFor(() => {
     expect(view.document.id).not.toBe(view.canvas);
   });
@@ -627,7 +631,7 @@ it('creates a template as the new canvas, retaining its node ids and choosing a 
   expect(button('Choose a project folder')).toBeDefined();
 });
 
-it('refreshes and retries a file save from the mirror after a concurrent core edit', async () => {
+it('saves the core’s live document with one operation after a concurrent edit', async () => {
   const view = setup({ files: true });
   view.save.mockImplementationOnce(async () => {
     await view.edit(
@@ -639,13 +643,13 @@ it('refreshes and retries a file save from the mirror after a concurrent core ed
       }),
       view.rev,
     );
-    throw new ApiError({ code: 'conflict', sentence: 'Changed before save' });
+    return { ok: true, value: { name: null, revs: {} } };
   });
   fireEvent.click(button('Save'));
   await waitFor(() => {
-    expect(view.save).toHaveBeenCalledTimes(2);
+    expect(view.save).toHaveBeenCalledOnce();
   });
-  expect(view.save).toHaveBeenLastCalledWith(toFile(view.document), false, view.rev);
+  expectOneOp(view.core, 'canvas.saveAs', { canvas: view.canvas });
   expect(view.document.nodes[0]?.data.label).toBe('Core edit');
 });
 

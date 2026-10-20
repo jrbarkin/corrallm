@@ -18,8 +18,8 @@ function stubApi(api: Partial<AppApi>) {
     windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
     getRun: vi
       .fn<AppApi['getRun']>()
-      .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
-    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue({ ok: true, value: { rev: 0 } }),
+      .mockResolvedValue({ id: canvas, token: 'test', checkpoint: null }),
+    saveRun: vi.fn<AppApi['saveRun']>().mockResolvedValue(null),
     runReady: vi.fn<AppApi['runReady']>().mockResolvedValue(null),
     onRunStopping: vi.fn<AppApi['onRunStopping']>(() => () => undefined),
     topicsSubscribe: vi.fn<AppApi['topicsSubscribe']>().mockResolvedValue({
@@ -109,12 +109,15 @@ describe('App', () => {
     const windowGet = vi
       .fn<AppApi['windowGet']>()
       .mockResolvedValue({ ok: true, value: { canvas: c } });
-    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue({ ok: true, value: { rev: 0 } });
+    const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
     stubApi({
       appInfo: vi
         .fn<AppApi['appInfo']>()
         .mockResolvedValue({ ok: true, value: { name: 'corrallm', version: '0.1.0' } }),
       windowGet,
+      getRun: vi
+        .fn<AppApi['getRun']>()
+        .mockResolvedValue({ id: c, token: 'test', checkpoint: null }),
       saveRun,
     });
     render(<App />);
@@ -122,10 +125,8 @@ describe('App', () => {
       expect(windowGet).toHaveBeenCalled();
     });
     await waitFor(() => {
-      const documents = saveRun.mock.calls.map(
-        ([, , document]) => JSON.parse(document) as { id: string },
-      );
-      expect(documents.at(-1)?.id).toBe(c);
+      expect(saveRun).toHaveBeenCalledWith('test', expect.any(Object));
+      expect(saveRun.mock.calls.every((args) => args.length === 2)).toBe(true);
     });
   });
 

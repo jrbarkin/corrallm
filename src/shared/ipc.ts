@@ -3,7 +3,7 @@ import type { OpResult } from './api/errors';
 import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
 import type { CanvasId } from './canvas';
 import type { GuiBridge } from './gui-link';
-import type { RunCheckpoint, RunContext } from './run';
+import type { RunCheckpoint, RunRestore } from './run';
 import type {
   FilesRewind,
   McpChange,
@@ -39,15 +39,14 @@ export interface IpcContract {
    */
   'core:connect': { args: []; result: null };
   /** Restore the current named canvas or durable draft, without starting an agent. */
-  'run:get': { args: []; result: RunContext };
+  'run:get': { args: []; result: RunRestore };
   /**
-   * Journals the run and commits the canvas's document as the renderer has it (its file's text),
-   * until its gestures are operations of their own. The core selects storage; the token rejects
-   * writes from an earlier canvas generation.
+   * Journals run metadata only. Document edits are operations; the token rejects writes from
+   * an earlier canvas generation.
    */
   'run:save': {
-    args: [token: string, checkpoint: RunCheckpoint | null, document: string, rev: number];
-    result: OpResult<{ rev: number }>;
+    args: [token: string, checkpoint: RunCheckpoint | null];
+    result: null;
   };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };

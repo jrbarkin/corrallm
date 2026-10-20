@@ -277,18 +277,23 @@ describe('the sender’s canvas', () => {
     expect(called.mock.calls[0]).toContain(CANVAS);
   });
 
-  it('is what run:get restores and run:save journals, its document with it', async () => {
-    services.documents.textOf.mockResolvedValue('{"its":"document"}');
-    await expect(invoke('run:get', [])).resolves.toMatchObject({
+  it('restores run identity and notices, and journals only the checkpoint', async () => {
+    services.runs.get.mockResolvedValue({
       id: CANVAS,
-      document: '{"its":"document"}',
+      token: 'canvas-token',
+      checkpoint: null,
+      name: null,
+      warning: 'Restored from a snapshot.',
     });
-    expect(services.runs.get).toHaveBeenCalledWith(CANVAS);
-    expect(services.documents.textOf).toHaveBeenCalledWith(CANVAS);
+    await expect(invoke('run:get', [])).resolves.toEqual({
+      id: CANVAS,
+      token: 'canvas-token',
+      checkpoint: null,
+      notices: ['Restored from a snapshot.'],
+    });
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
-    await invoke('run:save', ['canvas-token', checkpoint, '{"edited":true}', 1]);
-    expect(services.runs.check).toHaveBeenCalledWith(CANVAS, 'canvas-token');
-    expect(services.documents.edit).toHaveBeenCalledWith(CANVAS, '{"edited":true}', 1);
+    await invoke('run:save', ['canvas-token', checkpoint]);
+    expect(services.documents.edit).not.toHaveBeenCalled();
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
   });
 
@@ -296,9 +301,7 @@ describe('the sender’s canvas', () => {
     services.runs.check.mockImplementation(() => {
       throw new Error('This run belongs to an earlier canvas');
     });
-    await expect(invoke('run:save', ['stale', null, '{"edited":true}', 1])).rejects.toThrow(
-      'earlier canvas',
-    );
+    await expect(invoke('run:save', ['stale', null])).rejects.toThrow('earlier canvas');
     expect(services.documents.edit).not.toHaveBeenCalled();
     expect(services.runs.save).not.toHaveBeenCalled();
   });
@@ -822,7 +825,7 @@ describe('run journal channels', () => {
   it('uses the sender’s canvas and generation token, never a renderer-supplied path', async () => {
     const sender = 7;
     await expect(invoke('run:get', [], sender)).resolves.toMatchObject({ token: 'canvas-token' });
-    await invoke('run:save', ['canvas-token', checkpoint, '{}', 1], sender);
+    await invoke('run:save', ['canvas-token', checkpoint], sender);
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
     // The shutdown handshake is the window's.
     await invoke('run:ready', ['request', null], sender);
@@ -831,7 +834,7 @@ describe('run journal channels', () => {
   it.each([
     ['run:get', ['/a/path']],
     ['run:save', []],
-    ['run:save', ['t', checkpoint]],
+    ['run:save', ['t']],
     ['run:save', ['t', { ...checkpoint, file: '/a/path' }, '{}']],
     ['run:save', ['t', { ...checkpoint, state: 'broken' }, '{}']],
     ['run:save', ['t', { ...checkpoint, workflow: '{}' }, '{}']],
@@ -844,8 +847,6 @@ describe('run journal channels', () => {
   });
   it('surfaces a journal write error to the renderer', async () => {
     services.runs.save.mockRejectedValue(new Error('Disk full'));
-    await expect(invoke('run:save', ['canvas-token', checkpoint, '{}', 1])).rejects.toThrow(
-      'Disk full',
-    );
+    await expect(invoke('run:save', ['canvas-token', checkpoint])).rejects.toThrow('Disk full');
   });
 });

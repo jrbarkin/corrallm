@@ -19,16 +19,11 @@ export interface RunContext {
   id: CanvasId;
   token: string;
   checkpoint: RunCheckpoint | null;
-  name: string | null;
-  project?: { name: string; path: string };
-  /**
-   * The canvas's document as the core keeps it, as its file's text, edits since it was saved
-   * included: none for a draft that never held anything.
-   */
-  document?: string;
-  /** Its file's text, as saved. */
-  savedText?: string;
-  warning?: string;
+}
+
+/** Restore notices come from the core alongside the run, rather than document metadata. */
+export interface RunRestore extends RunContext {
+  notices?: readonly string[];
 }
 
 export const MAX_RUN_BYTES = 32 * 1024 * 1024;
