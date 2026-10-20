@@ -377,6 +377,107 @@ describe('a turn Codex ends without its Stop hook, as at a usage limit', () => {
     return events.find((event) => event.type === 'end');
   }
 
+  /** Its first end waits on usage while the user starts the next turn in Codex itself. */
+  async function pendingEnd() {
+    erring();
+    const reading = Promise.withResolvers<Awaited<ReturnType<UsageReader['read']>>>();
+    const entered = Promise.withResolvers<undefined>();
+    const usageReader = reader(100);
+    vi.spyOn(usageReader, 'read')
+      .mockResolvedValue(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => {
+        entered.resolve(undefined);
+        return reading.promise;
+      });
+    const session = await start(['prompts'], {}, { reader: usageReader, usage: () => undefined });
+    await session.send({ id: 'm1', text: 'Say hi in one word.' });
+    await entered.promise;
+    expect(ends()).toBe(0);
+    const run = runs[0];
+    if (!run) throw new Error('Codex did not start');
+    let output = '';
+    run.onData((data) => (output += data));
+    run.write(`${PASTE_START}Create a file named bye.txt containing the word bye.${PASTE_END}`);
+    run.write('\r');
+    await until(() => {
+      expect(output).toContain('Action Required');
+    });
+    return { session, run, reading };
+  }
+
+  function expectOrderedTurns() {
+    const firstEnd = events.findIndex((event) => event.type === 'end');
+    const nextUser = events.findIndex(
+      (event) => event.type === 'user' && event.text.startsWith('Create a file'),
+    );
+    expect(firstEnd).toBeGreaterThan(-1);
+    expect(nextUser).toBeGreaterThan(firstEnd);
+    // Codex may report working before its prompt hook, but only the first turn's status may
+    // precede the first end. None of the next turn's events may overtake that end.
+    expect(events.slice(0, firstEnd).filter((event) => event.type === 'status')).toEqual([
+      { type: 'status', status: 'working' },
+    ]);
+    expect(events.find((event) => event.type === 'end')).toMatchObject({ messages: ['m1'] });
+    expect(events.slice(firstEnd + 1)).toContainEqual({ type: 'status', status: 'working' });
+  }
+
+  it.each(['resolves', 'rejects'])(
+    'emits the old end before the next native turn’s events when its usage read %s',
+    async (outcome) => {
+      const { run, reading } = await pendingEnd();
+      if (outcome === 'rejects') reading.reject(new Error('Usage unavailable'));
+      else reading.resolve({ windows: {}, usedUp: FIVE_HOUR_RESET });
+      await until(() => {
+        expect(ends()).toBe(1);
+      });
+      expectOrderedTurns();
+      expect(events.find((event) => event.type === 'end')).toMatchObject({
+        result:
+          outcome === 'rejects'
+            ? { status: 'failed', reason: 'error' }
+            : { status: 'failed', reason: 'usage-limit', resetsAt: FIVE_HOUR_RESET },
+      });
+      run.write('y');
+      await until(() => {
+        expect(ends()).toBe(2);
+      });
+      const nativeUser = events.find(
+        (event) => event.type === 'user' && event.text.startsWith('Create a file'),
+      );
+      expect(events.filter((event) => event.type === 'end')[1]).toMatchObject({
+        messages: nativeUser?.type === 'user' ? [nativeUser.id] : [],
+        result: { status: 'completed', reason: 'completed' },
+      });
+    },
+  );
+
+  it('never holds the next turn past its own end or emits a late duplicate when usage stays pending', async () => {
+    const { run, reading } = await pendingEnd();
+    run.write('y');
+    await until(() => {
+      expect(ends()).toBe(2);
+    });
+    expectOrderedTurns();
+    expect(
+      events.filter((event) => event.type === 'end').map((event) => event.result.reason),
+    ).toEqual(['error', 'completed']);
+    reading.resolve({ windows: {}, usedUp: FIVE_HOUR_RESET });
+    await reading.promise;
+    await new Promise(setImmediate);
+    expect(ends()).toBe(2);
+  });
+
+  it('keeps the pending end when the session closes before its usage read finishes', async () => {
+    const { session, reading } = await pendingEnd();
+    await session.close();
+    expect(ends()).toBe(1);
+    expectOrderedTurns();
+    reading.reject(new Error('Usage unavailable after close'));
+    await new Promise(setImmediate);
+    expect(ends()).toBe(1);
+  });
+
   it('failed on its plan’s usage limit, until it resets, where its usage read then is used up', async () => {
     const readings: [UsageBackendId, UsageWindows][] = [];
     const end = await failedTurn({

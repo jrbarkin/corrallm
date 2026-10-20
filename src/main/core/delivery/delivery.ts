@@ -16,7 +16,15 @@ import { isSessionMode } from '../../../shared/session';
 import type { TurnReason, TurnResult } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
 import type { UsageReadings } from '../../usage';
-import { nameOf, partyName, partyText, pausesText, quotedParty, RELEASES } from '../parties';
+import {
+  nameOf,
+  partyName,
+  partyText,
+  pausesText,
+  quotedName,
+  quotedParty,
+  RELEASES,
+} from '../parties';
 import type { MessageStore } from './messages';
 
 /*
@@ -920,13 +928,14 @@ export class Delivery {
    */
   #note(message: Message, { by, why }: TakingBack, interrupted: boolean): string {
     const nodes = this.#deps.nodes();
-    const sender = message.from === 'you' ? 'the user' : partyName(nodes, message.from);
+    const sender =
+      message.from === 'you' ? quotedName('the user') : quotedParty(nodes, message.from);
     const turn = interrupted ? ', and its turn was interrupted' : '';
     const how =
       why === 'withdrawn'
         ? `by its sender after it reached you${turn}`
         : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
-    return `Message ${message.id} from "${sender}" was withdrawn ${how}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
+    return `Message ${message.id} from ${sender} was withdrawn ${how}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
@@ -1032,9 +1041,9 @@ export class Delivery {
     const outside = outsideOf(from);
     const [who, what] =
       agent !== undefined
-        ? [`agent "${this.#name(agent)}"`, 'an agent']
+        ? [`agent ${quotedParty(this.#deps.nodes(), from)}`, 'an agent']
         : outside !== undefined
-          ? [`"${outside}"`, 'an orchestrator outside corrallm']
+          ? [quotedName(outside), 'an orchestrator outside corrallm']
           : ['corrallm', 'corrallm itself'];
     const about =
       turn !== undefined && replyTo !== undefined
