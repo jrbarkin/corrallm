@@ -257,6 +257,9 @@ function problems(registry: Registry): string[] {
     } else if (worst > MAX_REQUEST_BYTES) {
       found.push(`${name}: its input may take ${String(worst)} bytes, over MAX_REQUEST_BYTES`);
     }
+    if (surface.kind === 'doc' && surface.scope !== 'canvas') {
+      found.push(`${name}: changes a document, but doesn’t run in a canvas’s scope`);
+    }
     if (surface.drains !== undefined && surface.scope !== 'canvas') {
       found.push(`${name}: drains, but doesn’t run in a canvas’s scope`);
     }
@@ -539,6 +542,11 @@ describe('T1: the surface’s rules', () => {
       'a long poll on both surfaces',
       registry({ 'test.poll': op({ access: both, kind: 'read', scope: 'none', waits: true }) }),
       "test.poll: waits, but isn't a read on MCP alone (the transport deviation)",
+    ],
+    [
+      'a doc op outside a canvas’s scope',
+      registry({ 'test.doc': op({ access: both, kind: 'doc', scope: 'agent' }) }),
+      'test.doc: changes a document, but doesn’t run in a canvas’s scope',
     ],
     [
       'an op that drains, outside a canvas’s scope',
