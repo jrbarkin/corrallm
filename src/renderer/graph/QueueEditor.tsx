@@ -866,7 +866,7 @@ function StepRow({
   context: Context;
 }) {
   const [expecting, setExpecting] = useState(false);
-  const instruction = useDraft(
+  const { problem: instructionProblem, ...instruction } = useDraft(
     item.instruction ?? '',
     (text) => {
       context.onInstruction(item.id, text);
@@ -914,6 +914,7 @@ function StepRow({
         placeholder={command ? 'Arguments' : 'What to do'}
         {...instruction}
       />
+      {instructionProblem && <span role="alert">{instructionProblem}</span>}
       <TargetChip item={item} label={`Change the agent ${item.action} acts on`} context={context} />
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />
@@ -1064,7 +1065,7 @@ function MessageRow({
   handle: HandleProps;
   context: Context;
 }) {
-  const message = useDraft(
+  const { problem: messageProblem, ...message } = useDraft(
     item.message,
     (text) => {
       context.onEditMessage(item.id, text);
@@ -1113,6 +1114,7 @@ function MessageRow({
         placeholder="Tell the agent what to do"
         {...message}
       />
+      {messageProblem && <span role="alert">{messageProblem}</span>}
       <RowCountdown id={item.id} context={context} />
       <GoOn item={item} context={context} />
       <RemoveButton item={item} context={context} />

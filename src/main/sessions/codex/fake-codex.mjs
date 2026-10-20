@@ -11,7 +11,7 @@
 //   (item/commandExecution/requestApproval, Yes, a rule for `npm test`, or No: cancel);
 // - "edit": patches hello.txt (a fileChange), asking first in a read-only sandbox;
 // - "ask": asks a question (item/tool/requestUserInput) and replies with the answer;
-// - "slow": runs `sleep 30`, printing a line every 50 ms, until interrupted (turn/interrupt);
+// - "slow": simulates `sleep 30` with a timer loop until turn/interrupt; it spawns no command;
 // - "todo": keeps a plan (turn/plan/updated);
 // - "fail": fails, out of usage (an error, then the turn failed);
 // - "crash": exits at once, saying so on stderr;

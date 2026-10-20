@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 import { flushDrafts } from '../useDraft';
+import { ipcErrorMessage } from '../ipc-error';
 
 import type { AdapterId } from '../../shared/adapter';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
@@ -210,11 +211,12 @@ export function Composer({
 
   const submit = (text = draft.trim()) => {
     if (text === '' && images.length === 0) return;
-    void flushDrafts();
-    controls.send(
-      text,
-      images.map(({ mediaType, data }) => ({ mediaType, data })),
-    );
+    const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
+    void flushDrafts(() => {
+      controls.send(text, attachments);
+    }).catch((error: unknown) => {
+      setProblem(ipcErrorMessage(error));
+    });
     setDraft('');
     setImages([]);
     setProblem(undefined);

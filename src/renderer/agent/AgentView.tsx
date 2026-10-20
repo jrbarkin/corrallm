@@ -372,7 +372,7 @@ export function AgentView({
   };
 
   const label = node.data.label;
-  const title = useDraft(label, onRename);
+  const { problem: titleProblem, ...title } = useDraft(label, onRename);
   const name = label || 'Unnamed agent';
   const agent = node.data.adapter ?? DEFAULT_AGENT;
   /** The chat's first message, which names it in the queue: of the conversation it is on now. */
@@ -457,6 +457,7 @@ export function AgentView({
                 {...title}
                 placeholder="Unnamed agent"
               />
+              {titleProblem && <span role="alert">{titleProblem}</span>}
               {queueState && <span className="agent-control-state">{queueState}</span>}
               {changed.added + changed.removed > 0 && (
                 <span className="agent-diff" title="Lines changed this session">

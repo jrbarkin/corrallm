@@ -98,7 +98,9 @@ export class Settings {
           version: VERSION,
           ...file,
           ...next,
-          ...(next.api === undefined ? {} : { api: { ...api, ...next.api } }),
+          ...(next.api === undefined && Object.keys(api).length === 0
+            ? {}
+            : { api: { ...api, ...next.api } }),
         },
         null,
         2,
@@ -122,7 +124,10 @@ export class Settings {
       (file) => {
         this.#unknown = {
           file: unknownFields(file, ['version', 'consents', 'api']),
-          api: unknownFields(file?.api, ['port']),
+          api: unknownFields(
+            file?.api,
+            isRecord(file?.api) && isPort(file.api.port) ? ['port'] : [],
+          ),
         };
         return parse(file);
       },

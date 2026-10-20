@@ -498,12 +498,18 @@ describe('the App Server connection', () => {
     expect(texts(events)).toEqual(['You picked Blue.']);
   });
 
-  it('interrupts a turn, whose command’s output streamed meanwhile', async () => {
+  it('interrupts a turn, whose simulated command’s output streamed meanwhile', async () => {
     const { session, heard, ended, events } = await start();
     await session.send({ id: 'm1', text: 'slow' });
     await heard('tool', { detail: { kind: 'output' } });
     await session.interrupt();
     await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([
+      {
+        threadId: (await requests('turn/start'))[0]?.threadId,
+        turnId: expect.any(String) as unknown,
+      },
+    ]);
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
@@ -888,6 +894,7 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(problems).toEqual([]);
   });
 
+  // The recording ends at turn/completed(interrupted), without a command exit: cancellation, not proof that its process stopped.
   it('a command interrupted while it runs', async () => {
     const { session, heard, ended, events, problems } = await replayed('interrupt', {
       cwd: '/work/smoke/three',

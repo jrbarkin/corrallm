@@ -46,3 +46,31 @@ it('lists and fills the fields and open agents returned by templates.list', asyn
   });
   expect(onPick.mock.calls[0]?.[0]).toEqual(item);
 });
+
+it('distinguishes an open role from a role pinned to an adapter in the gallery', async () => {
+  vi.stubGlobal('api', {
+    templatesList: vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        items: [
+          {
+            id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a11',
+            name: 'Open and pinned',
+            description: 'Roles',
+            fields: [],
+            agents: [
+              { id: 'open', name: 'Open' },
+              { id: 'pinned', name: 'Pinned', adapter: 'codex' },
+            ],
+          },
+        ],
+      },
+    }),
+  } satisfies Partial<AppApi>);
+  render(<ExampleGallery canInsert={false} onPick={() => undefined} onClose={() => undefined} />);
+  const card = await screen.findByRole('button', { name: /Open and pinned/ });
+  const open = within(card).getByTitle('Any agent');
+  expect(open.querySelector('img')).toBeNull();
+  const pinned = within(card).getByTitle('Codex');
+  expect(pinned.querySelector('img')?.getAttribute('alt')).toBe('Codex');
+});

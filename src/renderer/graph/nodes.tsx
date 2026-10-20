@@ -249,7 +249,7 @@ function Label({ id, label }: { id: string; label: string }) {
 
 function LabelInput({ id, label }: { id: string; label: string }) {
   const { rename, stopEditing } = useGraphActions();
-  const draft = useDraft(label, (text) => {
+  const { problem, ...draft } = useDraft(label, (text) => {
     rename(id, text);
   });
   const input = useRef<HTMLInputElement>(null);
@@ -258,21 +258,33 @@ function LabelInput({ id, label }: { id: string; label: string }) {
     input.current?.select();
   }, []);
   return (
-    <input
-      ref={input}
-      className="graph-label nodrag"
-      aria-label="Label"
-      {...draft}
-      onKeyDown={(event) => {
-        draft.onKeyDown(event);
-        if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape'))
-          stopEditing();
-      }}
-      onBlur={() => {
-        draft.onBlur();
-        stopEditing();
-      }}
-    />
+    <>
+      <input
+        ref={input}
+        className="graph-label nodrag"
+        aria-label="Label"
+        {...draft}
+        onKeyDown={(event) => {
+          const kept = draft.onKeyDown(event);
+          if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape')) {
+            if (kept instanceof Promise)
+              void kept.then((ok) => {
+                if (ok) stopEditing();
+              });
+            else if (kept !== false) stopEditing();
+          }
+        }}
+        onBlur={() => {
+          const kept = draft.onBlur();
+          if (kept instanceof Promise)
+            void kept.then((ok) => {
+              if (ok) stopEditing();
+            });
+          else if (kept) stopEditing();
+        }}
+      />
+      {problem && <span role="alert">{problem}</span>}
+    </>
   );
 }
 
