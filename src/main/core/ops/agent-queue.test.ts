@@ -199,10 +199,10 @@ describe('agent and queue commits through core.call', () => {
     await edit('agent.setRole', { agent: 'a', role: '  ' });
     expect(agent().role).toBeUndefined();
   });
-  it('returns the added item’s id, with the caller as its author', async () => {
+  it('returns the added item’s id, its text yours: no one else’s, so no author', async () => {
     const result = await edit('queue.add', { agent: 'a', entry: { message: 'New' } });
     expect(result.id).toEqual(expect.any(String));
-    expect(item(String(result.id))).toEqual({ id: result.id, message: 'New', by: 'you' });
+    expect(item(String(result.id))).toEqual({ id: result.id, message: 'New' });
     committed('queue.add', result, [itemKey('a', String(result.id))]);
   });
   it('authors a container and each child, minting distinct ids', async () => {
@@ -216,7 +216,7 @@ describe('agent and queue commits through core.call', () => {
     const added = item(String(result.id));
     expect(isIf(added)).toBe(true);
     if (!isIf(added)) throw new Error('Not an If');
-    expect([added, ...added.then].map((one) => one.by)).toEqual(['you', 'you', 'you']);
+    expect([added, ...added.then].map((one) => one.by)).toEqual([undefined, undefined, undefined]);
     expect(new Set([added, ...added.then].map((one) => one.id)).size).toBe(3);
     committed(
       'queue.add',
@@ -228,7 +228,7 @@ describe('agent and queue commits through core.call', () => {
     const result = await edit('queue.add', { agent: 'a', into, entry: { message: 'Child' } });
     const container = item(into);
     const children = isIf(container) ? container.then : isRepeat(container) ? container.repeat : [];
-    expect(children.at(-1)).toEqual({ id: result.id, message: 'Child', by: 'you' });
+    expect(children.at(-1)).toEqual({ id: result.id, message: 'Child' });
     committed('queue.add', result, [itemKey('a', String(result.id))]);
   });
   it.each(['m', 'nested', 'repeated'])('removes %s with its change row', async (id) => {
@@ -288,7 +288,9 @@ describe('agent and queue commits through core.call', () => {
     'updates %s (%j) with one row and the correct author',
     async (id, change, expected, text) => {
       const result = await edit('queue.update', { agent: 'a', item: id, change });
-      expect(item(id)).toMatchObject({ ...expected, by: text ? 'you' : OLD });
+      // Your words make the text yours, with no author; anything else keeps its author.
+      expect(item(id)).toMatchObject(expected);
+      expect(item(id).by).toBe(text ? undefined : OLD);
       committed('queue.update', result, [itemKey('a', id)]);
     },
   );
@@ -504,7 +506,8 @@ describe('authorship and queue input boundaries', () => {
     },
   ])('adds a complete queue entry (%j)', async (entry) => {
     const result = await edit('queue.add', { agent: 'a', entry });
-    expect(item(String(result.id))).toMatchObject({ ...entry, id: result.id, by: 'you' });
+    expect(item(String(result.id))).toMatchObject({ ...entry, id: result.id });
+    expect(item(String(result.id))).not.toHaveProperty('by');
     const added = item(String(result.id));
     const keys = [
       itemKey('a', added.id),

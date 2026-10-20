@@ -44,7 +44,7 @@ function frozen(queue: QueueItem[]): CanvasDocument {
   return document;
 }
 const items: (QueueStep | QueueMessage)[] = [
-  { id: 'first', message: 'First', by: 'you' },
+  { id: 'first', message: 'First' },
   { id: 'second', action: 'Read', instruction: 'notes.txt', by: 'outside:old' },
   { id: 'third', message: 'Third', by: 'agent:b' },
 ];
@@ -138,18 +138,45 @@ describe('queue operations', () => {
       },
       {
         id: 'loop',
-        by: 'you',
+        by: 'agent:b',
         repeat: [
           { id: 'wait', waitFor: [{ agent: 'b' }], by: 'corrallm' },
-          { id: 'delay', delay: { seconds: 60 }, by: 'you' },
+          { id: 'delay', delay: { seconds: 60 }, by: 'outside:writer' },
         ],
         until: { kind: 'failed' },
         rounds: 3,
         otherwise: 'ask',
       },
-      { id: 'ok', approve: 'Review', by: 'you' },
+      { id: 'ok', approve: 'Review', by: 'agent:b' },
     ]);
     expect(fromFile(toFile(before), TEST_CATALOG, 'claude-code')).toEqual(before);
+  });
+  it('leaves your text with no author: yours is written as none, and read as none', () => {
+    const before = frozen(items);
+    const added = add(before, { agent: 'a', entry: { message: 'Mine' } }, 'you', () => 'mine');
+    expect(queue(added.next).at(-1)).toEqual({ id: 'mine', message: 'Mine' });
+    // Rewriting another party's text makes it yours; what isn't its text keeps its author.
+    const rewritten = update(
+      before,
+      { agent: 'a', item: 'second', change: { kind: 'instruction', instruction: 'mine.txt' } },
+      'you',
+    );
+    expect(queue(rewritten.next)[1]).toEqual({
+      id: 'second',
+      action: 'Read',
+      instruction: 'mine.txt',
+    });
+    const retargeted = update(
+      before,
+      { agent: 'a', item: 'third', change: { kind: 'target', target: 'b' } },
+      'you',
+    );
+    expect(queue(retargeted.next)[2]).toEqual({ ...items[2], target: 'b' });
+    // A file can claim anything: one saying you wrote it says what saying nothing says.
+    const claimed = toFile(doc([{ id: 'x', message: 'Claimed', by: 'you' }]));
+    expect(queue(fromFile(claimed, TEST_CATALOG, 'claude-code'))).toEqual([
+      { id: 'x', message: 'Claimed' },
+    ]);
   });
 });
 
@@ -259,9 +286,9 @@ const setRepeat = (
 ) => change(doc, agent, item, { kind: 'repeat', ...fields });
 describe('queues', () => {
   const g = queuedDoc([agentNode('a', 0, 0), agentNode('b', 0, 100)]);
-  const first = { id: 'q1', by: 'you' as const, action: 'Read' };
-  const second = { id: 'q2', by: 'you' as const, action: 'Edit', target: 'b' };
-  const third = { id: 'q3', by: 'you' as const, action: 'Bash' };
+  const first = { id: 'q1', action: 'Read' };
+  const second = { id: 'q2', action: 'Edit', target: 'b' };
+  const third = { id: 'q3', action: 'Bash' };
   const queued = [first, second, third].reduce((acc, q) => addToQueue(acc, 'a', q), g);
   const queueOf = (graph: CanvasDocument) => get(graph, 'a').data.queue ?? [];
   const order = (graph: CanvasDocument) => queueOf(graph).map((q) => q.id);
@@ -294,7 +321,7 @@ describe('queues', () => {
   });
 
   it('holds messages for the agent, which can be edited, or sent to another agent', () => {
-    const note = { id: 'm1', by: 'you' as const, message: 'Use the staging database' };
+    const note = { id: 'm1', message: 'Use the staging database' };
     const withNote = addToQueue(queued, 'a', note);
     expect(queueOf(withNote).at(-1)).toEqual(note);
     expect(queueOf(editMessage(withNote, 'a', 'm1', 'Use prod')).at(-1)).toEqual({
@@ -314,7 +341,7 @@ describe('queues', () => {
     expect(setInstruction(told, 'a', 'q3', 'run npm test')).toBe(told);
     expect(setInstruction(queued, 'a', 'q3', '')).toBe(queued);
     // Only a step has one.
-    const note = addToQueue(queued, 'a', { id: 'm1', by: 'you' as const, message: 'Use staging' });
+    const note = addToQueue(queued, 'a', { id: 'm1', message: 'Use staging' });
     expect(setInstruction(note, 'a', 'm1', 'x')).toBe(note);
   });
 
@@ -325,18 +352,17 @@ describe('queues', () => {
     expect(setExpect(red, 'a', 'q3', 'fails')).toBe(red);
     expect(setExpect(queued, 'a', 'q3', undefined)).toBe(queued);
     // Only a step does.
-    const note = addToQueue(queued, 'a', { id: 'm1', by: 'you' as const, message: 'Use staging' });
+    const note = addToQueue(queued, 'a', { id: 'm1', message: 'Use staging' });
     expect(setExpect(note, 'a', 'm1', 'fails')).toBe(note);
   });
 
   it('holds waits for other agents or their steps, which can be changed', () => {
-    const wait = { id: 'w1', by: 'you' as const, waitFor: [{ agent: 'b' }] };
+    const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
     const waiting = addToQueue(queued, 'a', wait);
     expect(queueOf(waiting).at(-1)).toEqual(wait);
     const both = [{ agent: 'b' }, { agent: 'c', item: 's1' }];
     expect(queueOf(setWaitFor(waiting, 'a', 'w1', both)).at(-1)).toEqual({
       id: 'w1',
-      by: 'you' as const,
       waitFor: both,
     });
     // A wait waits for something, and only waits are changed.
@@ -351,13 +377,13 @@ describe('queues', () => {
   });
 
   it("sets a delay's time, and sets and clears a wait's time limit", () => {
-    const delay = { id: 'd1', by: 'you' as const, delay: { seconds: 600 } };
-    const wait = { id: 'w1', by: 'you' as const, waitFor: [{ agent: 'b' }] };
+    const delay = { id: 'd1', delay: { seconds: 600 } };
+    const wait = { id: 'w1', waitFor: [{ agent: 'b' }] };
     const timed = addToQueue(addToQueue(queued, 'a', delay), 'a', wait);
     const item = (graph: CanvasDocument, id: string) => queueOf(graph).find((q) => q.id === id);
 
     const longer = setTime(timed, 'a', 'd1', { at: '09:00' });
-    expect(item(longer, 'd1')).toEqual({ id: 'd1', by: 'you' as const, delay: { at: '09:00' } });
+    expect(item(longer, 'd1')).toEqual({ id: 'd1', delay: { at: '09:00' } });
     // A delay always has a time.
     expect(setTime(timed, 'a', 'd1', undefined)).toBe(timed);
     expect(setTime(timed, 'a', 'd1', { seconds: 600 })).toBe(timed);
@@ -374,18 +400,16 @@ describe('queues', () => {
   });
 
   it('holds OKs, whose words can be changed, and which nothing else changes', () => {
-    const ok = { id: 'ok1', by: 'you' as const, approve: 'the spec' };
+    const ok = { id: 'ok1', approve: 'the spec' };
     const asked = addToQueue(queued, 'a', ok);
     expect(queueOf(asked).at(-1)).toEqual(ok);
     const plan = setApproval(asked, 'a', 'ok1', 'the plan in PLAN.md');
     expect(queueOf(plan).at(-1)).toEqual({
       id: 'ok1',
-      by: 'you' as const,
       approve: 'the plan in PLAN.md',
     });
     expect(queueOf(setApproval(asked, 'a', 'ok1', '')).at(-1)).toEqual({
       id: 'ok1',
-      by: 'you' as const,
       approve: '',
     });
     // The same words, or an item that is not an OK, change nothing.
@@ -397,9 +421,9 @@ describe('queues', () => {
   });
 
   describe('if-then', () => {
-    const block = { id: 'if1', by: 'you' as const, if: { kind: 'failed' as const }, then: [] };
+    const block = { id: 'if1', if: { kind: 'failed' as const }, then: [] };
     const withIf = addToQueue(queued, 'a', block);
-    const step = (id: string) => ({ id, by: 'you' as const, action: 'Read' });
+    const step = (id: string) => ({ id, action: 'Read' });
     const filled = addToQueue(addToQueue(withIf, 'a', step('t1'), 'if1'), 'a', step('t2'), 'if1');
     const thenOf = (graph: CanvasDocument) => {
       const found = queueOf(graph).find((q) => q.id === 'if1');
@@ -410,15 +434,9 @@ describe('queues', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'if1']);
       expect(thenOf(filled)).toEqual(['t1', 't2']);
       expect(addToQueue(withIf, 'a', step('x'), 'q1')).toBe(withIf);
-      expect(
-        addToQueue(withIf, 'a', { id: 'w', by: 'you' as const, waitFor: [{ agent: 'b' }] }, 'if1'),
-      ).toBe(withIf);
-      expect(
-        addToQueue(withIf, 'a', { id: 'd', by: 'you' as const, delay: { seconds: 60 } }, 'if1'),
-      ).toBe(withIf);
-      expect(addToQueue(withIf, 'a', { id: 'ok', by: 'you' as const, approve: '' }, 'if1')).toBe(
-        withIf,
-      );
+      expect(addToQueue(withIf, 'a', { id: 'w', waitFor: [{ agent: 'b' }] }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'd', delay: { seconds: 60 } }, 'if1')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { id: 'ok', approve: '' }, 'if1')).toBe(withIf);
     });
 
     it('removes, moves and retargets the steps inside it', () => {
@@ -447,17 +465,16 @@ describe('queues', () => {
   describe('repeat', () => {
     const loop = {
       id: 'r1',
-      by: 'you' as const,
       repeat: [],
       until: { kind: 'succeeded' as const },
       rounds: 3,
       otherwise: 'ask' as const,
     };
     const withRepeat = addToQueue(queued, 'a', loop);
-    const fix = { id: 'fix', by: 'you' as const, message: 'Make the tests pass' };
-    const tests = { id: 'tests', by: 'you' as const, action: 'Bash' };
-    const wait = { id: 'w', by: 'you' as const, waitFor: [{ agent: 'b' }] };
-    const pause = { id: 'p', by: 'you' as const, delay: { seconds: 60 } };
+    const fix = { id: 'fix', message: 'Make the tests pass' };
+    const tests = { id: 'tests', action: 'Bash' };
+    const wait = { id: 'w', waitFor: [{ agent: 'b' }] };
+    const pause = { id: 'p', delay: { seconds: 60 } };
     const filled = [fix, tests, wait, pause].reduce(
       (graph, item) => addToQueue(graph, 'a', item, 'r1'),
       withRepeat,
@@ -471,17 +488,13 @@ describe('queues', () => {
     it('adds steps, messages, waits and delays inside a repeat; never an if-then, repeat or OK', () => {
       expect(order(filled)).toEqual(['q1', 'q2', 'q3', 'r1']);
       expect(inner(filled)).toEqual([fix, tests, wait, pause]);
-      const ifThen = { id: 'if', by: 'you' as const, if: { kind: 'failed' as const }, then: [] };
+      const ifThen = { id: 'if', if: { kind: 'failed' as const }, then: [] };
       expect(addToQueue(withRepeat, 'a', ifThen, 'r1')).toBe(withRepeat);
-      expect(addToQueue(withRepeat, 'a', { ...loop, id: 'r2', by: 'you' as const }, 'r1')).toBe(
-        withRepeat,
-      );
-      expect(addToQueue(withRepeat, 'a', { id: 'ok', by: 'you' as const, approve: '' }, 'r1')).toBe(
-        withRepeat,
-      );
+      expect(addToQueue(withRepeat, 'a', { ...loop, id: 'r2' }, 'r1')).toBe(withRepeat);
+      expect(addToQueue(withRepeat, 'a', { id: 'ok', approve: '' }, 'r1')).toBe(withRepeat);
       // Nor does an if-then hold a repeat.
       const withIf = addToQueue(withRepeat, 'a', ifThen);
-      expect(addToQueue(withIf, 'a', { ...loop, id: 'r2', by: 'you' as const }, 'if')).toBe(withIf);
+      expect(addToQueue(withIf, 'a', { ...loop, id: 'r2' }, 'if')).toBe(withIf);
     });
 
     it('removes, moves, retargets and edits what is inside it, and changes its waits and delays', () => {
@@ -504,7 +517,6 @@ describe('queues', () => {
       });
       expect(inner(setWaitFor(filled, 'a', 'w', [{ agent: 'b', item: 's' }]))[2]).toEqual({
         id: 'w',
-        by: 'you' as const,
         waitFor: [{ agent: 'b', item: 's' }],
       });
       expect(inner(setTime(filled, 'a', 'w', { seconds: 30 }))[2]).toEqual({
@@ -513,7 +525,6 @@ describe('queues', () => {
       });
       expect(inner(setTime(filled, 'a', 'p', { at: '09:00' }))[3]).toEqual({
         id: 'p',
-        by: 'you' as const,
         delay: { at: '09:00' },
       });
       // What changes nothing gives back the same graph.
@@ -549,12 +560,12 @@ describe('queue update variants', () => {
     [
       { id: 'x', action: 'Read', by: 'outside:old' },
       { kind: 'action', action: 'Edit' },
-      { action: 'Edit', by: 'you' },
+      { action: 'Edit', by: 'agent:b' },
     ],
     [
       { id: 'x', action: 'Read', instruction: 'Old', by: 'outside:old' },
       { kind: 'instruction', instruction: null },
-      { by: 'you' },
+      { by: 'agent:b' },
     ],
     [
       { id: 'x', action: 'Read', expect: 'fails', by: 'outside:old' },
@@ -569,12 +580,12 @@ describe('queue update variants', () => {
     [
       { id: 'x', if: { kind: 'freeText', text: 'Old' }, then: [], by: 'outside:old' },
       { kind: 'condition', condition: { kind: 'freeText', text: 'New' } },
-      { if: { kind: 'freeText', text: 'New' }, by: 'you' },
+      { if: { kind: 'freeText', text: 'New' }, by: 'agent:b' },
     ],
     [
       { id: 'x', approve: 'Old', by: 'outside:old' },
       { kind: 'approve', approve: 'New' },
-      { approve: 'New', by: 'you' },
+      { approve: 'New', by: 'agent:b' },
     ],
     [
       {
@@ -586,7 +597,7 @@ describe('queue update variants', () => {
         by: 'outside:old',
       },
       { kind: 'repeat', until: { kind: 'freeText', text: 'New' } },
-      { until: { kind: 'freeText', text: 'New' }, by: 'you' },
+      { until: { kind: 'freeText', text: 'New' }, by: 'agent:b' },
     ],
     [
       {
@@ -604,7 +615,7 @@ describe('queue update variants', () => {
     'changes the right field and its author (%j)',
     (item, change, expected) => {
       const result = queue(
-        update(frozen([item]), { agent: 'a', item: 'x', change }, 'you').next,
+        update(frozen([item]), { agent: 'a', item: 'x', change }, 'agent:b').next,
       )[0];
       expect(result).toMatchObject(expected);
       if (change.kind === 'instruction') expect(result).not.toHaveProperty('instruction');

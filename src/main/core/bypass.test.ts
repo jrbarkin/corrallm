@@ -31,12 +31,12 @@ import { CALLERS, CANVAS, isLead, NO_DESKTOP, PROPOSAL } from './test-registry';
 
 /*
  * T9 (Core Server §3.7, B9 Design §11): no token reaches what a rule forbids, by whatever op it
- * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R11, R12, R13, R14 so far), tried as
- * an outside write token through every op that exists now, single and structural, and the self
- * cases as an agent (a lead); each refusal changing nothing, and each accepted as you; then on
- * changes no single op makes, as a batch, a composite or an undo will. `canvas.batch`, proposals
- * (R4), `reply`, `canvas.save` and `canvas.close` come with B9's later tasks: their cases are
- * listed below as what remains.
+ * calls. Each rule that guards the canvas's document (R2, R6, R7, R8, R11, R12, R13, R14) and
+ * R34's validation, tried as an outside write token through every op that exists now, single and
+ * structural, and the self cases as an agent (a lead); each refusal changing nothing, and each
+ * accepted as you; then on changes no single op makes, as a batch, a composite or an undo will.
+ * `canvas.batch`, proposals (R4), `reply`, `canvas.save` and `canvas.close` come with B9's later
+ * tasks: their cases are listed below as what remains.
  *
  * The canvas: `lead` (a lead) holding `helper`, `team` (a frame holding `member`) and `spare` (an
  * empty frame); `a`, set to start in a mode and given a role, whose queue holds an OK with work
@@ -542,6 +542,85 @@ describe('R14: no token changes who manages an existing agent; frames are free',
   });
 });
 
+describe('R34: what anyone edits passes what a file would', () => {
+  it('refuses a step naming an action its agent’s adapter doesn’t declare, to anyone', async () => {
+    for (const caller of [OUTSIDE, YOU]) {
+      await failed(
+        'invalid',
+        'queue.add',
+        { agent: 'a', entry: { action: 'Bash', instruction: 'Run it' } },
+        caller,
+      );
+      await failed(
+        'invalid',
+        'queue.update',
+        { agent: 'a', item: 'first', change: { kind: 'action', action: 'Bash' } },
+        caller,
+      );
+    }
+    await applied('queue.add', { agent: 'a', entry: { action: 'apply_patch' } });
+  });
+
+  it('refuses a target, a wait or a repeat to go round with that isn’t there, to anyone', async () => {
+    const entries = [
+      { message: 'Hand over', target: 'ghost' },
+      { action: 'exec_command', target: 'ghost' },
+      { waitFor: [{ agent: 'ghost' }] },
+      { waitFor: [{ agent: 'b', item: 'ghost' }] },
+      {
+        repeat: [{ message: 'Again' }],
+        until: { kind: 'repeatEnds', agent: 'a', item: 'ghost' },
+        rounds: 2,
+        otherwise: 'ask',
+      },
+      // What it goes round with must be a repeat.
+      {
+        repeat: [{ message: 'Again' }],
+        until: { kind: 'repeatEnds', agent: 'a', item: 'first' },
+        rounds: 2,
+        otherwise: 'ask',
+      },
+    ];
+    for (const entry of entries) await failed('invalid', 'queue.add', { agent: 'a', entry }, YOU);
+    await failed(
+      'invalid',
+      'queue.update',
+      { agent: 'a', item: 'after', change: { kind: 'target', target: 'ghost' } },
+      YOU,
+    );
+    await applied('queue.add', { agent: 'a', entry: { waitFor: [{ agent: 'a', item: 'first' }] } });
+  });
+
+  it('takes canvas text starting with a shell prefix, held at delivery, never refused as it is added', async () => {
+    const { id } = await applied('queue.add', {
+      agent: 'a',
+      entry: { message: '!rm -rf ~', target: 'b' },
+    });
+    expect(itemOf('a', String(id))).toEqual({
+      id,
+      by: 'outside:orchestrator',
+      message: '!rm -rf ~',
+      target: 'b',
+    });
+  });
+
+  it('marks text another party writes as its, and yours as no one’s: provenance, never authority', async () => {
+    const { id } = await applied('queue.add', { agent: 'a', entry: { message: 'Token text' } });
+    expect(itemOf('a', String(id))).toHaveProperty('by', 'outside:orchestrator');
+    // A move keeps who wrote it; your words make it yours.
+    await applied('queue.move', { agent: 'a', item: String(id), before: 'check' }, YOU);
+    expect(itemOf('a', String(id))).toHaveProperty('by', 'outside:orchestrator');
+    await applied(
+      'queue.update',
+      { agent: 'a', item: String(id), change: { kind: 'message', message: 'My text' } },
+      YOU,
+    );
+    expect(itemOf('a', String(id))).not.toHaveProperty('by');
+    const mine = await applied('queue.add', { agent: 'a', entry: { message: 'Mine' } }, YOU);
+    expect(itemOf('a', String(mine.id))).not.toHaveProperty('by');
+  });
+});
+
 /*
  * Whatever builds a change: a batch, a composite's sub-ops, an undo or an op not written yet. The
  * change rules read the change itself, so a token's commit is refused whatever made it.
@@ -631,7 +710,7 @@ describe('on the change itself, whatever builds it', () => {
         settings: { ...data.settings, 'claude-code': { mode: 'plan' } },
       })),
     ],
-    ['a connection', editing('a', (data) => ({ ...data, connection: 'codex.terminal' }))],
+    ['a connection', editing('b', (data) => ({ ...data, connection: 'codex.terminal' }))],
     [
       'an adapter',
       editing('a', (data) => {

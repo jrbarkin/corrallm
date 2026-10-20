@@ -29,6 +29,7 @@ import type {
   Rows,
   RowsChange,
 } from '../../../shared/model/rows';
+import { editFault } from '../../../shared/model/valid';
 import type { CanvasMemory } from '../../memory';
 import { writeWhole } from '../../whole-file';
 import { OpFailure } from '../call';
@@ -47,7 +48,8 @@ import type { ChangeSet } from './change';
  *
  * An op changes a loaded document (`change`, B9 Design §3): what it builds from the live document is
  * diffed by reference against it (diffRows), refused if its rows couldn't hold it (rowsFault: they
- * would read back as another document), checked (expect, the change rules) and committed
+ * would read back as another document) or, whoever made it, what it touched couldn't be a file's
+ * or names what isn't there (editFault, revision R34), checked (expect, the change rules) and committed
  * write-through, past its point of no return once its write is queued: what it changed, entity by
  * entity, is written in one write of the database's lane with the revision it takes (the
  * document's next) and what it was, and the live document is the changed one only once that write
@@ -279,6 +281,9 @@ export class Documents {
       if (fault !== undefined)
         throw new OpFailure('invalid', `That change can’t be kept: ${fault}.`);
       const set = changeSetOf(live, next, rows, change.revision, copies);
+      // Whoever makes it (revision R34): what a file would hold, and names what is there.
+      const invalid = editFault(next, set.entities, this.#deps.catalog, this.#deps.defaultAdapter);
+      if (invalid !== undefined) throw new OpFailure('invalid', invalid);
       change.check(set, live);
       const creating = { by: change.revision.by, canvas, count: set.created.size };
       this.#creating.add(creating);

@@ -150,30 +150,57 @@ export function inFileOrder<T>(value: T): T {
 
 /** A canvas as the text of its `.corral` file. An agent's empty queue is written as none. */
 export function toFile({ id, arrange, nodes, links }: CanvasDocument): string {
-  const saved = nodes.map((n): FileNode => {
-    const agent = n.type === 'agent' ? n.data : undefined;
-    const role = readRole(agent?.role, `${n.id}.role`);
-    return {
-      id: n.id,
-      kind: n.type === 'frame' ? 'group' : 'agent',
-      label: n.data.label,
-      position: { x: n.position.x, y: n.position.y },
-      ...(n.parentId === undefined ? {} : { parent: n.parentId }),
-      ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
-      ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
-      ...(agent?.settings === undefined ? {} : { settings: inFileOrder(agent.settings) }),
-      ...(role === undefined ? {} : { role }),
-      ...(n.data.color === undefined ? {} : { color: n.data.color }),
-      ...(agent?.queue === undefined || agent.queue.length === 0
-        ? {}
-        : { queue: inFileOrder(agent.queue) }),
-    };
-  });
+  const saved = nodes.map(fileNodeOf);
   const drawn = links.map(({ source, target, dots }): FileLink => ({
     agents: [source, target],
     ...(dots ? { dots } : {}),
   }));
   return `${JSON.stringify({ format: FORMAT, version: CANVAS_VERSION, id, ...(arrange ? { arrange: true } : {}), nodes: saved, links: drawn }, null, 2)}\n`;
+}
+
+/** A node as its canvas's file holds it. An agent's empty queue is written as none. */
+function fileNodeOf(n: CanvasNode): FileNode {
+  const agent = n.type === 'agent' ? n.data : undefined;
+  const role = readRole(agent?.role, `${n.id}.role`);
+  return {
+    id: n.id,
+    kind: n.type === 'frame' ? 'group' : 'agent',
+    label: n.data.label,
+    position: { x: n.position.x, y: n.position.y },
+    ...(n.parentId === undefined ? {} : { parent: n.parentId }),
+    ...(agent?.adapter === undefined ? {} : { adapter: agent.adapter }),
+    ...(agent?.connection === undefined ? {} : { connection: agent.connection }),
+    ...(agent?.settings === undefined ? {} : { settings: inFileOrder(agent.settings) }),
+    ...(role === undefined ? {} : { role }),
+    ...(n.data.color === undefined ? {} : { color: n.data.color }),
+    ...(agent?.queue === undefined || agent.queue.length === 0
+      ? {}
+      : { queue: inFileOrder(agent.queue) }),
+  };
+}
+
+/**
+ * Why `node` couldn't be read from its canvas's file as it is, against `catalog`, an agent naming
+ * no adapter running `defaultAdapter`: what fromFile reads of a node (its id, label, position,
+ * adapter, connection, settings, role, colour and queue; not what it sits in, nor its links).
+ * Undefined if it could.
+ */
+export function nodeFault(
+  node: CanvasNode,
+  catalog: Catalog,
+  defaultAdapter: AdapterId,
+): string | undefined {
+  try {
+    readNode(
+      JSON.parse(JSON.stringify(fileNodeOf(node))) as unknown,
+      `node "${node.id}"`,
+      catalog,
+      defaultAdapter,
+    );
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 /**
@@ -460,9 +487,13 @@ function readItem(value: unknown, where: string): QueueItem {
   return readStep(value, where);
 }
 
-/** Queue text keeps its author when the canvas is saved and opened again. */
+/**
+ * Queue text keeps its author when the canvas is saved and opened again: a party other than you,
+ * since text you wrote has none. A file saying you wrote it says what saying nothing says.
+ * Provenance a shared file may claim, never authority: nothing reads it to decide anything.
+ */
 function author(item: Record<string, unknown>, where: string): { by?: PartyId } {
-  if (item.by === undefined) return {};
+  if (item.by === undefined || item.by === 'you') return {};
   if (typeof item.by !== 'string' || !PARTY_PATTERN.test(item.by))
     throw new Error(`${where}.by must be a party id`);
   return { by: item.by as PartyId };

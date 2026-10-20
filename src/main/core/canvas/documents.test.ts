@@ -60,7 +60,7 @@ function canvasOf(id: CanvasId): CanvasDocument {
             { id: 'hello', message: 'Say hello' },
             {
               id: 'loop',
-              repeat: [{ id: 'test', action: 'Bash', instruction: 'npm test' }],
+              repeat: [{ id: 'test', action: 'exec_command', instruction: 'npm test' }],
               until: { kind: 'succeeded' },
               rounds: 3,
               otherwise: 'ask',
