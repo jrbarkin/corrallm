@@ -145,11 +145,21 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 same list (before or after; null means the end). An initial If or repeat has at most
                 16 children to fit the request bound, with further children added through into;
                 canvas.addAgent takes the new agent's `role` (a token gives one only as it creates
-                an agent: R12); batch.ts: `canvas.batch`, each inner op prepared as the caller's own
+                an agent: R12); canvas-tools.ts: `canvas.insertTemplate` fills a shipped template's
+                fields, chooses its adapters by job and its connections (each adapter's first when
+                omitted), and inserts it as a new group, returning `{ group, agents }`. It records
+                `ctx.by` only on queue text changed by the fill (your text has no `by`), defaults a
+                lead's parent to its own agent, and checks R11 on the whole insertion.
+                `canvas.setArrange` saves the preference, laying out once when enabled. Both call
+                `ctx.commit` at once so a batch can capture their pure builds;
+                batch.ts: `canvas.batch`, each inner op prepared as the caller's own
                 call, then built in order over what the one before left and committed as one change
                 at one revision, a failure naming its op (`ops[i]`), drained as its inner ops
                 drain; reply.ts: `reply`, a proposal's Allow or Refuse (holds and prompts until
                 B11, file reviews with B9's task 12);
+                window.ts: `window.get` returns `{ canvas }` for the calling window; `window.show`
+                (D4, yours alone) shows a kept canvas there, restoring its project and ending the
+                previous canvas's sessions. Showing the same canvas leaves its sessions alone;
                 wait.ts: `wait`, see
                 Headless); core.ts is createCore, the
                 operations composed over the

@@ -24,6 +24,7 @@ import { appOps } from './app';
 import { batchOps } from './batch';
 import { replyOps } from './reply';
 import { canvasOps } from './canvas';
+import { canvasToolsOps } from './canvas-tools';
 import { canvasesOps } from './canvases';
 import { catalogOps } from './catalog';
 import { conversationOps } from './conversation';
@@ -64,9 +65,9 @@ export interface OpServices {
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
   links: Pick<LinkOpener, 'open'>;
   reveal: Pick<FileRevealer, 'reveal'>;
-  projects: Pick<ProjectFolders, 'of'>;
+  projects: Pick<ProjectFolders, 'of' | 'restore'>;
   files: Pick<ProjectFiles, 'find'>;
-  windows: Pick<Windows, 'canvasOf'>;
+  windows: Pick<Windows, 'canvasOf' | 'show'>;
   sessions: Pick<
     SessionManager,
     'attachTerminal' | 'detachTerminal' | 'inputTerminal' | 'resizeTerminal' | 'dropOnTerminal'
@@ -98,6 +99,7 @@ export function implementations(services: OpServices): Implementations {
     ...projectOps(services),
     ...canvasesOps(services),
     ...canvasOps(services),
+    ...canvasToolsOps(services),
     ...batchOps(),
     ...agentOps(services),
     ...queueOps(),

@@ -38,7 +38,7 @@ beforeEach(async () => {
   );
   const current = await core.call('window.get', {}, caller);
   if (!current.ok) throw new Error(current.error.sentence);
-  canvas = current.value.c as CanvasId;
+  canvas = current.value.canvas as CanvasId;
 });
 
 afterEach(async () => {

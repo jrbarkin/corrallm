@@ -11,6 +11,8 @@
     "api.canvas.list",
     "api.canvas.get",
     "api.canvas.rename",
+    "api.canvas.insertTemplate",
+    "api.canvas.setArrange",
     "api.canvas.addAgent",
     "api.canvas.spawnAgent",
     "api.canvas.delete",
@@ -36,6 +38,7 @@
     "api.link.open",
     "api.link.reveal",
     "api.window.get",
+    "api.window.show",
     "api.terminal.attach",
     "api.terminal.detach",
     "api.terminal.input",
@@ -54,6 +57,7 @@
       "canvas_delete",
       "canvas_get",
       "canvas_group",
+      "canvas_insertTemplate",
       "canvas_link",
       "canvas_list",
       "canvas_move",
@@ -126,10 +130,12 @@
       "canvas_delete",
       "canvas_get",
       "canvas_group",
+      "canvas_insertTemplate",
       "canvas_link",
       "canvas_list",
       "canvas_move",
       "canvas_rename",
+      "canvas_setArrange",
       "canvas_spawnAgent",
       "canvas_ungroup",
       "canvas_unlink",
@@ -159,10 +165,10 @@
     ]
   },
   "counts": {
-    "lead": 39,
+    "lead": 40,
     "worker": 11,
     "outside-read": 16,
-    "outside-write": 40
+    "outside-write": 42
   },
   "unhosted": {
     "agents": "B11",
@@ -188,6 +194,7 @@
     "link.open": "os-action",
     "link.reveal": "os-action",
     "window.get": "view",
+    "window.show": "view",
     "terminal.attach": "view",
     "terminal.detach": "view",
     "terminal.input": "acts-as-you",
@@ -236,6 +243,14 @@
       "input": "7c9d45e28398fe9e",
       "output": "647bbd6cc7b4f077"
     },
+    "canvas.insertTemplate": {
+      "input": "0425c47e9c4bb128",
+      "output": "97f24d47c6400a47"
+    },
+    "canvas.setArrange": {
+      "input": "bec4dc305819fe45",
+      "output": "647bbd6cc7b4f077"
+    },
     "canvas.addAgent": {
       "input": "0f3ca90703374a72",
       "output": "ebd0120825103788"
@@ -273,7 +288,7 @@
       "output": "647bbd6cc7b4f077"
     },
     "canvas.batch": {
-      "input": "07b5262a1e042e15",
+      "input": "aa3b1a41e3b86acb",
       "output": "774dad2f1bf247cd"
     },
     "agent.setType": {
@@ -390,7 +405,11 @@
     },
     "window.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "fe7f4592313235fe"
+      "output": "bebf6761c9f323e8"
+    },
+    "window.show": {
+      "input": "fa0f4b73e7d579d1",
+      "output": "647bbd6cc7b4f077"
     },
     "terminal.attach": {
       "input": "a80925bfbd4d86d2",

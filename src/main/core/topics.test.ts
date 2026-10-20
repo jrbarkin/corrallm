@@ -18,6 +18,7 @@ import type { Settings } from '../settings';
 import { createCore } from './core';
 import type { Core } from './core';
 import { WindowPorts } from './gui';
+import { readOnDisk } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { openWindow } from './test-window';
 import { REAL_FIXTURES, startWorld } from './test-world';
@@ -421,9 +422,16 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     for (const change of yours?.changes ?? []) {
       expect('replace' in change).toBe(false);
       if (!('set' in change)) continue;
-      // Never the whole document: a commit changes a few entities of the world's dozens.
-      // (An agent added renumbers the nodes' places: still under half the world's ~50.)
-      expect(Object.keys(change.set).length + (change.remove?.length ?? 0)).toBeLessThan(25);
+      const op = readOnDisk(world.profile, (disk) =>
+        disk
+          .prepare('SELECT op FROM revision WHERE canvas_id = ? AND rev = ?')
+          .get(CANVAS, change.rev),
+      )?.op;
+      // Ordinary edits change a few entities, including renumbered places. Inserting a whole
+      // template or laying out the canvas can legitimately change most of it in one commit.
+      if (op !== 'canvas.insertTemplate' && op !== 'canvas.setArrange') {
+        expect(Object.keys(change.set).length + (change.remove?.length ?? 0)).toBeLessThan(25);
+      }
       for (const entity of Object.values(change.set)) {
         expect(entity.rev).toBeLessThanOrEqual(change.rev);
       }

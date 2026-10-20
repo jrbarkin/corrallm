@@ -56,6 +56,44 @@ const template: Graph = {
 };
 
 describe('templates', () => {
+  it('attributes only text filled by a party, including conditions and nested steps', () => {
+    const filled = fillTemplate(
+      template,
+      {
+        feature: 'export',
+        language: 'TypeScript',
+        framework: 'Vitest',
+        marker: 'DONE',
+      },
+      'outside:builder',
+    );
+    const queue = filled.nodes[0]?.data.queue ?? [];
+    for (const item of queue) {
+      expect(item.by).toBe('outside:builder');
+      const children = 'then' in item ? item.then : 'repeat' in item ? item.repeat : [];
+      for (const child of children) expect(child.by).toBe('outside:builder');
+    }
+    expect(fillTemplate(template, {}, 'outside:builder')).toBe(template);
+    const nested = fillTemplate(template, { framework: 'Vitest' }, 'agent:lead').nodes[0]?.data
+      .queue?.[4];
+    expect(nested).not.toHaveProperty('by');
+    expect(nested && 'repeat' in nested && nested.repeat[0]).toMatchObject({ by: 'agent:lead' });
+    const yours = fillTemplate(filled, { feature: 'mine' }, 'you');
+    expect(yours).toBe(filled);
+    const authored = {
+      ...template,
+      nodes: template.nodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          queue: [{ id: 'new', message: '{{feature}}', by: 'outside:other' as const }],
+        },
+      })),
+    };
+    expect(
+      fillTemplate(authored, { feature: 'Mine' }, 'you').nodes[0]?.data.queue[0],
+    ).not.toHaveProperty('by');
+  });
   it('lists the placeholders a canvas uses, in the order they first appear', () => {
     // Inside repeats too: their messages, and the text they stop on.
     expect(placeholdersOf(template)).toEqual(['language', 'feature', 'framework', 'marker']);

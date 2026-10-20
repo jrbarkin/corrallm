@@ -170,16 +170,16 @@ describe('window.get', () => {
     const first = await core.call('window.get', {}, SEVEN);
     const context = await core.channels.call(7, 'run:get', []);
     if (!first.ok) throw new Error(first.error.sentence);
-    expect(context).toMatchObject({ id: first.value.c });
+    expect(context).toMatchObject({ id: first.value.canvas });
     await core.channels.call(8, 'run:get', []);
     const next = await core.channels.call(7, 'canvas:forget', []);
     expect(await core.call('window.get', undefined, SEVEN)).toEqual({
       ok: true,
-      value: { c: next },
+      value: { canvas: next },
     });
     expect(await core.call('window.get', {}, EIGHT)).toEqual({
       ok: true,
-      value: { c: first.value.c },
+      value: { canvas: first.value.canvas },
     });
   });
 
@@ -190,5 +190,51 @@ describe('window.get', () => {
         error: { code: 'invalid' },
       });
     }
+  });
+});
+
+describe('window.show', () => {
+  it('shows a kept canvas only in the calling window and restores its project', async () => {
+    const first = await core.call('window.get', {}, SEVEN);
+    if (!first.ok) throw new Error(first.error.sentence);
+    host.pickFolder.mockResolvedValue(mintTrustedPath(project));
+    await core.channels.call(7, 'project:choose', []);
+    await core.call('window.get', {}, EIGHT);
+    const draft = await core.channels.call(7, 'canvas:forget', []);
+    expect(await core.call('window.show', { canvas: first.value.canvas }, SEVEN)).toEqual({
+      ok: true,
+      value: { revs: {} },
+    });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+    expect(await core.channels.call(7, 'run:get', [])).toMatchObject({
+      id: first.value.canvas,
+      project: { path: project },
+    });
+    expect(await core.call('window.get', {}, EIGHT)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+    expect(await core.call('window.show', { canvas: draft }, EIGHT)).toEqual({
+      ok: true,
+      value: { revs: {} },
+    });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual({
+      ok: true,
+      value: { canvas: first.value.canvas },
+    });
+  });
+  it('refuses a missing canvas and page-supplied window without changing the shown canvas', async () => {
+    const first = await core.call('window.get', {}, SEVEN);
+    expect(await core.call('window.show', { canvas: crypto.randomUUID() }, SEVEN)).toMatchObject({
+      ok: false,
+      error: { code: 'not-found' },
+    });
+    expect(
+      await core.call('window.show', { canvas: crypto.randomUUID(), window: 8 }, SEVEN),
+    ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(await core.call('window.get', {}, SEVEN)).toEqual(first);
   });
 });

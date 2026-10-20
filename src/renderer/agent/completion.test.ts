@@ -13,8 +13,8 @@ it('reads file completions through project.files for the canvas the window now s
   const second = newCanvasId();
   const windowGet = vi
     .fn<AppApi['windowGet']>()
-    .mockResolvedValueOnce({ ok: true, value: { c: first } })
-    .mockResolvedValueOnce({ ok: true, value: { c: second } });
+    .mockResolvedValueOnce({ ok: true, value: { canvas: first } })
+    .mockResolvedValueOnce({ ok: true, value: { canvas: second } });
   const projectFiles = vi
     .fn()
     .mockResolvedValue({ ok: true, value: { items: ['src/main/', 'src/main/ipc.ts'] } });

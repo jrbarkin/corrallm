@@ -2,6 +2,9 @@ import type { GuiOp } from '../../shared/api/surface';
 
 /** GUI operations deliberately lacking a renderer gesture; T6 requires a reason for each. */
 export const NO_GESTURE = {
+  'canvas.insertTemplate': 'B9 task 10 moves template insertion onto this operation.',
+  'canvas.setArrange': 'B9 task 10 moves the Arrange toggle onto this operation.',
+  'window.show': 'B9 task 13 adds the Canvases list’s show gesture.',
   'agent.setType': 'B9 task 12 moves this renderer edit onto the core operation.',
   'agent.setConnection': 'B9 task 12 moves this renderer edit onto the core operation.',
   'agent.setSettings': 'B9 task 12 moves this renderer edit onto the core operation.',

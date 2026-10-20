@@ -14,7 +14,7 @@ vi.mock('./terminal/screen', async () => {
 function stubApi(api: Partial<AppApi>) {
   const canvas = newCanvasId();
   const usage: Partial<AppApi> = {
-    windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c: canvas } }),
+    windowGet: vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { canvas } }),
     getRun: vi
       .fn<AppApi['getRun']>()
       .mockResolvedValue({ id: newCanvasId(), token: 'test', checkpoint: null, name: null }),
@@ -82,7 +82,9 @@ describe('App', () => {
 
   it('learns the canvas id from window.get when it restores run progress', async () => {
     const c = newCanvasId();
-    const windowGet = vi.fn<AppApi['windowGet']>().mockResolvedValue({ ok: true, value: { c } });
+    const windowGet = vi
+      .fn<AppApi['windowGet']>()
+      .mockResolvedValue({ ok: true, value: { canvas: c } });
     const saveRun = vi.fn<AppApi['saveRun']>().mockResolvedValue(null);
     stubApi({
       appInfo: vi
