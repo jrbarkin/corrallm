@@ -14,6 +14,7 @@ import { appServerRefusal, ASK_EACH_SESSION, codexLogin } from '../login';
 import type { Distribution, Consent } from '../../adapter';
 import { startAppServer } from '../rpc';
 import type { SpawnAppServer } from '../rpc';
+import { folderTrust } from '../terminal/hooks';
 import { readSkills, slashCommands } from './commands';
 import { runGit } from './diff';
 import type { RunGit } from './diff';
@@ -30,7 +31,9 @@ import { Translator } from './translate';
  * agent's Agent SDK connection is. It runs the user's own `codex` (../codex.ts) in the project
  * folder, so the thread has their version, login and settings (~/.codex: config.toml, AGENTS.md,
  * skills, MCP servers), and is theirs: `codex resume` sees it, and corrallm resumes it after a
- * restart. One private app server per session, closed with it.
+ * restart. One private app server per session, closed with it, told on its command line that the
+ * project folder is trusted (the user chose it in corrallm's folder dialog, the trust gate), for
+ * that server alone, as a Codex Terminal session is: their config.toml is never written.
  *
  * It runs on whatever login Codex has; on a ChatGPT plan only once the user allows it, and never in
  * a build made as a commercial or hosted product (../login.ts says why). The plan's usage limits
@@ -130,6 +133,9 @@ export class AppServerConnector implements Connector<CodexMode> {
       cwd: spec.cwd,
       env: spec.env,
       clientInfo: { name: 'corrallm', title: 'corrallm', version },
+      // The project folder trusted for this server alone, as a Terminal session trusts it: by the
+      // path its thread works in, and its real path where they differ (Codex may resolve it).
+      args: ['-c', folderTrust(spec.cwd, realCwd)],
       onNotification: (method, params) => {
         if (live.session) live.session.notification(method, params);
         else early.push({ method, params });
