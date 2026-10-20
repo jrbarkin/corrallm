@@ -27,7 +27,8 @@ export const runOps = {
   'run.kill': define('run.kill', {
     summary:
       'Kills an agent, or every agent of a group: pauses it, interrupts its turn, and takes ' +
-      'back the messages to and from it that are waiting or whose turn is going on.',
+      'back the messages to and from it that are waiting or whose turn is going on. An agent ' +
+      'one of them had reached is told so with its next message.',
     input: z.strictObject({ canvas, target: Target }),
     output: z.strictObject({}),
   }),

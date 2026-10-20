@@ -220,6 +220,68 @@ describe('the app’s core and window channels', () => {
     expect(b).toEqual([]);
   });
 
+  it('tells the window a turn’s hit limit with when it lifts, as the core held its backend', async () => {
+    const resetsAt = Date.now() + 60 * 60_000;
+    // Claude Code's latest reading, as the core keeps it from its status line: its 5-hour window
+    // used up.
+    await writeFile(
+      path.join(profile, 'usage.json'),
+      JSON.stringify({
+        version: 2,
+        readings: [
+          {
+            backend: 'claude-code',
+            windows: { fiveHour: { usedPercent: 100, resetsAt } },
+            at: Date.now(),
+          },
+        ],
+      }),
+    );
+    // In a mode that runs its command without asking, so its turn goes to its end.
+    const fake = new FakeConnector({ adapter: 'claude-code', mode: 'acceptEdits' });
+    const start = fake.start.bind(fake);
+    // Its turn ends as Claude Code's Terminal ends one at its limit: usage-limit, saying no reset.
+    vi.spyOn(fake, 'start').mockImplementation((spec, host) =>
+      start(spec, {
+        ...host,
+        emit: (event) => {
+          host.emit(
+            event.type === 'end'
+              ? { ...event, result: { status: 'failed', reason: 'usage-limit', message: 'Limit' } }
+              : event,
+          );
+        },
+      }),
+    );
+    const { connect } = await app({
+      connectors: { 'claude-code.terminal': fake },
+      environment: () => Promise.resolve({}),
+    });
+    const seven = connect(7);
+    await channel(seven, 'canvas:forget');
+    await channel(seven, 'project:choose');
+    const heard = events(seven);
+    await channel(seven, 'session:start', 'a', {
+      connection: 'claude-code.terminal',
+      model: null,
+      mode: null,
+    });
+    await channel(seven, 'session:send', 'a', { id: crypto.randomUUID(), text: 'Hello' });
+    await vi.waitFor(() => {
+      expect(heard).toContainEqual([
+        'session:event',
+        [
+          'a',
+          'claude-code.terminal',
+          expect.objectContaining({
+            type: 'end',
+            result: { status: 'failed', reason: 'usage-limit', message: 'Limit', resetsAt },
+          }),
+        ],
+      ]);
+    });
+  });
+
   it('keeps the canvas across reload, closes its sessions, and forgets only a destroyed window', async () => {
     const fake = new FakeConnector({ adapter: 'codex' });
     const { core, connect, served } = await app({

@@ -1,15 +1,17 @@
 import { renderReady, events } from '../test-render';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_LABEL } from '../../shared/api/limits';
 import { canvasIdOf, newCanvasId } from '../../shared/canvas';
 import type { CanvasFile } from '../../shared/ipc';
+import type { QueueItem } from '../../shared/model/queue';
 import type { RunCheckpoint } from '../../shared/run';
 import type { UsageState } from '../../shared/usage';
 import { catalog } from '../catalog';
 import { api } from '../api/client';
+import { useDraft } from '../useDraft';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { readRun } from '../../shared/engine/run/checkpoint';
@@ -96,6 +98,119 @@ afterEach(() => {
 });
 
 describe('GraphEditor', () => {
+  function DraftGate({ save }: { save: () => Promise<void> }) {
+    const { problem, ...draft } = useDraft('Saved', save);
+    return (
+      <>
+        <input aria-label="Pending draft" {...draft} />
+        {problem && <p role="alert">{problem}</p>}
+      </>
+    );
+  }
+
+  it.each(['save', 'shortcut', 'run', 'composer'] as const)(
+    'waits for in-flight drafts before %s',
+    async (gesture) => {
+      const saving = Promise.withResolvers<undefined>();
+      const files = {
+        open: vi.fn<CanvasFiles['open']>().mockResolvedValue(null),
+        save: vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral'),
+        forget: vi.fn<CanvasFiles['forget']>().mockResolvedValue(newCanvasId()),
+      };
+      const { fake, node } = await setup(
+        {
+          nodes: [
+            agentNode('a', 0, 0, {
+              data: {
+                label: 'a',
+                connection: 'claude-code.sdk',
+                queue: [{ id: 'work', message: 'Planned' }],
+              },
+            }),
+          ],
+          edges: [],
+        },
+        files,
+      );
+      if (gesture === 'run') fireEvent.click(button('Show all queues'));
+      if (gesture === 'composer') fireEvent.doubleClick(node('a'));
+      const save = vi.fn(() => saving.promise);
+      render(<DraftGate save={save} />);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Pending draft' }), {
+        target: { value: 'New words' },
+      });
+      try {
+        if (gesture === 'save') fireEvent.click(button('Save'));
+        else if (gesture === 'shortcut')
+          fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+        else if (gesture === 'run') fireEvent.click(button('Run'));
+        else {
+          const composer = screen.getByRole('textbox', { name: 'Message a' });
+          fireEvent.change(composer, { target: { value: 'Hello' } });
+          fireEvent.keyDown(composer, { key: 'Enter' });
+        }
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(save).toHaveBeenCalledOnce();
+        expect(files.save).not.toHaveBeenCalled();
+        expect(fake.backend.send).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => {
+          saving.resolve(undefined);
+          await Promise.resolve();
+        });
+      }
+      await waitFor(() => {
+        expect(
+          gesture === 'save' || gesture === 'shortcut' ? files.save : fake.backend.send,
+        ).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it('waits for draft operations before acknowledging the quit freeze', async () => {
+    const saving = Promise.withResolvers<undefined>();
+    let stopping: ((request: string) => void) | undefined;
+    const source = {
+      get: vi
+        .fn<RunSource['get']>()
+        .mockResolvedValue({ id: newCanvasId(), token: 'current', checkpoint: null, name: null }),
+      save: vi.fn<RunSource['save']>().mockResolvedValue(0),
+      ready: vi.fn<RunSource['ready']>().mockResolvedValue(null),
+      onStopping: (listener: (request: string) => void) => {
+        stopping = listener;
+        return () => {
+          stopping = undefined;
+        };
+      },
+    };
+    const fake = automaticBackend();
+    await renderReady(<GraphEditor runSource={source} sessionBackend={fake.backend} />);
+    await waitFor(() => {
+      expect(source.save).toHaveBeenCalled();
+    });
+    render(<DraftGate save={() => saving.promise} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Pending draft' }), {
+      target: { value: 'New words' },
+    });
+    try {
+      await act(async () => {
+        stopping?.('quit');
+        await Promise.resolve();
+      });
+      expect(source.ready).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        saving.resolve(undefined);
+        await Promise.resolve();
+      });
+    }
+    await waitFor(() => {
+      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit', null);
+    });
+  });
+
   it('commits the agent name before the composer sends without blur', async () => {
     const { fake, node } = await setup({
       nodes: [agentNode('a', 0, 0, { data: { label: 'a', connection: 'claude-code.sdk' } })],
@@ -1497,6 +1612,97 @@ describe('GraphEditor', () => {
     expect(
       panel.getByRole('button', {
         name: 'Change how long it waits: until Codex’s usage resets (weekly)',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('offers an agent whose connection spends no usage backend no usage condition or reset', async () => {
+    // An Agent SDK agent runs on an API key: its connection declares no usage backend.
+    const { node } = await setup({
+      nodes: [agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk' } })],
+      edges: [],
+    });
+    await events.doubleClick(node('s'));
+    const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    // Neither the queue's own ⊕ nor the one above its message box.
+    for (const add of ['Add to queue', 'Queue something']) {
+      await events.click(panel.getByRole('button', { name: add }));
+      await events.click(panel.getByRole('option', { name: /^If… then/ }));
+      expect(options()).toEqual([
+        'the previous step succeeded',
+        'the previous step failed',
+        'the output contains…',
+        'the wait ran out of time',
+      ]);
+      await events.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+      await events.click(panel.getByRole('button', { name: add }));
+      await events.click(panel.getByRole('option', { name: /^Wait a while…/ }));
+      expect(options()).toEqual([
+        '5 minutes',
+        '10 minutes',
+        '30 minutes',
+        '1 hour',
+        '4 hours',
+        'Until 9:00 AM',
+      ]);
+      await events.keyDown(panel.getByRole('combobox'), { key: 'Escape' });
+    }
+  });
+
+  it('keeps a usage condition and reset an agent spending no usage backend has, editable', async () => {
+    // Written while it ran in a Terminal, or shared in a file: each still names its backend.
+    const queue: QueueItem[] = [
+      {
+        id: 'high',
+        if: { kind: 'usageAbove', backend: 'claude-code', window: 'fiveHour', percent: 80 },
+        then: [],
+      },
+      { id: 'reset', delay: { resets: 'weekly', backend: 'claude-code' } },
+    ];
+    const { node } = await setup({
+      nodes: [
+        agentNode('s', 0, 0, { data: { label: 'Keyed', connection: 'claude-code.sdk', queue } }),
+      ],
+      edges: [],
+    });
+    await events.doubleClick(node('s'));
+    const panel = within(screen.getByRole('dialog', { name: 'Keyed' }));
+    const options = () => panel.getAllByRole('option').map((o) => o.firstChild?.textContent);
+    const field = () => panel.getByRole<HTMLInputElement>('combobox');
+
+    await events.click(
+      panel.getByRole('button', {
+        name: 'Change the condition: Claude’s usage is over 80% (5-hour)',
+      }),
+    );
+    await events.click(panel.getByRole('option', { name: /^Claude’s usage is over…/ }));
+    expect(field().value).toBe('80%');
+    await events.change(field(), { target: { value: '90 weekly' } });
+    await events.click(panel.getByRole('option', { name: 'Over 90% of the weekly window' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change the condition: Claude’s usage is over 90% (weekly)',
+      }),
+    ).toBeTruthy();
+
+    await events.click(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Claude’s usage resets (weekly)',
+      }),
+    );
+    expect(field().value).toBe('until Claude’s usage resets (weekly)');
+    expect(options()).toEqual(['Until Claude’s usage resets (weekly)']);
+    // Its own backend's other window too.
+    await events.change(field(), { target: { value: 'resets' } });
+    expect(options()).toEqual([
+      'Until Claude’s usage resets (5-hour)',
+      'Until Claude’s usage resets (weekly)',
+    ]);
+    await events.click(panel.getByRole('option', { name: 'Until Claude’s usage resets (5-hour)' }));
+    expect(
+      panel.getByRole('button', {
+        name: 'Change how long it waits: until Claude’s usage resets (5-hour)',
       }),
     ).toBeTruthy();
   });

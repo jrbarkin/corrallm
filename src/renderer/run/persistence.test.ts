@@ -67,6 +67,33 @@ describe('run persistence coordinator', () => {
     await persistence.initialize();
     await persistence.flush();
     expect(source.save).toHaveBeenCalledWith('original', expect.any(Object), expect.any(String), 7);
+    persistence.dispose();
+  });
+
+  it('waits for an asynchronous freeze before capturing and acknowledging shutdown', async () => {
+    const { persistence, source, owner, stop, change } = setup();
+    await persistence.initialize();
+    const frozen = Promise.withResolvers<undefined>();
+    const freeze = vi.fn(() =>
+      frozen.promise.then(() => {
+        change('paused after draft');
+      }),
+    );
+    Object.assign(owner, { freeze });
+    stop();
+    await Promise.resolve();
+    expect(source.save).not.toHaveBeenCalled();
+    frozen.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit-1', null);
+    });
+    expect(source.save).toHaveBeenLastCalledWith(
+      'original',
+      expect.objectContaining({ state: JSON.stringify({ snapshot: 'paused after draft' }) }),
+      expect.any(String),
+      7,
+    );
+    persistence.dispose();
   });
 
   it('does not answer stop requests until started', () => {

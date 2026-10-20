@@ -5,14 +5,12 @@ import { USAGE_WINDOWS } from '../../shared/usage';
 import type { AdapterId, UsageBackendId } from '../../shared/adapter';
 import type { UsageWindow } from '../../shared/usage';
 import { threadTitle } from '../../shared/model/session';
-import { catalog as loadedCatalog } from '../catalog';
 import { answersOf, usageAnswers } from '../../shared/engine/run/asks';
 import type { Answers } from '../../shared/engine/run/asks';
 import type { EngineCatalog } from '../../shared/engine/catalog';
 import type { Answer, TaskAttempt, TaskProblem } from '../../shared/engine/run/runner';
 import { SearchPicker } from '../search/SearchPicker';
 import { useDraft } from '../useDraft';
-import { backendOfType } from '../usage/usage';
 import {
   andList,
   describe,
@@ -29,7 +27,7 @@ import {
   waitTargetLabel,
   windowText,
 } from '../../shared/model/words';
-import { DEFAULT_AGENT, runCatalog } from './agents';
+import { runCatalog } from './agents';
 import type { AgentAction } from './agents';
 import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
 import type { AddEntry, RepeatChange } from './edits';
@@ -42,6 +40,7 @@ import {
   isMessage,
   isRepeat,
   isRepeatEnds,
+  isUsageReset,
   isWait,
   MAX_ROUNDS,
   sameTarget,
@@ -405,7 +404,7 @@ function contextOf({
     owner: node.id,
     inRepeat: false,
     agent,
-    usage: backendOfType(loadedCatalog(), agent),
+    usage: engine.usageBackendOf(node.data),
     catalog: engine,
     actions,
     others,
@@ -446,8 +445,9 @@ interface AddContext {
   owner: string;
   inRepeat: boolean;
   /**
-   * The backend the agent's type is, if corrallm reads its usage: an If can check it, and a delay
-   * wait for its usage window to reset.
+   * The usage backend the agent spends, by its connection (the engine's usageBackendOf), if any: an
+   * If can check it, and a delay wait for its usage window to reset. An agent spending none (on an
+   * API key) is offered neither.
    */
   usage?: UsageBackendId | undefined;
   /** What names a usage backend in the queue's words: the run's catalog (runCatalog). */
@@ -511,7 +511,7 @@ export function QueueAddMenu({
   const context = {
     owner: node.id,
     inRepeat: false,
-    usage: backendOfType(loadedCatalog(), node.data.adapter ?? DEFAULT_AGENT),
+    usage: engine.usageBackendOf(node.data),
     catalog: engine,
     actions,
     others,
@@ -612,7 +612,8 @@ const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 /**
  * Picks a time by typing: a length, or a time of day (src/shared/model/time.ts reads what is typed, and lists what
  * it can mean first), or one of the presets. With `current`, its words are typed in to start
- * from. With `allowNone`, "No time limit" comes first, which picks undefined.
+ * from, and a usage window's reset offers its own backend's resets, whichever the agent spends.
+ * With `allowNone`, "No time limit" comes first, which picks undefined.
  */
 function TimePicker({
   label,
@@ -633,12 +634,11 @@ function TimePicker({
   onPick: (time: Time | undefined) => void;
   onCancel: () => void;
 }) {
+  const backend = current && isUsageReset(current) ? current.backend : usage;
   const options: (Time | null)[] = [
     ...(allowNone ? [null] : []),
     ...TIME_PRESETS,
-    ...(usage === undefined
-      ? []
-      : USAGE_WINDOWS.map((resets): Time => ({ resets, backend: usage }))),
+    ...(backend === undefined ? [] : USAGE_WINDOWS.map((resets): Time => ({ resets, backend }))),
   ];
   return (
     <SearchPicker

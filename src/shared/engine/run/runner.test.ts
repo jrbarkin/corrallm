@@ -2228,6 +2228,28 @@ describe('RunStore', () => {
       expect(unread.told).toEqual([]);
     });
 
+    it('reads the backend a usage condition or reset names, on an agent that spends none too', () => {
+      // An Agent SDK agent (on an API key) whose queue was written while it ran in a Terminal.
+      const queue: QueueItem[] = [
+        {
+          id: 'high',
+          if: { kind: 'usageAbove', backend: 'claude-code', window: 'fiveHour', percent: 80 },
+          then: [{ id: 'hand', message: 'Hand the mechanical steps to Codex', target: 'b' }],
+        },
+        { id: 'reset', delay: { resets: 'fiveHour', backend: 'claude-code' } },
+        { id: 'big', message: 'Start the big refactor' },
+      ];
+      const run = setup([connected('a', queue, 'claude-code.sdk'), agent('b')], manual);
+      run.reading(fiveHour(85));
+      run.store.start();
+      expect(run.sent.map((s) => s.agent)).toEqual(['b']);
+      run.reply('b');
+      expect(run.where()).toMatchObject({ a: 'waiting reset' });
+      expect(run.store.snapshot().agents.a?.until).toBe(2 * HOUR);
+      run.advance(2 * HOUR);
+      expect(run.sent.map((s) => s.text).at(-1)).toBe('Start the big refactor');
+    });
+
     it('goes on at once from a wait for a reset with no reading, saying so', () => {
       const queue: QueueItem[] = [
         { id: 'reset', delay: { resets: 'weekly', backend: 'claude-code' } },

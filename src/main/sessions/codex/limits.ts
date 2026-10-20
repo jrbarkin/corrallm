@@ -1,3 +1,4 @@
+import { usedUpUntil } from '../../../shared/usage';
 import type { UsageWindow, UsageWindows } from '../../../shared/usage';
 import { property } from '../transcript';
 
@@ -75,6 +76,21 @@ export function usageWindows(limits: readonly CodexLimit[], now: number): UsageW
     };
   }
   return Object.keys(windows).length > 0 ? windows : undefined;
+}
+
+/**
+ * Until when Codex's plan can't be used, by a snapshot: the latest reset of its windows used up
+ * (usedUpUntil), where its credits say Codex has none to go on with past them (`credits`, as
+ * recorded on a plan without any: neither `hasCredits` nor `unlimited`). Undefined where no window
+ * is used up, where credits may let Codex go on, or where the snapshot says nothing of them.
+ */
+export function codexUsedUp(snapshot: unknown, now: number): number | undefined {
+  const credits = property(snapshot, 'credits');
+  if (property(credits, 'hasCredits') !== false || property(credits, 'unlimited') !== false) {
+    return undefined;
+  }
+  const windows = usageWindows(codexLimits(snapshot) ?? [], now);
+  return windows && usedUpUntil(windows, now);
 }
 
 /** The window a limit is, by its length; by its place where Codex does not say its length. */

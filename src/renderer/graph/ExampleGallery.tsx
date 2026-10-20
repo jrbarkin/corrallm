@@ -241,11 +241,16 @@ export function ExampleGallery({
                   <span className="graph-example-description">{example.description}</span>
                   <span className="graph-example-agents" aria-hidden="true">
                     {example.agents.map((role) => (
-                      <AdapterLogo
+                      <span
                         key={role.id}
-                        adapter={role.adapter ?? DEFAULT_AGENT}
-                        size={18}
-                      />
+                        title={role.adapter === undefined ? 'Any agent' : adapterName(role.adapter)}
+                      >
+                        {role.adapter === undefined ? (
+                          <span className="graph-example-any-agent" />
+                        ) : (
+                          <AdapterLogo adapter={role.adapter} size={18} />
+                        )}
+                      </span>
                     ))}
                   </span>
                 </button>

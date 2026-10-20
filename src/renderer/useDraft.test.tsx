@@ -438,3 +438,95 @@ it.each(['resolves', 'rejects'])(
     expect(screen.queryByRole('alert')).toBeNull();
   },
 );
+
+it('keeps a failed draft at its field and lets the following operation through', async () => {
+  const core = fakeCore();
+  const saving = Promise.withResolvers<undefined>();
+  render(<Field commit={() => saving.promise} />);
+  type('Unsaved words');
+  fireEvent.blur(field());
+  const called = core.api.linkOpen({ url: 'https://example.com' }).catch((error: unknown) => error);
+  await act(async () => {
+    saving.reject(new Error('Draft refused'));
+    await Promise.resolve();
+  });
+  await called;
+  expectOneOp(core, 'link.open', { url: 'https://example.com' });
+  expect(field().value).toBe('Unsaved words');
+  expect(screen.getByRole('alert').textContent).toContain('Draft refused');
+  act(() => {
+    field().focus();
+  });
+  expect(field().value).toBe('Unsaved words');
+  fireEvent.keyDown(field(), { key: 'Escape' });
+  expect(field().value).toBe('Original');
+  expect(screen.queryByRole('alert')).toBeNull();
+  core.dispose();
+});
+
+it('waits for the other drafts even when one fails', async () => {
+  const core = fakeCore();
+  const failed = Promise.withResolvers<undefined>();
+  const successful = Promise.withResolvers<undefined>();
+  render(
+    <>
+      <Field commit={() => failed.promise} />
+      <Field commit={() => successful.promise} />
+    </>,
+  );
+  for (const input of screen.getAllByRole('textbox'))
+    fireEvent.change(input, { target: { value: 'Draft' } });
+  const called = core.api.linkOpen({ url: 'https://example.com' }).catch((error: unknown) => error);
+  await act(async () => {
+    failed.reject(new Error('No'));
+    await Promise.resolve();
+  });
+  expect(core.operations).toEqual([]);
+  await act(async () => {
+    successful.resolve(undefined);
+    await called;
+  });
+  expectOneOp(core, 'link.open', { url: 'https://example.com' });
+  core.dispose();
+});
+
+it('reports a failed operation at its draft even when the UI callback returns void', async () => {
+  const core = fakeCore();
+  core.reply('usage.setRule', {
+    ok: false,
+    error: { code: 'refused', sentence: 'This draft was refused.' },
+  });
+  render(
+    <Field
+      commit={() => {
+        void core.api.usageSetRule({ backend: 'codex', rule: null });
+      }}
+    />,
+  );
+  type('Unsaved');
+  await act(async () => {
+    await flushDrafts();
+  });
+  expect(field().value).toBe('Unsaved');
+  expect(screen.getByRole('alert').textContent).toBe('This draft was refused.');
+  await core.api.linkOpen({ url: 'https://example.com' });
+  expect(core.operations.map(({ op }) => op)).toEqual(['usage.setRule', 'link.open']);
+  core.dispose();
+});
+
+it('keeps a synchronous refusal at its field without rejecting the flush', async () => {
+  render(
+    <Field
+      commit={() => {
+        throw new Error('Invalid text');
+      }}
+    />,
+  );
+  type('Unsaved');
+  await act(async () => {
+    await flushDrafts();
+  });
+  expect(screen.getByRole('alert').textContent).toBe('Invalid text');
+  fireEvent.blur(field());
+  expect(field().value).toBe('Unsaved');
+});

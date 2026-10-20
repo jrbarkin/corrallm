@@ -172,6 +172,8 @@ export const codex: Adapter = {
   readUsage: async (backend, { env, cwd }) => {
     if (backend !== CODEX_USAGE) return undefined;
     const found = await findCodex(env);
-    return found === undefined ? undefined : usageReader.read({ codex: found, cwd, env });
+    return found === undefined
+      ? undefined
+      : (await usageReader.read({ codex: found, cwd, env }))?.windows;
   },
 };

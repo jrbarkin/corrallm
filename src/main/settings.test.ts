@@ -160,6 +160,22 @@ describe('Settings', () => {
     });
   });
 
+  it.each([
+    { host: '127.0.0.2' },
+    { host: '127.0.0.2', port: { number: 47123 } },
+    { host: '127.0.0.2', port: '47123' },
+  ])('preserves unsupported API settings on a consent write: %j', async (api) => {
+    await writeFile(file, JSON.stringify({ version: 2, consents: {}, api }));
+    const settings = new Settings(file);
+    expect(await settings.apiPort()).toBeUndefined();
+    await settings.consent('codex', 'plan').give();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ api });
+    await settings.keepApiPort(47124);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
+      api: { host: '127.0.0.2', port: 47124 },
+    });
+  });
+
   it('applies updates in order, and a failed write fails no one', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const settings = new Settings(path.join(dir, 'missing', 'settings.json'));

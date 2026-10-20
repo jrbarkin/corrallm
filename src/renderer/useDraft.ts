@@ -20,9 +20,10 @@ export function draftCall<T>(call: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Waits for every draft attempt; refusals belong to their fields and never block another action.
+ * Waits for every draft attempt; refusals belong to their fields. An action runs only afterward,
+ * synchronously when no write is in flight (as flushSync applies local graph edits).
  */
-export function flushDrafts(): Promise<void> {
+export function flushDrafts(after?: () => unknown): Promise<void> {
   // An op sent by the commit itself must not await that same commit.
   if (committing !== undefined) return Promise.resolve();
   if (!flushing && pending.size > 0) {
@@ -35,9 +36,12 @@ export function flushDrafts(): Promise<void> {
       flushing = false;
     }
   }
-  return saving.size === 0
-    ? Promise.resolve()
-    : Promise.allSettled([...saving]).then(() => flushDrafts());
+  if (saving.size > 0) return Promise.allSettled([...saving]).then(() => flushDrafts(after));
+  try {
+    return Promise.resolve(after?.()).then(() => undefined);
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(ipcErrorMessage(error)));
+  }
 }
 
 /** Pointer actions, drags and keyboard shortcuts flush before their handlers run, portals too. */
@@ -58,13 +62,18 @@ export function useDraft(
   {
     multiline = false,
     normalize,
-  }: { multiline?: boolean; normalize?: (text: string) => string } = {},
+    validate,
+  }: {
+    multiline?: boolean;
+    normalize?: (text: string) => string;
+    validate?: (text: string) => unknown;
+  } = {},
 ) {
   const [text, setText] = useState(value);
   const [focused, setFocused] = useState(false);
   const [problem, setProblem] = useState<string>();
   const [savingDraft, setSavingDraft] = useState(false);
-  const latest = useRef({ value, onCommit, normalize });
+  const latest = useRef({ value, onCommit, normalize, validate });
   const state = useRef({
     dirty: false,
     failed: false,
@@ -75,7 +84,7 @@ export function useDraft(
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   });
   useLayoutEffect(() => {
-    latest.current = { value, onCommit, normalize };
+    latest.current = { value, onCommit, normalize, validate };
   });
   useLayoutEffect(() => {
     const draft = state.current;
@@ -110,6 +119,7 @@ export function useDraft(
         draft.text = latest.current.normalize(draft.text);
         setText(draft.text);
       }
+      latest.current.validate?.(draft.text);
       const changed = draft.text !== draft.original && draft.text !== latest.current.value;
       if (!changed) return finish();
       const result = latest.current.onCommit(draft.text);
@@ -171,7 +181,13 @@ export function useDraft(
       setSavingDraft(false);
       setFocused(true);
       setText(draft.text);
-      setProblem(undefined);
+      try {
+        latest.current.validate?.(draft.text);
+        setProblem(undefined);
+      } catch (error) {
+        draft.failed = true;
+        setProblem(ipcErrorMessage(error));
+      }
       clearTimeout(draft.timer);
       pending.add(commit);
       draft.timer = setTimeout(() => {

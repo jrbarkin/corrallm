@@ -880,13 +880,15 @@ function Editor({
       if (restoreFailed && file !== 'new' && file !== 'open') return;
       if (commands && file) {
         event.preventDefault();
-        void flushDrafts().then(() => {
+        void flushDrafts(() => {
           if (file === 'save' || file === 'saveAs') {
             commands.save(file === 'saveAs');
           } else if (!latest.current.modal) {
             if (file === 'new') commands.new(latest.current.edited);
             else commands.open(latest.current.edited);
           }
+        }).catch((error: unknown) => {
+          setProblem(ipcErrorMessage(error));
         });
         return;
       }
@@ -894,7 +896,7 @@ function Editor({
       const action = keyAction(event);
       if (action === null) return;
       event.preventDefault();
-      void flushDrafts().then(() => {
+      void flushDrafts(() => {
         if (action !== 'rename') {
           execute(action);
           return;
@@ -903,6 +905,8 @@ function Editor({
           selection.nodes.has(n.id),
         );
         if (only && others.length === 0) setEditing(only.id);
+      }).catch((error: unknown) => {
+        setProblem(ipcErrorMessage(error));
       });
     };
     document.addEventListener('keydown', onKeyDown);
@@ -1360,10 +1364,18 @@ function Editor({
                   commands.open(edited);
                 }}
                 onSave={() => {
-                  commands.save(false);
+                  void flushDrafts(() => {
+                    commands.save(false);
+                  }).catch((error: unknown) => {
+                    setProblem(ipcErrorMessage(error));
+                  });
                 }}
                 onSaveAs={() => {
-                  commands.save(true);
+                  void flushDrafts(() => {
+                    commands.save(true);
+                  }).catch((error: unknown) => {
+                    setProblem(ipcErrorMessage(error));
+                  });
                 }}
                 onExamples={() => {
                   setGallery(true);
@@ -1559,16 +1571,12 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
-              void flushDrafts()
-                .then(() => legacy.flush())
-                .then(
-                  () => {
-                    runStore.start();
-                  },
-                  (error: unknown) => {
-                    setProblem(ipcErrorMessage(error));
-                  },
-                );
+              void flushDrafts(async () => {
+                await legacy.flush();
+                runStore.start();
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
             }}
             onStop={() => {
               runStore.stop();

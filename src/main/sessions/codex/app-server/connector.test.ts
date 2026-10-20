@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +140,35 @@ describe('the App Server connection', () => {
     expect(sent).not.toHaveProperty('approvalPolicy');
     expect(sent).not.toHaveProperty('sandboxPolicy');
   });
+
+  it('trusts the project folder for its app server alone, as a Terminal session trusts it', async () => {
+    /** What each app server was started with, and where. */
+    const servers: { args: readonly string[]; cwd: unknown }[] = [];
+    const spawnFake: AppServerConnectorDeps['spawn'] = (_codex, args, options) => {
+      servers.push({ args, cwd: options.cwd });
+      return spawn(process.execPath, [FAKE, ...args], options);
+    };
+    const trusted = (folder: string) => `${JSON.stringify(folder)}={trust_level="trusted"}`;
+    // One `-c` override, for this server alone (the user's config.toml is never written): the
+    // folder its thread works in.
+    const real = await realpath(dir);
+    await start({ cwd: real }, {}, { spawn: spawnFake });
+    expect(servers).toEqual([
+      { args: ['app-server', '-c', `projects={${trusted(real)}}`], cwd: real },
+    ]);
+    expect(await requests('thread/start')).toMatchObject([{ cwd: real }]);
+    // Reached through a link, by both its names: the thread works in it as given, and Codex may
+    // resolve it.
+    const link = path.join(dir, 'link');
+    await mkdir(path.join(dir, 'shop'));
+    await symlink(path.join(dir, 'shop'), link);
+    await start({ cwd: link }, {}, { spawn: spawnFake });
+    expect(servers[1]).toEqual({
+      args: ['app-server', '-c', `projects={${trusted(link)},${trusted(await realpath(link))}}`],
+      cwd: link,
+    });
+  });
+
   it('says whether the user’s own policies ask before acting, where they are none of its modes', async () => {
     const reported = async (sandbox: string, approval: string) => {
       const { events } = await start(
@@ -498,12 +527,18 @@ describe('the App Server connection', () => {
     expect(texts(events)).toEqual(['You picked Blue.']);
   });
 
-  it('interrupts a turn, whose command’s output streamed meanwhile', async () => {
+  it('interrupts a turn, whose simulated command’s output streamed meanwhile', async () => {
     const { session, heard, ended, events } = await start();
     await session.send({ id: 'm1', text: 'slow' });
     await heard('tool', { detail: { kind: 'output' } });
     await session.interrupt();
     await ended('m1');
+    expect(await requests('turn/interrupt')).toEqual([
+      {
+        threadId: (await requests('turn/start'))[0]?.threadId,
+        turnId: expect.any(String) as unknown,
+      },
+    ]);
     expect(events.at(-1)).toMatchObject({ type: 'end', result: { status: 'cancelled' } });
   });
 
@@ -888,6 +923,7 @@ describe('the App Server connection, replaying the real Codex', () => {
     expect(problems).toEqual([]);
   });
 
+  // The recording ends at turn/completed(interrupted), without a command exit: cancellation, not proof that its process stopped.
   it('a command interrupted while it runs', async () => {
     const { session, heard, ended, events, problems } = await replayed('interrupt', {
       cwd: '/work/smoke/three',

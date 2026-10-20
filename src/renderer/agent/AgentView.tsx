@@ -458,6 +458,7 @@ export function AgentView({
                 title={titleProblem}
                 placeholder="Unnamed agent"
               />
+              {titleProblem && <span role="alert">{titleProblem}</span>}
               {queueState && <span className="agent-control-state">{queueState}</span>}
               {changed.added + changed.removed > 0 && (
                 <span className="agent-diff" title="Lines changed this session">

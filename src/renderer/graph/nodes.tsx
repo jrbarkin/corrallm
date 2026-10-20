@@ -258,22 +258,33 @@ function LabelInput({ id, label }: { id: string; label: string }) {
     input.current?.select();
   }, []);
   return (
-    <input
-      ref={input}
-      className="graph-label nodrag"
-      aria-label="Label"
-      {...draft}
-      title={problem}
-      onKeyDown={(event) => {
-        void draft.onKeyDown(event);
-        if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape'))
-          stopEditing();
-      }}
-      onBlur={() => {
-        void draft.onBlur();
-        stopEditing();
-      }}
-    />
+    <>
+      <input
+        ref={input}
+        className="graph-label nodrag"
+        aria-label="Label"
+        {...draft}
+        onKeyDown={(event) => {
+          const kept = draft.onKeyDown(event);
+          if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'Escape')) {
+            if (kept instanceof Promise)
+              void kept.then((ok) => {
+                if (ok) stopEditing();
+              });
+            else if (kept !== false) stopEditing();
+          }
+        }}
+        onBlur={() => {
+          const kept = draft.onBlur();
+          if (kept instanceof Promise)
+            void kept.then((ok) => {
+              if (ok) stopEditing();
+            });
+          else if (kept) stopEditing();
+        }}
+      />
+      {problem && <span role="alert">{problem}</span>}
+    </>
   );
 }
 

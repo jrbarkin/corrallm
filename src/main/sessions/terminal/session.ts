@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   PermissionMode,
   SessionMode,
+  SessionEvent,
   TerminalAsk,
   TurnResult,
   UserMessage,
@@ -36,6 +37,9 @@ import { ENTER } from './typing';
  * lasts until the CLI has taken every message corrallm sent in it and stopped working. corrallm
  * types a message only once the prompt is ready: the CLI idle (or done), and nothing the user
  * typed in the prompt; meanwhile, a session kept from it by a dialog or by the user's draft is waiting on the user.
+ * A turn the CLI ends with an error fails, saying why where its hooks did (a usage limit, a login,
+ * the API). Where they didn't, a CLI that reads its account's usage apart from its terminal has it
+ * read before the turn ends: a limit used up then failed it, until its reset.
  *
  * What the CLI asks the user in its terminal is listed outside it ('asking'), never answered: its
  * hooks may tell what it is about to ask (what a permission prompt is for, its questions and a
@@ -113,6 +117,8 @@ const TAIL = 40;
 type State = ProgramStatus['state'];
 /** The CLI at work on a turn, or waiting on the user in one. */
 const busy = (state: State | undefined) => state === 'working' || state === 'blocked';
+/** How a turn ends that failed for a reason corrallm can't tell. */
+const FAILED: TurnResult = { status: 'failed', reason: 'error' };
 
 /** A turn going on, as corrallm sees it. */
 interface Turn {
@@ -191,6 +197,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   #state: State | undefined;
   #reporting = false;
   #turn: Turn | undefined;
+  /** An ended turn being classified, ahead of anything the CLI does in its next turn. */
+  #ending: { end: Extract<SessionEvent, { type: 'end' }>; events: SessionEvent[] } | undefined;
   /** Messages to type, once the prompt is ready. */
   #pending: UserMessage[] = [];
   /** A message being typed, until it is (or the typing is stopped). */
@@ -280,7 +288,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       throw error;
     }
     if (this.#id !== null) this.#host.remember(this.#id);
-    this.#host.emit({
+    this.#emit({
       type: 'started',
       model: this.#spec.model,
       mode: this.#mode,
@@ -288,7 +296,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       models: [],
     });
     const unheard = this.#cli.unheard?.();
-    if (unheard !== undefined) this.#host.emit({ type: 'unheard', text: unheard });
+    if (unheard !== undefined) this.#emit({ type: 'unheard', text: unheard });
     this.#readUsage();
   }
 
@@ -298,7 +306,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     const turn = this.#turn ?? this.#begin();
     turn.messages.push(message.id);
-    this.#host.emit({ type: 'user', id: message.id, text: message.text });
+    this.#emit({ type: 'user', id: message.id, text: message.text });
     this.#pending.push(message);
     this.#updateStatus();
     this.#check();
@@ -335,6 +343,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   }
 
   async close(): Promise<void> {
+    this.#finishEnd();
     this.#closing = true;
     if (this.#typing) this.#typing.stopped = true;
     this.#clearTimers();
@@ -409,7 +418,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         this.#exited = true;
         this.#clearTimers();
         this.#deliver({ type: 'exit', code: null });
-        this.#host.emit({
+        this.#emit({
           type: 'closed',
           error: error instanceof Error ? error.message : `${name} could not start.`,
         });
@@ -503,12 +512,13 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       }
     }
     this.#exited = true;
+    this.#finishEnd();
     this.#clearTimers();
     this.#flush();
     this.#deliver({ type: 'exit', code });
     if (this.#closing) return;
     this.#forgetAsks();
-    this.#host.emit({
+    this.#emit({
       type: 'closed',
       ...(code === 0 ? {} : { error: `${this.#cli.name} exited with code ${String(code)}.` }),
     });
@@ -576,6 +586,24 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   // ---- Turns.
 
+  /** A usage read may delay an end, but never let the next turn's events overtake it. */
+  #emit(event: SessionEvent): void {
+    if (this.#ending) this.#ending.events.push(event);
+    else this.#host.emit(event);
+  }
+
+  /**
+   * A read still pending when another turn ends (or the session closes) says nothing about why
+   * this turn failed. Publish its generic failure and release its following events in order.
+   */
+  #finishEnd(result: TurnResult = FAILED): void {
+    const pending = this.#ending;
+    if (!pending) return;
+    this.#ending = undefined;
+    this.#host.emit({ ...pending.end, result });
+    for (const event of pending.events) this.#emit(event);
+  }
+
   #begin(): Turn {
     const turn: Turn = {
       messages: [],
@@ -639,6 +667,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const turn = this.#turn;
     if (!turn || this.#typing || this.#awaiting || this.#pending.length > 0) return;
     if (busy(this.#state)) return;
+    this.#finishEnd();
     this.#turn = undefined;
     this.#unconfirmed = [];
     // What it asked in the turn was answered (or never will be).
@@ -646,18 +675,50 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#notified = undefined;
     this.#list();
     const interrupted = turn.interrupted || (turn.ran && this.#state === 'idle');
-    const failed = !interrupted && (turn.failed || (turn.ran && this.#state === 'error'));
-    this.#host.emit({
-      type: 'end',
-      messages: turn.messages,
-      seconds: Math.max(1, Math.round((Date.now() - turn.started) / 1000)),
-      result: interrupted
+    // Its CLI ended it with an error (rather than leaving corrallm's message unsent).
+    const erred = !interrupted && turn.ran && this.#state === 'error';
+    const failed = !interrupted && (turn.failed || erred);
+    const seconds = Math.max(1, Math.round((Date.now() - turn.started) / 1000));
+    const end = (result: TurnResult) => {
+      this.#emit({ type: 'end', messages: turn.messages, seconds, result });
+    };
+    if (erred && !turn.failed && turn.result === undefined && this.#cli.readUsage) {
+      void this.#endFailed({ type: 'end', messages: turn.messages, seconds, result: FAILED });
+      return;
+    }
+    end(
+      interrupted
         ? { status: 'cancelled', reason: 'interrupted' }
         : failed
-          ? (turn.result ?? { status: 'failed', reason: 'error' })
+          ? (turn.result ?? FAILED)
           : { status: 'completed', reason: 'completed' },
-    });
+    );
     this.#readUsage();
+  }
+
+  /**
+   * Ends a turn its CLI ended with an error without saying why, once its account's usage is read
+   * (apart from its terminal, its reading going to main's as after any turn): failed on its limit,
+   * until the reset, where the reading says the account is used up; else for a reason corrallm
+   * can't tell. Later events wait behind it, with their own turn identities; a read still pending
+   * when the next turn ends or the session closes is given up, never dropping or reordering ends.
+   */
+  async #endFailed(end: Extract<SessionEvent, { type: 'end' }>): Promise<void> {
+    const pending = { end, events: [] as SessionEvent[] };
+    this.#ending = pending;
+    let usage;
+    try {
+      usage = await this.#cli.readUsage?.();
+    } catch {
+      // A failed read leaves the turn's original, unexplained error intact.
+    }
+    if (usage && !this.#exited && !this.#closing) this.#deps.usage?.(usage.windows);
+    if (this.#ending !== pending) return;
+    this.#finishEnd(
+      usage?.usedUp === undefined
+        ? FAILED
+        : { status: 'failed', reason: 'usage-limit', resetsAt: usage.usedUp },
+    );
   }
 
   /** Whether a message can be typed now: the CLI's prompt is ready, and empty. */
@@ -790,14 +851,14 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     if (status === turn.status) return;
     turn.status = status;
-    this.#host.emit({ type: 'status', status });
+    this.#emit({ type: 'status', status });
   }
 
   /** Tells the user what went wrong in a turn, once. */
   #tell(turn: Turn, level: 'warning' | 'error', text: string): void {
     if (turn.told) return;
     turn.told = true;
-    this.#host.emit({ type: 'notice', id: randomUUID(), level, text });
+    this.#emit({ type: 'notice', id: randomUUID(), level, text });
   }
 
   /** Reads the screen again shortly (once it has settled): types what waits, says what it waits on. */
@@ -847,13 +908,13 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
           const turn = this.#turn ?? this.#begin();
           const message = randomUUID();
           turn.messages.push(message);
-          this.#host.emit({ type: 'user', id: message, text: signal.text });
+          this.#emit({ type: 'user', id: message, text: signal.text });
         }
         return;
       }
       case 'reply':
         if (signal.text.trim() !== '' && this.#turn) {
-          this.#host.emit({ type: 'text', id: randomUUID(), text: signal.text });
+          this.#emit({ type: 'text', id: randomUUID(), text: signal.text });
         }
         return;
       case 'failed':
@@ -871,11 +932,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       case 'mode':
         if (signal.mode !== this.#mode) {
           this.#mode = signal.mode;
-          this.#host.emit({ type: 'mode', mode: signal.mode });
+          this.#emit({ type: 'mode', mode: signal.mode });
         }
         return;
       case 'model':
-        this.#host.emit({ type: 'model', model: signal.model });
+        this.#emit({ type: 'model', model: signal.model });
         return;
       case 'ask':
         this.#told(signal.ask);
@@ -992,7 +1053,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const listed = JSON.stringify(asks);
     if (listed === this.#listed) return;
     this.#listed = listed;
-    this.#host.emit({ type: 'asking', asks });
+    this.#emit({ type: 'asking', asks });
   }
 
   // ---- Usage.
@@ -1011,8 +1072,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const usage = this.#deps.usage;
     if (!usage || !this.#cli.readUsage) return;
     void this.#cli.readUsage().then(
-      (windows) => {
-        if (windows && !this.#closing) usage(windows);
+      (read) => {
+        if (read && !this.#closing) usage(read.windows);
       },
       () => undefined,
     );
