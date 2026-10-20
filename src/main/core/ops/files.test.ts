@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { OpResult } from '../../../shared/api/errors';
+import { MAX_MESSAGE_BYTES } from '../../../shared/api/limits';
 import type { OpName } from '../../../shared/api/surface';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
@@ -221,6 +222,10 @@ describe('canvas.create', () => {
       { template: TEMPLATE, agents: { planner: 'nothing' } },
       { template: TEMPLATE, connections: { planner: 'codex.terminal' } },
       { values: { feature: 'Export CSV' } },
+      // As canvas.insertTemplate refuses them (the one fill): a blank it hasn't, and a value
+      // that, filled in among the template's words, passes what a message holds.
+      { template: TEMPLATE, values: { nothing: 'Export CSV' } },
+      { template: TEMPLATE, values: { feature: 'x'.repeat(MAX_MESSAGE_BYTES) } },
     ]) {
       expect(await call('canvas.create', args), JSON.stringify(args)).toMatchObject({
         ok: false,

@@ -148,11 +148,14 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 same list (before or after; null means the end). An initial If or repeat has at most
                 16 children to fit the request bound, with further children added through into;
                 canvas.addAgent takes the new agent's `role` (a token gives one only as it creates
-                an agent: R12); canvas-tools.ts: `canvas.insertTemplate` fills a shipped template's
-                fields, chooses its adapters by job and its connections (each adapter's first when
-                omitted), and inserts it as a new group, returning `{ group, agents }`. It records
-                `ctx.by` only on queue text changed by the fill (your text has no `by`), defaults a
-                lead's parent to its own agent, and checks R11 on the whole insertion.
+                an agent: R12); canvas-tools.ts: `canvas.insertTemplate` inserts a shipped template,
+                filled as canvas.create's is (canvas/template.ts' `filledTemplate`, the one fill:
+                its fields' values, its adapters chosen by job, its connections, each adapter's
+                first when omitted; a field or an agent it lacks, an unknown adapter or connection,
+                or filled text past MAX_MESSAGE_BYTES is invalid; `fillTemplate`'s one `by` rule:
+                queue text a party other than you filled in is that party's, yours no one's), as a
+                new group, returning `{ group, agents }`. It defaults a lead's parent to its own
+                agent, and checks R11 on the whole insertion.
                 `canvas.setArrange` saves the preference, laying out once when enabled. Both call
                 `ctx.commit` at once so a batch can capture their pure builds;
                 batch.ts: `canvas.batch`, each inner op prepared as the caller's own
@@ -163,8 +166,8 @@ src/main/core/  The core: corrallm's one server, owning profile stores, messages
                 touched a canvas's document and file, `document:<c>` and `file:<c>`, stale once
                 either changed, and its Allow, carrying no change of a document's, is settled in a
                 write of its own); files.ts: a canvas's lifetime over canvas/lifecycle.ts,
-                `canvas.create` (empty, or a template filled by canvas/template.ts, the text a
-                token's values filled in marked `by` it; shown in your window; a token's canvas its
+                `canvas.create` (empty, or a template filled by canvas/template.ts, as
+                `canvas.insertTemplate`'s is, the text a token's values filled in marked `by` it; shown in your window; a token's canvas its
                 party's, `document.created_by`), `canvas.open`, `canvas.saveAs` and
                 `project.choose` (yours alone, D1: a path only from the dialog you complete, on your
                 window), `canvas.save` (to its file; none for a canvas never saved) and

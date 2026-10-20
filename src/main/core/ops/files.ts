@@ -12,7 +12,7 @@ import { partyIdOf } from '../caller';
 import type { TokenCaller } from '../caller';
 import type { Lifecycle } from '../canvas/lifecycle';
 import type { Lost, Proposals } from '../canvas/proposals';
-import { templateDocument } from '../canvas/template';
+import { filledTemplate } from '../canvas/template';
 import type { TemplateChoice } from '../canvas/template';
 import type { WindowId } from '../host';
 import { nameOf, partyText } from '../parties';
@@ -331,4 +331,14 @@ function defined(choice: {
   [K in keyof Omit<TemplateChoice, 'template'>]?: TemplateChoice[K] | undefined;
 }): Omit<TemplateChoice, 'template'> {
   return Object.fromEntries(Object.entries(choice).filter(([, value]) => value !== undefined));
+}
+
+/** Template `choice` as canvas `canvas`'s document, filled by `by` (canvas/template.ts). */
+function templateDocument(
+  canvas: CanvasId,
+  choice: TemplateChoice,
+  by: PartyId,
+  context: Parameters<typeof filledTemplate>[2],
+): CanvasDocument {
+  return { ...filledTemplate(choice, by, context).document, id: canvas };
 }

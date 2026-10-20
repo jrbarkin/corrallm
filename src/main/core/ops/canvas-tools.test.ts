@@ -186,7 +186,12 @@ describe('canvas.insertTemplate', () => {
       [{ template: crypto.randomUUID(), values: {} }, 'not-found'],
       [{ template: template.id, values: {}, parent: 'missing' }, 'not-found'],
       [{ template: template.id, values: { unknown: 'words' } }, 'invalid'],
-      [{ template: template.id, values: {}, agents: { missing: 'codex' } }, 'not-found'],
+      // An agent the template lacks is an argument it doesn't take, as canvas.create says.
+      [{ template: template.id, values: {}, agents: { missing: 'codex' } }, 'invalid'],
+      [
+        { template: template.id, values: {}, connections: { missing: 'codex.terminal' } },
+        'invalid',
+      ],
       [{ template: template.id, values: {}, agents: { builder: 'absent' } }, 'invalid'],
       [
         { template: template.id, values: {}, connections: { builder: 'codex.app-server' } },
