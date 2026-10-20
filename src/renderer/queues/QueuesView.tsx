@@ -222,7 +222,7 @@ export function QueuesView({
     if (!wait || !isWait(wait)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choice.agent } : { agent: choice.agent, item };
-    edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
+    void edits.setWaitFor(owner, wait.id, chooseTarget(wait.waitFor, choice.index, target));
   };
 
   /**
@@ -475,22 +475,35 @@ function LaneCells({
   const items = lane.cells
     .map((cell) => cell.item)
     .filter((item) => !isMessage(item) || item.submission === undefined);
-  const { dragging, handle } = useSortable(
+  const { ordered, dragging, handle } = useSortable(
     items,
-    (itemId, index) => {
-      edits.move(id, itemId, index);
+    (itemId, before) => {
+      return edits.move(id, itemId, before);
     },
     () =>
       [...(grid.current?.querySelectorAll<HTMLElement>('.queues-cell') ?? [])].filter(
         (cell) => cell.dataset.lane === id && cell.hasAttribute('data-sortable'),
       ),
   );
+  // A lane previews only its own order; its document stays in the mirror until drop commits.
+  let previewAt = 0;
+  const queue = (node.data.queue ?? []).map((item) =>
+    items.includes(item) ? (ordered[previewAt++] ?? item) : item,
+  );
+  const shown =
+    dragging === undefined
+      ? lane
+      : (lanesOf(
+          nodes.map((other) =>
+            other.id === id ? { ...node, data: { ...node.data, queue } } : other,
+          ),
+        ).lanes.find((one) => one.agent.id === id) ?? lane);
   const agentRun = run.agents[id];
   /** Where the agent has nothing to do until what it waits for is done. */
-  const idle = lane.cells.flatMap(({ row }, n) => {
-    const previous = lane.cells[n - 1];
+  const idle = shown.cells.flatMap(({ row }, n) => {
+    const previous = shown.cells[n - 1];
     const after = previous ? previous.row + previous.span : 0;
-    const before = lane.cells[n];
+    const before = shown.cells[n];
     const held =
       run.running && agentRun?.status === 'waiting' && agentRun.current === before?.item.id;
     return row > after ? [{ from: after, to: row, held }] : [];
@@ -621,7 +634,7 @@ function LaneCells({
           style={{ gridColumn: column, gridRow: `${String(from + 2)} / ${String(to + 2)}` }}
         />
       ))}
-      {lane.cells.map(({ item, row, span, inner }) => (
+      {shown.cells.map(({ item, row, span, inner }) => (
         <div
           key={item.id}
           className={item.id === dragging ? 'queues-cell dragging' : 'queues-cell'}
@@ -662,7 +675,7 @@ function LaneCells({
           )}
         </div>
       ))}
-      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: lane.end + 2 }}>
+      <div className="queues-end-cell" style={{ gridColumn: column, gridRow: shown.end + 2 }}>
         <QueueEnd
           marks={marks(id, null)}
           pick={
@@ -682,7 +695,7 @@ function LaneCells({
           label={`Add to ${name(id)}'s queue`}
           up={false}
           onAdd={(entry) => {
-            edits.add(id, entry);
+            return edits.add(id, entry);
           }}
           onChooseStep={onChoose}
         />

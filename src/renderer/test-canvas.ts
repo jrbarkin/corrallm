@@ -7,6 +7,8 @@ import { fromFile, toFile } from '../shared/model/file';
 import { diffRows } from '../shared/model/rows';
 import type { Entities, Entity, MetaEntity } from '../shared/model/state';
 import * as S from '../shared/model/structure';
+import * as Q from '../shared/model/queue-ops';
+import type { QueueChange, QueueEntry } from '../shared/model/queue';
 import { arrange } from '../shared/model/layout';
 import { insert } from '../shared/model/insert';
 import { fillTemplate, withAgents, withConnections } from '../shared/model/templates';
@@ -90,6 +92,10 @@ export function fakeCanvas(initial: CanvasDocument) {
     });
   });
   const ops: GuiOp[] = [
+    'queue.add',
+    'queue.remove',
+    'queue.move',
+    'queue.update',
     'canvas.addAgent',
     'canvas.spawnAgent',
     'canvas.rename',
@@ -107,6 +113,34 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.reply(op, (raw) => {
       let built: S.Built<unknown>;
       switch (op) {
+        case 'queue.add': {
+          const { agent, entry, into } = OPS[op].input.parse(raw);
+          const made = Q.add(
+            document,
+            { agent, entry: entry as QueueEntry, ...(into === undefined ? {} : { into }) },
+            'you',
+            context.newId,
+          );
+          built = { next: made.next, result: { id: made.result.item } };
+          break;
+        }
+        case 'queue.remove':
+          built = Q.remove(document, OPS[op].input.parse(raw));
+          break;
+        case 'queue.move': {
+          const args = OPS[op].input.parse(raw);
+          built = Q.move(document, {
+            agent: args.agent,
+            item: args.item,
+            before: args.before ?? null,
+          });
+          break;
+        }
+        case 'queue.update': {
+          const { agent, item, change } = OPS[op].input.parse(raw);
+          built = Q.update(document, { agent, item, change: change as QueueChange }, 'you');
+          break;
+        }
         case 'canvas.addAgent':
           built = S.addAgent(document, OPS[op].input.parse(raw), context);
           break;

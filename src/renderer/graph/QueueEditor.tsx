@@ -32,7 +32,7 @@ import {
 import { DEFAULT_AGENT, runCatalog } from './agents';
 import type { AgentAction } from './agents';
 import type { AgentNode, CanvasNode } from '../../shared/model/canvas';
-import type { RepeatChange } from './edits';
+import type { AddEntry, RepeatChange } from './edits';
 import { agentName } from '../../shared/model/queries';
 import {
   CONDITIONS,
@@ -52,7 +52,6 @@ import type {
   Condition,
   QueueApproval,
   QueueDelay,
-  QueueEntry as ModelQueueEntry,
   QueueIf,
   QueueItem,
   QueueMessage,
@@ -71,9 +70,6 @@ import type { HandleProps } from './SortableList';
 import '../run/run.css';
 
 const EMPTY: readonly QueueItem[] = [];
-
-/** The wait chooser supplies its id until queue.add returns it through the operation. */
-export type QueueEntry = ModelQueueEntry & { id?: string };
 
 /** A wait's target (its `index`), whose agent was just picked: next, which of its steps. */
 export interface StepChoice {
@@ -119,9 +115,9 @@ interface QueueProps {
   /** What the agent can do. */
   actions: readonly AgentAction[];
   /** `into`: the id of the if-then or repeat to add to. */
-  onAdd: (entry: QueueEntry, into?: string) => void;
+  onAdd: AddEntry;
   onRemove: (itemId: string) => void;
-  onMove: (itemId: string, index: number) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
   onRetarget: (itemId: string, target: string | undefined) => void;
   onEditMessage: (itemId: string, message: string) => void;
   /** Sets what a step is to do, in the user's words ('' takes it off). */
@@ -199,10 +195,15 @@ export function QueueEditor({
   const shown = only ? queue.filter(only) : queue;
   const planned = queue.filter((item) => !isMessage(item) || item.submission === undefined);
   const movable = shown.filter((item) => !isMessage(item) || item.submission === undefined);
-  /** Moves an item to `index` among those shown: to where the item now there is in the queue. */
-  const moveShown = (itemId: string, index: number) => {
-    const at = movable[Math.min(Math.max(index, 0), movable.length - 1)];
-    if (at) onMove(itemId, planned.indexOf(at));
+  /** The end of a filtered view comes just after its last visible sibling. */
+  const moveShown = (itemId: string, before: string | null) => {
+    if (before !== null) return onMove(itemId, before);
+    const last = movable.filter((item) => item.id !== itemId).at(-1);
+    const next =
+      last === undefined
+        ? undefined
+        : planned.slice(planned.indexOf(last) + 1).find((item) => item.id !== itemId);
+    return onMove(itemId, next?.id ?? null);
   };
 
   return (
@@ -327,7 +328,7 @@ function ItemRow({
         context={context}
         onMove={props.onMove}
         onAdd={(entry) => {
-          props.onAdd(entry, item.id);
+          return props.onAdd(entry, item.id);
         }}
         onRepeat={(change) => {
           props.onRepeat(item.id, change);
@@ -343,7 +344,7 @@ function ItemRow({
       context={context}
       onMove={props.onMove}
       onAdd={(entry) => {
-        props.onAdd(entry, item.id);
+        return props.onAdd(entry, item.id);
       }}
       onCondition={(condition) => {
         props.onCondition(item.id, condition);
@@ -502,7 +503,7 @@ export function QueueAddMenu({
   /** Its name, telling it from the queue's own ⊕. */
   label?: string;
   up?: boolean;
-  onAdd: (entry: QueueEntry) => void;
+  onAdd: AddEntry;
   onChooseStep?: (choice: StepChoice) => void;
 }) {
   const others = nodes.filter((n) => n.type === 'agent').filter((n) => n.id !== node.id);
@@ -1586,8 +1587,8 @@ function IfRow({
   item: QueueIf;
   handle: HandleProps;
   context: Context;
-  onMove: (itemId: string, index: number) => void;
-  onAdd: (entry: QueueEntry) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
+  onAdd: AddEntry;
   onCondition: (condition: Condition) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1696,7 +1697,7 @@ function AddMenu({
   /** The agent every action and message added is aimed at; by default, the queue's own. */
   target?: string;
   context: AddContext;
-  onAdd: (entry: QueueEntry) => void;
+  onAdd: AddEntry;
 }) {
   // A wait added to a repeat waits round by round.
   const context = place === 'repeat' ? { ...given, inRepeat: true } : given;
@@ -1737,7 +1738,7 @@ function AddMenu({
           }
           onPick={(choice) => {
             if (choice.kind === 'action' && target !== undefined) {
-              onAdd({ action: choice.action.name, target });
+              void onAdd({ action: choice.action.name, target });
               close();
               return;
             }
@@ -1759,7 +1760,7 @@ function AddMenu({
           usage={context.usage}
           catalog={context.catalog}
           onPick={(condition) => {
-            if (condition.kind !== 'repeatEnds') onAdd({ if: condition, then: [] });
+            if (condition.kind !== 'repeatEnds') void onAdd({ if: condition, then: [] });
             close();
           }}
           onCancel={close}
@@ -1772,7 +1773,7 @@ function AddMenu({
           catalog={context.catalog}
           onPick={(until) => {
             if (until.kind !== 'timedOut' && until.kind !== 'usageAbove') {
-              onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
+              void onAdd({ repeat: [], until, rounds: DEFAULT_ROUNDS, otherwise: 'ask' });
             }
             close();
           }}
@@ -1788,9 +1789,10 @@ function AddMenu({
             close();
             if (target.id === undefined) return;
             // All of its work, until one of its steps is picked (beside).
-            const id = crypto.randomUUID();
-            onAdd({ id, waitFor: [{ agent: target.id }] });
-            context.onChooseStep?.({ waitId: id, index: 0, agent: target.id });
+            const agent = target.id;
+            void Promise.resolve(onAdd({ waitFor: [{ agent }] })).then((waitId) => {
+              if (waitId !== undefined) context.onChooseStep?.({ waitId, index: 0, agent });
+            });
           }}
           onCancel={close}
         />
@@ -1799,7 +1801,7 @@ function AddMenu({
         <WaitPicker
           context={context}
           onPick={(target) => {
-            onAdd({ waitFor: [target] });
+            void onAdd({ waitFor: [target] });
             close();
           }}
           onCancel={close}
@@ -1811,7 +1813,7 @@ function AddMenu({
           usage={context.usage}
           catalog={context.catalog}
           onPick={(time) => {
-            if (time) onAdd({ delay: time });
+            if (time) void onAdd({ delay: time });
             close();
           }}
           onCancel={close}
@@ -1820,7 +1822,7 @@ function AddMenu({
       {step === 'ok' && (
         <OkPicker
           onPick={(approve) => {
-            onAdd({ approve });
+            void onAdd({ approve });
             close();
           }}
           onCancel={close}
@@ -1831,7 +1833,7 @@ function AddMenu({
           label="New message to the agent"
           multiline
           onSubmit={(message) => {
-            onAdd({ message, ...(target === undefined ? {} : { target }) });
+            void onAdd({ message, ...(target === undefined ? {} : { target }) });
             close();
           }}
           onCancel={close}
@@ -1841,7 +1843,10 @@ function AddMenu({
         <TargetPicker
           context={context}
           onPick={(target) => {
-            onAdd({ action: step.name, ...(target.id === undefined ? {} : { target: target.id }) });
+            void onAdd({
+              action: step.name,
+              ...(target.id === undefined ? {} : { target: target.id }),
+            });
             close();
           }}
           onCancel={close}
@@ -2145,8 +2150,8 @@ function RepeatRow({
   item: QueueRepeat;
   handle: HandleProps;
   context: Context;
-  onMove: (itemId: string, index: number) => void;
-  onAdd: (entry: QueueEntry) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
+  onAdd: AddEntry;
   onRepeat: (change: RepeatChange) => void;
 }) {
   const [editing, setEditing] = useState<'until' | 'rounds' | 'otherwise'>();

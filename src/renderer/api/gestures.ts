@@ -7,10 +7,6 @@ export const NO_GESTURE = {
   'agent.setConnection': 'B9 task 12 moves this renderer edit onto the core operation.',
   'agent.setSettings': 'B9 task 12 moves this renderer edit onto the core operation.',
   'agent.setRole': 'B9 task 12 moves this renderer edit onto the core operation.',
-  'queue.add': 'B9 task 11 moves this renderer edit onto the core operation.',
-  'queue.remove': 'B9 task 11 moves this renderer edit onto the core operation.',
-  'queue.move': 'B9 task 11 moves this renderer edit onto the core operation.',
-  'queue.update': 'B9 task 11 moves this renderer edit onto the core operation.',
 
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
   'canvas.open': 'B9 task 12 moves Open from the canvas:open channel onto this operation.',

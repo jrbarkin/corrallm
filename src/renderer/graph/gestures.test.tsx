@@ -8,6 +8,7 @@ import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
 import { catalog } from '../catalog';
 import { newCanvasId } from '../../shared/canvas';
+import type { QueueItem } from '../../shared/model/queue';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { toFile } from '../../shared/model/file';
 import { fakeCanvas } from '../test-canvas';
@@ -64,6 +65,7 @@ function setup({
   empty = false,
   restored = false,
   project = false,
+  queue = [] as QueueItem[],
 } = {}) {
   const doc: CanvasDocument = {
     id: newCanvasId(),
@@ -88,7 +90,9 @@ function setup({
             ...(group ? { parentId: 'F' } : {}),
             data: {
               label: id,
-              ...(approval && id === 'a' ? { queue: [{ id: 'ok', approve: 'Review' }] } : {}),
+              ...(id === 'a'
+                ? { queue: approval ? [{ id: 'ok', approve: 'Review' }] : queue }
+                : {}),
             },
           })),
         ],
@@ -633,4 +637,138 @@ it('refreshes and retries a file save from the mirror after a concurrent core ed
   });
   expect(view.save).toHaveBeenLastCalledWith(toFile(view.document), false, view.rev);
   expect(view.document.nodes[0]?.data.label).toBe('Core edit');
+});
+
+it('adds a queue step with one op and renders its core id', async () => {
+  const view = setup();
+  fireEvent.doubleClick(view.node('a'));
+  fireEvent.click(button('Add to queue'));
+  fireEvent.click(screen.getByRole('option', { name: /^Read / }));
+  fireEvent.click(screen.getByRole('option', { name: 'This agent' }));
+  await called(view.core);
+  expectOneOp(view.core, 'queue.add', {
+    canvas: view.canvas,
+    agent: 'a',
+    entry: { action: 'Read' },
+  });
+  const row = await screen.findByRole('button', { name: 'Move Read' });
+  expect(row.closest('[data-item]')?.getAttribute('data-item')).toBe(
+    view.document.nodes[0]?.type === 'agent'
+      ? view.document.nodes[0].data.queue?.[0]?.id
+      : undefined,
+  );
+});
+it('removes a queue row with one op', async () => {
+  const view = setup({ queue: [{ id: 'work', action: 'Read' }] });
+  fireEvent.doubleClick(view.node('a'));
+  fireEvent.click(button('Remove Read'));
+  await called(view.core);
+  expectOneOp(view.core, 'queue.remove', { canvas: view.canvas, agent: 'a', item: 'work' });
+});
+it('commits a queue message draft with one op', async () => {
+  const view = setup({ queue: [{ id: 'work', message: 'Before' }] });
+  fireEvent.doubleClick(view.node('a'));
+  const field = screen.getByRole('textbox', { name: 'Message to the agent' });
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'After' } });
+  expect(view.core.operations).toEqual([]);
+  fireEvent.blur(field);
+  await called(view.core);
+  expectOneOp(view.core, 'queue.update', {
+    canvas: view.canvas,
+    agent: 'a',
+    item: 'work',
+    change: { kind: 'message', message: 'After' },
+  });
+  await waitFor(() => {
+    expect((field as HTMLTextAreaElement).value).toBe('After');
+  });
+});
+it.each(['agent', 'All queues'] as const)('sends one queue.move at drop from %s', async (where) => {
+  const view = setup({
+    queue: [
+      { id: 'first', action: 'Read' },
+      { id: 'second', action: 'Bash' },
+      { id: 'third', action: 'Edit' },
+    ],
+  });
+  if (where === 'agent') fireEvent.doubleClick(view.node('a'));
+  else fireEvent.click(button('Show all queues'));
+  const boxes = vi
+    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: HTMLElement) {
+      const all =
+        where === 'agent'
+          ? [...view.container.querySelectorAll('.graph-queue > li')]
+          : [...view.container.querySelectorAll('.queues-cell[data-lane="a"]')];
+      const top = all.findIndex((row) => row === this) * 40;
+      return { top, bottom: top + 40, height: 40 } as DOMRect;
+    });
+  fireEvent.pointerDown(button('Move Read'), { button: 0 });
+  fireEvent.pointerMove(window, { clientY: 115 });
+  fireEvent.pointerMove(window, { clientY: 45 });
+  expect(view.core.operations).toEqual([]);
+  fireEvent.pointerUp(window);
+  await called(view.core);
+  expectOneOp(view.core, 'queue.move', {
+    canvas: view.canvas,
+    agent: 'a',
+    item: 'first',
+    before: 'third',
+  });
+  await waitFor(() => {
+    const node = view.document.nodes.find((node) => node.id === 'a');
+    expect(node?.type === 'agent' ? node.data.queue?.map((item) => item.id) : []).toEqual([
+      'second',
+      'first',
+      'third',
+    ]);
+  });
+  boxes.mockRestore();
+});
+
+it('drops by the previewed neighbour when another writer inserts a row during the drag', async () => {
+  const view = setup({
+    queue: [
+      { id: 'first', action: 'Read' },
+      { id: 'second', action: 'Bash' },
+      { id: 'third', action: 'Edit' },
+    ],
+  });
+  fireEvent.doubleClick(view.node('a'));
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    const rows = [...view.container.querySelectorAll('.graph-queue > li')];
+    const top = rows.findIndex((row) => row === this) * 40;
+    return { top, bottom: top + 40, height: 40 } as DOMRect;
+  });
+  fireEvent.pointerDown(button('Move Read'), { button: 0 });
+  fireEvent.pointerMove(window, { clientY: 115 });
+  fireEvent.pointerMove(window, { clientY: 45 });
+  const next = {
+    ...view.document,
+    nodes: view.document.nodes.map((node) =>
+      node.id === 'a' && node.type === 'agent'
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              queue: [{ id: 'incoming', action: 'Read' }, ...(node.data.queue ?? [])],
+            },
+          }
+        : node,
+    ),
+  };
+  await act(async () => {
+    await view.edit(toFile(next), view.rev);
+  });
+  fireEvent.pointerUp(window);
+  await called(view.core);
+  expectOneOp(view.core, 'queue.move', {
+    canvas: view.canvas,
+    agent: 'a',
+    item: 'first',
+    before: 'third',
+  });
 });

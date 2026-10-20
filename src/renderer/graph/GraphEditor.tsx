@@ -73,24 +73,7 @@ import type { TerminalBackend } from '../terminal/backend';
 import { GraphActionsContext } from './actions';
 import { agentLabel, connectionOf, DEFAULT_AGENT, runCatalog } from './agents';
 import type { GraphActions } from './actions';
-import {
-  addToQueue,
-  editMessage,
-  moveInQueue,
-  removeFromQueue,
-  retarget,
-  setAgent,
-  setApproval,
-  setCondition,
-  setConnection,
-  setExpect,
-  setInstruction,
-  setRepeat,
-  setRole,
-  setSettings,
-  setTime,
-  setWaitFor,
-} from './graph';
+import { setAgent, setConnection, setRole, setSettings } from './graph';
 import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/model/queries';
 import type { Graph } from './flow';
 import { ExampleGallery } from './ExampleGallery';
@@ -107,7 +90,7 @@ import type { WorkFlowEdge } from './nodes';
 import { QuestionsSidebar } from './Questions';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
-import type { QueueEdits } from './edits';
+import { operationEdits } from './edits';
 import './GraphEditor.css';
 
 const nodeTypes = { agent: AgentNodeView, frame: GroupNodeView } satisfies NodeTypes;
@@ -683,66 +666,12 @@ function Editor({
     [api, canvasId, editing, model.nodes, perform, removed, run, selectOne],
   );
 
-  const edits = useMemo<QueueEdits>(
-    () => ({
-      add: (owner, entry, into) => {
-        const id = entry.id ?? crypto.randomUUID();
-        setGraph((g) => {
-          let first = true;
-          return addToQueue(
-            g,
-            owner,
-            entry,
-            () => {
-              const next = first ? id : crypto.randomUUID();
-              first = false;
-              return next;
-            },
-            into,
-          );
-        });
-      },
-      remove: (owner, itemId) => {
-        setGraph((g) => removeFromQueue(g, owner, itemId));
-      },
-      move: (owner, itemId, index) => {
-        setGraph((g) => moveInQueue(g, owner, itemId, index));
-      },
-      retarget: (owner, itemId, target) => {
-        setGraph((g) => retarget(g, owner, itemId, target));
-      },
-      editMessage: (owner, itemId, message) => {
-        setGraph((g) => editMessage(g, owner, itemId, message));
-      },
-      setInstruction: (owner, itemId, instruction) => {
-        setGraph((g) => setInstruction(g, owner, itemId, instruction));
-      },
-      setExpect: (owner, itemId, expect) => {
-        setGraph((g) => setExpect(g, owner, itemId, expect));
-      },
-      setCondition: (owner, ifId, condition) => {
-        setGraph((g) => setCondition(g, owner, ifId, condition));
-      },
-      setWaitFor: (owner, waitId, targets) => {
-        setGraph((g) => setWaitFor(g, owner, waitId, targets));
-      },
-      setTime: (owner, itemId, time) => {
-        setGraph((g) => setTime(g, owner, itemId, time));
-      },
-      setApproval: (owner, okId, approve) => {
-        setGraph((g) => setApproval(g, owner, okId, approve));
-      },
-      setRepeat: (owner, repeatId, change) => {
-        setGraph((g) => setRepeat(g, owner, repeatId, change));
-      },
-      goOn: (owner, itemId) => {
-        runStore.goOn(owner, itemId);
-      },
-      decide: (owner, itemId, answer) => {
-        runStore.decide(owner, itemId, answer);
-      },
-    }),
-    [setGraph, runStore],
+  const edits = useMemo(
+    () =>
+      operationEdits(api, canvasId, runStore, (error) => {
+        setProblem(ipcErrorMessage(error));
+      }),
+    [api, canvasId, runStore],
   );
   const closeWork = useCallback(() => {
     setWork(undefined);

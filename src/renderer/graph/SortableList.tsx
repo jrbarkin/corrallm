@@ -22,7 +22,7 @@ export function SortableList<T extends { id: string }>({
   items: readonly T[];
   className: string;
   label?: string;
-  onMove: (itemId: string, index: number) => void;
+  onMove: (itemId: string, before: string | null) => void | Promise<void>;
   rowOf?: (item: T) => number | undefined;
   renderItem: (item: T, handle: HandleProps) => ReactNode;
   /** Read-only rows stay visible but never become drag sources or reorder destinations. */
@@ -30,12 +30,14 @@ export function SortableList<T extends { id: string }>({
 }) {
   const list = useRef<HTMLOListElement>(null);
   const movable = isMovable ? items.filter(isMovable) : items;
-  const { dragging, handle } = useSortable(movable, onMove, () =>
+  const { ordered, dragging, handle } = useSortable(movable, onMove, () =>
     [...(list.current?.children ?? [])].filter((row) => row.hasAttribute('data-sortable')),
   );
+  let at = 0;
+  const shown = items.map((item) => (movable.includes(item) ? (ordered[at++] ?? item) : item));
   return (
     <ol ref={list} className={className} {...(label === undefined ? {} : { 'aria-label': label })}>
-      {items.map((item) => (
+      {shown.map((item) => (
         <li
           key={item.id}
           className={item.id === dragging ? 'dragging' : undefined}

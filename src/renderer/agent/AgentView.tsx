@@ -367,7 +367,7 @@ export function AgentView({
     if (!choosing || !waiting || !isWait(waiting)) return;
     const target: WaitTarget =
       item === undefined ? { agent: choosing.agent } : { agent: choosing.agent, item };
-    own.onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
+    void own.onWaitFor(waiting.id, chooseTarget(waiting.waitFor, choosing.index, target));
     setChoosing(undefined);
   };
 

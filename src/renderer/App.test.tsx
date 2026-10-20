@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { AppApi } from '../shared/ipc';
 import { App } from './App';
+import { topics } from './api/topics';
 
 vi.mock('./terminal/screen', async () => {
   const { fakeScreens } = await import('./terminal/test-screen');
@@ -57,7 +58,11 @@ function stubApi(api: Partial<AppApi>) {
 }
 
 describe('App', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    // Unmount and finish subscription cleanup while its transport still exists.
+    cleanup();
+    topics.dispose();
+    await Promise.resolve();
     Reflect.deleteProperty(window, 'api');
   });
 
