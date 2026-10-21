@@ -11,6 +11,7 @@ import type { Store } from './core/store/store';
 import { onDisk, openTestStore } from './core/store/test-store';
 import type { Connection } from './core/store/sqlite';
 import { CanvasMemory } from './memory';
+import { isConversationId } from './sessions/adapters';
 
 /*
  * What the core remembers of each canvas, in the profile's database (Core Database §5): its file,
@@ -57,7 +58,10 @@ describe('CanvasMemory', () => {
     add.run(TEAM, 'future-agent', 'valid', 'session:one');
     add.run(TEAM, 'future-agent', 'flag', '--resume');
     add.run(TEAM, 'codex', 'not-a-uuid', 'session:one');
-    expect((await new CanvasMemory(store).get(TEAM)).conversations).toEqual({
+    expect(
+      (await new CanvasMemory(store, undefined, undefined, isConversationId).get(TEAM))
+        .conversations,
+    ).toEqual({
       'future-agent': { valid: { id: 'session:one' } },
     });
     expect(said).toHaveBeenCalledTimes(2);
@@ -172,7 +176,7 @@ describe('CanvasMemory', () => {
       ['upper', { id: SESSION }],
       ['__proto__', { id: SESSION }],
     ]);
-    const memory = new CanvasMemory(store);
+    const memory = new CanvasMemory(store, undefined, undefined, isConversationId);
     const team = await memory.get(TEAM);
     expect(team).toEqual({
       project: '/p',

@@ -19,7 +19,7 @@ export function requireConversationId(
     throw new TypeError(`Invalid ${adapter} conversation id.`);
 }
 
-/** Claude Code and Codex's stricter shape. Other adapters declare their own. */
+/** A UUID shape an adapter may declare. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function isUuid(value: unknown): value is string {

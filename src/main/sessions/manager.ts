@@ -104,8 +104,8 @@ interface Agent {
  * session with its connection's connector (connector.ts), in the canvas's project folder, resuming
  * the agent's last conversation, and passes requests on to it. It remembers each agent's
  * conversation with the canvas (memory.ts, by the canvas's id), so that sessions survive a
- * restart: one per adapter (Claude Code's session, Codex's thread), which each of its connections
- * resumes. What an agent starts with (its model, effort and mode) is the renderer's to say: its
+ * restart: one per adapter, shared by its connections. What an agent starts with (its model,
+ * effort and mode) is the renderer's to say: its
  * settings, saved in the canvas's file. A window that stops showing the canvas, a new project
  * folder, and the app quitting all end sessions.
  */
@@ -229,8 +229,8 @@ export class SessionManager {
   }
 
   /**
-   * Rewinds the agent's session to before one of its messages: its files (Claude Code's file
-   * checkpoints), its conversation, or both. The conversation goes back as a copy of it up to
+   * Rewinds the agent's session to before one of its messages: its connection's file
+   * checkpoints, its conversation, or both. The conversation goes back as a copy of it up to
    * that point, which becomes the agent's own (none, for its first message: it starts afresh);
    * its session ends, to resume that copy when it starts again. The original stays, for /resume.
    * Rejects, changing nothing, if the message is not in the conversation or the files can't be

@@ -139,10 +139,7 @@ it('refuses an unsafe id reported by the native session without remembering it',
   } as SDKMessage);
   await settle();
   expect(remembered).toEqual([]);
-  expect(events).toContainEqual({
-    type: 'closed',
-    error: expect.stringMatching(/conversation id/),
-  });
+  expect(events.find((event) => event.type === 'closed')?.error).toMatch(/conversation id/);
 });
 
 /** Lets the session read what the fake CLI said. */

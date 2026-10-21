@@ -981,7 +981,9 @@ Native conversation ids meet R42a at every boundary: 1–128 ASCII letters, digi
 adapters). IPC checks the minimum; the manager checks the agent's adapter, including list and
 fork results and remembered ids. Connectors check resumes before finding/spawning a CLI, and
 validate native replies before remembering them. Saved conversation rows with invalid ids are
-refused with a diagnostic; an unknown adapter's safe ids are preserved. Terminal hooks refuse
+refused with a diagnostic; an unknown adapter's safe ids are preserved. Canvas memory always
+checks the platform minimum; the core supplies the registry's stricter check, so storage and
+its test helpers do not load connector runtimes or assets. Terminal hooks refuse
 an invalid id with a session warning while still reporting the rest of the event. Native ids
 live in canvas memory, not the run checkpoint. Agent and prompt ids that never enter argv or
 native conversation paths keep their own bounds.

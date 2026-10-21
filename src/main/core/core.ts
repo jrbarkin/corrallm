@@ -23,7 +23,7 @@ import { ProjectFiles } from '../files';
 import { CanvasMemory } from '../memory';
 import { ProjectFolders } from '../project';
 import { RunJournal } from '../run-journal';
-import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER, isConversationId } from '../sessions/adapters';
 import type { OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
 import { createConnectors, createConversations, createOptions } from '../sessions/connectors';
@@ -206,8 +206,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const tokens = new TokenStore(path.join(profile, 'tokens.json'));
   await tokens.load();
   // A canvas with edits not saved is never forgotten (B9 Design §2), nor one open.
-  const memory: CanvasMemory = new CanvasMemory(store, undefined, (canvas: CanvasId): boolean =>
-    documents.unsaved(canvas),
+  const memory: CanvasMemory = new CanvasMemory(
+    store,
+    undefined,
+    (canvas: CanvasId): boolean => documents.unsaved(canvas),
+    isConversationId,
   );
   // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
   // again as one is raised or settled.

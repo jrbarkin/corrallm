@@ -955,14 +955,21 @@ describe('SessionManager', () => {
 });
 
 describe('SessionManager and kept conversations', () => {
-  it('never gives a connector an unsafe remembered id, even from memory not read back yet', async () => {
+  it('starts afresh after refusing an unsafe saved id, saying why', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const canvas = shownCanvas();
     const sessions = manager();
     await memory.update(canvas, () => ({
       conversations: { 'claude-code': { a: { id: '--resume' } } },
     }));
-    await expect(sessions.start(canvas, 'a', OPTIONS)).rejects.toThrow(/conversation id/);
-    expect(fake.started).toEqual([]);
+    try {
+      await sessions.start(canvas, 'a', OPTIONS);
+      expect(fake.started[0]?.resume).toBeNull();
+      expect(said.mock.calls.flat().join(' ')).toContain('will not be resumed');
+      await sessions.close(canvas, 'a');
+    } finally {
+      said.mockRestore();
+    }
   });
   it('refuses an invalid native id returned by a conversation provider', async () => {
     const sessions = manager();

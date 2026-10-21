@@ -561,7 +561,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
     ];
     const quote = (part: string) => `'${part.replaceAll("'", `'\\''`)}'`;
     const env = cliEnv({
-      CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': FAKE_CLAUDE }),
+      CORRALLM_AGENT_PATHS: JSON.stringify({ codex, 'claude-code': FAKE_CLAUDE }),
       ...extra,
     });
     const child =

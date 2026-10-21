@@ -176,7 +176,7 @@ describe('session:* handlers', () => {
       's'.repeat(128),
     );
     for (const id of ['--resume', 's'.repeat(129), 's\n']) {
-      await expect(invoke('session:resume', ['a', id])).rejects.toThrow(/conversation's id/);
+      expect(() => invoke('session:resume', ['a', id])).toThrow(/conversation's id/);
     }
     expect(services.sessions.resumeSession).toHaveBeenCalledOnce();
   });

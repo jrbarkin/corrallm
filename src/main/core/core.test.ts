@@ -12,14 +12,20 @@ import { EXAMPLES } from '../../shared/examples';
 import { isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import type { Job } from '../../shared/adapter';
-import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
+import { ADAPTERS, CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
 import { STORE_FILE } from './store/open';
 import { snapshots } from './store/snapshots';
 import { connect } from './store/sqlite';
-import { journaledRun, openTestStore, readOnDisk, writeOnDisk } from './store/test-store';
+import {
+  journaledRun,
+  keepCanvases,
+  openTestStore,
+  readOnDisk,
+  writeOnDisk,
+} from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { asHuman, WindowPorts } from './gui';
 import { openWindow } from './test-window';
@@ -61,6 +67,30 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
 }
 
 describe('createCore', () => {
+  it('checks saved conversation ids with the registry’s stricter adapter shape', async () => {
+    const nativeId = 'session:one';
+    const adapter = ADAPTERS.find((adapter) => !adapter.isConversationId(nativeId));
+    if (adapter === undefined) throw new Error('No adapter with a stricter id shape');
+    const canvas = newCanvasId();
+    const file = path.join(profile, 'strict-ids.corral');
+    await writeFile(
+      file,
+      JSON.stringify({ format: 'corrallm', version: 2, id: canvas, nodes: [], links: [] }),
+    );
+    await keepCanvases(profile, {
+      [canvas]: {
+        file,
+        project: profile,
+        conversations: { [adapter.descriptor.id]: { a: { id: nativeId } } },
+      },
+    });
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
+    await expect(started.keptCanvas(file)).resolves.toBe(canvas);
+    expect(said.mock.calls.flat().join(' ')).toContain(
+      'conversation id is invalid; it will not be resumed',
+    );
+  });
   it('refuses a malformed executable map before opening the profile', async () => {
     vi.stubEnv('CORRALLM_AGENT_PATHS', 'not JSON');
     await expect(start()).rejects.toThrow(/CORRALLM_AGENT_PATHS/);
