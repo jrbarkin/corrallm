@@ -431,7 +431,7 @@ export function AgentView({
         className="agent-view"
         data-agent={agent}
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label={name}
         tabIndex={-1}
       >

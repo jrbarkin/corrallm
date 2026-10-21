@@ -1,3 +1,4 @@
+import { canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -153,7 +154,7 @@ async function openCanvas(nodes: CanvasNode[]) {
     },
     { folder, canvas },
   );
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.getByText('settings.corral', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
@@ -251,7 +252,7 @@ test('the shared panel saves role, name and startup settings while manual Messag
   expect(saved.nodes[0]?.queue).toEqual([planned]);
   expect(await readFile(canvas, 'utf8')).not.toContain(manual);
 
-  await page.getByRole('button', { name: 'New', exact: true }).click();
+  await canvasAction(page, 'New');
   await expect(page.locator('.react-flow__node-agent')).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+o');
   view = await openAgent('Reviewer');

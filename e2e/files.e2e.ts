@@ -1,3 +1,4 @@
+import { canvasAction } from './canvas-actions';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -56,7 +57,7 @@ test('saves a canvas as a .corral file, and opens it again', async () => {
   expect(saved.nodes.map((n) => n.label)).toEqual(['Agent 1', 'Agent 2']);
 
   // A new canvas, then the file opened again.
-  await page.getByRole('button', { name: 'New' }).click();
+  await canvasAction(page, 'New');
   await expect(nodes).toHaveCount(0);
   await expect.poll(windowTitle).toBe('Untitled — corrallm');
   await page.keyboard.press('ControlOrMeta+o');

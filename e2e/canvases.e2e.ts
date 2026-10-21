@@ -1,3 +1,4 @@
+import { canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,7 +25,7 @@ test.beforeEach(async () => {
     if (message.type() === 'error' || message.type() === 'warning') problems.push(message.text());
   });
   await page.waitForLoadState('load');
-  await expect(page.getByRole('button', { name: 'Open…', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Canvas menu', exact: true })).toBeVisible();
 });
 test.afterEach(async () => {
   await closeApp();
@@ -51,13 +52,13 @@ async function open(file: string) {
       showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
     });
   }, file);
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.locator('.graph-file-name')).toHaveText(path.basename(file));
 }
 const node = (label: string) =>
   page.locator('.react-flow__node').filter({ hasText: new RegExp(`^${label}$`) });
 async function list() {
-  await page.getByRole('button', { name: 'Canvases', exact: true }).click();
+  await canvasAction(page, 'Canvases');
   const dialog = page.getByRole('dialog', { name: 'Canvases', exact: true });
   await expect(dialog).toBeVisible();
   return dialog;
@@ -104,6 +105,7 @@ test('a file changed on disk raises one review in the app, applied or kept', asy
   const external = (label: string) =>
     JSON.stringify({ ...original, nodes: original.nodes.map((agent) => ({ ...agent, label })) });
   await writeFile(file, external('Applied'));
+  await openNeeds(page);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   const reviews = sidebar.getByRole('article');
   await expect(reviews).toHaveCount(1);
@@ -115,13 +117,14 @@ test('a file changed on disk raises one review in the app, applied or kept', asy
   await reviews.getByRole('button', { name: /^Dismiss / }).click();
   await expect(sidebar).toHaveCount(0);
   await writeFile(file, external('Kept on disk'));
+  await openNeeds(page);
   await expect(reviews).toHaveCount(1);
   await reviews.getByRole('button', { name: 'Keep', exact: true }).click();
   await expect(reviews.getByRole('status')).toHaveText('Kept.');
   await expect(node('Applied')).toBeVisible();
   await expect(node('Kept on disk')).toHaveCount(0);
   await reviews.getByRole('button', { name: /^Dismiss / }).click();
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await canvasAction(page, 'Save');
   await expect
     .poll(
       async () =>

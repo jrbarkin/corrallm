@@ -1,3 +1,4 @@
+import { canvasAction } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -137,7 +138,7 @@ test('runs a connected agent in the project folder, answering its prompts throug
   await expect(view).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByText('team.corral')).toBeVisible();
-  await page.getByRole('button', { name: 'New' }).click();
+  await canvasAction(page, 'New');
   await expect(page.getByRole('button', { name: 'Choose a project folder' })).toBeVisible();
   await page.keyboard.press('ControlOrMeta+o');
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();
@@ -193,7 +194,7 @@ test('runs a connected agent’s queue for real: a step, an If on its output, an
     }),
   );
   await answerDialogs(folder, canvas);
-  await page.getByRole('button', { name: 'Open…' }).click();
+  await canvasAction(page, 'Open…');
   await expect(page.getByText('release.corral')).toBeVisible();
   await page.getByRole('button', { name: 'Choose a project folder' }).click();
   await expect(page.getByRole('button', { name: 'Project folder: shop' })).toBeVisible();

@@ -1,3 +1,4 @@
+import { canvasAction, openNeeds } from './canvas-actions';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import nativePath from 'node:path';
@@ -54,7 +55,7 @@ test('long names and full queues keep ordinary and parent cards at the model’s
       showOpenDialog: () => Promise.resolve({ canceled: false, filePaths: [picked] }),
     });
   }, file);
-  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await canvasAction(page, 'Open…');
   const shown = (id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
   for (const id of ['worker', 'parent', 'child']) {
     const card = shown(id).locator('.graph-card');
@@ -1269,6 +1270,7 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
+  await openNeeds(page);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
   await sidebar.getByRole('button', { name: 'Yes', exact: true }).click();
@@ -1544,4 +1546,31 @@ test('double-click works inside the rectangle a marquee leaves around the select
   expectInside({ ...between, width: 0, height: 0 }, await box(rect));
   await page.mouse.dblclick(between.x, between.y);
   await expect(node('Agent 3')).toBeVisible();
+});
+
+test('the three floats stay at the canvas corners and open their controls', async () => {
+  const canvas = await box(pane());
+  const file = page.getByRole('toolbar', { name: 'Canvas file' });
+  const run = page.getByRole('toolbar', { name: 'Run controls' });
+  const zoom = page.getByRole('toolbar', { name: 'Canvas zoom' });
+  const left = await box(file),
+    right = await box(run),
+    bottom = await box(zoom);
+  expect(Math.abs(left.x - canvas.x - 12)).toBeLessThan(1);
+  expect(Math.abs(left.y - canvas.y - 12)).toBeLessThan(1);
+  expect(Math.abs(right.x + right.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
+  expect(Math.abs(right.y - canvas.y - 12)).toBeLessThan(1);
+  expect(Math.abs(bottom.x + bottom.width - canvas.x - canvas.width + 12)).toBeLessThan(1);
+  expect(Math.abs(bottom.y + bottom.height - canvas.y - canvas.height + 12)).toBeLessThan(1);
+  await expect(page.locator('.react-flow__controls')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Canvas menu', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'New', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Canvas menu', exact: true })).toBeHidden();
+  await zoom.getByRole('button', { name: 'Arrange automatically' }).click();
+  await expect(zoom.getByRole('button', { name: 'Arrange automatically' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 });

@@ -54,6 +54,11 @@ function setup(saved = true) {
   return canvas;
 }
 const click = async (name: string) => {
+  if (
+    ['New', 'Open…', 'Save', 'Save as…'].includes(name) &&
+    !screen.queryByRole('button', { name })
+  )
+    await events.click(screen.getByRole('button', { name: 'Canvas menu' }));
   await events.click(await screen.findByRole('button', { name }));
 };
 /** Opens the agent view of the canvas's one agent. */

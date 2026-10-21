@@ -1,8 +1,6 @@
 import {
   Background,
   ConnectionMode,
-  ControlButton,
-  Controls,
   MarkerType,
   NodeToolbar,
   Panel,
@@ -10,6 +8,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStoreApi,
+  useViewport,
 } from '@xyflow/react';
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -74,7 +73,9 @@ import { areLinked, groupMembers as groupAgentIds, isGroup } from '../../shared/
 import type { Graph } from './flow';
 import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
-import { FileBar } from './FileBar';
+import { CanvasMenu } from './CanvasMenu';
+import { RunFloat, ZoomFloat } from './Floats';
+import './Floats.css';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import type { KeyAction } from './keys';
 import { ConnectMenu } from './ConnectMenu';
@@ -459,7 +460,8 @@ function Editor({
     setAgentMenu({ id, x: event.clientX, y: event.clientY });
   }, []);
   const store = useStoreApi();
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, zoomIn, zoomOut } = useReactFlow();
+  const { zoom } = useViewport();
   const wrapper = useRef<HTMLDivElement>(null);
   /** Whether a panel, menu or question is open, which has the keyboard (Escape closes it). */
   const modal =
@@ -1045,6 +1047,7 @@ function Editor({
     <GraphActionsContext value={actions}>
       <div
         className="graph-editor"
+        data-window-open={front !== undefined || queues !== undefined ? '' : undefined}
         ref={wrapper}
         inert={restoring}
         aria-busy={restoring}
@@ -1070,7 +1073,7 @@ function Editor({
         }}
       >
         {notice && (
-          <div role="status" className="graph-panel">
+          <div role="status" className="graph-panel graph-canvas-notice">
             <ul>
               {notice.map((text, i) => (
                 <li key={i}>{text}</li>
@@ -1093,6 +1096,7 @@ function Editor({
           </p>
         )}
         <ReactFlow
+          inert={front !== undefined || queues !== undefined}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1244,36 +1248,6 @@ function Editor({
           colorMode="system"
         >
           <Background />
-          <Controls showInteractive={false}>
-            <ControlButton
-              className="graph-arrange"
-              aria-label="Arrange automatically"
-              aria-pressed={arranging}
-              title={
-                arranging
-                  ? 'Arranging automatically. Click to arrange by hand.'
-                  : 'Arrange automatically'
-              }
-              onClick={() => {
-                perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
-              }}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M6 1h4v3H6zM1 11h4v3H1zM11 11h4v3h-4zM7.5 4h1v2.5h5V11h-1V7.5h-9V11h-1V6.5h5z" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              aria-label="Show all queues"
-              title="All queues: every agent's, side by side"
-              onClick={() => {
-                setQueues({});
-              }}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M1 2h4v12H1zM6 2h4v8H6zM11 2h4v10h-4z" />
-              </svg>
-            </ControlButton>
-          </Controls>
           <NodeToolbar
             nodeId={selectedIds}
             isVisible={selectedIds.length > 1}
@@ -1303,70 +1277,6 @@ function Editor({
               Delete
             </button>
           </NodeToolbar>
-          <Panel position="top-right">
-            <NeedsSidebar
-              key={canvasId}
-              canvas={canvasId}
-              mirror={mirror}
-              onReply={commands.reply}
-              needs={needed.needs}
-              input={needed.input}
-              onDecide={edits.decide}
-              onAnswer={(agentId, promptId, index, answer) => {
-                sessionStore.answerQuestion(agentId, promptId, index, answer);
-              }}
-              onOpen={(agentId) => {
-                selectOne(agentId);
-                setOpened({ ids: [agentId] });
-              }}
-            />
-          </Panel>
-          {files && (
-            <Panel position="top-left">
-              <FileBar
-                canvases={
-                  <Canvases
-                    canvas={canvasId}
-                    mirror={mirror}
-                    onShow={commands.show}
-                    onClose={commands.close}
-                  />
-                }
-                name={name}
-                edited={canonical?.meta.edited ?? false}
-                project={{ folder: project, onChoose: commands.chooseProject }}
-                problem={problem}
-                onNew={() => {
-                  commands.new();
-                }}
-                onOpen={() => {
-                  commands.open();
-                }}
-                onSave={() => {
-                  void flushDrafts(() => {
-                    commands.save(false);
-                  }).catch((error: unknown) => {
-                    setProblem(ipcErrorMessage(error));
-                  });
-                }}
-                onSaveAs={() => {
-                  void flushDrafts(() => {
-                    commands.save(true);
-                  }).catch((error: unknown) => {
-                    setProblem(ipcErrorMessage(error));
-                  });
-                }}
-                onExamples={() => {
-                  setGallery(true);
-                }}
-                onDismiss={() => {
-                  setProblem(undefined);
-                }}
-                extra={gauges}
-              />
-            </Panel>
-          )}
-          {!files && backends.length > 0 && <Panel position="top-left">{gauges}</Panel>}
           {files && graph.nodes.length === 0 && (
             <Panel position="top-center" className="graph-panel graph-start">
               <button
@@ -1384,6 +1294,116 @@ function Editor({
             dots to let them talk or queue work · Drag on empty space to select · F2 to rename
           </Panel>
         </ReactFlow>
+        <div
+          className="canvas-floats"
+          hidden={gallery || work !== undefined || settingsAgent !== undefined}
+        >
+          {files && (
+            <CanvasMenu
+              canvases={
+                <Canvases
+                  canvas={canvasId}
+                  mirror={mirror}
+                  onShow={commands.show}
+                  onClose={commands.close}
+                />
+              }
+              name={name}
+              edited={canonical?.meta.edited ?? false}
+              project={{ folder: project, onChoose: commands.chooseProject }}
+              problem={problem}
+              onNew={() => {
+                commands.new();
+              }}
+              onOpen={() => {
+                commands.open();
+              }}
+              onSave={() => {
+                void flushDrafts(() => {
+                  commands.save(false);
+                }).catch((error: unknown) => {
+                  setProblem(ipcErrorMessage(error));
+                });
+              }}
+              onSaveAs={() => {
+                void flushDrafts(() => {
+                  commands.save(true);
+                }).catch((error: unknown) => {
+                  setProblem(ipcErrorMessage(error));
+                });
+              }}
+              onExamples={() => {
+                setGallery(true);
+              }}
+              onDismiss={() => {
+                setProblem(undefined);
+              }}
+            />
+          )}
+          <RunFloat
+            run={run}
+            working={
+              Object.keys(run.agents).filter((id) => sessions[id]?.status === 'working').length
+            }
+            queuesOpen={queues !== undefined}
+            onRun={() => {
+              void flushDrafts(() => {
+                runStore.start();
+              }).catch((error: unknown) => {
+                setProblem(ipcErrorMessage(error));
+              });
+            }}
+            onPause={() => {
+              runStore.pause();
+            }}
+            onResume={() => {
+              runStore.resume();
+            }}
+            onStop={() => {
+              runStore.stop();
+            }}
+            onQueues={() => {
+              setQueues({});
+            }}
+            gauges={gauges}
+            needs={
+              <NeedsSidebar
+                key={canvasId}
+                canvas={canvasId}
+                mirror={mirror}
+                onReply={commands.reply}
+                needs={needed.needs}
+                input={needed.input}
+                onDecide={edits.decide}
+                onAnswer={(agentId, promptId, index, answer) => {
+                  sessionStore.answerQuestion(agentId, promptId, index, answer);
+                }}
+                onOpen={(agentId) => {
+                  selectOne(agentId);
+                  setOpened({ ids: [agentId] });
+                }}
+              />
+            }
+          />
+          {front === undefined && queues === undefined && (
+            <ZoomFloat
+              zoom={zoom}
+              arranging={arranging}
+              onIn={() => {
+                void zoomIn();
+              }}
+              onOut={() => {
+                void zoomOut();
+              }}
+              onFit={() => {
+                void fitView({ padding: 0.2, maxZoom: 1 });
+              }}
+              onArrange={() => {
+                perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
+              }}
+            />
+          )}
+        </div>
         {openedNode && (
           <AgentView
             key={openedNode.id}

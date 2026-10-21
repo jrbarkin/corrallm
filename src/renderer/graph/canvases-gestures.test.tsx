@@ -106,9 +106,11 @@ it.each(['show', 'close', 'allow'] as const)(
       expect(save).toHaveBeenCalled();
     });
     order.length = 0;
-    if (action === 'allow')
+    if (action === 'allow') {
+      await events.click(screen.getByRole('button', { name: 'Needs you' }));
       await events.click(await screen.findByRole('button', { name: 'Allow' }));
-    else {
+    } else {
+      await events.click(screen.getByRole('button', { name: 'Canvas menu' }));
       await events.click(screen.getByRole('button', { name: 'Canvases' }));
       await events.click(
         await screen.findByRole('button', {

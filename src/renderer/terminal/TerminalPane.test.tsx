@@ -219,6 +219,7 @@ describe('a Terminal agent', () => {
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 4');
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
@@ -260,6 +261,7 @@ describe('a Terminal agent', () => {
     expect(card().classList.contains('asking')).toBe(true);
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const asked = sidebar.getByRole('group', { name: 'a asks, in its terminal' });
     expect(asked.textContent).toBe(
@@ -309,6 +311,7 @@ describe('a Terminal agent', () => {
     );
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
     await settle();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     const cards = sidebar.getAllByRole('group', { name: 'a asks, in its terminal' });
     expect(cards.map((card) => card.textContent)).toEqual([
@@ -350,6 +353,7 @@ describe('a Terminal agent', () => {
     expect(status().textContent).toBe('Needs you, in the terminal');
     expect(card().classList.contains('asking')).toBe(true);
     // Listed in Needs you, as a Claude agent's terminal asks are, to answer there.
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByRole('group', { name: 'a asks, in its terminal' }).textContent).toContain(
       'Codex needs you: see its terminal.',

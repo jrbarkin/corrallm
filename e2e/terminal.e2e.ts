@@ -1,3 +1,4 @@
+import { openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -304,6 +305,7 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await expect(view).toHaveCount(0);
   const card = page.locator('.react-flow__node');
   await expect(card).toHaveClass(/\basking\b/);
+  await openNeeds(page);
   const needsYou = page.getByRole('complementary', { name: 'Needs you' });
   const asked = needsYou.getByRole('group', { name: 'Agent 1 asks, in its terminal' });
   await expect(asked).toContainText('Bashecho helloDo you want to proceed?');
@@ -324,6 +326,7 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await typeIn(terminal, 'question about the database', 'Enter');
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
   await expect(asked).toContainText(
     'DatabaseWhich database?PostgresWhat the app uses todaySQLiteOne file, for tests',
   );
@@ -441,6 +444,7 @@ test('a template’s Claude agents run in their terminals, asked once whether to
   await page.waitForTimeout(500);
   expect(await starts()).toHaveLength(1);
   await queues.getByRole('button', { name: 'Back' }).click();
+  await openNeeds(page);
   const asked = page
     .getByRole('complementary', { name: 'Needs you' })
     .getByRole('group', { name: / asks, in its terminal$/ });

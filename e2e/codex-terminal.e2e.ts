@@ -1,3 +1,4 @@
+import { openNeeds } from './canvas-actions';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -208,6 +209,7 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   const card = page.locator('.react-flow__node');
   await expect(card).toHaveClass(/\basking\b/);
   // Listed in Needs you, to answer in its terminal.
+  await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });
   await expect(needs.getByRole('group', { name: /asks, in its terminal$/ })).toContainText(
     'Codex needs you: see its terminal.',

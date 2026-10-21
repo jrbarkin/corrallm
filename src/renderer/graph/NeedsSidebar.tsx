@@ -8,6 +8,9 @@ import { useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { ipcErrorMessage } from '../ipc-error';
 import { QuestionsSidebar } from './Questions';
+import type { Need } from '../../shared/engine/needs';
+import { promptQuestions } from '../../shared/model/session';
+import { FloatPopover } from './FloatPopover';
 
 type CoreNeed = ResultOf<'needs'>['items'][number];
 type Reply = Awaited<ReturnType<GuiApi['reply']>>;
@@ -50,63 +53,104 @@ export function NeedsSidebar({
       update({ item, pending: false, error: ipcErrorMessage(error) });
     }
   };
-  if (questions.needs.length === 0 && current.size === 0) return null;
+  const count =
+    needCardsCount(questions.needs) +
+    [...current.keys()].filter((id) => !settlements.get(id)?.outcome).length;
+  const bell = (
+    <>
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M3 11V7a5 5 0 0 1 10 0v4l1 2H2zM6 15h4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+      </svg>
+      {count > 0 && <span className="float-needs-count">{count}</span>}
+    </>
+  );
+  if (needCardsCount(questions.needs) === 0 && current.size === 0)
+    return (
+      <button type="button" aria-label="Needs you" title="Nothing needs you" disabled>
+        {bell}
+      </button>
+    );
   return (
-    <QuestionsSidebar
-      {...questions}
-      extra={{
-        count: [...current.keys()].filter((id) => !settlements.get(id)?.outcome).length,
-        cards: [...current.values()].map((item) => {
-          const settlement = settlements.get(item.id);
-          return (
-            <article key={item.id} className="graph-question" aria-label={item.title}>
-              <span className="graph-question-header">
-                {item.kind === 'file' ? 'File review' : 'Proposal'}
-              </span>
-              <p className="graph-question-text">{item.title}</p>
-              {item.detail && <p className="graph-question-detail">{item.detail}</p>}
-              {settlement?.outcome ? (
-                <p role="status">
-                  {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
-                </p>
-              ) : (
-                <div className="graph-question-options">
-                  {item.choices.map((choice, i) => (
+    <FloatPopover label="Needs you" button={bell} className="needs-popover">
+      {(close) => (
+        <QuestionsSidebar
+          {...questions}
+          onOpen={(id) => {
+            close();
+            questions.onOpen(id);
+          }}
+          extra={{
+            count: [...current.keys()].filter((id) => !settlements.get(id)?.outcome).length,
+            cards: [...current.values()].map((item) => {
+              const settlement = settlements.get(item.id);
+              return (
+                <article key={item.id} className="graph-question" aria-label={item.title}>
+                  <span className="graph-question-header">
+                    {item.kind === 'file' ? 'File review' : 'Proposal'}
+                  </span>
+                  <p className="graph-question-text">{item.title}</p>
+                  {item.detail && <p className="graph-question-detail">{item.detail}</p>}
+                  {settlement?.outcome ? (
+                    <p role="status">
+                      {settlement.outcome.charAt(0).toUpperCase() + settlement.outcome.slice(1)}.
+                    </p>
+                  ) : (
+                    <div className="graph-question-options">
+                      {item.choices.map((choice, i) => (
+                        <button
+                          key={choice.value}
+                          type="button"
+                          data-primary={i === 0 ? '' : undefined}
+                          disabled={settlement?.pending}
+                          title={choice.description}
+                          onClick={() => {
+                            void answer(item, choice.value);
+                          }}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {settlement?.error && <p role="alert">{settlement.error}</p>}
+                  {settlement?.outcome && (
                     <button
-                      key={choice.value}
                       type="button"
-                      data-primary={i === 0 ? '' : undefined}
-                      disabled={settlement?.pending}
-                      title={choice.description}
+                      aria-label={`Dismiss ${item.title}`}
                       onClick={() => {
-                        void answer(item, choice.value);
+                        setSettlements((previous) => {
+                          const next = new Map(previous);
+                          next.delete(item.id);
+                          return next;
+                        });
                       }}
                     >
-                      {choice.label}
+                      Dismiss
                     </button>
-                  ))}
-                </div>
-              )}
-              {settlement?.error && <p role="alert">{settlement.error}</p>}
-              {settlement?.outcome && (
-                <button
-                  type="button"
-                  aria-label={`Dismiss ${item.title}`}
-                  onClick={() => {
-                    setSettlements((previous) => {
-                      const next = new Map(previous);
-                      next.delete(item.id);
-                      return next;
-                    });
-                  }}
-                >
-                  Dismiss
-                </button>
-              )}
-            </article>
-          );
-        }),
-      }}
-    />
+                  )}
+                </article>
+              );
+            }),
+          }}
+        />
+      )}
+    </FloatPopover>
   );
+}
+
+/** The number of visible question cards, also used by the Needs float's badge. */
+function needCardsCount(needs: readonly Need[]): number {
+  return needs.reduce((count, need) => {
+    if (need.kind === 'prompt' && need.prompt.kind === 'question')
+      return (
+        count +
+        promptQuestions(need.prompt).filter(({ question }) => question.answer === undefined).length
+      );
+    return count + (need.kind === 'hold' || need.kind === 'prompt' || need.kind === 'ask' ? 1 : 0);
+  }, 0);
 }

@@ -559,6 +559,7 @@ describe('a connected agent', () => {
 
     // The canvas's Needs you lists it too, with what waits.
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByText(SUBSCRIPTION)).toBeTruthy();
     expect(sidebar.getByText('Bash waits until a can start')).toBeTruthy();
@@ -728,6 +729,7 @@ describe('a connected agent', () => {
 
     // Back on the canvas, the Needs you sidebar asks it too, and answers it.
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     await events.click(sidebar.getByRole('button', { name: 'develop' }));
     await settle();
@@ -766,9 +768,13 @@ describe('a connected agent', () => {
       ],
     });
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
+    // The badge counts questions, as the popover does, rather than just their one prompt.
+    expect(screen.getByRole('button', { name: 'Needs you' }).textContent).toBe('2');
     // The second first: each answer is its own question's.
     await events.click(sidebar().getByRole('button', { name: 'careful' }));
+    expect(screen.getByRole('button', { name: 'Needs you' }).textContent).toBe('1');
     await events.click(sidebar().getByRole('button', { name: 'main' }));
     await settle();
     expect(backend.answer).toHaveBeenCalledWith('a', 'q', {
@@ -827,6 +833,7 @@ describe('a connected agent', () => {
     // The Needs you sidebar asks the same way.
     emit(question('q2'));
     await events.click(view.getByRole('button', { name: 'Back to the canvas' }));
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar.getByText('Checks')).toBeTruthy();
     expect(sidebar.getByText('Vitest, every project')).toBeTruthy();
@@ -1021,6 +1028,7 @@ describe('a connected agent', () => {
         ],
       },
     );
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = () => within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(sidebar().getByText('Which branch?')).toBeTruthy();
     await events.click(sidebar().getByRole('button', { name: 'develop' }));
@@ -1037,6 +1045,7 @@ describe('a connected agent', () => {
       seconds: 6,
       result: { status: 'completed', reason: 'completed' },
     });
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     expect(sidebar().getByText('Your OK on the branch?')).toBeTruthy();
     expect(sidebar().getByText('1', { selector: '.graph-questions-count' })).toBeTruthy();
     await events.change(sidebar().getByRole('textbox', { name: 'What should change?' }), {
@@ -1281,6 +1290,7 @@ describe('a connected agent', () => {
     const { send, emit } = await open({ connection: 'claude-code.sdk' });
     await send('Test it');
     emit({ type: 'permission', id: 'p', tool: 'Bash', summary: 'npm test', always: null });
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const needs = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(needs.getByRole('heading', { level: 2 }).textContent).toBe('Needs you 1');
     const asked = within(needs.getByRole('group', { name: 'a asks' }));

@@ -1,0 +1,268 @@
+/* Canvas-first guide: three compact floats, 12px from the corners. */
+.graph-editor {
+  --float-bg: rgb(255 255 255 / 0.93);
+  --float-line: #d5dae1;
+  --float-hover: #eceff3;
+  --float-muted: #677080;
+  --float-need: #e0533f;
+}
+@media (prefers-color-scheme: dark) {
+  .graph-editor {
+    --float-bg: rgb(32 36 41 / 0.93);
+    --float-line: #313740;
+    --float-hover: #2a2f36;
+    --float-muted: #8c94a0;
+    --float-need: #ff7a64;
+  }
+}
+.canvas-floats {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.canvas-floats[hidden],
+.float-popover[hidden] {
+  display: none;
+}
+.graph-float,
+.float-popover {
+  background: var(--float-bg);
+  border: 1px solid var(--float-line);
+  color: CanvasText;
+  backdrop-filter: blur(8px);
+}
+.graph-float {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  padding: 5px 6px;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.1);
+  pointer-events: auto;
+  font-size: 12.5px;
+}
+.graph-float > button,
+.graph-float > .float-popover-root > button,
+.canvas-menu button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 28px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.graph-float > button:hover,
+.graph-float > .float-popover-root > button:hover,
+.canvas-menu button:hover,
+.graph-float > .float-popover-root > button[aria-expanded='true'] {
+  background: var(--float-hover);
+}
+.graph-float > button:disabled,
+.graph-float > .float-popover-root > button:disabled,
+.canvas-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.graph-float > button:focus-visible,
+.graph-float > .float-popover-root > button:focus-visible,
+.canvas-menu button:focus-visible {
+  outline: 2px solid var(--graph-accent, #3a6fd8);
+  outline-offset: 2px;
+}
+.graph-float > button > svg,
+.graph-float > .float-popover-root > button > svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.float-separator {
+  width: 1px;
+  align-self: stretch;
+  background: var(--float-line);
+  margin: 2px 4px;
+}
+.canvas-float-position {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  pointer-events: auto;
+}
+.canvas-float-position > [role='alert'] {
+  margin-top: 8px;
+}
+.canvas-float {
+  max-width: calc(100vw - 24px);
+}
+.canvas-float .graph-file-name {
+  padding: 0;
+  max-width: 160px;
+  font-weight: 650;
+}
+.canvas-float .graph-file-edited {
+  font-size: 10px;
+  color: var(--float-muted);
+}
+.canvas-folder {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--float-muted) !important;
+}
+.run-float {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+.float-run-state,
+.float-zoom-level {
+  color: var(--float-muted);
+  padding: 0 6px;
+  font-size: 12px;
+}
+.float-zoom-level {
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.zoom-float {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+}
+.graph-float .graph-arrange[aria-pressed='true'] {
+  background: var(--graph-accent, #3a6fd8);
+  color: white;
+}
+.float-popover-root {
+  position: relative;
+}
+.float-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  min-width: 220px;
+  padding: 10px;
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.2);
+  backdrop-filter: blur(12px);
+}
+.canvas-menu > .float-popover > button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+}
+.canvas-menu kbd {
+  color: var(--float-muted);
+  font: inherit;
+  font-size: 11px;
+}
+.needs-popover > .float-popover {
+  left: auto;
+  right: 0;
+  padding: 0;
+}
+.needs-popover .graph-questions {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  max-height: calc(100vh - 120px);
+}
+.float-needs-count {
+  position: absolute;
+  top: -5px;
+  right: -4px;
+  min-width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--float-need);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+.float-usage .usage-gauge {
+  font-size: 11.5px;
+  gap: 5px;
+  padding: 3px 5px;
+}
+.float-usage .usage-window-name,
+.float-usage .usage-age {
+  display: none;
+}
+.float-usage .usage-meter {
+  width: 24px;
+}
+.float-usage .usage-panel {
+  left: auto;
+  right: 0;
+}
+/* Leave room for the floats above today's windows; the dock's window treatment follows next. */
+.graph-editor[data-window-open] .agent-view,
+.graph-editor[data-window-open] .queues-view {
+  top: 64px;
+}
+.graph-editor[data-window-open] .canvas-folder,
+.graph-editor[data-window-open] .canvas-templates,
+.graph-editor[data-window-open] .float-run-state,
+.graph-editor[data-window-open] .float-usage {
+  display: none;
+}
+@media (max-width: 900px) {
+  .run-float {
+    top: 60px;
+    max-width: calc(100% - 24px);
+    flex-wrap: wrap;
+  }
+  .graph-editor[data-window-open] .agent-view,
+  .graph-editor[data-window-open] .queues-view {
+    top: 108px;
+  }
+}
+
+/* Keep all window readings in the panel, with one compact meter per backend in the float. */
+.float-usage .usage-gauge .usage-window ~ .usage-window {
+  display: none;
+}
+.canvas-menu .graph-canvases {
+  position: static;
+}
+.canvas-menu .graph-canvases-list {
+  top: 0;
+  left: calc(100% + 12px);
+  max-height: calc(100vh - 90px);
+}
+@media (max-width: 600px) {
+  .canvas-menu .graph-canvases-list {
+    top: calc(100% + 8px);
+    left: 0;
+    max-height: calc(100vh - 270px);
+  }
+}
+
+/* Notices float too, so switching with edited work cannot shift the canvas below its controls. */
+.graph-canvas-notice {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  bottom: 64px;
+  max-width: min(560px, calc(100% - 48px));
+}
+.graph-editor[data-window-open] .graph-canvas-notice {
+  display: none;
+}

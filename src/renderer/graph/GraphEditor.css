@@ -762,12 +762,6 @@ input.graph-label {
   background: color-mix(in srgb, var(--group-color) 7%, transparent);
 }
 
-/* The arrange toggle (in the zoom controls), when on. */
-.graph-editor .react-flow__controls-button.graph-arrange[aria-pressed='true'] {
-  background: var(--graph-accent);
-  color: white;
-}
-
 /* Agents by adapter (agents.ts), colour-coded: the tag on a node's card and the chip in its panel. */
 [data-agent='claude-code'] {
   --agent-color: #c15f3c;
@@ -1327,14 +1321,6 @@ input.graph-label {
   align-items: flex-start;
 }
 
-.graph-file {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 4px 6px;
-  font-size: 13px;
-}
-
 .graph-file-name {
   max-width: 220px;
   overflow: hidden;
@@ -1347,66 +1333,6 @@ input.graph-label {
 .graph-file-edited {
   margin-right: 6px;
   opacity: 0.55;
-}
-
-.graph-file button,
-.graph-file-discard button,
-.graph-file-problem button {
-  padding: 3px 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.graph-file button:hover,
-.graph-file-discard button:hover,
-.graph-file-problem button:hover {
-  border-color: color-mix(in srgb, CanvasText 20%, transparent);
-}
-
-/* Under the file's commands: the folder the canvas's agents work in, and the usage gauges. */
-.graph-file-row {
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
-}
-
-/* The folder the canvas's agents work in, under the file's commands. */
-.graph-file-project {
-  max-width: 320px;
-  padding: 4px 10px;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.graph-file-project::before {
-  flex: none;
-  width: 13px;
-  height: 10px;
-  background: currentColor;
-  content: '';
-  clip-path: polygon(0 0, 42% 0, 54% 20%, 100% 20%, 100% 100%, 0 100%);
-  opacity: 0.6;
-}
-
-.graph-file-project-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.graph-file-project:hover {
-  border-color: color-mix(in srgb, CanvasText 40%, transparent);
-}
-
-.graph-file-project:not([data-chosen]) {
-  color: var(--graph-accent, #2563eb);
-  font-weight: 600;
 }
 
 .graph-file-discard,

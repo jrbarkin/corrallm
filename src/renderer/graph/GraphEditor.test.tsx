@@ -100,7 +100,14 @@ async function setup(initialGraph?: Graph, files = false) {
   return { container, nodes, node, pane, fake, canvas };
 }
 
-const button = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name });
+const button = (name: string) => {
+  if (
+    ['New', 'Open…', 'Save', 'Save as…'].includes(name) &&
+    !screen.queryByRole('button', { name })
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  return screen.getByRole<HTMLButtonElement>('button', { name });
+};
 const labelInput = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Label' });
 /** The actions shown for a node, group or selection. */
 const actions = (id: string) => {
@@ -1408,6 +1415,7 @@ describe('GraphEditor', () => {
     ]);
 
     // The sidebar asks for each, in graph order, after the work it is on.
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const list = within(sidebar() ?? document.body);
     expect(list.getByRole('heading').textContent).toBe('Needs you 3');
     const card = (agent: string) => {
@@ -1425,6 +1433,10 @@ describe('GraphEditor', () => {
     await events.click(card('Builder').getByRole('button', { name: 'Stop here' }));
     const reply = card('Tester').getByRole('textbox', { name: 'What should change?' });
     await events.change(reply, { target: { value: 'Test the empty state' } });
+    await events.pointerDown(document.body);
+    expect(sidebar()).toBeNull();
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
+    expect(reply).toHaveProperty('value', 'Test the empty state');
     await events.click(card('Tester').getByRole('button', { name: 'Ask for changes' }));
     expect(sidebar()).toBeNull();
     expect(['a', 'b', 'c'].map((id) => node(id).classList.contains('asking'))).toEqual([
@@ -1516,6 +1528,7 @@ describe('GraphEditor', () => {
     );
     await events.click(queues.getByRole('button', { name: 'Back' }));
     expect(node('a').classList.contains('asking')).toBe(true);
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(
       sidebar.getByText('Claude has used 95% of its 5-hour window (over 90%). Go on?'),

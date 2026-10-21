@@ -483,6 +483,7 @@ describe('the queues view', () => {
 
     // The canvas's Needs you sidebar asks too: one more round runs another.
     await events.click(view.getByRole('button', { name: 'Back' }));
+    await events.click(screen.getByRole('button', { name: 'Needs you' }));
     const sidebar = within(screen.getByRole('complementary', { name: 'Needs you' }));
     expect(
       sidebar.getByText('1 round done, and still not: the output contains “APPROVED”.'),

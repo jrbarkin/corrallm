@@ -147,7 +147,15 @@ function setup({
     },
   };
 }
-const button = (name: string | RegExp) => screen.getByRole('button', { name });
+const button = (name: string | RegExp) => {
+  if (
+    typeof name === 'string' &&
+    ['New', 'Open…', 'Save', 'Save as…'].includes(name) &&
+    !screen.queryByRole('button', { name })
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas menu' }));
+  return screen.getByRole('button', { name });
+};
 async function called(core: ReturnType<typeof fakeCanvas>['core']) {
   await waitFor(() => {
     expect(core.operations).toHaveLength(1);
@@ -373,6 +381,7 @@ it('keeps Arrange when opening an agent from Needs, without a document operation
     await Promise.resolve();
   });
   fireEvent.click(button('Back'));
+  fireEvent.click(button('Needs you'));
   fireEvent.click(await screen.findByRole('button', { name: 'Open a' }));
   expect(await screen.findByRole('dialog', { name: 'a' })).toBeTruthy();
   expect(view.document.arrange).toBe(true);
