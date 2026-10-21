@@ -50,6 +50,7 @@ async function start(
 ) {
   const events: SessionEvent[] = [];
   const remembered: string[] = [];
+  const activity = vi.fn();
   const session = await connector(env, deps).start(
     {
       agentId: 'a',
@@ -63,6 +64,7 @@ async function start(
     {
       emit: (event) => events.push(event),
       remember: (id) => remembered.push(id),
+      activity,
     },
   );
   sessions.push(session);
@@ -96,7 +98,7 @@ async function start(
     );
     return found as Extract<SessionEvent, { type: T }>;
   };
-  return { session, events, remembered, turn, ended, heard };
+  return { session, events, remembered, turn, ended, heard, activity };
 }
 
 function matches(event: object, like: object): boolean {
@@ -129,6 +131,12 @@ function texts(events: SessionEvent[]): string[] {
 }
 
 describe('the App Server connection', () => {
+  it('reports the app server’s incoming turn notifications as activity', async () => {
+    const { activity, turn } = await start();
+    const before = activity.mock.calls.length;
+    await turn('Hello');
+    expect(activity.mock.calls.length).toBeGreaterThan(before);
+  });
   it('leaves an omitted mode to Codex, reports it, and preserves it on the next turn', async () => {
     const { events, turn } = await start({ mode: null });
     const [began] = await requests('thread/start');

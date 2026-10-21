@@ -174,6 +174,21 @@ function turn(fixture: Fixture, index: number): SDKMessage[] {
 }
 
 describe('SdkConnector', () => {
+  it('reports each incoming SDK message as activity', async () => {
+    const { sdk, host, query } = connector();
+    const activity = vi.fn();
+    host.activity = activity;
+    const session = await sdk.start(SPEC, host);
+    try {
+      const messages = turn('tools-and-compact', 0);
+      query().say(...messages);
+      await vi.waitFor(() => {
+        expect(activity).toHaveBeenCalledTimes(messages.length);
+      });
+    } finally {
+      await session.close();
+    }
+  });
   it('appends changed roles to the native preset on exact-ID resume, with snapshotting off and no synthetic turn', async () => {
     const { sdk, host, query } = connector();
     const resume = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11';

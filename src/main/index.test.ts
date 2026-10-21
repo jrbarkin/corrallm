@@ -5,34 +5,43 @@ import type { RunShutdown } from './run-shutdown';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { app, registerPrivileges, installGuards, getAllWindows, showMessageBox, showErrorBox } =
-  vi.hoisted(() => ({
-    app: {
-      isPackaged: false,
-      requestSingleInstanceLock: vi.fn(() => true),
-      quit: vi.fn(),
-      exit: vi.fn(),
-      setActivationPolicy: vi.fn(),
-      whenReady: vi.fn(() => new Promise<void>(() => undefined)),
-      enableSandbox: vi.fn(),
-      on: vi.fn(),
-      once: vi.fn(),
-      getPath: vi.fn(() => '/app/profile'),
-      getName: vi.fn(() => 'corrallm'),
-      getVersion: vi.fn(() => '1.2.3'),
-      getLocale: vi.fn(() => 'en-US'),
-      commandLine: { hasSwitch: vi.fn(() => false) },
-    },
-    getAllWindows: vi.fn<() => unknown[]>(() => []),
-    showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
-    showErrorBox: vi.fn(),
-    registerPrivileges: vi.fn(),
-    installGuards: vi.fn(),
-  }));
+const {
+  app,
+  powerMonitor,
+  registerPrivileges,
+  installGuards,
+  getAllWindows,
+  showMessageBox,
+  showErrorBox,
+} = vi.hoisted(() => ({
+  app: {
+    isPackaged: false,
+    requestSingleInstanceLock: vi.fn(() => true),
+    quit: vi.fn(),
+    exit: vi.fn(),
+    setActivationPolicy: vi.fn(),
+    whenReady: vi.fn(() => new Promise<void>(() => undefined)),
+    enableSandbox: vi.fn(),
+    on: vi.fn(),
+    once: vi.fn(),
+    getPath: vi.fn(() => '/app/profile'),
+    getName: vi.fn(() => 'corrallm'),
+    getVersion: vi.fn(() => '1.2.3'),
+    getLocale: vi.fn(() => 'en-US'),
+    commandLine: { hasSwitch: vi.fn(() => false) },
+  },
+  powerMonitor: { on: vi.fn() },
+  getAllWindows: vi.fn<() => unknown[]>(() => []),
+  showMessageBox: vi.fn(() => new Promise<{ response: number }>(() => undefined)),
+  showErrorBox: vi.fn(),
+  registerPrivileges: vi.fn(),
+  installGuards: vi.fn(),
+}));
 
 // The core and windows are faked: boot and closing never start sessions or write user data.
 vi.mock('electron', () => ({
   app,
+  powerMonitor,
   BrowserWindow: { getAllWindows },
   dialog: { showMessageBox, showErrorBox },
   session: { defaultSession: {} },
@@ -71,6 +80,7 @@ const { request, createWindow, makeHost, forkCore, cores, reconnect } = vi.hoist
         connect: vi.fn(),
         windowGone: vi.fn(),
         windowFocused: vi.fn(),
+        resumed: vi.fn(),
         kill: vi.fn(),
       };
     }),
@@ -168,6 +178,22 @@ it('tells the core when a window gains focus, so the canvas it shows has its fil
   const core = forkCore.mock.results[0]?.value as { windowFocused: (window: number) => void };
   await vi.waitFor(() => {
     expect(core.windowFocused).toHaveBeenCalledExactlyOnceWith(7);
+  });
+});
+
+it('tells the current core when powerMonitor reports resume', async () => {
+  app.whenReady.mockResolvedValueOnce();
+  await import('./index');
+  await vi.waitFor(() => {
+    expect(createWindow).toHaveBeenCalledOnce();
+  });
+  const resume = powerMonitor.on.mock.calls.find(([name]) => name === 'resume')?.[1] as
+    (() => void) | undefined;
+  expect(resume).toBeTypeOf('function');
+  resume?.();
+  const core = forkCore.mock.results[0]?.value as { resumed: () => void };
+  await vi.waitFor(() => {
+    expect(core.resumed).toHaveBeenCalledOnce();
   });
 });
 

@@ -9,6 +9,7 @@ import type { NeedsInput } from '../../shared/engine/needs';
 import type { SessionBackend } from '../../shared/engine/transcript/receive';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import type { Message, PartyId } from '../../shared/model/messages';
+import { agentParty } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
@@ -188,6 +189,47 @@ export class Engines {
    */
   async messagesOf(canvas: CanvasId): Promise<MessageStore> {
     return (await this.#mailOf(canvas)).messages;
+  }
+
+  /** A silent turn tells each sender once. The record wakes wait and keeps its dedupe key. */
+  async stalled(
+    canvas: CanvasId,
+    agent: string,
+    ids: readonly string[],
+    text: string,
+  ): Promise<void> {
+    const store = await this.messagesOf(canvas);
+    const parties = new Set<PartyId>();
+    const messages = store
+      .active()
+      .filter(
+        (message) =>
+          message.kind === 'text' &&
+          message.to === agentParty(agent) &&
+          message.delivery !== undefined &&
+          ids.includes(message.delivery.as) &&
+          (message.state === 'delivering' || message.state === 'delivered'),
+      );
+    for (const message of messages) {
+      if (parties.has(message.from) || message.from === 'corrallm') continue;
+      parties.add(message.from);
+      // Use the delivered message, not a process-local turn id: native history cannot retell it
+      // after a restart. Coalesced messages from one party still get just one notice.
+      if (messages.some((one) => one.from === message.from && store.hasTold(`stalled:${one.id}`)))
+        continue;
+      store.add(
+        {
+          from: 'corrallm',
+          to: message.from,
+          kind: 'notice',
+          body: text,
+          replyTo: message.id,
+          state: 'delivered',
+        },
+        `stalled:${message.id}`,
+      );
+    }
+    await store.durable();
   }
 
   /** The canvases the core has open, in the order they opened. */

@@ -301,6 +301,11 @@ export class MessageStore {
     );
   }
 
+  /** A durable notice already told this, even if its message's turn has ended since. */
+  hasTold(key: string): boolean {
+    return [...this.#kept.values()].some(({ told }) => told === key);
+  }
+
   /** Changes a message: as kept, or undefined if it isn't kept (any more). */
   update(
     id: string,

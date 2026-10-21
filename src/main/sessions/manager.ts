@@ -80,6 +80,10 @@ export interface SessionManagerDeps {
   >;
   /** Sends an event to the windows showing the canvas whose agent's session it is. */
   emit: (canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent) => void;
+  /** Raw CLI activity, even with no attached terminal view. */
+  activity?: (canvas: CanvasId, agentId: string) => void;
+  /** Intentional closes need not emit a session event, but end any turn's watchdog. */
+  ended?: (canvas: CanvasId, agentId: string) => void;
   /** Sends a terminal event to the view showing the canvas's agent's terminal. */
   terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
 }
@@ -144,7 +148,10 @@ export class SessionManager {
     try {
       await agent.session;
     } catch (error) {
-      if (agents.get(agentId) === agent) agents.delete(agentId);
+      if (agents.get(agentId) === agent) {
+        agents.delete(agentId);
+        this.#deps.ended?.(canvas, agentId);
+      }
       throw error;
     }
     // A view waiting to show the agent's terminal shows this session's.
@@ -408,6 +415,9 @@ export class SessionManager {
     const env = await this.#deps.environment();
     // A session replaced (by another connection, or after it closed) is no longer heard.
     const host: SessionHost = {
+      activity: () => {
+        if (current()) this.#deps.activity?.(canvas, agentId);
+      },
       emit: (event) => {
         if (!current()) return;
         if (event.type === 'closed') this.#agents.get(canvas)?.delete(agentId);
@@ -552,7 +562,10 @@ export class SessionManager {
 
   async #close(canvas: CanvasId, agentId: string, agent: Agent, tell: boolean): Promise<void> {
     const agents = this.#agents.get(canvas);
-    if (agents?.get(agentId) === agent) agents.delete(agentId);
+    if (agents?.get(agentId) === agent) {
+      agents.delete(agentId);
+      this.#deps.ended?.(canvas, agentId);
+    }
     if (tell) this.#deps.emit(canvas, agentId, agent.connection, { type: 'closed' });
     let session: LiveSession<SessionMode>;
     try {

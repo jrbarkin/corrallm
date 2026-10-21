@@ -13,6 +13,7 @@ import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import type { CoreLink } from '../../shared/link';
 import { toFile } from '../../shared/model/file';
 import type { TerminalEvent } from '../../shared/terminal';
+import type { SessionHost } from '../sessions/connector';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import type { Core, CoreConfig } from './core';
@@ -50,7 +51,7 @@ const dialogs: { open?: string; save?: string } = {};
 const picked = (file: string | undefined) =>
   Promise.resolve(file === undefined ? null : mintTrustedPath(file));
 
-async function app(sessions?: CoreConfig['sessions']) {
+async function app(sessions?: CoreConfig['sessions'], watchdog?: CoreConfig['watchdog']) {
   const host = {
     ...NO_DESKTOP,
     pickFolder: vi.fn(() => Promise.resolve(mintTrustedPath(folder))),
@@ -67,6 +68,7 @@ async function app(sessions?: CoreConfig['sessions']) {
       locale: 'en-US',
       fakeSessions: true,
       ...(sessions === undefined ? {} : { sessions }),
+      ...(watchdog === undefined ? {} : { watchdog }),
     },
     host,
   );
@@ -120,6 +122,122 @@ function events(window: WindowLink) {
 }
 
 describe('the app’s core and window channels', () => {
+  it.each(['codex.app-server', 'codex.terminal', 'claude-code.sdk', 'claude-code.terminal'])(
+    'warns a silent %s turn and answers its Needs item without opening a core run',
+    async (connection) => {
+      let now = Date.now();
+      let tick: (() => void) | undefined;
+      let host: SessionHost | undefined;
+      const interrupt = vi.fn(() => {
+        host?.emit({
+          type: 'end',
+          messages: ['m'],
+          seconds: 1,
+          result: { status: 'cancelled', reason: 'interrupted' },
+        });
+        return Promise.resolve();
+      });
+      const { core, connect } = await app(
+        {
+          connectors: {
+            [connection]: {
+              start: (_spec, given) => {
+                host = given;
+                given.emit({ type: 'started', model: null, mode: null, models: [] });
+                return Promise.resolve({
+                  send: (message) => {
+                    given.emit({ type: 'user', id: message.id, text: message.text });
+                    given.emit({ type: 'status', status: 'working' });
+                    return Promise.resolve();
+                  },
+                  interrupt,
+                  close: () => Promise.resolve(),
+                  answer: () => Promise.resolve(),
+                  setMode: () => Promise.resolve(),
+                  setModel: () => Promise.resolve(),
+                });
+              },
+            },
+          },
+          environment: () => Promise.resolve({}),
+        },
+        {
+          now: () => now,
+          later: (run) => {
+            tick = run;
+            return () => {
+              tick = undefined;
+            };
+          },
+        },
+      );
+      const window = connect(7);
+      const canvas = await created(window);
+      await chooseProject(window);
+      const heard = events(window);
+      await channel(window, 'session:start', 'a', { connection, model: null, mode: null });
+      await channel(window, 'session:send', 'a', { id: 'm', text: 'Hello' });
+      expect(core.engines.opened()).toEqual([]);
+      for (let i = 0; i < 79; i++) {
+        now += 15_000;
+        tick?.();
+      }
+      host?.activity?.(); // Raw output counts even with no attached terminal view.
+      now += 15_000;
+      tick?.();
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      // A host resume gets two fresh minutes, never an immediate warning for time asleep.
+      now += 3 * 60 * 60_000;
+      core.resumed();
+      tick?.();
+      for (let i = 0; i < 7; i++) {
+        now += 15_000;
+        tick?.();
+      }
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      now += 15_000;
+      tick?.();
+      await vi.waitFor(() => {
+        expect(heard).toContainEqual([
+          'session:event',
+          [
+            'a',
+            connection,
+            expect.objectContaining({
+              type: 'notice',
+              level: 'warning',
+              text: expect.stringContaining('No activity from') as unknown,
+            }),
+          ],
+        ]);
+      });
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: {
+          items: [expect.objectContaining({ id: 'stalled/a', agent: 'a' })],
+        },
+      });
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(
+        await core.call(
+          'reply',
+          { canvas, to: 'stalled/a', answer: { choice: 'interrupt' } },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      expect(interrupt).toHaveBeenCalledOnce();
+      expect(await core.call('needs', { canvas }, CALLERS.you)).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+    },
+  );
   it('shares usage between operations and the remaining channels', async () => {
     const { core, connect } = await app();
     const seven = connect(7);

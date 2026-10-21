@@ -150,6 +150,12 @@ describe('forking the core process', () => {
     expect(child.posted).toEqual([{ kind: 'event', name: 'windowFocused', args: [7] }]);
   });
 
+  it('tells the core the machine resumed, over the link', () => {
+    const { core, child } = start();
+    core.resumed();
+    expect(child.posted).toEqual([{ kind: 'event', name: 'resumed', args: [] }]);
+  });
+
   it('answers what the core asks of the desktop with the host’s services', async () => {
     const { child } = start();
 

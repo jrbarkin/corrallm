@@ -91,6 +91,8 @@ it.each(['canvas.delete', 'canvas.batch'] as const)(
           ...canvasOps({ catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER }),
           ...batchOps(),
           ...replyOps({
+            stalled: { items: () => [] },
+            sessions: { interrupt: () => Promise.resolve() },
             windows: { shownIn: () => undefined },
             needOf: () => undefined,
             // No file is reviewed here.

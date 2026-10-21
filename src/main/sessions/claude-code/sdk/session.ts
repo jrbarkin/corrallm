@@ -335,6 +335,7 @@ export class SdkSession implements LiveSession {
   }
 
   #receive(message: SDKMessage): void {
+    this.#host.activity?.();
     // Its id, once a turn has made it a conversation to resume (its transcript is written from
     // the first message), and again when /clear starts a new one.
     const turned =

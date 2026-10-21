@@ -73,6 +73,8 @@ export interface HostSide {
     windowGone: [window: WindowId, closed?: boolean];
     /** The window gained focus: the canvas it shows has its file checked (B9 Design §5). */
     windowFocused: [window: WindowId];
+    /** The machine woke: recheck silent turns with a short fresh grace period. */
+    resumed: [];
   };
 }
 

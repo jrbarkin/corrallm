@@ -13,7 +13,8 @@ import type { Implementations, OpServices } from '.';
  * one of its choices. In B9 that is a proposal or the review of a canvas file changed on disk, which
  * only you answer (R3, checked as the call arrives: rules.ts; then the item's `by`, here), choosing
  * Allow or Refuse, or Apply or Keep; a hold of the run and a session's prompt are answered in
- * corrallm's window until B11 moves them into the core.
+ * corrallm's window until B11 moves them into the core. A silent turn's stalled/<agent> prompt
+ * offers Interrupt through this same path, for you alone; it never stops a turn on its own.
  *
  * A review (canvas/reviews.ts): Apply reads the file again and, if its bytes are still those
  * reviewed, makes the canvas it holds your change (`file.apply`), its hashes and the settlement in
@@ -46,11 +47,15 @@ export function replyOps({
   needOf,
   lifecycle,
   windows,
+  stalled,
+  sessions,
 }: Pick<OpServices, 'proposals' | 'reviews' | 'needOf'> & {
   documents: Pick<OpServices['documents'], 'applyFile' | 'keepFile'>;
   engines: Pick<OpServices['engines'], 'changed'>;
   lifecycle: Pick<Lifecycle, 'touched'>;
   windows: Pick<OpServices['windows'], 'shownIn'>;
+  stalled: OpServices['stalled'];
+  sessions: Pick<OpServices['sessions'], 'interrupt'>;
 }): Pick<Implementations, 'reply'> {
   /** Answers the review `to` of the canvas's file with `choice`, as `ctx`'s caller. */
   async function review(canvas: CanvasId, to: string, choice: string, ctx: OpContext) {
@@ -98,6 +103,18 @@ export function replyOps({
       const id = canvas as string | undefined as CanvasId | undefined;
       if (id === undefined) throw new OpFailure('invalid', 'Name the canvas the item is on.');
       if (to.startsWith('file/')) return review(id, to, answer.choice, ctx);
+      if (to.startsWith('stalled/')) {
+        const item = stalled.items(id).find((one) => one.id === to);
+        if (item?.agent === undefined) {
+          throw new OpFailure('not-found', `There is no Needs item ${to} on this canvas.`);
+        }
+        if (ctx.by !== 'you') throw new OpFailure('refused', `Only the user may answer ${to}.`);
+        if (answer.choice !== 'interrupt')
+          throw new OpFailure('invalid', `${to} takes "interrupt".`);
+        ctx.noReturn();
+        await sessions.interrupt(id, item.agent);
+        return {};
+      }
       const proposal = proposals.get(id, to);
       if (proposal === undefined) {
         const settled = proposals.settled(id, to);
