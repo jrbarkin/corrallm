@@ -171,6 +171,11 @@ export class Checkpointer {
   #start(): Worker {
     const worker = new Worker(CODE, {
       eval: true,
+      // Results and failures travel by message; this worker writes no application output.
+      // Default stdio would open the parent's streams even when unused. At shutdown an unused
+      // stdout can block forever on macOS if serve's terminal has already hung up (#17).
+      stdout: true,
+      stderr: true,
       workerData: { file: this.#file, setUp: SET_UP },
     });
     worker.unref();

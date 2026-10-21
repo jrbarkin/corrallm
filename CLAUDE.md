@@ -380,7 +380,9 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 newest three kept, what one cut short left removed by the next; taken as it closes
                 and every four hours) and `close` (writes, and transactions outside one, refused
                 from its start; the lane drained and flushed, a TRUNCATE checkpoint, a snapshot,
-                then the checkpointer's thread ended; once). `Database` is what the stores kept in it
+                then the checkpointer's thread ended; once). The worker captures its unused stdout
+                and stderr instead of opening the parent's terminal streams, which may already
+                have hung up when the closing snapshot starts it. `Database` is what the stores kept in it
                 read and write through: the Store, or, when it couldn't be opened, `unopened` (every
                 read and write fails, saying why). createCore opens it first (once core.lock is
                 held: entry.ts, serve) and closes it last, after journaling; what opening it said is
