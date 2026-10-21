@@ -638,9 +638,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         await engines.close();
       } finally {
         // What the core keeps is written out even if a canvas's run couldn't be, and its database
-        // closed last.
+        // closed last. No CLI it started outlives it: a helper still running is ended.
         try {
-          await children.flush();
+          await children.close();
           await stores();
         } finally {
           await opened.store?.close();

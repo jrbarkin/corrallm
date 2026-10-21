@@ -81,6 +81,64 @@ describe('the core’s CLI children', () => {
     expect(await remembered()).toEqual({ version: 1, children: [] });
   });
 
+  it('ends every CLI still running as the core closes, resolving once each group has stopped', async () => {
+    const child = new Child(42);
+    children.node(child);
+    const grace = Promise.withResolvers<undefined>();
+    system.wait = () => grace.promise;
+    // SIGTERM ends the leader; a descendant keeps the group until SIGKILL.
+    system.signal = vi.fn<ChildSystem['signal']>((group, signal) => {
+      live.delete(group);
+      if (signal === 'SIGTERM') child.emit('exit', null, signal);
+      else groups.delete(group);
+    });
+    let closed = false;
+    const closing = children.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(system.signal).toHaveBeenCalledExactlyOnceWith(42, 'SIGTERM');
+    expect(closed).toBe(false);
+    grace.resolve(undefined);
+    await closing;
+    expect(system.signal).toHaveBeenNthCalledWith(2, 42, 'SIGKILL');
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  it('starts no CLI once closing: one spawned then is ended at once and never recorded', async () => {
+    await children.close();
+    live.set(43, { started: 2000, group: 43 });
+    groups.add(43);
+    const child = new Child(43);
+    expect(() => {
+      children.node(child);
+    }).toThrow(/closing/);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+    let exit: (() => void) | undefined;
+    const pty = {
+      pid: 43,
+      kill: vi.fn(),
+      onExit: (listener: () => void) => {
+        exit = listener;
+      },
+    };
+    expect(() => {
+      children.pty(pty);
+    }).toThrow(/closing/);
+    expect(pty.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+    exit?.();
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  it('ends a Windows CLI still running as the core closes, directly', async () => {
+    system.platform = 'win32';
+    const child = new Child(42);
+    children.node(child);
+    await children.close();
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(system.signal).not.toHaveBeenCalled();
+  });
+
   it('keeps an exited helper’s group owned while descendants still hold its pipes', async () => {
     const child = new Child(42);
     children.node(child, 'close');
