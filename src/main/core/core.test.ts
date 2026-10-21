@@ -21,7 +21,7 @@ import { snapshots } from './store/snapshots';
 import { connect } from './store/sqlite';
 import { journaledRun, openTestStore, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
-import { WindowPorts } from './gui';
+import { asHuman, WindowPorts } from './gui';
 import { openWindow } from './test-window';
 
 const READING = {
@@ -339,7 +339,10 @@ describe('the core’s database', () => {
     expect(logged).toHaveBeenCalledWith(expect.stringMatching(why));
     expect(await started.call('app.info', {}, CALLERS.you)).toMatchObject({ ok: true });
     await expect(started.channels.call(7, 'run:get', [])).rejects.toThrow(why);
-    await expect(started.channels.call(7, 'canvas:forget', [])).rejects.toThrow(why);
+    expect(await started.call('canvas.create', {}, asHuman(7))).toMatchObject({
+      ok: false,
+      error: { sentence: expect.stringMatching(why) as unknown },
+    });
     await expect(started.engines.open(newCanvasId())).rejects.toThrow(why);
     expect(codex.started).toEqual([]);
     await started.close();

@@ -173,6 +173,10 @@ describe('the window’s port to the core', () => {
     );
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
     expect(api).toHaveProperty('appInfo');
+    // A canvas's file, folder and document are operations': no function sends a page's text.
+    for (const gone of ['openCanvas', 'saveCanvas', 'forgetCanvas', 'chooseProject']) {
+      expect(api).not.toHaveProperty(gone);
+    }
   });
 
   it('calls each GUI operation over the port, passing its whole result through the bridge', async () => {
@@ -312,21 +316,6 @@ describe('the window’s port to the core', () => {
 describe('preload', () => {
   afterEach(() => {
     expect(invoke.mock.calls.map(([name]) => name)).toEqual(['core:connect']);
-  });
-
-  it('calls the canvas channels with their arguments', async () => {
-    const api = await exposed();
-    postPort(answerInfo);
-
-    // The canvas file functions channel their channels with their arguments.
-    await api.openCanvas();
-    expect(channel).toHaveBeenLastCalledWith('canvas:open');
-    await api.saveCanvas('{}', true, 1);
-    expect(channel).toHaveBeenLastCalledWith('canvas:save', '{}', true, 1);
-    await api.forgetCanvas();
-    expect(channel).toHaveBeenLastCalledWith('canvas:forget');
-    await api.chooseProject();
-    expect(channel).toHaveBeenLastCalledWith('project:choose');
   });
 
   it('calls the session channels with their arguments', async () => {
@@ -556,20 +545,18 @@ describe('run persistence preload', () => {
 describe('channels waiting for the core', () => {
   it('queues a channel until the port comes, and preserves a handler’s error message', async () => {
     const api = await exposed();
-    const pending = api.openCanvas();
-    channel.mockRejectedValue(new Error('The file could not open.'));
+    const pending = api.getRun();
+    channel.mockRejectedValue(new Error('The run could not be read.'));
     postPort(answerInfo);
-    await expect(pending).rejects.toThrow('The file could not open.');
-    expect(channel).toHaveBeenCalledExactlyOnceWith('canvas:open');
+    await expect(pending).rejects.toThrow('The run could not be read.');
+    expect(channel).toHaveBeenCalledExactlyOnceWith('run:get');
     expect(invoke).toHaveBeenCalledExactlyOnceWith('core:connect');
   });
 
   it('expires a queued channel after 10 seconds without replaying it on a late port', async () => {
     const api = await exposed();
     vi.useFakeTimers();
-    const failed = expect(api.forgetCanvas()).rejects.toThrow(
-      'corrallm’s core isn’t answering yet.',
-    );
+    const failed = expect(api.getUsage()).rejects.toThrow('corrallm’s core isn’t answering yet.');
     await vi.advanceTimersByTimeAsync(10_000);
     await failed;
     postPort(answerInfo);

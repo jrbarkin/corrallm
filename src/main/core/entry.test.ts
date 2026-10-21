@@ -143,7 +143,7 @@ describe('the core process’s init', () => {
     const entry = await start();
     expect(await entry.init()).toEqual({ ok: true, value: null });
     const window = entry.window(7);
-    await window.request('channel', 'canvas:forget', []);
+    await window.request('call', 'canvas.create', {});
     expect(await main.request('shown', [7, 8])).toEqual({ ok: true, value: [7] });
     expect(await main.request('flush')).toEqual({ ok: true, value: null });
     expect(await entry.init()).toEqual({

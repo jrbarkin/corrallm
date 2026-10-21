@@ -101,6 +101,15 @@ async function commit(
   });
   return committed?.rev;
 }
+/** Loads the canvas (a draft's empty document, if it is one), then commits `next` over it. */
+async function made(
+  canvas: CanvasId,
+  next: CanvasDocument,
+  revision?: Revision,
+): Promise<number | undefined> {
+  await documents.load(canvas);
+  return commit(canvas, next, revision);
+}
 
 function documentsOf(database: Store = store): Documents {
   return new Documents({
@@ -189,7 +198,7 @@ describe('a canvas’s document', () => {
     const copy = newCanvasId();
     const live = await documents.open(copy, toFile(original), 'original.corral');
     expect(live.document).toEqual({ ...original, id: copy });
-    expect(await documents.textOf(copy)).toBe(toFile({ ...original, id: copy }));
+    expect(toFile(documents.live(copy).document)).toBe(toFile({ ...original, id: copy }));
   });
 
   it('commits what changed alone, each entity it changed at the next revision, and what it was', async () => {
@@ -389,11 +398,10 @@ describe('a canvas’s document', () => {
     failing = false;
 
     // Its flushes work again, but the database keeps nothing more, of any canvas, until it is
-    // opened again: no commit, edit or save.
+    // opened again: no commit or save.
     const two = renamed(untouched, 'lead', 'Two');
     await expect(commit(other, two)).rejects.toThrow(FAILED);
     await expect(commit(canvas, one)).rejects.toThrow(FAILED);
-    await expect(documents.edit(other, toFile(two))).rejects.toThrow(FAILED);
     await expect(documents.save(other, mintTrustedPath(file))).rejects.toThrow(FAILED);
     expect(documents.live(canvas)).toMatchObject({ document: before, rev: 1 });
     expect(documents.live(other)).toMatchObject({ document: untouched, rev: 1 });
@@ -465,7 +473,7 @@ describe('a canvas’s document', () => {
 
   it('saves its own text to its file, as the canvas’s, and is not edited once saved', async () => {
     const canvas = newCanvasId();
-    await documents.edit(canvas, toFile(canvasOf(canvas)));
+    await made(canvas, canvasOf(canvas));
     expect(documents.edited(canvas)).toBe(true);
     const file = mintTrustedPath(path.join(profile, 'team.corral'));
 
@@ -542,31 +550,19 @@ describe('a canvas’s document', () => {
       nodes: [],
       links: [],
     });
-    await expect(documents.textOf(draft)).resolves.toBeUndefined();
-    await documents.edit(draft, toFile({ id: draft, arrange: false, nodes: [], links: [] }));
+    expect(documents.live(draft).kept).toBe(false);
+    await made(draft, { id: draft, arrange: false, nodes: [], links: [] });
     expect(documentRow(draft)).toBeUndefined();
 
-    await documents.edit(draft, toFile(canvasOf(draft)));
+    await made(draft, canvasOf(draft));
     expect(documentRow(draft)).toMatchObject({ rev: 1, saved_hash: null, file_hash: null });
     await restart();
-    await expect(documents.textOf(draft)).resolves.toBe(toFile(canvasOf(draft)));
-  });
-
-  it('refuses text that isn’t a canvas, or is another canvas’s, changing nothing', async () => {
-    const canvas = newCanvasId();
-    await documents.edit(canvas, toFile(canvasOf(canvas)));
-    await expect(documents.edit(canvas, 'Remember the milk')).rejects.toThrow(
-      'This is not a corrallm canvas',
-    );
-    await expect(documents.edit(canvas, toFile(canvasOf(newCanvasId())))).rejects.toThrow(
-      'This canvas’s text is another canvas’s.',
-    );
-    expect(documents.live(canvas)).toMatchObject({ document: canvasOf(canvas), rev: 1 });
+    expect(await documents.load(draft)).toMatchObject({ document: canvasOf(draft), kept: true });
   });
 
   it('commits one at a time on a canvas, each against what the one before left', async () => {
     const canvas = newCanvasId();
-    await documents.edit(canvas, toFile(canvasOf(canvas)));
+    await made(canvas, canvasOf(canvas));
     const first = renamed(canvasOf(canvas), 'lead', 'One');
     const second = renamed(first, 'worker', 'Two');
     // The second is built over what the first left.
@@ -618,7 +614,7 @@ describe('a canvas’s document', () => {
 
   it('fails alone a write whose reference is to nothing, while what shares its commit lands', async () => {
     const canvas = newCanvasId();
-    await documents.edit(canvas, toFile(canvasOf(canvas)));
+    await made(canvas, canvasOf(canvas));
     const [refused, sent] = await Promise.allSettled([
       store.write(() =>
         store
@@ -681,8 +677,8 @@ describe('a canvas’s document', () => {
     await restart({ ...SYSTEM_DEPS, flush: () => Promise.resolve() });
     const first = newCanvasId();
     const second = newCanvasId();
-    await documents.edit(first, toFile(canvasOf(first)));
-    await documents.edit(second, toFile(canvasOf(second)));
+    await made(first, canvasOf(first));
+    await made(second, canvasOf(second));
     const file = mintTrustedPath(path.join(profile, 'shared.corral'));
     const entered = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
@@ -714,29 +710,6 @@ describe('a canvas’s document', () => {
   });
 });
 
-it('refuses stale changes inside the canvas turn but accepts equal text at an older revision', async () => {
-  const canvas = newCanvasId();
-  await documents.edit(canvas, toFile(canvasOf(canvas)));
-  const before = documents.live(canvas);
-  const rev = before.rev;
-  const text = toFile(before.document);
-  await commit(canvas, renamed(before.document, 'lead', 'Newer'));
-  const newer = documents.live(canvas).document;
-  await expect(documents.edit(canvas, text, rev)).rejects.toMatchObject({
-    code: 'conflict',
-    current: { 'node/lead': { value: expect.objectContaining({ label: 'Newer' }) as unknown } },
-  });
-  await expect(documents.edit(canvas, toFile(newer), rev)).resolves.toBe(
-    documents.live(canvas).rev,
-  );
-  expect(documents.live(canvas).document).toBe(newer);
-  const current = documents.live(canvas).rev;
-  await documents.edit(canvas, toFile(renamed(newer, 'worker', 'Edited')), current);
-  expect(documents.live(canvas).document.nodes.find((node) => node.id === 'lead')?.data.label).toBe(
-    'Newer',
-  );
-});
-
 describe('the agents a party created', () => {
   /** `document` with a new agent `id`. */
   const withAgent = (document: CanvasDocument, id: string): CanvasDocument => ({
@@ -755,7 +728,7 @@ describe('the agents a party created', () => {
   it('subtracts only this party’s removals on this canvas, even when another canvas repeats an id', async () => {
     const [one, two] = [newCanvasId(), newCanvasId()];
     for (const canvas of [one, two]) {
-      await documents.edit(canvas, toFile(canvasOf(canvas)));
+      await made(canvas, canvasOf(canvas));
       await commit(canvas, withAgent(documents.live(canvas).document, 'same-id'), {
         op: 'canvas.addAgent',
         by: ORCHESTRATOR,
@@ -803,7 +776,7 @@ describe('the agents a party created', () => {
 
   it('counts a party’s live agents on every canvas, or on one, from when a change passed its checks', async () => {
     const [one, two] = [newCanvasId(), newCanvasId()];
-    for (const canvas of [one, two]) await documents.edit(canvas, toFile(canvasOf(canvas)));
+    for (const canvas of [one, two]) await made(canvas, canvasOf(canvas));
     await commit(one, withAgent(documents.live(one).document, 'first'), {
       op: 'canvas.addAgent',
       by: ORCHESTRATOR,
@@ -849,7 +822,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
     await documents.load(saved);
     await filed(canvasOf(edited));
     await commit(edited, renamed((await documents.load(edited)).document, 'lead', 'Head'));
-    await documents.edit(draft, toFile(canvasOf(draft)));
+    await made(draft, canvasOf(draft));
     expect([saved, edited, draft, empty].map((one) => documents.unsaved(one))).toEqual([
       false,
       true,
@@ -943,7 +916,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
 
   it('forgets a draft discarded, with everything kept of it', async () => {
     const draft = newCanvasId();
-    await documents.edit(draft, toFile(canvasOf(draft)));
+    await made(draft, canvasOf(draft));
     expect(documentRow(draft)).toBeDefined();
     await documents.forget(draft);
     expect(documents.loaded(draft)).toBeUndefined();
@@ -954,24 +927,6 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
   });
 });
 
-it('accepts a whole-document edit across meta-only bumps, but refuses one before a document change', async () => {
-  const canvas = newCanvasId();
-  await documents.edit(canvas, toFile(canvasOf(canvas)));
-  const seen = documents.live(canvas).rev;
-  await documents.between(canvas, () => documents.bump(canvas));
-  await expect(
-    documents.edit(
-      canvas,
-      toFile(renamed(documents.live(canvas).document, 'lead', 'After meta')),
-      seen,
-    ),
-  ).resolves.toBeGreaterThan(seen);
-  const prior = documents.live(canvas).rev;
-  const stale = toFile(documents.live(canvas).document);
-  await documents.edit(canvas, toFile({ id: canvas, arrange: false, nodes: [], links: [] }));
-  await expect(documents.edit(canvas, stale, prior)).rejects.toMatchObject({ code: 'conflict' });
-});
-
 it('keeps the only copy of a canvas after Save As displaces its file, across eviction and restart', async () => {
   memory = new CanvasMemory(store, 1, (canvas) => documents.unsaved(canvas));
   documents = documentsOf();
@@ -980,11 +935,11 @@ it('keeps the only copy of a canvas after Save As displaces its file, across evi
     c = newCanvasId();
   const file = await filed(canvasOf(a));
   await documents.load(a);
-  await documents.edit(b, toFile(renamed(canvasOf(b), 'lead', 'Other canvas')));
+  await made(b, renamed(canvasOf(b), 'lead', 'Other canvas'));
   await documents.save(b, mintTrustedPath(file));
   expect(documents.edited(a)).toBe(true);
   expect(documents.unsaved(a)).toBe(true);
-  await documents.edit(c, toFile(canvasOf(c)));
+  await made(c, canvasOf(c));
   await restart();
   expect((await documents.load(a)).document.nodes).toHaveLength(3);
   expect(documents.unsaved(a)).toBe(true);

@@ -1,10 +1,11 @@
-import { asHuman } from './gui';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { toFile } from '../../shared/model/file';
+import { Documents } from './canvas/documents';
+import { commitDocument } from './canvas/test-documents';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
 import { SYSTEM_DEPS } from './store/store';
@@ -136,21 +137,24 @@ describe('reach when a queued canvas call runs', () => {
 
 describe('reach when a batch’s commit builds', () => {
   it('refuses a batch whose inner op names an agent that left the caller’s reach while it waited', async () => {
+    // The core's documents, which every commit goes through.
+    const subscribed = vi.spyOn(Documents.prototype, 'subscribe');
     const w = await world();
-    await w.core.channels.call(7, 'run:get', []);
-    // The window's whole-document edit, which commits outside every op's scope: the helper out of
-    // the lead's team. Only the legacy canvas:save channel still makes one (no renderer calls it;
-    // Claude 13 deletes it, B9 Design §10).
-    const ungrouped = toFile({
+    const documents = subscribed.mock.contexts[0] as Documents;
+    // A commit outside every op's scope, as a caller of the documents' own makes one: the helper
+    // out of the lead's team. An op's commit runs in its canvas's scope, which the batch holds, so
+    // only such a commit can come between the batch's checks and its build.
+    const ungrouped = {
       ...document(),
       nodes: document().nodes.map(({ parentId, ...node }) =>
         node.id === 'helper' || parentId === undefined ? node : { ...node, parentId },
       ),
-    });
-    const snapshot = await w.core.call('canvas.get', { canvas: CANVAS }, asHuman(7));
-    if (!snapshot.ok) throw new Error(snapshot.error.sentence);
+    };
     const gate = w.hold();
-    const edited = w.core.channels.call(7, 'canvas:save', [ungrouped, false, snapshot.value.rev]);
+    const edited = commitDocument(documents, CANVAS, ungrouped, {
+      op: 'canvas.ungroup',
+      by: 'you',
+    });
     await gate.entered;
     // The batch takes its scope and passes its inner op's checks there, the edit not live yet,
     // then waits for the canvas's turn behind it.

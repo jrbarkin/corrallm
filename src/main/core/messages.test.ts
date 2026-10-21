@@ -28,6 +28,7 @@ import { CodexTui } from '../sessions/codex/terminal/tui';
 import { UsageReader } from '../sessions/codex/terminal/usage';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { Documents } from './canvas/documents';
+import { commitDocument } from './canvas/test-documents';
 import { createCore } from './core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
@@ -179,7 +180,7 @@ async function keepCanvas(
 
 /**
  * Commits the canvas's document as its file holds it now, while no core has the profile open, as
- * the app's edits would.
+ * your edits in the app would.
  */
 async function editInApp(): Promise<void> {
   const store = await openTestStore(profile);
@@ -191,7 +192,8 @@ async function editInApp(): Promise<void> {
       catalog: CATALOG,
       defaultAdapter: DEFAULT_ADAPTER,
     });
-    await documents.edit(CANVAS, await readFile(path.join(profile, 'canvas.corral'), 'utf8'));
+    const text = await readFile(path.join(profile, 'canvas.corral'), 'utf8');
+    await commitDocument(documents, CANVAS, documents.read(text));
     await memory.flush();
   } finally {
     await store.close();

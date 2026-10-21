@@ -354,7 +354,7 @@ describe('the list of canvases', () => {
     // A draft shown in a window, and one neither shown nor holding anything.
     const empty = newCanvasId();
     const hidden = newCanvasId();
-    const journal = new RunJournal({ store, memory, projectOf: () => undefined });
+    const journal = new RunJournal({ store, memory });
     await journal.opened(empty);
     await memory.update(hidden, (remembered) => remembered);
     await store.write(() => {

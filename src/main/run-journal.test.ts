@@ -39,7 +39,6 @@ function journal(database: Database = store, said?: readonly string[]): RunJourn
   return new RunJournal({
     store: database,
     memory,
-    projectOf: () => '/work/project',
     ...(said === undefined ? {} : { said }),
   });
 }
@@ -91,19 +90,15 @@ describe('RunJournal', () => {
     const first = journal();
     const canvas = await first.last();
     const context = await first.get(canvas);
-    expect(context).toMatchObject({ id: canvas, checkpoint: null, name: null });
+    expect(context).toMatchObject({ id: canvas, checkpoint: null });
+    expect(context.savedText).toBeUndefined();
     await first.save(canvas, context.token, checkpoint);
     expect(await first.get(canvas)).toMatchObject({ checkpoint, token: context.token });
 
     await reopen();
     const second = journal();
     expect(await second.last()).toBe(canvas);
-    expect(await second.get(canvas)).toMatchObject({
-      id: canvas,
-      checkpoint,
-      name: null,
-      project: { path: '/work/project' },
-    });
+    expect(await second.get(canvas)).toMatchObject({ id: canvas, checkpoint });
   });
 
   it('has a canvas’s run on disk once its save resolves, one row a canvas, and the canvas the profile had last', async () => {
@@ -137,7 +132,8 @@ describe('RunJournal', () => {
     const runs = journal();
     await runs.opened(team);
     await runs.opened(other);
-    const draft = await runs.draft();
+    const draft = newCanvasId();
+    await runs.opened(draft);
     await reopen();
     expect(open()).toEqual([draft, other, team]);
     expect(await journal().last()).toBe(draft);
@@ -174,11 +170,7 @@ describe('RunJournal', () => {
     await reopen();
     const next = journal();
     expect(await next.last()).toBe(canvas);
-    expect(await next.get(canvas)).toMatchObject({
-      checkpoint,
-      name: 'team.corral',
-      savedText: '{"saved":true}',
-    });
+    expect(await next.get(canvas)).toMatchObject({ checkpoint, savedText: '{"saved":true}' });
   });
 
   it('writes the run a save has, whatever an earlier save’s flush did', async () => {
@@ -273,7 +265,8 @@ describe('RunJournal', () => {
     // run, as the app's does, closing the one before it.
     const drafts: CanvasId[] = [];
     for (let i = 0; i < 5; i++) {
-      const draft = await runs.draft();
+      const draft = newCanvasId();
+      await runs.opened(draft);
       const before = drafts.at(-1);
       if (before !== undefined) await runs.close(before);
       await runs.save(draft, (await runs.get(draft)).token, { ...checkpoint, updatedAt: i });
@@ -298,14 +291,13 @@ describe('RunJournal', () => {
     await runs.save(canvas, before.token, checkpoint);
     const target = path.join(profile, 'team v2.corral');
     await writeFile(target, '{"copy":true}');
-    // canvas:save has written the new file, and memory has it as the canvas's.
+    // canvas.saveAs has written the new file, and memory has it as the canvas's.
     await memory.setFile(canvas, mintTrustedPath(target));
     await runs.saved(canvas);
 
     expect(await runs.get(canvas)).toMatchObject({
       token: before.token,
       checkpoint,
-      name: 'team v2.corral',
       savedText: '{"copy":true}',
     });
   });
@@ -392,8 +384,8 @@ describe('RunJournal', () => {
     const first = await runs.last();
     const before = await runs.get(first);
     await runs.save(first, before.token, checkpoint);
-    const next = await runs.draft();
-    expect(next).not.toBe(first);
+    const next = newCanvasId();
+    await runs.opened(next);
     // The window's canvas is the new one: the old token is an earlier canvas's.
     await expect(runs.save(next, before.token, checkpoint)).rejects.toThrow(/earlier canvas/);
     expect((await runs.get(next)).checkpoint).toBeNull();
@@ -428,14 +420,15 @@ describe('RunJournal', () => {
     const next = journal();
     expect(await next.last()).toBe(canvas);
     const context = await next.get(canvas);
-    expect(context).toMatchObject({ id: canvas, checkpoint, name: null });
+    expect(context).toMatchObject({ id: canvas, checkpoint });
+    expect(context.savedText).toBeUndefined();
     expect(context.warning).toContain('missing');
     expect((await memory.get(canvas)).file).toBeUndefined();
     // The same canvas: its token still saves.
     await next.save(canvas, context.token, checkpoint);
     // The window that had it open keeps saving it, as unsaved.
     await runs.save(canvas, token, checkpoint);
-    expect((await runs.get(canvas)).name).toBeNull();
+    expect((await runs.get(canvas)).savedText).toBeUndefined();
   });
 
   it('fails a save that couldn’t be written, keeping the run before it, and saves the next', async () => {
@@ -469,11 +462,7 @@ describe('RunJournal', () => {
     store.prepare('UPDATE run SET state = ?').run(state);
     const next = journal();
     const context = await next.get(canvas);
-    expect(context).toMatchObject({
-      checkpoint: null,
-      name: 'team.corral',
-      savedText: '{"saved":true}',
-    });
+    expect(context).toMatchObject({ checkpoint: null, savedText: '{"saved":true}' });
     expect(context.warning).toMatch(
       /^The run progress could not be restored, so it was discarded \(.+\)\.$/,
     );
@@ -506,7 +495,6 @@ describe('RunJournal', () => {
       runs.last(),
       runs.get(canvas),
       runs.reads(canvas),
-      runs.draft(),
       runs.opened(canvas),
       runs.saved(canvas),
     ]);

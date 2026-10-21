@@ -225,8 +225,6 @@ export interface Commit {
 interface Live extends LiveDocument {
   document: CanvasDocument;
   rev: number;
-  /** Last document commit; topic-only meta bumps do not change this. */
-  documentRev: number;
   rows: Record<EntityKey, Row>;
   revs: Map<EntityKey, number>;
   bys: Map<EntityKey, PartyId>;
@@ -437,12 +435,6 @@ export class Documents {
     return live.rev;
   }
 
-  /** The canvas's document as its file's text: none for a draft that never held anything. */
-  async textOf(canvas: CanvasId): Promise<string | undefined> {
-    const live = (await this.load(canvas)) as Live;
-    return live.kept ? this.#text(live.document).text : undefined;
-  }
-
   /** Whether the canvas's document differs from its text as last saved or read. */
   edited(canvas: CanvasId): boolean {
     const live = this.#lives.get(canvas);
@@ -651,41 +643,6 @@ export class Documents {
   }
 
   /**
-   * Commits the canvas's document as `text` (its file's text) holds it, by you: the renderer's
-   * edits, until its gestures are operations of their own. Rejects for text that isn't a canvas,
-   * or is another canvas's.
-   */
-  edit(canvas: CanvasId, text: string, expected?: number): Promise<number> {
-    return this.#queue(canvas, async () => {
-      const live = await this.#load(canvas);
-      // An equal document overwrites nothing, whatever topic revision the renderer saw.
-      if (this.#text(live.document).text === text) return live.rev;
-      // Topic-only meta changes occupy revisions too; only a newer document can be overwritten.
-      if (expected !== undefined && (expected < live.documentRev || expected > live.rev)) {
-        throw new OpFailure(
-          'conflict',
-          'The canvas changed before this edit could be saved.',
-          Object.fromEntries(
-            Object.entries(live.rows).map(([key, value]) => [
-              key,
-              { rev: live.revs.get(key) ?? 0, value },
-            ]),
-          ),
-        );
-      }
-      const next = this.read(text);
-      if (next.id !== canvas) throw new Error(ANOTHER);
-      return this.#commit(
-        live,
-        next,
-        diffRows(live.rows, next),
-        { op: 'canvas.edit', by: 'you' },
-        { creator: 'you' },
-      );
-    });
-  }
-
-  /**
    * Saves the canvas's document to `file`, which becomes its file (canvas memory's), in order: the
    * hash of its text committed as being written, the file written whole and on disk, then its hash
    * committed as the file's and as saved. Over its own file, the file is checked first, and the save
@@ -872,7 +829,6 @@ export class Documents {
     return {
       document,
       rev: Number(head.rev),
-      documentRev: Number(head.rev),
       // In the document's order, each in its place.
       rows: toRows(document, rows),
       revs,
@@ -1056,7 +1012,6 @@ export class Documents {
       }
     }
     live.rev = rev;
-    live.documentRev = rev;
     live.kept = true;
     live.creators = creators;
     if (hashes !== undefined) {
@@ -1378,7 +1333,6 @@ function emptyLive(canvas: CanvasId): Live {
   return {
     document: { id: canvas, arrange: false, nodes: [], links: [] },
     rev: 0,
-    documentRev: 0,
     rows: { [META]: { arrange: false } },
     revs: new Map(),
     bys: new Map(),

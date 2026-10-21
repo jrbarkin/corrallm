@@ -1,19 +1,13 @@
-import { OpFailure } from './call';
-import type { OpResult } from '../../shared/api/errors';
 import type { Children } from './children';
 import type { GuiEvent, GuiEventArgs } from '../../shared/gui-link';
 import type { CanvasId } from '../../shared/canvas';
 import type { Catalog } from '../../shared/adapter';
-import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import type { CoreChannel, IpcArgs, IpcResult } from '../../shared/ipc';
 import { parseRunCheckpoint } from '../../shared/run';
 import type { RunJournal } from '../run-journal';
 import { parseBackend, parseRule, parseWindows } from '../../shared/usage';
-import type { CanvasFiles } from '../canvas';
-import type { Documents } from './canvas/documents';
 import type { Windows } from './windows';
 import type { HostServices, WindowId } from './host';
-import type { ProjectFolders } from '../project';
 import {
   parseAgentArgs,
   parseAnswerArgs,
@@ -35,7 +29,7 @@ import type { UsageReadings } from '../usage';
 
 /** Turns the raw, untrusted arguments into the channel's contract tuple, or throws. */
 export type ArgsParser<C extends CoreChannel> = (args: unknown[]) => IpcArgs<C>;
-/** The window whose port the call came over, also the parent for its dialogs. */
+/** The window whose port the call came over: the canvas it shows is the one a channel acts on. */
 export interface ChannelCaller {
   window: WindowId;
 }
@@ -45,21 +39,16 @@ export type ChannelHandler<C extends CoreChannel> = (
 ) => IpcResult<C> | Promise<IpcResult<C>>;
 
 /**
- * What the handlers act on: the catalog, which canvas each window shows, canvas files and
- * documents, runs, project folders, sessions, the agents the user has, and usage. A handler looks
- * up the window's canvas before calling its service.
+ * What the handlers act on: the catalog, which canvas each window shows, runs, sessions and usage.
+ * A handler looks up the window's canvas before calling its service.
  */
 export interface ChannelServices {
   processes?: Pick<Children, 'run'>;
   /** What every adapter declares (sessions/adapters.ts): what the channels' arguments name. */
   catalog: Catalog;
-  windows: Pick<Windows, 'canvasOf' | 'show' | 'showing' | 'shownIn' | 'gone'>;
-  canvases: Pick<CanvasFiles, 'open' | 'save'>;
-  /** Each canvas's document: the renderer's edits commit to it until they are operations. */
-  documents: Pick<Documents, 'edit' | 'textOf'>;
-  runs: Pick<RunJournal, 'get' | 'check' | 'save' | 'opened' | 'saved' | 'draft' | 'close'>;
+  windows: Pick<Windows, 'canvasOf' | 'showing' | 'gone'>;
+  runs: Pick<RunJournal, 'get' | 'check' | 'save'>;
   shutdown: { ready: HostServices['runReady'] };
-  projects: Pick<ProjectFolders, 'choose' | 'restore' | 'of'>;
   sessions: Pick<
     SessionManager,
     | 'start'
@@ -79,7 +68,6 @@ export interface ChannelServices {
     | 'settingsOptions'
     | 'previewRewind'
     | 'rewind'
-    | 'projectChanged'
   >;
   usage: Pick<UsageReadings, 'state' | 'setRule' | 'simulate'>;
 }
@@ -97,52 +85,6 @@ export function noArgs(args: unknown[]): [] {
 type HandlerTable = {
   [C in CoreChannel]: { parseArgs: ArgsParser<C>; handler: ChannelHandler<C> };
 };
-
-/** `ArgsParser` for canvas:save: the bounded canvas text, `choose` and its mirror revision. */
-export function parseSaveArgs(args: unknown[]): IpcArgs<'canvas:save'> {
-  const [text, choose, rev] = args;
-  if (
-    args.length !== 3 ||
-    typeof text !== 'string' ||
-    typeof choose !== 'boolean' ||
-    !revision(rev)
-  ) {
-    throw new TypeError(
-      'Expected the canvas text, whether to choose a file and its mirror revision',
-    );
-  }
-  return [canvasText(text), choose, rev];
-}
-
-/** A canvas's text as the renderer sends it, within the size limit. */
-function canvasText(text: string): string {
-  if (Buffer.byteLength(text, 'utf8') > MAX_CANVAS_BYTES) {
-    throw new RangeError('The canvas is too large to save');
-  }
-  return text;
-}
-
-/** A whole-document edit names the mirror revision it was built from. */
-function revision(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-/** Structured op failures survive the channel's port, including conflict.current. */
-async function edited<T>(task: () => Promise<T>): Promise<OpResult<T>> {
-  try {
-    return { ok: true, value: await task() };
-  } catch (error) {
-    if (!(error instanceof OpFailure)) throw error;
-    return {
-      ok: false,
-      error: {
-        code: error.code,
-        sentence: error.message,
-        ...(error.current === undefined ? {} : { current: error.current }),
-      },
-    };
-  }
-}
 
 /** The usage backends the catalog lists: those whose usage corrallm reads. */
 const backendsOf = (catalog: Catalog) => catalog.usageBackends.map((backend) => backend.id);
@@ -167,27 +109,13 @@ export function parseSimulateArgs(args: unknown[], catalog: Catalog): IpcArgs<'u
 function createHandlers({
   catalog,
   windows,
-  canvases,
-  documents,
   runs,
   shutdown,
-  projects,
   sessions,
   usage,
 }: ChannelServices): HandlerTable {
   /** The canvas the sender's window shows: what every canvas's channel acts on. */
   const of = (window: WindowId) => windows.canvasOf(window);
-  /**
-   * The window shows `canvas` now, in place of the one it showed (New, Open): that one is closed
-   * once no window shows it (B9 Design §2), as `canvas.create` and `canvas.open` replace it.
-   */
-  const replace = async (window: WindowId, canvas: CanvasId) => {
-    const before = windows.shownIn(window);
-    await windows.show(window, canvas);
-    if (before !== undefined && before !== canvas && windows.showing(before).length === 0) {
-      await runs.close(before);
-    }
-  };
   return {
     'run:get': {
       parseArgs: noArgs,
@@ -228,52 +156,6 @@ function createHandlers({
       handler: async ({ window }, id, error) => {
         await shutdown.ready(window, id, error);
         return null;
-      },
-    },
-    'canvas:open': {
-      parseArgs: noArgs,
-      handler: async ({ window }) => {
-        // It works even when the canvas before could not be restored.
-        const opened = await canvases.open(window);
-        if (opened === null) return null;
-        const { id, name, copy } = opened;
-        await runs.opened(id, copy);
-        // Another canvas: the old one's sessions end, and the new one's folder comes back.
-        await replace(window, id);
-        const project = await projects.restore(id);
-        const text = (await documents.textOf(id)) ?? '';
-        return { id, name, text, ...(project ? { project } : {}) };
-      },
-    },
-    'canvas:save': {
-      parseArgs: parseSaveArgs,
-      handler: ({ window }, text, choose, expected) =>
-        edited(async () => {
-          const canvas = await of(window);
-          // As the renderer has it, then as the core saves it.
-          const rev = await documents.edit(canvas, text, expected);
-          const name = await canvases.save(window, canvas, choose);
-          if (name !== null) await runs.saved(canvas);
-          return { name, rev };
-        }),
-    },
-    'canvas:forget': {
-      parseArgs: noArgs,
-      handler: async ({ window }) => {
-        // New keeps the canvas before as it was, even one that could not be restored.
-        const draft = await runs.draft();
-        await replace(window, draft);
-        return draft;
-      },
-    },
-    'project:choose': {
-      parseArgs: noArgs,
-      handler: async ({ window }) => {
-        const canvas = await of(window);
-        const before = projects.of(canvas);
-        const chosen = await projects.choose(window, canvas);
-        if (chosen !== null && chosen.path !== before) await sessions.projectChanged(canvas);
-        return chosen;
       },
     },
     'session:start': {

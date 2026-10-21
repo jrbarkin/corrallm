@@ -87,7 +87,9 @@ beforeEach(async () => {
     },
     { ...NO_DESKTOP, pickFolder: () => Promise.resolve(mintTrustedPath(folder)) },
   );
-  await core.channels.call(7, 'project:choose', []);
+  const shown = await core.call('window.get', {}, YOU);
+  if (!shown.ok) throw new Error(shown.error.sentence);
+  await core.call('project.choose', { canvas: shown.value.canvas }, YOU);
 });
 
 afterEach(async () => {
@@ -108,13 +110,13 @@ describe('terminal operations', () => {
     );
     expect(screen.input).toHaveBeenCalledExactlyOnceWith('\x1b[Z\x03');
     expect(screen.resize).toHaveBeenCalledExactlyOnceWith(120, 40);
-    await core.channels.call(8, 'canvas:forget', []);
+    await core.call('canvas.create', {}, EIGHT);
     expect(await core.call('terminal.input', { agent: 'a', data: 'other' }, EIGHT)).toEqual(ok);
     expect(screen.input).toHaveBeenCalledOnce();
   });
 
   it('streams the screen, bytes and exit over the window’s port, until detached', async () => {
-    await core.channels.call(8, 'canvas:forget', []);
+    await core.call('canvas.create', {}, EIGHT);
     const served = new WindowPorts(core);
     const seven = openWindow(served, 7);
     const eight = openWindow(served, 8);

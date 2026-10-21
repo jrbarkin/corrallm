@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../../shared/canvas';
 import type { CanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
-import { toFile } from '../../../shared/model/file';
 import { CanvasMemory } from '../../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../../sessions/adapters';
 import { OpFailure } from '../call';
@@ -22,6 +21,7 @@ import type { ChangeSet } from './change';
 import { committer } from './commit';
 import type { ChangeRule, CommitCall } from './commit';
 import { Documents } from './documents';
+import { commitDocument } from './test-documents';
 
 /*
  * An op's commit (B9 Design §3): what it builds over a canvas's live document, checked against the
@@ -86,7 +86,7 @@ beforeEach(async () => {
   const memory = new CanvasMemory(store);
   documents = new Documents({ store, memory, catalog: CATALOG, defaultAdapter: DEFAULT_ADAPTER });
   canvas = newCanvasId();
-  await documents.edit(canvas, toFile(document(canvas)));
+  await commitDocument(documents, canvas, document(canvas));
 });
 afterEach(async () => {
   vi.restoreAllMocks();

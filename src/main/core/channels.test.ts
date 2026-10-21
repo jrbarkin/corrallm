@@ -4,15 +4,12 @@ import { newCanvasId } from '../../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../../shared/ipc';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
 import { MAX_ANSWER_LENGTH, MAX_ID_LENGTH, MAX_MESSAGE_LENGTH } from '../../shared/session';
-import { mintTrustedPath } from './host';
 import { Channels } from './channels';
 import type { ChannelServices } from './channels';
 import { CATALOG } from '../sessions/adapters';
 
 /** The canvas the sender's window shows, as the window map says. */
 const CANVAS = newCanvasId();
-/** A new draft's id, as the journal gives it. */
-const DRAFT = newCanvasId();
 
 /** What the handlers act on, faked: every call is recorded. */
 function fakeServices() {
@@ -20,36 +17,17 @@ function fakeServices() {
     catalog: CATALOG,
     windows: {
       canvasOf: vi.fn<ChannelServices['windows']['canvasOf']>().mockResolvedValue(CANVAS),
-      show: vi.fn<ChannelServices['windows']['show']>().mockResolvedValue(undefined),
       showing: vi.fn<ChannelServices['windows']['showing']>().mockReturnValue([7]),
-      shownIn: vi.fn<ChannelServices['windows']['shownIn']>().mockReturnValue(undefined),
       gone: vi.fn<ChannelServices['windows']['gone']>().mockResolvedValue(undefined),
-    },
-    canvases: {
-      open: vi.fn<ChannelServices['canvases']['open']>().mockResolvedValue(null),
-      save: vi.fn<ChannelServices['canvases']['save']>().mockResolvedValue(null),
-    },
-    documents: {
-      edit: vi.fn<ChannelServices['documents']['edit']>().mockResolvedValue(1),
-      textOf: vi.fn<ChannelServices['documents']['textOf']>().mockResolvedValue(undefined),
     },
     runs: {
       get: vi
         .fn<ChannelServices['runs']['get']>()
-        .mockResolvedValue({ id: CANVAS, token: 'canvas-token', checkpoint: null, name: null }),
+        .mockResolvedValue({ id: CANVAS, token: 'canvas-token', checkpoint: null }),
       check: vi.fn<ChannelServices['runs']['check']>(),
       save: vi.fn<ChannelServices['runs']['save']>().mockResolvedValue(undefined),
-      opened: vi.fn<ChannelServices['runs']['opened']>().mockResolvedValue(undefined),
-      saved: vi.fn<ChannelServices['runs']['saved']>().mockResolvedValue(undefined),
-      draft: vi.fn<ChannelServices['runs']['draft']>().mockResolvedValue(DRAFT),
-      close: vi.fn<ChannelServices['runs']['close']>().mockResolvedValue(undefined),
     },
     shutdown: { ready: vi.fn<ChannelServices['shutdown']['ready']>() },
-    projects: {
-      choose: vi.fn<ChannelServices['projects']['choose']>().mockResolvedValue(null),
-      restore: vi.fn<ChannelServices['projects']['restore']>().mockResolvedValue(undefined),
-      of: vi.fn<ChannelServices['projects']['of']>().mockReturnValue(undefined),
-    },
     sessions: {
       start: vi.fn<ChannelServices['sessions']['start']>().mockResolvedValue(undefined),
       send: vi.fn<ChannelServices['sessions']['send']>().mockResolvedValue(undefined),
@@ -79,9 +57,6 @@ function fakeServices() {
         models: [],
         defaults: { model: null, effort: null, mode: null },
       }),
-      projectChanged: vi
-        .fn<ChannelServices['sessions']['projectChanged']>()
-        .mockResolvedValue(undefined),
     },
     usage: {
       state: vi
@@ -110,6 +85,12 @@ beforeEach(() => {
 describe('the channel surface', () => {
   it.each([
     'core:connect',
+    // A canvas's file, folder and document are operations' (canvas.open, canvas.save,
+    // canvas.saveAs, canvas.create, project.choose): no channel commits or saves a page's text.
+    'canvas:open',
+    'canvas:save',
+    'canvas:forget',
+    'project:choose',
     'catalog:get',
     'session:clis',
     'link:open',
@@ -124,155 +105,37 @@ describe('the channel surface', () => {
     'unknown',
   ])('refuses %s', (name) => {
     expect(() => invoke(name, [])).toThrow(/no channel/);
-    expect(services.canvases.open).not.toHaveBeenCalled();
+    expect(services.windows.canvasOf).not.toHaveBeenCalled();
   });
 
   it('refuses arguments that are not a tuple before running a parser or handler', () => {
-    expect(() => channels.call(7, 'canvas:open', null as never)).toThrow(/arguments/);
-    expect(services.canvases.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('canvas:* handlers', () => {
-  it('opens a canvas file in the sender’s window, which shows it, its folder restored', async () => {
-    const sender = 7;
-    const id = newCanvasId();
-    services.canvases.open.mockResolvedValue({ id, name: 'team.corral' });
-    services.documents.textOf.mockResolvedValue('{"its":"document"}');
-    services.projects.restore.mockResolvedValue({ name: 'app', path: '/work/app' });
-    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
-      id,
-      name: 'team.corral',
-      text: '{"its":"document"}',
-      project: { name: 'app', path: '/work/app' },
-    });
-    expect(services.canvases.open).toHaveBeenCalledWith(7);
-    expect(services.documents.textOf).toHaveBeenCalledWith(id);
-    expect(services.runs.opened).toHaveBeenCalledWith(id, undefined);
-    expect(services.windows.show).toHaveBeenCalledWith(sender, id);
-    expect(services.projects.restore).toHaveBeenCalledWith(id);
-  });
-
-  it('says once why a file opened as a copy, and opens nothing when cancelled', async () => {
-    const id = newCanvasId();
-    const copy = 'team.corral is a copy of a canvas saved as other.corral: it opened as its own.';
-    services.canvases.open.mockResolvedValueOnce({ id, name: 'team.corral', copy });
-    services.documents.textOf.mockResolvedValue('{}');
-    await expect(invoke('canvas:open', [])).resolves.toEqual({
-      id,
-      name: 'team.corral',
-      text: '{}',
-    });
-    expect(services.runs.opened).toHaveBeenCalledWith(id, copy);
-    await expect(invoke('canvas:open', [])).resolves.toBeNull();
-    expect(services.windows.show).toHaveBeenCalledOnce();
-  });
-
-  it('saves the sender’s canvas as its renderer has it, and its record names the file then', async () => {
-    services.canvases.save.mockResolvedValueOnce('team.corral').mockResolvedValueOnce(null);
-    await expect(invoke('canvas:save', ['{}', true, 1])).resolves.toEqual({
-      ok: true,
-      value: { name: 'team.corral', rev: 1 },
-    });
-    expect(services.documents.edit).toHaveBeenCalledWith(CANVAS, '{}', 1);
-    expect(services.canvases.save).toHaveBeenCalledWith(7, CANVAS, true);
-    expect(services.runs.saved).toHaveBeenCalledWith(CANVAS);
-    // Cancelled: nothing changes.
-    await expect(invoke('canvas:save', ['{}', false, 1])).resolves.toEqual({
-      ok: true,
-      value: { name: null, rev: 1 },
-    });
-    expect(services.runs.saved).toHaveBeenCalledOnce();
-  });
-
-  it('begins a new draft in the sender’s window', async () => {
-    const sender = 7;
-    await expect(invoke('canvas:forget', [], sender)).resolves.toBe(DRAFT);
-    expect(services.windows.show).toHaveBeenCalledWith(sender, DRAFT);
-  });
-
-  it('closes the canvas the window showed before, once no window shows it, whichever replaced it', async () => {
-    const sender = 7;
-    const id = newCanvasId();
-    services.windows.shownIn.mockReturnValue(CANVAS);
-    services.windows.showing.mockReturnValue([]);
-    services.canvases.open.mockResolvedValue({ id, name: 'team.corral' });
-    await invoke('canvas:open', [], sender);
-    expect(services.runs.close).toHaveBeenCalledWith(CANVAS);
-    expect(services.runs.close.mock.invocationCallOrder[0]).toBeGreaterThan(
-      services.windows.show.mock.invocationCallOrder[0] ?? Infinity,
-    );
-    await invoke('canvas:forget', [], sender);
-    expect(services.runs.close).toHaveBeenCalledTimes(2);
-
-    // Another window shows it still, or the window shows it again: it stays open.
-    services.windows.showing.mockReturnValue([8]);
-    await invoke('canvas:forget', [], sender);
-    services.windows.showing.mockReturnValue([]);
-    services.canvases.open.mockResolvedValue({ id: CANVAS, name: 'team.corral' });
-    await invoke('canvas:open', [], sender);
-    // None before: nothing to close.
-    services.windows.shownIn.mockReturnValue(undefined);
-    await invoke('canvas:forget', [], sender);
-    expect(services.runs.close).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('canvas replacement after a failed restore', () => {
-  it('starts New without requiring the rejected journal to be readable', async () => {
-    const sender = 7;
-    services.windows.canvasOf.mockRejectedValue(new Error('Corrupt journal'));
-    await expect(invoke('canvas:forget', [], sender)).resolves.toBe(DRAFT);
+    expect(() => channels.call(7, 'run:get', null as never)).toThrow(/arguments/);
     expect(services.windows.canvasOf).not.toHaveBeenCalled();
-    expect(services.windows.show).toHaveBeenCalledWith(sender, DRAFT);
-  });
-
-  it('opens a replacement without reading the rejected journal first', async () => {
-    const sender = 7;
-    const id = newCanvasId();
-    services.windows.canvasOf.mockRejectedValue(new Error('Corrupt journal'));
-    services.canvases.open.mockResolvedValue({ id, name: 'replacement.corral' });
-    services.documents.textOf.mockResolvedValue('{}');
-    await expect(invoke('canvas:open', [], sender)).resolves.toEqual({
-      id,
-      name: 'replacement.corral',
-      text: '{}',
-    });
-    expect(services.windows.canvasOf).not.toHaveBeenCalled();
-    expect(services.windows.show).toHaveBeenCalledWith(sender, id);
+    expect(services.runs.get).not.toHaveBeenCalled();
   });
 });
 
 describe('the sender’s canvas', () => {
   it.each([
-    { channel: 'canvas:save', args: ['{}', true, 1], action: 'save' },
-    { channel: 'project:choose', args: [], action: 'choose' },
     {
       channel: 'session:start',
       args: ['a', { connection: 'claude-code.terminal', model: null, mode: null }],
       action: 'start',
     },
-  ])('$channel acts on it once its window has it', async ({ channel, args, action }) => {
+    { channel: 'session:close', args: ['a'], action: 'close' },
+  ] as const)('$channel acts on it once its window has it', async ({ channel, args, action }) => {
     const sender = 7;
     const shown = Promise.withResolvers<typeof CANVAS>();
     services.windows.canvasOf.mockReturnValue(shown.promise);
-    services.canvases.save.mockResolvedValue('rescued.corral');
-    const called =
-      action === 'save'
-        ? services.canvases.save
-        : action === 'choose'
-          ? services.projects.choose
-          : services.sessions.start;
-    const result = Promise.resolve(invoke(channel, args, sender)).then(
+    const called = services.sessions[action];
+    const result = Promise.resolve(invoke(channel, [...args], sender)).then(
       (value: unknown) => ({ value }),
       (error: unknown) => ({ error }),
     );
     expect(services.windows.canvasOf).toHaveBeenCalledWith(sender);
     expect(called).not.toHaveBeenCalled();
     shown.resolve(CANVAS);
-    expect(await result).toEqual({
-      value: action === 'save' ? { ok: true, value: { name: 'rescued.corral', rev: 1 } } : null,
-    });
+    expect(await result).toEqual({ value: null });
     expect(called).toHaveBeenCalledOnce();
     expect(called.mock.calls[0]).toContain(CANVAS);
   });
@@ -282,7 +145,6 @@ describe('the sender’s canvas', () => {
       id: CANVAS,
       token: 'canvas-token',
       checkpoint: null,
-      name: null,
       warning: 'Restored from a snapshot.',
     });
     await expect(invoke('run:get', [])).resolves.toEqual({
@@ -293,50 +155,15 @@ describe('the sender’s canvas', () => {
     });
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 };
     await invoke('run:save', ['canvas-token', checkpoint]);
-    expect(services.documents.edit).not.toHaveBeenCalled();
     expect(services.runs.save).toHaveBeenCalledWith(CANVAS, 'canvas-token', checkpoint);
   });
 
-  it('commits no document for an earlier canvas’s token', async () => {
+  it('journals nothing for an earlier canvas’s token', async () => {
     services.runs.check.mockImplementation(() => {
       throw new Error('This run belongs to an earlier canvas');
     });
     await expect(invoke('run:save', ['stale', null])).rejects.toThrow('earlier canvas');
-    expect(services.documents.edit).not.toHaveBeenCalled();
     expect(services.runs.save).not.toHaveBeenCalled();
-  });
-});
-
-describe('canvas:save handler', () => {
-  it.each([
-    ['no arguments', [], /Expected the canvas text/],
-    ['text that is not a string', [42, false], /Expected the canvas text/],
-    ['a choice that is not a boolean', ['{}', 'yes'], /Expected the canvas text/],
-    ['an extra argument', ['{}', false, 'more'], /Expected the canvas text/],
-    ['a canvas too large to save', ['x'.repeat(MAX_CANVAS_BYTES + 1), false, 1], /too large/],
-  ])('rejects %s', (_label, args, message) => {
-    expect(() => invoke('canvas:save', args)).toThrow(message);
-  });
-});
-
-describe('project:choose handler', () => {
-  it('ends the canvas’s sessions only when another folder is chosen', async () => {
-    const sender = 7;
-    services.projects.of.mockReturnValue(mintTrustedPath('/work/app'));
-    services.projects.choose.mockResolvedValueOnce({ name: 'app', path: '/work/app' });
-    await invoke('project:choose', [], sender);
-    expect(services.sessions.projectChanged).not.toHaveBeenCalled();
-
-    services.projects.choose.mockResolvedValueOnce({ name: 'other', path: '/work/other' });
-    await expect(invoke('project:choose', [], sender)).resolves.toEqual({
-      name: 'other',
-      path: '/work/other',
-    });
-    expect(services.sessions.projectChanged).toHaveBeenCalledWith(CANVAS);
-
-    services.projects.choose.mockResolvedValueOnce(null);
-    await expect(invoke('project:choose', [], sender)).resolves.toBeNull();
-    expect(services.sessions.projectChanged).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -759,7 +586,7 @@ describe('session:* handlers', () => {
   ])('%s rejects %s', (channel, _label, args, message) => {
     expect(() => invoke(channel, args)).toThrow(message);
     expect(Object.values(services.sessions).every((fn) => fn.mock.calls.length === 0)).toBe(true);
-    expect(services.canvases.open).not.toHaveBeenCalled();
+    expect(services.windows.canvasOf).not.toHaveBeenCalled();
   });
 });
 

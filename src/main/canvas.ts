@@ -9,10 +9,10 @@ import type { Documents } from './core/canvas/documents';
 import type { CanvasMemory } from './memory';
 
 /*
- * Canvas files on disk, for the canvas:* channels: the Open and Save dialogs, and which canvas a
- * file is. The renderer never names a path: main remembers which file each canvas is (memory.ts,
- * by the canvas's id), so a save can only write where the user picked in a dialog, and the core
- * reads and saves its own document (core/canvas/documents.ts).
+ * Canvas files on disk, for canvas.open and canvas.saveAs (core/canvas/lifecycle.ts): the Open and
+ * Save dialogs, and which canvas a file is. No caller names a path: the core remembers which file
+ * each canvas is (memory.ts, by the canvas's id), so a save can only write where the user picked in
+ * a dialog, and the core reads and saves its own document (core/canvas/documents.ts).
  *
  * A canvas's id is in its file. Opening a file makes it that canvas, unless the canvas is kept in
  * another file that still holds its id (the original after Save As, or a copy made in the Finder):
@@ -75,17 +75,17 @@ export class CanvasFiles {
   }
 
   /**
-   * Saves the canvas's document to its file, or to one picked in the Save dialog on `window` when
-   * it has none or `choose` is true (Save As, which keeps its id). Resolves with the file's name,
-   * or null if cancelled.
+   * The Save dialog on `window`, starting at the canvas's file, then the canvas's document saved
+   * to the file picked, which becomes its file (Save As, which keeps its id). Resolves with the
+   * file's name, or null if cancelled.
    */
-  async save(window: WindowId, canvas: CanvasId, choose: boolean): Promise<string | null> {
+  async saveAs(window: WindowId, canvas: CanvasId): Promise<string | null> {
     const known = (await this.#deps.memory.get(canvas)).file;
-    let file = choose ? undefined : known;
-    file ??=
-      (await this.#deps.host.pickCanvasToSave(window, known ?? `Untitled.${CANVAS_EXTENSION}`)) ??
-      undefined;
-    if (file === undefined) return null;
+    const file = await this.#deps.host.pickCanvasToSave(
+      window,
+      known ?? `Untitled.${CANVAS_EXTENSION}`,
+    );
+    if (file === null) return null;
     await this.#deps.documents.save(canvas, file);
     return path.basename(file);
   }

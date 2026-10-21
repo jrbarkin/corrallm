@@ -28,7 +28,6 @@ interface JournalDeps {
   store: Database;
   /** What the canvases' rows are kept by. */
   memory: CanvasMemory;
-  projectOf(canvas: CanvasId): string | undefined;
   /** What opening the database found to say (core/store/open.ts): said with the first run restored. */
   said?: readonly string[];
 }
@@ -86,15 +85,11 @@ export class RunJournal {
     return canvas;
   }
 
-  /** What a window showing `canvas` restores: its run, its file's name and text, its folder. */
-  async get(canvas: CanvasId): Promise<
-    RunContext & {
-      name: string | null;
-      savedText?: string;
-      project?: { name: string; path: string };
-      warning?: string;
-    }
-  > {
+  /**
+   * What a window showing `canvas`, or the core opening it, restores: its run, what to say of it,
+   * and its file's text as it is on disk (none for a canvas with no file, or whose file is gone).
+   */
+  async get(canvas: CanvasId): Promise<RunContext & { savedText?: string; warning?: string }> {
     await this.flush();
     const entry = this.#entry(canvas);
     const row = this.#deps.store
@@ -146,13 +141,10 @@ export class RunJournal {
         await this.#deps.memory.setFile(canvas, undefined);
       }
     }
-    const folder = this.#deps.projectOf(canvas);
     return {
       id: canvas,
       token: entry.token,
       checkpoint,
-      name: file === undefined || savedText === undefined ? null : path.basename(file),
-      ...(folder === undefined ? {} : { project: { name: path.basename(folder), path: folder } }),
       ...(savedText === undefined ? {} : { savedText }),
       ...(entry.warning === undefined ? {} : { warning: entry.warning }),
     };
@@ -253,16 +245,6 @@ export class RunJournal {
     await this.#write(() => {
       this.#markOpen(canvas);
     });
-  }
-
-  /** New: a new draft, its id. The canvas before keeps its run. */
-  async draft(): Promise<CanvasId> {
-    const canvas = newCanvasId();
-    this.#entries.set(canvas, { token: randomUUID() });
-    await this.#write(() => {
-      this.#markOpen(canvas);
-    });
-    return canvas;
   }
 
   /**

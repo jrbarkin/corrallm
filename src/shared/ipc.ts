@@ -1,7 +1,4 @@
-import type { OpResult } from './api/errors';
-
 import type { AdapterId, ConnectionId, UsageBackendId } from './adapter';
-import type { CanvasId } from './canvas';
 import type { GuiBridge } from './gui-link';
 import type { RunCheckpoint, RunRestore } from './run';
 import type {
@@ -38,7 +35,11 @@ export interface IpcContract {
    * window's port to the core, which main posts back as 'core:port' (src/shared/gui-link.ts).
    */
   'core:connect': { args: []; result: null };
-  /** Restore the current named canvas or durable draft, without starting an agent. */
+  /**
+   * The run of the canvas the window shows, as the journal keeps it: its id, its generation's
+   * token, its checkpoint and what to say of it. Starts no agent. Its document is the core's,
+   * read through the `canvas:<id>` topic.
+   */
   'run:get': { args: []; result: RunRestore };
   /**
    * Journals run metadata only. Document edits are operations; the token rejects writes from
@@ -50,38 +51,6 @@ export interface IpcContract {
   };
   /** Renderer froze dispatch and finished persisting before the requested shutdown. */
   'run:ready': { args: [requestId: string, error: string | null]; result: null };
-  /**
-   * Asks for a canvas file to open (the Open dialog). Resolves with it, its canvas's document as
-   * the core keeps it (edits since it was saved included), or null if cancelled; rejects, keeping
-   * nothing of it, for a file that isn't a canvas. The canvas before's agents' sessions end, and
-   * the opened one's project folder, if one was chosen for it, comes back.
-   */
-  'canvas:open': { args: []; result: CanvasFile | null };
-  /**
-   * Commits a canvas as the renderer has it (its file's text, holding its id), then saves the
-   * core's document to the file it was opened from or last saved to, or, when it has none or
-   * `choose` is true, to one picked in the Save dialog (Save As, which keeps its id, and so its
-   * project folder and its agents' conversations). Resolves with the file's name, or null if
-   * cancelled.
-   */
-  'canvas:save': {
-    args: [text: string, choose: boolean, rev: number];
-    result: OpResult<{ name: string | null; rev: number }>;
-  };
-  /**
-   * Begins a new canvas, a draft with an id of its own: its first save asks where. The canvas
-   * before is kept as it was, and its agents' sessions end. Resolves with the new canvas's id.
-   */
-  'canvas:forget': { args: []; result: CanvasId };
-  /**
-   * Asks for the folder the canvas's agents work in (a folder dialog). Resolves with it, or null if
-   * cancelled. Choosing another folder ends the agents' sessions: they start afresh in it.
-   */
-  'project:choose': { args: []; result: ProjectFolder | null };
-  /**
-   * The files and folders of the canvas's project folder (relative to it; folders end in "/")
-   * that best match `query`, for an @-mention in the composer. None without a project folder.
-   */
   /**
    * Starts an agent's connected session (or resumes it, if the canvas's file remembers one), in
    * the canvas's project folder. Resolves once it runs; rejects without a project folder, or if
@@ -174,19 +143,6 @@ export interface IpcEvents {
   'session:event': [agentId: string, connection: ConnectionId, event: SessionEvent];
 }
 
-/**
- * A canvas file opened: its canvas's id (its own, or a new one for a copy of a canvas kept in
- * another file), its name (without folders) and its canvas's document as the core keeps it, as a
- * file's text (src/shared/model/file.ts).
- */
-export interface CanvasFile {
-  id: CanvasId;
-  name: string;
-  text: string;
-  /** The folder its agents work in, when one was chosen for it and is still there. */
-  project?: ProjectFolder;
-}
-
 /** The folder a canvas's agents work in: its name, and where it is (to show; never sent back). */
 export interface ProjectFolder {
   name: string;
@@ -218,10 +174,6 @@ export interface InvokeApi {
   getRun(): Promise<IpcResult<'run:get'>>;
   saveRun(...args: IpcArgs<'run:save'>): Promise<IpcResult<'run:save'>>;
   runReady(...args: IpcArgs<'run:ready'>): Promise<IpcResult<'run:ready'>>;
-  openCanvas(): Promise<IpcResult<'canvas:open'>>;
-  saveCanvas(...args: IpcArgs<'canvas:save'>): Promise<IpcResult<'canvas:save'>>;
-  forgetCanvas(): Promise<IpcResult<'canvas:forget'>>;
-  chooseProject(): Promise<IpcResult<'project:choose'>>;
   startSession(...args: IpcArgs<'session:start'>): Promise<IpcResult<'session:start'>>;
   sendToSession(...args: IpcArgs<'session:send'>): Promise<IpcResult<'session:send'>>;
   answerSession(...args: IpcArgs<'session:answer'>): Promise<IpcResult<'session:answer'>>;
@@ -263,10 +215,6 @@ export const API_CHANNELS = {
   getRun: 'run:get',
   saveRun: 'run:save',
   runReady: 'run:ready',
-  openCanvas: 'canvas:open',
-  saveCanvas: 'canvas:save',
-  forgetCanvas: 'canvas:forget',
-  chooseProject: 'project:choose',
   startSession: 'session:start',
   sendToSession: 'session:send',
   answerSession: 'session:answer',

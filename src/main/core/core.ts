@@ -227,7 +227,6 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const journal = new RunJournal({
     store,
     memory,
-    projectOf: (canvas) => projects.of(canvas),
     // What it set aside or restored, said with the first canvas restored, as its runs' are.
     ...(opened.store === undefined ? {} : { said: opened.said }),
   });
@@ -325,11 +324,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     processes: children,
     catalog: CATALOG,
     windows,
-    canvases: canvasFiles,
-    documents,
     runs: journal,
     shutdown: { ready: (window, request, error) => host.runReady(window, request, error) },
-    projects,
     sessions,
     usage,
   });

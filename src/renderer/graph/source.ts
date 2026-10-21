@@ -54,9 +54,6 @@ export class CanvasSource {
   ready(): Promise<void> {
     return this.#mirror.whenAt(this.topic, 0);
   }
-  refresh(): Promise<void> {
-    return this.#mirror.refresh(this.topic);
-  }
   #listen(): void {
     if (this.#listeners.size > 0)
       this.#stop ??= this.#mirror.subscribe(this.topic, () => {

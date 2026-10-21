@@ -53,7 +53,7 @@ export interface LifecycleDeps {
   sessions: Pick<SessionManager, 'closeCanvas' | 'projectChanged'>;
   engines: Pick<Engines, 'closeCanvas'>;
   /** The Open and Save dialogs, and which canvas a file opened is. */
-  files: Pick<CanvasFiles, 'open' | 'save'>;
+  files: Pick<CanvasFiles, 'open' | 'saveAs'>;
 }
 
 const NO_FILE_YET =
@@ -190,7 +190,7 @@ export class Lifecycle {
    * the canvas keeping its id: the file's name, or null if cancelled.
    */
   async saveAs(window: WindowId, canvas: CanvasId): Promise<string | null> {
-    const name = await this.#deps.files.save(window, canvas, true);
+    const name = await this.#deps.files.saveAs(window, canvas);
     if (name !== null) await this.#deps.journal.saved(canvas);
     return name;
   }

@@ -15,13 +15,13 @@ import type { Message } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import { findItem } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
-import { toFile } from '../../shared/model/file';
 import { CanvasMemory } from '../memory';
 import { CATALOG, DEFAULT_ADAPTER } from '../sessions/adapters';
 import { FakeConnector } from '../sessions/fake';
 import { committer } from './canvas/commit';
 import type { Committer } from './canvas/commit';
 import { Documents } from './canvas/documents';
+import { commitDocument } from './canvas/test-documents';
 import type { Caller, OutsideCaller } from './caller';
 import { partyIdOf, partyOf } from './caller';
 import { createCore } from './core';
@@ -726,7 +726,7 @@ describe('on the change itself, whatever builds it', () => {
       catalog: CATALOG,
       defaultAdapter: DEFAULT_ADAPTER,
     });
-    await documents.edit(BUILT, toFile({ ...documents.read(JSON.stringify(MAIN)), id: BUILT }));
+    await commitDocument(documents, BUILT, { ...documents.read(JSON.stringify(MAIN)), id: BUILT });
     commit = committer({
       documents,
       propose: () => Promise.resolve(PROPOSAL),

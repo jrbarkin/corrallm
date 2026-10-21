@@ -55,7 +55,7 @@ describe('project.files', () => {
       value: { items: [] },
     });
     expect(find).not.toHaveBeenCalled();
-    await core.channels.call(7, 'project:choose', []);
+    await core.call('project.choose', { canvas }, caller);
     expect(await core.call('project.files', { canvas, query: 'ipc' }, caller)).toEqual({
       ok: true,
       value: { items: ['src/main/ipc.ts'] },
@@ -70,7 +70,7 @@ describe('project.files', () => {
         writeFile(path.join(folder, `file-${String(i).padStart(2, '0')}.txt`), ''),
       ),
     );
-    await core.channels.call(7, 'project:choose', []);
+    await core.call('project.choose', { canvas }, caller);
     expect(await core.call('project.files', { canvas, query: 'src/ma' }, caller)).toEqual({
       ok: true,
       value: { items: ['src/main/', 'src/main/ipc.ts'] },
@@ -87,7 +87,7 @@ describe('project.files', () => {
   });
 
   it('answers MCP within an outside token’s reach and returns not-found outside it', async () => {
-    await core.channels.call(7, 'project:choose', []);
+    await core.call('project.choose', { canvas }, caller);
     const token = { ...CALLERS['outside-read'], canvases: [canvas] };
     expect(await callTool(core, token, 'project_files', { query: 'ipc' })).toMatchObject({
       structuredContent: { items: ['src/main/ipc.ts'] },

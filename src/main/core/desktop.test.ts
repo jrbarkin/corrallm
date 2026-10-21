@@ -55,6 +55,19 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
+/** Picks the project folder of the canvas `caller`'s window shows, in the folder dialog. */
+async function chooseProject(caller: typeof SEVEN) {
+  const shown = await core.call('window.get', {}, caller);
+  if (!shown.ok) throw new Error(shown.error.sentence);
+  return core.call('project.choose', { canvas: shown.value.canvas }, caller);
+}
+/** Begins a new canvas in `caller`'s window, as New does: its id. */
+async function created(caller: typeof SEVEN) {
+  const made = await core.call('canvas.create', {}, caller);
+  if (!made.ok || !('canvas' in made.value)) throw new Error('No canvas was made');
+  return made.value.canvas;
+}
+
 describe('link.open', () => {
   it('opens a normalized allowlisted URL through the host', async () => {
     expect(await core.call('link.open', { url: 'HTTPS://GITHUB.COM/openai' }, SEVEN)).toEqual({
@@ -101,7 +114,7 @@ describe('link.open', () => {
 describe('link.reveal', () => {
   it('reveals a real path only inside the calling window’s project folder', async () => {
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
-    await core.channels.call(7, 'project:choose', []);
+    await chooseProject(SEVEN);
     const file = path.join(project, 'notes.txt');
     await writeFile(file, 'Notes');
     expect(await core.call('link.reveal', { url: pathToFileURL(file).href }, SEVEN)).toEqual({
@@ -130,9 +143,9 @@ describe('link.reveal', () => {
 
   it('uses the window’s canvas, including after another window chooses a different folder', async () => {
     await core.channels.call(7, 'run:get', []);
-    await core.channels.call(8, 'canvas:forget', []);
+    await created(EIGHT);
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
-    await core.channels.call(7, 'project:choose', []);
+    await chooseProject(SEVEN);
     const file = path.join(project, 'notes.txt');
     await writeFile(file, 'Notes');
     const url = pathToFileURL(file).href;
@@ -202,27 +215,6 @@ describe('window.get', () => {
       },
     });
   });
-  it('refuses a stale canvas:save before any file is chosen, keeping the core’s newer commit', async () => {
-    const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
-    const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
-    if (!first.ok) throw new Error(first.error.sentence);
-    const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
-    const added = await core.call(
-      'canvas.addAgent',
-      { canvas: context.id, adapter: 'codex', at: { x: 0, y: 0 } },
-      SEVEN,
-    );
-    if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
-    const pick = vi.spyOn(host, 'pickCanvasToSave');
-    expect(
-      await core.channels.call(7, 'canvas:save', [stale, true, first.value.rev]),
-    ).toMatchObject({ ok: false, error: { code: 'conflict' } });
-    expect(pick).not.toHaveBeenCalled();
-    expect(await core.call('canvas.get', { canvas: context.id }, SEVEN)).toMatchObject({
-      ok: true,
-      value: { nodes: [expect.objectContaining({ id: added.value.id })] },
-    });
-  });
   it('lists the current running state when two journal saves have the same timestamp', async () => {
     const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
     for (const running of [true, false, true]) {
@@ -247,7 +239,7 @@ describe('window.get', () => {
     if (!first.ok) throw new Error(first.error.sentence);
     expect(context).toMatchObject({ id: first.value.canvas });
     await core.channels.call(8, 'run:get', []);
-    const next = await core.channels.call(7, 'canvas:forget', []);
+    const next = await created(SEVEN);
     expect(await core.call('window.get', undefined, SEVEN)).toEqual({
       ok: true,
       value: { canvas: next },
@@ -273,9 +265,9 @@ describe('window.show', () => {
     const first = await core.call('window.get', {}, SEVEN);
     if (!first.ok) throw new Error(first.error.sentence);
     host.pickFolder.mockResolvedValue(mintTrustedPath(project));
-    await core.channels.call(7, 'project:choose', []);
+    await chooseProject(SEVEN);
     await core.call('window.get', {}, EIGHT);
-    const draft = await core.channels.call(7, 'canvas:forget', []);
+    const draft = await created(SEVEN);
     expect(await core.call('window.show', { canvas: first.value.canvas }, SEVEN)).toEqual({
       ok: true,
       value: { revs: {} },

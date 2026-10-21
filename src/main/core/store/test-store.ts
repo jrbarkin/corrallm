@@ -107,7 +107,7 @@ async function withJournal(profile: string, use: (journal: RunJournal) => Promis
   const store = await openTestStore(profile);
   try {
     const memory = new CanvasMemory(store);
-    await use(new RunJournal({ store, memory, projectOf: () => undefined }));
+    await use(new RunJournal({ store, memory }));
   } finally {
     await store.close();
   }

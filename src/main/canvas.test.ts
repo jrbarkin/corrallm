@@ -10,6 +10,7 @@ import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import { toFile } from '../shared/model/file';
 import { CanvasFiles } from './canvas';
 import { Documents } from './core/canvas/documents';
+import { commitDocument } from './core/canvas/test-documents';
 import { mintTrustedPath } from './core/host';
 import type { HostServices } from './core/host';
 import type { Store } from './core/store/store';
@@ -58,14 +59,16 @@ const picks = ({ open, save }: { open?: string; save?: string }) => {
   if (open !== undefined) pickCanvasToOpen.mockResolvedValueOnce(mintTrustedPath(open));
   if (save !== undefined) pickCanvasToSave.mockResolvedValueOnce(mintTrustedPath(save));
 };
-/** Saves canvas `id` as the renderer has it, `label` its agent's. */
-async function saves(id: CanvasId, label: string, choose: boolean): Promise<string | null> {
-  await documents.edit(id, text(id, label));
-  return canvases.save(WINDOW, id, choose);
+/** Canvas `id`'s document as its file's text. */
+const textOf = async (id: CanvasId) => toFile((await documents.load(id)).document);
+/** Saves canvas `id` as you pick in the Save dialog, `label` its agent's, as an op made it. */
+async function saves(id: CanvasId, label: string): Promise<string | null> {
+  await commitDocument(documents, id, documents.read(text(id, label)));
+  return canvases.saveAs(WINDOW, id);
 }
 
 describe('canvas files', () => {
-  it('opens the file picked in the Open dialog as its canvas, then saves back to it without asking', async () => {
+  it('opens the file picked in the Open dialog as its canvas, its document read from it', async () => {
     const file = path.join(dir, 'team.corral');
     const id = newCanvasId();
     await writeFile(file, text(id));
@@ -74,30 +77,23 @@ describe('canvas files', () => {
     await expect(canvases.open(WINDOW)).resolves.toEqual({ id, name: 'team.corral' });
     expect(pickCanvasToOpen).toHaveBeenCalledWith(WINDOW);
     expect((await memory.get(id)).file).toBe(file);
-    expect(await documents.textOf(id)).toBe(text(id));
-    await expect(saves(id, 'Changed', false)).resolves.toBe('team.corral');
-    expect(pickCanvasToSave).not.toHaveBeenCalled();
-    expect(await readFile(file, 'utf8')).toBe(text(id, 'Changed'));
-    // Written whole: nothing is left beside it.
-    expect((await readdir(dir)).filter((name) => name.endsWith('.corral'))).toEqual([
-      'team.corral',
-    ]);
+    expect(await textOf(id)).toBe(text(id));
   });
 
-  it('asks where to save a canvas without a file, and on Save As, which keeps its id', async () => {
+  it('saves where you pick, starting at the canvas’s file, which the file picked becomes, keeping its id', async () => {
     const id = newCanvasId();
     picks({ save: path.join(dir, 'plan.corral') });
-    await expect(saves(id, 'one', false)).resolves.toBe('plan.corral');
+    await expect(saves(id, 'one')).resolves.toBe('plan.corral');
     expect(pickCanvasToSave).toHaveBeenLastCalledWith(WINDOW, 'Untitled.corral');
     picks({ save: path.join(dir, 'copy.corral') });
-    await expect(saves(id, 'two', true)).resolves.toBe('copy.corral');
+    await expect(saves(id, 'two')).resolves.toBe('copy.corral');
     expect(pickCanvasToSave).toHaveBeenLastCalledWith(WINDOW, path.join(dir, 'plan.corral'));
-    // The copy is the canvas's file now, under the same id.
-    await expect(saves(id, 'three', false)).resolves.toBe('copy.corral');
-    expect(pickCanvasToSave).toHaveBeenCalledTimes(2);
     expect(await readFile(path.join(dir, 'plan.corral'), 'utf8')).toBe(text(id, 'one'));
-    expect(await readFile(path.join(dir, 'copy.corral'), 'utf8')).toBe(text(id, 'three'));
+    expect(await readFile(path.join(dir, 'copy.corral'), 'utf8')).toBe(text(id, 'two'));
+    // The copy is the canvas's file now, under the same id.
     expect((await memory.get(id)).file).toBe(path.join(dir, 'copy.corral'));
+    // Written whole: nothing is left beside them.
+    expect((await readdir(dir)).sort()).toEqual(['copy.corral', 'plan.corral']);
   });
 
   it('opens the original after Save As as a copy, with an id of its own it keeps', async () => {
@@ -107,7 +103,7 @@ describe('canvas files', () => {
     await writeFile(original, text(id));
     picks({ open: original, save: saved });
     await canvases.open(WINDOW);
-    await canvases.save(WINDOW, id, true);
+    await canvases.saveAs(WINDOW, id);
 
     picks({ open: original });
     const copy = await canvases.open(WINDOW);
@@ -118,13 +114,14 @@ describe('canvas files', () => {
     );
     if (!copy) throw new Error('Not opened');
     // Its document is the file's, under its own id.
-    expect(await documents.textOf(copy.id)).toBe(text(copy.id));
+    expect(await textOf(copy.id)).toBe(text(copy.id));
     expect((await memory.get(id)).file).toBe(saved);
     // Opened again, it is the same copy: its conversations are its own.
     picks({ open: original });
     expect((await canvases.open(WINDOW))?.id).toBe(copy.id);
-    // Saved, it holds its own id.
-    await canvases.save(WINDOW, copy.id, false);
+    // Saved over its file, it holds its own id.
+    picks({ save: original });
+    await canvases.saveAs(WINDOW, copy.id);
     expect(await readFile(original, 'utf8')).toBe(text(copy.id));
     picks({ open: original });
     expect(await canvases.open(WINDOW)).toEqual({ id: copy.id, name: 'team.corral' });
@@ -182,7 +179,7 @@ describe('canvas files', () => {
     pickCanvasToSave.mockResolvedValue(null);
     const id = newCanvasId();
     await expect(canvases.open(WINDOW)).resolves.toBeNull();
-    await expect(saves(id, 'Agent 1', false)).resolves.toBeNull();
+    await expect(saves(id, 'Agent 1')).resolves.toBeNull();
     expect(await readdir(dir)).toEqual([]);
   });
 
