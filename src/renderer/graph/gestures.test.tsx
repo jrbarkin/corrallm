@@ -11,6 +11,9 @@ import { newCanvasId } from '../../shared/canvas';
 import type { QueueItem } from '../../shared/model/queue';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { toFile } from '../../shared/model/file';
+import { absolutePosition } from '../../shared/model/geometry';
+import { move } from '../../shared/model/structure';
+import { OPS } from '../../shared/api/registry';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
 import { GraphEditor } from './GraphEditor';
@@ -402,6 +405,69 @@ it('keeps an untouched rendered node object when another queue changes', async (
   expect(seen.props?.nodes?.find((node) => node.id === 'b')).toBe(before);
 });
 
+it('keeps a dropped child where it was dropped while the mirror holds the move that refits its group', async () => {
+  const view = setup({ group: true, selected: ['a'] });
+  // The core's commit reaches the mirror before the move resolves (its topic batch, or a reply
+  // that waits for its write), and the overlay is cleared only once the move resolves.
+  const held = Promise.withResolvers<undefined>();
+  view.core.reply('canvas.move', async (raw) => {
+    const rev = await view.edit(
+      toFile(move(view.document, OPS['canvas.move'].input.parse(raw)).next),
+      view.rev,
+    );
+    await held.promise;
+    return { ok: true, value: { revs: { [`canvas:${view.canvas}`]: rev } } };
+  });
+  const shown = (nodes: XYFlow.Node[]) => {
+    const byId = new Map(
+      nodes.map(({ id, position, parentId }) => [
+        id,
+        { id, position, data: { label: id }, ...(parentId === undefined ? {} : { parentId }) },
+      ]),
+    );
+    const at = (id: string) => {
+      const node = byId.get(id);
+      if (!node) throw new Error(`No ${id}`);
+      return absolutePosition(node, byId);
+    };
+    return { a: at('a'), b: at('b'), frame: at('F') };
+  };
+  // Past the group's top-left corner: the group grows up and left once the card is dropped.
+  const dropped = { x: -100, y: -60 };
+  act(() => {
+    seen.props?.onNodesChange?.([{ id: 'a', type: 'position', position: dropped, dragging: true }]);
+  });
+  act(() => {
+    seen.props?.onNodesChange?.([
+      { id: 'a', type: 'position', position: dropped, dragging: false },
+    ]);
+  });
+  const shownA = seen.props?.nodes?.find((one) => one.id === 'a');
+  if (!shownA) throw new Error('No dragged node');
+  const fromDrop = seen.nodeLists.length - 1;
+  // React Flow's own dragged node, placed in its parent as the drag left it.
+  const node = { ...shownA, position: dropped };
+  act(() => {
+    seen.props?.onNodeDragStop?.({} as MouseEvent, node, [node]);
+  });
+  await waitFor(() => {
+    expect(view.document.nodes.find((one) => one.id === 'F')?.position).toEqual({
+      x: -120,
+      y: -112,
+    });
+  });
+  await waitFor(() => {
+    expect(seen.props?.nodes && shown(seen.props.nodes).frame).toEqual({ x: -120, y: -112 });
+  });
+  held.resolve(undefined);
+  await waitFor(() => {
+    expect(seen.props?.nodes?.find((one) => one.id === 'a')).not.toHaveProperty('dragging', false);
+  });
+  // Every view since the drop agrees: the overlay's, then the mirror's under the overlay, then
+  // the mirror's alone.
+  for (const nodes of seen.nodeLists.slice(fromDrop))
+    expect(shown(nodes)).toEqual({ a: dropped, b: { x: 240, y: 52 }, frame: { x: -120, y: -112 } });
+});
 it('removes a rejected drag overlay so the view returns to the mirror', async () => {
   const view = setup({ selected: ['a'] });
   view.core.reply('canvas.move', {

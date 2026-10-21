@@ -78,7 +78,7 @@ it('keeps selection, measurements and dragging outside the document, preserving 
   const moved = projectOverlay(
     selected,
     new Map([
-      ['a', { position: { x: 200, y: 300 }, dragging: true, measured: { width: 150, height: 34 } }],
+      ['a', { at: { x: 200, y: 300 }, dragging: true, measured: { width: 150, height: 34 } }],
     ]),
   );
   expect(moved.nodes[0]).toMatchObject({
@@ -180,10 +180,7 @@ it('fits a dragged child’s containers in the overlay while leaving model and o
     ],
     edges: [],
   };
-  const shown = projectOverlay(
-    graph,
-    new Map([['a', { position: { x: 450, y: 100 }, dragging: true }]]),
-  );
+  const shown = projectOverlay(graph, new Map([['a', { at: { x: 450, y: 100 }, dragging: true }]]));
   expect(shown.nodes[0]?.width).toBe(620);
   expect(shown.nodes[0]?.position).toEqual({ x: 0, y: 0 });
   expect(shown.nodes[2]).toBe(graph.nodes[2]);

@@ -1056,13 +1056,36 @@ function Editor({
                 }
               return { ...current, nodes };
             });
+            // React Flow places a moved node in its parent as it holds that parent now; the
+            // overlay keeps it there in canvas coordinates, whatever the commit does to the parent.
+            const { nodeLookup } = store.getState();
+            const placed = new Map(
+              changes.flatMap((change) => {
+                if (change.type !== 'position' || !change.position) return [];
+                const parent = nodeLookup.get(change.id)?.parentId;
+                const origin =
+                  parent === undefined
+                    ? undefined
+                    : nodeLookup.get(parent)?.internals.positionAbsolute;
+                return [
+                  [
+                    change.id,
+                    {
+                      x: (origin?.x ?? 0) + change.position.x,
+                      y: (origin?.y ?? 0) + change.position.y,
+                    },
+                  ] as const,
+                ];
+              }),
+            );
             setOverlays((current) => {
               const next = new Map(current);
               for (const change of changes) {
-                if (change.type === 'position' && change.position)
+                const at = change.type === 'position' ? placed.get(change.id) : undefined;
+                if (at && change.type === 'position')
                   next.set(change.id, {
                     ...next.get(change.id),
-                    position: change.position,
+                    at,
                     dragging: change.dragging ?? false,
                   });
                 if (change.type === 'dimensions' && change.dimensions)

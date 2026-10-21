@@ -528,7 +528,10 @@ src/renderer/graph/  Graph editor on React Flow (@xyflow/react). Its nodes are a
                      so a node selected before the marquee is included in its first change. Empty
                      canvases never queue a fit that would move their first added node.
                      overlay.ts holds measurements and a drag until its one
-                     canvas.move lands at drop, fitting containers for display while dragging.
+                     canvas.move lands at drop, fitting containers for display while dragging; a
+                     dragged node is held in canvas coordinates, placed in its parent as projected,
+                     so the commit that refits its groups shows it where it was dropped even while
+                     the overlay still holds it.
                      CanvasSource keeps the shown canvas's subscription through restores and switches.
                      GraphEditor reads name, project, edited and arrange from the mirror's meta;
                      the canvas in
