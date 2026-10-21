@@ -6,6 +6,7 @@ import { isCanvasId, newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
 import { MAX_CANVAS_BYTES } from '../shared/ipc';
 import type { PartyId } from '../shared/model/messages';
+import type { NeedsItem } from '../shared/model/needs';
 import { MAX_RUN_BYTES, parseRunCheckpoint } from '../shared/run';
 import type { RunCheckpoint, RunContext } from '../shared/run';
 import { mintTrustedPath } from './core/host';
@@ -30,10 +31,13 @@ interface JournalDeps {
   memory: CanvasMemory;
   /** What opening the database found to say (core/store/open.ts): said with the first run restored. */
   said?: readonly string[];
+  problemChanged?: (canvas: CanvasId) => void;
 }
 
 const MISSING = 'The saved canvas is missing. Its run was restored as an unsaved canvas.';
 const EARLIER = 'This run belongs to an earlier canvas';
+const TOO_LARGE =
+  'The run checkpoint is too large (over 32 MiB), so current run progress cannot be kept. Messages are still recorded and delivered. Restarting restores only the last checkpoint that fit, if any.';
 
 /**
  * Each canvas's run, journaled by the canvas's id in the profile's database (Core Database §5),
@@ -56,6 +60,7 @@ const EARLIER = 'This run belongs to an earlier canvas';
 export class RunJournal {
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
+  readonly #problems = new Map<CanvasId, string | undefined>();
   /** What opening the database found to say, until the first run restored says it. */
   #said: string | undefined;
   /** Every write asked for so far, written or failed. */
@@ -96,7 +101,7 @@ export class RunJournal {
       .prepare(
         `SELECT c.file AS file, r.canvas_id AS ran, json_extract(r.state, '$.version') AS version,
            json_extract(r.state, '$.state') AS state, json_extract(r.state, '$.messages') AS messages,
-           r.updated_at AS updated_at
+           r.updated_at AS updated_at, json_extract(r.state, '$.saveError') AS save_error
          FROM canvas c LEFT JOIN run r ON r.canvas_id = c.id
          WHERE c.id = ?`,
       )
@@ -106,7 +111,8 @@ export class RunJournal {
       this.#said = undefined;
     }
     let checkpoint: RunCheckpoint | null = null;
-    if (typeof row?.ran === 'string') {
+    const saveError = typeof row?.save_error === 'string' ? row.save_error : undefined;
+    if (typeof row?.ran === 'string' && !(saveError !== undefined && row.version === null)) {
       try {
         checkpoint = parseRunCheckpoint({
           version: row.version,
@@ -147,6 +153,7 @@ export class RunJournal {
       checkpoint,
       ...(savedText === undefined ? {} : { savedText }),
       ...(entry.warning === undefined ? {} : { warning: entry.warning }),
+      ...(saveError === undefined ? {} : { saveError }),
     };
   }
 
@@ -181,17 +188,17 @@ export class RunJournal {
    */
   async save(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): Promise<void> {
     this.check(canvas, token);
-    await this.#write(() => {
-      this.keep(canvas, token, checkpoint);
-    });
+    const problem = await this.#write(() => this.keep(canvas, token, checkpoint));
+    this.kept(canvas, problem);
+    if (problem !== undefined) throw new RangeError(problem);
   }
 
   /**
    * Within a write: journals a canvas's run (null: none), as `save` does, with whatever else the
-   * write holds. Throws, failing the write, for a token that isn't its canvas's, or a run it can't
-   * journal.
+   * write holds. An oversized run keeps only a size refusal beside the last good checkpoint,
+   * returning that refusal; other invalid data, SQL failures and a wrong token still throw.
    */
-  keep(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): void {
+  keep(canvas: CanvasId, token: string, checkpoint: RunCheckpoint | null): string | undefined {
     if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
@@ -200,10 +207,18 @@ export class RunJournal {
       store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
       return;
     }
-    const { version, state, messages, updatedAt } = parseRunCheckpoint(checkpoint);
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
-      throw new RangeError('The run checkpoint is too large');
+      // A size limit is not a drive failure. Retain the last good run and commit this marker
+      // with its messages, rather than rolling messages back or sending without their record.
+      store
+        .prepare(
+          `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, json_object('saveError', ?), ?)
+        ON CONFLICT(canvas_id) DO UPDATE SET state = json_set(run.state, '$.saveError', ?)`,
+        )
+        .run(canvas, TOO_LARGE, checkpoint.updatedAt, TOO_LARGE);
+      return TOO_LARGE;
     }
+    const { version, state, messages, updatedAt } = parseRunCheckpoint(checkpoint);
     // Its state and messages are JSON texts (parseRunCheckpoint read them): kept as they are.
     store
       .prepare(
@@ -215,7 +230,46 @@ export class RunJournal {
         `{"version":${String(version)},"state":${state},"messages":${messages}}`,
         updatedAt,
       );
+    return undefined;
+  }
+
+  /** Called only after the containing write is durable, including a size refusal's marker. */
+  kept(canvas: CanvasId, problem: string | undefined): void {
+    const before = this.#problems.get(canvas);
+    this.#problems.set(canvas, problem);
+    if (before !== problem) this.#deps.problemChanged?.(canvas);
     this.#tell(canvas);
+  }
+
+  /** The persisted size refusal, cached until another run write lands. */
+  problem(canvas: CanvasId): string | undefined {
+    if (!this.#problems.has(canvas)) {
+      const value = this.#deps.store
+        .prepare("SELECT json_extract(state, '$.saveError') AS error FROM run WHERE canvas_id = ?")
+        .get(canvas)?.error;
+      this.#problems.set(canvas, typeof value === 'string' ? value : undefined);
+    }
+    return this.#problems.get(canvas);
+  }
+
+  /** A canvas-wide warning: no answer can make an oversized checkpoint durable. */
+  items(canvas: CanvasId): NeedsItem[] {
+    const problem = this.problem(canvas);
+    return problem === undefined
+      ? []
+      : [
+          {
+            id: `unsaved/${encodeURIComponent(canvas)}`,
+            canvas,
+            kind: 'hold',
+            for: 'you',
+            by: [],
+            title: 'Run progress is too large to save',
+            detail: problem,
+            choices: [],
+            answerIn: 'api',
+          },
+        ];
   }
 
   /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
@@ -287,7 +341,7 @@ export class RunJournal {
   }
 
   /** Writes to the database: resolves once the commit holding it returned. */
-  #write(write: () => void): Promise<void> {
+  #write<T>(write: () => T): Promise<T> {
     const written = this.#deps.store.write(write);
     this.#writing = Promise.all([this.#writing, written.catch(() => undefined)]);
     return written;

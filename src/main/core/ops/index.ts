@@ -83,6 +83,7 @@ export interface OpServices {
     | 'interrupt'
   >;
   stalled: Pick<StalledTurns, 'items'>;
+  runProblems?: (canvas: CanvasId) => readonly NeedsItem[];
   /** The canvases the core runs. */
   engines: Engines;
   /** Each canvas's lifetime: made, opened, saved, closed, its folder chosen. */

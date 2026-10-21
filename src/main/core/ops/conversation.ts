@@ -41,6 +41,7 @@ export function conversationOps(
       ...proposals.items(id),
       ...reviews.items(id),
       ...stalled.items(id),
+      ...(services.runProblems?.(id) ?? []),
     ];
     if (ctx.caller.kind === 'human') return items;
     const { caller } = ctx;
@@ -113,7 +114,12 @@ export function conversationOps(
         return {
           items:
             ctx.caller.kind === 'human'
-              ? [...proposals.items(id), ...reviews.items(id), ...stalled.items(id)]
+              ? [
+                  ...proposals.items(id),
+                  ...reviews.items(id),
+                  ...stalled.items(id),
+                  ...(services.runProblems?.(id) ?? []),
+                ]
               : [],
         };
       }

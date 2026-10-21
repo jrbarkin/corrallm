@@ -406,6 +406,14 @@ src/main/core/store/  The core's database (B9.0, Core Database §5): <profile>/c
                 openedLast, forgetRun) or a connection of the test's own (onDisk, journaledRun,
                 readPositions, refuseWrites: triggers that fail a table's writes), never by writing
                 its files.
+                An oversized run (over MAX_RUN_BYTES, 32 MiB) leaves its last good checkpoint in
+                place and keeps a saveError in the run's JSON in the same commit as its messages.
+                Messages still reach the drive before delivery; size alone never fails them.
+                run:get reports saveError (and a restore notice), and Needs shows a canvas-wide
+                `unsaved/<canvas>` warning, with no answer. A smaller checkpoint or forgetting
+                the run clears it. A renderer's oversized run:save records the warning then
+                rejects, so it never claims to have saved progress; core journaling can continue.
+                Restart restores only the last checkpoint that fit, paused, with that warning.
 src/main/api/   mcp.ts, the agents' server: MCP over streamable HTTP on 127.0.0.1, generated from
                 the registry (one tool per op, listed by the caller's party; every call through
                 core.call), the caller named by its bearer token: an agent's session or an outside

@@ -39,7 +39,10 @@ export function NeedsSidebar({
     (state?.items ?? [])
       .filter(
         (item) =>
-          item.kind === 'file' || item.kind === 'proposal' || item.id.startsWith('stalled/'),
+          item.kind === 'file' ||
+          item.kind === 'proposal' ||
+          item.id.startsWith('stalled/') ||
+          item.id.startsWith('unsaved/'),
       )
       .map((item) => [item.id, item]),
   );
@@ -99,7 +102,9 @@ export function NeedsSidebar({
                       ? 'File review'
                       : item.id.startsWith('stalled/')
                         ? `Silent session: ${item.agent === undefined ? 'agent' : agentName(questions.input.nodes, item.agent)}`
-                        : 'Proposal'}
+                        : item.id.startsWith('unsaved/')
+                          ? 'Run progress'
+                          : 'Proposal'}
                   </span>
                   <p className="graph-question-text">{item.title}</p>
                   {item.detail && <p className="graph-question-detail">{item.detail}</p>}

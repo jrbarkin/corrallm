@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { newCanvasId } from '../shared/canvas';
 import type { CanvasId } from '../shared/canvas';
+import { MAX_RUN_BYTES } from '../shared/run';
 import type { RunCheckpoint } from '../shared/run';
 import { mintTrustedPath } from './core/host';
 import type { Connection } from './core/store/sqlite';
@@ -86,6 +87,36 @@ afterEach(async () => {
 });
 
 describe('RunJournal', () => {
+  it('keeps the last good run and a durable explanation when the next run is oversized', async () => {
+    const runs = journal();
+    const canvas = await runs.last();
+    const { token } = await runs.get(canvas);
+    await runs.save(canvas, token, checkpoint);
+    const large = { ...checkpoint, state: JSON.stringify({ text: 'x'.repeat(MAX_RUN_BYTES) }) };
+    await expect(runs.save(canvas, token, large)).rejects.toThrow(/too large/);
+    expect(await runs.get(canvas)).toMatchObject({ checkpoint });
+    expect((await runs.get(canvas)).saveError).toMatch(/too large/);
+    await reopen();
+    const next = journal();
+    expect(await next.get(canvas)).toMatchObject({ checkpoint });
+    expect((await next.get(canvas)).saveError).toMatch(/too large/);
+    await next.save(canvas, (await next.get(canvas)).token, checkpoint);
+    expect((await next.get(canvas)).saveError).toBeUndefined();
+  });
+
+  it('records an oversized first run without inventing a checkpoint', async () => {
+    const runs = journal();
+    const canvas = await runs.last();
+    const { token } = await runs.get(canvas);
+    await expect(
+      runs.save(canvas, token, {
+        ...checkpoint,
+        state: JSON.stringify({ text: 'x'.repeat(MAX_RUN_BYTES) }),
+      }),
+    ).rejects.toThrow(/too large/);
+    expect((await runs.get(canvas)).checkpoint).toBeNull();
+    expect((await runs.get(canvas)).saveError).toMatch(/too large/);
+  });
   it('persists an unsaved draft under its id, across journals and restarts', async () => {
     const first = journal();
     const canvas = await first.last();
