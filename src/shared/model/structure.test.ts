@@ -194,7 +194,7 @@ describe('addAgent', () => {
     expect(get(changed.next, 'n')).toEqual({
       id: 'n',
       type: 'agent',
-      position: { x: 125, y: 83 },
+      position: { x: 107, y: 64 },
       data: {
         label: 'Agent 1',
         adapter: 'codex',
@@ -209,9 +209,9 @@ describe('addAgent', () => {
     for (const id of ['a', 'b', 'c'])
       doc = addAgent(doc, { at: { x: 200, y: 100 }, adapter: 'codex' }, context(id)).next;
     expect(doc.nodes.map((node) => node.position)).toEqual([
-      { x: 125, y: 83 },
-      { x: 149, y: 107 },
-      { x: 173, y: 131 },
+      { x: 107, y: 64 },
+      { x: 131, y: 88 },
+      { x: 155, y: 112 },
     ]);
   });
   it('adds into the innermost container and grows it without moving its other agents', () => {

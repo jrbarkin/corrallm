@@ -58,7 +58,9 @@ test.afterEach(async () => {
 
 /** Author the SDK connection before opening a view, so no Terminal session starts first. */
 async function openSdkAgent(name: string) {
-  const card = page.locator('.react-flow__node-agent').filter({ hasText: name });
+  const card = page
+    .locator('.react-flow__node-agent')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${name}$`) }) });
   await card.click({ button: 'right' });
   await page
     .getByRole('menu', { name: `${name} controls`, exact: true })

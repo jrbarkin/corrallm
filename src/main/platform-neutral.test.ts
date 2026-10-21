@@ -62,7 +62,6 @@ const ALLOWED: Readonly<Record<string, number>> = {
   'src/shared/examples/review-panel.corral': 4,
   'src/shared/examples/tdd-relay.corral': 3,
   'src/shared/examples/team-lead.corral': 4,
-  'src/renderer/graph/nodes.tsx': 1,
   'src/renderer/open-link.ts': 1,
   'src/renderer/terminal/TerminalPane.css': 1,
   'src/renderer/terminal/TerminalPane.tsx': 6,

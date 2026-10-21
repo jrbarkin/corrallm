@@ -78,6 +78,7 @@ import { StartSession } from './StartSession';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
 import { Dock } from './Dock';
+import { agentCard } from './agent-status';
 import './Floats.css';
 import { fileAction, keyAction, SHORTCUTS } from './keys';
 import type { KeyAction } from './keys';
@@ -339,6 +340,26 @@ function Editor({
   );
   /** The canvas's nodes as the run reads them (the model's, src/shared/model/canvas.ts). */
   const runNodes = model.nodes;
+  /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
+  const needed = useMemo(() => {
+    const input = {
+      canvas: canvasId,
+      nodes: runNodes,
+      run,
+      sessions,
+      catalog: engine.catalog,
+    };
+    return { input, needs: needsOf(input) };
+  }, [canvasId, runNodes, run, sessions, engine]);
+  const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
+  const dockNeeds = useMemo(
+    () =>
+      new Set([
+        ...needed.needs.map((need) => need.agent.id),
+        ...(coreNeeds?.items ?? []).flatMap((need) => (need.agent ? [need.agent] : [])),
+      ]),
+    [needed, coreNeeds],
+  );
   /** What the run holds for the user (OKs), in graph order: shown on the canvas and in agents. */
   const asks = useMemo(() => heldAsks(runNodes, run, engine.catalog), [runNodes, run, engine]);
   /** How every queue's tasks are marked, wherever a queue is shown: links, and where the run is. */
@@ -606,6 +627,7 @@ function Editor({
 
   const actions = useMemo<GraphActions>(
     () => ({
+      card: (id) => agentCard(id, model.nodes, sessions, run, dockNeeds, engine.catalog),
       queueState: (id) => queueControlText(run, id),
       groupState: (id) => groupControlText(model.nodes, run, id),
       editing,
@@ -642,7 +664,19 @@ function Editor({
         setWork({ from, to });
       },
     }),
-    [api, canvasId, editing, model.nodes, perform, removed, run, selectOne],
+    [
+      api,
+      canvasId,
+      editing,
+      model.nodes,
+      perform,
+      removed,
+      run,
+      selectOne,
+      sessions,
+      dockNeeds,
+      engine.catalog,
+    ],
   );
 
   const edits = useMemo(
@@ -876,6 +910,7 @@ function Editor({
       const status = sessions[n.id]?.status ?? 'idle';
       // Waiting on a permission answer is asking too, as is what its CLI asks in its terminal.
       const asking =
+        dockNeeds.has(n.id) ||
         status === 'waiting' ||
         (sessions[n.id]?.asking?.length ?? 0) > 0 ||
         (run.running && run.agents[n.id]?.status === 'asking');
@@ -896,23 +931,7 @@ function Editor({
         data,
       );
     });
-  }, [displayNodes, graph, selection, overlays, sessions, run]);
-  /** What needs the user, as the engine derives it: the run's holds, and what sessions ask. */
-  const needed = useMemo(() => {
-    const input = {
-      canvas: canvasId,
-      nodes: runNodes,
-      run,
-      sessions,
-      catalog: engine.catalog,
-    };
-    return { input, needs: needsOf(input) };
-  }, [canvasId, runNodes, run, sessions, engine]);
-  const coreNeeds = useTopic(`needs:${canvasId}`, mirror);
-  const dockNeeds = new Set([
-    ...needed.needs.map((need) => need.agent.id),
-    ...(coreNeeds?.items ?? []).flatMap((need) => (need.agent ? [need.agent] : [])),
-  ]);
+  }, [displayNodes, graph, selection, overlays, sessions, run, dockNeeds]);
 
   // The links between agents that can talk (graph.edges, dashed), except where one hands the other
   // work: that is drawn from the queues as an arrow (work.ts), and implies they can talk. React Flow

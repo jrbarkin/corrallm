@@ -1,5 +1,6 @@
 import { renderReady } from '../test-render';
 import { afterEach, expect, it, vi } from 'vitest';
+import { screen, within } from '@testing-library/react';
 
 import { CARD_SIZE } from '../../shared/model/geometry';
 import { GraphEditor } from '../test-graph';
@@ -19,8 +20,8 @@ afterEach(() => {
 function cardRules() {
   expect(css).toContain('.graph-card {');
   const card = /\n\.graph-card \{([^}]+)\}/.exec(css)?.[1] ?? '';
-  const label = /\n\.graph-card > \.graph-label[^{]*\{([^}]+)\}/.exec(css)?.[1] ?? '';
-  rules.textContent = `.graph-card { ${card} } .graph-card > .graph-label { ${label} }`;
+  const label = /\n\.graph-card-top > \.graph-label[^{]*\{([^}]+)\}/.exec(css)?.[1] ?? '';
+  rules.textContent = `.graph-card { ${card} } .graph-card-top > .graph-label { ${label} }`;
   document.head.append(rules);
 }
 
@@ -34,6 +35,10 @@ it('keeps the fixed card dimensions equal to the model’s CARD_SIZE', async () 
   expect(style.width).toBe(`${String(CARD_SIZE.width)}px`);
   expect(style.height).toBe(`${String(CARD_SIZE.height)}px`);
   expect(style.boxSizing).toBe('border-box');
+  expect(style.borderRadius).toBe('10px');
+  expect(style.padding).toBe('10px 12px');
+  const parent = /\.react-flow__node-agent\.parent::before \{([^}]+)\}/.exec(css)?.[1] ?? '';
+  expect(Number(/inset: ([\d.]+)px/.exec(parent)?.[1])).toBe(CARD_SIZE.height / 2);
 });
 
 it('constrains a long name and full queue to the same card, clipping the label with an ellipsis', async () => {
@@ -71,4 +76,61 @@ it('constrains a long name and full queue to the same card, clipping the label w
   });
   expect(label.getAttribute('title')).toBe(name);
   expect(card.querySelector('.graph-queue-count')?.getAttribute('data-count')).toBe('100');
+});
+
+it('uses the guide’s 186 by 73 card, with a catalog image, name, status and queue progress', async () => {
+  expect(CARD_SIZE).toEqual({ width: 186, height: 73 });
+  const { container } = await renderReady(
+    <GraphEditor
+      initialGraph={{
+        nodes: [
+          {
+            id: 'a',
+            type: 'agent',
+            position: { x: 0, y: 0 },
+            data: { label: 'Writer', queue: [{ id: 'one', message: 'Work' }] },
+          },
+        ],
+        edges: [],
+      }}
+    />,
+  );
+  const card = container.querySelector<HTMLElement>('.graph-card');
+  if (!card) throw new Error('No card');
+  const view = within(card);
+  const logo = view.getByRole('img', { name: 'Claude Code' });
+  expect(logo.tagName).toBe('IMG');
+  expect(logo.getAttribute('src')).toMatch(/^data:image\/svg\+xml,/);
+  expect(card.querySelector('svg')).toBeNull();
+  expect(card.querySelector('.graph-agent')).toBeNull();
+  expect(view.getByText('Writer')).toBeTruthy();
+  expect(view.getByText('Idle')).toBeTruthy();
+  expect(card.getAttribute('data-status')).toBe('Idle');
+  expect(
+    view.getByRole('progressbar', { name: 'Writer queue progress' }).getAttribute('aria-valuenow'),
+  ).toBe('0');
+  expect(card.querySelectorAll('.react-flow__handle')).toHaveLength(2);
+  expect(card.querySelector('.graph-queue-count')?.getAttribute('data-count')).toBe('1');
+});
+it('a card gives an adapter without a logo its first letter', async () => {
+  await renderReady(
+    <GraphEditor
+      initialGraph={{
+        nodes: [
+          {
+            id: 'zed',
+            type: 'agent',
+            position: { x: 0, y: 0 },
+            data: { label: 'Zed', adapter: 'zed' },
+          },
+        ],
+        edges: [],
+      }}
+    />,
+  );
+  const logo = screen
+    .getAllByRole('img', { name: 'zed' })
+    .find((image) => image.closest('.graph-card'));
+  expect(logo?.tagName).toBe('SPAN');
+  expect(logo?.textContent).toBe('Z');
 });

@@ -6,8 +6,8 @@ import type { CanvasNode, NodeLike, Position } from './canvas';
  * by its index among GROUP_COLORS.
  */
 
-/** An item's card: 150px wide, a 32px label inside a 1px border. Matches `.graph-card`. */
-export const CARD_SIZE = { width: 150, height: 34 } as const;
+/** The guide's card: logo/name, status and queue progress, its height rounded to a CSS pixel. */
+export const CARD_SIZE = { width: 186, height: 73 } as const;
 /** Height of a container's header zone (a frame's label bar). Matches `.graph-label` in GraphEditor.css. */
 export const HEADER = 32;
 /** Space between a container's edges (below its label bar or card) and its children. */

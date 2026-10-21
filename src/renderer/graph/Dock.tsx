@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { CanvasNode, AgentNode } from '../../shared/model/canvas';
 import type { Session } from '../../shared/model/session';
 import type { Run } from '../../shared/engine/run/runner';
-import { queueControlText } from '../../shared/engine/run/controls';
+import { agentStatus } from './agent-status';
 import { AdapterLogo } from '../AdapterLogo';
 import { slide } from '../agent/motion';
 import { agentLabel, connectionOf, DEFAULT_AGENT } from './agents';
@@ -98,7 +98,7 @@ export function Dock({
   const icon = (node: AgentNode) => {
     const name = node.data.label || 'Unnamed agent';
     const adapter = node.data.adapter ?? DEFAULT_AGENT;
-    const state = status(node.id, sessions, run, needs);
+    const state = agentStatus(node.id, sessions, run, needs);
     const label = `${name}, ${agentLabel(adapter, connectionOf(node.data))}: ${state}`;
     return (
       <button
@@ -171,31 +171,4 @@ export function Dock({
       </div>
     </nav>
   );
-}
-
-/** The most immediate work first: a live session, then its queue's state. */
-function status(
-  id: string,
-  sessions: Readonly<Record<string, Session>>,
-  run: Run,
-  needs: ReadonlySet<string>,
-): string {
-  if (needs.has(id)) return 'Needs you';
-  const control = queueControlText(run, id);
-  if (control) return control;
-  const session = sessions[id]?.status;
-  if (session === 'waiting') return 'Needs you';
-  if (session === 'working') return 'Working';
-  const queued = run.agents[id];
-  if (!queued) return 'Idle';
-  if (queued.status === 'done') return 'Done';
-  if (queued.status === 'stopped') return 'Stopped';
-  if (run.paused) return 'Paused';
-  return {
-    running: 'Working',
-    waiting: 'Waiting',
-    asking: 'Needs you',
-    stopped: 'Stopped',
-    done: 'Done',
-  }[queued.status];
 }

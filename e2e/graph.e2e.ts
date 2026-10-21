@@ -135,7 +135,9 @@ const nodes = () => page.locator('.react-flow__node');
 const edges = () => page.locator('.react-flow__edge');
 /** A node by its exact label. Children are DOM siblings of their container, not descendants. */
 const node = (label: string) =>
-  page.locator('.react-flow__node', { hasText: new RegExp(`^${label}$`) });
+  page
+    .locator('.react-flow__node')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${label}$`) }) });
 /** What you grab a group by: a frame's label bar, or a parent node's card. */
 const titleBar = (label: string) => node(label).locator('.graph-frame-title');
 const card = (label: string) => node(label).locator('.graph-card');
@@ -1248,20 +1250,21 @@ test('lines repeats up across lanes, round by round, with ribbons between the st
 test('agents show their type and ask questions, which a sidebar lists until answered', async () => {
   const a = await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 650, 380);
-  const tagColor = (label: string) =>
-    card(label)
-      .locator('.graph-agent')
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
-  const stripe = (label: string) =>
-    card(label).evaluate((el) => getComputedStyle(el).borderLeftColor);
+  const logo = (label: string) => card(label).getByRole('img');
 
-  // Every agent has a type, colour-coded on its card; its panel changes it.
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute(
-    'data-agent',
-    'claude-code',
-  );
-  const claude = await tagColor('Agent 1');
-  expect(await stripe('Agent 1')).toBe(claude);
+  // Every card shows the catalog's logo as an isolated image; its panel changes the adapter.
+  await expect(card('Agent 1')).toHaveAttribute('data-agent', 'claude-code');
+  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Claude Code');
+  await expect(logo('Agent 1')).toHaveAttribute('src', /^data:image\/svg\+xml,/);
+  const claude = await logo('Agent 1').getAttribute('src');
+  await expect
+    .poll(() =>
+      logo('Agent 1').evaluate(
+        (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+  await expect(card('Agent 1').locator('svg')).toHaveCount(0);
   await a.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
   await panel.getByRole('button', { name: /^Agent: Claude/ }).click();
@@ -1273,9 +1276,9 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await expect(panel.getByRole('option', { name: /Simulated|Qwen|Gemini/ })).toHaveCount(0);
   await page.keyboard.type('codex app server');
   await panel.getByRole('option', { name: /^Codex · App Server/ }).click();
-  await expect(card('Agent 1').locator('.graph-agent')).toHaveAttribute('data-agent', 'codex');
-  expect(await tagColor('Agent 1')).not.toBe(claude);
-  expect(await stripe('Agent 1')).toBe(await tagColor('Agent 1'));
+  await expect(card('Agent 1')).toHaveAttribute('data-agent', 'codex');
+  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Codex');
+  await expect(logo('Agent 1')).not.toHaveAttribute('src', claude ?? '');
 
   // A connector's native question glows and appears on the canvas until answered.
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
@@ -1285,12 +1288,15 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await panel.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(panel).toHaveCount(0);
   await expect(a).toHaveClass(/asking/);
+  await expect(card('Agent 1')).toHaveAttribute('data-status', 'Needs you');
+  await expect(card('Agent 1').locator('.graph-card-status')).toContainText('Needs you');
   await openNeeds(page);
   const sidebar = page.getByRole('complementary', { name: 'Needs you' });
   await expect(sidebar.getByRole('button', { name: 'Open Agent 1' })).toBeVisible();
   await sidebar.getByRole('button', { name: 'Yes', exact: true }).click();
   await expect(sidebar).toHaveCount(0);
   await expect(a).not.toHaveClass(/asking/);
+  await expect(card('Agent 1')).not.toHaveAttribute('data-status', 'Needs you');
 });
 
 test('groups fit their contents as a nested node is dragged out of them and back', async () => {
@@ -1642,7 +1648,7 @@ test('the dock toggles All queues and flies to the taskbar to switch agents, wit
   expectSamePlace(await box(dock), original);
 });
 
-test('the dock gives a logo-less agent its first letter', async () => {
+test('the dock and card give a logo-less agent its first letter', async () => {
   const adapter = MADE_UP.adapters[0];
   if (!adapter) throw new Error('The made-up catalog has no adapter');
   // Files retain adapters this build lacks. The unit test also supplies this catalog with its
@@ -1679,4 +1685,8 @@ test('the dock gives a logo-less agent its first letter', async () => {
   await expect(logo).toHaveText('Z');
   expect(await logo.evaluate((element) => element.tagName)).toBe('SPAN');
   await expect(icon.locator('img, svg')).toHaveCount(0);
+  const fallback = card('My Zed').getByRole('img', { name: adapter.id });
+  await expect(fallback).toHaveText('Z');
+  expect(await fallback.evaluate((element) => element.tagName)).toBe('SPAN');
+  await expect(card('My Zed').locator('img, svg')).toHaveCount(0);
 });

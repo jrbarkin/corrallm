@@ -62,6 +62,6 @@ test('saves a canvas as a .corral file, and opens it again', async () => {
   await expect(nodes).toHaveCount(0);
   await expect.poll(windowTitle).toBe('Untitled — corrallm');
   await page.keyboard.press('ControlOrMeta+o');
-  await expect(nodes).toHaveText(['Agent 1', 'Agent 2']);
+  await expect(nodes.locator('.graph-label')).toHaveText(['Agent 1', 'Agent 2']);
   await expect.poll(windowTitle).toBe('team.corral — corrallm');
 });

@@ -57,7 +57,9 @@ async function open(file: string) {
   await expect(page.locator('.graph-file-name')).toHaveText(path.basename(file));
 }
 const node = (label: string) =>
-  page.locator('.react-flow__node').filter({ hasText: new RegExp(`^${label}$`) });
+  page
+    .locator('.react-flow__node')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${label}$`) }) });
 async function list() {
   await canvasAction(page, 'Canvases');
   const dialog = page.getByRole('dialog', { name: 'Canvases', exact: true });

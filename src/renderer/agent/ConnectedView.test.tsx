@@ -355,7 +355,10 @@ describe('a connected agent', () => {
     await events.click(view.getByRole('option', { name: /^Claude · Agent SDK/ }));
     expect(chip().getAttribute('aria-label')).toBe('Agent: Claude · Agent SDK');
     expect(card().getAttribute('aria-label')).toBe('a, Claude · SDK');
-    expect(card().querySelector('.graph-agent')?.getAttribute('data-connection')).toBe('SDK');
+    expect(card().querySelector('.graph-card')?.getAttribute('title')).toBe(
+      'Agent: Claude · Agent SDK',
+    );
+    expect(card().querySelector('img')?.getAttribute('alt')).toBe('Claude Code');
     // Its view is open: its session starts.
     await settle();
     expect(backend.start).toHaveBeenCalledWith('a', {

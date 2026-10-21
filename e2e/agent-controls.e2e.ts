@@ -282,7 +282,9 @@ test('a canvas pause chosen before Run survives reload and global Resume until t
   await menu()
     .getByRole('menuitem', { name: /^Pause/ })
     .click();
-  await expect(builder.getByText('Paused', { exact: true })).toBeVisible();
+  await expect(
+    builder.locator('.graph-agent-control').filter({ hasText: /^Paused$/ }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Show all queues' }).click();
   await queues.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(row(queues, 'independent', 'parallel')).toHaveAttribute('data-run', 'succeeded');

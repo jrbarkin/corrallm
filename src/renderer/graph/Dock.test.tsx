@@ -224,6 +224,9 @@ it('glows for a need from either the core topic or the renderer session, until b
       />,
     );
     const writer = screen.getByRole('button', { name: /^Writer,/ });
+    const card = document.querySelector('.react-flow__node[data-id="a"] > .graph-card');
+    const node = card?.parentElement;
+    if (!card || !node) throw new Error('No Writer card');
     await events.click(writer);
     act(() => {
       canvas.core.change({
@@ -247,6 +250,9 @@ it('glows for a need from either the core topic or the renderer session, until b
       });
     });
     expect(writer.hasAttribute('data-needs')).toBe(true);
+    expect(card.getAttribute('data-status')).toBe('Needs you');
+    expect(node.classList.contains('asking')).toBe(true);
+    expect(card.querySelector('.graph-card-status')?.textContent).toBe('Needs you');
     act(() => {
       sessions.emit('a', 'claude-code.terminal', {
         type: 'asking',
@@ -255,10 +261,15 @@ it('glows for a need from either the core topic or the renderer session, until b
       canvas.core.change({ topic: `needs:${canvas.document.id}`, rev: 2, replace: { items: [] } });
     });
     expect(writer.hasAttribute('data-needs')).toBe(true);
+    expect(card.getAttribute('data-status')).toBe('Needs you');
+    expect(node.classList.contains('asking')).toBe(true);
+    expect(card.querySelector('.graph-card-status')?.textContent).toBe('Needs you');
     act(() => {
       sessions.emit('a', 'claude-code.terminal', { type: 'asking', asks: [] });
     });
     expect(writer.hasAttribute('data-needs')).toBe(false);
+    expect(card.getAttribute('data-status')).toBe('Idle');
+    expect(node.classList.contains('asking')).toBe(false);
     expect(canvas.core.operations).toEqual([]);
   } finally {
     canvas.core.dispose();

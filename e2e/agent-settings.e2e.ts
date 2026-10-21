@@ -162,7 +162,10 @@ async function openCanvas(nodes: CanvasNode[]) {
 }
 
 async function openAgent(name: string) {
-  await page.locator('.react-flow__node-agent').filter({ hasText: name }).dblclick();
+  await page
+    .locator('.react-flow__node-agent')
+    .filter({ has: page.locator('.graph-label').filter({ hasText: new RegExp(`^${name}$`) }) })
+    .dblclick();
   return page.getByRole('dialog', { name, exact: true });
 }
 
