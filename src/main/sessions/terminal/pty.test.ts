@@ -10,13 +10,32 @@ afterEach(() => {
 });
 
 describe('owned ptys', () => {
+  it('refuses a pty before the native spawn once closing, including during module loading', async () => {
+    let closing = false;
+    const owner = {
+      node: vi.fn(),
+      pty: vi.fn(),
+      stop: vi.fn(),
+      beforeSpawn: () => {
+        if (closing) throw new Error('closing');
+      },
+    };
+    const starting = withProcesses(owner, () =>
+      spawnPty('fake-cli', [], { cwd: '/project', env: {}, cols: 80, rows: 24 }),
+    );
+    closing = true;
+    await expect(starting).rejects.toThrow('closing');
+    expect(nativeSpawn).not.toHaveBeenCalled();
+    expect(owner.pty).not.toHaveBeenCalled();
+  });
+
   it.each(['darwin', 'win32'] as const)(
     'records the native pty on %s, keeping the ConPTY DLL on Windows',
     async (platform) => {
       vi.stubGlobal('process', { ...process, platform });
       const child = { pid: 42, kill: vi.fn(), onExit: vi.fn() };
       nativeSpawn.mockReturnValue(child);
-      const owner = { node: vi.fn(), pty: vi.fn(), stop: vi.fn() };
+      const owner = { beforeSpawn: vi.fn(), node: vi.fn(), pty: vi.fn(), stop: vi.fn() };
       await withProcesses(owner, () =>
         spawnPty('fake-cli', [], { cwd: '/project', env: {}, cols: 80, rows: 24 }),
       );

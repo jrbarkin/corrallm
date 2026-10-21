@@ -105,29 +105,82 @@ describe('the core’s CLI children', () => {
     expect(await remembered()).toEqual({ version: 1, children: [] });
   });
 
-  it('starts no CLI once closing: one spawned then is ended at once and never recorded', async () => {
-    await children.close();
+  it.each(['stdio', 'pty'] as const)(
+    'records and ends a late %s child’s whole group, retaining it through cleanup',
+    async (kind) => {
+      await children.close();
+      live.set(43, { started: 2000, group: 43 });
+      groups.add(43);
+      const child = new Child(43);
+      const grace = Promise.withResolvers<undefined>();
+      system.wait = () => grace.promise;
+      system.signal = vi.fn<ChildSystem['signal']>((group, signal) => {
+        live.delete(group);
+        if (signal === 'SIGTERM') child.emit('exit', null, signal);
+        else groups.delete(group);
+      });
+      expect(() => {
+        if (kind === 'stdio') children.node(child);
+        else children.pty({ pid: 43, kill: child.kill, onExit: (exit) => child.on('exit', exit) });
+      }).toThrow(/closing/);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(system.signal).toHaveBeenCalledExactlyOnceWith(43, 'SIGTERM');
+      expect(await remembered()).toEqual({ version: 1, children: [{ pid: 43, started: 2000 }] });
+      let finished = false;
+      const flushing = children.flush().then(() => {
+        finished = true;
+      });
+      expect(finished).toBe(false);
+      grace.resolve(undefined);
+      await flushing;
+      expect(system.signal).toHaveBeenNthCalledWith(2, 43, 'SIGKILL');
+      expect(groups.has(43)).toBe(false);
+      expect(await remembered()).toEqual({ version: 1, children: [] });
+    },
+  );
+
+  it('waits for a late child too when it joins cleanup during close', async () => {
+    children.node(new Child(42));
+    const first = Promise.withResolvers<undefined>();
+    const late = Promise.withResolvers<undefined>();
+    system.wait = vi
+      .fn<ChildSystem['wait']>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementation(() => late.promise);
+    system.signal = vi.fn<ChildSystem['signal']>((group, signal) => {
+      live.delete(group);
+      if (signal === 'SIGKILL') groups.delete(group);
+    });
+    let closed = false;
+    const closing = children.close().then(() => {
+      closed = true;
+    });
     live.set(43, { started: 2000, group: 43 });
     groups.add(43);
-    const child = new Child(43);
     expect(() => {
-      children.node(child);
+      children.node(new Child(43));
     }).toThrow(/closing/);
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
-    let exit: (() => void) | undefined;
-    const pty = {
-      pid: 43,
-      kill: vi.fn(),
-      onExit: (listener: () => void) => {
-        exit = listener;
-      },
+    groups.delete(42);
+    first.resolve(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    late.resolve(undefined);
+    await closing;
+    expect(groups.has(43)).toBe(false);
+    expect(await remembered()).toEqual({ version: 1, children: [] });
+  });
+
+  it('keeps a late child recorded when its group cannot be stopped', async () => {
+    await children.close();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    system.signal = () => {
+      throw new Error('EPERM');
     };
     expect(() => {
-      children.pty(pty);
+      children.node(new Child(42));
     }).toThrow(/closing/);
-    expect(pty.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
-    exit?.();
-    expect(await remembered()).toEqual({ version: 1, children: [] });
+    await children.flush();
+    expect(await remembered()).toEqual({ version: 1, children: [{ pid: 42, started: 1000 }] });
   });
 
   it('ends a Windows CLI still running as the core closes, directly', async () => {

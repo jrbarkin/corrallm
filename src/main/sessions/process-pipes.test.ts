@@ -10,6 +10,7 @@ it.each(['running', 'exited'] as const)(
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const done = vi.fn();
     const owner = {
+      beforeSpawn: vi.fn(),
       node: vi.fn(),
       pty: vi.fn(),
       stop: (child: { kill: (signal: NodeJS.Signals | number) => unknown }) => {

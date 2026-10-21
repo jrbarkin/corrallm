@@ -129,7 +129,8 @@ it('ends a helper still running as it closes, and starts none once closing', asy
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
   answered.resolve(undefined);
   await reading.catch(() => undefined);
-  expect(cli.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+  expect(spawned).toHaveBeenCalledTimes(1);
+  expect(cli.kill).not.toHaveBeenCalled();
   expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, children: [] });
 });
 

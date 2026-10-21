@@ -9,6 +9,8 @@ import type {
 
 /** A core's owner of the processes started while its work runs. No profile is global. */
 export interface ProcessOwner {
+  /** Refuses new OS spawns once the owner starts closing. */
+  beforeSpawn(): void;
   stop(
     child: Parameters<ProcessOwner['node']>[0],
     signal: NodeJS.Signals | number,
@@ -42,6 +44,7 @@ export const spawn = ((
   options: SpawnOptions = {},
 ): ChildProcess => {
   const processes = owner.getStore();
+  processes?.beforeSpawn();
   const argv = Array.isArray(args) ? (args as readonly string[]) : [];
   const settings = Array.isArray(args) ? options : (args as SpawnOptions);
   const child = spawnProcess(
@@ -62,6 +65,7 @@ export function execFile(
 ): ChildProcess {
   const processes = owner.getStore();
   if (!processes) return execProcess(command, args, options, callback);
+  processes.beforeSpawn();
   // Node's execFile does not forward detached to spawn. Collect its bounded UTF-8 result here.
   const {
     timeout = 0,
@@ -140,4 +144,9 @@ export function execFile(
 /** node-pty's forkpty creates the POSIX session and process group itself. */
 export function recordPty(child: Parameters<ProcessOwner['pty']>[0]): void {
   owner.getStore()?.pty(child);
+}
+
+/** Check after loading node-pty, immediately before its synchronous native spawn. */
+export function beforeSpawn(): void {
+  owner.getStore()?.beforeSpawn();
 }

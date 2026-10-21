@@ -74,6 +74,10 @@ export class Children implements ProcessOwner {
     this.#system = system;
   }
 
+  beforeSpawn(): void {
+    if (this.#closed) throw new Error('corrallm’s core is closing: it starts no more CLIs.');
+  }
+
   run<T>(work: () => T): T {
     return withProcesses(this, work);
   }
@@ -169,7 +173,7 @@ export class Children implements ProcessOwner {
 
   /** Finish any group cleanup already begun before the host exits. */
   async flush(): Promise<void> {
-    await Promise.all(this.#stopping.values());
+    while (this.#stopping.size > 0) await Promise.all(this.#stopping.values());
   }
 
   /**
@@ -245,10 +249,6 @@ export class Children implements ProcessOwner {
     const stop = () => {
       kill('SIGKILL');
     };
-    if (this.#closed) {
-      stop();
-      throw new Error('corrallm’s core is closing: it starts no more CLIs.');
-    }
     const state = { ended: false };
     let record: ChildRecord | undefined;
     onExit(() => {
@@ -268,7 +268,10 @@ export class Children implements ProcessOwner {
         this.#system.platform === 'win32'
           ? { started: this.#system.now(), group: pid }
           : this.#system.inspect(pid);
-      if (state.ended || found === undefined) return; // It exited before its identity could be read.
+      if (state.ended || found === undefined) {
+        this.beforeSpawn();
+        return; // It exited before its identity could be read.
+      }
       if (pid <= 1 || pid === process.pid || found.group !== pid) {
         throw new Error('The CLI did not start in its own process group.');
       }
@@ -281,6 +284,13 @@ export class Children implements ProcessOwner {
       this.#kills.delete(pid);
       stop();
       throw error;
+    }
+    if (this.#closed) {
+      // A child already created as closing began still belongs to us. Record its verified
+      // identity first, then retain it through the same group cleanup as every owned CLI.
+      if (this.#system.platform === 'win32') kill('SIGTERM');
+      else void this.#ending(record, 'SIGTERM');
+      this.beforeSpawn();
     }
   }
 

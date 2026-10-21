@@ -13,7 +13,7 @@ const { spawnProcess, execProcess } = vi.hoisted(() => ({
 vi.mock('node:child_process', () => ({ spawn: spawnProcess, execFile: execProcess }));
 let child: ChildProcess;
 let kill = vi.fn();
-const owner = () => ({ node: vi.fn(), pty: vi.fn(), stop: vi.fn() });
+const owner = () => ({ beforeSpawn: vi.fn(), node: vi.fn(), pty: vi.fn(), stop: vi.fn() });
 beforeEach(() => {
   kill = vi.fn();
   child = Object.assign(new EventEmitter(), {
@@ -31,6 +31,26 @@ afterEach(() => {
 });
 
 describe('owned process spawns', () => {
+  it.each(['spawn', 'execFile'] as const)(
+    'refuses %s before starting an OS process once closing',
+    (kind) => {
+      const children = {
+        ...owner(),
+        beforeSpawn: () => {
+          throw new Error('closing');
+        },
+      };
+      expect(() =>
+        withProcesses(children, () =>
+          kind === 'spawn' ? spawn('fake-cli') : execFile('fake-cli', [], {}, vi.fn()),
+        ),
+      ).toThrow('closing');
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(execProcess).not.toHaveBeenCalled();
+      expect(children.node).not.toHaveBeenCalled();
+    },
+  );
+
   it('starts owned stdio children in private POSIX groups and records them before returning', () => {
     const children = owner();
     const spawned = withProcesses(children, () =>
