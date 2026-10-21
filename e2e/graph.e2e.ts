@@ -540,8 +540,10 @@ test('moves a group like one node: drag it anywhere, and what is inside comes al
 });
 
 test("gives a group a parent from the '+' on its top border, then connects and deletes it", async () => {
-  const a = await addAgentAt('Agent 1', 450, 330);
-  const b = await addAgentAt('Agent 2', 450, 460);
+  // Leave room for the parent's card and the nested frame above its children, so Agent 3
+  // stays above the parent after it grows around that frame.
+  const a = await addAgentAt('Agent 1', 450, 330 + CARD_SIZE.height);
+  const b = await addAgentAt('Agent 2', 450, 460 + CARD_SIZE.height);
   const c = await addAgentAt('Agent 3', 900, 200);
 
   await marquee(a, b);
@@ -591,6 +593,7 @@ test("gives a group a parent from the '+' on its top border, then connects and d
   expectInside(await box(inner), await box(team));
   const teamCard = await box(card('Team'));
   expect((await box(inner)).y).toBeGreaterThanOrEqual(teamCard.y + teamCard.height);
+  expect((await box(card('Agent 3'))).y).toBeLessThan(teamCard.y);
 
   // The parent node links to nodes outside its group, and gives them work, from its own dots.
   await connect(c, team);
@@ -1490,11 +1493,13 @@ test('arranges the graph automatically while the toggle is on', async () => {
 
   // Nodes stay where the arrangement puts them; turning it off lets them be dragged again.
   const held = await box(b);
-  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  const grab = await center(b);
+  const drop = { x: grab.x + 200, y: grab.y + 150 };
+  await drag(grab, drop);
   expectSamePlace(await box(b), held);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await drag(await center(b), { x: held.x + 200, y: held.y + 150 });
+  await drag(grab, drop);
   expect((await box(b)).x).toBeGreaterThan(held.x + 100);
 });
 
@@ -1529,7 +1534,7 @@ test('shows which node or frame has keyboard focus', async () => {
   const focused = page.locator('.react-flow__node:focus-visible');
   const outline = () => focused.evaluate((el) => getComputedStyle(el).outlineStyle);
   await page.keyboard.press('Tab');
-  await expect(focused).toHaveText('Group 1');
+  await expect(focused.locator('.graph-label')).toHaveText('Group 1');
   await expect(focused).not.toHaveClass(/selected/);
   expect(await outline()).toBe('dashed');
 
@@ -1540,7 +1545,7 @@ test('shows which node or frame has keyboard focus', async () => {
   await expect.poll(() => plus.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
 
   await page.keyboard.press('Tab');
-  await expect(focused).toHaveText('Agent 1');
+  await expect(focused.locator('.graph-label')).toHaveText('Agent 1');
   expect(await outline()).toBe('dashed');
 });
 
