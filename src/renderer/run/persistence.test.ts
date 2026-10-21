@@ -26,20 +26,23 @@ function setup() {
       messages: '{}',
       updatedAt: 1,
     }),
-    open: vi.fn<(_canvas: ReturnType<typeof newCanvasId>) => Promise<void>>(() =>
-      Promise.resolve(),
-    ),
+    ready: vi.fn(() => Promise.resolve()),
     restore: vi.fn(),
-    freeze: vi.fn(() => {
+    freeze: vi.fn((): void | Promise<void> => {
       snapshot = 'paused';
     }),
     error: vi.fn(),
   };
+  /** What a switch resets and binds before it reads the new canvas's run. */
+  const open = vi.fn<(canvas: ReturnType<typeof newCanvasId>) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
   const persistence = new RunPersistence(source, owner);
   return {
     persistence,
     source,
     owner,
+    open,
     context,
     stop: () => {
       for (const listener of stopping) listener('quit-1');
@@ -58,10 +61,23 @@ describe('run persistence coordinator', () => {
     await persistence.flush();
     expect(source.save).toHaveBeenCalledExactlyOnceWith('original', expect.any(Object));
   });
+  it('reads the run only once the mirror holds the canvas shown (B9 Design §9)', async () => {
+    const { persistence, source, owner } = setup();
+    const mirrored = Promise.withResolvers<undefined>();
+    owner.ready.mockReturnValue(mirrored.promise);
+    const initialized = persistence.initialize();
+    await Promise.resolve();
+    expect(owner.ready).toHaveBeenCalledOnce();
+    expect(source.get).not.toHaveBeenCalled();
+    mirrored.resolve(undefined);
+    await initialized;
+    expect(source.get).toHaveBeenCalledOnce();
+    expect(owner.restore).toHaveBeenCalledOnce();
+  });
   it('waits for an asynchronous freeze before capturing and acknowledging shutdown', async () => {
     const { persistence, source, owner, stop, change } = setup();
     await persistence.initialize();
-    const frozen = Promise.withResolvers<void>();
+    const frozen = Promise.withResolvers<undefined>();
     owner.freeze.mockImplementation(() => {
       return frozen.promise.then(() => {
         change('paused after draft');
@@ -70,7 +86,7 @@ describe('run persistence coordinator', () => {
     stop();
     await Promise.resolve();
     expect(source.save).not.toHaveBeenCalled();
-    frozen.resolve();
+    frozen.resolve(undefined);
     await vi.waitFor(() => {
       expect(source.ready).toHaveBeenCalledExactlyOnceWith('quit-1', null);
     });
@@ -192,7 +208,7 @@ describe('run persistence coordinator', () => {
     expect(source.save).toHaveBeenCalledTimes(2);
   });
   it('flushes before the switching op, resets and waits for the mirror, then reads the new run', async () => {
-    const { persistence, source, owner } = setup();
+    const { persistence, source, owner, open } = setup();
     await persistence.initialize();
     const next = newCanvasId(),
       order: string[] = [];
@@ -200,9 +216,10 @@ describe('run persistence coordinator', () => {
       order.push('save');
       return Promise.resolve();
     });
-    owner.open.mockImplementation(async (canvas) => {
+    open.mockImplementation((canvas) => {
       expect(canvas).toBe(next);
       order.push('mirror');
+      return Promise.resolve();
     });
     vi.mocked(source.get).mockImplementation(() => {
       order.push('get');
@@ -214,7 +231,7 @@ describe('run persistence coordinator', () => {
     await persistence.switch(() => {
       order.push('op');
       return Promise.resolve(next);
-    });
+    }, open);
     expect(order).toEqual(['save', 'op', 'mirror', 'get', 'restore']);
     await persistence.flush();
     expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
@@ -222,25 +239,25 @@ describe('run persistence coordinator', () => {
   it.each(['cancelled', 'refused'])(
     'keeps the current token and stores after a %s switch',
     async (why) => {
-      const { persistence, source, owner } = setup();
+      const { persistence, source, owner, open } = setup();
       await persistence.initialize();
       const action = () =>
         why === 'cancelled' ? Promise.resolve(null) : Promise.reject(new Error('Invalid file'));
-      const attempt = persistence.switch(action);
+      const attempt = persistence.switch(action, open);
       if (why === 'cancelled') await attempt;
       else await expect(attempt).rejects.toThrow('Invalid file');
-      expect(owner.open).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
       expect(owner.restore).toHaveBeenCalledOnce();
       await persistence.flush();
       expect(source.save).toHaveBeenLastCalledWith('original', expect.any(Object));
     },
   );
   it('makes shutdown wait through a switch and saves only the new generation afterwards', async () => {
-    const { persistence, source } = setup();
+    const { persistence, source, open } = setup();
     await persistence.initialize();
     const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
     vi.mocked(source.get).mockResolvedValue({ id: newCanvasId(), token: 'new', checkpoint: null });
-    const switching = persistence.switch(() => held.promise);
+    const switching = persistence.switch(() => held.promise, open);
     await vi.waitFor(() => {
       expect(source.save).toHaveBeenCalledOnce();
     });
@@ -253,19 +270,19 @@ describe('run persistence coordinator', () => {
     expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
   });
   it('serializes two switches and holds writes until both finish', async () => {
-    const { persistence, source } = setup();
+    const { persistence, source, open } = setup();
     await persistence.initialize();
     const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
     let token = 'first';
     vi.mocked(source.get).mockImplementation(() =>
       Promise.resolve({ id: newCanvasId(), token, checkpoint: null }),
     );
-    const first = persistence.switch(() => held.promise),
+    const first = persistence.switch(() => held.promise, open),
       secondAction = vi.fn(() => {
         token = 'second';
         return Promise.resolve(newCanvasId());
       });
-    const second = persistence.switch(secondAction),
+    const second = persistence.switch(secondAction, open),
       flush = persistence.flush();
     await vi.waitFor(() => {
       expect(source.save).toHaveBeenCalledOnce();
@@ -276,10 +293,10 @@ describe('run persistence coordinator', () => {
     expect(source.save).toHaveBeenLastCalledWith('second', expect.any(Object));
   });
   it('refuses a queued flush after disposal during a switch', async () => {
-    const { persistence, source } = setup();
+    const { persistence, source, open } = setup();
     await persistence.initialize();
     const held = Promise.withResolvers<ReturnType<typeof newCanvasId>>();
-    const switching = persistence.switch(() => held.promise);
+    const switching = persistence.switch(() => held.promise, open);
     await vi.waitFor(() => {
       expect(source.save).toHaveBeenCalledOnce();
     });
@@ -292,7 +309,7 @@ describe('run persistence coordinator', () => {
   it.each(['load', 'restore'])(
     'keeps a rejected %s untouched until an explicit switch',
     async (failure) => {
-      const { persistence, source, owner, stop } = setup();
+      const { persistence, source, owner, stop, open } = setup();
       if (failure === 'load')
         vi.mocked(source.get).mockRejectedValueOnce(new Error('Corrupt saved state'));
       else
@@ -305,7 +322,7 @@ describe('run persistence coordinator', () => {
         expect(source.ready).toHaveBeenCalledWith('quit-1', null);
       });
       expect(source.save).not.toHaveBeenCalled();
-      await persistence.switch(() => Promise.resolve(newCanvasId()));
+      await persistence.switch(() => Promise.resolve(newCanvasId()), open);
       await persistence.flush();
       expect(source.save).toHaveBeenCalledWith('original', expect.any(Object));
     },
@@ -322,17 +339,17 @@ describe('run persistence coordinator', () => {
     expect(source.save).not.toHaveBeenCalled();
   });
   it('blocks saving if the new canvas cannot restore, then recovers with another switch', async () => {
-    const { persistence, source, owner } = setup();
+    const { persistence, source, owner, open } = setup();
     await persistence.initialize();
     vi.mocked(source.get).mockResolvedValue({ id: newCanvasId(), token: 'new', checkpoint: null });
     owner.restore.mockImplementationOnce(() => {
       throw new Error('Invalid checkpoint');
     });
-    await expect(persistence.switch(() => Promise.resolve(newCanvasId()))).rejects.toThrow(
+    await expect(persistence.switch(() => Promise.resolve(newCanvasId()), open)).rejects.toThrow(
       'Invalid',
     );
     await expect(persistence.flush()).rejects.toThrow('Invalid');
-    await persistence.switch(() => Promise.resolve(newCanvasId()));
+    await persistence.switch(() => Promise.resolve(newCanvasId()), open);
     await persistence.flush();
     expect(source.save).toHaveBeenLastCalledWith('new', expect.any(Object));
   });

@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasDocument } from '../../shared/model/canvas';
-import type { RunContext } from '../../shared/run';
 import { toFile } from '../../shared/model/file';
 import { FakeConnector } from '../sessions/fake';
 import { createCore } from './core';
@@ -138,8 +137,10 @@ describe('reach when a queued canvas call runs', () => {
 describe('reach when a batch’s commit builds', () => {
   it('refuses a batch whose inner op names an agent that left the caller’s reach while it waited', async () => {
     const w = await world();
-    const { token } = (await w.core.channels.call(7, 'run:get', [])) as RunContext;
-    // The window's edit, which commits outside every op's scope: the helper out of the lead's team.
+    await w.core.channels.call(7, 'run:get', []);
+    // The window's whole-document edit, which commits outside every op's scope: the helper out of
+    // the lead's team. Only the legacy canvas:save channel still makes one (no renderer calls it;
+    // Claude 13 deletes it, B9 Design §10).
     const ungrouped = toFile({
       ...document(),
       nodes: document().nodes.map(({ parentId, ...node }) =>
@@ -149,12 +150,7 @@ describe('reach when a batch’s commit builds', () => {
     const snapshot = await w.core.call('canvas.get', { canvas: CANVAS }, asHuman(7));
     if (!snapshot.ok) throw new Error(snapshot.error.sentence);
     const gate = w.hold();
-    const edited = w.core.channels.call(7, 'run:save', [
-      token,
-      null,
-      ungrouped,
-      snapshot.value.rev,
-    ]);
+    const edited = w.core.channels.call(7, 'canvas:save', [ungrouped, false, snapshot.value.rev]);
     await gate.entered;
     // The batch takes its scope and passes its inner op's checks there, the edit not live yet,
     // then waits for the canvas's turn behind it.

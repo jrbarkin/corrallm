@@ -126,7 +126,8 @@ describe('App', () => {
     });
     await waitFor(() => {
       expect(saveRun).toHaveBeenCalledWith('test', expect.any(Object));
-      expect(saveRun.mock.calls.every((args) => args.length === 2)).toBe(true);
+      // A token and a checkpoint, never a document beside them.
+      for (const call of saveRun.mock.calls) expect(call).toHaveLength(2);
     });
   });
 

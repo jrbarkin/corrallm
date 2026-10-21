@@ -87,9 +87,7 @@ export class RunJournal {
   }
 
   /** What a window showing `canvas` restores: its run, its file's name and text, its folder. */
-  async get(
-    canvas: CanvasId,
-  ): Promise<
+  async get(canvas: CanvasId): Promise<
     RunContext & {
       name: string | null;
       savedText?: string;

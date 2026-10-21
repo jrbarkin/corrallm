@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 
-import type { CanvasId } from '../shared/canvas';
 import type { SessionBackend } from '../shared/engine/transcript/receive';
 import { api } from './api/client';
 import { findProjectFiles } from './agent/completion';
@@ -13,14 +12,12 @@ import { topics } from './api/topics';
 import type { UsageSource } from './usage/store';
 import type { RunSource } from './run/persistence';
 
+/**
+ * The window's run, journaled by the core: read once the editor's mirror holds the canvas shown
+ * (B9 Design §9), and saved without the document, which is the core's.
+ */
 const runSource: RunSource = {
-  get: async () => {
-    const { canvas } = await api.windowGet();
-    await topics.whenAt(`canvas:${canvas as CanvasId}`, 0);
-    const context = await window.api.getRun();
-    await topics.whenAt(`canvas:${context.id}`, 0);
-    return context;
-  },
+  get: () => window.api.getRun(),
   save: (token, checkpoint) => window.api.saveRun(token, checkpoint),
   ready: (request, error) => window.api.runReady(request, error),
   onStopping: (listener) => window.api.onRunStopping(listener),

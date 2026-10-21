@@ -220,7 +220,6 @@ function Editor({
    * steps and questions through their native connections. An agent whose session would not
    * start is switched to the connection the user chose for it there.
    */
-  const resetCanvas = useRef<(id: CanvasId) => Promise<void>>(async () => undefined);
   const [{ engine, sessionStore, runStore, persistence }] = useState(() => {
     let persistence: RunPersistence | undefined = undefined;
     const engine = new Engine({
@@ -260,9 +259,7 @@ function Editor({
           ...engine.checkpoint(),
           updatedAt: Date.now(),
         }),
-        open: async (id) => {
-          await resetCanvas.current(id);
-        },
+        ready: () => binding.ready(),
         beforeSave: flushDrafts,
         freeze: async () => {
           await flushDrafts();
@@ -572,7 +569,7 @@ function Editor({
       const node = binding.required().document.nodes.find((n) => n.id === id);
       const connection = node?.type === 'agent' ? connectionOf(node.data) : 'unavailable';
       if (connection === 'unavailable') return;
-      return draftCall(() =>
+      void draftCall(() =>
         api.agentSetSettings({
           canvas: binding.canvas,
           agent: id,
@@ -688,24 +685,30 @@ function Editor({
     },
     [runStore, sessionStore, binding, clearSelection],
   );
-  resetCanvas.current = load;
   const commands = useMemo(() => {
     if (!files) return undefined;
     const failed = (doing: string) => (error: unknown) => {
       setRestoreFailed(persistence?.failedInitialization() ?? false);
       setProblem(`Could not ${doing}: ${ipcErrorMessage(error)}`);
     };
+    /**
+     * A switch (B9 Design §9: New, Open, a template's New): one op, after which the window shows
+     * the canvas it names. The canvas before stays open in the core, its changes with it, so
+     * nothing asks to discard them; the window says so when it had any.
+     */
     const switchTo = async (action: () => Promise<CanvasId | null>) => {
       await flushDrafts();
-      const before = binding.required();
+      // Read, not required: a canvas that could not be restored can still be switched from.
+      const before = binding.read();
       runStore.pause();
-      if (persistence) await persistence.switch(action);
+      if (persistence) await persistence.switch(action, load);
       else {
         const id = await action();
         if (id !== null) await load(id);
       }
-      setRestoreFailed(false);
-      if (before.document.id !== binding.canvas && before.meta.edited)
+      // A cancelled Open after a failed restore leaves it failed: only another canvas recovers.
+      setRestoreFailed(persistence?.failedInitialization() ?? false);
+      if (before && before.document.id !== binding.canvas && before.meta.edited)
         setNotice([`${before.meta.name ?? 'The previous canvas'} stays open with its changes.`]);
       persistence?.changed();
     };
@@ -1239,11 +1242,8 @@ function Editor({
               <FileBar
                 name={name}
                 edited={canonical?.meta.edited ?? false}
-                {...(commands.chooseProject
-                  ? { project: { folder: project, onChoose: commands.chooseProject } }
-                  : {})}
+                project={{ folder: project, onChoose: commands.chooseProject }}
                 problem={problem}
-
                 onNew={() => {
                   commands.new();
                 }}
@@ -1456,7 +1456,7 @@ function Editor({
             edits={edits}
             gauges={gauges}
             onRun={() => {
-              void flushDrafts(async () => {
+              void flushDrafts(() => {
                 runStore.start();
               }).catch((error: unknown) => {
                 setProblem(ipcErrorMessage(error));

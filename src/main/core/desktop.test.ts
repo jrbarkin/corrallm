@@ -168,10 +168,11 @@ describe.each(['link.open', 'link.reveal'] as const)('%s arguments', (op) => {
 });
 
 describe('window.get', () => {
-  it('returns a conflict with current rows when a stale run save would undo a core operation', async () => {
+  it('never lets a run save undo a core operation: it carries the run alone, never a document', async () => {
     const context = (await core.channels.call(7, 'run:get', [])) as RunContext;
     const first = await core.call('canvas.get', { canvas: context.id }, SEVEN);
     if (!first.ok) throw new Error(first.error.sentence);
+    // What a renderer had before the core's commit, which run:save once sent beside its run.
     const stale = toFile({ id: context.id, arrange: false, nodes: [], links: [] });
     const added = await core.call(
       'canvas.addAgent',
@@ -179,27 +180,26 @@ describe('window.get', () => {
       SEVEN,
     );
     if (!added.ok || 'proposed' in added.value) throw new Error('Agent not added');
-    const result = await core.channels.call(7, 'run:save', [
-      context.token,
-      null,
-      stale,
-      first.value.rev,
-    ]);
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: 'conflict',
-        current: {
-          [`node/${added.value.id}`]: {
-            value: expect.objectContaining({ adapter: 'codex' }) as unknown,
-          },
-        },
-      },
-    });
-    const current = await core.call('canvas.get', { canvas: context.id }, SEVEN);
-    expect(current).toMatchObject({
+    const after = await core.call('canvas.get', { canvas: context.id }, SEVEN);
+    if (!after.ok) throw new Error(after.error.sentence);
+    // A document beside the run is refused before anything is journaled or committed.
+    await expect(
+      Promise.resolve().then(() =>
+        core.channels.call(7, 'run:save', [context.token, null, stale, first.value.rev]),
+      ),
+    ).rejects.toThrow('Expected a canvas token and a run checkpoint');
+    await expect(core.channels.call(7, 'run:save', [context.token, null])).resolves.toBeNull();
+    expect(await core.call('canvas.get', { canvas: context.id }, SEVEN)).toMatchObject({
       ok: true,
-      value: { nodes: [expect.objectContaining({ id: added.value.id })] },
+      value: {
+        rev: after.value.rev,
+        nodes: [
+          expect.objectContaining({
+            id: added.value.id,
+            data: expect.objectContaining({ adapter: 'codex' }) as unknown,
+          }),
+        ],
+      },
     });
   });
   it('refuses a stale canvas:save before any file is chosen, keeping the core’s newer commit', async () => {
@@ -234,13 +234,6 @@ describe('window.get', () => {
           messages: '[]',
           updatedAt: 1234,
         },
-        toFile({ id: context.id, arrange: false, nodes: [], links: [] }),
-        (
-          (await core.call('canvas.get', { canvas: context.id }, SEVEN)) as {
-            ok: true;
-            value: { rev: number };
-          }
-        ).value.rev,
       ]);
       const listed = await core.call('canvas.list', {}, SEVEN);
       expect(listed.ok).toBe(true);
@@ -291,9 +284,10 @@ describe('window.show', () => {
       ok: true,
       value: { canvas: first.value.canvas },
     });
-    expect(await core.channels.call(7, 'run:get', [])).toMatchObject({
-      id: first.value.canvas,
-      project: { path: project },
+    expect(await core.channels.call(7, 'run:get', [])).toMatchObject({ id: first.value.canvas });
+    expect(await core.call('canvas.get', { canvas: first.value.canvas }, SEVEN)).toMatchObject({
+      ok: true,
+      value: { project: { path: project } },
     });
     expect(await core.call('window.get', {}, EIGHT)).toEqual({
       ok: true,

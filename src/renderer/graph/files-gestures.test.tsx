@@ -1,8 +1,16 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { newCanvasId } from '../../shared/canvas';
+import { EXAMPLES } from '../../shared/examples';
+import { templateInfo } from '../../shared/templates';
+import { api } from '../api/client';
+import { catalog } from '../catalog';
+import { DEFAULT_AGENT } from './agents';
+import type { AgentNode } from '../../shared/model/canvas';
+import type { RunSource } from '../run/persistence';
 import { fakeCanvas } from '../test-canvas';
 import { expectOneOp } from '../test-api';
+import { events } from '../test-render';
 import { GraphEditor } from './GraphEditor';
 
 vi.mock('../terminal/screen', async () => ({
@@ -10,7 +18,13 @@ vi.mock('../terminal/screen', async () => ({
 }));
 
 const cleanups: (() => void)[] = [];
+beforeEach(() => {
+  vi.spyOn(api, 'templatesList').mockResolvedValue({
+    items: EXAMPLES.map((example) => templateInfo(example, catalog(), DEFAULT_AGENT)),
+  });
+});
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   cleanups.splice(0).forEach((stop) => {
     stop();
@@ -38,10 +52,15 @@ function setup(saved = true) {
   return canvas;
 }
 const click = async (name: string) => {
-  await act(async () => {
-    fireEvent.click(await screen.findByRole('button', { name }));
-  });
+  await events.click(await screen.findByRole('button', { name }));
 };
+/** Opens the agent view of the canvas's one agent. */
+const openWriter = async () => {
+  await events.doubleClick(screen.getByText('Writer'));
+};
+const writer = (canvas: ReturnType<typeof fakeCanvas>) =>
+  canvas.document.nodes.find((node): node is AgentNode => node.id === 'a' && node.type === 'agent');
+
 it.each([
   ['Save', 'canvas.save', true],
   ['Save', 'canvas.saveAs', false],
@@ -55,6 +74,7 @@ it.each([
     expectOneOp(canvas.core, op, { canvas: canvas.document.id });
   });
 });
+
 it.each(['New', 'Open…'])('%s keeps edited work without a discard question', async (button) => {
   const canvas = setup();
   canvas.meta({ edited: true });
@@ -74,8 +94,50 @@ it.each(['New', 'Open…'])('%s keeps edited work without a discard question', a
     expect(screen.queryByText('Writer')).toBeNull();
   });
   expect(canvas.document.id).not.toBe(before);
-  expect(screen.getByRole('status').textContent).toContain('stays open with its changes');
+  expect(screen.getByRole('status').textContent).toContain(
+    'work.corral stays open with its changes.',
+  );
 });
+
+it('a template’s New is one canvas.create, keeping edited work open as New and Open do', async () => {
+  const canvas = setup();
+  canvas.meta({ edited: true });
+  const before = canvas.document.id;
+  await click('Templates…');
+  const gallery = within(await screen.findByRole('dialog', { name: 'Templates' }));
+  await events.click(await gallery.findByRole('button', { name: /^Review loop/ }));
+  await events.click(gallery.getByRole('button', { name: 'Create canvas' }));
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  await waitFor(() => {
+    expect(canvas.core.operations).toEqual([
+      {
+        op: 'canvas.create',
+        args: expect.objectContaining({ template: expect.any(String) as unknown }) as unknown,
+      },
+    ]);
+  });
+  await waitFor(() => {
+    expect(screen.queryByText('Writer')).toBeNull();
+  });
+  expect(canvas.document.id).not.toBe(before);
+  expect(screen.getByText('Reviewer')).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toContain(
+    'work.corral stays open with its changes.',
+  );
+});
+
+it('says nothing of the canvas before when it had no changes', async () => {
+  const canvas = setup();
+  await click('New');
+  await waitFor(() => {
+    expectOneOp(canvas.core, 'canvas.create', {});
+  });
+  await waitFor(() => {
+    expect(screen.queryByText('Writer')).toBeNull();
+  });
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
 it('a cancelled Open keeps the canvas and its selection', async () => {
   const canvas = setup();
   canvas.core.respond('canvas.open', { canvas: null });
@@ -86,24 +148,19 @@ it('a cancelled Open keeps the canvas and its selection', async () => {
   expect(screen.getByText('Writer')).toBeTruthy();
   expect(screen.queryByRole('status')).toBeNull();
 });
+
 it('a role draft commits as one agent.setRole and a refusal stays at the field', async () => {
   const canvas = setup();
-  await act(async () => {
-    fireEvent.doubleClick(screen.getByText('Writer'));
-  });
+  await openWriter();
   await click('Agent settings: Writer');
-  // The summary menu opens the settings sheet.
-  if (!screen.queryByRole('textbox', { name: 'Role' })) await click('Agent settings…');
   const role = await screen.findByRole('textbox', { name: 'Role' });
   canvas.core.reply('agent.setRole', {
     ok: false,
     error: { code: 'unavailable', sentence: 'Not saved' },
   });
-  await act(async () => {
-    fireEvent.focus(role);
-    fireEvent.change(role, { target: { value: 'Review carefully' } });
-    fireEvent.blur(role);
-  });
+  await events.focus(role);
+  await events.change(role, { target: { value: 'Review carefully' } });
+  await events.blur(role);
   await waitFor(() => {
     expectOneOp(canvas.core, 'agent.setRole', {
       canvas: canvas.document.id,
@@ -120,32 +177,40 @@ it.each([
   ['Codex · App Server', 'agent.setType', { adapter: 'codex', connection: 'codex.app-server' }],
 ] as const)('the agent chip chooses %s with one %s', async (choice, op, args) => {
   const canvas = setup();
-  await act(async () => {
-    fireEvent.doubleClick(screen.getByText('Writer'));
-  });
+  await openWriter();
   await click('Agent: Claude · Terminal');
-  await act(async () => {
-    fireEvent.click(await screen.findByRole('option', { name: new RegExp(`^${choice}`) }));
-  });
+  await events.click(await screen.findByRole('option', { name: new RegExp(`^${choice}`) }));
   await waitFor(() => {
     expectOneOp(canvas.core, op, { canvas: canvas.document.id, agent: 'a', ...args });
   });
   expect(await screen.findByRole('button', { name: `Agent: ${choice}` })).toBeTruthy();
 });
 
-it('a settings-sheet choice commits one agent.setSettings', async () => {
+it('the settings sheet’s chip changes the agent’s CLI with one agent.setType', async () => {
   const canvas = setup();
-  await act(async () => {
-    fireEvent.doubleClick(screen.getByText('Writer'));
-  });
+  await openWriter();
   await click('Agent settings: Writer');
   const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
-  await act(async () => {
-    fireEvent.click(within(sheet).getByRole('button', { name: /^Mode:/ }));
+  await events.click(within(sheet).getByRole('button', { name: 'Agent: Claude · Terminal' }));
+  await events.click(await screen.findByRole('option', { name: /^Codex · Terminal/ }));
+  await waitFor(() => {
+    expectOneOp(canvas.core, 'agent.setType', {
+      canvas: canvas.document.id,
+      agent: 'a',
+      adapter: 'codex',
+      connection: 'codex.terminal',
+    });
   });
-  await act(async () => {
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^Plan/ }));
-  });
+  expect(writer(canvas)?.data).toMatchObject({ adapter: 'codex', connection: 'codex.terminal' });
+});
+
+it('a settings-sheet choice commits one agent.setSettings', async () => {
+  const canvas = setup();
+  await openWriter();
+  await click('Agent settings: Writer');
+  const sheet = await screen.findByRole('dialog', { name: 'Agent settings: Writer' });
+  await events.click(within(sheet).getByRole('button', { name: /^Mode:/ }));
+  await events.click(await screen.findByRole('menuitemradio', { name: /^Plan/ }));
   await waitFor(() => {
     expectOneOp(canvas.core, 'agent.setSettings', {
       canvas: canvas.document.id,
@@ -154,19 +219,82 @@ it('a settings-sheet choice commits one agent.setSettings', async () => {
       settings: { model: null, effort: null, mode: 'plan' },
     });
   });
-  expect(canvas.document.nodes[0]?.data.settings?.['claude-code']?.mode).toBe('plan');
+  expect(writer(canvas)?.data.settings?.['claude-code']?.mode).toBe('plan');
 });
 
 it('waits for the initial canvas mirror before reading run progress', async () => {
   const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
-  cleanups.push(() => { canvas.core.dispose(); });
-  const ready = Promise.withResolvers<void>();
-  vi.spyOn(canvas.core.topics, 'whenAt').mockReturnValue(ready.promise);
-  const get = vi.fn(() => Promise.resolve({ id: canvas.document.id, token: 'run', checkpoint: null, notices: ['Restored from a snapshot.'] }));
-  render(<GraphEditor canvas={canvas.document.id} client={canvas.core.api} mirror={canvas.core.topics} runSource={{ get, save: () => Promise.resolve(null), ready: () => Promise.resolve(null), onStopping: () => () => undefined }} />);
+  cleanups.push(() => {
+    canvas.core.dispose();
+  });
+  const mirrored = Promise.withResolvers<undefined>();
+  vi.spyOn(canvas.core.topics, 'whenAt').mockReturnValue(mirrored.promise);
+  const get = vi.fn<RunSource['get']>(() =>
+    Promise.resolve({
+      id: canvas.document.id,
+      token: 'run',
+      checkpoint: null,
+      notices: ['Restored from a snapshot.'],
+    }),
+  );
+  render(
+    <GraphEditor
+      canvas={canvas.document.id}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      runSource={{
+        get,
+        save: () => Promise.resolve(null),
+        ready: () => Promise.resolve(null),
+        onStopping: () => () => undefined,
+      }}
+    />,
+  );
   await act(() => Promise.resolve());
   expect(get).not.toHaveBeenCalled();
-  await act(async () => { ready.resolve(); });
-  await waitFor(() => { expect(get).toHaveBeenCalledOnce(); });
+  await act(() => {
+    mirrored.resolve(undefined);
+    return Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(get).toHaveBeenCalledOnce();
+  });
   expect(await screen.findByText('Restored from a snapshot.')).toBeTruthy();
+});
+
+it('keeps a failed restore’s recovery after a cancelled Open, until New switches canvases', async () => {
+  const canvas = fakeCanvas({ id: newCanvasId(), arrange: false, nodes: [], links: [] });
+  cleanups.push(() => {
+    canvas.core.dispose();
+  });
+  // The canvas shown can't be restored; the one a switch shows can.
+  let restored = 0;
+  render(
+    <GraphEditor
+      canvas={canvas.document.id}
+      client={canvas.core.api}
+      mirror={canvas.core.topics}
+      files
+      runSource={{
+        get: () =>
+          restored++ === 0
+            ? Promise.reject(new Error('Unreadable journal'))
+            : Promise.resolve({ id: canvas.document.id, token: 'new', checkpoint: null }),
+        save: () => Promise.resolve(null),
+        ready: () => Promise.resolve(null),
+        onStopping: () => () => undefined,
+      }}
+    />,
+  );
+  expect(await screen.findByRole('toolbar', { name: 'Canvas recovery' })).toBeTruthy();
+  // The Open dialog cancelled: still the canvas that could not be restored.
+  await click('Open…');
+  await waitFor(() => {
+    expectOneOp(canvas.core, 'canvas.open', {});
+  });
+  expect(screen.getByRole('toolbar', { name: 'Canvas recovery' })).toBeTruthy();
+  await click('New');
+  await waitFor(() => {
+    expect(screen.queryByRole('toolbar', { name: 'Canvas recovery' })).toBeNull();
+  });
 });

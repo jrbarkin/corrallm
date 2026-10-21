@@ -1,14 +1,13 @@
 import { renderReady, events } from '../test-render';
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { newCanvasId } from '../../shared/canvas';
 import type { SessionEvent, SettingsOptions } from '../../shared/session';
 import type { TerminalEvent } from '../../shared/terminal';
 import { catalog } from '../catalog';
 import { fromFile } from '../../shared/model/file';
 import { GraphEditor } from '../test-graph';
-import type { CanvasFiles } from '../test-graph';
+import type { FakeCanvas } from '../test-canvas';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../../shared/engine/test-backend';
@@ -59,13 +58,8 @@ async function open({
   /** What main reads of what its CLI's agents can be set to, or why it could not. */
   options?: SettingsOptions | Error;
 } = {}) {
-  /** Where the canvas is saved, as a .corral file's text. */
-  const save = vi.fn<CanvasFiles['save']>().mockResolvedValue('team.corral');
-  const files: CanvasFiles = {
-    open: () => Promise.resolve(null),
-    save,
-    forget: () => Promise.resolve(newCanvasId()),
-  };
+  /** The fake core the editor runs on: what it saved, as each .corral file's text. */
+  let core: FakeCanvas | undefined;
   const sessions = fakeBackend();
   if (start) sessions.backend.start.mockImplementation(start);
   if (options instanceof Error) sessions.backend.options.mockRejectedValue(options);
@@ -80,7 +74,10 @@ async function open({
     <OpenLinkContext.Provider value={openLink}>
       <GraphEditor
         initialGraph={graph}
-        files={files}
+        files
+        onCanvas={(made) => {
+          core = made;
+        }}
         sessionBackend={sessions.backend}
         terminalBackend={terminals.backend}
       />
@@ -97,7 +94,7 @@ async function open({
   return {
     sessions,
     terminals,
-    save,
+    saved: () => core?.files.saved ?? [],
     openLink,
     card,
     view,
@@ -757,7 +754,7 @@ describe('a Terminal agent’s settings', () => {
       .map((item) => item.firstChild?.textContent);
 
   it('starts Claude Code with what it is set to, chosen beside its chip, the user’s own shown', async () => {
-    const { sessions, save, view } = await open({
+    const { sessions, saved, view } = await open({
       data: { connection: 'claude-code.terminal', settings: { 'claude-code': { model: 'haiku' } } },
       options: CLAUDE,
     });
@@ -800,12 +797,14 @@ describe('a Terminal agent’s settings', () => {
     expect(button().textContent).toContain('Opus · Low · Plan');
     // Saved with the agent, in the canvas's file.
     await events.keyDown(document.body, { key: 's', ctrlKey: true });
-    const [text] = save.mock.calls.at(-1) ?? [];
-    expect(graphOf(fromFile(text ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings).toEqual(
-      {
-        'claude-code': { effort: 'low', mode: 'plan' },
-      },
-    );
+    await waitFor(() => {
+      expect(saved()).toHaveLength(1);
+    });
+    expect(
+      graphOf(fromFile(saved().at(-1) ?? '', catalog(), DEFAULT_AGENT)).nodes[0]?.data.settings,
+    ).toEqual({
+      'claude-code': { effort: 'low', mode: 'plan' },
+    });
 
     // Its session runs as it started: restarted, it starts with these, resuming its conversation.
     expect(sessions.backend.start).toHaveBeenCalledOnce();

@@ -14,8 +14,8 @@ export interface RunSource {
 
 interface Owner {
   capture: () => RunCheckpoint;
-  /** Reset view/run stores and await the new canvas's mirror before reading its checkpoint. */
-  open: (canvas: CanvasId) => Promise<void>;
+  /** Resolves once the mirror holds the shown canvas: its run is read only after (B9 Design §9). */
+  ready: () => Promise<void>;
   beforeSave?: () => Promise<void>;
   restore: (context: RunRestore) => void | Promise<void>;
   freeze: () => void | Promise<void>;
@@ -73,7 +73,7 @@ export class RunPersistence {
   }
 
   #load(): Promise<RunRestore> {
-    this.#loading ??= (this.#context ??= this.#source.get())
+    this.#loading ??= (this.#context ??= this.#owner.ready().then(() => this.#source.get()))
       .then(async (context) => {
         if (this.#disposed) {
           this.#loading = undefined;
@@ -103,11 +103,16 @@ export class RunPersistence {
     void this.flush().catch(this.#owner.error);
   }
 
+  /** The switch under way, if any: a flush saves under the token it installs. */
+  #switching(): Promise<void> | undefined {
+    return this.#changing;
+  }
+
   async flush(): Promise<void> {
-    while (this.#changing) await this.#changing;
+    for (let changing = this.#switching(); changing; changing = this.#switching()) await changing;
     await this.#load();
     if (this.#owner.beforeSave) await this.#owner.beforeSave();
-    while (this.#changing) await this.#changing;
+    for (let changing = this.#switching(); changing; changing = this.#switching()) await changing;
     if (this.#disposed || !this.#token) throw new Error('The run storage is not available.');
     const token = this.#token;
     const checkpoint = this.#owner.capture();
@@ -128,10 +133,18 @@ export class RunPersistence {
     await write;
   }
 
-  /** Flush the old run, call one switching op, reset/bind its mirror, then restore its run. */
-  async switch(action: () => Promise<CanvasId | null>): Promise<void> {
+  /**
+   * A switch (B9 Design §9): drafts flushed and the old run saved, then `action`, the one op that
+   * switches (null: cancelled, keeping the canvas and its token), then `open` (the stores reset and
+   * the new canvas's mirror awaited), then its run read and restored under its new token. A flush
+   * asked for meanwhile waits for it.
+   */
+  async switch(
+    action: () => Promise<CanvasId | null>,
+    open: (canvas: CanvasId) => Promise<void>,
+  ): Promise<void> {
     const before = this.#changing;
-    const done = Promise.withResolvers<void>();
+    const done = Promise.withResolvers<undefined>();
     this.#changing = done.promise;
     try {
       await before;
@@ -154,7 +167,7 @@ export class RunPersistence {
       if (canvas === null) return;
       this.#token = undefined;
       try {
-        await this.#owner.open(canvas);
+        await open(canvas);
         const context = await this.#source.get();
         if (this.#disposed) return;
         await this.#owner.restore(context);
@@ -166,13 +179,15 @@ export class RunPersistence {
       } catch (error) {
         this.#failedInitialization = true;
         this.#failedBaseline = contentsKey(this.#owner);
-        this.#context = this.#loading = Promise.reject(error);
+        this.#context = this.#loading = Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
         void this.#loading.catch(() => undefined);
         throw error;
       }
     } finally {
       if (this.#changing === done.promise) this.#changing = undefined;
-      done.resolve();
+      done.resolve(undefined);
     }
   }
 

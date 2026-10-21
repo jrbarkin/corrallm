@@ -115,8 +115,7 @@ function setup({
       {...(restored
         ? {
             runSource: {
-              get: () =>
-                Promise.resolve({ id: doc.id, token: 'test', checkpoint: null, name: null }),
+              get: () => Promise.resolve({ id: doc.id, token: 'test', checkpoint: null }),
               save: () => Promise.resolve(null),
               ready: () => Promise.resolve(null),
               onStopping: () => () => undefined,

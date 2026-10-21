@@ -66,14 +66,16 @@ function Editor({
     );
   };
   const changeAgent = (next: AdapterId, connection: AgentConnection) => {
-    setNode(
-      (current) =>
-        (AgentOps.setType(
-          asDoc(current),
-          { agent: current.id, adapter: next, connection },
-          { catalog: catalog(), defaultAdapter: DEFAULT_AGENT },
-        ).next.nodes[0] as AgentNode | undefined) ?? current,
-    );
+    const context = { catalog: catalog(), defaultAdapter: DEFAULT_AGENT };
+    setNode((current) => {
+      const typed = AgentOps.setType(asDoc(current), { agent: current.id, adapter: next }, context);
+      const connected = AgentOps.setConnection(
+        typed.next,
+        { agent: current.id, connection },
+        context,
+      );
+      return (connected.next.nodes[0] as AgentNode | undefined) ?? current;
+    });
   };
   const changeSettings = (cli: AdapterId, settings: AgentSettings) => {
     setNode((current) => ({

@@ -11,7 +11,6 @@ import type { OpName, Party } from '../../shared/api/surface';
 import type { Change, TopicKey, TopicRequest, TopicSnapshot } from '../../shared/api/topics';
 import { topicKey } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
-import { toFile } from '../../shared/model/file';
 import type { Entities } from '../../shared/model/state';
 import { canvasStateOf } from '../../shared/model/state';
 import type { Settings } from '../settings';
@@ -207,7 +206,7 @@ describe('T3c: usage and settings topics', () => {
     const served = new WindowPorts(core);
     const window = connect(served, 7);
     const run = await core.channels.call(7, 'run:get', []);
-    const { id: canvas, token } = run as { id: CanvasId; token: string };
+    const { id: canvas } = run as { id: CanvasId };
     const subscribe = async (request: TopicRequest) => {
       const answer = await window.link.request('call', 'topics.subscribe', request);
       if (!answer.ok || !answer.value.ok) throw new Error(JSON.stringify(answer));
@@ -219,14 +218,15 @@ describe('T3c: usage and settings topics', () => {
     expect(Object.keys(snapshot.state as object)).toEqual(['meta']);
     expect((await subscribe({ topic: 'needs', canvas })).state).toEqual({ items: [] });
 
-    // The renderer's own edits, until its gestures are operations: committed, and so said.
-    const text = toFile({
-      id: canvas,
-      arrange: false,
-      nodes: [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } }],
-      links: [],
+    // A gesture's operation, through the window's port: committed, and so said.
+    const answer = await window.link.request('call', 'canvas.addAgent', {
+      canvas,
+      adapter: 'codex',
+      at: { x: 0, y: 0 },
+      request: randomUUID(),
     });
-    await core.channels.call(7, 'run:save', [token, null, text, snapshot.rev]);
+    if (!answer.ok || !answer.value.ok) throw new Error(JSON.stringify(answer));
+    const { id } = answer.value.value as { id: string };
     await vi.waitFor(() => {
       expect(window.changes.find(({ topic }) => topic === `canvas:${canvas}`)).toBeDefined();
     });
@@ -234,10 +234,15 @@ describe('T3c: usage and settings topics', () => {
       rev: 1,
       by: 'you',
       set: {
-        'node/a': { id: 'a', label: 'A', rev: 1, by: 'you' },
+        [`node/${id}`]: { id, adapter: 'codex', rev: 1, by: 'you' },
         meta: { edited: true, rev: 1 },
       },
     });
+    // A run journaled beside it commits nothing of the canvas: no change of its own.
+    const { token } = run as { token: string };
+    await core.channels.call(7, 'run:save', [token, null]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(window.changes.filter(({ topic }) => topic === `canvas:${canvas}`)).toHaveLength(1);
   });
 
   it('lists no topic operation for a token and refuses either if called', async () => {

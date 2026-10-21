@@ -18,6 +18,14 @@ import { catalog } from './catalog';
 import { DEFAULT_AGENT } from './graph/agents';
 import { fakeCore } from './test-api';
 
+/** A canvas's project folder, as the core says it. */
+interface Project {
+  name: string;
+  path: string;
+}
+
+export type FakeCanvas = ReturnType<typeof fakeCanvas>;
+
 /** An in-memory canvas core for editor gesture tests: real schemas and pure builds, pushed rows. */
 export function fakeCanvas(initial: CanvasDocument) {
   const core = fakeCore();
@@ -29,7 +37,7 @@ export function fakeCanvas(initial: CanvasDocument) {
   const meta = {
     name: null as string | null,
     edited: false,
-    project: null as { name: string; path: string } | null,
+    project: null as Project | null,
   };
   const source = core.topics.snapshot.bind(core.topics);
   const revision = core.topics.revision.bind(core.topics);
@@ -71,6 +79,18 @@ export function fakeCanvas(initial: CanvasDocument) {
     core.respond('window.get', { canvas: next.id });
   };
   open(initial);
+  /** The canvas's meta changed (its name, folder, whether edited), as the core says it. */
+  function view(next: Partial<typeof meta>) {
+    if (next.edited === false) saved = toFile(document);
+    Object.assign(meta, next);
+    rev++;
+    entities = { ...entities, meta: { ...meta, arrange: document.arrange, rev, by: 'you' } };
+    core.change({
+      topic: `canvas:${document.id}`,
+      rev,
+      set: { meta: entities.meta as MetaEntity },
+    });
+  }
   const create = (raw: unknown) => {
     const args = OPS['canvas.create'].input.parse(raw);
     const example = args.template === undefined ? undefined : exampleOf(args.template);
@@ -95,6 +115,56 @@ export function fakeCanvas(initial: CanvasDocument) {
     });
   };
   core.reply('canvas.create', create);
+  /**
+   * The file and folder operations as the core answers them, its dialogs' picks set by the test:
+   * each text canvas.save and canvas.saveAs saved, as the core keeps the document.
+   */
+  const files = {
+    saved: [] as string[],
+    /** The file the Save dialog picks: its name, or null (cancelled). */
+    saveAs: 'team.corral' as string | null,
+    /** What the Open dialog picks: a canvas file, a file that isn't one (refused), or null. */
+    open: null as { document: CanvasDocument; name: string; project?: Project } | Error | null,
+    /** What the folder dialog picks, in turn: a folder, or null (cancelled). */
+    folders: [] as (Project | null)[],
+  };
+  const saveTo = (name: string) => {
+    files.saved.push(toFile(document));
+    meta.name = name;
+    view({ edited: false });
+    return Promise.resolve({ ok: true as const, value: { name, revs: {} } });
+  };
+  core.reply('canvas.save', () =>
+    meta.name === null
+      ? Promise.resolve({
+          ok: false as const,
+          error: { code: 'refused' as const, sentence: 'This canvas has no file yet.' },
+        })
+      : saveTo(meta.name),
+  );
+  core.reply('canvas.saveAs', () =>
+    files.saveAs === null
+      ? Promise.resolve({ ok: true as const, value: { name: null, revs: {} } })
+      : saveTo(files.saveAs),
+  );
+  core.reply('canvas.open', () => {
+    const picked = files.open;
+    if (picked instanceof Error)
+      return Promise.resolve({
+        ok: false as const,
+        error: { code: 'invalid' as const, sentence: picked.message },
+      });
+    if (picked === null) return Promise.resolve({ ok: true, value: { canvas: null, revs: {} } });
+    meta.name = picked.name;
+    meta.project = picked.project ?? null;
+    open(picked.document);
+    return Promise.resolve({ ok: true, value: { canvas: document.id, revs: {} } });
+  });
+  core.reply('project.choose', () => {
+    const project = files.folders.shift() ?? null;
+    if (project) view({ project });
+    return Promise.resolve({ ok: true, value: { project, revs: {} } });
+  });
   const ops: GuiOp[] = [
     'agent.setType',
     'agent.setConnection',
@@ -295,17 +365,8 @@ export function fakeCanvas(initial: CanvasDocument) {
       if (expected !== rev) return Promise.reject(new Error('Stale test canvas'));
       return Promise.resolve(keep(fromFile(text, catalog(), DEFAULT_AGENT)));
     },
-    meta(next: Partial<typeof meta>) {
-      if (next.edited === false) saved = toFile(document);
-      Object.assign(meta, next);
-      rev++;
-      entities = { ...entities, meta: { ...meta, arrange: document.arrange, rev, by: 'you' } };
-      core.change({
-        topic: `canvas:${document.id}`,
-        rev,
-        set: { meta: entities.meta as MetaEntity },
-      });
-    },
+    files,
+    meta: view,
   };
 }
 export const emptyCanvas = (id: CanvasId = newCanvasId()): CanvasDocument => ({

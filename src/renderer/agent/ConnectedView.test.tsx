@@ -7,6 +7,7 @@ import { newCanvasId } from '../../shared/canvas';
 import type { AppApi } from '../../shared/ipc';
 import { findProjectFiles } from './completion';
 import { GraphEditor } from '../test-graph';
+import type { FakeCanvas } from '../test-canvas';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeBackend } from '../../shared/engine/test-backend';
@@ -55,9 +56,17 @@ async function open(
   const graph: Graph = { nodes: [agent('a', data)], edges: [] };
   /** Where clicked links go: to main, in the app. */
   const openLink = vi.fn<(url: string) => void>();
+  /** The fake core the editor runs on: the operations its gestures call. */
+  const held: { canvas?: FakeCanvas } = {};
   const { container } = await renderReady(
     <OpenLinkContext.Provider value={openLink}>
-      <GraphEditor initialGraph={graph} sessionBackend={fake.backend} />
+      <GraphEditor
+        initialGraph={graph}
+        sessionBackend={fake.backend}
+        onCanvas={(made) => {
+          held.canvas = made;
+        }}
+      />
     </OpenLinkContext.Provider>,
   );
   const card = () => {
@@ -81,7 +90,19 @@ async function open(
       fake.emit('a', data.connection ?? 'claude-code.sdk', ...events);
     });
   };
-  return { ...fake, container, card, view, composer, send, transcript, emit, openLink };
+  const operations = () => held.canvas?.core.operations ?? [];
+  return {
+    ...fake,
+    container,
+    card,
+    view,
+    composer,
+    send,
+    transcript,
+    emit,
+    openLink,
+    operations,
+  };
 }
 
 /** Why main refuses to start an Agent SDK session on a Claude subscription. */
@@ -1556,7 +1577,9 @@ describe('a connected agent', () => {
 
 describe('an Agent SDK agent continued in Terminal', () => {
   it('offers Terminal for a command only Claude Code’s terminal runs, and runs it there', async () => {
-    const { backend, composer, view, emit, card } = await open({ connection: 'claude-code.sdk' });
+    const { backend, composer, view, emit, card, operations } = await open({
+      connection: 'claude-code.sdk',
+    });
     emit({ type: 'started', model: 'opus', mode: 'manual', models: MODELS });
     await events.change(composer, { target: { value: '/perm', selectionStart: 5 } });
     const menu = within(view.getByRole('listbox', { name: 'Commands' }));
@@ -1570,8 +1593,20 @@ describe('an Agent SDK agent continued in Terminal', () => {
     const offer = within(view.getByRole('group', { name: 'Continue in Terminal?' }));
     expect(offer.getByText(/^\/permissions opens a screen of Claude Code’s own/)).toBeTruthy();
 
+    const before = operations().length;
     await events.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
     await settle();
+    // One operation, and (until B11, B9 Design §8) the renderer's sendOnceIn for the command.
+    expect(operations().slice(before)).toEqual([
+      {
+        op: 'agent.setConnection',
+        args: {
+          canvas: expect.any(String) as unknown,
+          agent: 'a',
+          connection: 'claude-code.terminal',
+        },
+      },
+    ]);
     expect(view.getByRole('button', { name: /^Agent: / }).getAttribute('aria-label')).toBe(
       'Agent: Claude · Terminal',
     );

@@ -307,7 +307,6 @@ describe('the app’s core and window channels', () => {
     await channel(window, 'project:choose');
     const run = await channel(window, 'run:get');
     const checkpoint = { version: 2, state: '{}', messages: '[]', updatedAt: 1 } as const;
-    const empty = toFile({ id, arrange: false, nodes: [], links: [] });
     await channel(window, 'run:save', run.token, checkpoint);
     await channel(window, 'session:start', 'a', {
       connection: 'codex.app-server',
@@ -350,10 +349,9 @@ describe('the app’s core and window channels', () => {
     const { connect } = await app();
     const seven = connect(7);
     const eight = connect(8);
-    const id = await channel(seven, 'canvas:forget');
+    await channel(seven, 'canvas:forget');
     await channel(eight, 'canvas:forget');
     const other = await channel(eight, 'run:get');
-    const empty = toFile({ id, arrange: false, nodes: [], links: [] });
     expect(await seven.request('channel', 'run:save', [other.token, null])).toEqual({
       ok: false,
       error: { message: 'This run belongs to an earlier canvas' },
@@ -413,9 +411,14 @@ describe('the canvas’s document, which the core keeps', () => {
       value: {
         ok: true,
         value: {
+          // Its file's name, and its edit since that file was saved.
+          name: 'team.corral',
+          edited: true,
           nodes: expect.arrayContaining([
-            expect.objectContaining({ data: expect.objectContaining({ label: 'Head' }) }),
-          ]),
+            expect.objectContaining({
+              data: expect.objectContaining({ label: 'Head' }) as unknown,
+            }),
+          ]) as unknown,
         },
       },
     });
@@ -515,7 +518,9 @@ describe('the canvas’s document, which the core keeps', () => {
       value: {
         ok: false,
         error: {
-          sentence: expect.stringContaining('broken.corral: This is not a corrallm canvas'),
+          sentence: expect.stringContaining(
+            'broken.corral: This is not a corrallm canvas',
+          ) as unknown,
         },
       },
     });
