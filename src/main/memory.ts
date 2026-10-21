@@ -7,7 +7,7 @@ import type { CanvasId } from '../shared/canvas';
 import { mintTrustedPath } from './core/host';
 import type { TrustedPath } from './core/host';
 import type { Database } from './core/store/store';
-import { isSessionId } from './sessions/id';
+import { isConversationId } from './sessions/adapters';
 
 /** A native conversation an agent runs in a CLI: its id, and the role it launched with. */
 export interface Conversation {
@@ -327,7 +327,11 @@ export class CanvasMemory {
       .all(canvas);
     for (const { adapter, agent_id: agent, native_id: id, role_fingerprint: role } of rows) {
       if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
-      if (typeof agent !== 'string' || !isSessionId(id)) continue;
+      if (typeof agent !== 'string') continue;
+      if (!isConversationId(adapter, id)) {
+        console.error(`A saved ${adapter} conversation id is invalid; it will not be resumed.`);
+        continue;
+      }
       const agents = byAdapter.get(adapter) ?? [];
       agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
       byAdapter.set(adapter, agents);

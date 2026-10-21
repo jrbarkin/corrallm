@@ -120,6 +120,31 @@ const SPEC: SessionSpec = {
   resume: null,
 };
 
+it('refuses a resume option before querying or reading conversation history', async () => {
+  const { sdk, host, queries, getSessionMessages, authStatus } = connector();
+  await expect(sdk.start({ ...SPEC, resume: '--help' }, host)).rejects.toThrow(/conversation.*id/i);
+  expect(queries).toEqual([]);
+  expect(getSessionMessages).not.toHaveBeenCalled();
+  expect(authStatus).not.toHaveBeenCalled();
+});
+
+it('refuses an unsafe id reported by the native session without remembering it', async () => {
+  const { sdk, host, query, remembered, events } = connector();
+  await sdk.start(SPEC, host);
+  query().say({
+    ...turn('tools-and-compact', 0).find(
+      (event) => event.type === 'system' && event.subtype === 'init',
+    ),
+    session_id: '--resume',
+  } as SDKMessage);
+  await settle();
+  expect(remembered).toEqual([]);
+  expect(events).toContainEqual({
+    type: 'closed',
+    error: expect.stringMatching(/conversation id/),
+  });
+});
+
 /** Lets the session read what the fake CLI said. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -500,10 +525,13 @@ describe('SdkConnector', () => {
     query().say(...turn('tools-and-compact', 0));
     query().say({
       ...turn('tools-and-compact', 0).find((m) => m.type === 'system' && m.subtype === 'init'),
-      session_id: 'after-clear',
+      session_id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e90',
     } as SDKMessage);
     await settle();
-    expect(remembered).toEqual(['a8629cd9-286a-4160-b524-97c271917415', 'after-clear']);
+    expect(remembered).toEqual([
+      'a8629cd9-286a-4160-b524-97c271917415',
+      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e90',
+    ]);
   });
 
   it('sends pasted images with the message', async () => {
@@ -853,8 +881,8 @@ describe('SdkConnector', () => {
       // A junction on Windows, which needs no privileges.
       await symlink(dir, link, 'junction');
       const { sdk, host, getSessionMessages } = connector();
-      await sdk.start({ ...SPEC, cwd: link, resume: 'abc' }, host);
-      expect(getSessionMessages).toHaveBeenCalledWith('abc', {
+      await sdk.start({ ...SPEC, cwd: link, resume: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e91' }, host);
+      expect(getSessionMessages).toHaveBeenCalledWith('0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e91', {
         dir: await realpath(dir),
         includeSystemMessages: true,
       });
@@ -875,10 +903,18 @@ describe('SdkConnector', () => {
       },
     });
     await sdk.start(
-      { ...SPEC, resume: 'broken', role: 'Fallback review role', roleChanged: true },
+      {
+        ...SPEC,
+        resume: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e92',
+        role: 'Fallback review role',
+        roleChanged: true,
+      },
       host,
     );
-    expect(queries.map((q) => q.options.resume)).toEqual(['broken', undefined]);
+    expect(queries.map((q) => q.options.resume)).toEqual([
+      '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e92',
+      undefined,
+    ]);
     expect(queries.map((q) => q.options.systemPrompt)).toEqual([
       { type: 'preset', preset: 'claude_code', append: 'Fallback review role', snapshot: false },
       { type: 'preset', preset: 'claude_code', append: 'Fallback review role' },

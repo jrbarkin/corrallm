@@ -49,7 +49,10 @@ test.afterEach(async () => {
 async function launch() {
   ({ app, close: closeApp } = await launchApp({
     profile,
-    env: { CORRALLM_CLAUDE_PATH: claude, CLAUDE_CONFIG_DIR: config },
+    env: {
+      CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': claude }),
+      CLAUDE_CONFIG_DIR: config,
+    },
   }));
   page = await app.firstWindow();
   page.on('pageerror', (error) => problems.push(error.message));

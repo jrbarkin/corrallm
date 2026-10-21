@@ -13,7 +13,7 @@ import { Conversations } from './conversations';
 const message = (uuid: string, type: 'user' | 'assistant' = 'user'): SessionMessage => ({
   type,
   uuid,
-  session_id: 's',
+  session_id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10',
   parent_tool_use_id: null,
   parent_agent_id: null,
   message: { role: type, content: uuid },
@@ -25,7 +25,9 @@ function conversations({
 }: { listed?: SDKSessionInfo[]; messages?: SessionMessage[] } = {}) {
   const list = vi.fn<typeof listSessions>().mockResolvedValue(listed);
   const read = vi.fn<typeof getSessionMessages>().mockResolvedValue(messages);
-  const fork = vi.fn<typeof forkSession>().mockResolvedValue({ sessionId: 'forked' });
+  const fork = vi
+    .fn<typeof forkSession>()
+    .mockResolvedValue({ sessionId: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11' });
   const kept = new Conversations({
     listSessions: list,
     getSessionMessages: read,
@@ -36,25 +38,56 @@ function conversations({
 }
 
 describe('Conversations', () => {
+  it('refuses an option before reading or forking a conversation file', async () => {
+    const { kept, read, fork } = conversations();
+    await expect(kept.before('/work/shop', '--resume', 'u1')).rejects.toThrow(/conversation id/);
+    await expect(kept.fork('/work/shop', '--resume', 'u1')).rejects.toThrow(/conversation id/);
+    expect(read).not.toHaveBeenCalled();
+    expect(fork).not.toHaveBeenCalled();
+  });
   it('lists the folder’s conversations, most recent first, as /resume shows them', async () => {
     const { kept, list } = conversations({
       listed: [
-        { sessionId: 'old', summary: 'Fix the login bug', lastModified: 1000, fileSize: 2048 },
         {
-          sessionId: 'new',
+          sessionId: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12',
+          summary: 'Fix the login bug',
+          lastModified: 1000,
+          fileSize: 2048,
+        },
+        {
+          sessionId: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13',
           summary: 'Add a cart\nand checkout',
           customTitle: '  Shop  checkout ',
           lastModified: 5000,
           gitBranch: 'main',
         },
         // No branch: the CLI notes HEAD.
-        { sessionId: 'blank', summary: '   ', lastModified: 3000, gitBranch: 'HEAD' },
+        {
+          sessionId: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e14',
+          summary: '   ',
+          lastModified: 3000,
+          gitBranch: 'HEAD',
+        },
       ],
     });
     await expect(kept.list('/work/shop')).resolves.toEqual([
-      { id: 'new', title: 'Shop checkout', modified: 5000, branch: 'main' },
-      { id: 'blank', title: 'Untitled conversation', modified: 3000 },
-      { id: 'old', title: 'Fix the login bug', modified: 1000, bytes: 2048 },
+      {
+        id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e13',
+        title: 'Shop checkout',
+        modified: 5000,
+        branch: 'main',
+      },
+      {
+        id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e14',
+        title: 'Untitled conversation',
+        modified: 3000,
+      },
+      {
+        id: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e12',
+        title: 'Fix the login bug',
+        modified: 1000,
+        bytes: 2048,
+      },
     ]);
     // Where the CLI keeps them: by the folder's real path; its own sessions only, not its
     // worktrees' (which resume elsewhere).
@@ -67,17 +100,29 @@ describe('Conversations', () => {
     const { kept, read } = conversations({
       messages: [message('u1'), message('a1', 'assistant'), message('u2'), message('a2')],
     });
-    await expect(kept.before('/work/shop', 's', 'u2')).resolves.toBe('a1');
-    await expect(kept.before('/work/shop', 's', 'u1')).resolves.toBeNull();
-    await expect(kept.before('/work/shop', 's', 'gone')).rejects.toThrow(
-      /not in this conversation/,
-    );
-    expect(read).toHaveBeenCalledWith('s', { dir: '/real/work/shop', includeSystemMessages: true });
+    await expect(
+      kept.before('/work/shop', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', 'u2'),
+    ).resolves.toBe('a1');
+    await expect(
+      kept.before('/work/shop', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', 'u1'),
+    ).resolves.toBeNull();
+    await expect(
+      kept.before('/work/shop', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', 'gone'),
+    ).rejects.toThrow(/not in this conversation/);
+    expect(read).toHaveBeenCalledWith('0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', {
+      dir: '/real/work/shop',
+      includeSystemMessages: true,
+    });
   });
 
   it('forks a conversation up to an entry, as a new one', async () => {
     const { kept, fork } = conversations();
-    await expect(kept.fork('/work/shop', 's', 'a1')).resolves.toBe('forked');
-    expect(fork).toHaveBeenCalledWith('s', { dir: '/real/work/shop', upToMessageId: 'a1' });
+    await expect(
+      kept.fork('/work/shop', '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', 'a1'),
+    ).resolves.toBe('0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e11');
+    expect(fork).toHaveBeenCalledWith('0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e10', {
+      dir: '/real/work/shop',
+      upToMessageId: 'a1',
+    });
   });
 });

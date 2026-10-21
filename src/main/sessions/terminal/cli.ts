@@ -38,6 +38,7 @@ export interface Launch<M extends SessionMode> {
 
 /** What a hook event told, for the session to act on. */
 export type TerminalSignal<M extends SessionMode> =
+  | { kind: 'notice'; text: string }
   /** The CLI's session id is now this (it started, or a new one began, as after /clear). */
   | { kind: 'session'; id: string }
   /** The session was cleared: a new one, whose id a later hook tells. */

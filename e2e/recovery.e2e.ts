@@ -31,7 +31,7 @@ test.beforeEach(async () => {
   log = path.join(dir, 'prompts.jsonl');
   ({ app, close: closeApp } = await launchApp({
     env: {
-      CORRALLM_CLAUDE_PATH: FAKE_CLAUDE,
+      CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': FAKE_CLAUDE }),
       ANTHROPIC_API_KEY: 'sk-ant-fake',
       CLAUDE_CONFIG_DIR: path.join(dir, 'config'),
       FAKE_CLAUDE_PROMPTS: log,

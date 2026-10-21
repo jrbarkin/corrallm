@@ -13,7 +13,7 @@ import type {
 import type { TerminalEvent } from '../../../shared/terminal';
 import type { UsageWindows } from '../../../shared/usage';
 import type { LiveSession, SessionHost, SessionSpec, TerminalScreen } from '../connector';
-import { isSessionId } from '../id';
+import { isNativeId } from '../id';
 import type { TerminalCli, TerminalSignal } from './cli';
 import type { FirstRunTurn } from './first-run';
 import type { HookEvent, HookRegistration, HookServer } from './hooks';
@@ -257,7 +257,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#deps = deps;
     this.#cli = deps.cli;
     this.#id = spec.resume ?? deps.cli.newId();
-    if (this.#id !== null && !isSessionId(this.#id)) {
+    if (this.#id !== null && !isNativeId(this.#id)) {
       throw new TypeError('Expected a UUID session id');
     }
     this.#resuming = spec.resume !== null;
@@ -890,8 +890,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   /** Acts on what a hook told (cli.ts: TerminalSignal). */
   #signal(signal: TerminalSignal<M>): void {
     switch (signal.kind) {
+      case 'notice':
+        this.#host.emit({ type: 'notice', id: randomUUID(), level: 'warning', text: signal.text });
+        return;
       case 'session':
-        if (signal.id !== this.#id && isSessionId(signal.id)) {
+        if (signal.id !== this.#id && isNativeId(signal.id)) {
           this.#id = signal.id;
           this.#host.remember(signal.id);
         }

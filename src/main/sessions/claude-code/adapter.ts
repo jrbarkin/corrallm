@@ -3,6 +3,7 @@ import { IMAGE_TYPES } from '../../../shared/session';
 import type { Adapter } from '../adapter';
 import { FakeConnector, FAKE_MODELS } from '../fake';
 import { findClaude } from './claude';
+import { isUuid } from '../id';
 import { claudeOptions } from './claude-settings';
 import { TerminalConnector } from './connector';
 import { SdkConnector } from './sdk/connector';
@@ -184,9 +185,13 @@ export const claudeCode: Adapter = {
     'CLAUDE_AGENT_SDK_VERSION',
   ],
   find: findClaude,
-  connectors: ({ clientApp, usage }) => ({
-    [CLAUDE_TERMINAL]: new TerminalConnector(usage === undefined ? {} : { usage }),
-    'claude-code.sdk': new SdkConnector({ clientApp }),
+  isConversationId: isUuid,
+  connectors: ({ clientApp, usage, executable }) => ({
+    [CLAUDE_TERMINAL]: new TerminalConnector({
+      findClaude: executable,
+      ...(usage === undefined ? {} : { usage }),
+    }),
+    'claude-code.sdk': new SdkConnector({ clientApp, findClaude: executable }),
   }),
   readOptions: ({ env, cwd }) => claudeOptions(env, cwd),
   fake: (pause) => new FakeConnector({ pause }),
@@ -195,7 +200,7 @@ export const claudeCode: Adapter = {
     // The fake's own default, Manual, asks.
     defaults: { model: null, effort: null, mode: null, asks: true },
   },
-  conversations: new Conversations(),
+  conversations: () => new Conversations(),
   selfTests: [{ name: 'Agent SDK', run: () => checkAgentSdk() }],
   usageBackends: [
     {

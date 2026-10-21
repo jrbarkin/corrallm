@@ -18,7 +18,10 @@ test('Start opens over the canvas, starts an installed agent, reopens from the d
   await writeFile(claude, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
   await chmod(claude, 0o755);
   const { app, close } = await launchApp({
-    env: { CORRALLM_CLAUDE_PATH: claude, CLAUDE_CONFIG_DIR: config },
+    env: {
+      CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': claude }),
+      CLAUDE_CONFIG_DIR: config,
+    },
   });
   try {
     const page = await app.firstWindow();

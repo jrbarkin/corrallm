@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
-import type { ConnectionId } from '../../shared/adapter';
+import type { AdapterId, ConnectionId } from '../../shared/adapter';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { FilesRewind, SessionEvent, SessionOptions } from '../../shared/session';
@@ -20,6 +20,7 @@ import { FakeConnector } from './fake';
 import { CATALOG } from './adapters';
 import { SessionManager } from './manager';
 import type { SessionManagerDeps } from './manager';
+import type { Conversations } from './adapter';
 import { quotePath } from './terminal/drop';
 
 const OPTIONS: SessionOptions = { connection: 'claude-code.sdk', model: null, mode: null };
@@ -42,18 +43,25 @@ let heard: Map<CanvasId, [string, ConnectionId, SessionEvent][]>;
 /** What each canvas's terminal views heard: agent and event. */
 let shown: Map<CanvasId, [string, TerminalEvent][]>;
 let environment: () => Promise<Record<string, string>>;
-type Kept = NonNullable<SessionManagerDeps['conversations']>;
+type Kept = Required<Conversations>;
+let adapters: Map<string, AdapterId>;
 /** The conversations Claude Code kept for each folder, as the Agent SDK lists and forks them. */
 let listKept: Mock<Kept['list']>;
 let before: Mock<Kept['before']>;
 let fork: Mock<Kept['fork']>;
 
-function manager(connectors: Partial<Record<ConnectionId, Connector>> = {}) {
+function manager(
+  connectors: Partial<Record<ConnectionId, Connector>> = {},
+  conversations: SessionManagerDeps['conversations'] = {
+    'claude-code': { list: listKept, before, fork },
+  },
+) {
   return new SessionManager({
     catalog: CATALOG,
     connectors: { 'claude-code.sdk': fake, 'claude-code.terminal': terminal, ...connectors },
     environment: () => environment(),
-    conversations: { list: listKept, before, fork },
+    conversations,
+    adapterOf: (_canvas, agent) => Promise.resolve(adapters.get(agent) ?? 'claude-code'),
     projectOf: (canvas) => projects.get(canvas),
     memory,
     emit: (canvas, agentId, connection, event) => {
@@ -90,6 +98,7 @@ beforeEach(async () => {
   fake = new FakeConnector();
   terminal = new FakeConnector();
   projects = new Map();
+  adapters = new Map();
   heard = new Map();
   shown = new Map();
   environment = () => Promise.resolve({ PATH: '/usr/bin' });
@@ -651,6 +660,7 @@ describe('SessionManager', () => {
       connectors: {},
       environment: () => Promise.resolve({ PATH: '/usr/bin', HOME: '/home/me' }),
       projectOf: (canvas) => projects.get(canvas),
+      adapterOf: () => Promise.resolve('claude-code'),
       memory,
       emit: () => undefined,
       options: { 'claude-code': claude },
@@ -945,6 +955,65 @@ describe('SessionManager', () => {
 });
 
 describe('SessionManager and kept conversations', () => {
+  it('never gives a connector an unsafe remembered id, even from memory not read back yet', async () => {
+    const canvas = shownCanvas();
+    const sessions = manager();
+    await memory.update(canvas, () => ({
+      conversations: { 'claude-code': { a: { id: '--resume' } } },
+    }));
+    await expect(sessions.start(canvas, 'a', OPTIONS)).rejects.toThrow(/conversation id/);
+    expect(fake.started).toEqual([]);
+  });
+  it('refuses an invalid native id returned by a conversation provider', async () => {
+    const sessions = manager();
+    const canvas = shownCanvas();
+    listKept.mockResolvedValue([{ id: '--resume', title: 'Unsafe', modified: 1 }]);
+    await expect(sessions.listSessions(canvas, 'a')).rejects.toThrow(/conversation.*id/i);
+    await expect(sessions.resumeSession(canvas, 'a', '--resume')).rejects.toThrow(
+      /conversation.*id/i,
+    );
+  });
+  it('lists and resumes a Codex agent’s own threads without reading or changing Claude’s ids', async () => {
+    const codex = new FakeConnector({ adapter: 'codex' });
+    const list = vi
+      .fn<Conversations['list']>()
+      .mockResolvedValue([{ id: KEPT_TWO, title: 'Codex thread', modified: 2000 }]);
+    const sessions = manager(
+      { 'codex.app-server': codex },
+      { 'claude-code': { list: listKept, before, fork }, codex: { list } },
+    );
+    const canvas = shownCanvas();
+    adapters.set('a', 'codex');
+    await memory.update(canvas, () => ({
+      conversations: {
+        'claude-code': { a: { id: KEPT_ONE } },
+        codex: { a: { id: KEPT_TWO } },
+      },
+    }));
+    await expect(sessions.listSessions(canvas, 'a')).resolves.toEqual([
+      { id: KEPT_TWO, title: 'Codex thread', modified: 2000, current: true },
+    ]);
+    expect(listKept).not.toHaveBeenCalled();
+    await sessions.resumeSession(canvas, 'a', KEPT_TWO);
+    expect((await conversations(canvas))['claude-code']?.a?.id).toBe(KEPT_ONE);
+    await sessions.start(canvas, 'a', { ...OPTIONS, connection: 'codex.app-server' });
+    expect(codex.started.at(-1)?.resume).toBe(KEPT_TWO);
+    await expect(sessions.rewind(canvas, 'a', 'message', 'conversation')).rejects.toThrow(
+      /rewind/i,
+    );
+    expect(before).not.toHaveBeenCalled();
+    expect(fork).not.toHaveBeenCalled();
+    await sessions.close(canvas, 'a');
+  });
+
+  it('does not reuse a list from another adapter, agent or a switched agent', async () => {
+    const sessions = manager();
+    const canvas = shownCanvas();
+    await sessions.listSessions(canvas, 'a');
+    await expect(sessions.resumeSession(canvas, 'b', KEPT_ONE)).rejects.toThrow(/not one/);
+    adapters.set('a', 'codex');
+    await expect(sessions.resumeSession(canvas, 'a', KEPT_ONE)).rejects.toThrow(/not one/);
+  });
   it('lists the project folder’s conversations for /resume, saying which is the agent’s own', async () => {
     const sessions = manager();
     const canvas = shownCanvas();
@@ -958,7 +1027,7 @@ describe('SessionManager and kept conversations', () => {
       { id: own, title: 'This one', modified: 3000, current: true },
       { id: KEPT_ONE, title: 'Fix the login bug', modified: 1000, current: false },
     ]);
-    expect(listKept).toHaveBeenCalledWith('/work/app');
+    expect(listKept).toHaveBeenCalledWith('/work/app', { PATH: '/usr/bin' });
     // Without a project folder there is nothing to list.
     await expect(sessions.listSessions(newCanvasId(), 'a')).rejects.toThrow(
       /Choose a project folder/,
@@ -993,7 +1062,7 @@ describe('SessionManager and kept conversations', () => {
       /not one of this project folder’s conversations/,
     );
     await sessions.listSessions(canvas, 'a');
-    await expect(sessions.resumeSession(canvas, 'a', 'elsewhere')).rejects.toThrow(
+    await expect(sessions.resumeSession(canvas, 'a', REMEMBERED)).rejects.toThrow(
       /not one of this project folder’s conversations/,
     );
     // Listed for another folder.

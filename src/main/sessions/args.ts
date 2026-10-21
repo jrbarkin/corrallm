@@ -30,7 +30,7 @@ import type {
   SessionOptions,
   UserMessage,
 } from '../../shared/session';
-import { isSessionId } from './id';
+import { isNativeId } from './id';
 
 /*
  * Parsers for the session:* channels' arguments, which come from an untrusted renderer: each
@@ -158,7 +158,7 @@ function parseAdapter(value: unknown, catalog: Catalog): AdapterId {
 /** session:resume: an agent, and the id of a conversation (main opens it only if it listed it). */
 export function parseResumeArgs(args: unknown[]): IpcArgs<'session:resume'> {
   const [agentId, sessionId] = expect(args, 2, 'an agent and a conversation');
-  if (!isSessionId(sessionId)) {
+  if (!isNativeId(sessionId)) {
     throw new TypeError("Expected the conversation's id");
   }
   return [parseId(agentId, 'agent'), sessionId];

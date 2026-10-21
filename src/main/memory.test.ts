@@ -48,6 +48,21 @@ async function reopen(): Promise<void> {
 }
 
 describe('CanvasMemory', () => {
+  it('checks unknown adapters’ saved ids against the platform minimum and reports a refused id', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    store.exec(`INSERT INTO canvas (id, used_at) VALUES ('${TEAM}', 1)`);
+    const add = store.prepare(
+      'INSERT INTO conversation (canvas_id, adapter, agent_id, native_id) VALUES (?, ?, ?, ?)',
+    );
+    add.run(TEAM, 'future-agent', 'valid', 'session:one');
+    add.run(TEAM, 'future-agent', 'flag', '--resume');
+    add.run(TEAM, 'codex', 'not-a-uuid', 'session:one');
+    expect((await new CanvasMemory(store).get(TEAM)).conversations).toEqual({
+      'future-agent': { valid: { id: 'session:one' } },
+    });
+    expect(said).toHaveBeenCalledTimes(2);
+    expect(said.mock.calls.flat().join(' ')).toContain('will not be resumed');
+  });
   it('remembers a canvas’s file, project folder and conversations by its id, across restarts', async () => {
     const memory = new CanvasMemory(store);
     expect(await memory.get(TEAM)).toEqual({ conversations: {} });

@@ -17,7 +17,7 @@ import { agentElectronExecutable } from './agent-electron';
  * to the app's environment (CORRALLM_FAKE_SESSIONS=1: connected agents run a fake, not Claude).
  * `profile`: a profile of the test's own instead, kept when the app quits (to launch it again, as
  * after a restart); the test deletes it. Connected agents find no `claude` or `codex` unless `env`
- * points CORRALLM_CLAUDE_PATH or CORRALLM_CODEX_PATH at one (a fake): never the user's own.
+ * points CORRALLM_AGENT_PATHS at one (a fake): never the user's own.
  */
 export async function launchApp({
   env: extra = {},
@@ -45,8 +45,7 @@ export async function launchApp({
       env: {
         ...env,
         // Paths with nothing there: only the CLIs a test gives are found (main looks nowhere else).
-        CORRALLM_CLAUDE_PATH: path.join(profile, 'no-claude'),
-        CORRALLM_CODEX_PATH: path.join(profile, 'no-codex'),
+        CORRALLM_AGENT_PATHS: '{}',
         ...extra,
         CORRALLM_HIDE_WINDOW: '1',
       },

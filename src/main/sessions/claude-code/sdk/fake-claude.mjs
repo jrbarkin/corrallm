@@ -37,7 +37,7 @@
 // and, unless they say to accept them, where the sender's permission class (fromMode) isn't its
 // own, a sender that declares none being held only while it bypasses permissions.
 //
-// The connector's tests and the e2e tests point corrallm at it (CORRALLM_CLAUDE_PATH): a path
+// The connector's tests and the e2e tests point corrallm at it (CORRALLM_AGENT_PATHS): a path
 // ending in .mjs, so the SDK runs it with `node`.
 import { randomUUID } from 'node:crypto';
 import {

@@ -18,6 +18,40 @@ import { replay } from './replay';
 /** A fake `codex` that speaks the app server's protocol (../fake-codex.mjs), run with node. */
 const FAKE = fileURLToPath(new URL('../fake-codex.mjs', import.meta.url));
 
+it('refuses a resume option before finding or spawning a CLI', async () => {
+  const findCodex = vi.fn().mockResolvedValue('/not-run');
+  const spawn = vi.fn();
+  await expect(start({ resume: '--help' }, {}, { findCodex, spawn })).rejects.toThrow(
+    /conversation.*id/i,
+  );
+  expect(findCodex).not.toHaveBeenCalled();
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it('refuses an unsafe native thread id and closes the private server', async () => {
+  const rpc = await import('../rpc');
+  const original = rpc.startAppServer;
+  const close = vi.fn<Awaited<ReturnType<typeof original>>['close']>();
+  const starting = vi.spyOn(rpc, 'startAppServer').mockImplementation(async (options) => {
+    const server = await original(options);
+    close.mockImplementation(() => server.close());
+    return {
+      ...server,
+      close,
+      request: async (method, params) => {
+        const answer = await server.request(method, params);
+        return method === 'thread/start' ? { thread: { id: '--resume' } } : answer;
+      },
+    };
+  });
+  try {
+    await expect(start()).rejects.toThrow(/conversation id/);
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    starting.mockRestore();
+  }
+});
+
 let dir: string;
 let sessions: LiveSession<CodexMode>[];
 
@@ -745,7 +779,10 @@ describe('the App Server connection', () => {
     });
     expect((await requests('thread/resume'))[0]).toMatchObject({ threadId: thread, cwd: dir });
 
-    const fresh = await start({ resume: 'never-kept' }, { FAKE_CODEX_STATE: state });
+    const fresh = await start(
+      { resume: '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e99' },
+      { FAKE_CODEX_STATE: state },
+    );
     expect(fresh.events.some((e) => e.type === 'notice' || e.type === 'history')).toBe(false);
     expect(fresh.events[0]).toMatchObject({ type: 'started' });
   });

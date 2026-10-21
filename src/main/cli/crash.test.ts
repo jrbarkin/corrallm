@@ -101,8 +101,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
     await rm(path.join(profile, 'api.json'), { force: true });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CORRALLM_CODEX_PATH: path.join(dir, 'codex'),
-      CORRALLM_CLAUDE_PATH: path.join(dir, 'no-claude'),
+      CORRALLM_AGENT_PATHS: JSON.stringify({
+        codex: path.join(dir, 'codex'),
+        'claude-code': path.join(dir, 'no-claude'),
+      }),
     };
     delete env.CORRALLM_URL;
     delete env.CORRALLM_OUTSIDE_TOKEN;

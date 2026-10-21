@@ -61,6 +61,11 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
 }
 
 describe('createCore', () => {
+  it('refuses a malformed executable map before opening the profile', async () => {
+    vi.stubEnv('CORRALLM_AGENT_PATHS', 'not JSON');
+    await expect(start()).rejects.toThrow(/CORRALLM_AGENT_PATHS/);
+    expect(existsSync(path.join(profile, STORE_FILE))).toBe(false);
+  });
   it('lists each shipped template’s fields and agent roles with the jobs of all their steps', async () => {
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     const jobs = (queue: QueueItem[]): Job[] => [
@@ -111,8 +116,13 @@ describe('createCore', () => {
   });
 
   it('serves both catalog operations on a window’s port', async () => {
-    vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
-    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+    vi.stubEnv(
+      'CORRALLM_AGENT_PATHS',
+      JSON.stringify({
+        codex: path.join(profile, 'no-codex'),
+        'claude-code': path.join(profile, 'no-claude'),
+      }),
+    );
     const started = await start({ connectors: {}, environment: () => Promise.resolve({}) });
     const window = openWindow(new WindowPorts(started), 1);
     try {
@@ -140,8 +150,10 @@ describe('createCore', () => {
     const codex = path.join(profile, 'codex.mjs');
     await copyFile(path.join(import.meta.dirname, '../sessions/codex/fake-codex.mjs'), codex);
     await chmod(codex, 0o755);
-    vi.stubEnv('CORRALLM_CODEX_PATH', codex);
-    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
+    vi.stubEnv(
+      'CORRALLM_AGENT_PATHS',
+      JSON.stringify({ codex: codex, 'claude-code': path.join(profile, 'no-claude') }),
+    );
     const started = await start({
       connectors: {},
       environment: () => Promise.resolve({ PATH: path.dirname(process.execPath) }),

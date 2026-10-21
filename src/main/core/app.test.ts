@@ -33,8 +33,13 @@ beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-app-core-'));
   folder = path.join(profile, 'project');
   await mkdir(folder);
-  vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
-  vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+  vi.stubEnv(
+    'CORRALLM_AGENT_PATHS',
+    JSON.stringify({
+      'claude-code': path.join(profile, 'no-claude'),
+      codex: path.join(profile, 'no-codex'),
+    }),
+  );
 });
 afterEach(async () => {
   delete dialogs.open;

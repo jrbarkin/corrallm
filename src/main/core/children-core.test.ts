@@ -78,8 +78,13 @@ it('ends a helper still running as it closes, and starts none once closing', asy
   const shell = Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
   const cli = Object.assign(new EventEmitter(), { pid: 43, kill: vi.fn() });
   spawned.mockReturnValueOnce(shell).mockReturnValueOnce(cli);
-  vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
-  vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+  vi.stubEnv(
+    'CORRALLM_AGENT_PATHS',
+    JSON.stringify({
+      'claude-code': path.join(profile, 'no-claude'),
+      codex: path.join(profile, 'no-codex'),
+    }),
+  );
   const running = new Set([42, 43]);
   const signal = vi.fn((group: number) => {
     running.delete(group);
@@ -139,8 +144,13 @@ it.each(['operation', 'channel', 'engine'] as const)(
   async (from) => {
     const child = Object.assign(new EventEmitter(), { pid: 42, kill: vi.fn() });
     spawned.mockReturnValue(child);
-    vi.stubEnv('CORRALLM_CLAUDE_PATH', path.join(profile, 'no-claude'));
-    vi.stubEnv('CORRALLM_CODEX_PATH', path.join(profile, 'no-codex'));
+    vi.stubEnv(
+      'CORRALLM_AGENT_PATHS',
+      JSON.stringify({
+        'claude-code': path.join(profile, 'no-claude'),
+        codex: path.join(profile, 'no-codex'),
+      }),
+    );
     const canvas = '4b1f6c2e-8d3a-4e5f-9a0b-7c6d5e4f3a2b' as CanvasId;
     if (from === 'engine') {
       const project = path.join(profile, 'project');
